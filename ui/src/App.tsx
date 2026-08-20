@@ -1,0 +1,159 @@
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { api, type AppConfig, type Snapshot } from "./api";
+import { Badge, Banner, Button } from "./components";
+import Providers from "./panels/Providers";
+import Models from "./panels/Models";
+import Routing from "./panels/Routing";
+import Activity from "./panels/Activity";
+
+type Tab = "providers" | "models" | "routing" | "activity";
+
+const TABS: { id: Tab; label: string }[] = [
+  { id: "providers", label: "Providers" },
+  { id: "models", label: "Models" },
+  { id: "routing", label: "Routing" },
+  { id: "activity", label: "Activity" },
+];
+
+export default function App() {
+  const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
+  const [tab, setTab] = useState<Tab>("providers");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const run = useCallback(async (task: () => Promise<Snapshot>) => {
+    setBusy(true);
+    setError(null);
+    try {
+      setSnapshot(await task());
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void run(api.snapshot);
+  }, [run]);
+
+  // The Activity tab needs fresh numbers; the rest does not.
+  useEffect(() => {
+    if (tab !== "activity") return;
+    const timer = setInterval(() => {
+      api.snapshot().then(setSnapshot).catch(() => {});
+    }, 2000);
+    return () => clearInterval(timer);
+  }, [tab]);
+
+  const save = useCallback(
+    (config: AppConfig) => run(() => api.saveConfig(config)),
+    [run],
+  );
+
+  const unclassified = useMemo(
+    () => snapshot?.config.models.filter((m) => m.class === null) ?? [],
+    [snapshot],
+  );
+
+  if (!snapshot) {
+    return (
+      <main className="loading">
+        <p>{error ?? "Loading…"}</p>
+      </main>
+    );
+  }
+
+  const { server } = snapshot;
+  const baseUrl = server.base_url ?? `http://${server.host}:${server.port}`;
+
+  return (
+    <div className="app">
+      <header className="titlebar" data-tauri-drag-region>
+        <div className="brand">
+          <span className={`dot ${server.running ? "dot-on" : "dot-off"}`} aria-hidden />
+          <strong>Zroutery</strong>
+          <span className="muted">v{snapshot.version}</span>
+        </div>
+
+        <div className="row gap">
+          <code className="url" title={baseUrl}>
+            {baseUrl}
+          </code>
+          <Button kind="ghost" onClick={() => api.copy(baseUrl)} title="Copy the base URL">
+            Copy URL
+          </Button>
+          <Button
+            kind="ghost"
+            onClick={() => api.copy(server.token)}
+            title="Copy the local API token"
+          >
+            Copy token
+          </Button>
+          <Button
+            kind={server.running ? "default" : "primary"}
+            disabled={busy}
+            onClick={() => run(server.running ? api.stop : api.start)}
+          >
+            {server.running ? "Stop proxy" : "Start proxy"}
+          </Button>
+        </div>
+      </header>
+
+      <nav className="tabs" role="tablist">
+        {TABS.map((t) => (
+          <button
+            key={t.id}
+            role="tab"
+            aria-selected={tab === t.id}
+            className={`tab ${tab === t.id ? "tab-active" : ""}`}
+            onClick={() => setTab(t.id)}
+          >
+            {t.label}
+            {t.id === "models" && unclassified.length > 0 && (
+              <Badge tone="warn">{unclassified.length}</Badge>
+            )}
+          </button>
+        ))}
+      </nav>
+
+      <main className="content">
+        {error && (
+          <Banner tone="danger" actions={<Button kind="ghost" onClick={() => setError(null)}>Dismiss</Button>}>
+            {error}
+          </Banner>
+        )}
+        {snapshot.warning && <Banner tone="warn">{snapshot.warning}</Banner>}
+        {server.exposed && (
+          <Banner tone="danger">
+            The proxy is bound to <code>{server.host}</code>, so other machines on your network
+            can use your API keys. Keep authentication enabled or switch back to{" "}
+            <code>127.0.0.1</code>.
+          </Banner>
+        )}
+        {!server.require_auth && (
+          <Banner tone="warn">
+            Authentication is off: any local process can spend your API credit.
+          </Banner>
+        )}
+
+        {tab === "providers" && <Providers snapshot={snapshot} save={save} run={run} busy={busy} />}
+        {tab === "models" && <Models snapshot={snapshot} save={save} busy={busy} />}
+        {tab === "routing" && <Routing snapshot={snapshot} save={save} run={run} busy={busy} />}
+        {tab === "activity" && <Activity snapshot={snapshot} run={run} />}
+      </main>
+
+      <footer className="statusbar">
+        <span className="muted">{snapshot.config_path}</span>
+        <span className="row gap">
+          <Button kind="ghost" onClick={() => api.hide()}>
+            Hide window
+          </Button>
+          <Button kind="ghost" onClick={() => api.quit()} title="Stop the proxy and quit">
+            Quit
+          </Button>
+        </span>
+      </footer>
+    </div>
+  );
+}

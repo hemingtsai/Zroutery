@@ -1,0 +1,17 @@
+{
+  "name": "zroutery",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "build:debug": "tauri build --debug",
+    "ui:dev": "pnpm --dir ui dev",
+    "ui:build": "pnpm --dir ui build",
+    "test": "cargo test --workspace",
+    "smoke": "cargo build -p zroutery --bin zroutery-headless && python3 scripts/smoke_test.py"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.11.4"
+  }
+}
