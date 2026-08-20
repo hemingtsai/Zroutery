@@ -1,0 +1,871 @@
+//! End to end tests: a real Zroutery server in front of a mock provider.
+//!
+//! These cover the paths that unit tests cannot: cross dialect streaming,
+//! failover between providers, auth and the model listing.
+
+use std::net::SocketAddr;
+use std::sync::{Arc, Mutex};
+
+use axum::extract::State;
+use axum::response::{IntoResponse, Response};
+use axum::routing::{get, post};
+use axum::Json;
+use serde_json::{json, Value};
+use zroutery_core::config::{
+    AppConfig, MemorySecretStore, ModelClass, ModelEntry, ProviderConfig, ProviderKind,
+};
+use zroutery_core::server::{AppState, ServerHandle};
+
+// ------------------------------------------------------------------ mock upstream
+
+#[derive(Default)]
+struct MockInner {
+    /// Every request body the mock received, in order.
+    received: Vec<Value>,
+    /// Path of each request.
+    paths: Vec<String>,
+    /// Authorization / x-api-key values seen.
+    keys: Vec<String>,
+}
+
+#[derive(Clone, Default)]
+struct Mock {
+    inner: Arc<Mutex<MockInner>>,
+}
+
+impl Mock {
+    fn record(&self, path: &str, key: Option<String>, body: &Value) {
+        let mut inner = self.inner.lock().unwrap();
+        inner.paths.push(path.to_string());
+        inner.keys.push(key.unwrap_or_default());
+        inner.received.push(body.clone());
+    }
+
+    fn bodies(&self) -> Vec<Value> {
+        self.inner.lock().unwrap().received.clone()
+    }
+
+    fn keys(&self) -> Vec<String> {
+        self.inner.lock().unwrap().keys.clone()
+    }
+
+    fn count(&self) -> usize {
+        self.inner.lock().unwrap().received.len()
+    }
+}
+
+/// The mock reacts to the requested model name:
+/// * `broken*`  -> HTTP 500
+/// * `refuse*`  -> HTTP 400 (non retryable)
+/// * `tools*`   -> answers with a tool call
+/// * `think*`   -> answers with reasoning content
+/// * anything else -> plain text answer
+async fn mock_openai_chat(
+    State(mock): State<Mock>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<Value>,
+) -> Response {
+    let key = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
+    mock.record("/chat/completions", key, &body);
+
+    let model = body["model"].as_str().unwrap_or("").to_string();
+    if model.starts_with("broken") {
+        return (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": {"message": "upstream exploded", "type": "server_error"}})),
+        )
+            .into_response();
+    }
+    if model.starts_with("refuse") {
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(json!({"error": {"message": "bad request", "type": "invalid_request_error"}})),
+        )
+            .into_response();
+    }
+
+    let stream = body["stream"].as_bool().unwrap_or(false);
+    if !stream {
+        let message = if model.starts_with("tools") {
+            json!({
+                "role": "assistant",
+                "content": Value::Null,
+                "tool_calls": [{"id": "call_a", "type": "function",
+                                "function": {"name": "get_weather", "arguments": "{\"city\":\"SH\"}"}}]
+            })
+        } else if model.starts_with("think") {
+            json!({"role": "assistant", "content": "final", "reasoning_content": "reasoning"})
+        } else {
+            json!({"role": "assistant", "content": "hello from mock"})
+        };
+        let finish = if model.starts_with("tools") {
+            "tool_calls"
+        } else {
+            "stop"
+        };
+        return Json(json!({
+            "id": "chatcmpl-mock",
+            "object": "chat.completion",
+            "created": 1,
+            "model": model,
+            "choices": [{"index": 0, "message": message, "finish_reason": finish}],
+            "usage": {"prompt_tokens": 11, "completion_tokens": 7,
+                      "completion_tokens_details": {"reasoning_tokens": 3}}
+        }))
+        .into_response();
+    }
+
+    let mut sse = String::new();
+    let chunk = |delta: Value, finish: Value| {
+        format!(
+            "data: {}\n\n",
+            json!({"id": "chatcmpl-mock", "object": "chat.completion.chunk", "created": 1,
+                   "model": "mock", "choices": [{"index": 0, "delta": delta, "finish_reason": finish}]})
+        )
+    };
+    if model.starts_with("think") {
+        sse.push_str(&chunk(json!({"reasoning_content": "step 1"}), Value::Null));
+    }
+    if model.starts_with("tools") {
+        sse.push_str(&chunk(
+            json!({"tool_calls": [{"index": 0, "id": "call_a", "type": "function",
+                                   "function": {"name": "get_weather", "arguments": ""}}]}),
+            Value::Null,
+        ));
+        sse.push_str(&chunk(
+            json!({"tool_calls": [{"index": 0, "function": {"arguments": "{\"city\":\"SH\"}"}}]}),
+            Value::Null,
+        ));
+        sse.push_str(&chunk(json!({}), json!("tool_calls")));
+    } else {
+        sse.push_str(&chunk(
+            json!({"role": "assistant", "content": ""}),
+            Value::Null,
+        ));
+        sse.push_str(&chunk(json!({"content": "hel"}), Value::Null));
+        sse.push_str(&chunk(json!({"content": "lo"}), Value::Null));
+        sse.push_str(&chunk(json!({}), json!("stop")));
+    }
+    sse.push_str(&format!(
+        "data: {}\n\n",
+        json!({"id": "chatcmpl-mock", "object": "chat.completion.chunk", "model": "mock",
+               "choices": [], "usage": {"prompt_tokens": 5, "completion_tokens": 2}})
+    ));
+    sse.push_str("data: [DONE]\n\n");
+
+    Response::builder()
+        .header("content-type", "text/event-stream")
+        .body(axum::body::Body::from(sse))
+        .unwrap()
+}
+
+async fn mock_anthropic_messages(
+    State(mock): State<Mock>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<Value>,
+) -> Response {
+    let key = headers
+        .get("x-api-key")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
+    mock.record("/v1/messages", key, &body);
+
+    let stream = body["stream"].as_bool().unwrap_or(false);
+    if !stream {
+        return Json(json!({
+            "id": "msg_mock",
+            "type": "message",
+            "role": "assistant",
+            "model": body["model"],
+            "content": [{"type": "text", "text": "anthropic mock"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 4, "output_tokens": 2}
+        }))
+        .into_response();
+    }
+
+    let sse = concat!(
+        "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_mock\",\"model\":\"claude-mock\",\"usage\":{\"input_tokens\":4}}}\n\n",
+        "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+        "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"claude \"}}\n\n",
+        "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"stream\"}}\n\n",
+        "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+        "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":6}}\n\n",
+        "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+    );
+    Response::builder()
+        .header("content-type", "text/event-stream")
+        .body(axum::body::Body::from(sse))
+        .unwrap()
+}
+
+async fn mock_models() -> Json<Value> {
+    Json(json!({"object": "list", "data": [{"id": "m-b"}, {"id": "m-a"}, {"id": "m-a"}]}))
+}
+
+async fn start_mock() -> (SocketAddr, Mock) {
+    let mock = Mock::default();
+    let app = axum::Router::new()
+        .route("/chat/completions", post(mock_openai_chat))
+        .route("/v1/messages", post(mock_anthropic_messages))
+        .route("/models", get(mock_models))
+        .route("/v1/models", get(mock_models))
+        .with_state(mock.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    (addr, mock)
+}
+
+// ------------------------------------------------------------------ fixtures
+
+const TOKEN: &str = "zr-test-token";
+
+/// The scenario from the brief, pointed at the mock instead of the real APIs.
+fn config_for(mock: SocketAddr) -> AppConfig {
+    let mut cfg = AppConfig::default();
+    cfg.server.host = "127.0.0.1".into();
+    cfg.server.port = 0;
+    cfg.server.auth_token = TOKEN.into();
+
+    let mut deepseek = ProviderConfig::new("deepseek", "DeepSeek", ProviderKind::OpenAICompatible);
+    deepseek.base_url = format!("http://{mock}");
+    deepseek.key_ref = "provider:deepseek".into();
+    deepseek.timeout_secs = 10;
+
+    let mut openai = ProviderConfig::new("openai", "OpenAI", ProviderKind::OpenAICompatible);
+    openai.base_url = format!("http://{mock}");
+    openai.key_ref = "provider:openai".into();
+    openai.timeout_secs = 10;
+
+    let mut anthropic = ProviderConfig::new("anthropic", "Anthropic", ProviderKind::Anthropic);
+    anthropic.base_url = format!("http://{mock}");
+    anthropic.key_ref = "provider:anthropic".into();
+    anthropic.timeout_secs = 10;
+
+    cfg.providers = vec![deepseek, openai, anthropic];
+    cfg.models = vec![
+        ModelEntry::new("deepseek-v4-flash", "deepseek", Some(ModelClass::Haiku)),
+        ModelEntry::new("deepseek-v4-pro", "deepseek", Some(ModelClass::Sonnet)),
+        ModelEntry::new("gpt-5.3-sol", "openai", Some(ModelClass::Opus)),
+        ModelEntry::new("claude-native", "anthropic", None),
+    ];
+    cfg
+}
+
+fn secrets() -> Arc<MemorySecretStore> {
+    Arc::new(
+        MemorySecretStore::new()
+            .with("provider:deepseek", "sk-deepseek")
+            .with("provider:openai", "sk-openai")
+            .with("provider:anthropic", "sk-ant"),
+    )
+}
+
+struct Harness {
+    base: String,
+    server: Option<ServerHandle>,
+    state: Arc<AppState>,
+    client: reqwest::Client,
+    mock: Mock,
+}
+
+impl Harness {
+    async fn start(cfg: AppConfig, mock: Mock) -> Harness {
+        let state = Arc::new(AppState::new(cfg, secrets()));
+        let server = ServerHandle::start(Arc::clone(&state)).await.unwrap();
+        let base = format!("http://{}", server.addr);
+        Harness {
+            base,
+            server: Some(server),
+            state,
+            client: reqwest::Client::new(),
+            mock,
+        }
+    }
+
+    async fn new() -> Harness {
+        let (addr, mock) = start_mock().await;
+        Harness::start(config_for(addr), mock).await
+    }
+
+    fn post(&self, path: &str) -> reqwest::RequestBuilder {
+        self.client
+            .post(format!("{}{path}", self.base))
+            .header("x-api-key", TOKEN)
+    }
+
+    fn get(&self, path: &str) -> reqwest::RequestBuilder {
+        self.client
+            .get(format!("{}{path}", self.base))
+            .header("x-api-key", TOKEN)
+    }
+
+    async fn shutdown(mut self) {
+        if let Some(s) = self.server.take() {
+            s.stop().await;
+        }
+    }
+}
+
+// ------------------------------------------------------------------ the tests
+
+#[tokio::test]
+async fn anthropic_in_openai_out_non_streaming() {
+    let h = Harness::new().await;
+
+    let resp = h
+        .post("/v1/messages")
+        .json(&json!({
+            "model": "sonnet-class",
+            "max_tokens": 100,
+            "system": "be brief",
+            "messages": [{"role": "user", "content": "hi"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    assert_eq!(resp.headers()["x-zroutery-model"], "deepseek-v4-pro");
+    assert_eq!(resp.headers()["x-zroutery-provider"], "DeepSeek");
+    let body: Value = resp.json().await.unwrap();
+
+    assert_eq!(body["type"], "message");
+    assert_eq!(body["role"], "assistant");
+    assert_eq!(body["model"], "deepseek-v4-pro");
+    assert_eq!(body["content"][0]["text"], "hello from mock");
+    assert_eq!(body["stop_reason"], "end_turn");
+    assert_eq!(body["usage"]["input_tokens"], 11);
+    assert_eq!(body["usage"]["output_tokens"], 7);
+
+    // The upstream saw an OpenAI shaped request with the mapped model id.
+    let sent = &h.mock.bodies()[0];
+    assert_eq!(sent["model"], "deepseek-v4-pro");
+    assert_eq!(sent["messages"][0]["role"], "system");
+    assert_eq!(sent["messages"][0]["content"], "be brief");
+    assert_eq!(sent["messages"][1]["role"], "user");
+    assert_eq!(sent["messages"][1]["content"], "hi");
+    assert_eq!(sent["max_tokens"], 100);
+    assert_eq!(h.mock.keys()[0], "Bearer sk-deepseek");
+
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn openai_in_openai_out_with_tool_calls() {
+    let (addr, mock) = start_mock().await;
+    let mut cfg = config_for(addr);
+    // Force the mock into tool-call mode via the upstream model name.
+    cfg.models[1].upstream_model = "tools-model".into();
+    let h = Harness::start(cfg, mock).await;
+
+    let body: Value = h
+        .post("/v1/chat/completions")
+        .json(&json!({
+            "model": "sonnet-class",
+            "messages": [{"role": "user", "content": "weather?"}],
+            "tools": [{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}]
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    assert_eq!(body["object"], "chat.completion");
+    assert_eq!(body["choices"][0]["finish_reason"], "tool_calls");
+    assert_eq!(body["choices"][0]["message"]["content"], Value::Null);
+    let call = &body["choices"][0]["message"]["tool_calls"][0];
+    assert_eq!(call["function"]["name"], "get_weather");
+    assert_eq!(call["function"]["arguments"], "{\"city\":\"SH\"}");
+    assert_eq!(body["usage"]["total_tokens"], 18);
+
+    let sent = &h.mock.bodies()[0];
+    assert_eq!(sent["tools"][0]["function"]["name"], "get_weather");
+
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn anthropic_client_streaming_over_an_openai_provider() {
+    let (addr, mock) = start_mock().await;
+    let mut cfg = config_for(addr);
+    cfg.models[1].upstream_model = "think-model".into();
+    let h = Harness::start(cfg, mock).await;
+
+    let resp = h
+        .post("/v1/messages")
+        .json(&json!({
+            "model": "sonnet-class",
+            "max_tokens": 64,
+            "stream": true,
+            "messages": [{"role": "user", "content": "hi"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    assert_eq!(resp.headers()["content-type"], "text/event-stream");
+    let wire = resp.text().await.unwrap();
+
+    // Anthropic clients need the full event lifecycle, in order.
+    let order: Vec<&str> = wire
+        .lines()
+        .filter_map(|l| l.strip_prefix("event: "))
+        .collect();
+    assert_eq!(order.first(), Some(&"message_start"));
+    assert_eq!(order.last(), Some(&"message_stop"));
+    assert!(order.contains(&"content_block_start"));
+    assert!(order.contains(&"message_delta"));
+
+    // Reasoning became a thinking block, and text its own block.
+    assert!(wire.contains("\"type\":\"thinking\""));
+    assert!(wire.contains("\"thinking\":\"step 1\""));
+    assert!(wire.contains("\"text\":\"hel\""));
+    assert!(wire.contains("\"text\":\"lo\""));
+    // Usage from the trailing OpenAI chunk survived the translation.
+    assert!(wire.contains("\"output_tokens\":2"));
+    // Two blocks opened, two closed.
+    assert_eq!(wire.matches("event: content_block_start").count(), 2);
+    assert_eq!(wire.matches("event: content_block_stop").count(), 2);
+
+    let stats = h.state.stats.summary();
+    assert_eq!(stats.requests, 1);
+    assert_eq!(stats.failures, 0);
+    assert_eq!(stats.output_tokens, 2);
+
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn openai_client_streaming_over_an_anthropic_provider() {
+    let h = Harness::new().await;
+
+    let wire = h
+        .post("/v1/chat/completions")
+        .json(&json!({
+            "model": "claude-native",
+            "messages": [{"role": "user", "content": "hi"}],
+            "stream": true,
+            "stream_options": {"include_usage": true}
+        }))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+
+    assert!(wire.contains("\"object\":\"chat.completion.chunk\""));
+    assert!(wire.contains("\"content\":\"claude \""));
+    assert!(wire.contains("\"content\":\"stream\""));
+    assert!(wire.contains("\"finish_reason\":\"stop\""));
+    assert!(wire.contains("\"prompt_tokens\":4"));
+    assert!(wire.contains("\"completion_tokens\":6"));
+    assert!(wire.trim_end().ends_with("data: [DONE]"));
+
+    // The Anthropic upstream got an Anthropic shaped body and the right auth.
+    let sent = &h.mock.bodies()[0];
+    assert_eq!(sent["model"], "claude-native");
+    assert_eq!(sent["messages"][0]["content"][0]["type"], "text");
+    assert_eq!(sent["max_tokens"], 4096, "anthropic requires max_tokens");
+    assert_eq!(h.mock.keys()[0], "sk-ant");
+
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn failover_moves_to_the_next_model_in_the_class() {
+    let (addr, mock) = start_mock().await;
+    let mut cfg = config_for(addr);
+    // Two sonnet candidates: the preferred one always fails.
+    cfg.models[1].upstream_model = "broken-model".into();
+    cfg.models[1].priority = 0;
+    cfg.models
+        .push(ModelEntry::new("gpt-sonnet", "openai", Some(ModelClass::Sonnet)).with_priority(10));
+    let h = Harness::start(cfg, mock).await;
+
+    let resp = h
+        .post("/v1/messages")
+        .json(&json!({
+            "model": "sonnet-class",
+            "max_tokens": 10,
+            "messages": [{"role": "user", "content": "hi"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    assert_eq!(resp.headers()["x-zroutery-model"], "gpt-sonnet");
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["content"][0]["text"], "hello from mock");
+
+    assert_eq!(h.mock.count(), 2, "the broken model was tried first");
+    let health = h.state.router.health_snapshot();
+    let broken = health
+        .iter()
+        .find(|m| m.model_id == "deepseek-v4-pro")
+        .unwrap();
+    assert_eq!(broken.total_failure, 1);
+    let good = health.iter().find(|m| m.model_id == "gpt-sonnet").unwrap();
+    assert_eq!(good.total_success, 1);
+
+    let record = &h.state.stats.recent(1)[0];
+    assert_eq!(record.attempts, 2);
+    assert_eq!(record.resolved_model.as_deref(), Some("gpt-sonnet"));
+
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn client_errors_are_not_retried() {
+    let (addr, mock) = start_mock().await;
+    let mut cfg = config_for(addr);
+    cfg.models[1].upstream_model = "refuse-model".into();
+    cfg.models
+        .push(ModelEntry::new("gpt-sonnet", "openai", Some(ModelClass::Sonnet)).with_priority(10));
+    let h = Harness::start(cfg, mock).await;
+
+    let resp = h
+        .post("/v1/messages")
+        .json(&json!({"model": "sonnet-class", "max_tokens": 10,
+                      "messages": [{"role": "user", "content": "hi"}]}))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 400);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["type"], "error");
+    assert_eq!(body["error"]["type"], "invalid_request_error");
+    assert_eq!(h.mock.count(), 1, "a 400 must not trigger failover");
+
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn circuit_breaker_skips_a_failing_model() {
+    let (addr, mock) = start_mock().await;
+    let mut cfg = config_for(addr);
+    cfg.models[1].upstream_model = "broken-model".into();
+    cfg.models
+        .push(ModelEntry::new("gpt-sonnet", "openai", Some(ModelClass::Sonnet)).with_priority(10));
+    cfg.routing.break_after_failures = 1;
+    let h = Harness::start(cfg, mock).await;
+
+    for _ in 0..2 {
+        let status = h
+            .post("/v1/messages")
+            .json(&json!({"model": "sonnet-class", "max_tokens": 10,
+                          "messages": [{"role": "user", "content": "hi"}]}))
+            .send()
+            .await
+            .unwrap()
+            .status();
+        assert_eq!(status, 200);
+    }
+
+    // First call: broken + good = 2 upstream calls. Second call: the breaker is
+    // open, so the broken model is demoted and only the good one is used.
+    assert_eq!(h.mock.count(), 3);
+    assert!(h.state.router.is_cooling("deepseek-v4-pro"));
+
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn missing_api_key_fails_over_and_reports_clearly() {
+    let (addr, mock) = start_mock().await;
+    let mut cfg = config_for(addr);
+    cfg.providers[0].key_ref = "provider:nonexistent".into();
+    let h = Harness::start(cfg, mock).await;
+
+    let resp = h
+        .post("/v1/messages")
+        .json(&json!({"model": "deepseek-v4-pro", "max_tokens": 10,
+                      "messages": [{"role": "user", "content": "hi"}]}))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 412);
+    let body: Value = resp.json().await.unwrap();
+    assert!(body["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("no API key"));
+    assert_eq!(h.mock.count(), 0);
+
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn authentication_is_enforced_on_api_routes_only() {
+    let h = Harness::new().await;
+
+    // No credentials at all.
+    let resp = h
+        .client
+        .post(format!("{}/v1/messages", h.base))
+        .json(&json!({"model": "sonnet-class", "messages": []}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 401);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["error"]["type"], "authentication_error");
+
+    // Wrong token.
+    let resp = h
+        .client
+        .get(format!("{}/v1/models", h.base))
+        .header("authorization", "Bearer nope")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 401);
+
+    // Bearer form is accepted.
+    let resp = h
+        .client
+        .get(format!("{}/v1/models", h.base))
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+
+    // Health stays open for the GUI.
+    let resp = h
+        .client
+        .get(format!("{}/health", h.base))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_eq!(resp.json::<Value>().await.unwrap()["status"], "ok");
+
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn model_listing_exposes_real_and_virtual_models() {
+    let h = Harness::new().await;
+
+    let body: Value = h
+        .get("/v1/models")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(body["object"], "list");
+    let ids: Vec<&str> = body["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["id"].as_str().unwrap())
+        .collect();
+    assert!(ids.contains(&"deepseek-v4-flash"));
+    assert!(ids.contains(&"deepseek-v4-pro"));
+    assert!(ids.contains(&"gpt-5.3-sol"));
+    assert!(ids.contains(&"claude-native"));
+    assert!(ids.contains(&"opus-class"));
+    assert!(ids.contains(&"sonnet-class"));
+    assert!(ids.contains(&"haiku-class"));
+
+    // Both dialects find what they expect on each entry.
+    let entry = body["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["id"] == "sonnet-class")
+        .unwrap();
+    assert_eq!(entry["object"], "model");
+    assert_eq!(entry["type"], "model");
+    assert!(entry["created"].is_i64());
+    assert!(entry["created_at"].is_string());
+    assert_eq!(entry["zroutery"]["virtual"], true);
+    assert_eq!(entry["zroutery"]["member_count"], 1);
+
+    // The unclassified model is listed but has no class.
+    let entry = body["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["id"] == "claude-native")
+        .unwrap();
+    assert_eq!(entry["zroutery"]["class"], Value::Null);
+    assert_eq!(entry["owned_by"], "Anthropic");
+
+    let single: Value = h
+        .get("/v1/models/gpt-5.3-sol")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(single["id"], "gpt-5.3-sol");
+    assert_eq!(single["zroutery"]["class"], "opus");
+
+    assert_eq!(h.get("/v1/models/nope").send().await.unwrap().status(), 404);
+
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn unknown_and_unclassified_routing_errors() {
+    let (addr, mock) = start_mock().await;
+    let mut cfg = config_for(addr);
+    // Remove every opus member so the class is empty.
+    cfg.models.retain(|m| m.class != Some(ModelClass::Opus));
+    let h = Harness::start(cfg, mock).await;
+
+    let resp = h
+        .post("/v1/chat/completions")
+        .json(&json!({"model": "totally-unknown", "messages": [{"role": "user", "content": "x"}]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 404);
+    assert_eq!(
+        resp.json::<Value>().await.unwrap()["error"]["code"],
+        "not_found_error"
+    );
+
+    let resp = h
+        .post("/v1/messages")
+        .json(&json!({"model": "opus-class", "max_tokens": 10,
+                      "messages": [{"role": "user", "content": "x"}]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 503);
+    assert_eq!(
+        resp.json::<Value>().await.unwrap()["error"]["type"],
+        "overloaded_error"
+    );
+
+    assert_eq!(h.mock.count(), 0);
+    let summary = h.state.stats.summary();
+    assert_eq!(summary.requests, 2);
+    assert_eq!(summary.failures, 2);
+
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn claude_style_model_names_are_routed_by_class() {
+    let h = Harness::new().await;
+
+    let resp = h
+        .post("/v1/messages")
+        .json(&json!({
+            "model": "claude-sonnet-4-5-20250929",
+            "max_tokens": 32,
+            "messages": [{"role": "user", "content": "hi"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_eq!(resp.headers()["x-zroutery-model"], "deepseek-v4-pro");
+
+    let resp = h
+        .post("/v1/messages")
+        .json(&json!({
+            "model": "claude-3-5-haiku-latest",
+            "max_tokens": 32,
+            "messages": [{"role": "user", "content": "hi"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.headers()["x-zroutery-model"], "deepseek-v4-flash");
+
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn count_tokens_endpoint_answers_anthropic_clients() {
+    let h = Harness::new().await;
+    let body: Value = h
+        .post("/v1/messages/count_tokens")
+        .json(&json!({
+            "model": "sonnet-class",
+            "messages": [{"role": "user", "content": "count these characters please"}]
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(body["input_tokens"].as_u64().unwrap() > 0);
+    assert_eq!(h.mock.count(), 0, "estimated locally, no upstream call");
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn config_can_be_swapped_while_running() {
+    let (addr, mock) = start_mock().await;
+    let h = Harness::start(config_for(addr), mock).await;
+
+    let mut cfg = (*h.state.config()).clone();
+    cfg.models.retain(|m| m.id != "deepseek-v4-pro");
+    cfg.models.push(ModelEntry::new(
+        "gpt-sonnet",
+        "openai",
+        Some(ModelClass::Sonnet),
+    ));
+    h.state.set_config(cfg);
+
+    let resp = h
+        .post("/v1/messages")
+        .json(&json!({"model": "sonnet-class", "max_tokens": 10,
+                      "messages": [{"role": "user", "content": "hi"}]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.headers()["x-zroutery-model"], "gpt-sonnet");
+
+    let resp = h
+        .post("/v1/messages")
+        .json(&json!({"model": "deepseek-v4-pro", "max_tokens": 10,
+                      "messages": [{"role": "user", "content": "hi"}]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 404);
+
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn provider_model_discovery_dedupes_and_sorts() {
+    let (addr, mock) = start_mock().await;
+    let cfg = config_for(addr);
+    let provider = cfg.providers[0].clone();
+    let h = Harness::start(cfg, mock).await;
+
+    let models = h
+        .state
+        .upstream
+        .list_models(&provider, Some("sk-deepseek"))
+        .await
+        .unwrap();
+    assert_eq!(models, vec!["m-a", "m-b"]);
+
+    h.shutdown().await;
+}

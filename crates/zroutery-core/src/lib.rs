@@ -13,6 +13,7 @@
 //! * [`router`] picks candidates, tracks health and drives failover.
 //! * [`protocol`] contains the two decoders and two encoders plus SSE handling.
 //! * [`upstream`] talks HTTP to providers.
+//! * [`server`] exposes the axum app used by the desktop shell.
 
 pub mod config;
 pub mod error;
@@ -20,6 +21,7 @@ pub mod ir;
 pub mod protocol;
 pub mod registry;
 pub mod router;
+pub mod server;
 pub mod stats;
 pub mod upstream;
 
@@ -33,4 +35,5 @@ pub use ir::{
 };
 pub use registry::{Registry, Resolution};
 pub use router::{Candidate, Router};
+pub use server::{build_app, AppState, ServerHandle};
 pub use stats::{RequestRecord, Stats};
