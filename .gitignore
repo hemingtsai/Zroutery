@@ -1,0 +1,16 @@
+# Rust
+/target
+**/target
+
+# Frontend
+node_modules
+ui/dist
+
+# Tauri codegen
+src-tauri/gen
+
+# macOS
+.DS_Store
+
+# Local overrides
+.env
