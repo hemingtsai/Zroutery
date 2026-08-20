@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/zroutery-core"]
+members = ["crates/zroutery-core", "src-tauri"]
 resolver = "2"
 
 [workspace.package]

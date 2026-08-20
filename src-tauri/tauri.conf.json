@@ -1,0 +1,67 @@
+{
+  "$schema": "../ui/node_modules/@tauri-apps/cli/schema.json",
+  "productName": "Zroutery",
+  "version": "0.1.0",
+  "identifier": "app.zroutery.desktop",
+  "build": {
+    "frontendDist": "../ui/dist",
+    "devUrl": "http://localhost:5173",
+    "beforeDevCommand": "pnpm ui:dev",
+    "beforeBuildCommand": "pnpm ui:build"
+  },
+  "app": {
+    "macOSPrivateApi": true,
+    "withGlobalTauri": false,
+    "windows": [
+      {
+        "label": "main",
+        "title": "Zroutery",
+        "width": 1040,
+        "height": 720,
+        "minWidth": 820,
+        "minHeight": 560,
+        "visible": false,
+        "titleBarStyle": "Visible",
+        "hiddenTitle": false,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: asset: http://asset.localhost; connect-src 'self' ipc: http://ipc.localhost"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "app",
+      "dmg"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns"
+    ],
+    "copyright": "",
+    "category": "DeveloperTool",
+    "shortDescription": "One endpoint for every LLM provider",
+    "longDescription": "Zroutery aggregates several LLM providers behind a single local endpoint that speaks both the Anthropic Messages API and the OpenAI Chat Completions API, with user assigned opus/sonnet/haiku classes.",
+    "macOS": {
+      "minimumSystemVersion": "11.0",
+      "dmg": {
+        "appPosition": {
+          "x": 180,
+          "y": 170
+        },
+        "applicationFolderPosition": {
+          "x": 480,
+          "y": 170
+        },
+        "windowSize": {
+          "width": 660,
+          "height": 400
+        }
+      }
+    }
+  }
+}
