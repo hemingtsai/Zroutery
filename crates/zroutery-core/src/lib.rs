@@ -12,6 +12,7 @@
 //! * [`registry`] resolves a client model id (including `*-class` virtual ids).
 //! * [`router`] picks candidates, tracks health and drives failover.
 //! * [`protocol`] contains the two decoders and two encoders plus SSE handling.
+//! * [`upstream`] talks HTTP to providers.
 
 pub mod config;
 pub mod error;
@@ -19,6 +20,8 @@ pub mod ir;
 pub mod protocol;
 pub mod registry;
 pub mod router;
+pub mod stats;
+pub mod upstream;
 
 pub use config::{
     AppConfig, ConfigIssue, IssueSeverity, MemorySecretStore, ModelClass, ModelEntry,
@@ -30,3 +33,4 @@ pub use ir::{
 };
 pub use registry::{Registry, Resolution};
 pub use router::{Candidate, Router};
+pub use stats::{RequestRecord, Stats};
