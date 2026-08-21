@@ -75,6 +75,7 @@ SNAPSHOT = {
                 "timeout_secs": 600,
                 "connect_timeout_secs": 15,
                 "anthropic_version": None,
+                "balance": {"preset": "deep_seek", "custom": None},
                 "quirks": {
                     "use_max_completion_tokens": False,
                     "drop_temperature": False,
@@ -96,6 +97,7 @@ SNAPSHOT = {
                 "timeout_secs": 600,
                 "connect_timeout_secs": 15,
                 "anthropic_version": None,
+                "balance": {"preset": "none", "custom": None},
                 "quirks": {
                     "use_max_completion_tokens": False,
                     "drop_temperature": False,
@@ -121,6 +123,13 @@ SNAPSHOT = {
                 "display_name": None,
                 "aliases": ["deepseek-v4-pro"],
                 "max_output_tokens": None,
+                "pricing": {
+                    "currency": "CNY",
+                    "input_per_mtok": 2.0,
+                    "output_per_mtok": 8.0,
+                    "cache_read_per_mtok": 0.5,
+                    "cache_write_per_mtok": None,
+                },
             },
             {
                 "provider_id": "anthropic",
@@ -135,6 +144,7 @@ SNAPSHOT = {
                 "display_name": None,
                 "aliases": [],
                 "max_output_tokens": None,
+                "pricing": None,
             },
         ],
     },
@@ -169,6 +179,7 @@ SNAPSHOT = {
         "failures": 1,
         "input_tokens": 120,
         "output_tokens": 64,
+        "cost": {"CNY": 0.75},
         "per_model": [
             {
                 "model_id": "deepseek-deepseek-chat",
@@ -178,6 +189,7 @@ SNAPSHOT = {
                 "output_tokens": 64,
                 "reasoning_tokens": 12,
                 "cached_tokens": 0,
+                "cost": {"CNY": 0.75},
                 "avg_latency_ms": 812.5,
             }
         ],
@@ -203,12 +215,20 @@ SNAPSHOT = {
                 "cache_write_tokens": 0,
                 "reasoning_tokens": 3,
             },
+            "cost": {"currency": "CNY", "amount": 0.42},
             "attempts": 1,
         }
     ],
     "warning": None,
     "config_path": "/tmp/config.json",
-    "version": "0.1.0",
+    "version": "0.3.0",
+    "balances": {
+        "deepseek": {
+            "checked_at": "2026-01-01T00:00:00Z",
+            "balance": {"currency": "CNY", "remaining": 48.75, "total": None, "used": None},
+            "error": None,
+        }
+    },
 }
 
 HARNESS = """

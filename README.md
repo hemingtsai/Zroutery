@@ -101,17 +101,57 @@ curl http://127.0.0.1:8787/v1/messages -H "x-api-key: $TOKEN" \
 ```
 
 响应头里会带 `x-zroutery-model` / `x-zroutery-provider`，告诉你这次实际是谁答的（`x-zroutery-model`
-就是 `<provider>-<模型名>` 那个 id）；`x-zroutery-degraded: 1` 表示所有候选都在熔断中，属于兜底调用。
+就是 `<provider>-<模型名>` 那个 id）；`x-zroutery-degraded: 1` 表示所有候选都在熔断中，属于兜底调用；
+配了价格的模型还会带 `x-zroutery-cost`，例如 `CNY 0.000048`。
 
 Claude 系命名（`claude-sonnet-4-5-…`、`claude-3-5-haiku-…`）默认按名字里的
 opus/sonnet/haiku 映射到对应 class，可以在 Routing 里关掉或用精确别名覆盖。
+
+## 花费估算
+
+在 Models 里给模型填价格（**每百万 token**，币种就填 provider 计费用的那个），Zroutery 会用上游返回的
+usage 算出每次请求的花费：
+
+- 请求日志、按模型汇总、总计都带金额，并且**按币种分开**统计，绝不把 USD 和 CNY 加到一起。
+- 缓存命中按「缓存读价」计，并且不会再按输入价重复算一遍（各家的 `cached_tokens` 都含在 prompt 总数里）；
+  不填缓存价就退回输入价，只会高估不会低估。
+- 没填价格的模型记为「无价格」而不是 0，所以总计是下限，不是账单。
+- `POST /v1/messages/count_tokens` 除了 `input_tokens`，还在 `zroutery` 字段里给出这次会由谁回答、
+  以及**发送之前**的 prompt 花费估算：
+
+```json
+{ "input_tokens": 42,
+  "zroutery": { "estimated": true, "model": "deepseek-deepseek-v4-pro",
+                "estimated_input_cost": { "currency": "CNY", "amount": 0.000084 },
+                "input_per_mtok": 2.0, "output_per_mtok": 8.0 } }
+```
+
+从 provider 拉模型列表时，如果目录里带价格（OpenRouter 那种按单 token 计价的字符串），会自动换算成
+每百万 token 填好，之后仍可修改。流式请求拿不到 `x-zroutery-cost`（响应头早就发出去了），
+但 Activity 里照样记账。
+
+## 余额查询
+
+各家余额接口没有统一标准，所以 provider 上挂一个 *probe*：一个路径加几个 JSON pointer。内置
+DeepSeek / Moonshot / SiliconFlow / OpenRouter 四个预设，其它用 Custom 自己填；OpenAI 和 Anthropic
+根本没有这种接口，预设里就是「not supported」。
+
+Providers 面板里每个 provider 一行：选预设 → 点 Check，旁边显示余额和检查时间，失败会留下原因。
+**不做定时轮询**——查一次要花一个请求，有些厂商还限流，所以只在你点的时候查。
+
+命令行也能查：
+
+```sh
+zroutery-headless --balances     # 逐个查、打印、退出，适合塞进 cron
+# deepseek: 48.75 CNY remaining
+```
 
 ## 端点
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | POST | `/v1/messages` | Anthropic Messages，支持 SSE |
-| POST | `/v1/messages/count_tokens` | 本地估算，不打上游 |
+| POST | `/v1/messages/count_tokens` | 本地 token 估算 + 价格估算，不打上游 |
 | POST | `/v1/chat/completions` | OpenAI Chat Completions，支持 SSE |
 | GET | `/v1/models`、`/v1/models/{id}` | 同一份 JSON 同时满足两种客户端 |
 | GET | `/v1/status` | 版本、模型数、provider 数（需要 token） |
@@ -135,9 +175,10 @@ opus/sonnet/haiku 映射到对应 class，可以在 Routing 里关掉或用精�
 ## 项目结构
 
 ```
-crates/zroutery-core/     协议转换、模型注册表、路由、HTTP 服务（无 GUI 依赖，109 个测试）
+crates/zroutery-core/     协议转换、模型注册表、路由、计费、HTTP 服务（无 GUI 依赖，130 个测试）
   src/ir.rs               统一中间表示：2 个 decoder + 2 个 encoder，避免 N×M
   src/protocol/           anthropic.rs / openai.rs，含两个方向的 SSE 状态机
+  src/billing.rs          价格计算（按币种分开）、余额 probe 与四个内置预设
   src/config.rs           provider、模型身份与 id 推导、路由策略、配置迁移
   src/registry.rs         模型 id 解析：id/别名走一次哈希，class 成员表预先算好
   src/router.rs           类内候选排序、健康度、熔断、失败转移
@@ -169,3 +210,4 @@ extended thinking ↔ `reasoning_content`、停止原因、usage（含缓存命�
   `max_tokens` / `temperature`，部分网关不认 `stream_options`。
 - `cargo test -p zroutery-core` 只跑纯逻辑，秒级；`pnpm smoke` 验证真实进程。
 - 想看请求细节：`ZROUTERY_LOG=debug`。
+- 价格是每百万 token，不是每 token；从目录里自动填的价格已经换算过了。

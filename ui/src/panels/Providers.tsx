@@ -1,10 +1,16 @@
 import { useState } from "react";
 import {
   api,
+  BALANCE_PRESETS,
+  defaultProbe,
   errorText,
+  money,
   previewId,
   slugify,
   type AppConfig,
+  type BalancePreset,
+  type BalanceStatus,
+  type DiscoveredModel,
   type Provider,
   type ProviderKind,
   type Snapshot,
@@ -43,6 +49,7 @@ function blankProvider(kind: ProviderKind, name: string): Provider {
     timeout_secs: 600,
     connect_timeout_secs: 15,
     anthropic_version: null,
+    balance: { preset: "none", custom: null },
     quirks: {
       use_max_completion_tokens: false,
       drop_temperature: false,
@@ -71,7 +78,7 @@ export default function Providers({
   const [newKind, setNewKind] = useState<ProviderKind>("openai_compatible");
   const [editing, setEditing] = useState<string | null>(null);
   const [keyDraft, setKeyDraft] = useState<Record<string, string>>({});
-  const [discovered, setDiscovered] = useState<Record<string, string[]>>({});
+  const [discovered, setDiscovered] = useState<Record<string, DiscoveredModel[]>>({});
   const [notice, setNotice] = useState<string | null>(null);
 
   const update = (id: string, patch: Partial<Provider>) => {
@@ -126,7 +133,8 @@ export default function Providers({
     }
   };
 
-  const addDiscovered = (provider: Provider, modelName: string) => {
+  const addDiscovered = (provider: Provider, model: DiscoveredModel) => {
+    const modelName = model.id;
     // Only the same provider offering the same model is a duplicate; the same
     // name coming from another provider gets its own prefixed id.
     if (
@@ -150,10 +158,14 @@ export default function Providers({
       display_name: null,
       aliases: [],
       max_output_tokens: null,
+      // Prefilled when the catalogue publishes prices; still editable.
+      pricing: model.pricing,
     });
     void save(next);
     setNotice(
-      `Added “${previewId(provider.id, modelName)}”. Assign it a class on the Models tab.`,
+      model.pricing
+        ? `Added “${previewId(provider.id, modelName)}” with the catalogue price. Assign it a class on the Models tab.`
+        : `Added “${previewId(provider.id, modelName)}”. Assign it a class on the Models tab.`,
     );
   };
 
@@ -165,7 +177,16 @@ export default function Providers({
         </Banner>
       )}
 
-      <Card title="Add a provider">
+      <Card
+        title="Add a provider"
+        actions={
+          config.providers.some((p) => p.balance.preset !== "none") ? (
+            <Button kind="ghost" onClick={() => run(api.refreshBalances)} disabled={busy}>
+              Check all balances
+            </Button>
+          ) : undefined
+        }
+      >
         <div className="controls">
           <Field label="Name" hint="Shown in logs and the model list">
             <input
@@ -265,7 +286,68 @@ export default function Providers({
               <span className="muted">
                 {models.length} model{models.length === 1 ? "" : "s"}
               </span>
+              <BalanceRow
+                provider={provider}
+                status={snapshot.balances[provider.id]}
+                busy={busy}
+                onPreset={(preset) =>
+                  update(provider.id, {
+                    balance: {
+                      preset,
+                      custom:
+                        preset === "custom"
+                          ? (provider.balance.custom ?? defaultProbe())
+                          : null,
+                    },
+                  })
+                }
+                onCheck={() => run(() => api.refreshBalance(provider.id))}
+              />
             </div>
+
+            {provider.balance.preset === "custom" && provider.balance.custom && (
+              <div className="controls">
+                <TextField
+                  label="Balance path"
+                  hint="Appended to the base URL, or an absolute URL"
+                  value={provider.balance.custom.path}
+                  onCommit={(path) =>
+                    update(provider.id, {
+                      balance: {
+                        preset: "custom",
+                        custom: { ...provider.balance.custom!, path },
+                      },
+                    })
+                  }
+                />
+                <TextField
+                  label="Remaining pointer"
+                  hint="JSON pointer, e.g. /data/balance"
+                  value={provider.balance.custom.remaining_pointer ?? ""}
+                  onCommit={(v) =>
+                    update(provider.id, {
+                      balance: {
+                        preset: "custom",
+                        custom: { ...provider.balance.custom!, remaining_pointer: v || null },
+                      },
+                    })
+                  }
+                />
+                <TextField
+                  label="Currency"
+                  hint="Used when the payload carries none"
+                  value={provider.balance.custom.currency ?? ""}
+                  onCommit={(v) =>
+                    update(provider.id, {
+                      balance: {
+                        preset: "custom",
+                        custom: { ...provider.balance.custom!, currency: v || null },
+                      },
+                    })
+                  }
+                />
+              </div>
+            )}
 
             {open && (
               <div className="subpanel">
@@ -367,7 +449,8 @@ export default function Providers({
               <div className="subpanel">
                 <h3>Models reported by {provider.name}</h3>
                 <div className="chips">
-                  {discovered[provider.id].map((name) => {
+                  {discovered[provider.id].map((model) => {
+                    const name = model.id;
                     const already = config.models.some(
                       (m) => m.provider_id === provider.id && m.upstream_model === name,
                     );
@@ -376,10 +459,17 @@ export default function Providers({
                         key={name}
                         className={`chip ${already ? "chip-done" : ""}`}
                         disabled={already}
-                        onClick={() => addDiscovered(provider, name)}
-                        title={already ? "Already added" : `Add as ${previewId(provider.id, name)}`}
+                        onClick={() => addDiscovered(provider, model)}
+                        title={
+                          already
+                            ? "Already added"
+                            : model.pricing
+                              ? `Add as ${previewId(provider.id, name)}, priced ${model.pricing.input_per_mtok}/${model.pricing.output_per_mtok} ${model.pricing.currency} per Mtok`
+                              : `Add as ${previewId(provider.id, name)}`
+                        }
                       >
                         {name}
+                        {model.pricing ? " ¤" : ""}
                         {already ? " ✓" : " +"}
                       </button>
                     );
@@ -391,5 +481,73 @@ export default function Providers({
         );
       })}
     </>
+  );
+}
+
+/**
+ * The balance line of a provider card: which endpoint to ask, the last answer,
+ * and a button to ask again.
+ *
+ * Nothing polls this. Balance endpoints cost a request and some vendors rate
+ * limit them, so it is refreshed only when asked.
+ */
+function BalanceRow({
+  provider,
+  status,
+  busy,
+  onPreset,
+  onCheck,
+}: {
+  provider: Provider;
+  status: BalanceStatus | undefined;
+  busy: boolean;
+  onPreset: (preset: BalancePreset) => void;
+  onCheck: () => void;
+}) {
+  const supported =
+    provider.balance.preset !== "none" &&
+    (provider.balance.preset !== "custom" || provider.balance.custom !== null);
+
+  return (
+    <span className="row gap wrap">
+      <span className="field-label">Balance</span>
+      <select
+        aria-label={`Balance endpoint for ${provider.name}`}
+        value={provider.balance.preset}
+        onChange={(e) => onPreset(e.currentTarget.value as BalancePreset)}
+      >
+        {BALANCE_PRESETS.map((p) => (
+          <option key={p.id} value={p.id}>
+            {p.label}
+          </option>
+        ))}
+      </select>
+      {supported && (
+        <Button kind="ghost" onClick={onCheck} disabled={busy}>
+          Check
+        </Button>
+      )}
+      {status?.balance && (
+        <Badge tone="ok">
+          {status.balance.remaining !== null
+            ? money(status.balance.currency, status.balance.remaining)
+            : `${status.balance.total ?? 0} ${status.balance.currency} granted`}
+        </Badge>
+      )}
+      {status?.error && (
+        <span className="row gap">
+          <Badge tone="danger">check failed</Badge>
+          <span className="muted truncate" title={status.error}>
+            {status.error}
+          </span>
+        </span>
+      )}
+      {status && (
+        <span className="muted">{new Date(status.checked_at).toLocaleTimeString()}</span>
+      )}
+      {!supported && provider.balance.preset === "none" && (
+        <span className="muted">this provider publishes no balance</span>
+      )}
+    </span>
   );
 }

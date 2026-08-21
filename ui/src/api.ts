@@ -15,6 +15,68 @@ export type RoutingStrategy =
 
 export const CLASSES: ModelClass[] = ["opus", "sonnet", "haiku"];
 
+/** What a provider charges for one model, per million tokens. */
+export interface Pricing {
+  currency: string;
+  input_per_mtok: number;
+  output_per_mtok: number;
+  cache_read_per_mtok: number | null;
+  cache_write_per_mtok: number | null;
+}
+
+export interface Cost {
+  currency: string;
+  amount: number;
+}
+
+/** Spend per currency; never summed across currencies. */
+export type CostTotals = Record<string, number>;
+
+export type BalancePreset =
+  | "none"
+  | "deep_seek"
+  | "moonshot"
+  | "silicon_flow"
+  | "open_router"
+  | "custom";
+
+export const BALANCE_PRESETS: { id: BalancePreset; label: string }[] = [
+  { id: "none", label: "Not supported" },
+  { id: "deep_seek", label: "DeepSeek" },
+  { id: "moonshot", label: "Moonshot" },
+  { id: "silicon_flow", label: "SiliconFlow" },
+  { id: "open_router", label: "OpenRouter" },
+  { id: "custom", label: "Custom endpoint" },
+];
+
+export interface BalanceProbe {
+  path: string;
+  remaining_pointer: string | null;
+  total_pointer: string | null;
+  used_pointer: string | null;
+  currency_pointer: string | null;
+  currency: string | null;
+}
+
+export interface BalanceConfig {
+  preset: BalancePreset;
+  custom: BalanceProbe | null;
+}
+
+export interface Balance {
+  currency: string;
+  remaining: number | null;
+  total: number | null;
+  used: number | null;
+}
+
+/** The last answer from a provider's balance endpoint. */
+export interface BalanceStatus {
+  checked_at: string;
+  balance: Balance | null;
+  error: string | null;
+}
+
 export interface ProviderQuirks {
   use_max_completion_tokens: boolean;
   drop_temperature: boolean;
@@ -37,6 +99,7 @@ export interface Provider {
   connect_timeout_secs: number;
   anthropic_version: string | null;
   quirks: ProviderQuirks;
+  balance: BalanceConfig;
 }
 
 /**
@@ -57,6 +120,8 @@ export interface ModelEntry {
   display_name: string | null;
   aliases: string[];
   max_output_tokens: number | null;
+  /** Entered by hand, like the class. Without it a request is logged unpriced. */
+  pricing: Pricing | null;
 }
 
 export interface RoutingConfig {
@@ -131,6 +196,8 @@ export interface RequestRecord {
   latency_ms: number;
   ttft_ms: number | null;
   usage: Usage;
+  /** `null` means unpriced, not free. */
+  cost: Cost | null;
   attempts: number;
 }
 
@@ -152,6 +219,7 @@ export interface ModelTotals {
   output_tokens: number;
   reasoning_tokens: number;
   cached_tokens: number;
+  cost: CostTotals;
   avg_latency_ms: number;
 }
 
@@ -161,6 +229,7 @@ export interface StatsSummary {
   failures: number;
   input_tokens: number;
   output_tokens: number;
+  cost: CostTotals;
   per_model: ModelTotals[];
 }
 
@@ -178,6 +247,14 @@ export interface Snapshot {
   warning: string | null;
   config_path: string;
   version: string;
+  /** provider id -> last balance check. */
+  balances: Record<string, BalanceStatus>;
+}
+
+/** One entry of a provider's catalogue, with prices when it publishes them. */
+export interface DiscoveredModel {
+  id: string;
+  pricing: Pricing | null;
 }
 
 /** The counters the Activity tab polls for, without the configuration. */
@@ -196,7 +273,10 @@ export const api = {
   clearKey: (provider_id: string) =>
     invoke<Snapshot>("clear_provider_key", { providerId: provider_id }),
   fetchModels: (provider: Provider) =>
-    invoke<string[]>("fetch_provider_models", { provider }),
+    invoke<DiscoveredModel[]>("fetch_provider_models", { provider }),
+  refreshBalance: (provider_id: string) =>
+    invoke<Snapshot>("refresh_balance", { providerId: provider_id }),
+  refreshBalances: () => invoke<Snapshot>("refresh_balances"),
   start: () => invoke<Snapshot>("start_proxy"),
   stop: () => invoke<Snapshot>("stop_proxy"),
   regenerateToken: () => invoke<Snapshot>("regenerate_token"),
@@ -232,6 +312,52 @@ export function errorText(value: unknown): string {
     }
   }
   return String(value ?? "unknown error");
+}
+
+/**
+ * Money for humans: enough decimals to see a single cheap request, not so many
+ * that a total becomes unreadable.
+ */
+export function money(currency: string, amount: number): string {
+  const digits = Math.abs(amount) > 0 && Math.abs(amount) < 0.01 ? 6 : 2;
+  return `${amount.toFixed(digits)} ${currency}`;
+}
+
+export function costText(cost: Cost | null): string {
+  return cost ? money(cost.currency, cost.amount) : "—";
+}
+
+export function totalsText(totals: CostTotals): string {
+  const entries = Object.entries(totals);
+  if (entries.length === 0) return "—";
+  return entries.map(([currency, amount]) => money(currency, amount)).join(" + ");
+}
+
+/** `2.75 in / 11.00 out` per million tokens. */
+export function priceText(pricing: Pricing | null): string {
+  if (!pricing) return "—";
+  return `${pricing.input_per_mtok} / ${pricing.output_per_mtok} ${pricing.currency}`;
+}
+
+export function emptyPricing(currency = "USD"): Pricing {
+  return {
+    currency,
+    input_per_mtok: 0,
+    output_per_mtok: 0,
+    cache_read_per_mtok: null,
+    cache_write_per_mtok: null,
+  };
+}
+
+export function defaultProbe(): BalanceProbe {
+  return {
+    path: "/user/balance",
+    remaining_pointer: "/balance",
+    total_pointer: null,
+    used_pointer: null,
+    currency_pointer: null,
+    currency: null,
+  };
 }
 
 /** The virtual model id a class is exposed as. */

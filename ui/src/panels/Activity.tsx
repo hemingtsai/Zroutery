@@ -1,4 +1,4 @@
-import { api, type Snapshot } from "../api";
+import { api, costText, totalsText, type Snapshot } from "../api";
 import { Badge, Button, Card, Empty, ms, num } from "../components";
 
 export default function Activity({
@@ -39,7 +39,15 @@ export default function Activity({
             <strong>{num(summary.output_tokens)}</strong>
             <span>output tokens</span>
           </div>
+          <div>
+            <strong>{totalsText(summary.cost)}</strong>
+            <span>estimated spend</span>
+          </div>
         </div>
+        <p className="field-hint">
+          Spend is computed from the prices you entered and the usage each provider reported.
+          Unpriced models contribute nothing, so a total is a floor, not a bill.
+        </p>
 
         {summary.per_model.length > 0 && (
           <table className="table">
@@ -52,6 +60,7 @@ export default function Activity({
                 <th>Out</th>
                 <th>Reasoning</th>
                 <th>Cached</th>
+                <th>Spend</th>
                 <th>Avg latency</th>
               </tr>
             </thead>
@@ -65,6 +74,7 @@ export default function Activity({
                   <td>{num(m.output_tokens)}</td>
                   <td>{num(m.reasoning_tokens)}</td>
                   <td>{num(m.cached_tokens)}</td>
+                  <td>{totalsText(m.cost)}</td>
                   <td>{ms(m.avg_latency_ms)}</td>
                 </tr>
               ))}
@@ -132,6 +142,7 @@ export default function Activity({
                 <th>Asked for</th>
                 <th>Answered by</th>
                 <th>Tokens</th>
+                <th>Cost</th>
                 <th>TTFT</th>
                 <th>Total</th>
                 <th>Result</th>
@@ -153,6 +164,7 @@ export default function Activity({
                   <td className="muted">
                     {r.usage.input_tokens}/{r.usage.output_tokens}
                   </td>
+                  <td className={r.cost ? "" : "muted"}>{costText(r.cost)}</td>
                   <td>{ms(r.ttft_ms)}</td>
                   <td>{ms(r.latency_ms)}</td>
                   <td>

@@ -2,12 +2,15 @@ import { Fragment, useState } from "react";
 import {
   CLASSES,
   classMembers,
+  emptyPricing,
   modelRows,
   previewId,
+  priceText,
   virtualId,
   type AppConfig,
   type ModelClass,
   type ModelEntry,
+  type Pricing,
   type Snapshot,
 } from "../api";
 import {
@@ -96,6 +99,8 @@ export default function Models({
       display_name: null,
       aliases: [],
       max_output_tokens: null,
+      // Prices are typed in on the row, like the class: never guessed.
+      pricing: null,
     });
     setDraft({ ...draft, upstream_model: "", class: "" });
     setNotice(null);
@@ -142,6 +147,9 @@ export default function Models({
                     {members.map((r, i) => (
                       <li key={r.id}>
                         <span className="muted">{i === 0 ? "primary" : `fallback ${i}`}</span> {r.id}
+                        {r.model.pricing && (
+                          <span className="muted"> · {priceText(r.model.pricing)}</span>
+                        )}
                       </li>
                     ))}
                   </ol>
@@ -210,6 +218,7 @@ export default function Models({
                 <th>Provider</th>
                 <th>Model name</th>
                 <th>Class</th>
+                <th title="Per million tokens, input / output">Price</th>
                 <th title="Lower wins inside a class">Priority</th>
                 <th title="Random tie breaking among equal priorities">Weight</th>
                 <th>On</th>
@@ -256,6 +265,7 @@ export default function Models({
                           ))}
                         </select>
                       </td>
+                      <td className={m.pricing ? "" : "muted"}>{priceText(m.pricing)}</td>
                       <td>
                         <input
                           className="tiny"
@@ -295,7 +305,7 @@ export default function Models({
                     </tr>
                     {expanded === index && (
                       <tr>
-                        <td colSpan={8}>
+                        <td colSpan={9}>
                           <div className="subpanel">
                             <div className="controls">
                               <TextField
@@ -337,6 +347,16 @@ export default function Models({
                                 }
                               />
                             </div>
+                            <h3>Price per million tokens</h3>
+                            <p className="field-hint">
+                              In the currency the provider bills in. Leave it off and requests are
+                              logged without a cost rather than with a guessed one.
+                            </p>
+                            <PriceFields
+                              id={id}
+                              pricing={m.pricing}
+                              onChange={(pricing) => update(index, { pricing })}
+                            />
                             <div className="grid-three">
                               <Toggle
                                 label="Tool use"
@@ -369,3 +389,77 @@ export default function Models({
   );
 }
 
+
+/**
+ * The four numbers that make up a price. Clearing input and output removes the
+ * price entirely, which is how a model goes back to being unpriced.
+ */
+function PriceFields({
+  id,
+  pricing,
+  onChange,
+}: {
+  id: string;
+  pricing: Pricing | null;
+  onChange: (pricing: Pricing | null) => void;
+}) {
+  const current = pricing ?? emptyPricing();
+
+  const patch = (change: Partial<Pricing>) => {
+    const next = { ...current, ...change };
+    const priced =
+      next.input_per_mtok > 0 ||
+      next.output_per_mtok > 0 ||
+      next.cache_read_per_mtok !== null ||
+      next.cache_write_per_mtok !== null;
+    onChange(priced ? next : null);
+  };
+
+  return (
+    <div className="controls">
+      <TextField
+        label="Currency"
+        hint="USD, CNY, …"
+        value={current.currency}
+        onCommit={(currency) => patch({ currency: currency.trim().toUpperCase() || "USD" })}
+      />
+      <NumberField
+        label="Input"
+        hint={`per 1M prompt tokens for ${id}`}
+        min={0}
+        value={current.input_per_mtok}
+        onCommit={(v) => patch({ input_per_mtok: v ?? 0 })}
+      />
+      <NumberField
+        label="Output"
+        hint="per 1M completion tokens"
+        min={0}
+        value={current.output_per_mtok}
+        onCommit={(v) => patch({ output_per_mtok: v ?? 0 })}
+      />
+      <NumberField
+        label="Cache read"
+        hint="optional, defaults to the input price"
+        min={0}
+        placeholder="same as input"
+        value={current.cache_read_per_mtok}
+        onCommit={(v) => patch({ cache_read_per_mtok: v })}
+      />
+      <NumberField
+        label="Cache write"
+        hint="optional"
+        min={0}
+        placeholder="not billed"
+        value={current.cache_write_per_mtok}
+        onCommit={(v) => patch({ cache_write_per_mtok: v })}
+      />
+      {pricing && (
+        <div className="field-actions">
+          <Button kind="ghost" onClick={() => onChange(null)}>
+            Clear price
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}

@@ -43,7 +43,35 @@ class Provider(BaseHTTPRequestHandler):
         self.wfile.write(payload)
 
     def do_GET(self):
-        self._send(200, json.dumps({"data": [{"id": "mock-1"}, {"id": "mock-2"}]}).encode())
+        if self.path.endswith("/user/balance"):
+            self._send(
+                200,
+                json.dumps(
+                    {
+                        "is_available": True,
+                        "balance_infos": [
+                            {"currency": "CNY", "total_balance": "48.75",
+                             "granted_balance": "0.00", "topped_up_balance": "48.75"}
+                        ],
+                    }
+                ).encode(),
+            )
+            return
+        # A catalogue in the OpenRouter shape: prices per single token.
+        self._send(
+            200,
+            json.dumps(
+                {
+                    "data": [
+                        {"id": "mock-1"},
+                        {
+                            "id": "mock-2",
+                            "pricing": {"prompt": "0.0000005", "completion": "0.000002"},
+                        },
+                    ]
+                }
+            ).encode(),
+        )
 
     def do_POST(self):
         length = int(self.headers.get("Content-Length", "0"))
@@ -154,6 +182,14 @@ def write_config(path: str, upstream: str):
                 "key_ref": "provider:deepseek",
                 "enabled": True,
                 "timeout_secs": 30,
+                "balance": {
+                    "preset": "custom",
+                    "custom": {
+                        "path": "/user/balance",
+                        "remaining_pointer": "/balance_infos/0/total_balance",
+                        "currency_pointer": "/balance_infos/0/currency",
+                    },
+                },
             },
             {
                 "id": "openai",
@@ -177,6 +213,12 @@ def write_config(path: str, upstream: str):
                 "provider_id": "deepseek",
                 "upstream_model": "deepseek-v4-pro",
                 "class": "sonnet",
+                "pricing": {
+                    "currency": "CNY",
+                    "input_per_mtok": 2.0,
+                    "output_per_mtok": 8.0,
+                    "cache_read_per_mtok": 0.5,
+                },
             },
             # The very same model name, offered by a second provider.
             {
@@ -313,6 +355,31 @@ def main() -> int:
         check("upstream got a bearer token", sent["auth"] == "Bearer sk-mock-deepseek", str(sent["auth"]))
         check("system prompt became a system message", sent["body"]["messages"][0]["role"] == "system")
 
+        print("cost estimation")
+        # The mock reports 8 prompt and 4 completion tokens.
+        expected = 2.0 * 8 / 1e6 + 8.0 * 4 / 1e6
+        check(
+            "the answer carries an estimated cost",
+            headers.get("x-zroutery-cost") == f"CNY {expected:.6f}",
+            str(headers.get("x-zroutery-cost")),
+        )
+        _, _, body = request(
+            f"{base}/v1/messages/count_tokens",
+            {"model": "sonnet-class", "messages": [{"role": "user", "content": "hello"}]},
+        )
+        estimate = body.get("zroutery", {}).get("estimated_input_cost")
+        check("count_tokens prices the prompt", estimate is not None, str(body))
+        check(
+            "in the model's own currency",
+            estimate and estimate["currency"] == "CNY" and estimate["amount"] > 0,
+            str(estimate),
+        )
+        check(
+            "and names the model that would answer",
+            body["zroutery"]["model"] == "deepseek-deepseek-v4-pro",
+            str(body["zroutery"]),
+        )
+
         print("openai dialect, non streaming")
         status, headers, body = request(
             f"{base}/v1/chat/completions",
@@ -423,6 +490,21 @@ def main() -> int:
             {"model": "sonnet-class", "messages": [{"role": "user", "content": "some text to count"}]},
         )
         check("count_tokens answers", status == 200 and body["input_tokens"] > 0, str(body))
+
+        print("balance query")
+        balances = subprocess.run(
+            [binary, "--balances"], env=env, capture_output=True, text=True, timeout=60
+        )
+        check(
+            "the balance is read from the provider",
+            "deepseek: 48.75 CNY remaining" in balances.stdout,
+            balances.stdout.strip() + balances.stderr.strip()[-200:],
+        )
+        check(
+            "providers without an endpoint are left alone",
+            "openai:" not in balances.stdout,
+            balances.stdout.strip(),
+        )
 
         print("config on disk carries no secrets")
         with open(os.path.join(config_dir, "config.json")) as fh:
