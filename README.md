@@ -51,11 +51,28 @@ cargo run -p zroutery --bin zroutery-headless
    精确 id 调用，但不参与 `*-class` 路由，界面会一直提醒你。
 3. **Routing**：选类内策略（优先级 / 加权随机 / 轮询 / 最低延迟）、失败转移次数、熔断阈值。
 
+### 模型 id 规则
+
+模型的身份是 **(provider, 上游模型名)**，对外 id 由这两者推导：`<provider>-<模型名>`，不单独存储，
+所以不会漂移，也不会因为两个 provider 提供同名模型而冲突：
+
+```
+deepseek + deepseek-v4-pro    →  deepseek-deepseek-v4-pro
+openrouter + deepseek-v4-pro  →  openrouter-deepseek-v4-pro
+openrouter + deepseek/r1:free →  openrouter-deepseek-r1-free   （/ 和 : 会变成 -）
+```
+
+发给上游的仍然是原始模型名（`deepseek-v4-pro`），只有对外的 id 带前缀。嫌长可以在模型详情里加
+**aliases**，任意短名都能解析到同一个模型。
+
+从 0.1.x 升级：旧配置里手写的 `id` 会自动变成 alias，老客户端不用改；界面会提示一次新 id 是什么。
+
 按简报里的例子配完之后，对外可用的模型是：
 
 ```
-deepseek-v4-flash   (haiku)     deepseek-v4-pro  (sonnet)     gpt-5.3-sol (opus)
-opus-class          sonnet-class            haiku-class
+deepseek-deepseek-v4-flash (haiku)   deepseek-deepseek-v4-pro (sonnet)
+openai-gpt-5.3-sol (opus)
+opus-class          sonnet-class          haiku-class
 ```
 
 ## 接客户端
@@ -83,8 +100,8 @@ curl http://127.0.0.1:8787/v1/messages -H "x-api-key: $TOKEN" \
   }'
 ```
 
-响应头里会带 `x-zroutery-model` / `x-zroutery-provider`，告诉你这次实际是谁答的；
-`x-zroutery-degraded: 1` 表示所有候选都在熔断中，属于兜底调用。
+响应头里会带 `x-zroutery-model` / `x-zroutery-provider`，告诉你这次实际是谁答的（`x-zroutery-model`
+就是 `<provider>-<模型名>` 那个 id）；`x-zroutery-degraded: 1` 表示所有候选都在熔断中，属于兜底调用。
 
 Claude 系命名（`claude-sonnet-4-5-…`、`claude-3-5-haiku-…`）默认按名字里的
 opus/sonnet/haiku 映射到对应 class，可以在 Routing 里关掉或用精确别名覆盖。
@@ -110,15 +127,17 @@ opus/sonnet/haiku 映射到对应 class，可以在 Routing 里关掉或用精�
 ## 项目结构
 
 ```
-crates/zroutery-core/     协议转换、模型注册表、路由、HTTP 服务（无 GUI 依赖，92 个测试）
+crates/zroutery-core/     协议转换、模型注册表、路由、HTTP 服务（无 GUI 依赖，102 个测试）
   src/ir.rs               统一中间表示：2 个 decoder + 2 个 encoder，避免 N×M
   src/protocol/           anthropic.rs / openai.rs，含两个方向的 SSE 状态机
+  src/config.rs           provider、模型身份与 id 推导、路由策略、配置迁移
   src/registry.rs         模型 id 解析（精确 id / 别名 / *-class / Claude 命名）
   src/router.rs           类内候选排序、健康度、熔断、失败转移
   src/server.rs           axum 路由、鉴权、流式管道
 src-tauri/                桌面外壳：菜单栏、钥匙串、配置持久化、Tauri 命令
 ui/                       React + TypeScript 仪表盘
 scripts/smoke_test.py     端到端冒烟测试（假 provider → 真二进制 → 真 HTTP）
+scripts/ui_layout_test.py 无头 Chromium 量界面控件的高度和基线
 ```
 
 ## 协议转换支持情况

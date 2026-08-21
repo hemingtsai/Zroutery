@@ -164,36 +164,45 @@ def write_config(path: str, upstream: str):
             },
         ],
         "models": [
+            # Ids are derived as <provider>-<model>, so no entry carries an "id"
+            # except the legacy one at the end.
             {
-                "id": "deepseek-v4-flash",
                 "provider_id": "deepseek",
                 "upstream_model": "deepseek-v4-flash",
                 "class": "haiku",
             },
             {
-                "id": "deepseek-v4-pro",
                 "provider_id": "deepseek",
                 "upstream_model": "deepseek-v4-pro",
                 "class": "sonnet",
             },
+            # The very same model name, offered by a second provider.
             {
-                "id": "gpt-5.3-sol",
+                "provider_id": "openai",
+                "upstream_model": "deepseek-v4-pro",
+                "class": "sonnet",
+                "priority": 50,
+            },
+            {
                 "provider_id": "openai",
                 "upstream_model": "gpt-5.3-sol",
                 "class": "opus",
                 "priority": 0,
             },
             {
-                "id": "broken-opus",
                 "provider_id": "openai",
                 "upstream_model": "broken-model",
                 "class": "opus",
                 "priority": -10,
             },
+            {"provider_id": "openai", "upstream_model": "mystery"},
+            # Written by 0.1.x: the free-form id must survive as an alias.
             {
-                "id": "unclassified-thing",
+                "id": "legacy-name",
                 "provider_id": "openai",
-                "upstream_model": "mystery",
+                "upstream_model": "gpt-legacy",
+                "class": "haiku",
+                "priority": 90,
             },
         ],
     }
@@ -248,10 +257,18 @@ def main() -> int:
         ids = [m["id"] for m in listing["data"]]
         check(
             "classes and concrete models are listed",
-            {"opus-class", "sonnet-class", "haiku-class", "deepseek-v4-pro", "unclassified-thing"} <= set(ids),
+            {
+                "opus-class",
+                "sonnet-class",
+                "haiku-class",
+                "deepseek-deepseek-v4-pro",
+                "openai-deepseek-v4-pro",
+                "openai-mystery",
+            }
+            <= set(ids),
             str(ids),
         )
-        unclassified = next(m for m in listing["data"] if m["id"] == "unclassified-thing")
+        unclassified = next(m for m in listing["data"] if m["id"] == "openai-mystery")
         check("unclassified model has no class", unclassified["zroutery"]["class"] is None)
 
         print("anthropic dialect, non streaming")
@@ -261,7 +278,11 @@ def main() -> int:
              "messages": [{"role": "user", "content": "hello"}]},
         )
         check("200 from sonnet-class", status == 200, str(body))
-        check("routed to deepseek-v4-pro", headers.get("x-zroutery-model") == "deepseek-v4-pro")
+        check(
+            "routed to deepseek-deepseek-v4-pro",
+            headers.get("x-zroutery-model") == "deepseek-deepseek-v4-pro",
+            str(headers),
+        )
         check("anthropic response shape", body.get("type") == "message" and body["content"][0]["type"] == "text")
         check("upstream text is returned", "deepseek-v4-pro" in body["content"][0]["text"], str(body))
         check("usage is reported", body["usage"]["input_tokens"] == 8)
@@ -275,7 +296,10 @@ def main() -> int:
             {"model": "haiku-class", "messages": [{"role": "user", "content": "hello"}]},
         )
         check("200 from haiku-class", status == 200, str(body))
-        check("routed to deepseek-v4-flash", headers.get("x-zroutery-model") == "deepseek-v4-flash")
+        check(
+            "routed to deepseek-deepseek-v4-flash",
+            headers.get("x-zroutery-model") == "deepseek-deepseek-v4-flash",
+        )
         check("openai response shape", body.get("object") == "chat.completion")
         check("finish reason mapped", body["choices"][0]["finish_reason"] == "stop")
 
@@ -284,7 +308,11 @@ def main() -> int:
             f"{base}/v1/messages",
             {"model": "opus-class", "max_tokens": 16, "messages": [{"role": "user", "content": "hi"}]},
         )
-        check("failed over to the healthy opus model", headers.get("x-zroutery-model") == "gpt-5.3-sol", str(headers))
+        check(
+            "failed over to the healthy opus model",
+            headers.get("x-zroutery-model") == "openai-gpt-5.3-sol",
+            str(headers),
+        )
         check("client still sees 200", status == 200)
 
         print("claude style name")
@@ -293,7 +321,43 @@ def main() -> int:
             {"model": "claude-3-5-haiku-20241022", "max_tokens": 8,
              "messages": [{"role": "user", "content": "hi"}]},
         )
-        check("claude haiku name maps to haiku-class", headers.get("x-zroutery-model") == "deepseek-v4-flash")
+        check(
+            "claude haiku name maps to haiku-class",
+            headers.get("x-zroutery-model") == "deepseek-deepseek-v4-flash",
+        )
+
+        print("the same model from two providers")
+        for model_id, expected_key in [
+            ("deepseek-deepseek-v4-pro", "Bearer sk-mock-deepseek"),
+            ("openai-deepseek-v4-pro", "Bearer sk-mock-openai"),
+        ]:
+            _, headers, _ = request(
+                f"{base}/v1/messages",
+                {"model": model_id, "max_tokens": 16,
+                 "messages": [{"role": "user", "content": "hi"}]},
+            )
+            sent = Provider.seen[-1]
+            check(f"{model_id} reaches its own provider", sent["auth"] == expected_key, str(sent["auth"]))
+            check(f"{model_id} sends the bare model name", sent["body"]["model"] == "deepseek-v4-pro")
+            check(f"{model_id} is reported back", headers.get("x-zroutery-model") == model_id)
+
+        print("ids from 0.1.x")
+        status, headers, _ = request(
+            f"{base}/v1/messages",
+            {"model": "legacy-name", "max_tokens": 16,
+             "messages": [{"role": "user", "content": "hi"}]},
+        )
+        check("the old id still resolves", status == 200)
+        check(
+            "and reports the new id",
+            headers.get("x-zroutery-model") == "openai-gpt-legacy",
+            str(headers),
+        )
+        with open(os.path.join(config_dir, "config.json")) as fh:
+            migrated = json.load(fh)
+        legacy = next(m for m in migrated["models"] if m["upstream_model"] == "gpt-legacy")
+        check("the old id was written back as an alias", legacy.get("aliases") == ["legacy-name"], str(legacy))
+        check("and the free-form id is gone", "id" not in legacy, str(legacy))
 
         print("streaming, anthropic dialect over an openai provider")
         _, headers, wire = request(
