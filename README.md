@@ -26,6 +26,7 @@ pnpm dev                    # 开发模式（热更新）
 pnpm build                  # 产出 target/release/bundle/{macos,dmg}
 pnpm test                   # cargo test --workspace
 pnpm smoke                  # 起一个假 provider，端到端跑通两种方言 + 流式
+pnpm test:layout            # 无头 Chromium 渲染真实界面，量每个控件的高度和基线
 ```
 
 > `pnpm build` 里的 DMG 步骤用 `hdiutil` + Finder，需要在正常桌面会话里跑；只要 `.app`
