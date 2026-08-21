@@ -20,6 +20,10 @@ pub enum Error {
     #[error("model `{0}` is not available")]
     UnknownModel(String),
 
+    /// Nothing is served at that path.
+    #[error("no endpoint at {0}")]
+    UnknownRoute(String),
+
     /// A `*-class` id has no enabled, healthy member.
     #[error("no model is available for `{0}`")]
     NoCandidate(String),
@@ -70,7 +74,7 @@ impl Error {
         match self {
             Error::InvalidRequest(_) => StatusCode::BAD_REQUEST,
             Error::TooLarge { .. } => StatusCode::PAYLOAD_TOO_LARGE,
-            Error::UnknownModel(_) => StatusCode::NOT_FOUND,
+            Error::UnknownModel(_) | Error::UnknownRoute(_) => StatusCode::NOT_FOUND,
             Error::NoCandidate(_) => StatusCode::SERVICE_UNAVAILABLE,
             Error::Unauthorized => StatusCode::UNAUTHORIZED,
             Error::MissingApiKey(_) => StatusCode::PRECONDITION_FAILED,
@@ -89,7 +93,7 @@ impl Error {
         match self {
             Error::InvalidRequest(_) => "invalid_request_error",
             Error::TooLarge { .. } => "request_too_large",
-            Error::UnknownModel(_) => "not_found_error",
+            Error::UnknownModel(_) | Error::UnknownRoute(_) => "not_found_error",
             Error::NoCandidate(_) => "overloaded_error",
             Error::Unauthorized => "authentication_error",
             Error::MissingApiKey(_) => "authentication_error",
@@ -123,7 +127,10 @@ impl Error {
     pub fn counts_against_health(&self) -> bool {
         !matches!(
             self,
-            Error::InvalidRequest(_) | Error::UnknownModel(_) | Error::TooLarge { .. }
+            Error::InvalidRequest(_)
+                | Error::UnknownModel(_)
+                | Error::UnknownRoute(_)
+                | Error::TooLarge { .. }
         )
     }
 

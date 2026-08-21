@@ -324,6 +324,35 @@ def main() -> int:
         )
         check("unauthenticated requests are rejected", status == 401, f"got {status}")
 
+        print("path shapes")
+        # Clients disagree about whether the base URL carries /v1, so both work.
+        for path in ("/v1/models", "/models"):
+            status, _, body = request(f"{base}{path}")
+            check(f"{path} answers", status == 200 and body.get("object") == "list", str(body)[:80])
+        status, _, body = request(
+            f"{base}/chat/completions",
+            {"model": "haiku-class", "messages": [{"role": "user", "content": "hi"}]},
+        )
+        check("/chat/completions answers", status == 200, f"got {status}")
+
+        status, _, body = request(f"{base}/nope")
+        check("an unknown path is a 404", status == 404, f"got {status}")
+        check(
+            "and it lists the real endpoints",
+            "/v1/models" in (body.get("zroutery", {}).get("endpoints") or []),
+            str(body)[:120],
+        )
+        status, _, body = request(
+            f"{base}/v1/v1/messages",
+            {"model": "sonnet-class", "max_tokens": 8,
+             "messages": [{"role": "user", "content": "hi"}]},
+        )
+        check(
+            "a doubled /v1 prefix says so",
+            "base URL already ends in /v1" in str(body.get("zroutery", {}).get("likely_cause")),
+            str(body)[:160],
+        )
+
         status, _, body = request(f"{base}/health", token=None)
         check("health needs no token", status == 200 and body == {"status": "ok"}, str(body))
         status, _, _ = request(f"{base}/v1/status", token=None)

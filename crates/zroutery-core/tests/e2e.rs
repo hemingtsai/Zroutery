@@ -659,6 +659,137 @@ async fn missing_api_key_fails_over_and_reports_clearly() {
 }
 
 #[tokio::test]
+async fn both_prefixes_reach_the_same_endpoints() {
+    let h = Harness::new().await;
+
+    // A base URL with /v1 and one without both work, because clients disagree
+    // about which of the two they are handed.
+    for path in ["/v1/models", "/models"] {
+        let resp = h.get(path).send().await.unwrap();
+        assert_eq!(resp.status(), 200, "{path}");
+        let body: Value = resp.json().await.unwrap();
+        assert_eq!(body["object"], "list", "{path}");
+    }
+    for path in [
+        "/v1/models/openai-gpt-5.3-sol",
+        "/models/openai-gpt-5.3-sol",
+    ] {
+        let body: Value = h.get(path).send().await.unwrap().json().await.unwrap();
+        assert_eq!(body["id"], "openai-gpt-5.3-sol", "{path}");
+    }
+
+    for path in ["/v1/chat/completions", "/chat/completions"] {
+        let resp = h
+            .post(path)
+            .json(&json!({"model": "sonnet-class",
+                          "messages": [{"role": "user", "content": "hi"}]}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200, "{path}");
+    }
+    for path in ["/v1/messages", "/messages"] {
+        let resp = h
+            .post(path)
+            .json(&json!({"model": "sonnet-class", "max_tokens": 8,
+                          "messages": [{"role": "user", "content": "hi"}]}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200, "{path}");
+    }
+    for path in ["/v1/messages/count_tokens", "/messages/count_tokens"] {
+        let resp = h
+            .post(path)
+            .json(&json!({"model": "sonnet-class",
+                          "messages": [{"role": "user", "content": "hi"}]}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200, "{path}");
+    }
+
+    // The alias sits inside the auth layer; it is not a way around it. Each path
+    // is probed with the verb it actually implements, since a wrong verb is
+    // answered before authentication runs.
+    for (path, post) in [
+        ("/models", false),
+        ("/status", false),
+        ("/chat/completions", true),
+        ("/messages", true),
+    ] {
+        let url = format!("{}{path}", h.base);
+        let request = if post {
+            h.client.post(url).json(&json!({"model": "sonnet-class"}))
+        } else {
+            h.client.get(url)
+        };
+        let resp = request.send().await.unwrap();
+        assert_eq!(resp.status(), 401, "{path} must still need the token");
+    }
+
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn an_unknown_path_explains_itself() {
+    let h = Harness::new().await;
+
+    let resp = h.get("/v2/models").send().await.unwrap();
+    assert_eq!(resp.status(), 404);
+    let body: Value = resp.json().await.unwrap();
+    // OpenAI shaped, because that is what a client on this path expects.
+    assert_eq!(body["error"]["code"], "not_found_error");
+    assert!(body["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("GET /v2/models"));
+    let endpoints = body["zroutery"]["endpoints"].as_array().unwrap();
+    assert!(endpoints.iter().any(|e| e == "/v1/models"));
+    assert!(body["zroutery"]["likely_cause"].is_null());
+
+    // A path that looks like a messages call answers in the Anthropic envelope.
+    let body: Value = h
+        .post("/v1/messages/nope")
+        .json(&json!({}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(body["type"], "error");
+    assert_eq!(body["error"]["type"], "not_found_error");
+
+    // The classic misconfiguration: a base URL ending in /v1 plus an SDK that
+    // appends /v1 itself.
+    let body: Value = h
+        .post("/v1/v1/messages")
+        .json(&json!({}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let cause = body["zroutery"]["likely_cause"].as_str().unwrap();
+    assert!(cause.contains("base URL already ends in /v1"), "{cause}");
+    assert!(cause.contains("/v1/messages"), "{cause}");
+
+    // A real path with the wrong verb says which verb it wants, rather than
+    // answering with an empty 405 that reads like a broken proxy.
+    let resp = h.get("/v1/chat/completions").send().await.unwrap();
+    assert_eq!(resp.status(), 405);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["error"]["code"], "method_not_allowed");
+    let message = body["error"]["message"].as_str().unwrap();
+    assert!(message.contains("POST endpoint"), "{message}");
+    assert!(message.contains("not GET"), "{message}");
+
+    h.shutdown().await;
+}
+
+#[tokio::test]
 async fn authentication_is_enforced_on_api_routes_only() {
     let h = Harness::new().await;
 

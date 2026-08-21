@@ -186,6 +186,15 @@ zroutery-headless --balances     # 逐个查、打印、退出，适合塞进 cr
 | GET | `/v1/status` | 版本、模型数、provider 数（需要 token） |
 | GET | `/health` | 只回 `{"status":"ok"}`，唯一免鉴权的路由 |
 
+**`/v1` 前缀可有可无**：上面每个路径去掉 `/v1` 也一样能用（`/models`、`/chat/completions`、
+`/messages` …），因为各家客户端对「base URL 要不要带 `/v1`」的约定并不一致。所以
+`OPENAI_BASE_URL` 填 `http://127.0.0.1:8787` 或 `http://127.0.0.1:8787/v1` 都行。
+
+路径写错时不会给你一个空的 404，而是返回 JSON 列出真实可用的端点；如果是 `/v1/v1/...`
+这种重复前缀（把带 `/v1` 的 base URL 配给了会自己拼 `/v1` 的 SDK，Anthropic 系最常见），
+会直接告诉你去掉 base URL 里的 `/v1`。方法用错（比如 GET 打 `/v1/chat/completions`）会返回 405
+并说明该用哪个方法。
+
 ## 安全
 
 - 默认只监听 `127.0.0.1`，并且要求 `x-api-key` 或 `Authorization: Bearer <token>`。
@@ -204,7 +213,7 @@ zroutery-headless --balances     # 逐个查、打印、退出，适合塞进 cr
 ## 项目结构
 
 ```
-crates/zroutery-core/     协议转换、模型注册表、路由、计费、HTTP 服务（无 GUI 依赖，133 个测试）
+crates/zroutery-core/     协议转换、模型注册表、路由、计费、HTTP 服务（无 GUI 依赖，135 个测试）
   src/ir.rs               统一中间表示：2 个 decoder + 2 个 encoder，避免 N×M
   src/protocol/           anthropic.rs / openai.rs，含两个方向的 SSE 状态机
   src/billing.rs          价格计算（按币种分开）、余额 probe 与五个内置预设

@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 use axum::body::Body;
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{DefaultBodyLimit, Path, State};
-use axum::http::{header, HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
+use axum::http::{header, HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -105,15 +105,41 @@ impl AppState {
 }
 
 /// Build the axum application.
+/// Every path the proxy answers on, in the order the docs list them.
+///
+/// Both prefixes are served. OpenAI clients are usually configured with a base
+/// URL that already ends in `/v1` and append `/models` themselves, but plenty of
+/// tools take the host on its own and do the same, so serving only one prefix
+/// turns a working configuration into a bare 404.
+const ENDPOINTS: &[&str] = &[
+    "/v1/messages",
+    "/v1/messages/count_tokens",
+    "/v1/chat/completions",
+    "/v1/models",
+    "/v1/models/{id}",
+    "/v1/status",
+    "/health",
+];
+
 pub fn build_app(state: Arc<AppState>) -> AxumRouter {
     let cfg = state.config();
-    let mut app = AxumRouter::new()
-        .route("/v1/messages", post(anthropic_messages))
-        .route("/v1/messages/count_tokens", post(count_tokens))
-        .route("/v1/chat/completions", post(openai_chat))
-        .route("/v1/models", get(list_models))
-        .route("/v1/models/{id}", get(get_model))
-        .route("/v1/status", get(status))
+    let mut api = AxumRouter::new();
+    // `/x` and `/v1/x` reach the same handler, so a base URL with or without the
+    // version prefix both work.
+    for prefix in ["", "/v1"] {
+        api = api
+            .route(&format!("{prefix}/messages"), post(anthropic_messages))
+            .route(
+                &format!("{prefix}/messages/count_tokens"),
+                post(count_tokens),
+            )
+            .route(&format!("{prefix}/chat/completions"), post(openai_chat))
+            .route(&format!("{prefix}/models"), get(list_models))
+            .route(&format!("{prefix}/models/{{id}}"), get(get_model))
+            .route(&format!("{prefix}/status"), get(status));
+    }
+
+    let mut app = api
         // Prompts with inline images are large, runaway bodies are not.
         .layer(DefaultBodyLimit::max(cfg.server.max_body_bytes()))
         .route_layer(middleware::from_fn_with_state(
@@ -123,12 +149,78 @@ pub fn build_app(state: Arc<AppState>) -> AxumRouter {
         // Liveness only, and deliberately unauthenticated: it says nothing about
         // the configuration. `/v1/status` behind the token has the detail.
         .route("/health", get(health))
+        // An unmatched path used to answer with an empty 404, which tells a user
+        // nothing about whether the proxy is even running. A wrong method on a
+        // real path is worth spelling out too.
+        .fallback(unknown_route)
+        .method_not_allowed_fallback(wrong_method)
         .with_state(Arc::clone(&state));
 
     if let Some(cors) = cors_layer(&cfg.server) {
         app = app.layer(cors);
     }
     app
+}
+
+/// Answer an unknown path with something a human can act on.
+///
+/// Only route names are listed, never configuration: this runs before
+/// authentication, because an unmatched path never reaches the auth layer.
+async fn unknown_route(method: Method, uri: Uri) -> Response {
+    let path = uri.path().to_string();
+    let error = Error::UnknownRoute(format!("{method} {path}"));
+    // Anthropic clients parse a different error envelope, so answer in the shape
+    // the caller is most likely to understand.
+    let dialect = if path.contains("messages") || path.contains("count_tokens") {
+        Dialect::Anthropic
+    } else {
+        Dialect::OpenAI
+    };
+
+    let mut hint = serde_json::Map::new();
+    hint.insert("endpoints".into(), json!(ENDPOINTS));
+    // The usual cause: a base URL that already ends in /v1 while the client
+    // appends /v1 as well, which the Anthropic SDKs do.
+    if let Some(rest) = path.strip_prefix("/v1/v1/") {
+        hint.insert(
+            "likely_cause".into(),
+            json!(format!(
+                "the base URL already ends in /v1 and the client added another; \
+                 drop the /v1 from the base URL and this becomes /v1/{rest}"
+            )),
+        );
+    }
+    let mut body = error.to_wire(dialect);
+    if let Some(object) = body.as_object_mut() {
+        object.insert("zroutery".into(), Value::Object(hint));
+    }
+    (error.status(), Json(body)).into_response()
+}
+
+/// The path exists but not for this verb. Say which one it wants, since an empty
+/// 405 reads exactly like a broken proxy.
+///
+/// Like the 404 handler this runs before authentication, so it names routes and
+/// nothing else. That a well known path exists is already public.
+async fn wrong_method(method: Method, uri: Uri) -> Response {
+    let path = uri.path();
+    let wanted = if path.ends_with("/models") || path.ends_with("/status") {
+        "GET"
+    } else {
+        "POST"
+    };
+    (
+        StatusCode::METHOD_NOT_ALLOWED,
+        Json(json!({
+            "error": {
+                "message": format!("{path} is a {wanted} endpoint, not {method}"),
+                "type": "invalid_request_error",
+                "code": "method_not_allowed",
+            },
+            "zroutery": {"endpoints": ENDPOINTS},
+        })),
+    )
+        .into_response()
 }
 
 /// Build the CORS layer for the configured origins.
