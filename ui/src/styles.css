@@ -15,6 +15,10 @@
   --danger: #b3261e;
   --danger-bg: #fee2e2;
   --radius: 10px;
+  /* One height for every control, so a row lines up whatever it contains. */
+  --control-h: 28px;
+  --label-h: 14px;
+  --field-gap: 4px;
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
   font-size: 13px;
 }
@@ -96,8 +100,12 @@ body {
 }
 
 .url {
-  padding: 4px 8px;
-  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  box-sizing: border-box;
+  height: var(--control-h);
+  padding: 0 8px;
+  border-radius: 7px;
   background: var(--panel-2);
   border: 1px solid var(--line);
   max-width: 260px;
@@ -120,7 +128,8 @@ body {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 7px 14px;
+  height: 30px;
+  padding: 0 14px;
   border: 1px solid transparent;
   border-bottom: none;
   border-radius: 8px 8px 0 0;
@@ -231,15 +240,26 @@ select:focus-visible,
 
 /* ------------------------------------------------------------------ inputs */
 
+/* `.row` groups things that sit on one line (badges, buttons, inline text). */
 .row {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
 }
 .row.gap {
   gap: 8px;
 }
 .row.wrap {
   flex-wrap: wrap;
+}
+
+/* `.controls` groups labelled fields. Every field reserves the same space for
+   its label, so the inputs share one baseline even when only some fields carry
+   a hint underneath. */
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 10px 12px;
 }
 
 .grid-two {
@@ -257,7 +277,7 @@ select:focus-visible,
 .field {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--field-gap);
   min-width: 150px;
 }
 
@@ -266,6 +286,8 @@ select:focus-visible,
 }
 
 .field-label {
+  height: var(--label-h);
+  line-height: var(--label-h);
   font-size: 11px;
   color: var(--muted);
   font-weight: 600;
@@ -273,32 +295,70 @@ select:focus-visible,
 
 .field-hint {
   font-size: 11px;
+  line-height: 14px;
   color: var(--muted);
   font-style: normal;
 }
 
+/* Buttons that belong to a field row start where the inputs start. */
 .field-actions {
   display: flex;
+  align-items: center;
   gap: 8px;
-  align-items: flex-end;
-  padding-bottom: 1px;
+  height: var(--control-h);
+  margin-top: calc(var(--label-h) + var(--field-gap));
+}
+
+input,
+select,
+.btn {
+  box-sizing: border-box;
+  height: var(--control-h);
+  font: inherit;
+  font-size: 13px;
+  line-height: normal;
+  border-radius: 7px;
+  border: 1px solid var(--line);
+  color: var(--text);
+  background: var(--panel-2);
+  /* Native selects ignore padding and pick their own height in WebKit. */
+  appearance: none;
+  -webkit-appearance: none;
 }
 
 input,
 select {
-  font: inherit;
-  color: var(--text);
-  background: var(--panel-2);
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  padding: 6px 8px;
+  padding: 0 8px;
   min-width: 0;
 }
 
+select {
+  padding-right: 26px;
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%238a8a96' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 9px center;
+  cursor: pointer;
+}
+
+input[type="number"] {
+  text-align: left;
+}
+
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  appearance: none;
+  -webkit-appearance: none;
+  margin: 0;
+}
+
 input[type="checkbox"] {
-  width: 15px;
   height: 15px;
+  width: 15px;
+  padding: 0;
+  appearance: auto;
+  -webkit-appearance: checkbox;
   accent-color: var(--accent);
+  flex: none;
 }
 
 input.tiny {
@@ -313,18 +373,17 @@ input[readonly] {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-height: var(--control-h);
   cursor: pointer;
 }
 
 /* ----------------------------------------------------------------- buttons */
 
 .btn {
-  font: inherit;
-  border-radius: 7px;
-  padding: 6px 12px;
-  border: 1px solid var(--line);
-  background: var(--panel-2);
-  color: var(--text);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 12px;
   cursor: pointer;
   white-space: nowrap;
 }
@@ -360,6 +419,7 @@ input[readonly] {
 
 .linky {
   font: inherit;
+  line-height: var(--control-h);
   border: none;
   background: none;
   padding: 0;
@@ -371,8 +431,10 @@ input[readonly] {
 /* ------------------------------------------------------------------ badges */
 
 .badge {
-  display: inline-block;
-  padding: 1px 7px;
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 7px;
   border-radius: 999px;
   font-size: 11px;
   font-weight: 600;
@@ -524,9 +586,13 @@ input[readonly] {
 }
 
 .chip {
+  display: inline-flex;
+  align-items: center;
+  box-sizing: border-box;
+  height: 24px;
   font: inherit;
   font-size: 11px;
-  padding: 3px 9px;
+  padding: 0 10px;
   border-radius: 999px;
   border: 1px dashed var(--line);
   background: var(--panel-2);

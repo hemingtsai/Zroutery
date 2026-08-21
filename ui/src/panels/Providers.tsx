@@ -149,7 +149,7 @@ export default function Providers({
       )}
 
       <Card title="Add a provider">
-        <div className="row gap wrap">
+        <div className="controls">
           <Field label="Name" hint="Shown in logs and the model list">
             <input
               value={newName}
@@ -211,7 +211,7 @@ export default function Providers({
               </>
             }
           >
-            <div className="row gap wrap">
+            <div className="controls">
               <Field label="Base URL" wide hint="Everything before /chat/completions or /v1/messages">
                 <input
                   value={provider.base_url}
@@ -253,7 +253,7 @@ export default function Providers({
 
             {open && (
               <div className="subpanel">
-                <div className="row gap wrap">
+                <div className="controls">
                   <Field label="Request timeout (s)">
                     <input
                       type="number"

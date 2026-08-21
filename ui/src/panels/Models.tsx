@@ -134,7 +134,7 @@ export default function Models({
       </Card>
 
       <Card title="Add a model">
-        <div className="row gap wrap">
+        <div className="controls">
           <Field label="Provider">
             <select
               value={draft.provider_id}
@@ -271,7 +271,7 @@ export default function Models({
                       <tr>
                         <td colSpan={8}>
                           <div className="subpanel">
-                            <div className="row gap wrap">
+                            <div className="controls">
                               <Field label="Display name">
                                 <input
                                   value={m.display_name ?? ""}

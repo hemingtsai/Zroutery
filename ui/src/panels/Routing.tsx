@@ -62,7 +62,7 @@ export default function Routing({
   return (
     <>
       <Card title="Class routing">
-        <div className="row gap wrap">
+        <div className="controls">
           <Field
             label="Strategy"
             hint={STRATEGIES.find((s) => s.id === config.routing.strategy)?.hint}
@@ -173,7 +173,7 @@ export default function Routing({
             </tbody>
           </table>
         )}
-        <div className="row gap wrap">
+        <div className="controls">
           <Field label="Model id">
             <input
               value={aliasDraft.from}
@@ -205,7 +205,7 @@ export default function Routing({
       </Card>
 
       <Card title="Local server" tone={snapshot.server.exposed ? "warn" : undefined}>
-        <div className="row gap wrap">
+        <div className="controls">
           <Field label="Host" hint="127.0.0.1 keeps the proxy on this machine">
             <input
               value={hostDraft}
@@ -259,7 +259,7 @@ export default function Routing({
           />
         </div>
 
-        <div className="row gap wrap">
+        <div className="controls">
           <Field label="Local token" wide hint="Send as x-api-key or Authorization: Bearer">
             <input readOnly value={config.server.auth_token} onFocus={(e) => e.currentTarget.select()} />
           </Field>
