@@ -1,6 +1,7 @@
 import { useState } from "react";
 import {
   api,
+  errorText,
   previewId,
   slugify,
   type AppConfig,
@@ -8,7 +9,17 @@ import {
   type ProviderKind,
   type Snapshot,
 } from "../api";
-import { Badge, Banner, Button, Card, Empty, Field, Toggle } from "../components";
+import {
+  Badge,
+  Banner,
+  Button,
+  Card,
+  Empty,
+  Field,
+  NumberField,
+  TextField,
+  Toggle,
+} from "../components";
 
 const KINDS: { id: ProviderKind; label: string; hint: string }[] = [
   {
@@ -111,7 +122,7 @@ export default function Providers({
       setDiscovered({ ...discovered, [provider.id]: ids });
       if (!ids.length) setNotice(`${provider.name} returned an empty model list.`);
     } catch (e) {
-      setNotice(String(e));
+      setNotice(errorText(e));
     }
   };
 
@@ -196,9 +207,7 @@ export default function Providers({
             title={
               <span className="row gap">
                 {provider.name}
-                <Badge tone={provider.kind === "anthropic" ? "neutral" : "neutral"}>
-                  {provider.kind === "anthropic" ? "Anthropic API" : "OpenAI API"}
-                </Badge>
+                <Badge>{provider.kind === "anthropic" ? "Anthropic API" : "OpenAI API"}</Badge>
                 {hasKey ? <Badge tone="ok">key stored</Badge> : <Badge tone="warn">no key</Badge>}
                 {!provider.enabled && <Badge tone="danger">disabled</Badge>}
               </span>
@@ -218,12 +227,13 @@ export default function Providers({
             }
           >
             <div className="controls">
-              <Field label="Base URL" wide hint="Everything before /chat/completions or /v1/messages">
-                <input
-                  value={provider.base_url}
-                  onChange={(e) => update(provider.id, { base_url: e.currentTarget.value })}
-                />
-              </Field>
+              <TextField
+                label="Base URL"
+                wide
+                hint="Everything before /chat/completions or /v1/messages"
+                value={provider.base_url}
+                onCommit={(base_url) => update(provider.id, { base_url })}
+              />
               <Field label="API key" hint={hasKey ? "Stored in the macOS keychain" : "Required"}>
                 <input
                   type="password"
@@ -260,39 +270,25 @@ export default function Providers({
             {open && (
               <div className="subpanel">
                 <div className="controls">
-                  <Field label="Request timeout (s)">
-                    <input
-                      type="number"
-                      min={5}
-                      value={provider.timeout_secs}
-                      onChange={(e) =>
-                        update(provider.id, { timeout_secs: Number(e.currentTarget.value) || 600 })
-                      }
-                    />
-                  </Field>
-                  <Field label="Connect timeout (s)">
-                    <input
-                      type="number"
-                      min={1}
-                      value={provider.connect_timeout_secs}
-                      onChange={(e) =>
-                        update(provider.id, {
-                          connect_timeout_secs: Number(e.currentTarget.value) || 15,
-                        })
-                      }
-                    />
-                  </Field>
+                  <NumberField
+                    label="Request timeout (s)"
+                    min={5}
+                    value={provider.timeout_secs}
+                    onCommit={(v) => update(provider.id, { timeout_secs: v ?? 600 })}
+                  />
+                  <NumberField
+                    label="Connect timeout (s)"
+                    min={1}
+                    value={provider.connect_timeout_secs}
+                    onCommit={(v) => update(provider.id, { connect_timeout_secs: v ?? 15 })}
+                  />
                   {provider.kind === "anthropic" && (
-                    <Field label="anthropic-version" hint="Leave empty for 2023-06-01">
-                      <input
-                        value={provider.anthropic_version ?? ""}
-                        onChange={(e) =>
-                          update(provider.id, {
-                            anthropic_version: e.currentTarget.value || null,
-                          })
-                        }
-                      />
-                    </Field>
+                    <TextField
+                      label="anthropic-version"
+                      hint="Leave empty for 2023-06-01"
+                      value={provider.anthropic_version ?? ""}
+                      onCommit={(v) => update(provider.id, { anthropic_version: v || null })}
+                    />
                   )}
                 </div>
 

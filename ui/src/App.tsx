@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { api, type AppConfig, type Snapshot } from "./api";
+import { api, errorText, type AppConfig, type Snapshot } from "./api";
 import { Badge, Banner, Button } from "./components";
 import Providers from "./panels/Providers";
 import Models from "./panels/Models";
@@ -19,6 +19,7 @@ export default function App() {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [tab, setTab] = useState<Tab>("providers");
   const [error, setError] = useState<string | null>(null);
+  const [pollError, setPollError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const run = useCallback(async (task: () => Promise<Snapshot>) => {
@@ -27,7 +28,7 @@ export default function App() {
     try {
       setSnapshot(await task());
     } catch (e) {
-      setError(String(e));
+      setError(errorText(e));
     } finally {
       setBusy(false);
     }
@@ -37,13 +38,28 @@ export default function App() {
     void run(api.snapshot);
   }, [run]);
 
-  // The Activity tab needs fresh numbers; the rest does not.
+  // The Activity tab needs fresh numbers. It polls the counters only, and a
+  // failure is reported rather than swallowed: silence would look like an idle
+  // proxy.
   useEffect(() => {
     if (tab !== "activity") return;
-    const timer = setInterval(() => {
-      api.snapshot().then(setSnapshot).catch(() => {});
-    }, 2000);
-    return () => clearInterval(timer);
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const activity = await api.activity();
+        if (cancelled) return;
+        setPollError(null);
+        setSnapshot((current) => (current ? { ...current, ...activity } : current));
+      } catch (e) {
+        if (!cancelled) setPollError(errorText(e));
+      }
+    };
+    const timer = setInterval(poll, 2000);
+    void poll();
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
   }, [tab]);
 
   const save = useCallback(
@@ -85,8 +101,8 @@ export default function App() {
           </Button>
           <Button
             kind="ghost"
-            onClick={() => api.copy(server.token)}
-            title="Copy the local API token"
+            onClick={() => api.copyToken()}
+            title="Copy the local API token to the clipboard"
           >
             Copy token
           </Button>
@@ -119,9 +135,19 @@ export default function App() {
 
       <main className="content">
         {error && (
-          <Banner tone="danger" actions={<Button kind="ghost" onClick={() => setError(null)}>Dismiss</Button>}>
+          <Banner
+            tone="danger"
+            actions={
+              <Button kind="ghost" onClick={() => setError(null)}>
+                Dismiss
+              </Button>
+            }
+          >
             {error}
           </Banner>
+        )}
+        {pollError && (
+          <Banner tone="warn">Live updates stopped: {pollError}</Banner>
         )}
         {snapshot.warning && <Banner tone="warn">{snapshot.warning}</Banner>}
         {server.exposed && (
@@ -136,6 +162,13 @@ export default function App() {
             Authentication is off: any local process can spend your API credit.
           </Banner>
         )}
+        {snapshot.issues
+          .filter((i) => i.code === "server.cors_any_origin")
+          .map((i) => (
+            <Banner key={i.code} tone="danger">
+              {i.message}
+            </Banner>
+          ))}
 
         {tab === "providers" && <Providers snapshot={snapshot} save={save} run={run} busy={busy} />}
         {tab === "models" && <Models snapshot={snapshot} save={save} busy={busy} />}
@@ -157,3 +190,4 @@ export default function App() {
     </div>
   );
 }
+

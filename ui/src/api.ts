@@ -74,9 +74,12 @@ export interface ServerConfig {
   host: string;
   port: number;
   require_auth: boolean;
+  /** Always empty in snapshots; sending it back empty keeps the stored token. */
   auth_token: string;
   autostart: boolean;
   allow_cors: boolean;
+  cors_origins: string[];
+  max_body_mib: number;
   log_limit: number;
 }
 
@@ -101,7 +104,8 @@ export interface ServerStatus {
   host: string;
   port: number;
   require_auth: boolean;
-  token: string;
+  /** `zr-…abcd`. The real token only arrives through `revealToken`. */
+  token_hint: string;
   exposed: boolean;
 }
 
@@ -176,8 +180,16 @@ export interface Snapshot {
   version: string;
 }
 
+/** The counters the Activity tab polls for, without the configuration. */
+export interface Activity {
+  health: ModelHealth[];
+  summary: StatsSummary;
+  recent: RequestRecord[];
+}
+
 export const api = {
   snapshot: () => invoke<Snapshot>("get_snapshot"),
+  activity: () => invoke<Activity>("get_activity"),
   saveConfig: (config: AppConfig) => invoke<Snapshot>("save_config", { config }),
   setKey: (provider_id: string, api_key: string) =>
     invoke<Snapshot>("set_provider_key", { providerId: provider_id, apiKey: api_key }),
@@ -188,6 +200,10 @@ export const api = {
   start: () => invoke<Snapshot>("start_proxy"),
   stop: () => invoke<Snapshot>("stop_proxy"),
   regenerateToken: () => invoke<Snapshot>("regenerate_token"),
+  /** Explicit user action; everything else works off `token_hint`. */
+  revealToken: () => invoke<string>("reveal_token"),
+  /** Copies in Rust so the token never enters this side. */
+  copyToken: () => invoke<void>("copy_token"),
   clearStats: () => invoke<Snapshot>("clear_stats"),
   resetHealth: (model_id: string) =>
     invoke<Snapshot>("reset_model_health", { modelId: model_id }),
@@ -195,6 +211,28 @@ export const api = {
   hide: () => invoke<void>("hide_window"),
   quit: () => invoke<void>("quit_app"),
 };
+
+/**
+ * Readable text for anything thrown across the IPC boundary.
+ *
+ * Tauri rejects with a string, but a render bug can throw an Error or a plain
+ * object, and `String(value)` turns those into `[object Object]`.
+ */
+export function errorText(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (value instanceof Error) return value.message;
+  if (value && typeof value === "object") {
+    const maybe = value as { message?: unknown; error?: unknown };
+    if (typeof maybe.message === "string") return maybe.message;
+    if (typeof maybe.error === "string") return maybe.error;
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return "unknown error";
+    }
+  }
+  return String(value ?? "unknown error");
+}
 
 /** The virtual model id a class is exposed as. */
 export function virtualId(cls: ModelClass): string {

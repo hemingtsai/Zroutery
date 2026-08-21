@@ -1,5 +1,5 @@
 /** Small presentational building blocks shared by the panels. */
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 export function Card({
   title,
@@ -96,6 +96,125 @@ export function Toggle({
         {hint && <em className="field-hint"> {hint}</em>}
       </span>
     </label>
+  );
+}
+
+/**
+ * Text input that reports its value when the user is done with it.
+ *
+ * Every commit round trips through Rust and rewrites the configuration file, so
+ * doing that per keystroke is both wasteful and a good way to save half-typed
+ * URLs. Enter commits, Escape reverts, blur commits.
+ */
+export function TextField({
+  label,
+  hint,
+  value,
+  onCommit,
+  placeholder,
+  wide,
+  readOnly,
+  password,
+}: {
+  label: string;
+  hint?: string;
+  value: string;
+  onCommit: (value: string) => void;
+  placeholder?: string;
+  wide?: boolean;
+  readOnly?: boolean;
+  password?: boolean;
+}) {
+  const [draft, setDraft] = useState(value);
+  // Adopt values that changed underneath us, e.g. after a save elsewhere.
+  useEffect(() => setDraft(value), [value]);
+
+  const commit = () => {
+    if (draft !== value) onCommit(draft);
+  };
+
+  return (
+    <Field label={label} hint={hint} wide={wide}>
+      <input
+        type={password ? "password" : "text"}
+        autoComplete={password ? "off" : undefined}
+        value={draft}
+        placeholder={placeholder}
+        readOnly={readOnly}
+        onChange={(e) => setDraft(e.currentTarget.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            commit();
+            e.currentTarget.blur();
+          } else if (e.key === "Escape") {
+            setDraft(value);
+          }
+        }}
+      />
+    </Field>
+  );
+}
+
+/** Same idea as [`TextField`] for numbers, with clamping on commit. */
+export function NumberField({
+  label,
+  hint,
+  value,
+  onCommit,
+  min,
+  max,
+  placeholder,
+}: {
+  label: string;
+  hint?: string;
+  value: number | null;
+  onCommit: (value: number | null) => void;
+  min?: number;
+  max?: number;
+  placeholder?: string;
+}) {
+  const text = value === null ? "" : String(value);
+  const [draft, setDraft] = useState(text);
+  useEffect(() => setDraft(text), [text]);
+
+  const commit = () => {
+    if (draft.trim() === "") {
+      if (value !== null) onCommit(null);
+      return;
+    }
+    const parsed = Number(draft);
+    if (!Number.isFinite(parsed)) {
+      setDraft(text);
+      return;
+    }
+    let next = Math.round(parsed);
+    if (min !== undefined) next = Math.max(min, next);
+    if (max !== undefined) next = Math.min(max, next);
+    if (next !== value) onCommit(next);
+    setDraft(String(next));
+  };
+
+  return (
+    <Field label={label} hint={hint}>
+      <input
+        type="number"
+        min={min}
+        max={max}
+        value={draft}
+        placeholder={placeholder}
+        onChange={(e) => setDraft(e.currentTarget.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            commit();
+            e.currentTarget.blur();
+          } else if (e.key === "Escape") {
+            setDraft(text);
+          }
+        }}
+      />
+    </Field>
   );
 }
 

@@ -10,7 +10,17 @@ import {
   type ModelEntry,
   type Snapshot,
 } from "../api";
-import { Badge, Banner, Button, Card, Empty, Field, Toggle } from "../components";
+import {
+  Badge,
+  Banner,
+  Button,
+  Card,
+  Empty,
+  Field,
+  NumberField,
+  TextField,
+  Toggle,
+} from "../components";
 
 const CLASS_HINT: Record<ModelClass, string> = {
   opus: "Your strongest, most expensive model",
@@ -288,55 +298,44 @@ export default function Models({
                         <td colSpan={8}>
                           <div className="subpanel">
                             <div className="controls">
-                              <Field
+                              <TextField
                                 label="Model name"
                                 hint="Sent upstream; renaming it changes the exposed id"
-                              >
-                                <input
-                                  value={m.upstream_model}
-                                  onChange={(e) =>
-                                    update(index, { upstream_model: e.currentTarget.value })
-                                  }
-                                />
-                              </Field>
-                              <Field label="Display name" hint="Shown in /v1/models">
-                                <input
-                                  value={m.display_name ?? ""}
-                                  placeholder={m.upstream_model}
-                                  onChange={(e) =>
-                                    update(index, { display_name: e.currentTarget.value || null })
-                                  }
-                                />
-                              </Field>
-                              <Field
+                                value={m.upstream_model}
+                                onCommit={(upstream_model) =>
+                                  upstream_model.trim() && update(index, { upstream_model })
+                                }
+                              />
+                              <TextField
+                                label="Display name"
+                                hint="Shown in /v1/models"
+                                value={m.display_name ?? ""}
+                                placeholder={m.upstream_model}
+                                onCommit={(v) => update(index, { display_name: v || null })}
+                              />
+                              <TextField
                                 label="Aliases"
                                 hint="Comma separated short names that also reach this model"
-                              >
-                                <input
-                                  value={m.aliases.join(", ")}
-                                  onChange={(e) =>
-                                    update(index, {
-                                      aliases: e.currentTarget.value
-                                        .split(",")
-                                        .map((a) => a.trim())
-                                        .filter(Boolean),
-                                    })
-                                  }
-                                />
-                              </Field>
-                              <Field label="Max output tokens" hint="Caps what clients may ask for">
-                                <input
-                                  type="number"
-                                  min={1}
-                                  value={m.max_output_tokens ?? ""}
-                                  placeholder="unlimited"
-                                  onChange={(e) =>
-                                    update(index, {
-                                      max_output_tokens: Number(e.currentTarget.value) || null,
-                                    })
-                                  }
-                                />
-                              </Field>
+                                value={m.aliases.join(", ")}
+                                onCommit={(v) =>
+                                  update(index, {
+                                    aliases: v
+                                      .split(",")
+                                      .map((a) => a.trim())
+                                      .filter(Boolean),
+                                  })
+                                }
+                              />
+                              <NumberField
+                                label="Max output tokens"
+                                hint="Caps what clients may ask for"
+                                min={1}
+                                placeholder="unlimited"
+                                value={m.max_output_tokens}
+                                onCommit={(max_output_tokens) =>
+                                  update(index, { max_output_tokens })
+                                }
+                              />
                             </div>
                             <div className="grid-three">
                               <Toggle

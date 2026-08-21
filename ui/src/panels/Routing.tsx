@@ -2,12 +2,22 @@ import { useState } from "react";
 import {
   api,
   CLASSES,
+  errorText,
   type AppConfig,
   type ModelClass,
   type RoutingStrategy,
   type Snapshot,
 } from "../api";
-import { Banner, Button, Card, Field, Toggle } from "../components";
+import {
+  Badge,
+  Banner,
+  Button,
+  Card,
+  Field,
+  NumberField,
+  TextField,
+  Toggle,
+} from "../components";
 
 const STRATEGIES: { id: RoutingStrategy; label: string; hint: string }[] = [
   { id: "priority", label: "Priority", hint: "Lowest priority number first; weight breaks ties" },
@@ -27,10 +37,11 @@ export default function Routing({
   run: (task: () => Promise<Snapshot>) => Promise<void>;
   busy: boolean;
 }) {
-  const { config } = snapshot;
+  const { config, server } = snapshot;
   const [aliasDraft, setAliasDraft] = useState({ from: "", to: "sonnet" as ModelClass });
-  const [portDraft, setPortDraft] = useState(String(config.server.port));
-  const [hostDraft, setHostDraft] = useState(config.server.host);
+  const [originDraft, setOriginDraft] = useState("");
+  const [revealed, setRevealed] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   const patchRouting = (patch: Partial<AppConfig["routing"]>) => {
     const next = structuredClone(config);
@@ -59,8 +70,37 @@ export default function Routing({
     void save(next);
   };
 
+  const addOrigin = () => {
+    const origin = originDraft.trim().replace(/\/$/, "");
+    if (!origin) return;
+    if (!/^https?:\/\//.test(origin)) {
+      setNotice("An origin looks like https://example.com, with no path.");
+      return;
+    }
+    if (config.server.cors_origins.includes(origin)) return;
+    setOriginDraft("");
+    setNotice(null);
+    patchServer({ cors_origins: [...config.server.cors_origins, origin] });
+  };
+
+  const reveal = async () => {
+    try {
+      setRevealed(await api.revealToken());
+    } catch (e) {
+      setNotice(errorText(e));
+    }
+  };
+
+  const baseUrl = server.base_url ?? `http://${config.server.host}:${config.server.port}`;
+
   return (
     <>
+      {notice && (
+        <Banner tone="warn" actions={<Button kind="ghost" onClick={() => setNotice(null)}>OK</Button>}>
+          {notice}
+        </Banner>
+      )}
+
       <Card title="Class routing">
         <div className="controls">
           <Field
@@ -78,33 +118,27 @@ export default function Routing({
               ))}
             </select>
           </Field>
-          <Field label="Max attempts" hint="Upstream tries per client request">
-            <input
-              type="number"
-              min={1}
-              max={10}
-              value={config.routing.max_attempts}
-              onChange={(e) => patchRouting({ max_attempts: Number(e.currentTarget.value) || 1 })}
-            />
-          </Field>
-          <Field label="Break after failures" hint="Consecutive errors before cooldown">
-            <input
-              type="number"
-              min={1}
-              value={config.routing.break_after_failures}
-              onChange={(e) =>
-                patchRouting({ break_after_failures: Number(e.currentTarget.value) || 1 })
-              }
-            />
-          </Field>
-          <Field label="Cooldown (s)">
-            <input
-              type="number"
-              min={1}
-              value={config.routing.cooldown_secs}
-              onChange={(e) => patchRouting({ cooldown_secs: Number(e.currentTarget.value) || 60 })}
-            />
-          </Field>
+          <NumberField
+            label="Max attempts"
+            hint="Upstream tries per client request"
+            min={1}
+            max={10}
+            value={config.routing.max_attempts}
+            onCommit={(v) => patchRouting({ max_attempts: v ?? 1 })}
+          />
+          <NumberField
+            label="Break after failures"
+            hint="Consecutive errors before cooldown"
+            min={1}
+            value={config.routing.break_after_failures}
+            onCommit={(v) => patchRouting({ break_after_failures: v ?? 1 })}
+          />
+          <NumberField
+            label="Cooldown (s)"
+            min={1}
+            value={config.routing.cooldown_secs}
+            onCommit={(v) => patchRouting({ cooldown_secs: v ?? 60 })}
+          />
         </div>
         <div className="grid-two">
           <Toggle
@@ -204,39 +238,37 @@ export default function Routing({
         </div>
       </Card>
 
-      <Card title="Local server" tone={snapshot.server.exposed ? "warn" : undefined}>
+      <Card title="Local server" tone={server.exposed ? "warn" : undefined}>
         <div className="controls">
-          <Field label="Host" hint="127.0.0.1 keeps the proxy on this machine">
-            <input
-              value={hostDraft}
-              onChange={(e) => setHostDraft(e.currentTarget.value)}
-              onBlur={() => hostDraft !== config.server.host && patchServer({ host: hostDraft })}
-            />
-          </Field>
-          <Field label="Port">
-            <input
-              type="number"
-              min={1}
-              max={65535}
-              value={portDraft}
-              onChange={(e) => setPortDraft(e.currentTarget.value)}
-              onBlur={() => {
-                const port = Number(portDraft);
-                if (port >= 1 && port <= 65535 && port !== config.server.port) {
-                  patchServer({ port });
-                }
-              }}
-            />
-          </Field>
-          <Field label="Kept requests" hint="Size of the in-memory activity log">
-            <input
-              type="number"
-              min={10}
-              max={5000}
-              value={config.server.log_limit}
-              onChange={(e) => patchServer({ log_limit: Number(e.currentTarget.value) || 500 })}
-            />
-          </Field>
+          <TextField
+            label="Host"
+            hint="127.0.0.1 keeps the proxy on this machine"
+            value={config.server.host}
+            onCommit={(host) => patchServer({ host })}
+          />
+          <NumberField
+            label="Port"
+            min={1}
+            max={65535}
+            value={config.server.port}
+            onCommit={(port) => port && patchServer({ port })}
+          />
+          <NumberField
+            label="Max request body (MiB)"
+            hint="Inline images make prompts big; this caps them"
+            min={1}
+            max={512}
+            value={config.server.max_body_mib}
+            onCommit={(v) => patchServer({ max_body_mib: v ?? 32 })}
+          />
+          <NumberField
+            label="Kept requests"
+            hint="Size of the in-memory activity log"
+            min={10}
+            max={5000}
+            value={config.server.log_limit}
+            onCommit={(v) => patchServer({ log_limit: v ?? 500 })}
+          />
         </div>
 
         <div className="grid-two">
@@ -251,33 +283,40 @@ export default function Routing({
             checked={config.server.autostart}
             onChange={(autostart) => patchServer({ autostart })}
           />
-          <Toggle
-            label="Allow browser origins (CORS)"
-            hint="Only needed for web based clients"
-            checked={config.server.allow_cors}
-            onChange={(allow_cors) => patchServer({ allow_cors })}
-          />
         </div>
 
-        <div className="controls">
-          <Field label="Local token" wide hint="Send as x-api-key or Authorization: Bearer">
-            <input readOnly value={config.server.auth_token} onFocus={(e) => e.currentTarget.select()} />
-          </Field>
-          <div className="field-actions">
-            <Button kind="ghost" onClick={() => api.copy(config.server.auth_token)}>
-              Copy
+        <div className="row gap wrap">
+          <span className="field-label">Local token</span>
+          <code className="url">{revealed ?? server.token_hint}</code>
+          {revealed ? (
+            <Button kind="ghost" onClick={() => setRevealed(null)}>
+              Hide
             </Button>
-            <Button
-              kind="danger"
-              onClick={() => run(api.regenerateToken)}
-              title="Existing clients will need the new token"
-            >
-              Regenerate
+          ) : (
+            <Button kind="ghost" onClick={reveal} title="Show the token in this window">
+              Reveal
             </Button>
-          </div>
+          )}
+          <Button kind="ghost" onClick={() => api.copyToken()}>
+            Copy
+          </Button>
+          <Button
+            kind="danger"
+            onClick={() => {
+              setRevealed(null);
+              void run(api.regenerateToken);
+            }}
+            title="Existing clients will need the new token"
+          >
+            Regenerate
+          </Button>
         </div>
+        <p className="field-hint">
+          Send it as <code>x-api-key</code> or <code>Authorization: Bearer</code>. The dashboard only
+          holds the last four characters until you press Reveal.
+        </p>
 
-        {config.server.host !== "127.0.0.1" && (
+        {server.exposed && (
           <Banner tone="danger">
             Anything that can reach <code>{config.server.host}:{config.server.port}</code> can spend
             your API credit. Keep the token requirement on.
@@ -285,21 +324,92 @@ export default function Routing({
         )}
       </Card>
 
+      <Card
+        title="Browser access (CORS)"
+        tone={config.server.allow_cors && config.server.cors_origins.length === 0 ? "danger" : undefined}
+      >
+        <p className="field-hint">
+          Only needed for clients that run inside a web page. Without an origin list every site you
+          visit can call the proxy from your browser.
+        </p>
+        <Toggle
+          label="Allow browser origins"
+          checked={config.server.allow_cors}
+          onChange={(allow_cors) => patchServer({ allow_cors })}
+        />
+        {config.server.allow_cors && (
+          <>
+            {config.server.cors_origins.length === 0 ? (
+              <Banner tone="danger">
+                No origins listed, so any origin is accepted. Add the ones you actually use.
+              </Banner>
+            ) : (
+              <div className="chips">
+                {config.server.cors_origins.map((origin) => (
+                  <span key={origin} className="chip chip-done">
+                    {origin}
+                    <button
+                      className="chip-remove"
+                      aria-label={`Remove ${origin}`}
+                      onClick={() =>
+                        patchServer({
+                          cors_origins: config.server.cors_origins.filter((o) => o !== origin),
+                        })
+                      }
+                    >
+                      ×
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+            <div className="controls">
+              <Field label="Allowed origin" hint="Scheme, host and port, no path">
+                <input
+                  value={originDraft}
+                  placeholder="http://localhost:3000"
+                  onChange={(e) => setOriginDraft(e.currentTarget.value)}
+                  onKeyDown={(e) => e.key === "Enter" && addOrigin()}
+                />
+              </Field>
+              <div className="field-actions">
+                <Button onClick={addOrigin} disabled={busy || !originDraft.trim()}>
+                  Add origin
+                </Button>
+              </div>
+            </div>
+          </>
+        )}
+      </Card>
+
       <Card title="How to point a client at Zroutery">
-        <p className="field-hint">Anthropic style clients, including Claude Code:</p>
+        <p className="field-hint">
+          Anthropic style clients, including Claude Code. Use <em>Copy token</em> above for the value
+          of the second line.
+        </p>
         <pre className="snippet">
-{`export ANTHROPIC_BASE_URL=${snapshot.server.base_url ?? `http://${config.server.host}:${config.server.port}`}
-export ANTHROPIC_AUTH_TOKEN=${config.server.auth_token}
+{`export ANTHROPIC_BASE_URL=${baseUrl}
+export ANTHROPIC_AUTH_TOKEN=<paste the token>
 export ANTHROPIC_MODEL=sonnet-class`}
         </pre>
         <p className="field-hint">OpenAI style clients:</p>
         <pre className="snippet">
-{`export OPENAI_BASE_URL=${snapshot.server.base_url ?? `http://${config.server.host}:${config.server.port}`}/v1
-export OPENAI_API_KEY=${config.server.auth_token}
-# then request the model "opus-class", "sonnet-class", "haiku-class"
+{`export OPENAI_BASE_URL=${baseUrl}/v1
+export OPENAI_API_KEY=<paste the token>
+# then request "opus-class", "sonnet-class", "haiku-class"
 # or any exact id from the Models tab`}
         </pre>
+        <div className="row gap">
+          <Badge tone="neutral">{snapshot.exposed_ids.length} models exposed</Badge>
+          <Button kind="ghost" onClick={() => api.copy(baseUrl)}>
+            Copy base URL
+          </Button>
+          <Button kind="ghost" onClick={() => api.copyToken()}>
+            Copy token
+          </Button>
+        </div>
       </Card>
     </>
   );
 }
+
