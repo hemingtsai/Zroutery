@@ -114,7 +114,8 @@ opus/sonnet/haiku 映射到对应 class，可以在 Routing 里关掉或用精�
 | POST | `/v1/messages/count_tokens` | 本地估算，不打上游 |
 | POST | `/v1/chat/completions` | OpenAI Chat Completions，支持 SSE |
 | GET | `/v1/models`、`/v1/models/{id}` | 同一份 JSON 同时满足两种客户端 |
-| GET | `/health` | 免鉴权，给 GUI 轮询 |
+| GET | `/v1/status` | 版本、模型数、provider 数（需要 token） |
+| GET | `/health` | 只回 `{"status":"ok"}`，唯一免鉴权的路由 |
 
 ## 安全
 
@@ -122,18 +123,26 @@ opus/sonnet/haiku 映射到对应 class，可以在 Routing 里关掉或用精�
   能访问这个端口的进程就能花你的额度。
 - 改成 `0.0.0.0` 会让同网段的人可用你的 key，界面会红色告警；这种情况下别关鉴权。
 - token 比较用的是定长比较，避免时序泄露。
+- **token 不进前端**：界面拿到的只有 `zr-…后四位`，点 Reveal 才单独取一次，Copy 是在 Rust 侧
+  直接写剪贴板。快照里的 `auth_token` 一律为空，回存时为空表示「保持不变」。
+- **API key 只从钥匙串读**。`ZROUTERY_KEY_*` 环境变量只有 `zroutery-headless` 认，GUI 不认
+  （环境变量同机可见，还会进崩溃报告和 CI 日志）。
+- 请求体上限默认 32 MiB（Routing 面板可调），超限直接 413，不会转发给上游。
+- CORS 默认关闭；打开后不填 origin 列表会红色告警（校验里也有对应 warning），填了就只允许
+  列出的 origin，方法和请求头也收敛到两个 API 真正用到的那些。
 - 请求日志只在内存里（环形缓冲，默认 500 条），进程退出即消失；配置文件里不含任何密钥。
 
 ## 项目结构
 
 ```
-crates/zroutery-core/     协议转换、模型注册表、路由、HTTP 服务（无 GUI 依赖，102 个测试）
+crates/zroutery-core/     协议转换、模型注册表、路由、HTTP 服务（无 GUI 依赖，109 个测试）
   src/ir.rs               统一中间表示：2 个 decoder + 2 个 encoder，避免 N×M
   src/protocol/           anthropic.rs / openai.rs，含两个方向的 SSE 状态机
   src/config.rs           provider、模型身份与 id 推导、路由策略、配置迁移
-  src/registry.rs         模型 id 解析（精确 id / 别名 / *-class / Claude 命名）
+  src/registry.rs         模型 id 解析：id/别名走一次哈希，class 成员表预先算好
   src/router.rs           类内候选排序、健康度、熔断、失败转移
-  src/server.rs           axum 路由、鉴权、流式管道
+  src/server.rs           axum 路由、鉴权、请求体上限、CORS、流式管道
+  src/sync.rs             容忍中毒的锁封装（一个线程 panic 不该拖垮整个代理）
 src-tauri/                桌面外壳：菜单栏、钥匙串、配置持久化、Tauri 命令
 ui/                       React + TypeScript 仪表盘
 scripts/smoke_test.py     端到端冒烟测试（假 provider → 真二进制 → 真 HTTP）

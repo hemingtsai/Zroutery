@@ -131,6 +131,8 @@ def write_config(path: str, upstream: str):
             "auth_token": TOKEN,
             "autostart": True,
             "allow_cors": False,
+            "cors_origins": [],
+            "max_body_mib": 1,
             "log_limit": 100,
         },
         "routing": {
@@ -251,6 +253,27 @@ def main() -> int:
             token=None,
         )
         check("unauthenticated requests are rejected", status == 401, f"got {status}")
+
+        status, _, body = request(f"{base}/health", token=None)
+        check("health needs no token", status == 200 and body == {"status": "ok"}, str(body))
+        status, _, _ = request(f"{base}/v1/status", token=None)
+        check("but the detailed status does", status == 401, f"got {status}")
+        _, _, body = request(f"{base}/v1/status")
+        check("and it reports the model count", body.get("models", 0) > 0, str(body))
+
+        print("request size limit")
+        status, _, body = request(
+            f"{base}/v1/messages",
+            {"model": "sonnet-class", "max_tokens": 8,
+             "messages": [{"role": "user", "content": "x" * (2 * 1024 * 1024)}]},
+        )
+        check("an oversized body is rejected with 413", status == 413, f"got {status}")
+        check(
+            "and the error explains the limit",
+            "too large" in json.dumps(body),
+            str(body)[:120],
+        )
+
 
         print("model listing")
         _, _, listing = request(f"{base}/v1/models")
