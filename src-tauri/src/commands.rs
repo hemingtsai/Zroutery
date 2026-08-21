@@ -134,9 +134,9 @@ pub fn hide_window(app: AppHandle) -> Cmd<()> {
     Ok(())
 }
 
+/// Same path as the tray's Quit item: stop the proxy, then end the process.
 #[tauri::command]
-pub async fn quit_app(app: AppHandle, desktop: State<'_, Arc<Desktop>>) -> Cmd<()> {
-    desktop.stop().await;
-    app.exit(0);
+pub fn quit_app(app: AppHandle) -> Cmd<()> {
+    tray::quit(&app);
     Ok(())
 }

@@ -71,14 +71,7 @@ fn on_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
     let app = app.clone();
     match event.id().as_ref() {
         "open" => show_dashboard(&app),
-        "quit" => {
-            tauri::async_runtime::spawn(async move {
-                if let Some(desktop) = app.try_state::<Arc<Desktop>>() {
-                    desktop.stop().await;
-                }
-                app.exit(0);
-            });
-        }
+        "quit" => quit(&app),
         "toggle" => {
             tauri::async_runtime::spawn(async move {
                 let Some(desktop) = app.try_state::<Arc<Desktop>>().map(|s| s.inner().clone())
@@ -121,6 +114,21 @@ pub fn show_dashboard(app: &AppHandle) {
         let _ = window.unminimize();
         let _ = window.set_focus();
     }
+}
+
+/// Stop the proxy and end the process.
+///
+/// Shared by the tray item and the dashboard's Quit button so both behave
+/// identically. `AppHandle::exit` reports a `Some(code)` exit request, which is
+/// how the run loop tells a real quit apart from the last window closing.
+pub fn quit(app: &AppHandle) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Some(desktop) = app.try_state::<Arc<Desktop>>().map(|s| s.inner().clone()) {
+            desktop.stop().await;
+        }
+        app.exit(0);
+    });
 }
 
 /// Push the current proxy state into the tray labels and tooltip.

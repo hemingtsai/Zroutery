@@ -73,6 +73,19 @@ pub fn run() {
 
             tray::build(app.handle())?;
 
+            // Debug-only hook so the quit path can be exercised without a
+            // pointer: it runs exactly the code the tray item runs.
+            #[cfg(debug_assertions)]
+            if let Ok(delay) = std::env::var("ZROUTERY_SELFTEST_QUIT") {
+                let handle = app.handle().clone();
+                let secs: u64 = delay.parse().unwrap_or(5);
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_secs(secs)).await;
+                    tracing::info!("selftest: quitting");
+                    tray::quit(&handle);
+                });
+            }
+
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 if autostart {
@@ -95,11 +108,35 @@ pub fn run() {
         })
         .build(tauri::generate_context!())
         .expect("failed to build the Zroutery application")
-        .run(|app, event| {
-            if let RunEvent::ExitRequested { api, .. } = event {
-                // Keep running when the last window closes.
-                api.prevent_exit();
-                let _ = app;
+        .run(|_app, event| {
+            if let RunEvent::ExitRequested { code, api, .. } = event {
+                // `code` is None when the request comes from user interaction,
+                // i.e. the last window was closed: stay alive in the menu bar.
+                // An explicit quit goes through `AppHandle::exit`, which carries
+                // a code, and has to be honoured.
+                if should_stay_resident(code) {
+                    api.prevent_exit();
+                }
             }
         });
+}
+
+/// Whether an exit request should be ignored so the app keeps living in the menu
+/// bar.
+fn should_stay_resident(exit_code: Option<i32>) -> bool {
+    exit_code.is_none()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_stay_resident;
+
+    #[test]
+    fn closing_the_window_keeps_the_app_alive_but_quitting_does_not() {
+        // Last window closed: Tauri reports no exit code.
+        assert!(should_stay_resident(None));
+        // Tray "Quit" and the dashboard button both call AppHandle::exit(0).
+        assert!(!should_stay_resident(Some(0)));
+        assert!(!should_stay_resident(Some(1)));
+    }
 }
