@@ -1,6 +1,7 @@
 //! Maps a client supplied model id onto either one concrete model or a class of
 //! models, and produces the `/v1/models` listing.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -17,6 +18,67 @@ pub enum Resolution {
     Class(ModelClass),
 }
 
+/// Precomputed lookup tables over one configuration.
+///
+/// Built once per configuration version rather than per request: name resolution
+/// used to walk the model list up to four times per call, which is the one place
+/// on the hot path where that cost is avoidable.
+#[derive(Debug, Default)]
+struct Index {
+    /// Exposed id of every model, positionally aligned with `config.models`.
+    ids: Vec<String>,
+    /// Exposed id and every alias -> position in `config.models`.
+    by_name: HashMap<String, usize>,
+    /// Usable members of each class, ordered the way the router will try them.
+    by_class: HashMap<ModelClass, Vec<usize>>,
+}
+
+impl Index {
+    fn build(config: &AppConfig) -> Index {
+        let ids: Vec<String> = config.exposed_ids();
+        let mut by_name = HashMap::with_capacity(ids.len() * 2);
+        for (position, model) in config.models.iter().enumerate() {
+            // First declaration wins; `AppConfig::validate` reports the clash.
+            by_name.entry(ids[position].clone()).or_insert(position);
+            for alias in &model.aliases {
+                by_name.entry(alias.clone()).or_insert(position);
+            }
+        }
+
+        let mut by_class: HashMap<ModelClass, Vec<usize>> = HashMap::new();
+        for class in ModelClass::ALL {
+            let mut members: Vec<usize> = config
+                .models
+                .iter()
+                .enumerate()
+                .filter(|(_, m)| m.enabled && m.class == Some(class))
+                .filter(|(_, m)| {
+                    config
+                        .provider(&m.provider_id)
+                        .map(|p| p.enabled)
+                        .unwrap_or(false)
+                })
+                .map(|(position, _)| position)
+                .collect();
+            members.sort_by(|a, b| {
+                config.models[*a]
+                    .priority
+                    .cmp(&config.models[*b].priority)
+                    .then_with(|| ids[*a].cmp(&ids[*b]))
+            });
+            if !members.is_empty() {
+                by_class.insert(class, members);
+            }
+        }
+
+        Index {
+            ids,
+            by_name,
+            by_class,
+        }
+    }
+}
+
 /// Immutable snapshot of the model registry.
 ///
 /// Cheap to clone; the server swaps in a new snapshot when configuration
@@ -24,6 +86,7 @@ pub enum Resolution {
 #[derive(Debug, Clone)]
 pub struct Registry {
     config: Arc<AppConfig>,
+    index: Arc<Index>,
 }
 
 /// One entry of the `/v1/models` listing.
@@ -46,7 +109,8 @@ pub struct ModelInfo {
 
 impl Registry {
     pub fn new(config: Arc<AppConfig>) -> Self {
-        Registry { config }
+        let index = Arc::new(Index::build(&config));
+        Registry { config, index }
     }
 
     pub fn config(&self) -> &AppConfig {
@@ -57,32 +121,27 @@ impl Registry {
         Arc::clone(&self.config)
     }
 
+    /// The exposed id of a model by position, without deriving it again.
+    fn id_at(&self, position: usize) -> &str {
+        &self.index.ids[position]
+    }
+
     /// Resolve what the client asked for.
     ///
-    /// Order: exact model id, model alias, `*-class` virtual id, configured
-    /// client alias, Claude-style name heuristic (opt-in), unknown-model
-    /// fallback class.
+    /// Order: exact model id or alias (one hash lookup), `*-class` virtual id,
+    /// configured client alias, Claude-style name heuristic (opt-in),
+    /// unknown-model fallback class.
     pub fn resolve(&self, requested: &str) -> Result<Resolution> {
         let asked = requested.trim();
         if asked.is_empty() {
             return Err(Error::invalid("`model` must not be empty"));
         }
 
-        if let Some(m) = self
-            .config
-            .models
-            .iter()
-            .find(|m| m.enabled && m.exposed_id() == asked)
-        {
-            return Ok(Resolution::Direct(m.exposed_id()));
-        }
-        if let Some(m) = self
-            .config
-            .models
-            .iter()
-            .find(|m| m.enabled && m.aliases.iter().any(|a| a == asked))
-        {
-            return Ok(Resolution::Direct(m.exposed_id()));
+        let known = self.index.by_name.get(asked).copied();
+        if let Some(position) = known {
+            if self.config.models[position].enabled {
+                return Ok(Resolution::Direct(self.id_at(position).to_string()));
+            }
         }
         if let Some(class) = ModelClass::from_virtual_id(asked) {
             return Ok(Resolution::Class(class));
@@ -95,50 +154,31 @@ impl Registry {
                 return Ok(Resolution::Class(class));
             }
         }
-        // A disabled-but-known id gets a clearer error than a typo.
-        if let Some(m) = self.config.models.iter().find(|m| m.answers_to(asked)) {
-            if let Some(class) = self.config.routing.unknown_model_fallback {
-                return Ok(Resolution::Class(class));
-            }
-            return Err(Error::UnknownModel(format!(
-                "{} (disabled)",
-                m.exposed_id()
-            )));
-        }
         if let Some(class) = self.config.routing.unknown_model_fallback {
             return Ok(Resolution::Class(class));
         }
-        Err(Error::UnknownModel(asked.to_string()))
+        // A disabled-but-known id gets a clearer error than a typo.
+        Err(Error::UnknownModel(match known {
+            Some(position) => format!("{} (disabled)", self.id_at(position)),
+            None => asked.to_string(),
+        }))
     }
 
-    /// All enabled models of a class, sorted by priority (ascending) then id.
+    /// All usable models of a class, in the order the router will try them.
     pub fn class_members(&self, class: ModelClass) -> Vec<&ModelEntry> {
-        let mut v: Vec<&ModelEntry> = self
-            .config
-            .models
-            .iter()
-            .filter(|m| m.enabled && m.class == Some(class))
-            .filter(|m| {
-                self.config
-                    .provider(&m.provider_id)
-                    .map(|p| p.enabled)
-                    .unwrap_or(false)
-            })
-            .collect();
-        v.sort_by(|a, b| {
-            a.priority
-                .cmp(&b.priority)
-                .then_with(|| a.exposed_id().cmp(&b.exposed_id()))
-        });
-        v
+        self.index
+            .by_class
+            .get(&class)
+            .map(|members| members.iter().map(|i| &self.config.models[*i]).collect())
+            .unwrap_or_default()
     }
 
     /// Look up a model by exposed id or alias, enabled or not.
     pub fn entry(&self, id: &str) -> Result<&ModelEntry> {
-        self.config
-            .models
-            .iter()
-            .find(|m| m.answers_to(id))
+        self.index
+            .by_name
+            .get(id)
+            .map(|position| &self.config.models[*position])
             .ok_or_else(|| Error::UnknownModel(id.to_string()))
     }
 
@@ -155,13 +195,16 @@ impl Registry {
     /// class id that currently has at least one usable member.
     pub fn list(&self) -> Vec<ModelInfo> {
         let mut out: Vec<ModelInfo> = Vec::new();
-        for m in self.config.models.iter().filter(|m| m.enabled) {
+        for (position, m) in self.config.models.iter().enumerate() {
+            if !m.enabled {
+                continue;
+            }
             let provider = self.config.provider(&m.provider_id);
             if provider.map(|p| !p.enabled).unwrap_or(true) {
                 continue;
             }
             out.push(ModelInfo {
-                id: m.exposed_id(),
+                id: self.id_at(position).to_string(),
                 display_name: m
                     .display_name
                     .clone()
@@ -179,9 +222,15 @@ impl Registry {
         out.sort_by(|a, b| a.id.cmp(&b.id));
 
         for class in ModelClass::ALL {
-            let members = self.class_members(class);
-            if members.is_empty() {
+            // One pass over the precomputed member list per class.
+            let Some(members) = self.index.by_class.get(&class) else {
                 continue;
+            };
+            let mut capabilities = (true, true, true);
+            for m in members.iter().map(|i| &self.config.models[*i]) {
+                capabilities.0 &= m.supports_tools;
+                capabilities.1 &= m.supports_vision;
+                capabilities.2 &= m.supports_thinking;
             }
             out.push(ModelInfo {
                 id: class.virtual_id().to_string(),
@@ -191,9 +240,9 @@ impl Registry {
                 virtual_model: true,
                 member_count: members.len(),
                 aliases: Vec::new(),
-                supports_tools: members.iter().all(|m| m.supports_tools),
-                supports_vision: members.iter().all(|m| m.supports_vision),
-                supports_thinking: members.iter().all(|m| m.supports_thinking),
+                supports_tools: capabilities.0,
+                supports_vision: capabilities.1,
+                supports_thinking: capabilities.2,
             });
         }
         out
@@ -446,6 +495,39 @@ mod tests {
                 .map(|m| m.exposed_id())
                 .collect::<Vec<_>>(),
             vec!["openai-backup-sonnet", "deepseek-deepseek-v4-pro"]
+        );
+    }
+
+    #[test]
+    fn resolution_uses_the_index_for_aliases_and_disabled_models() {
+        let mut cfg = brief_config();
+        cfg.models[1].aliases.push("pro".into());
+        cfg.models[1].enabled = false;
+        let r = registry(cfg);
+
+        // A disabled model is reported as disabled rather than unknown, whether
+        // it was named by its id or by an alias.
+        for name in ["deepseek-deepseek-v4-pro", "pro"] {
+            let err = r.resolve(name).unwrap_err();
+            assert!(err.to_string().contains("disabled"), "{name}: {err}");
+        }
+        // It stays findable for diagnostics, but is out of every class.
+        assert!(r.entry("pro").is_ok());
+        assert!(r.class_members(ModelClass::Sonnet).is_empty());
+        assert!(!r.list().iter().any(|m| m.id == "sonnet-class"));
+    }
+
+    #[test]
+    fn duplicate_names_resolve_to_the_first_declaration() {
+        let mut cfg = brief_config();
+        // Two models claiming one alias: validation rejects it, and until the
+        // user fixes it the first declaration wins deterministically.
+        cfg.models[0].aliases.push("dup".into());
+        cfg.models[1].aliases.push("dup".into());
+        let r = registry(cfg);
+        assert_eq!(
+            r.resolve("dup").unwrap(),
+            Resolution::Direct("deepseek-deepseek-v4-flash".into())
         );
     }
 }

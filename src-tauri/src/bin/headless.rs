@@ -54,7 +54,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let desktop = Arc::new(Desktop::new(
         dir.clone(),
         config,
-        Arc::new(KeychainSecrets::new(KEYCHAIN_SERVICE)),
+        // Headless runs may have no keychain access, so this is the one place
+        // where ZROUTERY_KEY_* variables are honoured.
+        Arc::new(KeychainSecrets::with_env_fallback(KEYCHAIN_SERVICE)),
     ));
     desktop.start().await.map_err(|e| e.to_string())?;
 
@@ -77,7 +79,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .join(", ")
     );
     if snapshot.server.require_auth {
-        println!("token:   {}", snapshot.server.token);
+        // Headless has no clipboard and no dashboard, so the token is printed
+        // here; the GUI only ever shows the hint.
+        println!("token:   {}", desktop.auth_token());
     } else {
         println!("token:   authentication disabled");
     }

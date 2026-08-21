@@ -7,7 +7,7 @@ use tauri_plugin_clipboard_manager::ClipboardExt;
 use zroutery_core::config::{AppConfig, ProviderConfig, SecretStore};
 use zroutery_core::upstream::Upstream;
 
-use crate::state::{Desktop, Snapshot};
+use crate::state::{Activity, Desktop, Snapshot};
 use crate::store;
 use crate::tray;
 
@@ -21,6 +21,28 @@ async fn refreshed(app: &AppHandle, desktop: &Desktop) -> Snapshot {
 #[tauri::command]
 pub async fn get_snapshot(app: AppHandle, desktop: State<'_, Arc<Desktop>>) -> Cmd<Snapshot> {
     Ok(refreshed(&app, &desktop).await)
+}
+
+/// Counters and log only: what the Activity tab polls, without cloning the
+/// configuration or asking the keychain about every provider.
+#[tauri::command]
+pub fn get_activity(desktop: State<'_, Arc<Desktop>>) -> Cmd<Activity> {
+    Ok(desktop.activity())
+}
+
+/// The token in plain text, for the dashboard's explicit "Reveal" action. Every
+/// other path only ever sees the hint.
+#[tauri::command]
+pub fn reveal_token(desktop: State<'_, Arc<Desktop>>) -> Cmd<String> {
+    Ok(desktop.auth_token())
+}
+
+/// Put the token on the clipboard without it entering the webview at all.
+#[tauri::command]
+pub fn copy_token(app: AppHandle, desktop: State<'_, Arc<Desktop>>) -> Cmd<()> {
+    app.clipboard()
+        .write_text(desktop.auth_token())
+        .map_err(|e| e.to_string())
 }
 
 /// Replace the whole configuration document.
@@ -107,7 +129,7 @@ pub async fn regenerate_token(app: AppHandle, desktop: State<'_, Arc<Desktop>>) 
 
 #[tauri::command]
 pub async fn clear_stats(app: AppHandle, desktop: State<'_, Arc<Desktop>>) -> Cmd<Snapshot> {
-    desktop.core.stats.clear();
+    desktop.core.stats().clear();
     Ok(refreshed(&app, &desktop).await)
 }
 
@@ -117,7 +139,7 @@ pub async fn reset_model_health(
     desktop: State<'_, Arc<Desktop>>,
     model_id: String,
 ) -> Cmd<Snapshot> {
-    desktop.core.router.reset(&model_id);
+    desktop.core.router().reset(&model_id);
     Ok(refreshed(&app, &desktop).await)
 }
 

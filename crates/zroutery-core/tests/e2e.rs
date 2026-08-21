@@ -441,7 +441,7 @@ async fn anthropic_client_streaming_over_an_openai_provider() {
     assert_eq!(wire.matches("event: content_block_start").count(), 2);
     assert_eq!(wire.matches("event: content_block_stop").count(), 2);
 
-    let stats = h.state.stats.summary();
+    let stats = h.state.stats().summary();
     assert_eq!(stats.requests, 1);
     assert_eq!(stats.failures, 0);
     assert_eq!(stats.output_tokens, 2);
@@ -516,7 +516,7 @@ async fn failover_moves_to_the_next_model_in_the_class() {
     assert_eq!(body["content"][0]["text"], "hello from mock");
 
     assert_eq!(h.mock.count(), 2, "the broken model was tried first");
-    let health = h.state.router.health_snapshot();
+    let health = h.state.router().health_snapshot();
     let broken = health
         .iter()
         .find(|m| m.model_id == "deepseek-broken-model")
@@ -528,7 +528,7 @@ async fn failover_moves_to_the_next_model_in_the_class() {
         .unwrap();
     assert_eq!(good.total_success, 1);
 
-    let record = &h.state.stats.recent(1)[0];
+    let record = &h.state.stats().recent(1)[0];
     assert_eq!(record.attempts, 2);
     assert_eq!(record.resolved_model.as_deref(), Some("openai-gpt-sonnet"));
 
@@ -590,7 +590,7 @@ async fn circuit_breaker_skips_a_failing_model() {
     // First call: broken + good = 2 upstream calls. Second call: the breaker is
     // open, so the broken model is demoted and only the good one is used.
     assert_eq!(h.mock.count(), 3);
-    assert!(h.state.router.is_cooling("deepseek-broken-model"));
+    assert!(h.state.router().is_cooling("deepseek-broken-model"));
 
     h.shutdown().await;
 }
@@ -659,7 +659,7 @@ async fn authentication_is_enforced_on_api_routes_only() {
         .unwrap();
     assert_eq!(resp.status(), 200);
 
-    // Health stays open for the GUI.
+    // Liveness stays open, and says nothing else.
     let resp = h
         .client
         .get(format!("{}/health", h.base))
@@ -667,7 +667,107 @@ async fn authentication_is_enforced_on_api_routes_only() {
         .await
         .unwrap();
     assert_eq!(resp.status(), 200);
-    assert_eq!(resp.json::<Value>().await.unwrap()["status"], "ok");
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["status"], "ok");
+    assert_eq!(
+        body.as_object().unwrap().len(),
+        1,
+        "an unauthenticated route must not describe the configuration: {body}"
+    );
+
+    // The detail moved behind the token.
+    let resp = h
+        .client
+        .get(format!("{}/v1/status", h.base))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 401);
+    let body: Value = h
+        .get("/v1/status")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(body["auth_required"], true);
+    assert!(body["models"].as_u64().unwrap() > 0);
+    assert!(body["version"].is_string());
+
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn oversized_request_bodies_are_rejected_before_reaching_a_provider() {
+    let (addr, mock) = start_mock().await;
+    let mut cfg = config_for(addr);
+    cfg.server.max_body_mib = 1;
+    let h = Harness::start(cfg, mock).await;
+
+    let huge = "x".repeat(2 * 1024 * 1024);
+    let resp = h
+        .post("/v1/messages")
+        .json(&json!({"model": "sonnet-class", "max_tokens": 8,
+                      "messages": [{"role": "user", "content": huge}]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 413);
+    assert_eq!(h.mock.count(), 0, "nothing was forwarded upstream");
+
+    // A normal request on the same server still works.
+    let resp = h
+        .post("/v1/messages")
+        .json(&json!({"model": "sonnet-class", "max_tokens": 8,
+                      "messages": [{"role": "user", "content": "hi"}]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn cors_is_limited_to_the_configured_origins() {
+    let (addr, mock) = start_mock().await;
+    let mut cfg = config_for(addr);
+    cfg.server.allow_cors = true;
+    cfg.server.cors_origins = vec!["http://localhost:3000".into()];
+    assert!(!cfg.server.cors_is_wide_open());
+    let h = Harness::start(cfg, mock).await;
+
+    let resp = h
+        .get("/v1/models")
+        .header("origin", "http://localhost:3000")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.headers()["access-control-allow-origin"],
+        "http://localhost:3000"
+    );
+
+    let resp = h
+        .get("/v1/models")
+        .header("origin", "https://evil.example")
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        resp.headers().get("access-control-allow-origin").is_none(),
+        "an origin outside the list must not be allowed"
+    );
+
+    // Enabling CORS without a list is allowed but reported.
+    let mut wide = (*h.state.config()).clone();
+    wide.server.cors_origins.clear();
+    assert!(wide.server.cors_is_wide_open());
+    assert!(wide
+        .validate()
+        .iter()
+        .any(|i| i.code == "server.cors_any_origin"));
 
     h.shutdown().await;
 }
@@ -773,7 +873,7 @@ async fn unknown_and_unclassified_routing_errors() {
     );
 
     assert_eq!(h.mock.count(), 0);
-    let summary = h.state.stats.summary();
+    let summary = h.state.stats().summary();
     assert_eq!(summary.requests, 2);
     assert_eq!(summary.failures, 2);
 
@@ -927,7 +1027,7 @@ async fn the_same_model_from_two_providers_stays_addressable() {
 
     // They are separate members of the same class, so they can cover for each
     // other and are accounted for separately.
-    let health = h.state.router.health_snapshot();
+    let health = h.state.router().health_snapshot();
     assert_eq!(health.len(), 2);
     assert_eq!(health[0].model_id, "deepseek-deepseek-v4-pro");
     assert_eq!(health[1].model_id, "openai-deepseek-v4-pro");
@@ -971,7 +1071,7 @@ async fn provider_model_discovery_dedupes_and_sorts() {
 
     let models = h
         .state
-        .upstream
+        .upstream()
         .list_models(&provider, Some("sk-deepseek"))
         .await
         .unwrap();

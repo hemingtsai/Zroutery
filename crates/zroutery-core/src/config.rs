@@ -413,6 +413,14 @@ pub struct ServerConfig {
     /// Allow browser origins to call the proxy.
     #[serde(default)]
     pub allow_cors: bool,
+    /// Origins allowed when `allow_cors` is on. Empty means every origin, which
+    /// `validate` reports as a warning.
+    #[serde(default)]
+    pub cors_origins: Vec<String>,
+    /// Largest accepted request body, in mebibytes. Inline images make prompts
+    /// big, but not unbounded.
+    #[serde(default = "ServerConfig::default_body_limit_mib")]
+    pub max_body_mib: usize,
     /// Number of request records kept in memory for the GUI.
     #[serde(default = "ServerConfig::default_log_limit")]
     pub log_limit: usize,
@@ -428,10 +436,23 @@ impl ServerConfig {
     fn default_log_limit() -> usize {
         500
     }
+    fn default_body_limit_mib() -> usize {
+        32
+    }
 
     /// True when the server is reachable from outside this machine.
     pub fn is_exposed(&self) -> bool {
         !matches!(self.host.as_str(), "127.0.0.1" | "localhost" | "::1")
+    }
+
+    /// Body limit in bytes, clamped to something a proxy can actually buffer.
+    pub fn max_body_bytes(&self) -> usize {
+        self.max_body_mib.clamp(1, 512) * 1024 * 1024
+    }
+
+    /// True when CORS is on without an origin list, i.e. any site may call in.
+    pub fn cors_is_wide_open(&self) -> bool {
+        self.allow_cors && self.cors_origins.iter().all(|o| o.trim().is_empty())
     }
 }
 
@@ -444,6 +465,8 @@ impl Default for ServerConfig {
             auth_token: String::new(),
             autostart: true,
             allow_cors: false,
+            cors_origins: Vec::new(),
+            max_body_mib: Self::default_body_limit_mib(),
             log_limit: Self::default_log_limit(),
         }
     }
@@ -644,6 +667,16 @@ impl AppConfig {
                 severity: IssueSeverity::Warning,
                 code: "server.no_auth".into(),
                 message: "Authentication is disabled: any local process can spend your API credit"
+                    .into(),
+                subject: None,
+            });
+        }
+        if self.server.cors_is_wide_open() {
+            issues.push(ConfigIssue {
+                severity: IssueSeverity::Warning,
+                code: "server.cors_any_origin".into(),
+                message: "CORS is on with no origin list, so any website you visit can call the \
+                          proxy from your browser; list the origins you need"
                     .into(),
                 subject: None,
             });

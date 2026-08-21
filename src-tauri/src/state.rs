@@ -15,12 +15,12 @@ use crate::secrets::KeychainSecrets;
 use crate::store;
 
 pub struct Desktop {
-    pub core: Arc<AppState>,
-    pub secrets: Arc<KeychainSecrets>,
-    pub config_dir: PathBuf,
-    pub server: AsyncMutex<Option<ServerHandle>>,
+    pub(crate) core: Arc<AppState>,
+    pub(crate) secrets: Arc<KeychainSecrets>,
+    pub(crate) config_dir: PathBuf,
+    server: AsyncMutex<Option<ServerHandle>>,
     /// Startup problem worth surfacing once in the UI.
-    pub warning: Mutex<Option<String>>,
+    warning: Mutex<Option<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -31,7 +31,10 @@ pub struct ServerStatus {
     pub host: String,
     pub port: u16,
     pub require_auth: bool,
-    pub token: String,
+    /// Enough of the token to recognise which one is in play, never the whole
+    /// thing: snapshots are handed to the webview on every poll. Use the
+    /// `reveal_token` or `copy_token` commands for the real value.
+    pub token_hint: String,
     pub exposed: bool,
 }
 
@@ -56,6 +59,32 @@ pub struct Snapshot {
     pub version: String,
 }
 
+/// The subset the Activity tab polls for.
+#[derive(Debug, Clone, Serialize)]
+pub struct Activity {
+    pub health: Vec<ModelHealth>,
+    pub summary: StatsSummary,
+    pub recent: Vec<RequestRecord>,
+}
+
+/// `zr-1234abcd…` -> `zr-…abcd`: enough to tell two tokens apart, useless on its
+/// own.
+pub fn token_hint(token: &str) -> String {
+    let trimmed = token.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    let tail: String = trimmed
+        .chars()
+        .rev()
+        .take(4)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    format!("zr-…{tail}")
+}
+
 impl Desktop {
     pub fn new(config_dir: PathBuf, config: AppConfig, secrets: Arc<KeychainSecrets>) -> Self {
         let core = Arc::new(AppState::new(config, secrets.clone() as Arc<_>));
@@ -69,12 +98,22 @@ impl Desktop {
     }
 
     pub fn set_warning(&self, warning: Option<String>) {
-        *self.warning.lock().expect("warning poisoned") = warning;
+        *self
+            .warning
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = warning;
+    }
+
+    pub fn warning(&self) -> Option<String> {
+        self.warning
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
     }
 
     pub async fn snapshot(&self) -> Snapshot {
-        let config = (*self.core.config()).clone();
-        let issues = config.validate();
+        let stored = self.core.config();
+        let issues = stored.validate();
         let blocking = issues.iter().any(|i| i.severity == IssueSeverity::Error);
         let running_addr = self
             .server
@@ -83,35 +122,56 @@ impl Desktop {
             .as_ref()
             .map(|s| s.addr.to_string());
 
-        let keys = config
+        let keys = stored
             .providers
             .iter()
             .map(|p| (p.id.clone(), self.secrets.has(&p.key_ref)))
             .collect();
+
+        // The webview gets everything except the token itself.
+        let mut config = (*stored).clone();
+        config.server.auth_token = String::new();
 
         Snapshot {
             server: ServerStatus {
                 running: running_addr.is_some(),
                 base_url: running_addr.as_ref().map(|a| format!("http://{a}")),
                 address: running_addr,
-                host: config.server.host.clone(),
-                port: config.server.port,
-                require_auth: config.server.require_auth,
-                token: config.server.auth_token.clone(),
-                exposed: config.server.is_exposed(),
+                host: stored.server.host.clone(),
+                port: stored.server.port,
+                require_auth: stored.server.require_auth,
+                token_hint: token_hint(&stored.server.auth_token),
+                exposed: stored.server.is_exposed(),
             },
             keys,
             issues,
             blocking,
-            health: self.core.router.health_snapshot(),
-            summary: self.core.stats.summary(),
-            recent: self.core.stats.recent(200),
-            warning: self.warning.lock().expect("warning poisoned").clone(),
+            health: self.core.router().health_snapshot(),
+            summary: self.core.stats().summary(),
+            recent: self.core.stats().recent(200),
+            warning: self.warning(),
             config_path: self.config_dir.join(store::FILE_NAME).display().to_string(),
             version: env!("CARGO_PKG_VERSION").to_string(),
             exposed_ids: config.exposed_ids(),
             config,
         }
+    }
+
+    /// Only the counters and the log, for the Activity tab's polling.
+    ///
+    /// A full snapshot clones the whole configuration and asks the keychain about
+    /// every provider; this is what the dashboard actually needs twice a second.
+    pub fn activity(&self) -> Activity {
+        Activity {
+            health: self.core.router().health_snapshot(),
+            summary: self.core.stats().summary(),
+            recent: self.core.stats().recent(200),
+        }
+    }
+
+    /// The real token. Only reached through an explicit user action.
+    pub fn auth_token(&self) -> String {
+        self.core.config().server.auth_token.clone()
     }
 
     pub async fn is_running(&self) -> bool {
@@ -151,11 +211,16 @@ impl Desktop {
     pub async fn apply_config(&self, mut next: AppConfig) -> Result<bool, String> {
         // Tidy the alias lists and fold any legacy id the dashboard echoed back.
         next.normalize();
+        let previous = self.core.config();
+        // The dashboard never receives the token, so an empty one means "keep
+        // what you have" rather than "clear it".
+        if next.server.auth_token.trim().is_empty() {
+            next.server.auth_token = previous.server.auth_token.clone();
+        }
         let issues = next.validate();
         if let Some(err) = issues.iter().find(|i| i.severity == IssueSeverity::Error) {
             return Err(err.message.clone());
         }
-        let previous = self.core.config();
         store::save(&self.config_dir, &next)?;
         let needs_rebind = needs_rebind(&previous.server, &next.server);
         self.core.set_config(next);
@@ -194,5 +259,81 @@ mod tests {
         let mut d = a.clone();
         d.host = "0.0.0.0".into();
         assert!(needs_rebind(&a, &d));
+    }
+
+    fn desktop_with(config: AppConfig) -> (Arc<Desktop>, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("zroutery-state-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let secrets = Arc::new(KeychainSecrets::new(format!(
+            "app.zroutery.test.{}",
+            uuid::Uuid::new_v4()
+        )));
+        (Arc::new(Desktop::new(dir.clone(), config, secrets)), dir)
+    }
+
+    fn config_with_token(token: &str) -> AppConfig {
+        let mut cfg = AppConfig::default();
+        cfg.server.auth_token = token.into();
+        cfg.server.port = 0;
+        cfg
+    }
+
+    #[test]
+    fn the_token_hint_keeps_only_the_tail() {
+        assert_eq!(token_hint("zr-0123456789abcdef"), "zr-…cdef");
+        assert_eq!(token_hint(""), "");
+        // A short token still does not reveal itself entirely.
+        assert_eq!(token_hint("abcd"), "zr-…abcd");
+    }
+
+    #[tokio::test]
+    async fn snapshots_never_carry_the_token() {
+        let (desktop, dir) = desktop_with(config_with_token("zr-secret-token-1234"));
+        let snapshot = desktop.snapshot().await;
+
+        assert_eq!(snapshot.server.token_hint, "zr-…1234");
+        assert!(snapshot.config.server.auth_token.is_empty());
+        let json = serde_json::to_string(&snapshot).unwrap();
+        assert!(
+            !json.contains("zr-secret-token-1234"),
+            "the token reached the payload handed to the webview"
+        );
+        // The explicit accessor still has it.
+        assert_eq!(desktop.auth_token(), "zr-secret-token-1234");
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn saving_a_redacted_config_keeps_the_existing_token() {
+        let (desktop, dir) = desktop_with(config_with_token("zr-keep-me-9999"));
+
+        // What the dashboard sends back: everything except the token.
+        let mut edited = desktop.snapshot().await.config;
+        assert!(edited.server.auth_token.is_empty());
+        edited.server.log_limit = 42;
+        desktop.apply_config(edited).await.unwrap();
+
+        assert_eq!(desktop.auth_token(), "zr-keep-me-9999");
+        assert_eq!(desktop.core.config().server.log_limit, 42);
+
+        // An explicit new token is still honoured.
+        let mut rotated = desktop.snapshot().await.config;
+        rotated.server.auth_token = "zr-brand-new".into();
+        desktop.apply_config(rotated).await.unwrap();
+        assert_eq!(desktop.auth_token(), "zr-brand-new");
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn the_activity_view_matches_the_snapshot_counters() {
+        let (desktop, dir) = desktop_with(config_with_token("zr-1"));
+        let activity = desktop.activity();
+        let snapshot = desktop.snapshot().await;
+        assert_eq!(activity.summary.requests, snapshot.summary.requests);
+        assert_eq!(activity.recent.len(), snapshot.recent.len());
+        assert_eq!(activity.health.len(), snapshot.health.len());
+        std::fs::remove_dir_all(dir).ok();
     }
 }

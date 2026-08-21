@@ -23,6 +23,7 @@ pub mod registry;
 pub mod router;
 pub mod server;
 pub mod stats;
+mod sync;
 pub mod upstream;
 
 pub use config::{

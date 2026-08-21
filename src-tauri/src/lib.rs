@@ -28,10 +28,13 @@ pub fn run() {
         .with_target(false)
         .init();
 
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_clipboard_manager::init())
         .invoke_handler(tauri::generate_handler![
             commands::get_snapshot,
+            commands::get_activity,
+            commands::reveal_token,
+            commands::copy_token,
             commands::save_config,
             commands::set_provider_key,
             commands::clear_provider_key,
@@ -106,19 +109,30 @@ pub fn run() {
                 let _ = window.hide();
             }
         })
-        .build(tauri::generate_context!())
-        .expect("failed to build the Zroutery application")
-        .run(|_app, event| {
-            if let RunEvent::ExitRequested { code, api, .. } = event {
-                // `code` is None when the request comes from user interaction,
-                // i.e. the last window was closed: stay alive in the menu bar.
-                // An explicit quit goes through `AppHandle::exit`, which carries
-                // a code, and has to be honoured.
-                if should_stay_resident(code) {
-                    api.prevent_exit();
-                }
+        .build(tauri::generate_context!());
+
+    // A panic here would surface as a crash report; a message plus a non-zero
+    // exit code is more use to whoever has to fix it.
+    let app = match app {
+        Ok(app) => app,
+        Err(e) => {
+            tracing::error!("Zroutery cannot start: {e}");
+            eprintln!("Zroutery cannot start: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    app.run(|_app, event| {
+        if let RunEvent::ExitRequested { code, api, .. } = event {
+            // `code` is None when the request comes from user interaction, i.e.
+            // the last window was closed: stay alive in the menu bar. An explicit
+            // quit goes through `AppHandle::exit`, which carries a code, and has
+            // to be honoured.
+            if should_stay_resident(code) {
+                api.prevent_exit();
             }
-        });
+        }
+    });
 }
 
 /// Whether an exit request should be ignored so the app keeps living in the menu

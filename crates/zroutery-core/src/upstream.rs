@@ -42,7 +42,12 @@ impl Upstream {
             .pool_idle_timeout(Duration::from_secs(90))
             .user_agent(USER_AGENT)
             .build()
-            .expect("failed to build HTTP client");
+            // The builder only fails when the TLS backend cannot initialise. A
+            // default client is a better outcome than taking the process down.
+            .unwrap_or_else(|e| {
+                tracing::error!("falling back to a default HTTP client: {e}");
+                reqwest::Client::new()
+            });
         Upstream { client }
     }
 

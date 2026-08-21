@@ -93,10 +93,10 @@ fn on_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
                 else {
                     return;
                 };
-                let snapshot = desktop.snapshot().await;
                 let text = if want_token {
-                    snapshot.server.token
+                    desktop.auth_token()
                 } else {
+                    let snapshot = desktop.snapshot().await;
                     snapshot.server.base_url.unwrap_or_else(|| {
                         format!("http://{}:{}", snapshot.server.host, snapshot.server.port)
                     })

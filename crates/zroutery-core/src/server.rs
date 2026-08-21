@@ -10,12 +10,12 @@
 use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::sync::{Arc, RwLock};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use axum::body::Body;
 use axum::extract::rejection::JsonRejection;
-use axum::extract::{Path, State};
-use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
+use axum::extract::{DefaultBodyLimit, Path, State};
+use axum::http::{header, HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -23,9 +23,9 @@ use axum::{Json, Router as AxumRouter};
 use serde_json::{json, Value};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 
-use crate::config::{AppConfig, ProviderConfig, SecretStore};
+use crate::config::{AppConfig, ProviderConfig, SecretStore, ServerConfig};
 use crate::error::{Error, Result};
 use crate::ir::{ChatRequest, Dialect, StreamEvent, Usage};
 use crate::protocol::{self, openai, SseFrame, StreamEncoder};
@@ -35,19 +35,23 @@ use crate::stats::{RecordBuilder, Stats};
 use crate::upstream::Upstream;
 
 /// Everything a request handler needs.
+///
+/// Fields are private so nothing outside can leave the cached registry out of
+/// step with the configuration it was built from.
 pub struct AppState {
-    config: RwLock<Arc<AppConfig>>,
-    pub router: Arc<Router>,
-    pub stats: Arc<Stats>,
-    pub upstream: Upstream,
-    pub secrets: Arc<dyn SecretStore>,
+    /// Configuration plus its precomputed lookup tables, swapped together.
+    registry: RwLock<Arc<Registry>>,
+    router: Arc<Router>,
+    stats: Arc<Stats>,
+    upstream: Upstream,
+    secrets: Arc<dyn SecretStore>,
 }
 
 impl AppState {
     pub fn new(config: AppConfig, secrets: Arc<dyn SecretStore>) -> Self {
         let stats = Arc::new(Stats::new(config.server.log_limit));
         AppState {
-            config: RwLock::new(Arc::new(config)),
+            registry: RwLock::new(Arc::new(Registry::new(Arc::new(config)))),
             router: Arc::new(Router::new()),
             stats,
             upstream: Upstream::new(),
@@ -55,18 +59,36 @@ impl AppState {
         }
     }
 
-    pub fn config(&self) -> Arc<AppConfig> {
-        Arc::clone(&self.config.read().expect("config poisoned"))
+    pub fn router(&self) -> &Arc<Router> {
+        &self.router
     }
 
-    /// Swap in a new configuration. In-flight requests keep their snapshot.
+    pub fn stats(&self) -> &Arc<Stats> {
+        &self.stats
+    }
+
+    pub fn upstream(&self) -> &Upstream {
+        &self.upstream
+    }
+
+    pub fn secrets(&self) -> &Arc<dyn SecretStore> {
+        &self.secrets
+    }
+
+    pub fn config(&self) -> Arc<AppConfig> {
+        self.registry().snapshot()
+    }
+
+    /// Swap in a new configuration, rebuilding the lookup tables once here
+    /// instead of per request. In-flight requests keep their snapshot.
     pub fn set_config(&self, config: AppConfig) {
         self.stats.set_limit(config.server.log_limit);
-        *self.config.write().expect("config poisoned") = Arc::new(config);
+        let registry = Arc::new(Registry::new(Arc::new(config)));
+        *crate::sync::write(&self.registry) = registry;
     }
 
-    pub fn registry(&self) -> Registry {
-        Registry::new(self.config())
+    pub fn registry(&self) -> Arc<Registry> {
+        Arc::clone(&crate::sync::read(&self.registry))
     }
 
     /// Resolve a provider's secret, failing loudly when one is expected but absent.
@@ -83,29 +105,64 @@ impl AppState {
 
 /// Build the axum application.
 pub fn build_app(state: Arc<AppState>) -> AxumRouter {
+    let cfg = state.config();
     let mut app = AxumRouter::new()
         .route("/v1/messages", post(anthropic_messages))
         .route("/v1/messages/count_tokens", post(count_tokens))
         .route("/v1/chat/completions", post(openai_chat))
         .route("/v1/models", get(list_models))
         .route("/v1/models/{id}", get(get_model))
+        .route("/v1/status", get(status))
+        // Prompts with inline images are large, runaway bodies are not.
+        .layer(DefaultBodyLimit::max(cfg.server.max_body_bytes()))
         .route_layer(middleware::from_fn_with_state(
             Arc::clone(&state),
             auth_layer,
         ))
-        // Health is intentionally unauthenticated so the GUI can poll it.
+        // Liveness only, and deliberately unauthenticated: it says nothing about
+        // the configuration. `/v1/status` behind the token has the detail.
         .route("/health", get(health))
         .with_state(Arc::clone(&state));
 
-    if state.config().server.allow_cors {
-        app = app.layer(
-            CorsLayer::new()
-                .allow_origin(Any)
-                .allow_methods(Any)
-                .allow_headers(Any),
-        );
+    if let Some(cors) = cors_layer(&cfg.server) {
+        app = app.layer(cors);
     }
     app
+}
+
+/// Build the CORS layer for the configured origins.
+///
+/// Browsers are the only reason this exists, so the allowed methods and headers
+/// are pinned to what the two APIs actually use instead of `Any`. An empty origin
+/// list with CORS enabled means "any origin", which `AppConfig::validate` flags as
+/// a warning and the dashboard shows in red.
+fn cors_layer(server: &ServerConfig) -> Option<CorsLayer> {
+    if !server.allow_cors {
+        return None;
+    }
+    let mut layer = CorsLayer::new()
+        .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+        .allow_headers([
+            header::CONTENT_TYPE,
+            header::AUTHORIZATION,
+            header::ACCEPT,
+            HeaderName::from_static("x-api-key"),
+            HeaderName::from_static("anthropic-version"),
+            HeaderName::from_static("anthropic-beta"),
+        ])
+        .max_age(Duration::from_secs(600));
+
+    let origins: Vec<HeaderValue> = server
+        .cors_origins
+        .iter()
+        .filter_map(|o| HeaderValue::from_str(o.trim()).ok())
+        .collect();
+    layer = if origins.is_empty() {
+        layer.allow_origin(Any)
+    } else {
+        layer.allow_origin(AllowOrigin::list(origins))
+    };
+    Some(layer)
 }
 
 /// A running server plus its shutdown handle.
@@ -157,9 +214,16 @@ impl ServerHandle {
 
 // ------------------------------------------------------------------- handlers
 
-async fn health(State(state): State<Arc<AppState>>) -> Json<Value> {
-    let cfg = state.config();
+/// Liveness probe. Says nothing about the configuration on purpose: it is the
+/// only route that does not require the token.
+async fn health() -> Json<Value> {
+    Json(json!({"status": "ok"}))
+}
+
+/// The detail that `/health` used to leak, behind authentication.
+async fn status(State(state): State<Arc<AppState>>) -> Json<Value> {
     let registry = state.registry();
+    let cfg = registry.config();
     Json(json!({
         "status": "ok",
         "version": env!("CARGO_PKG_VERSION"),
@@ -216,15 +280,20 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 
 type JsonBody = std::result::Result<Json<Value>, JsonRejection>;
 
-fn unwrap_body(body: JsonBody) -> Result<Value> {
+fn unwrap_body(state: &AppState, body: JsonBody) -> Result<Value> {
     match body {
         Ok(Json(v)) => Ok(v),
+        // A body over the limit is a different problem from malformed JSON, and
+        // clients back off differently for 413 than for 400.
+        Err(e) if e.status() == StatusCode::PAYLOAD_TOO_LARGE => Err(Error::TooLarge {
+            limit_mib: state.config().server.max_body_mib,
+        }),
         Err(e) => Err(Error::invalid(e.body_text())),
     }
 }
 
 async fn anthropic_messages(State(state): State<Arc<AppState>>, body: JsonBody) -> Response {
-    let body = match unwrap_body(body) {
+    let body = match unwrap_body(&state, body) {
         Ok(v) => v,
         Err(e) => return error_response(Dialect::Anthropic, &e),
     };
@@ -232,7 +301,7 @@ async fn anthropic_messages(State(state): State<Arc<AppState>>, body: JsonBody) 
 }
 
 async fn openai_chat(State(state): State<Arc<AppState>>, body: JsonBody) -> Response {
-    let body = match unwrap_body(body) {
+    let body = match unwrap_body(&state, body) {
         Ok(v) => v,
         Err(e) => return error_response(Dialect::OpenAI, &e),
     };
@@ -240,7 +309,7 @@ async fn openai_chat(State(state): State<Arc<AppState>>, body: JsonBody) -> Resp
 }
 
 async fn count_tokens(State(state): State<Arc<AppState>>, body: JsonBody) -> Response {
-    let body = match unwrap_body(body) {
+    let body = match unwrap_body(&state, body) {
         Ok(v) => v,
         Err(e) => return error_response(Dialect::Anthropic, &e),
     };
@@ -478,13 +547,16 @@ async fn stream_chat(
                     candidate.model_id().to_string(),
                     routing.clone(),
                 ));
-                let mut response = Response::builder()
-                    .status(StatusCode::OK)
-                    .header(header::CONTENT_TYPE, "text/event-stream")
-                    .header(header::CACHE_CONTROL, "no-cache")
-                    .header("x-accel-buffering", "no")
-                    .body(body)
-                    .expect("valid response");
+                // Built from a plain body and static headers, so nothing here can
+                // fail and there is no reason to unwrap.
+                let mut response = Response::new(body);
+                let headers = response.headers_mut();
+                headers.insert(
+                    header::CONTENT_TYPE,
+                    HeaderValue::from_static("text/event-stream"),
+                );
+                headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+                headers.insert("x-accel-buffering", HeaderValue::from_static("no"));
                 inject_routing_headers(response.headers_mut(), candidate);
                 return response;
             }

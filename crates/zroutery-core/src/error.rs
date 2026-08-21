@@ -12,6 +12,10 @@ pub enum Error {
     #[error("invalid request: {0}")]
     InvalidRequest(String),
 
+    /// Body larger than `server.max_body_mib`.
+    #[error("request body is too large (limit {limit_mib} MiB)")]
+    TooLarge { limit_mib: usize },
+
     /// Client model id resolved to nothing.
     #[error("model `{0}` is not available")]
     UnknownModel(String),
@@ -65,6 +69,7 @@ impl Error {
     pub fn status(&self) -> StatusCode {
         match self {
             Error::InvalidRequest(_) => StatusCode::BAD_REQUEST,
+            Error::TooLarge { .. } => StatusCode::PAYLOAD_TOO_LARGE,
             Error::UnknownModel(_) => StatusCode::NOT_FOUND,
             Error::NoCandidate(_) => StatusCode::SERVICE_UNAVAILABLE,
             Error::Unauthorized => StatusCode::UNAUTHORIZED,
@@ -83,6 +88,7 @@ impl Error {
     pub fn kind(&self) -> &'static str {
         match self {
             Error::InvalidRequest(_) => "invalid_request_error",
+            Error::TooLarge { .. } => "request_too_large",
             Error::UnknownModel(_) => "not_found_error",
             Error::NoCandidate(_) => "overloaded_error",
             Error::Unauthorized => "authentication_error",
@@ -115,7 +121,10 @@ impl Error {
 
     /// True when the failure should count against the model's health.
     pub fn counts_against_health(&self) -> bool {
-        !matches!(self, Error::InvalidRequest(_) | Error::UnknownModel(_))
+        !matches!(
+            self,
+            Error::InvalidRequest(_) | Error::UnknownModel(_) | Error::TooLarge { .. }
+        )
     }
 
     /// Serialize into the shape the given dialect expects.
@@ -183,6 +192,23 @@ mod tests {
     #[test]
     fn health_accounting_ignores_client_errors() {
         assert!(!Error::invalid("nope").counts_against_health());
+        assert!(!Error::TooLarge { limit_mib: 32 }.counts_against_health());
         assert!(Error::Timeout(1).counts_against_health());
+    }
+
+    #[test]
+    fn oversized_bodies_report_413_in_both_dialects() {
+        let e = Error::TooLarge { limit_mib: 32 };
+        assert_eq!(e.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        assert!(!e.is_retryable());
+        assert_eq!(
+            e.to_wire(Dialect::Anthropic)["error"]["type"],
+            "request_too_large"
+        );
+        assert_eq!(
+            e.to_wire(Dialect::OpenAI)["error"]["code"],
+            "request_too_large"
+        );
+        assert!(e.to_string().contains("32 MiB"));
     }
 }

@@ -140,7 +140,7 @@ impl Router {
 
         let now = self.clock.now_ms();
         let (healthy, cooling): (Vec<&ModelEntry>, Vec<&ModelEntry>) = {
-            let health = self.health.lock().expect("health poisoned");
+            let health = crate::sync::lock(&self.health);
             members.into_iter().partition(|m| {
                 health
                     .get(&m.exposed_id())
@@ -206,7 +206,7 @@ impl Router {
             }
             RoutingStrategy::WeightedRandom => self.weighted_shuffle(members),
             RoutingStrategy::RoundRobin => {
-                let mut rr = self.rr.lock().expect("rr poisoned");
+                let mut rr = crate::sync::lock(&self.rr);
                 let counter = rr.entry(class).or_insert(0);
                 let start = *counter % members.len();
                 *counter = counter.wrapping_add(1);
@@ -216,7 +216,7 @@ impl Router {
                 v
             }
             RoutingStrategy::LowestLatency => {
-                let health = self.health.lock().expect("health poisoned");
+                let health = crate::sync::lock(&self.health);
                 let mut v = members.to_vec();
                 v.sort_by(|a, b| {
                     // Unmeasured models sort first so they get probed.
@@ -258,7 +258,7 @@ impl Router {
     }
 
     pub fn report_success(&self, model_id: &str, latency_ms: u64) {
-        let mut health = self.health.lock().expect("health poisoned");
+        let mut health = crate::sync::lock(&self.health);
         let h = health.entry(model_id.to_string()).or_default();
         h.consecutive_failures = 0;
         h.cooldown_until_ms = 0;
@@ -275,7 +275,7 @@ impl Router {
         if !error.counts_against_health() {
             return;
         }
-        let mut health = self.health.lock().expect("health poisoned");
+        let mut health = crate::sync::lock(&self.health);
         let now = self.clock.now_ms();
         let h = health.entry(model_id.to_string()).or_default();
         h.consecutive_failures += 1;
@@ -288,7 +288,7 @@ impl Router {
 
     /// Clear cooldown and failure streak for one model (GUI "retry now").
     pub fn reset(&self, model_id: &str) {
-        let mut health = self.health.lock().expect("health poisoned");
+        let mut health = crate::sync::lock(&self.health);
         if let Some(h) = health.get_mut(model_id) {
             h.consecutive_failures = 0;
             h.cooldown_until_ms = 0;
@@ -300,7 +300,7 @@ impl Router {
         let now = self.clock.now_ms();
         self.health
             .lock()
-            .expect("health poisoned")
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .get(model_id)
             .map(|h| h.cooldown_until_ms > now)
             .unwrap_or(false)
@@ -308,7 +308,7 @@ impl Router {
 
     pub fn health_snapshot(&self) -> Vec<ModelHealth> {
         let now = self.clock.now_ms();
-        let health = self.health.lock().expect("health poisoned");
+        let health = crate::sync::lock(&self.health);
         let mut out: Vec<ModelHealth> = health
             .iter()
             .map(|(id, h)| ModelHealth {

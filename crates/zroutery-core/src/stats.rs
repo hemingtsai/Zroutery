@@ -92,7 +92,7 @@ impl Stats {
     }
 
     pub fn set_limit(&self, limit: usize) {
-        let mut inner = self.inner.lock().expect("stats poisoned");
+        let mut inner = crate::sync::lock(&self.inner);
         inner.limit = limit.max(1);
         while inner.records.len() > inner.limit {
             inner.records.pop_front();
@@ -100,7 +100,7 @@ impl Stats {
     }
 
     pub fn record(&self, record: RequestRecord) {
-        let mut inner = self.inner.lock().expect("stats poisoned");
+        let mut inner = crate::sync::lock(&self.inner);
         inner.requests += 1;
         if !record.ok {
             inner.failures += 1;
@@ -139,12 +139,12 @@ impl Stats {
 
     /// Most recent requests first.
     pub fn recent(&self, limit: usize) -> Vec<RequestRecord> {
-        let inner = self.inner.lock().expect("stats poisoned");
+        let inner = crate::sync::lock(&self.inner);
         inner.records.iter().rev().take(limit).cloned().collect()
     }
 
     pub fn summary(&self) -> StatsSummary {
-        let inner = self.inner.lock().expect("stats poisoned");
+        let inner = crate::sync::lock(&self.inner);
         StatsSummary {
             since: inner.since,
             requests: inner.requests,
@@ -156,7 +156,7 @@ impl Stats {
     }
 
     pub fn clear(&self) {
-        let mut inner = self.inner.lock().expect("stats poisoned");
+        let mut inner = crate::sync::lock(&self.inner);
         inner.records.clear();
         inner.per_model.clear();
         inner.requests = 0;
