@@ -203,14 +203,42 @@ impl ProviderConfig {
     }
 }
 
+/// Build the id clients use for a model: `<provider>-<upstream model>`.
+///
+/// Two providers offering the same upstream model therefore stay
+/// distinguishable, e.g. `deepseek-deepseek-chat` next to
+/// `openrouter-deepseek-chat`. Characters that are awkward in an id, such as the
+/// slash in `deepseek/deepseek-chat`, become hyphens; the untouched name is
+/// still what goes upstream.
+pub fn qualified_id(provider_id: &str, upstream_model: &str) -> String {
+    let raw = format!("{}-{}", provider_id.trim(), upstream_model.trim());
+    let mut out = String::with_capacity(raw.len());
+    for c in raw.chars() {
+        if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') {
+            out.push(c);
+        } else {
+            out.push('-');
+        }
+    }
+    out
+}
+
 /// A model exposed by Zroutery, bound to one upstream provider.
+///
+/// Identity is the `(provider_id, upstream_model)` pair. The id clients see is
+/// derived from it by [`ModelEntry::exposed_id`] instead of being stored, so it
+/// can neither drift nor collide with the same model coming from another
+/// provider.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ModelEntry {
-    /// Id exposed to clients, e.g. `deepseek-v4-pro`. Must be unique.
-    pub id: String,
     pub provider_id: String,
-    /// Model id sent upstream. Often equal to `id`.
+    /// Model id sent upstream, exactly as the provider spells it.
     pub upstream_model: String,
+    /// Free-form id from configurations written before ids were derived.
+    /// [`AppConfig::normalize`] folds it into `aliases` so existing clients keep
+    /// working, and it is never written back.
+    #[serde(default, rename = "id", skip_serializing)]
+    legacy_id: Option<String>,
     /// Tier used by `*-class` virtual models. `None` means the user has not
     /// classified it yet: it stays callable by exact id but never participates
     /// in class routing.
@@ -233,7 +261,7 @@ pub struct ModelEntry {
     /// Optional display name for `/v1/models`.
     #[serde(default)]
     pub display_name: Option<String>,
-    /// Extra alias ids that resolve to this exact model.
+    /// Extra ids that resolve to this exact model, for shorter names.
     #[serde(default)]
     pub aliases: Vec<String>,
     /// Hard cap on `max_tokens` sent upstream.
@@ -242,16 +270,17 @@ pub struct ModelEntry {
 }
 
 impl ModelEntry {
-    pub fn new(
-        id: impl Into<String>,
+    /// Named rather than `new` so every call site has to state which argument is
+    /// the provider now that both are plain strings.
+    pub fn for_upstream(
         provider_id: impl Into<String>,
+        upstream_model: impl Into<String>,
         class: Option<ModelClass>,
     ) -> Self {
-        let id = id.into();
         ModelEntry {
-            upstream_model: id.clone(),
-            id,
             provider_id: provider_id.into(),
+            upstream_model: upstream_model.into(),
+            legacy_id: None,
             class,
             priority: 0,
             weight: default_weight(),
@@ -265,8 +294,23 @@ impl ModelEntry {
         }
     }
 
-    pub fn with_upstream(mut self, upstream: impl Into<String>) -> Self {
-        self.upstream_model = upstream.into();
+    /// The id clients use, `<provider>-<upstream model>`.
+    pub fn exposed_id(&self) -> String {
+        qualified_id(&self.provider_id, &self.upstream_model)
+    }
+
+    /// True when `id` is this model's exposed id or one of its aliases.
+    pub fn answers_to(&self, id: &str) -> bool {
+        self.exposed_id() == id || self.aliases.iter().any(|a| a == id)
+    }
+
+    /// Identity of the model: which provider, which upstream name.
+    pub fn key(&self) -> (&str, &str) {
+        (&self.provider_id, &self.upstream_model)
+    }
+
+    pub fn with_alias(mut self, alias: impl Into<String>) -> Self {
+        self.aliases.push(alias.into());
         self
     }
 
@@ -441,7 +485,48 @@ impl AppConfig {
     }
 
     pub fn model(&self, id: &str) -> Option<&ModelEntry> {
-        self.models.iter().find(|m| m.id == id)
+        self.models.iter().find(|m| m.answers_to(id))
+    }
+
+    /// Look a model up by identity rather than by exposed id.
+    pub fn model_by_key(&self, provider_id: &str, upstream_model: &str) -> Option<&ModelEntry> {
+        self.models
+            .iter()
+            .find(|m| m.provider_id == provider_id && m.upstream_model == upstream_model)
+    }
+
+    /// The exposed ids of every configured model, in order.
+    ///
+    /// The GUI renders these instead of deriving ids itself, so the naming rule
+    /// has exactly one implementation.
+    pub fn exposed_ids(&self) -> Vec<String> {
+        self.models.iter().map(|m| m.exposed_id()).collect()
+    }
+
+    /// Fold configurations written before ids were derived into the current
+    /// shape, and tidy the alias lists.
+    ///
+    /// Returns a note for every id that moved, so the UI can explain itself.
+    pub fn normalize(&mut self) -> Vec<String> {
+        let mut notes = Vec::new();
+        for model in &mut self.models {
+            let exposed = qualified_id(&model.provider_id, &model.upstream_model);
+            if let Some(legacy) = model.legacy_id.take() {
+                let legacy = legacy.trim().to_string();
+                if !legacy.is_empty() && legacy != exposed && !model.aliases.contains(&legacy) {
+                    model.aliases.push(legacy.clone());
+                    notes.push(format!(
+                        "`{legacy}` is now exposed as `{exposed}`; the old id still works as an alias"
+                    ));
+                }
+            }
+            model
+                .aliases
+                .retain(|a| !a.trim().is_empty() && a != &exposed);
+            model.aliases.sort();
+            model.aliases.dedup();
+        }
+        notes
     }
 
     /// Models that the user still has to classify. The GUI nags about these.
@@ -451,7 +536,7 @@ impl AppConfig {
 
     pub fn validate(&self) -> Vec<ConfigIssue> {
         let mut issues = Vec::new();
-        let mut seen_ids: BTreeMap<&str, usize> = BTreeMap::new();
+        let mut seen_ids: BTreeMap<String, usize> = BTreeMap::new();
 
         for p in &self.providers {
             if p.base_url.trim().is_empty() {
@@ -465,32 +550,48 @@ impl AppConfig {
         }
 
         for m in &self.models {
-            *seen_ids.entry(m.id.as_str()).or_insert(0) += 1;
+            let exposed = m.exposed_id();
+            *seen_ids.entry(exposed.clone()).or_insert(0) += 1;
+            for alias in &m.aliases {
+                *seen_ids.entry(alias.clone()).or_insert(0) += 1;
+            }
             if self.provider(&m.provider_id).is_none() {
                 issues.push(ConfigIssue {
                     severity: IssueSeverity::Error,
                     code: "model.orphan".into(),
-                    message: format!("Model `{}` points at a missing provider", m.id),
-                    subject: Some(m.id.clone()),
+                    message: format!(
+                        "Model `{}` points at missing provider `{}`",
+                        m.upstream_model, m.provider_id
+                    ),
+                    subject: Some(exposed.clone()),
                 });
             }
-            if ModelClass::from_virtual_id(&m.id).is_some() {
+            if m.upstream_model.trim().is_empty() {
                 issues.push(ConfigIssue {
                     severity: IssueSeverity::Error,
-                    code: "model.reserved_id".into(),
-                    message: format!("`{}` is a reserved virtual model id", m.id),
-                    subject: Some(m.id.clone()),
+                    code: "model.no_upstream".into(),
+                    message: format!("A model on provider `{}` has no name", m.provider_id),
+                    subject: Some(exposed.clone()),
                 });
+            }
+            for reserved in std::iter::once(&exposed).chain(m.aliases.iter()) {
+                if ModelClass::from_virtual_id(reserved).is_some() {
+                    issues.push(ConfigIssue {
+                        severity: IssueSeverity::Error,
+                        code: "model.reserved_id".into(),
+                        message: format!("`{reserved}` is a reserved virtual model id"),
+                        subject: Some(exposed.clone()),
+                    });
+                }
             }
             if m.class.is_none() {
                 issues.push(ConfigIssue {
                     severity: IssueSeverity::Warning,
                     code: "model.unclassified".into(),
                     message: format!(
-                        "Model `{}` has no class yet, so it is excluded from *-class routing",
-                        m.id
+                        "Model `{exposed}` has no class yet, so it is excluded from *-class routing"
                     ),
-                    subject: Some(m.id.clone()),
+                    subject: Some(exposed.clone()),
                 });
             }
         }
@@ -500,8 +601,11 @@ impl AppConfig {
                 issues.push(ConfigIssue {
                     severity: IssueSeverity::Error,
                     code: "model.duplicate_id".into(),
-                    message: format!("Model id `{id}` is declared {count} times"),
-                    subject: Some(id.to_string()),
+                    message: format!(
+                        "`{id}` resolves to {count} models; the same provider and model must not \
+                         be listed twice, and aliases have to be unique"
+                    ),
+                    subject: Some(id),
                 });
             }
         }
@@ -593,12 +697,72 @@ mod tests {
             "DeepSeek",
             ProviderKind::OpenAICompatible,
         ));
-        cfg.models.push(ModelEntry::new(
-            "deepseek-v4-pro",
+        cfg.models.push(ModelEntry::for_upstream(
             "deepseek",
+            "deepseek-chat",
             Some(ModelClass::Sonnet),
         ));
         cfg
+    }
+
+    #[test]
+    fn exposed_ids_are_namespaced_by_provider() {
+        let direct = ModelEntry::for_upstream("deepseek", "deepseek-chat", None);
+        let proxied = ModelEntry::for_upstream("openrouter", "deepseek-chat", None);
+        assert_eq!(direct.exposed_id(), "deepseek-deepseek-chat");
+        assert_eq!(proxied.exposed_id(), "openrouter-deepseek-chat");
+        assert_ne!(direct.exposed_id(), proxied.exposed_id());
+    }
+
+    #[test]
+    fn exposed_ids_stay_url_safe() {
+        // OpenRouter style names carry a slash, and some providers use a colon.
+        let m = ModelEntry::for_upstream("openrouter", "deepseek/deepseek-chat:free", None);
+        assert_eq!(m.exposed_id(), "openrouter-deepseek-deepseek-chat-free");
+        // Dots survive: they are common in version numbers.
+        let m = ModelEntry::for_upstream("openai", " gpt-5.3-sol ", None);
+        assert_eq!(m.exposed_id(), "openai-gpt-5.3-sol");
+    }
+
+    #[test]
+    fn models_answer_to_their_id_and_aliases() {
+        let m = ModelEntry::for_upstream("deepseek", "deepseek-chat", None).with_alias("ds");
+        assert!(m.answers_to("deepseek-deepseek-chat"));
+        assert!(m.answers_to("ds"));
+        assert!(!m.answers_to("deepseek-chat"));
+    }
+
+    #[test]
+    fn the_same_model_from_two_providers_is_allowed() {
+        let mut cfg = sample();
+        cfg.providers.push(ProviderConfig::new(
+            "openrouter",
+            "OpenRouter",
+            ProviderKind::OpenAICompatible,
+        ));
+        cfg.models.push(ModelEntry::for_upstream(
+            "openrouter",
+            "deepseek-chat",
+            Some(ModelClass::Sonnet),
+        ));
+        assert!(cfg
+            .validate()
+            .iter()
+            .all(|i| i.severity != IssueSeverity::Error));
+        assert_eq!(
+            cfg.exposed_ids(),
+            vec!["deepseek-deepseek-chat", "openrouter-deepseek-chat"]
+        );
+        assert_eq!(
+            cfg.model("openrouter-deepseek-chat").unwrap().provider_id,
+            "openrouter"
+        );
+        assert_eq!(
+            cfg.model_by_key("deepseek", "deepseek-chat")
+                .unwrap()
+                .exposed_id(),
+            "deepseek-deepseek-chat"
+        );
     }
 
     #[test]
@@ -622,37 +786,59 @@ mod tests {
     #[test]
     fn validate_flags_unclassified_and_empty_classes() {
         let mut cfg = sample();
-        cfg.models
-            .push(ModelEntry::new("deepseek-v4-flash", "deepseek", None));
+        cfg.models.push(ModelEntry::for_upstream(
+            "deepseek",
+            "deepseek-reasoner",
+            None,
+        ));
         let issues = cfg.validate();
-        assert!(issues
-            .iter()
-            .any(|i| i.code == "model.unclassified"
-                && i.subject.as_deref() == Some("deepseek-v4-flash")));
+        assert!(issues.iter().any(|i| i.code == "model.unclassified"
+            && i.subject.as_deref() == Some("deepseek-deepseek-reasoner")));
         // sonnet is covered, opus and haiku are not
         assert_eq!(issues.iter().filter(|i| i.code == "class.empty").count(), 2);
         assert!(issues.iter().all(|i| i.severity == IssueSeverity::Warning));
     }
 
     #[test]
-    fn validate_rejects_reserved_and_duplicate_ids() {
+    fn validate_rejects_reserved_ids_duplicates_and_orphans() {
         let mut cfg = sample();
-        cfg.models.push(ModelEntry::new(
-            "sonnet-class",
+        // An alias must not shadow a virtual class id.
+        cfg.models[0].aliases.push("sonnet-class".into());
+        // The very same provider and model listed twice.
+        cfg.models.push(ModelEntry::for_upstream(
             "deepseek",
-            Some(ModelClass::Sonnet),
-        ));
-        cfg.models.push(ModelEntry::new(
-            "deepseek-v4-pro",
-            "deepseek",
+            "deepseek-chat",
             Some(ModelClass::Opus),
         ));
-        cfg.models
-            .push(ModelEntry::new("x", "nope", Some(ModelClass::Haiku)));
+        cfg.models.push(ModelEntry::for_upstream(
+            "nope",
+            "whatever",
+            Some(ModelClass::Haiku),
+        ));
         let issues = cfg.validate();
         assert!(issues.iter().any(|i| i.code == "model.reserved_id"));
-        assert!(issues.iter().any(|i| i.code == "model.duplicate_id"));
+        assert!(issues.iter().any(|i| i.code == "model.duplicate_id"
+            && i.subject.as_deref() == Some("deepseek-deepseek-chat")));
         assert!(issues.iter().any(|i| i.code == "model.orphan"));
+    }
+
+    #[test]
+    fn validate_rejects_an_alias_shared_by_two_models() {
+        let mut cfg = sample();
+        cfg.providers.push(ProviderConfig::new(
+            "openrouter",
+            "OpenRouter",
+            ProviderKind::OpenAICompatible,
+        ));
+        cfg.models[0].aliases.push("chat".into());
+        cfg.models.push(
+            ModelEntry::for_upstream("openrouter", "deepseek-chat", Some(ModelClass::Sonnet))
+                .with_alias("chat"),
+        );
+        assert!(cfg
+            .validate()
+            .iter()
+            .any(|i| i.code == "model.duplicate_id" && i.subject.as_deref() == Some("chat")));
     }
 
     #[test]
@@ -667,15 +853,50 @@ mod tests {
     fn config_json_round_trip() {
         let cfg = sample();
         let json = serde_json::to_string(&cfg).unwrap();
+        // Identity is persisted, the derived id is not.
+        assert!(json.contains("\"upstream_model\":\"deepseek-chat\""));
+        assert!(!json.contains("\"id\":\"deepseek-deepseek-chat\""));
         let back: AppConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(cfg, back);
+    }
+
+    #[test]
+    fn normalize_keeps_pre_0_2_ids_working_as_aliases() {
+        // A configuration written by 0.1.x, where the id was free-form.
+        let mut cfg: AppConfig = serde_json::from_str(
+            r#"{"providers":[{"id":"deepseek","name":"DeepSeek","kind":"openai_compatible","base_url":"http://x"}],
+                "models":[{"id":"deepseek-v4-pro","provider_id":"deepseek","upstream_model":"deepseek-v4-pro","class":"sonnet"}]}"#,
+        )
+        .unwrap();
+        let notes = cfg.normalize();
+
+        assert_eq!(cfg.models[0].exposed_id(), "deepseek-deepseek-v4-pro");
+        assert_eq!(cfg.models[0].aliases, vec!["deepseek-v4-pro"]);
+        assert!(notes[0].contains("deepseek-v4-pro"));
+        // Clients pinned to the old id keep resolving.
+        assert!(cfg.model("deepseek-v4-pro").is_some());
+        assert!(cfg.model("deepseek-deepseek-v4-pro").is_some());
+        // Running it again changes nothing.
+        assert!(cfg.normalize().is_empty());
+        assert_eq!(cfg.models[0].aliases, vec!["deepseek-v4-pro"]);
+    }
+
+    #[test]
+    fn normalize_drops_redundant_and_empty_aliases() {
+        let mut cfg: AppConfig = serde_json::from_str(
+            r#"{"models":[{"id":"p-m","provider_id":"p","upstream_model":"m",
+                           "aliases":["dup","dup","  ","p-m"]}]}"#,
+        )
+        .unwrap();
+        cfg.normalize();
+        assert_eq!(cfg.models[0].aliases, vec!["dup"]);
     }
 
     #[test]
     fn partial_json_uses_defaults() {
         let cfg: AppConfig = serde_json::from_str(
             r#"{"providers":[{"id":"p","name":"P","kind":"openai_compatible","base_url":"http://x"}],
-                "models":[{"id":"m","provider_id":"p","upstream_model":"m"}]}"#,
+                "models":[{"provider_id":"p","upstream_model":"m"}]}"#,
         )
         .unwrap();
         assert_eq!(cfg.server.port, 8787);
@@ -683,5 +904,6 @@ mod tests {
         assert!(cfg.models[0].enabled);
         assert_eq!(cfg.models[0].weight, 1);
         assert_eq!(cfg.models[0].class, None);
+        assert_eq!(cfg.models[0].exposed_id(), "p-m");
     }
 }

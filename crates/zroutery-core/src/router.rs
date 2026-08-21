@@ -18,6 +18,9 @@ use crate::registry::{Registry, Resolution};
 /// One attempt: which model, on which provider.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Candidate {
+    /// Derived once here so health keys, log records and response headers all
+    /// agree on the name.
+    pub exposed_id: String,
     pub entry: ModelEntry,
     pub provider: ProviderConfig,
     /// True when this candidate is only being tried because everything else is
@@ -26,8 +29,17 @@ pub struct Candidate {
 }
 
 impl Candidate {
+    fn new(entry: &ModelEntry, provider: &ProviderConfig, degraded: bool) -> Self {
+        Candidate {
+            exposed_id: entry.exposed_id(),
+            entry: entry.clone(),
+            provider: provider.clone(),
+            degraded,
+        }
+    }
+
     pub fn model_id(&self) -> &str {
-        &self.entry.id
+        &self.exposed_id
     }
 }
 
@@ -109,11 +121,7 @@ impl Router {
                 if !provider.enabled {
                     return Err(Error::UnknownModel(format!("{id} (provider disabled)")));
                 }
-                Ok(vec![Candidate {
-                    entry: entry.clone(),
-                    provider: provider.clone(),
-                    degraded: false,
-                }])
+                Ok(vec![Candidate::new(entry, provider, false)])
             }
             Resolution::Class(class) => self.plan_class(registry, *class, routing),
         }
@@ -135,7 +143,7 @@ impl Router {
             let health = self.health.lock().expect("health poisoned");
             members.into_iter().partition(|m| {
                 health
-                    .get(&m.id)
+                    .get(&m.exposed_id())
                     .map(|h| h.cooldown_until_ms <= now)
                     .unwrap_or(true)
             })
@@ -146,10 +154,10 @@ impl Router {
         let mut degraded_ids: Vec<String> = Vec::new();
         if ordered.is_empty() {
             ordered = cooling.clone();
-            degraded_ids = ordered.iter().map(|m| m.id.clone()).collect();
+            degraded_ids = ordered.iter().map(|m| m.exposed_id()).collect();
         } else if routing.failover {
             for m in &cooling {
-                degraded_ids.push(m.id.clone());
+                degraded_ids.push(m.exposed_id());
                 ordered.push(m);
             }
         }
@@ -163,11 +171,8 @@ impl Router {
         let mut out = Vec::new();
         for entry in ordered.into_iter().take(limit) {
             let provider = registry.provider_of(entry)?;
-            out.push(Candidate {
-                degraded: degraded_ids.iter().any(|id| id == &entry.id),
-                entry: entry.clone(),
-                provider: provider.clone(),
-            });
+            let degraded = degraded_ids.contains(&entry.exposed_id());
+            out.push(Candidate::new(entry, provider, degraded));
         }
         if out.is_empty() {
             return Err(Error::NoCandidate(class.virtual_id().to_string()));
@@ -215,8 +220,14 @@ impl Router {
                 let mut v = members.to_vec();
                 v.sort_by(|a, b| {
                     // Unmeasured models sort first so they get probed.
-                    let la = health.get(&a.id).map(|h| h.avg_latency_ms).unwrap_or(0.0);
-                    let lb = health.get(&b.id).map(|h| h.avg_latency_ms).unwrap_or(0.0);
+                    let la = health
+                        .get(&a.exposed_id())
+                        .map(|h| h.avg_latency_ms)
+                        .unwrap_or(0.0);
+                    let lb = health
+                        .get(&b.exposed_id())
+                        .map(|h| h.avg_latency_ms)
+                        .unwrap_or(0.0);
                     la.partial_cmp(&lb).unwrap_or(std::cmp::Ordering::Equal)
                 });
                 v
@@ -345,26 +356,26 @@ mod tests {
     }
 
     fn ids(c: &[Candidate]) -> Vec<&str> {
-        c.iter().map(|c| c.entry.id.as_str()).collect()
+        c.iter().map(|c| c.exposed_id.as_str()).collect()
     }
 
     #[test]
     fn direct_request_does_not_failover() {
         let r = reg(cfg_with(vec![
-            ModelEntry::new("a", "p1", Some(ModelClass::Sonnet)),
-            ModelEntry::new("b", "p2", Some(ModelClass::Sonnet)),
+            ModelEntry::for_upstream("p1", "a", Some(ModelClass::Sonnet)),
+            ModelEntry::for_upstream("p2", "b", Some(ModelClass::Sonnet)),
         ]));
         let router = Router::new();
-        let plan = router.plan(&r, &Resolution::Direct("a".into())).unwrap();
-        assert_eq!(ids(&plan), vec!["a"]);
+        let plan = router.plan(&r, &Resolution::Direct("p1-a".into())).unwrap();
+        assert_eq!(ids(&plan), vec!["p1-a"]);
     }
 
     #[test]
     fn class_plan_follows_priority_and_respects_max_attempts() {
         let mut cfg = cfg_with(vec![
-            ModelEntry::new("first", "p1", Some(ModelClass::Opus)).with_priority(0),
-            ModelEntry::new("second", "p2", Some(ModelClass::Opus)).with_priority(10),
-            ModelEntry::new("third", "p1", Some(ModelClass::Opus)).with_priority(20),
+            ModelEntry::for_upstream("p1", "first", Some(ModelClass::Opus)).with_priority(0),
+            ModelEntry::for_upstream("p2", "second", Some(ModelClass::Opus)).with_priority(10),
+            ModelEntry::for_upstream("p1", "third", Some(ModelClass::Opus)).with_priority(20),
         ]);
         cfg.routing.max_attempts = 2;
         let r = reg(cfg);
@@ -372,14 +383,14 @@ mod tests {
         let plan = router
             .plan(&r, &Resolution::Class(ModelClass::Opus))
             .unwrap();
-        assert_eq!(ids(&plan), vec!["first", "second"]);
+        assert_eq!(ids(&plan), vec!["p1-first", "p2-second"]);
     }
 
     #[test]
     fn failover_disabled_yields_single_attempt() {
         let mut cfg = cfg_with(vec![
-            ModelEntry::new("a", "p1", Some(ModelClass::Haiku)),
-            ModelEntry::new("b", "p2", Some(ModelClass::Haiku)),
+            ModelEntry::for_upstream("p1", "a", Some(ModelClass::Haiku)),
+            ModelEntry::for_upstream("p2", "b", Some(ModelClass::Haiku)),
         ]);
         cfg.routing.failover = false;
         let r = reg(cfg);
@@ -391,7 +402,7 @@ mod tests {
 
     #[test]
     fn empty_class_is_an_error() {
-        let r = reg(cfg_with(vec![ModelEntry::new("a", "p1", None)]));
+        let r = reg(cfg_with(vec![ModelEntry::for_upstream("p1", "a", None)]));
         let err = Router::new()
             .plan(&r, &Resolution::Class(ModelClass::Sonnet))
             .unwrap_err();
@@ -401,8 +412,8 @@ mod tests {
     #[test]
     fn circuit_breaker_demotes_then_recovers() {
         let cfg = cfg_with(vec![
-            ModelEntry::new("bad", "p1", Some(ModelClass::Sonnet)).with_priority(0),
-            ModelEntry::new("good", "p2", Some(ModelClass::Sonnet)).with_priority(5),
+            ModelEntry::for_upstream("p1", "bad", Some(ModelClass::Sonnet)).with_priority(0),
+            ModelEntry::for_upstream("p2", "good", Some(ModelClass::Sonnet)).with_priority(5),
         ]);
         let routing = cfg.routing.clone();
         let r = reg(cfg);
@@ -412,79 +423,91 @@ mod tests {
             ids(&router
                 .plan(&r, &Resolution::Class(ModelClass::Sonnet))
                 .unwrap())[0],
-            "bad"
+            "p1-bad"
         );
 
         let err = Error::Timeout(5);
         for _ in 0..routing.break_after_failures {
-            router.report_failure("bad", &err, &routing);
+            router.report_failure("p1-bad", &err, &routing);
         }
-        assert!(router.is_cooling("bad"));
+        assert!(router.is_cooling("p1-bad"));
         let plan = router
             .plan(&r, &Resolution::Class(ModelClass::Sonnet))
             .unwrap();
-        assert_eq!(ids(&plan), vec!["good", "bad"]);
+        assert_eq!(ids(&plan), vec!["p2-good", "p1-bad"]);
         assert!(!plan[0].degraded && plan[1].degraded);
 
         router.advance_clock_ms(routing.cooldown_secs * 1000 + 1);
-        assert!(!router.is_cooling("bad"));
+        assert!(!router.is_cooling("p1-bad"));
         assert_eq!(
             ids(&router
                 .plan(&r, &Resolution::Class(ModelClass::Sonnet))
                 .unwrap())[0],
-            "bad"
+            "p1-bad"
         );
     }
 
     #[test]
     fn all_cooling_still_produces_a_plan() {
-        let cfg = cfg_with(vec![ModelEntry::new("only", "p1", Some(ModelClass::Opus))]);
+        let cfg = cfg_with(vec![ModelEntry::for_upstream(
+            "p1",
+            "only",
+            Some(ModelClass::Opus),
+        )]);
         let routing = cfg.routing.clone();
         let r = reg(cfg);
         let router = Router::new();
         for _ in 0..10 {
-            router.report_failure("only", &Error::Timeout(1), &routing);
+            router.report_failure("p1-only", &Error::Timeout(1), &routing);
         }
         let plan = router
             .plan(&r, &Resolution::Class(ModelClass::Opus))
             .unwrap();
-        assert_eq!(ids(&plan), vec!["only"]);
+        assert_eq!(ids(&plan), vec!["p1-only"]);
         assert!(plan[0].degraded);
     }
 
     #[test]
     fn client_errors_do_not_open_the_breaker() {
-        let cfg = cfg_with(vec![ModelEntry::new("a", "p1", Some(ModelClass::Opus))]);
+        let cfg = cfg_with(vec![ModelEntry::for_upstream(
+            "p1",
+            "a",
+            Some(ModelClass::Opus),
+        )]);
         let routing = cfg.routing.clone();
         let router = Router::new();
         for _ in 0..10 {
-            router.report_failure("a", &Error::invalid("bad json"), &routing);
+            router.report_failure("p1-a", &Error::invalid("bad json"), &routing);
         }
-        assert!(!router.is_cooling("a"));
+        assert!(!router.is_cooling("p1-a"));
         assert!(router.health_snapshot().is_empty());
     }
 
     #[test]
     fn success_resets_streak_and_tracks_latency() {
-        let cfg = cfg_with(vec![ModelEntry::new("a", "p1", Some(ModelClass::Opus))]);
+        let cfg = cfg_with(vec![ModelEntry::for_upstream(
+            "p1",
+            "a",
+            Some(ModelClass::Opus),
+        )]);
         let routing = cfg.routing.clone();
         let router = Router::new();
-        router.report_failure("a", &Error::Timeout(1), &routing);
-        router.report_success("a", 200);
+        router.report_failure("p1-a", &Error::Timeout(1), &routing);
+        router.report_success("p1-a", 200);
         let snap = router.health_snapshot();
         assert_eq!(snap[0].consecutive_failures, 0);
         assert_eq!(snap[0].total_success, 1);
         assert_eq!(snap[0].total_failure, 1);
         assert_eq!(snap[0].avg_latency_ms, 200.0);
-        router.report_success("a", 400);
+        router.report_success("p1-a", 400);
         assert!((router.health_snapshot()[0].avg_latency_ms - 260.0).abs() < 0.001);
     }
 
     #[test]
     fn round_robin_rotates() {
         let mut cfg = cfg_with(vec![
-            ModelEntry::new("a", "p1", Some(ModelClass::Haiku)),
-            ModelEntry::new("b", "p2", Some(ModelClass::Haiku)),
+            ModelEntry::for_upstream("p1", "a", Some(ModelClass::Haiku)),
+            ModelEntry::for_upstream("p2", "b", Some(ModelClass::Haiku)),
         ]);
         cfg.routing.strategy = RoutingStrategy::RoundRobin;
         let r = reg(cfg);
@@ -503,27 +526,27 @@ mod tests {
     #[test]
     fn lowest_latency_prefers_the_fast_model() {
         let mut cfg = cfg_with(vec![
-            ModelEntry::new("slow", "p1", Some(ModelClass::Sonnet)),
-            ModelEntry::new("fast", "p2", Some(ModelClass::Sonnet)),
+            ModelEntry::for_upstream("p1", "slow", Some(ModelClass::Sonnet)),
+            ModelEntry::for_upstream("p2", "fast", Some(ModelClass::Sonnet)),
         ]);
         cfg.routing.strategy = RoutingStrategy::LowestLatency;
         let r = reg(cfg);
         let router = Router::new();
-        router.report_success("slow", 3000);
-        router.report_success("fast", 300);
+        router.report_success("p1-slow", 3000);
+        router.report_success("p2-fast", 300);
         assert_eq!(
             ids(&router
                 .plan(&r, &Resolution::Class(ModelClass::Sonnet))
                 .unwrap())[0],
-            "fast"
+            "p2-fast"
         );
     }
 
     #[test]
     fn weighted_random_covers_all_and_favours_weight() {
         let mut cfg = cfg_with(vec![
-            ModelEntry::new("heavy", "p1", Some(ModelClass::Opus)),
-            ModelEntry::new("light", "p2", Some(ModelClass::Opus)),
+            ModelEntry::for_upstream("p1", "heavy", Some(ModelClass::Opus)),
+            ModelEntry::for_upstream("p2", "light", Some(ModelClass::Opus)),
         ]);
         cfg.models[0].weight = 9;
         cfg.models[1].weight = 1;
@@ -540,7 +563,7 @@ mod tests {
                 2,
                 "every member must remain in the failover chain"
             );
-            if plan[0].entry.id == "heavy" {
+            if plan[0].exposed_id == "p1-heavy" {
                 heavy_first += 1;
             }
         }

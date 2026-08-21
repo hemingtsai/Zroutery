@@ -20,7 +20,21 @@ pub fn load(dir: &Path) -> (AppConfig, Option<String>) {
     }
     match std::fs::read_to_string(&path) {
         Ok(text) => match serde_json::from_str::<AppConfig>(&text) {
-            Ok(cfg) => (with_defaults(cfg), None),
+            Ok(cfg) => {
+                let mut cfg = with_defaults(cfg);
+                // Configurations written before ids were derived from the
+                // provider keep working: their old ids become aliases.
+                let notes = cfg.normalize();
+                let warning = if notes.is_empty() {
+                    None
+                } else {
+                    Some(format!(
+                        "Model ids are now `<provider>-<model>`. {}",
+                        notes.join(" ")
+                    ))
+                };
+                (cfg, warning)
+            }
             Err(e) => {
                 let backup = dir.join("config.broken.json");
                 let _ = std::fs::write(&backup, &text);
@@ -94,9 +108,9 @@ mod tests {
             "DeepSeek",
             ProviderKind::OpenAICompatible,
         ));
-        cfg.models.push(ModelEntry::new(
-            "deepseek-v4-pro",
+        cfg.models.push(ModelEntry::for_upstream(
             "deepseek",
+            "deepseek-chat",
             Some(ModelClass::Sonnet),
         ));
         save(&dir, &cfg).unwrap();
@@ -104,10 +118,38 @@ mod tests {
         let (back, warning) = load(&dir);
         assert!(warning.is_none());
         assert_eq!(back, cfg);
+        assert_eq!(back.exposed_ids(), vec!["deepseek-deepseek-chat"]);
         // No secret material on disk.
         let text = std::fs::read_to_string(dir.join(FILE_NAME)).unwrap();
         assert!(text.contains("key_ref"));
         assert!(!text.contains("sk-"));
+    }
+
+    #[test]
+    fn loading_a_pre_0_2_file_migrates_ids_and_explains_itself() {
+        let dir = tmpdir();
+        std::fs::write(
+            dir.join(FILE_NAME),
+            r#"{"server":{"auth_token":"zr-fixed"},
+                "providers":[{"id":"deepseek","name":"DeepSeek","kind":"openai_compatible",
+                              "base_url":"https://api.deepseek.com/v1"}],
+                "models":[{"id":"deepseek-v4-pro","provider_id":"deepseek",
+                           "upstream_model":"deepseek-v4-pro","class":"sonnet"}]}"#,
+        )
+        .unwrap();
+
+        let (cfg, warning) = load(&dir);
+        assert_eq!(cfg.exposed_ids(), vec!["deepseek-deepseek-v4-pro"]);
+        assert_eq!(cfg.models[0].aliases, vec!["deepseek-v4-pro"]);
+        let warning = warning.unwrap();
+        assert!(warning.contains("<provider>-<model>"));
+        assert!(warning.contains("deepseek-v4-pro"));
+
+        // Saving and loading again is a no-op: the migration is not repeated.
+        save(&dir, &cfg).unwrap();
+        let (again, warning) = load(&dir);
+        assert_eq!(again, cfg);
+        assert!(warning.is_none());
     }
 
     #[test]

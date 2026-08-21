@@ -250,10 +250,10 @@ fn config_for(mock: SocketAddr) -> AppConfig {
 
     cfg.providers = vec![deepseek, openai, anthropic];
     cfg.models = vec![
-        ModelEntry::new("deepseek-v4-flash", "deepseek", Some(ModelClass::Haiku)),
-        ModelEntry::new("deepseek-v4-pro", "deepseek", Some(ModelClass::Sonnet)),
-        ModelEntry::new("gpt-5.3-sol", "openai", Some(ModelClass::Opus)),
-        ModelEntry::new("claude-native", "anthropic", None),
+        ModelEntry::for_upstream("deepseek", "deepseek-v4-flash", Some(ModelClass::Haiku)),
+        ModelEntry::for_upstream("deepseek", "deepseek-v4-pro", Some(ModelClass::Sonnet)),
+        ModelEntry::for_upstream("openai", "gpt-5.3-sol", Some(ModelClass::Opus)),
+        ModelEntry::for_upstream("anthropic", "claude-native", None),
     ];
     cfg
 }
@@ -332,13 +332,16 @@ async fn anthropic_in_openai_out_non_streaming() {
         .unwrap();
 
     assert_eq!(resp.status(), 200);
-    assert_eq!(resp.headers()["x-zroutery-model"], "deepseek-v4-pro");
+    assert_eq!(
+        resp.headers()["x-zroutery-model"],
+        "deepseek-deepseek-v4-pro"
+    );
     assert_eq!(resp.headers()["x-zroutery-provider"], "DeepSeek");
     let body: Value = resp.json().await.unwrap();
 
     assert_eq!(body["type"], "message");
     assert_eq!(body["role"], "assistant");
-    assert_eq!(body["model"], "deepseek-v4-pro");
+    assert_eq!(body["model"], "deepseek-deepseek-v4-pro");
     assert_eq!(body["content"][0]["text"], "hello from mock");
     assert_eq!(body["stop_reason"], "end_turn");
     assert_eq!(body["usage"]["input_tokens"], 11);
@@ -346,6 +349,7 @@ async fn anthropic_in_openai_out_non_streaming() {
 
     // The upstream saw an OpenAI shaped request with the mapped model id.
     let sent = &h.mock.bodies()[0];
+    // The provider is asked for its own name, not for our namespaced id.
     assert_eq!(sent["model"], "deepseek-v4-pro");
     assert_eq!(sent["messages"][0]["role"], "system");
     assert_eq!(sent["messages"][0]["content"], "be brief");
@@ -452,7 +456,7 @@ async fn openai_client_streaming_over_an_anthropic_provider() {
     let wire = h
         .post("/v1/chat/completions")
         .json(&json!({
-            "model": "claude-native",
+            "model": "anthropic-claude-native",
             "messages": [{"role": "user", "content": "hi"}],
             "stream": true,
             "stream_options": {"include_usage": true}
@@ -489,8 +493,10 @@ async fn failover_moves_to_the_next_model_in_the_class() {
     // Two sonnet candidates: the preferred one always fails.
     cfg.models[1].upstream_model = "broken-model".into();
     cfg.models[1].priority = 0;
-    cfg.models
-        .push(ModelEntry::new("gpt-sonnet", "openai", Some(ModelClass::Sonnet)).with_priority(10));
+    cfg.models.push(
+        ModelEntry::for_upstream("openai", "gpt-sonnet", Some(ModelClass::Sonnet))
+            .with_priority(10),
+    );
     let h = Harness::start(cfg, mock).await;
 
     let resp = h
@@ -505,7 +511,7 @@ async fn failover_moves_to_the_next_model_in_the_class() {
         .unwrap();
 
     assert_eq!(resp.status(), 200);
-    assert_eq!(resp.headers()["x-zroutery-model"], "gpt-sonnet");
+    assert_eq!(resp.headers()["x-zroutery-model"], "openai-gpt-sonnet");
     let body: Value = resp.json().await.unwrap();
     assert_eq!(body["content"][0]["text"], "hello from mock");
 
@@ -513,15 +519,18 @@ async fn failover_moves_to_the_next_model_in_the_class() {
     let health = h.state.router.health_snapshot();
     let broken = health
         .iter()
-        .find(|m| m.model_id == "deepseek-v4-pro")
+        .find(|m| m.model_id == "deepseek-broken-model")
         .unwrap();
     assert_eq!(broken.total_failure, 1);
-    let good = health.iter().find(|m| m.model_id == "gpt-sonnet").unwrap();
+    let good = health
+        .iter()
+        .find(|m| m.model_id == "openai-gpt-sonnet")
+        .unwrap();
     assert_eq!(good.total_success, 1);
 
     let record = &h.state.stats.recent(1)[0];
     assert_eq!(record.attempts, 2);
-    assert_eq!(record.resolved_model.as_deref(), Some("gpt-sonnet"));
+    assert_eq!(record.resolved_model.as_deref(), Some("openai-gpt-sonnet"));
 
     h.shutdown().await;
 }
@@ -531,8 +540,10 @@ async fn client_errors_are_not_retried() {
     let (addr, mock) = start_mock().await;
     let mut cfg = config_for(addr);
     cfg.models[1].upstream_model = "refuse-model".into();
-    cfg.models
-        .push(ModelEntry::new("gpt-sonnet", "openai", Some(ModelClass::Sonnet)).with_priority(10));
+    cfg.models.push(
+        ModelEntry::for_upstream("openai", "gpt-sonnet", Some(ModelClass::Sonnet))
+            .with_priority(10),
+    );
     let h = Harness::start(cfg, mock).await;
 
     let resp = h
@@ -557,8 +568,10 @@ async fn circuit_breaker_skips_a_failing_model() {
     let (addr, mock) = start_mock().await;
     let mut cfg = config_for(addr);
     cfg.models[1].upstream_model = "broken-model".into();
-    cfg.models
-        .push(ModelEntry::new("gpt-sonnet", "openai", Some(ModelClass::Sonnet)).with_priority(10));
+    cfg.models.push(
+        ModelEntry::for_upstream("openai", "gpt-sonnet", Some(ModelClass::Sonnet))
+            .with_priority(10),
+    );
     cfg.routing.break_after_failures = 1;
     let h = Harness::start(cfg, mock).await;
 
@@ -577,7 +590,7 @@ async fn circuit_breaker_skips_a_failing_model() {
     // First call: broken + good = 2 upstream calls. Second call: the breaker is
     // open, so the broken model is demoted and only the good one is used.
     assert_eq!(h.mock.count(), 3);
-    assert!(h.state.router.is_cooling("deepseek-v4-pro"));
+    assert!(h.state.router.is_cooling("deepseek-broken-model"));
 
     h.shutdown().await;
 }
@@ -591,8 +604,10 @@ async fn missing_api_key_fails_over_and_reports_clearly() {
 
     let resp = h
         .post("/v1/messages")
-        .json(&json!({"model": "deepseek-v4-pro", "max_tokens": 10,
-                      "messages": [{"role": "user", "content": "hi"}]}))
+        .json(
+            &json!({"model": "deepseek-deepseek-v4-pro", "max_tokens": 10,
+                      "messages": [{"role": "user", "content": "hi"}]}),
+        )
         .send()
         .await
         .unwrap();
@@ -676,10 +691,10 @@ async fn model_listing_exposes_real_and_virtual_models() {
         .iter()
         .map(|m| m["id"].as_str().unwrap())
         .collect();
-    assert!(ids.contains(&"deepseek-v4-flash"));
-    assert!(ids.contains(&"deepseek-v4-pro"));
-    assert!(ids.contains(&"gpt-5.3-sol"));
-    assert!(ids.contains(&"claude-native"));
+    assert!(ids.contains(&"deepseek-deepseek-v4-flash"));
+    assert!(ids.contains(&"deepseek-deepseek-v4-pro"));
+    assert!(ids.contains(&"openai-gpt-5.3-sol"));
+    assert!(ids.contains(&"anthropic-claude-native"));
     assert!(ids.contains(&"opus-class"));
     assert!(ids.contains(&"sonnet-class"));
     assert!(ids.contains(&"haiku-class"));
@@ -703,20 +718,20 @@ async fn model_listing_exposes_real_and_virtual_models() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|m| m["id"] == "claude-native")
+        .find(|m| m["id"] == "anthropic-claude-native")
         .unwrap();
     assert_eq!(entry["zroutery"]["class"], Value::Null);
     assert_eq!(entry["owned_by"], "Anthropic");
 
     let single: Value = h
-        .get("/v1/models/gpt-5.3-sol")
+        .get("/v1/models/openai-gpt-5.3-sol")
         .send()
         .await
         .unwrap()
         .json()
         .await
         .unwrap();
-    assert_eq!(single["id"], "gpt-5.3-sol");
+    assert_eq!(single["id"], "openai-gpt-5.3-sol");
     assert_eq!(single["zroutery"]["class"], "opus");
 
     assert_eq!(h.get("/v1/models/nope").send().await.unwrap().status(), 404);
@@ -780,7 +795,10 @@ async fn claude_style_model_names_are_routed_by_class() {
         .await
         .unwrap();
     assert_eq!(resp.status(), 200);
-    assert_eq!(resp.headers()["x-zroutery-model"], "deepseek-v4-pro");
+    assert_eq!(
+        resp.headers()["x-zroutery-model"],
+        "deepseek-deepseek-v4-pro"
+    );
 
     let resp = h
         .post("/v1/messages")
@@ -792,7 +810,10 @@ async fn claude_style_model_names_are_routed_by_class() {
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.headers()["x-zroutery-model"], "deepseek-v4-flash");
+    assert_eq!(
+        resp.headers()["x-zroutery-model"],
+        "deepseek-deepseek-v4-flash"
+    );
 
     h.shutdown().await;
 }
@@ -823,10 +844,10 @@ async fn config_can_be_swapped_while_running() {
     let h = Harness::start(config_for(addr), mock).await;
 
     let mut cfg = (*h.state.config()).clone();
-    cfg.models.retain(|m| m.id != "deepseek-v4-pro");
-    cfg.models.push(ModelEntry::new(
-        "gpt-sonnet",
+    cfg.models.retain(|m| m.upstream_model != "deepseek-v4-pro");
+    cfg.models.push(ModelEntry::for_upstream(
         "openai",
+        "gpt-sonnet",
         Some(ModelClass::Sonnet),
     ));
     h.state.set_config(cfg);
@@ -838,16 +859,105 @@ async fn config_can_be_swapped_while_running() {
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.headers()["x-zroutery-model"], "gpt-sonnet");
+    assert_eq!(resp.headers()["x-zroutery-model"], "openai-gpt-sonnet");
 
     let resp = h
         .post("/v1/messages")
-        .json(&json!({"model": "deepseek-v4-pro", "max_tokens": 10,
-                      "messages": [{"role": "user", "content": "hi"}]}))
+        .json(
+            &json!({"model": "deepseek-deepseek-v4-pro", "max_tokens": 10,
+                      "messages": [{"role": "user", "content": "hi"}]}),
+        )
         .send()
         .await
         .unwrap();
     assert_eq!(resp.status(), 404);
+
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn the_same_model_from_two_providers_stays_addressable() {
+    let (addr, mock) = start_mock().await;
+    let mut cfg = config_for(addr);
+    // Both providers offer a model with the very same upstream name, which is
+    // what happens as soon as an aggregator sits next to a direct account.
+    cfg.models.push(ModelEntry::for_upstream(
+        "openai",
+        "deepseek-v4-pro",
+        Some(ModelClass::Sonnet),
+    ));
+    let h = Harness::start(cfg, mock).await;
+
+    let listing: Value = h
+        .get("/v1/models")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let ids: Vec<&str> = listing["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["id"].as_str().unwrap())
+        .collect();
+    assert!(ids.contains(&"deepseek-deepseek-v4-pro"), "{ids:?}");
+    assert!(ids.contains(&"openai-deepseek-v4-pro"), "{ids:?}");
+
+    // Each id reaches its own provider, and each provider is asked for the bare
+    // model name with its own key.
+    for (id, provider, key) in [
+        ("deepseek-deepseek-v4-pro", "DeepSeek", "Bearer sk-deepseek"),
+        ("openai-deepseek-v4-pro", "OpenAI", "Bearer sk-openai"),
+    ] {
+        let resp = h
+            .post("/v1/messages")
+            .json(&json!({"model": id, "max_tokens": 16,
+                          "messages": [{"role": "user", "content": "hi"}]}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200, "{id}");
+        assert_eq!(resp.headers()["x-zroutery-model"], id);
+        assert_eq!(resp.headers()["x-zroutery-provider"], provider);
+        assert_eq!(h.mock.bodies().last().unwrap()["model"], "deepseek-v4-pro");
+        assert_eq!(h.mock.keys().last().unwrap(), key);
+    }
+
+    // They are separate members of the same class, so they can cover for each
+    // other and are accounted for separately.
+    let health = h.state.router.health_snapshot();
+    assert_eq!(health.len(), 2);
+    assert_eq!(health[0].model_id, "deepseek-deepseek-v4-pro");
+    assert_eq!(health[1].model_id, "openai-deepseek-v4-pro");
+    assert!(health.iter().all(|m| m.total_success == 1));
+
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn ids_from_before_0_2_keep_working() {
+    let (addr, mock) = start_mock().await;
+    let mut cfg = config_for(addr);
+    // What `AppConfig::normalize` leaves behind for a 0.1.x configuration: the
+    // old free-form id survives as an alias next to the derived one.
+    cfg.models[1].aliases.push("deepseek-v4-pro".into());
+    let h = Harness::start(cfg, mock).await;
+
+    let resp = h
+        .post("/v1/chat/completions")
+        .json(&json!({"model": "deepseek-v4-pro",
+                      "messages": [{"role": "user", "content": "hi"}]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    // The answer reports the current id, so clients can migrate when they like.
+    assert_eq!(
+        resp.headers()["x-zroutery-model"],
+        "deepseek-deepseek-v4-pro"
+    );
 
     h.shutdown().await;
 }

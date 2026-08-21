@@ -72,7 +72,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .models
             .iter()
             .filter(|m| m.enabled)
-            .map(|m| m.id.as_str())
+            .map(|m| m.exposed_id())
             .collect::<Vec<_>>()
             .join(", ")
     );

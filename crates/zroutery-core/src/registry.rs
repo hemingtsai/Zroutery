@@ -37,6 +37,8 @@ pub struct ModelInfo {
     pub virtual_model: bool,
     /// For virtual ids: how many enabled models back it.
     pub member_count: usize,
+    /// Extra ids that also resolve to this model.
+    pub aliases: Vec<String>,
     pub supports_tools: bool,
     pub supports_vision: bool,
     pub supports_thinking: bool,
@@ -70,9 +72,9 @@ impl Registry {
             .config
             .models
             .iter()
-            .find(|m| m.id == asked && m.enabled)
+            .find(|m| m.enabled && m.exposed_id() == asked)
         {
-            return Ok(Resolution::Direct(m.id.clone()));
+            return Ok(Resolution::Direct(m.exposed_id()));
         }
         if let Some(m) = self
             .config
@@ -80,7 +82,7 @@ impl Registry {
             .iter()
             .find(|m| m.enabled && m.aliases.iter().any(|a| a == asked))
         {
-            return Ok(Resolution::Direct(m.id.clone()));
+            return Ok(Resolution::Direct(m.exposed_id()));
         }
         if let Some(class) = ModelClass::from_virtual_id(asked) {
             return Ok(Resolution::Class(class));
@@ -94,11 +96,14 @@ impl Registry {
             }
         }
         // A disabled-but-known id gets a clearer error than a typo.
-        if let Some(m) = self.config.models.iter().find(|m| m.id == asked) {
+        if let Some(m) = self.config.models.iter().find(|m| m.answers_to(asked)) {
             if let Some(class) = self.config.routing.unknown_model_fallback {
                 return Ok(Resolution::Class(class));
             }
-            return Err(Error::UnknownModel(format!("{} (disabled)", m.id)));
+            return Err(Error::UnknownModel(format!(
+                "{} (disabled)",
+                m.exposed_id()
+            )));
         }
         if let Some(class) = self.config.routing.unknown_model_fallback {
             return Ok(Resolution::Class(class));
@@ -120,15 +125,20 @@ impl Registry {
                     .unwrap_or(false)
             })
             .collect();
-        v.sort_by(|a, b| a.priority.cmp(&b.priority).then_with(|| a.id.cmp(&b.id)));
+        v.sort_by(|a, b| {
+            a.priority
+                .cmp(&b.priority)
+                .then_with(|| a.exposed_id().cmp(&b.exposed_id()))
+        });
         v
     }
 
+    /// Look up a model by exposed id or alias, enabled or not.
     pub fn entry(&self, id: &str) -> Result<&ModelEntry> {
         self.config
             .models
             .iter()
-            .find(|m| m.id == id)
+            .find(|m| m.answers_to(id))
             .ok_or_else(|| Error::UnknownModel(id.to_string()))
     }
 
@@ -136,7 +146,7 @@ impl Registry {
         self.config.provider(&entry.provider_id).ok_or_else(|| {
             Error::internal(format!(
                 "model `{}` references unknown provider `{}`",
-                entry.id, entry.provider_id
+                entry.upstream_model, entry.provider_id
             ))
         })
     }
@@ -151,12 +161,16 @@ impl Registry {
                 continue;
             }
             out.push(ModelInfo {
-                id: m.id.clone(),
-                display_name: m.display_name.clone().unwrap_or_else(|| m.id.clone()),
+                id: m.exposed_id(),
+                display_name: m
+                    .display_name
+                    .clone()
+                    .unwrap_or_else(|| m.upstream_model.clone()),
                 provider_name: provider.map(|p| p.name.clone()),
                 class: m.class,
                 virtual_model: false,
                 member_count: 0,
+                aliases: m.aliases.clone(),
                 supports_tools: m.supports_tools,
                 supports_vision: m.supports_vision,
                 supports_thinking: m.supports_thinking,
@@ -176,6 +190,7 @@ impl Registry {
                 class: Some(class),
                 virtual_model: true,
                 member_count: members.len(),
+                aliases: Vec::new(),
                 supports_tools: members.iter().all(|m| m.supports_tools),
                 supports_vision: members.iter().all(|m| m.supports_vision),
                 supports_thinking: members.iter().all(|m| m.supports_thinking),
@@ -222,19 +237,19 @@ mod tests {
             "OpenAI",
             ProviderKind::OpenAICompatible,
         ));
-        cfg.models.push(ModelEntry::new(
-            "deepseek-v4-flash",
+        cfg.models.push(ModelEntry::for_upstream(
             "deepseek",
+            "deepseek-v4-flash",
             Some(ModelClass::Haiku),
         ));
-        cfg.models.push(ModelEntry::new(
-            "deepseek-v4-pro",
+        cfg.models.push(ModelEntry::for_upstream(
             "deepseek",
+            "deepseek-v4-pro",
             Some(ModelClass::Sonnet),
         ));
-        cfg.models.push(ModelEntry::new(
-            "gpt-5.3-sol",
+        cfg.models.push(ModelEntry::for_upstream(
             "openai",
+            "gpt-5.3-sol",
             Some(ModelClass::Opus),
         ));
         cfg
@@ -247,13 +262,58 @@ mod tests {
         assert_eq!(
             ids,
             vec![
-                "deepseek-v4-flash",
-                "deepseek-v4-pro",
-                "gpt-5.3-sol",
+                "deepseek-deepseek-v4-flash",
+                "deepseek-deepseek-v4-pro",
+                "openai-gpt-5.3-sol",
                 "opus-class",
                 "sonnet-class",
                 "haiku-class",
             ]
+        );
+        // The short upstream name is what the listing shows as a label.
+        let info = r
+            .list()
+            .into_iter()
+            .find(|m| m.id == "openai-gpt-5.3-sol")
+            .unwrap();
+        assert_eq!(info.display_name, "gpt-5.3-sol");
+        assert_eq!(info.provider_name.as_deref(), Some("OpenAI"));
+    }
+
+    #[test]
+    fn the_same_model_on_two_providers_resolves_independently() {
+        let mut cfg = brief_config();
+        cfg.providers.push(ProviderConfig::new(
+            "openrouter",
+            "OpenRouter",
+            ProviderKind::OpenAICompatible,
+        ));
+        // Same upstream name as the direct DeepSeek entry.
+        cfg.models.push(ModelEntry::for_upstream(
+            "openrouter",
+            "deepseek-v4-pro",
+            Some(ModelClass::Sonnet),
+        ));
+        let r = registry(cfg);
+
+        let direct = r.resolve("deepseek-deepseek-v4-pro").unwrap();
+        let proxied = r.resolve("openrouter-deepseek-v4-pro").unwrap();
+        assert_ne!(direct, proxied);
+        assert_eq!(
+            r.entry("deepseek-deepseek-v4-pro").unwrap().provider_id,
+            "deepseek"
+        );
+        assert_eq!(
+            r.entry("openrouter-deepseek-v4-pro").unwrap().provider_id,
+            "openrouter"
+        );
+        // Both are members of the class and can fail over to each other.
+        assert_eq!(
+            r.class_members(ModelClass::Sonnet)
+                .iter()
+                .map(|m| m.exposed_id())
+                .collect::<Vec<_>>(),
+            vec!["deepseek-deepseek-v4-pro", "openrouter-deepseek-v4-pro"]
         );
     }
 
@@ -261,19 +321,22 @@ mod tests {
     fn unclassified_model_is_callable_but_not_in_a_class() {
         let mut cfg = brief_config();
         cfg.models
-            .push(ModelEntry::new("mystery-1", "openai", None));
+            .push(ModelEntry::for_upstream("openai", "mystery-1", None));
         let r = registry(cfg);
         assert_eq!(
-            r.resolve("mystery-1").unwrap(),
-            Resolution::Direct("mystery-1".into())
+            r.resolve("openai-mystery-1").unwrap(),
+            Resolution::Direct("openai-mystery-1".into())
         );
         for class in ModelClass::ALL {
-            assert!(r.class_members(class).iter().all(|m| m.id != "mystery-1"));
+            assert!(r
+                .class_members(class)
+                .iter()
+                .all(|m| m.upstream_model != "mystery-1"));
         }
         assert!(r
             .list()
             .iter()
-            .any(|m| m.id == "mystery-1" && m.class.is_none()));
+            .any(|m| m.id == "openai-mystery-1" && m.class.is_none()));
     }
 
     #[test]
@@ -284,15 +347,17 @@ mod tests {
             Resolution::Class(ModelClass::Sonnet)
         );
         assert_eq!(
-            r.resolve("gpt-5.3-sol").unwrap(),
-            Resolution::Direct("gpt-5.3-sol".into())
+            r.resolve("openai-gpt-5.3-sol").unwrap(),
+            Resolution::Direct("openai-gpt-5.3-sol".into())
         );
+        // The bare upstream name is not an id any more.
+        assert!(r.resolve("gpt-5.3-sol").is_err());
         assert_eq!(
             r.class_members(ModelClass::Opus)
                 .iter()
-                .map(|m| m.id.as_str())
+                .map(|m| m.exposed_id())
                 .collect::<Vec<_>>(),
-            vec!["gpt-5.3-sol"]
+            vec!["openai-gpt-5.3-sol"]
         );
     }
 
@@ -335,7 +400,7 @@ mod tests {
         let r = registry(cfg);
         assert_eq!(
             r.resolve("ds-pro").unwrap(),
-            Resolution::Direct("deepseek-v4-pro".into())
+            Resolution::Direct("deepseek-deepseek-v4-pro".into())
         );
     }
 
@@ -364,22 +429,23 @@ mod tests {
         let r = registry(cfg);
         assert!(r.class_members(ModelClass::Sonnet).is_empty());
         assert!(!r.list().iter().any(|m| m.id == "sonnet-class"));
-        assert!(!r.list().iter().any(|m| m.id == "deepseek-v4-pro"));
+        assert!(!r.list().iter().any(|m| m.id == "deepseek-deepseek-v4-pro"));
     }
 
     #[test]
     fn priority_orders_class_members() {
         let mut cfg = brief_config();
         cfg.models.push(
-            ModelEntry::new("backup-sonnet", "openai", Some(ModelClass::Sonnet)).with_priority(-5),
+            ModelEntry::for_upstream("openai", "backup-sonnet", Some(ModelClass::Sonnet))
+                .with_priority(-5),
         );
         let r = registry(cfg);
         assert_eq!(
             r.class_members(ModelClass::Sonnet)
                 .iter()
-                .map(|m| m.id.as_str())
+                .map(|m| m.exposed_id())
                 .collect::<Vec<_>>(),
-            vec!["backup-sonnet", "deepseek-v4-pro"]
+            vec!["openai-backup-sonnet", "deepseek-deepseek-v4-pro"]
         );
     }
 }

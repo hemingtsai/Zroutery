@@ -394,7 +394,7 @@ async fn buffered_chat(
                     .stats
                     .record(rec.finish(started.elapsed().as_millis() as u64));
                 // Report the model that actually answered, not the virtual id.
-                resp.model = candidate.entry.id.clone();
+                resp.model = candidate.exposed_id.clone();
                 let mut response = Json(protocol::encode_response(dialect, &resp)).into_response();
                 inject_routing_headers(response.headers_mut(), candidate);
                 return response;
@@ -467,7 +467,8 @@ async fn stream_chat(
                 state
                     .router
                     .report_success(candidate.model_id(), started.elapsed().as_millis() as u64);
-                let encoder = protocol::stream_encoder(dialect, &candidate.entry.id, include_usage);
+                let encoder =
+                    protocol::stream_encoder(dialect, &candidate.exposed_id, include_usage);
                 let body = Body::from_stream(sse_body(
                     Arc::clone(&state),
                     events,
@@ -512,7 +513,7 @@ async fn stream_chat(
 }
 
 fn inject_routing_headers(headers: &mut HeaderMap, candidate: &Candidate) {
-    if let Ok(v) = HeaderValue::from_str(&candidate.entry.id) {
+    if let Ok(v) = HeaderValue::from_str(&candidate.exposed_id) {
         headers.insert("x-zroutery-model", v);
     }
     if let Ok(v) = HeaderValue::from_str(&candidate.provider.name) {

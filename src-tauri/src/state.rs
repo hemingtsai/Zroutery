@@ -38,6 +38,11 @@ pub struct ServerStatus {
 #[derive(Debug, Clone, Serialize)]
 pub struct Snapshot {
     pub config: AppConfig,
+    /// The exposed id of every entry in `config.models`, in the same order.
+    ///
+    /// The dashboard renders these instead of deriving ids itself, so the
+    /// `<provider>-<model>` rule has exactly one implementation.
+    pub exposed_ids: Vec<String>,
     pub issues: Vec<ConfigIssue>,
     pub blocking: bool,
     pub server: ServerStatus,
@@ -104,6 +109,7 @@ impl Desktop {
             warning: self.warning.lock().expect("warning poisoned").clone(),
             config_path: self.config_dir.join(store::FILE_NAME).display().to_string(),
             version: env!("CARGO_PKG_VERSION").to_string(),
+            exposed_ids: config.exposed_ids(),
             config,
         }
     }
@@ -142,7 +148,9 @@ impl Desktop {
     ///
     /// Returns `true` when the listener had to be rebound, which only happens
     /// for host, port or CORS changes.
-    pub async fn apply_config(&self, next: AppConfig) -> Result<bool, String> {
+    pub async fn apply_config(&self, mut next: AppConfig) -> Result<bool, String> {
+        // Tidy the alias lists and fold any legacy id the dashboard echoed back.
+        next.normalize();
         let issues = next.validate();
         if let Some(err) = issues.iter().find(|i| i.severity == IssueSeverity::Error) {
             return Err(err.message.clone());
