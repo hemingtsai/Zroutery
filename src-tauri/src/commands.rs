@@ -5,7 +5,7 @@ use std::sync::Arc;
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use zroutery_core::config::{AppConfig, ProviderConfig, SecretStore};
-use zroutery_core::upstream::Upstream;
+use zroutery_core::upstream::{DiscoveredModel, Upstream};
 
 use crate::state::{Activity, Desktop, Snapshot};
 use crate::store;
@@ -95,11 +95,31 @@ pub async fn clear_provider_key(
 
 /// Ask a provider for its model list. Works on unsaved providers too, so the
 /// user can test before committing.
+/// Ask a provider what credit is left. The stored answer, including a failure,
+/// comes back in the snapshot.
+#[tauri::command]
+pub async fn refresh_balance(
+    app: AppHandle,
+    desktop: State<'_, Arc<Desktop>>,
+    provider_id: String,
+) -> Cmd<Snapshot> {
+    // The error is already recorded against the provider, so the command itself
+    // succeeds and the dashboard renders the reason next to the provider.
+    let _ = desktop.refresh_balance(&provider_id).await;
+    Ok(refreshed(&app, &desktop).await)
+}
+
+#[tauri::command]
+pub async fn refresh_balances(app: AppHandle, desktop: State<'_, Arc<Desktop>>) -> Cmd<Snapshot> {
+    let _ = desktop.refresh_all_balances().await;
+    Ok(refreshed(&app, &desktop).await)
+}
+
 #[tauri::command]
 pub async fn fetch_provider_models(
     desktop: State<'_, Arc<Desktop>>,
     provider: ProviderConfig,
-) -> Cmd<Vec<String>> {
+) -> Cmd<Vec<DiscoveredModel>> {
     let key = desktop.secrets.get(&provider.key_ref);
     Upstream::new()
         .list_models(&provider, key.as_deref())

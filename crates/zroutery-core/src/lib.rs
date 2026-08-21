@@ -8,6 +8,7 @@
 //! ```
 //!
 //! * [`ir`] is the canonical representation every dialect is translated through.
+//! * [`billing`] prices a request and reads provider balances.
 //! * [`config`] holds providers, the model registry and routing policy.
 //! * [`registry`] resolves a client model id (including `*-class` virtual ids).
 //! * [`router`] picks candidates, tracks health and drives failover.
@@ -15,6 +16,7 @@
 //! * [`upstream`] talks HTTP to providers.
 //! * [`server`] exposes the axum app used by the desktop shell.
 
+pub mod billing;
 pub mod config;
 pub mod error;
 pub mod ir;
@@ -26,6 +28,7 @@ pub mod stats;
 mod sync;
 pub mod upstream;
 
+pub use billing::{Balance, BalanceConfig, BalancePreset, BalanceProbe, Cost, CostTotals, Pricing};
 pub use config::{
     AppConfig, ConfigIssue, IssueSeverity, MemorySecretStore, ModelClass, ModelEntry,
     ProviderConfig, ProviderKind, RoutingConfig, RoutingStrategy, SecretStore, ServerConfig,
@@ -38,3 +41,4 @@ pub use registry::{Registry, Resolution};
 pub use router::{Candidate, Router};
 pub use server::{build_app, AppState, ServerHandle};
 pub use stats::{RequestRecord, Stats};
+pub use upstream::{DiscoveredModel, Upstream};

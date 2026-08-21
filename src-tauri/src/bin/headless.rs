@@ -58,6 +58,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // where ZROUTERY_KEY_* variables are honoured.
         Arc::new(KeychainSecrets::with_env_fallback(KEYCHAIN_SERVICE)),
     ));
+
+    // `--balances` is a diagnostic: ask every provider that publishes a balance,
+    // print what came back, and exit without serving.
+    if std::env::args().any(|a| a == "--balances") {
+        let problems = desktop.refresh_all_balances().await;
+        let balances = desktop.balances();
+        if balances.is_empty() {
+            println!("no provider is configured with a balance endpoint");
+        }
+        for (provider_id, status) in balances {
+            match (status.balance, status.error) {
+                (Some(b), _) => println!(
+                    "{provider_id}: {} {} remaining",
+                    b.remaining
+                        .or(b.total)
+                        .map(|v| format!("{v:.2}"))
+                        .unwrap_or_else(|| "?".into()),
+                    b.currency
+                ),
+                (None, Some(e)) => println!("{provider_id}: check failed: {e}"),
+                (None, None) => println!("{provider_id}: no answer"),
+            }
+        }
+        return if problems.is_empty() {
+            Ok(())
+        } else {
+            Err(format!("{} provider(s) failed", problems.len()).into())
+        };
+    }
+
     desktop.start().await.map_err(|e| e.to_string())?;
 
     let snapshot = desktop.snapshot().await;

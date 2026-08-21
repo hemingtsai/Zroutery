@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::billing::{BalanceConfig, Pricing};
 use crate::ir::Dialect;
 
 /// Capability tier a model belongs to. Assigned manually by the user; Zroutery
@@ -164,6 +165,9 @@ pub struct ProviderConfig {
     pub anthropic_version: Option<String>,
     #[serde(default)]
     pub quirks: ProviderQuirks,
+    /// How to ask this provider for the remaining credit, when it can be asked.
+    #[serde(default)]
+    pub balance: BalanceConfig,
 }
 
 impl ProviderConfig {
@@ -181,6 +185,7 @@ impl ProviderConfig {
             connect_timeout_secs: default_connect_timeout(),
             anthropic_version: None,
             quirks: ProviderQuirks::default(),
+            balance: BalanceConfig::default(),
         }
     }
 
@@ -267,6 +272,10 @@ pub struct ModelEntry {
     /// Hard cap on `max_tokens` sent upstream.
     #[serde(default)]
     pub max_output_tokens: Option<u32>,
+    /// What the provider charges for this model. Entered by hand, like the class;
+    /// without it a request is logged with no cost rather than a guessed one.
+    #[serde(default)]
+    pub pricing: Option<Pricing>,
 }
 
 impl ModelEntry {
@@ -291,6 +300,7 @@ impl ModelEntry {
             display_name: None,
             aliases: Vec::new(),
             max_output_tokens: None,
+            pricing: None,
         }
     }
 
@@ -616,6 +626,16 @@ impl AppConfig {
                     ),
                     subject: Some(exposed.clone()),
                 });
+            }
+            if let Some(pricing) = &m.pricing {
+                for problem in pricing.problems() {
+                    issues.push(ConfigIssue {
+                        severity: IssueSeverity::Error,
+                        code: "model.bad_pricing".into(),
+                        message: format!("The price for `{exposed}` {problem}"),
+                        subject: Some(exposed.clone()),
+                    });
+                }
             }
         }
 

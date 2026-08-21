@@ -11,6 +11,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::Json;
 use serde_json::{json, Value};
+use zroutery_core::billing::{BalanceConfig, BalancePreset, BalanceProbe, Pricing};
 use zroutery_core::config::{
     AppConfig, MemorySecretStore, ModelClass, ModelEntry, ProviderConfig, ProviderKind,
 };
@@ -203,7 +204,24 @@ async fn mock_anthropic_messages(
 }
 
 async fn mock_models() -> Json<Value> {
-    Json(json!({"object": "list", "data": [{"id": "m-b"}, {"id": "m-a"}, {"id": "m-a"}]}))
+    Json(json!({"object": "list", "data": [
+        {"id": "m-b"},
+        {"id": "m-a"},
+        {"id": "m-a"},
+        // An OpenRouter style entry, priced per single token.
+        {"id": "m-priced", "pricing": {"prompt": "0.0000005", "completion": "0.000002"}},
+    ]}))
+}
+
+/// A DeepSeek shaped balance payload, with the amounts as decimal strings.
+async fn mock_balance() -> Json<Value> {
+    Json(json!({
+        "is_available": true,
+        "balance_infos": [
+            {"currency": "CNY", "total_balance": "48.75",
+             "granted_balance": "0.00", "topped_up_balance": "48.75"}
+        ]
+    }))
 }
 
 async fn start_mock() -> (SocketAddr, Mock) {
@@ -212,6 +230,7 @@ async fn start_mock() -> (SocketAddr, Mock) {
         .route("/chat/completions", post(mock_openai_chat))
         .route("/v1/messages", post(mock_anthropic_messages))
         .route("/models", get(mock_models))
+        .route("/user/balance", get(mock_balance))
         .route("/v1/models", get(mock_models))
         .with_state(mock.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -935,6 +954,152 @@ async fn count_tokens_endpoint_answers_anthropic_clients() {
         .unwrap();
     assert!(body["input_tokens"].as_u64().unwrap() > 0);
     assert_eq!(h.mock.count(), 0, "estimated locally, no upstream call");
+    // Unpriced models simply say which model answered.
+    assert_eq!(body["zroutery"]["estimated"], true);
+    assert_eq!(body["zroutery"]["model"], "deepseek-deepseek-v4-pro");
+    assert!(body["zroutery"]["estimated_input_cost"].is_null());
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn priced_requests_report_their_cost() {
+    let (addr, mock) = start_mock().await;
+    let mut cfg = config_for(addr);
+    // 3 USD per million in, 15 out: the shape of a frontier model's price list.
+    cfg.models[1].pricing = Some(Pricing::new("USD", 3.0, 15.0));
+    let h = Harness::start(cfg, mock).await;
+
+    let resp = h
+        .post("/v1/messages")
+        .json(&json!({"model": "sonnet-class", "max_tokens": 16,
+                      "messages": [{"role": "user", "content": "hi"}]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    // The mock reports 11 prompt and 7 completion tokens.
+    let expected = 3.0 * 11.0 / 1e6 + 15.0 * 7.0 / 1e6;
+    assert_eq!(
+        resp.headers()["x-zroutery-cost"],
+        format!("USD {expected:.6}")
+    );
+
+    let record = &h.state.stats().recent(1)[0];
+    let cost = record.cost.as_ref().unwrap();
+    assert_eq!(cost.currency, "USD");
+    assert!((cost.amount - expected).abs() < 1e-12);
+
+    let summary = h.state.stats().summary();
+    assert!((summary.cost.get("USD") - expected).abs() < 1e-12);
+    let per_model = summary
+        .per_model
+        .iter()
+        .find(|m| m.model_id == "deepseek-deepseek-v4-pro")
+        .unwrap();
+    assert!((per_model.cost.get("USD") - expected).abs() < 1e-12);
+
+    // And the estimate offered before sending uses the same price.
+    let body: Value = h
+        .post("/v1/messages/count_tokens")
+        .json(&json!({"model": "sonnet-class",
+                      "messages": [{"role": "user", "content": "hi"}]}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let estimate = &body["zroutery"]["estimated_input_cost"];
+    assert_eq!(estimate["currency"], "USD");
+    assert!(estimate["amount"].as_f64().unwrap() > 0.0);
+    assert_eq!(body["zroutery"]["input_per_mtok"], 3.0);
+
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn streamed_requests_are_priced_even_without_a_header() {
+    let (addr, mock) = start_mock().await;
+    let mut cfg = config_for(addr);
+    cfg.models[1].pricing = Some(Pricing::new("CNY", 2.0, 8.0));
+    let h = Harness::start(cfg, mock).await;
+
+    let resp = h
+        .post("/v1/messages")
+        .json(
+            &json!({"model": "sonnet-class", "max_tokens": 16, "stream": true,
+                      "messages": [{"role": "user", "content": "hi"}]}),
+        )
+        .send()
+        .await
+        .unwrap();
+    // Headers are already sent when the usage arrives, so there is nothing to put
+    // in them; the record still gets the cost.
+    assert!(resp.headers().get("x-zroutery-cost").is_none());
+    let _ = resp.text().await.unwrap();
+
+    let record = &h.state.stats().recent(1)[0];
+    let cost = record.cost.as_ref().unwrap();
+    // The mock's streaming trailer reports 5 prompt and 2 completion tokens.
+    assert_eq!(cost.currency, "CNY");
+    assert!((cost.amount - (2.0 * 5.0 / 1e6 + 8.0 * 2.0 / 1e6)).abs() < 1e-12);
+
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_balance_is_fetched_with_the_providers_own_key() {
+    let (addr, mock) = start_mock().await;
+    let mut cfg = config_for(addr);
+    // The built-in presets point at real vendors, so the mock is driven by a
+    // custom probe; the presets themselves are covered by unit tests.
+    cfg.providers[0].balance = BalanceConfig {
+        preset: BalancePreset::Custom,
+        custom: Some(BalanceProbe {
+            path: "/user/balance".into(),
+            remaining_pointer: Some("/balance_infos/0/total_balance".into()),
+            currency_pointer: Some("/balance_infos/0/currency".into()),
+            ..BalanceProbe::default()
+        }),
+    };
+    let provider = cfg.providers[0].clone();
+    let h = Harness::start(cfg, mock).await;
+
+    let balance = h
+        .state
+        .upstream()
+        .fetch_balance(
+            &provider,
+            Some("sk-deepseek"),
+            &provider.balance.probe().unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(balance.currency, "CNY");
+    assert_eq!(balance.remaining, Some(48.75));
+
+    // A provider that publishes nothing is not asked at all.
+    assert!(!h.state.config().providers[1].balance.is_supported());
+
+    // A pointer into thin air is an error rather than a silent zero.
+    let mut broken = provider.clone();
+    broken.balance.custom = Some(BalanceProbe {
+        path: "/user/balance".into(),
+        remaining_pointer: Some("/nope".into()),
+        ..BalanceProbe::default()
+    });
+    let err = h
+        .state
+        .upstream()
+        .fetch_balance(
+            &broken,
+            Some("sk-deepseek"),
+            &broken.balance.probe().unwrap(),
+        )
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("no balance found"), "{err}");
+
     h.shutdown().await;
 }
 
@@ -1075,7 +1240,14 @@ async fn provider_model_discovery_dedupes_and_sorts() {
         .list_models(&provider, Some("sk-deepseek"))
         .await
         .unwrap();
-    assert_eq!(models, vec!["m-a", "m-b"]);
+    let ids: Vec<&str> = models.iter().map(|m| m.id.as_str()).collect();
+    assert_eq!(ids, vec!["m-a", "m-b", "m-priced"]);
+    // Prices come along when the catalogue publishes them, per million tokens.
+    assert!(models[0].pricing.is_none());
+    let priced = models[2].pricing.as_ref().unwrap();
+    assert_eq!(priced.currency, "USD");
+    assert!((priced.input_per_mtok - 0.5).abs() < 1e-9);
+    assert!((priced.output_per_mtok - 2.0).abs() < 1e-9);
 
     h.shutdown().await;
 }

@@ -39,6 +39,8 @@ pub fn run() {
             commands::set_provider_key,
             commands::clear_provider_key,
             commands::fetch_provider_models,
+            commands::refresh_balance,
+            commands::refresh_balances,
             commands::start_proxy,
             commands::stop_proxy,
             commands::regenerate_token,

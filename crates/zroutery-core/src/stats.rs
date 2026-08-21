@@ -9,6 +9,7 @@ use std::sync::Mutex;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::billing::{Cost, CostTotals};
 use crate::ir::{Dialect, Usage};
 
 /// One completed (or failed) client request.
@@ -31,6 +32,8 @@ pub struct RequestRecord {
     /// Time to first streamed token.
     pub ttft_ms: Option<u64>,
     pub usage: Usage,
+    /// What it cost, when the model has a price. `None` means unpriced, not free.
+    pub cost: Option<Cost>,
     /// How many upstream attempts it took (>1 means failover happened).
     pub attempts: u32,
 }
@@ -44,6 +47,8 @@ pub struct ModelTotals {
     pub output_tokens: u64,
     pub reasoning_tokens: u64,
     pub cached_tokens: u64,
+    /// Spend per currency. Empty while the model has no price.
+    pub cost: CostTotals,
     /// Average end to end latency in milliseconds.
     pub avg_latency_ms: f64,
 }
@@ -55,6 +60,8 @@ pub struct StatsSummary {
     pub failures: u64,
     pub input_tokens: u64,
     pub output_tokens: u64,
+    /// Spend per currency; never summed across currencies.
+    pub cost: CostTotals,
     pub per_model: Vec<ModelTotals>,
 }
 
@@ -73,6 +80,7 @@ struct Inner {
     failures: u64,
     input_tokens: u64,
     output_tokens: u64,
+    cost: CostTotals,
 }
 
 impl Stats {
@@ -87,6 +95,7 @@ impl Stats {
                 failures: 0,
                 input_tokens: 0,
                 output_tokens: 0,
+                cost: CostTotals::default(),
             }),
         }
     }
@@ -107,6 +116,9 @@ impl Stats {
         }
         inner.input_tokens += record.usage.input_tokens as u64;
         inner.output_tokens += record.usage.output_tokens as u64;
+        if let Some(cost) = &record.cost {
+            inner.cost.add(cost);
+        }
 
         let key = record
             .resolved_model
@@ -127,6 +139,9 @@ impl Stats {
         totals.output_tokens += record.usage.output_tokens as u64;
         totals.reasoning_tokens += record.usage.reasoning_tokens as u64;
         totals.cached_tokens += record.usage.cache_read_tokens as u64;
+        if let Some(cost) = &record.cost {
+            totals.cost.add(cost);
+        }
         let n = totals.requests as f64;
         totals.avg_latency_ms += (record.latency_ms as f64 - totals.avg_latency_ms) / n;
 
@@ -151,6 +166,7 @@ impl Stats {
             failures: inner.failures,
             input_tokens: inner.input_tokens,
             output_tokens: inner.output_tokens,
+            cost: inner.cost.clone(),
             per_model: inner.per_model.values().cloned().collect(),
         }
     }
@@ -163,6 +179,7 @@ impl Stats {
         inner.failures = 0;
         inner.input_tokens = 0;
         inner.output_tokens = 0;
+        inner.cost = CostTotals::default();
         inner.since = Utc::now();
     }
 }
@@ -195,6 +212,7 @@ impl RecordBuilder {
                 latency_ms: 0,
                 ttft_ms: None,
                 usage: Usage::default(),
+                cost: None,
                 attempts: 0,
             },
         }
@@ -217,6 +235,13 @@ impl RecordBuilder {
 
     pub fn usage(&mut self, usage: Usage) -> &mut Self {
         self.record.usage = usage;
+        self
+    }
+
+    /// Price the recorded usage. Called once the answering model is known, so a
+    /// later price change never rewrites history.
+    pub fn priced_with(&mut self, pricing: Option<&crate::billing::Pricing>) -> &mut Self {
+        self.record.cost = pricing.map(|p| p.cost_of(&self.record.usage));
         self
     }
 
@@ -258,6 +283,69 @@ mod tests {
             b.fail(502, "boom".into());
         }
         b.finish(latency)
+    }
+
+    fn priced_rec(model: &str, usage: Usage, pricing: &crate::billing::Pricing) -> RequestRecord {
+        let mut b = RecordBuilder::new(Dialect::OpenAI, "sonnet-class", false);
+        b.resolved(model, "DeepSeek")
+            .usage(usage)
+            .priced_with(Some(pricing))
+            .attempt();
+        b.finish(100)
+    }
+
+    #[test]
+    fn cost_is_recorded_per_request_and_summed_per_currency() {
+        let stats = Stats::new(10);
+        let usd = crate::billing::Pricing::new("USD", 3.0, 15.0);
+        let cny = crate::billing::Pricing::new("CNY", 2.0, 8.0);
+        let usage = Usage {
+            input_tokens: 1_000_000,
+            output_tokens: 0,
+            ..Usage::default()
+        };
+
+        stats.record(priced_rec("gpt", usage, &usd));
+        stats.record(priced_rec("gpt", usage, &usd));
+        stats.record(priced_rec("deepseek", usage, &cny));
+        // An unpriced model contributes nothing rather than zero-cost noise.
+        stats.record(rec("mystery", true, 10, usage));
+
+        let summary = stats.summary();
+        assert!((summary.cost.get("USD") - 6.0).abs() < 1e-9);
+        assert!((summary.cost.get("CNY") - 2.0).abs() < 1e-9);
+        assert_eq!(summary.cost.0.len(), 2, "currencies stay apart");
+
+        let gpt = summary
+            .per_model
+            .iter()
+            .find(|m| m.model_id == "gpt")
+            .unwrap();
+        assert!((gpt.cost.get("USD") - 6.0).abs() < 1e-9);
+        let mystery = summary
+            .per_model
+            .iter()
+            .find(|m| m.model_id == "mystery")
+            .unwrap();
+        assert!(mystery.cost.is_empty());
+        assert!(stats.recent(1)[0].cost.is_none());
+    }
+
+    #[test]
+    fn clearing_resets_the_spend_too() {
+        let stats = Stats::new(4);
+        let pricing = crate::billing::Pricing::new("USD", 3.0, 15.0);
+        stats.record(priced_rec(
+            "m",
+            Usage {
+                input_tokens: 1_000_000,
+                ..Usage::default()
+            },
+            &pricing,
+        ));
+        assert!(!stats.summary().cost.is_empty());
+        stats.clear();
+        assert!(stats.summary().cost.is_empty());
     }
 
     #[test]

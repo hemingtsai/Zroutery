@@ -13,6 +13,7 @@ use futures_util::{Stream, StreamExt};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, ACCEPT, AUTHORIZATION, CONTENT_TYPE};
 use serde_json::Value;
 
+use crate::billing::{Balance, BalanceProbe, Pricing};
 use crate::config::{ProviderConfig, ProviderKind};
 use crate::error::{Error, Result};
 use crate::ir::{ChatRequest, ChatResponse, StreamEvent};
@@ -181,20 +182,82 @@ impl Upstream {
     }
 
     /// Ask the provider which models it offers, for the "fetch models" button.
+    ///
+    /// Some catalogues (OpenRouter style) publish per-token prices; those are
+    /// carried along so the dashboard can prefill them.
     pub async fn list_models(
         &self,
         provider: &ProviderConfig,
         api_key: Option<&str>,
-    ) -> Result<Vec<String>> {
+    ) -> Result<Vec<DiscoveredModel>> {
+        let json = self
+            .get_json(provider, api_key, &provider.models_url(), 30)
+            .await?;
+        let mut models: Vec<DiscoveredModel> = json
+            .get("data")
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|m| {
+                        let id = m.get("id").and_then(Value::as_str)?;
+                        Some(DiscoveredModel {
+                            id: id.to_string(),
+                            pricing: pricing_from_catalogue(m),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        models.sort_by(|a, b| a.id.cmp(&b.id));
+        models.dedup_by(|a, b| a.id == b.id);
+        Ok(models)
+    }
+
+    /// Ask the provider how much credit is left.
+    pub async fn fetch_balance(
+        &self,
+        provider: &ProviderConfig,
+        api_key: Option<&str>,
+        probe: &BalanceProbe,
+    ) -> Result<Balance> {
+        // Presets sometimes need an absolute URL: DeepSeek's balance hangs off the
+        // API root while its chat endpoint lives under /v1.
+        let url = if probe.path.starts_with("http://") || probe.path.starts_with("https://") {
+            probe.path.clone()
+        } else {
+            format!(
+                "{}/{}",
+                provider.base_url.trim_end_matches('/'),
+                probe.path.trim_start_matches('/')
+            )
+        };
+        let json = self.get_json(provider, api_key, &url, 20).await?;
+        Balance::from_payload(probe, &json).ok_or_else(|| {
+            Error::BadUpstreamPayload(format!(
+                "no balance found in the response from {url}: {}",
+                truncate(&json.to_string(), 300)
+            ))
+        })
+    }
+
+    /// Shared GET plumbing for the two metadata endpoints.
+    async fn get_json(
+        &self,
+        provider: &ProviderConfig,
+        api_key: Option<&str>,
+        url: &str,
+        timeout_secs: u64,
+    ) -> Result<Value> {
         let response = tokio::time::timeout(
-            Duration::from_secs(30),
+            Duration::from_secs(timeout_secs),
             self.client
-                .get(provider.models_url())
+                .get(url)
                 .headers(build_headers(provider, api_key)?)
                 .send(),
         )
         .await
-        .map_err(|_| Error::Timeout(30))?
+        .map_err(|_| Error::Timeout(timeout_secs))?
         .map_err(|source| Error::Transport {
             provider: provider.name.clone(),
             source,
@@ -212,23 +275,46 @@ impl Upstream {
                 body: truncate(&text, 2000),
             });
         }
-        let json: Value = serde_json::from_str(&text)
-            .map_err(|e| Error::BadUpstreamPayload(format!("{e}: {}", truncate(&text, 500))))?;
-        let mut ids: Vec<String> = json
-            .get("data")
-            .and_then(Value::as_array)
-            .map(|items| {
-                items
-                    .iter()
-                    .filter_map(|m| m.get("id").and_then(Value::as_str))
-                    .map(str::to_string)
-                    .collect()
-            })
-            .unwrap_or_default();
-        ids.sort();
-        ids.dedup();
-        Ok(ids)
+        serde_json::from_str(&text)
+            .map_err(|e| Error::BadUpstreamPayload(format!("{e}: {}", truncate(&text, 500))))
     }
+}
+
+/// One entry of a provider's model catalogue.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct DiscoveredModel {
+    pub id: String,
+    /// Present only when the catalogue publishes prices.
+    pub pricing: Option<Pricing>,
+}
+
+/// Read per-token prices out of a catalogue entry.
+///
+/// The shape is OpenRouter's: strings of dollars per single token, which become
+/// dollars per million. Anything else is left for the user to type.
+fn pricing_from_catalogue(entry: &Value) -> Option<Pricing> {
+    let pricing = entry.get("pricing")?;
+    let per_mtok = |key: &str| -> Option<f64> {
+        let raw = pricing.get(key)?;
+        let value = raw
+            .as_f64()
+            .or_else(|| raw.as_str()?.trim().parse::<f64>().ok())?;
+        (value.is_finite() && value >= 0.0).then_some(value * 1_000_000.0)
+    };
+
+    let input = per_mtok("prompt").or_else(|| per_mtok("input"))?;
+    let output = per_mtok("completion").or_else(|| per_mtok("output"))?;
+    if input == 0.0 && output == 0.0 {
+        // A free model, or a catalogue that fills the fields with zeros.
+        return None;
+    }
+    Some(Pricing {
+        currency: "USD".into(),
+        input_per_mtok: input,
+        output_per_mtok: output,
+        cache_read_per_mtok: per_mtok("input_cache_read"),
+        cache_write_per_mtok: per_mtok("input_cache_write"),
+    })
 }
 
 struct StreamState {
@@ -409,5 +495,36 @@ mod tests {
     fn truncate_keeps_utf8_intact() {
         assert_eq!(truncate("hello", 10), "hello");
         assert_eq!(truncate("中文测试内容", 3), "中文测…");
+    }
+
+    #[test]
+    fn catalogue_prices_become_per_million_tokens() {
+        // OpenRouter publishes dollars per single token, as strings.
+        let entry = serde_json::json!({
+            "id": "deepseek/deepseek-chat",
+            "pricing": {
+                "prompt": "0.00000027",
+                "completion": "0.0000011",
+                "input_cache_read": "0.00000007"
+            }
+        });
+        let pricing = pricing_from_catalogue(&entry).unwrap();
+        assert_eq!(pricing.currency, "USD");
+        assert!((pricing.input_per_mtok - 0.27).abs() < 1e-9);
+        assert!((pricing.output_per_mtok - 1.10).abs() < 1e-9);
+        assert!((pricing.cache_read_per_mtok.unwrap() - 0.07).abs() < 1e-9);
+        assert!(pricing.cache_write_per_mtok.is_none());
+    }
+
+    #[test]
+    fn catalogues_without_usable_prices_are_left_alone() {
+        for entry in [
+            serde_json::json!({"id": "m"}),
+            serde_json::json!({"id": "m", "pricing": {}}),
+            serde_json::json!({"id": "m", "pricing": {"prompt": "0", "completion": "0"}}),
+            serde_json::json!({"id": "m", "pricing": {"prompt": "abc", "completion": "1"}}),
+        ] {
+            assert!(pricing_from_catalogue(&entry).is_none(), "{entry}");
+        }
     }
 }

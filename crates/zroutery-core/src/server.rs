@@ -25,6 +25,7 @@ use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 
+use crate::billing::{Cost, Pricing};
 use crate::config::{AppConfig, ProviderConfig, SecretStore, ServerConfig};
 use crate::error::{Error, Result};
 use crate::ir::{ChatRequest, Dialect, StreamEvent, Usage};
@@ -313,15 +314,44 @@ async fn count_tokens(State(state): State<Arc<AppState>>, body: JsonBody) -> Res
         Ok(v) => v,
         Err(e) => return error_response(Dialect::Anthropic, &e),
     };
-    match protocol::decode_request(Dialect::Anthropic, body) {
-        Ok(req) => {
-            // Best effort: providers do not expose a shared tokenizer, so this
-            // is an estimate and is documented as such in the GUI.
-            let _ = state;
-            Json(json!({"input_tokens": req.estimate_tokens()})).into_response()
+    let req = match protocol::decode_request(Dialect::Anthropic, body) {
+        Ok(req) => req,
+        Err(e) => return error_response(Dialect::Anthropic, &e),
+    };
+
+    // Best effort: providers do not expose a shared tokenizer, so this is an
+    // estimate, and the price beside it covers the prompt only.
+    let estimate = req.estimate_tokens();
+    let mut extra = serde_json::Map::new();
+    extra.insert("estimated".into(), json!(true));
+    if let Some((model_id, pricing)) = first_candidate_pricing(&state, &req.model) {
+        extra.insert("model".into(), json!(model_id));
+        if let Some(pricing) = pricing {
+            let cost = pricing.estimate_input(estimate);
+            extra.insert(
+                "estimated_input_cost".into(),
+                json!({"currency": cost.currency, "amount": cost.amount}),
+            );
+            extra.insert("input_per_mtok".into(), json!(pricing.input_per_mtok));
+            extra.insert("output_per_mtok".into(), json!(pricing.output_per_mtok));
         }
-        Err(e) => error_response(Dialect::Anthropic, &e),
     }
+
+    Json(json!({
+        "input_tokens": estimate,
+        // Namespaced, so Anthropic clients that only read `input_tokens` ignore it.
+        "zroutery": Value::Object(extra),
+    }))
+    .into_response()
+}
+
+/// Which model would answer this request, and what it charges.
+fn first_candidate_pricing(state: &AppState, requested: &str) -> Option<(String, Option<Pricing>)> {
+    let registry = state.registry();
+    let resolution = registry.resolve(requested).ok()?;
+    let plan = state.router().plan(&registry, &resolution).ok()?;
+    let candidate = plan.into_iter().next()?;
+    Some((candidate.exposed_id, candidate.entry.pricing))
 }
 
 async fn list_models(State(state): State<Arc<AppState>>) -> Response {
@@ -458,7 +488,13 @@ async fn buffered_chat(
                     candidate.model_id(),
                     attempt_start.elapsed().as_millis() as u64,
                 );
-                rec.usage(resp.usage);
+                rec.usage(resp.usage)
+                    .priced_with(candidate.entry.pricing.as_ref());
+                let cost = candidate
+                    .entry
+                    .pricing
+                    .as_ref()
+                    .map(|p| p.cost_of(&resp.usage));
                 state
                     .stats
                     .record(rec.finish(started.elapsed().as_millis() as u64));
@@ -466,6 +502,7 @@ async fn buffered_chat(
                 resp.model = candidate.exposed_id.clone();
                 let mut response = Json(protocol::encode_response(dialect, &resp)).into_response();
                 inject_routing_headers(response.headers_mut(), candidate);
+                inject_cost_header(response.headers_mut(), cost.as_ref());
                 return response;
             }
             Err(e) => {
@@ -542,10 +579,13 @@ async fn stream_chat(
                     Arc::clone(&state),
                     events,
                     encoder,
-                    rec,
-                    started,
-                    candidate.model_id().to_string(),
-                    routing.clone(),
+                    StreamContext {
+                        record: rec,
+                        started,
+                        model_id: candidate.model_id().to_string(),
+                        routing: routing.clone(),
+                        pricing: candidate.entry.pricing.clone(),
+                    },
                 ));
                 // Built from a plain body and static headers, so nothing here can
                 // fail and there is no reason to unwrap.
@@ -584,6 +624,18 @@ async fn stream_chat(
     error_response(dialect, &last_error)
 }
 
+/// Report the estimated spend of a buffered answer.
+///
+/// Streaming answers cannot carry this: the headers are long gone by the time the
+/// usage arrives, so a stream's cost shows up in the Activity tab instead.
+fn inject_cost_header(headers: &mut HeaderMap, cost: Option<&Cost>) {
+    if let Some(cost) = cost {
+        if let Ok(value) = HeaderValue::from_str(&format!("{} {:.6}", cost.currency, cost.amount)) {
+            headers.insert("x-zroutery-cost", value);
+        }
+    }
+}
+
 fn inject_routing_headers(headers: &mut HeaderMap, candidate: &Candidate) {
     if let Ok(v) = HeaderValue::from_str(&candidate.exposed_id) {
         headers.insert("x-zroutery-model", v);
@@ -606,6 +658,7 @@ struct SseState {
     model_id: String,
     routing: crate::config::RoutingConfig,
     usage: Usage,
+    pricing: Option<Pricing>,
     finished: bool,
 }
 
@@ -613,7 +666,7 @@ impl SseState {
     /// Record the request exactly once, when the stream ends for any reason.
     fn finalize(&mut self, error: Option<&Error>) {
         if let Some(mut rec) = self.rec.take() {
-            rec.usage(self.usage);
+            rec.usage(self.usage).priced_with(self.pricing.as_ref());
             if let Some(e) = error {
                 rec.fail(e.status().as_u16(), e.to_string());
                 self.state
@@ -627,15 +680,21 @@ impl SseState {
     }
 }
 
+/// What the SSE pipeline needs to know about the request it is serving.
+struct StreamContext {
+    record: RecordBuilder,
+    started: Instant,
+    model_id: String,
+    routing: crate::config::RoutingConfig,
+    pricing: Option<Pricing>,
+}
+
 /// Pipe canonical events through the egress encoder into an SSE byte stream.
 fn sse_body(
     app: Arc<AppState>,
     events: crate::upstream::EventStream,
     encoder: Box<dyn StreamEncoder>,
-    rec: RecordBuilder,
-    started: Instant,
-    model_id: String,
-    routing: crate::config::RoutingConfig,
+    context: StreamContext,
 ) -> impl futures_util::Stream<Item = std::result::Result<bytes::Bytes, std::io::Error>> {
     use futures_util::StreamExt;
 
@@ -643,12 +702,13 @@ fn sse_body(
         events,
         encoder,
         pending: VecDeque::new(),
-        rec: Some(rec),
+        rec: Some(context.record),
         state: app,
-        started,
-        model_id,
-        routing,
+        started: context.started,
+        model_id: context.model_id,
+        routing: context.routing,
         usage: Usage::default(),
+        pricing: context.pricing,
         finished: false,
     };
 

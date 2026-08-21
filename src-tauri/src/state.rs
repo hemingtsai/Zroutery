@@ -1,11 +1,15 @@
 //! Desktop application state: owns the core proxy state, the keychain, the
 //! config file location and the running server handle.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use chrono::{DateTime, Utc};
+
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex as AsyncMutex;
+use zroutery_core::billing::Balance;
 use zroutery_core::config::{AppConfig, ConfigIssue, IssueSeverity, ServerConfig};
 use zroutery_core::router::ModelHealth;
 use zroutery_core::server::{AppState, ServerHandle};
@@ -21,6 +25,17 @@ pub struct Desktop {
     server: AsyncMutex<Option<ServerHandle>>,
     /// Startup problem worth surfacing once in the UI.
     warning: Mutex<Option<String>>,
+    /// Last answer from each provider's balance endpoint. Never fetched on a
+    /// timer: it costs a request and some vendors rate limit it.
+    balances: Mutex<BTreeMap<String, BalanceStatus>>,
+}
+
+/// What the last balance check found, per provider.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BalanceStatus {
+    pub checked_at: DateTime<Utc>,
+    pub balance: Option<Balance>,
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -57,6 +72,8 @@ pub struct Snapshot {
     pub warning: Option<String>,
     pub config_path: String,
     pub version: String,
+    /// provider id -> last balance check, for the providers that were asked.
+    pub balances: BTreeMap<String, BalanceStatus>,
 }
 
 /// The subset the Activity tab polls for.
@@ -94,21 +111,16 @@ impl Desktop {
             config_dir,
             server: AsyncMutex::new(None),
             warning: Mutex::new(None),
+            balances: Mutex::new(BTreeMap::new()),
         }
     }
 
     pub fn set_warning(&self, warning: Option<String>) {
-        *self
-            .warning
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = warning;
+        *lock(&self.warning) = warning;
     }
 
     pub fn warning(&self) -> Option<String> {
-        self.warning
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone()
+        lock(&self.warning).clone()
     }
 
     pub async fn snapshot(&self) -> Snapshot {
@@ -153,8 +165,77 @@ impl Desktop {
             config_path: self.config_dir.join(store::FILE_NAME).display().to_string(),
             version: env!("CARGO_PKG_VERSION").to_string(),
             exposed_ids: config.exposed_ids(),
+            balances: self.balances(),
             config,
         }
+    }
+
+    pub fn balances(&self) -> BTreeMap<String, BalanceStatus> {
+        lock(&self.balances).clone()
+    }
+
+    /// Ask one provider how much credit is left and remember the answer.
+    ///
+    /// A failure is stored rather than thrown away: "asked and refused" is more
+    /// useful on screen than a blank.
+    pub async fn refresh_balance(&self, provider_id: &str) -> Result<(), String> {
+        let config = self.core.config();
+        let provider = config
+            .provider(provider_id)
+            .ok_or_else(|| format!("unknown provider `{provider_id}`"))?;
+        let probe = provider
+            .balance
+            .probe()
+            .ok_or_else(|| format!("{} does not publish a balance", provider.name))?;
+
+        let key = self.core.api_key(provider).map_err(|e| e.to_string())?;
+        let outcome = self
+            .core
+            .upstream()
+            .fetch_balance(provider, key.as_deref(), &probe)
+            .await;
+
+        let status = match outcome {
+            Ok(balance) => BalanceStatus {
+                checked_at: Utc::now(),
+                balance: Some(balance),
+                error: None,
+            },
+            Err(e) => BalanceStatus {
+                checked_at: Utc::now(),
+                balance: None,
+                error: Some(e.to_string()),
+            },
+        };
+        let failed = status.error.clone();
+        lock(&self.balances).insert(provider_id.to_string(), status);
+        match failed {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
+    }
+
+    /// Refresh every provider that publishes a balance, one after another.
+    ///
+    /// Sequential on purpose: a handful of providers, and hammering them in
+    /// parallel is a good way to get rate limited.
+    pub async fn refresh_all_balances(&self) -> Vec<String> {
+        let ids: Vec<String> = self
+            .core
+            .config()
+            .providers
+            .iter()
+            .filter(|p| p.enabled && p.balance.is_supported())
+            .map(|p| p.id.clone())
+            .collect();
+
+        let mut problems = Vec::new();
+        for id in ids {
+            if let Err(e) = self.refresh_balance(&id).await {
+                problems.push(format!("{id}: {e}"));
+            }
+        }
+        problems
     }
 
     /// Only the counters and the log, for the Activity tab's polling.
@@ -229,6 +310,14 @@ impl Desktop {
         }
         Ok(needs_rebind)
     }
+}
+
+/// Recovers a poisoned lock instead of taking the app down with it; the worst
+/// case is a stale balance or warning.
+fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// Only these settings require tearing the listener down.
@@ -334,6 +423,49 @@ mod tests {
         assert_eq!(activity.summary.requests, snapshot.summary.requests);
         assert_eq!(activity.recent.len(), snapshot.recent.len());
         assert_eq!(activity.health.len(), snapshot.health.len());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn balances_are_only_fetched_where_they_exist() {
+        use zroutery_core::billing::{BalanceConfig, BalancePreset, BalanceProbe};
+        use zroutery_core::config::{ProviderConfig, ProviderKind};
+
+        let mut config = config_with_token("zr-1");
+        let mut quiet = ProviderConfig::new("quiet", "Quiet Co", ProviderKind::OpenAICompatible);
+        quiet.key_ref = String::new();
+        let mut probed = quiet.clone();
+        probed.id = "probed".into();
+        probed.name = "Probed Co".into();
+        // Nothing listens here, so the fetch fails without needing a mock server.
+        probed.base_url = "http://127.0.0.1:1".into();
+        probed.connect_timeout_secs = 1;
+        probed.timeout_secs = 2;
+        probed.balance = BalanceConfig {
+            preset: BalancePreset::Custom,
+            custom: Some(BalanceProbe::default()),
+        };
+        config.providers = vec![quiet, probed];
+        let (desktop, dir) = desktop_with(config);
+
+        // A provider with no endpoint is refused up front rather than asked.
+        let err = desktop.refresh_balance("quiet").await.unwrap_err();
+        assert!(err.contains("does not publish a balance"), "{err}");
+        assert!(desktop.balances().is_empty());
+        assert!(desktop.refresh_balance("nope").await.is_err());
+
+        // A failure is remembered so the dashboard can show why.
+        assert!(desktop.refresh_balance("probed").await.is_err());
+        let status = desktop.balances().get("probed").cloned().unwrap();
+        assert!(status.balance.is_none());
+        assert!(status.error.is_some());
+        assert!(desktop.snapshot().await.balances.contains_key("probed"));
+
+        // Refreshing everything skips the provider that cannot answer.
+        let problems = desktop.refresh_all_balances().await;
+        assert_eq!(problems.len(), 1);
+        assert!(problems[0].starts_with("probed:"));
+
         std::fs::remove_dir_all(dir).ok();
     }
 }
