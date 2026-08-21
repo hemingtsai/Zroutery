@@ -2,6 +2,8 @@ import { Fragment, useState } from "react";
 import {
   CLASSES,
   classMembers,
+  modelRows,
+  previewId,
   virtualId,
   type AppConfig,
   type ModelClass,
@@ -26,49 +28,52 @@ export default function Models({
   busy: boolean;
 }) {
   const { config } = snapshot;
+  const rows = modelRows(snapshot);
   const [draft, setDraft] = useState({
     provider_id: config.providers[0]?.id ?? "",
     upstream_model: "",
-    id: "",
     class: "" as ModelClass | "",
   });
-  const [expanded, setExpanded] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<number | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
-  const unclassified = config.models.filter((m) => m.class === null);
+  const unclassified = rows.filter((r) => r.model.class === null);
 
-  const update = (id: string, patch: Partial<ModelEntry>) => {
+  const update = (index: number, patch: Partial<ModelEntry>) => {
     const next = structuredClone(config);
-    const model = next.models.find((m) => m.id === id);
+    const model = next.models[index];
     if (!model) return;
     Object.assign(model, patch);
     void save(next);
   };
 
-  const remove = (id: string) => {
+  const remove = (index: number) => {
     const next = structuredClone(config);
-    next.models = next.models.filter((m) => m.id !== id);
+    next.models.splice(index, 1);
     void save(next);
   };
 
   const add = () => {
     const upstream = draft.upstream_model.trim();
-    const exposed = (draft.id || upstream).trim();
-    if (!draft.provider_id || !upstream || !exposed) {
-      setNotice("Pick a provider and fill in the model id.");
+    if (!draft.provider_id || !upstream) {
+      setNotice("Pick a provider and fill in the model name.");
       return;
     }
     if (!draft.class) {
       setNotice("Choose a class. Zroutery never guesses which tier a model belongs to.");
       return;
     }
-    if (config.models.some((m) => m.id === exposed)) {
-      setNotice(`“${exposed}” is already exposed.`);
+    // Identity is the provider plus the upstream name, so the same model coming
+    // from a second provider is a separate entry with its own id.
+    const clash = config.models.some(
+      (m) => m.provider_id === draft.provider_id && m.upstream_model === upstream,
+    );
+    if (clash) {
+      setNotice(`That provider already offers “${upstream}”.`);
       return;
     }
     const next = structuredClone(config);
     next.models.push({
-      id: exposed,
       provider_id: draft.provider_id,
       upstream_model: upstream,
       class: draft.class,
@@ -82,10 +87,15 @@ export default function Models({
       aliases: [],
       max_output_tokens: null,
     });
-    setDraft({ ...draft, upstream_model: "", id: "", class: "" });
+    setDraft({ ...draft, upstream_model: "", class: "" });
     setNotice(null);
     void save(next);
   };
+
+  const preview =
+    draft.provider_id && draft.upstream_model.trim()
+      ? previewId(draft.provider_id, draft.upstream_model)
+      : null;
 
   return (
     <>
@@ -98,7 +108,7 @@ export default function Models({
       {unclassified.length > 0 && (
         <Banner tone="warn">
           {unclassified.length} model{unclassified.length === 1 ? "" : "s"} have no class yet:{" "}
-          <code>{unclassified.map((m) => m.id).join(", ")}</code>. They stay callable by their exact
+          <code>{unclassified.map((r) => r.id).join(", ")}</code>. They stay callable by their exact
           id, but they are excluded from <code>*-class</code> routing until you pick a tier.
         </Banner>
       )}
@@ -106,7 +116,7 @@ export default function Models({
       <Card title="Exposed classes">
         <div className="grid-three">
           {CLASSES.map((cls) => {
-            const members = classMembers(config, cls);
+            const members = classMembers(rows, config.providers, cls);
             return (
               <div key={cls} className="class-card">
                 <div className="row gap">
@@ -119,10 +129,9 @@ export default function Models({
                   </p>
                 ) : (
                   <ol className="member-list">
-                    {members.map((m, i) => (
-                      <li key={m.id}>
-                        <span className="muted">{i === 0 ? "primary" : `fallback ${i}`}</span>{" "}
-                        {m.id}
+                    {members.map((r, i) => (
+                      <li key={r.id}>
+                        <span className="muted">{i === 0 ? "primary" : `fallback ${i}`}</span> {r.id}
                       </li>
                     ))}
                   </ol>
@@ -147,18 +156,12 @@ export default function Models({
               ))}
             </select>
           </Field>
-          <Field label="Upstream model id" hint="Exactly what the provider calls it">
+          <Field label="Model name" hint="Exactly what the provider calls it">
             <input
               value={draft.upstream_model}
-              placeholder="deepseek-v4-pro"
+              placeholder="deepseek-chat"
               onChange={(e) => setDraft({ ...draft, upstream_model: e.currentTarget.value })}
-            />
-          </Field>
-          <Field label="Exposed as" hint="Defaults to the upstream id">
-            <input
-              value={draft.id}
-              placeholder="(same)"
-              onChange={(e) => setDraft({ ...draft, id: e.currentTarget.value })}
+              onKeyDown={(e) => e.key === "Enter" && add()}
             />
           </Field>
           <Field label="Class" hint="Required">
@@ -174,6 +177,9 @@ export default function Models({
               ))}
             </select>
           </Field>
+          <Field label="Exposed as" hint="The provider prefix keeps duplicates apart">
+            <input readOnly value={preview ?? ""} placeholder="<provider>-<model>" />
+          </Field>
           <div className="field-actions">
             <Button kind="primary" onClick={add} disabled={busy || !config.providers.length}>
               Add model
@@ -184,7 +190,7 @@ export default function Models({
       </Card>
 
       <Card title="Model registry">
-        {config.models.length === 0 ? (
+        {rows.length === 0 ? (
           <Empty>Nothing exposed yet.</Empty>
         ) : (
           <table className="table">
@@ -192,7 +198,7 @@ export default function Models({
               <tr>
                 <th>Exposed id</th>
                 <th>Provider</th>
-                <th>Upstream</th>
+                <th>Model name</th>
                 <th>Class</th>
                 <th title="Lower wins inside a class">Priority</th>
                 <th title="Random tie breaking among equal priorities">Weight</th>
@@ -201,15 +207,21 @@ export default function Models({
               </tr>
             </thead>
             <tbody>
-              {config.models.map((m) => {
+              {rows.map(({ model: m, id, index }) => {
                 const provider = config.providers.find((p) => p.id === m.provider_id);
                 return (
-                  <Fragment key={m.id}>
+                  <Fragment key={id}>
                     <tr className={m.class === null ? "row-warn" : ""}>
                       <td>
-                        <button className="linky" onClick={() => setExpanded(expanded === m.id ? null : m.id)}>
-                          {m.id}
+                        <button
+                          className="linky"
+                          onClick={() => setExpanded(expanded === index ? null : index)}
+                        >
+                          {id}
                         </button>
+                        {m.aliases.length > 0 && (
+                          <Badge tone="neutral">+{m.aliases.length} alias</Badge>
+                        )}
                       </td>
                       <td>
                         {provider?.name ?? <Badge tone="danger">missing</Badge>}
@@ -218,10 +230,10 @@ export default function Models({
                       <td className="muted">{m.upstream_model}</td>
                       <td>
                         <select
-                          aria-label={`Class for ${m.id}`}
+                          aria-label={`Class for ${id}`}
                           value={m.class ?? ""}
                           onChange={(e) =>
-                            update(m.id, {
+                            update(index, {
                               class: (e.currentTarget.value || null) as ModelClass | null,
                             })
                           }
@@ -238,9 +250,11 @@ export default function Models({
                         <input
                           className="tiny"
                           type="number"
-                          aria-label={`Priority for ${m.id}`}
+                          aria-label={`Priority for ${id}`}
                           value={m.priority}
-                          onChange={(e) => update(m.id, { priority: Number(e.currentTarget.value) || 0 })}
+                          onChange={(e) =>
+                            update(index, { priority: Number(e.currentTarget.value) || 0 })
+                          }
                         />
                       </td>
                       <td>
@@ -248,44 +262,60 @@ export default function Models({
                           className="tiny"
                           type="number"
                           min={1}
-                          aria-label={`Weight for ${m.id}`}
+                          aria-label={`Weight for ${id}`}
                           value={m.weight}
-                          onChange={(e) => update(m.id, { weight: Number(e.currentTarget.value) || 1 })}
+                          onChange={(e) =>
+                            update(index, { weight: Number(e.currentTarget.value) || 1 })
+                          }
                         />
                       </td>
                       <td>
                         <input
                           type="checkbox"
-                          aria-label={`Enable ${m.id}`}
+                          aria-label={`Enable ${id}`}
                           checked={m.enabled}
-                          onChange={(e) => update(m.id, { enabled: e.currentTarget.checked })}
+                          onChange={(e) => update(index, { enabled: e.currentTarget.checked })}
                         />
                       </td>
                       <td>
-                        <Button kind="ghost" onClick={() => remove(m.id)}>
+                        <Button kind="ghost" onClick={() => remove(index)}>
                           Delete
                         </Button>
                       </td>
                     </tr>
-                    {expanded === m.id && (
+                    {expanded === index && (
                       <tr>
                         <td colSpan={8}>
                           <div className="subpanel">
                             <div className="controls">
-                              <Field label="Display name">
+                              <Field
+                                label="Model name"
+                                hint="Sent upstream; renaming it changes the exposed id"
+                              >
                                 <input
-                                  value={m.display_name ?? ""}
-                                  placeholder={m.id}
+                                  value={m.upstream_model}
                                   onChange={(e) =>
-                                    update(m.id, { display_name: e.currentTarget.value || null })
+                                    update(index, { upstream_model: e.currentTarget.value })
                                   }
                                 />
                               </Field>
-                              <Field label="Aliases" hint="Comma separated, resolve to this exact model">
+                              <Field label="Display name" hint="Shown in /v1/models">
+                                <input
+                                  value={m.display_name ?? ""}
+                                  placeholder={m.upstream_model}
+                                  onChange={(e) =>
+                                    update(index, { display_name: e.currentTarget.value || null })
+                                  }
+                                />
+                              </Field>
+                              <Field
+                                label="Aliases"
+                                hint="Comma separated short names that also reach this model"
+                              >
                                 <input
                                   value={m.aliases.join(", ")}
                                   onChange={(e) =>
-                                    update(m.id, {
+                                    update(index, {
                                       aliases: e.currentTarget.value
                                         .split(",")
                                         .map((a) => a.trim())
@@ -301,7 +331,7 @@ export default function Models({
                                   value={m.max_output_tokens ?? ""}
                                   placeholder="unlimited"
                                   onChange={(e) =>
-                                    update(m.id, {
+                                    update(index, {
                                       max_output_tokens: Number(e.currentTarget.value) || null,
                                     })
                                   }
@@ -312,17 +342,17 @@ export default function Models({
                               <Toggle
                                 label="Tool use"
                                 checked={m.supports_tools}
-                                onChange={(v) => update(m.id, { supports_tools: v })}
+                                onChange={(v) => update(index, { supports_tools: v })}
                               />
                               <Toggle
                                 label="Vision"
                                 checked={m.supports_vision}
-                                onChange={(v) => update(m.id, { supports_vision: v })}
+                                onChange={(v) => update(index, { supports_vision: v })}
                               />
                               <Toggle
                                 label="Extended thinking"
                                 checked={m.supports_thinking}
-                                onChange={(v) => update(m.id, { supports_thinking: v })}
+                                onChange={(v) => update(index, { supports_thinking: v })}
                               />
                             </div>
                           </div>
@@ -339,3 +369,4 @@ export default function Models({
     </>
   );
 }
+

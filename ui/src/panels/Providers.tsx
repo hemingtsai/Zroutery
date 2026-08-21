@@ -1,6 +1,7 @@
 import { useState } from "react";
 import {
   api,
+  previewId,
   slugify,
   type AppConfig,
   type Provider,
@@ -114,16 +115,19 @@ export default function Providers({
     }
   };
 
-  const addDiscovered = (provider: Provider, modelId: string) => {
-    if (config.models.some((m) => m.id === modelId)) {
-      setNotice(`“${modelId}” is already in the model list.`);
+  const addDiscovered = (provider: Provider, modelName: string) => {
+    // Only the same provider offering the same model is a duplicate; the same
+    // name coming from another provider gets its own prefixed id.
+    if (
+      config.models.some((m) => m.provider_id === provider.id && m.upstream_model === modelName)
+    ) {
+      setNotice(`“${modelName}” is already listed for ${provider.name}.`);
       return;
     }
     const next = structuredClone(config);
     next.models.push({
-      id: modelId,
       provider_id: provider.id,
-      upstream_model: modelId,
+      upstream_model: modelName,
       // Left unset on purpose: classes are always assigned by hand.
       class: null,
       priority: 0,
@@ -137,7 +141,9 @@ export default function Providers({
       max_output_tokens: null,
     });
     void save(next);
-    setNotice(`Added “${modelId}”. Assign it a class on the Models tab.`);
+    setNotice(
+      `Added “${previewId(provider.id, modelName)}”. Assign it a class on the Models tab.`,
+    );
   };
 
   return (
@@ -365,17 +371,19 @@ export default function Providers({
               <div className="subpanel">
                 <h3>Models reported by {provider.name}</h3>
                 <div className="chips">
-                  {discovered[provider.id].map((id) => {
-                    const already = config.models.some((m) => m.id === id);
+                  {discovered[provider.id].map((name) => {
+                    const already = config.models.some(
+                      (m) => m.provider_id === provider.id && m.upstream_model === name,
+                    );
                     return (
                       <button
-                        key={id}
+                        key={name}
                         className={`chip ${already ? "chip-done" : ""}`}
                         disabled={already}
-                        onClick={() => addDiscovered(provider, id)}
-                        title={already ? "Already added" : "Add this model"}
+                        onClick={() => addDiscovered(provider, name)}
+                        title={already ? "Already added" : `Add as ${previewId(provider.id, name)}`}
                       >
-                        {id}
+                        {name}
                         {already ? " ✓" : " +"}
                       </button>
                     );

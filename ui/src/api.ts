@@ -39,8 +39,12 @@ export interface Provider {
   quirks: ProviderQuirks;
 }
 
+/**
+ * A model is identified by its provider plus the upstream name. The id clients
+ * use is derived from that pair by the backend and arrives in
+ * `Snapshot.exposed_ids`, so this side never re-implements the rule.
+ */
 export interface ModelEntry {
-  id: string;
   provider_id: string;
   upstream_model: string;
   class: ModelClass | null;
@@ -158,6 +162,8 @@ export interface StatsSummary {
 
 export interface Snapshot {
   config: AppConfig;
+  /** Exposed id per entry of `config.models`, same order. */
+  exposed_ids: string[];
   issues: ConfigIssue[];
   blocking: boolean;
   server: ServerStatus;
@@ -195,11 +201,40 @@ export function virtualId(cls: ModelClass): string {
   return `${cls}-class`;
 }
 
-export function classMembers(config: AppConfig, cls: ModelClass): ModelEntry[] {
-  return config.models
-    .filter((m) => m.class === cls && m.enabled)
-    .filter((m) => config.providers.find((p) => p.id === m.provider_id)?.enabled)
-    .sort((a, b) => a.priority - b.priority || a.id.localeCompare(b.id));
+/** A configured model together with the id the backend exposes it as. */
+export interface ModelRow {
+  model: ModelEntry;
+  id: string;
+  /** Index into `config.models`, used when editing. */
+  index: number;
+}
+
+export function modelRows(snapshot: Snapshot): ModelRow[] {
+  return snapshot.config.models.map((model, index) => ({
+    model,
+    id: snapshot.exposed_ids[index] ?? `${model.provider_id}-${model.upstream_model}`,
+    index,
+  }));
+}
+
+/** Members of a class in the order the router would try them. */
+export function classMembers(
+  rows: ModelRow[],
+  providers: Provider[],
+  cls: ModelClass,
+): ModelRow[] {
+  return rows
+    .filter((r) => r.model.class === cls && r.model.enabled)
+    .filter((r) => providers.find((p) => p.id === r.model.provider_id)?.enabled)
+    .sort((a, b) => a.model.priority - b.model.priority || a.id.localeCompare(b.id));
+}
+
+/**
+ * Preview of the id a model will get. Display only: the backend derives the real
+ * one, and `Snapshot.exposed_ids` is what gets rendered afterwards.
+ */
+export function previewId(providerId: string, upstreamModel: string): string {
+  return `${providerId.trim()}-${upstreamModel.trim()}`.replace(/[^A-Za-z0-9._-]/g, "-");
 }
 
 export function slugify(value: string): string {

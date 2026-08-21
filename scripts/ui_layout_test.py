@@ -107,9 +107,8 @@ SNAPSHOT = {
         ],
         "models": [
             {
-                "id": "deepseek-v4-pro",
                 "provider_id": "deepseek",
-                "upstream_model": "deepseek-v4-pro",
+                "upstream_model": "deepseek-chat",
                 "class": "sonnet",
                 "priority": 0,
                 "weight": 1,
@@ -118,11 +117,10 @@ SNAPSHOT = {
                 "supports_vision": False,
                 "supports_thinking": False,
                 "display_name": None,
-                "aliases": [],
+                "aliases": ["deepseek-v4-pro"],
                 "max_output_tokens": None,
             },
             {
-                "id": "unclassified-thing",
                 "provider_id": "anthropic",
                 "upstream_model": "mystery",
                 "class": None,
@@ -138,6 +136,7 @@ SNAPSHOT = {
             },
         ],
     },
+    "exposed_ids": ["deepseek-deepseek-chat", "anthropic-mystery"],
     "issues": [],
     "blocking": False,
     "server": {
@@ -153,7 +152,7 @@ SNAPSHOT = {
     "keys": {"deepseek": True, "anthropic": False},
     "health": [
         {
-            "model_id": "deepseek-v4-pro",
+            "model_id": "deepseek-deepseek-chat",
             "consecutive_failures": 0,
             "total_success": 3,
             "total_failure": 1,
@@ -170,7 +169,7 @@ SNAPSHOT = {
         "output_tokens": 64,
         "per_model": [
             {
-                "model_id": "deepseek-v4-pro",
+                "model_id": "deepseek-deepseek-chat",
                 "requests": 4,
                 "failures": 1,
                 "input_tokens": 120,
@@ -187,7 +186,7 @@ SNAPSHOT = {
             "at": "2026-01-01T00:00:00Z",
             "ingress": "anthropic",
             "requested_model": "sonnet-class",
-            "resolved_model": "deepseek-v4-pro",
+            "resolved_model": "deepseek-deepseek-chat",
             "provider_name": "DeepSeek",
             "stream": True,
             "status": 200,
