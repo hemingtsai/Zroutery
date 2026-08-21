@@ -1,7 +1,7 @@
 {
   "name": "zroutery",
   "private": true,
-  "version": "0.4.0",
+  "version": "0.4.1",
   "scripts": {
     "dev": "tauri dev",
     "build": "tauri build",
