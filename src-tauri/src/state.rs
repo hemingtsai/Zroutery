@@ -185,7 +185,7 @@ impl Desktop {
             .ok_or_else(|| format!("unknown provider `{provider_id}`"))?;
         let probe = provider
             .balance
-            .probe()
+            .probe(provider.kind)
             .ok_or_else(|| format!("{} does not publish a balance", provider.name))?;
 
         let key = self.core.api_key(provider).map_err(|e| e.to_string())?;
@@ -225,7 +225,7 @@ impl Desktop {
             .config()
             .providers
             .iter()
-            .filter(|p| p.enabled && p.balance.is_supported())
+            .filter(|p| p.enabled && p.balance.is_supported(p.kind))
             .map(|p| p.id.clone())
             .collect();
 

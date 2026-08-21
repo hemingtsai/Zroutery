@@ -15,6 +15,7 @@ Requires: `pnpm --dir ui build` (dist/) and any Chromium based browser.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import functools
 import http.server
 import json
@@ -29,6 +30,9 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DIST = os.path.join(ROOT, "ui", "dist")
 EXPECTED_CONTROL_HEIGHT = 28.0
 TOLERANCE = 0.6
+# Field boxes on one flex line share a top, give or take an action group's offset;
+# the next line starts a whole control lower.
+LINE_GAP = 30.0
 
 CHROMIUM_CANDIDATES = [
     "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
@@ -75,7 +79,7 @@ SNAPSHOT = {
                 "timeout_secs": 600,
                 "connect_timeout_secs": 15,
                 "anthropic_version": None,
-                "balance": {"preset": "deep_seek", "custom": None},
+                "balance": {"preset": "sub2api", "custom": None},
                 "quirks": {
                     "use_max_completion_tokens": False,
                     "drop_temperature": False,
@@ -225,7 +229,7 @@ SNAPSHOT = {
     "balances": {
         "deepseek": {
             "checked_at": "2026-01-01T00:00:00Z",
-            "balance": {"currency": "CNY", "remaining": 48.75, "total": None, "used": None},
+            "balance": {"currency": "USD", "remaining": 7.25, "total": 20.0, "used": 12.75},
             "error": None,
         }
     },
@@ -255,6 +259,7 @@ HARNESS = """
         const controls = child.matches(".field")
           ? child.querySelectorAll("input, select")
           : child.querySelectorAll("button, input, select");
+        const groupTop = child.getBoundingClientRect().top;
         for (const el of controls) {
           const r = el.getBoundingClientRect();
           if (r.width === 0 && r.height === 0) continue;
@@ -263,6 +268,8 @@ HARNESS = """
             tag: el.tagName.toLowerCase() + (el.type ? ":" + el.type : ""),
             label: (child.querySelector(".field-label")?.textContent || el.textContent || "").trim().slice(0, 24),
             hasHint: !!child.querySelector(".field-hint"),
+            // Which flex line the field box landed on, and where its control sits.
+            groupTop: Math.round(groupTop * 100) / 100,
             top: Math.round(r.top * 100) / 100,
             height: Math.round(r.height * 100) / 100,
           });
@@ -286,6 +293,109 @@ HARNESS = """
   })();
 </script>
 """
+
+
+@dataclass
+class Verdict:
+    """Whether one row of controls is laid out correctly."""
+
+    passed: bool
+    lines: int
+    worst_spread: float
+    heights: set[float]
+
+
+def judge(row: dict) -> Verdict:
+    """Check one measured row.
+
+    A row of fields may wrap onto several flex lines, so alignment is judged per
+    line. Lines are found by clustering the *field box* tops: boxes on one line
+    share a top, or sit `--label-h + --field-gap` lower for an action group, while
+    the next line starts at least a full control's height further down.
+
+    Clustering on the boxes rather than on the controls is the point: a control
+    that is misplaced inside its own box does not move the box, so it stays inside
+    its line's cluster and shows up as a spread instead of forming a line of its
+    own and looking fine.
+    """
+    lines: list[list[dict]] = []
+    for item in sorted(row["items"], key=lambda i: i["groupTop"]):
+        if lines and item["groupTop"] - lines[-1][0]["groupTop"] <= LINE_GAP:
+            lines[-1].append(item)
+        else:
+            lines.append([item])
+
+    heights = {item["height"] for item in row["items"]}
+    spreads = [
+        max(i["top"] for i in line) - min(i["top"] for i in line) for line in lines
+    ]
+    passed = (
+        all(spread <= TOLERANCE for spread in spreads)
+        and max(heights) - min(heights) <= TOLERANCE
+        and abs(max(heights) - EXPECTED_CONTROL_HEIGHT) <= TOLERANCE
+    )
+    return Verdict(passed, len(lines), max(spreads), heights)
+
+
+def self_test() -> int:
+    """Prove the checker still rejects what it is meant to reject.
+
+    The browser half cannot be asserted about, but the verdict is pure and the
+    regressions worth catching are easy to state as numbers.
+    """
+    def row(items: list[tuple[float, float, float]]) -> dict:
+        return {
+            "items": [
+                {
+                    "groupTop": g,
+                    "top": t,
+                    "height": h,
+                    "tag": "input",
+                    "hasHint": False,
+                }
+                for g, t, h in items
+            ]
+        }
+
+    cases: list[tuple[str, dict, bool]] = [
+        # One line, everything where it belongs.
+        ("aligned single line", row([(100, 118, 28), (100, 118, 28)]), True),
+        # Two lines: the second starts 56px lower, and each is internally aligned.
+        (
+            "wrapped but aligned",
+            row([(100, 118, 28), (100, 118, 28), (156, 174, 28), (156, 174, 28)]),
+            True,
+        ),
+        # The bug this test was written for: hint text pushed one control 17px up
+        # while its field box stayed put.
+        ("control off its line", row([(100, 118, 28), (100, 101, 28)]), False),
+        # A native select that picked its own height.
+        ("mixed heights", row([(100, 118, 28), (100, 118, 32)]), False),
+        # Uniform but wrong: every control 30px, so `--control-h` was not applied.
+        ("uniformly wrong height", row([(100, 118, 30), (100, 118, 30)]), False),
+        # An action group sits lower than the fields but its button lines up.
+        ("action group on the same line", row([(100, 118, 28), (118, 118, 28)]), True),
+        # A misplaced control on the second line must not hide behind the first.
+        (
+            "second line broken",
+            row([(100, 118, 28), (156, 174, 28), (156, 190, 28)]),
+            False,
+        ),
+    ]
+
+    failures = 0
+    for name, case, expected in cases:
+        got = judge(case).passed
+        ok = got == expected
+        failures += not ok
+        print(f"  {'ok  ' if ok else 'FAIL'} {name}: expected {expected}, got {got}")
+
+    print()
+    if failures:
+        print(f"{failures} self test(s) failed")
+        return 1
+    print(f"all {len(cases)} self tests passed")
+    return 0
 
 
 def find_chromium() -> str | None:
@@ -324,6 +434,8 @@ def serve(directory: str) -> tuple[http.server.ThreadingHTTPServer, int]:
 
 
 def main() -> int:
+    if "--self-test" in sys.argv:
+        return self_test()
     if not os.path.exists(os.path.join(DIST, "index.html")):
         print("ui/dist is missing; run `pnpm --dir ui build` first")
         return 2
@@ -387,28 +499,29 @@ def main() -> int:
 
     failures = 0
     for row in rows:
-        tops = {item["top"] for item in row["items"]}
-        heights = {item["height"] for item in row["items"]}
-        aligned = max(tops) - min(tops) <= TOLERANCE
-        uniform = max(heights) - min(heights) <= TOLERANCE
-        correct = abs(max(heights) - EXPECTED_CONTROL_HEIGHT) <= TOLERANCE
-        status = "ok  " if aligned and uniform and correct else "FAIL"
-        if status == "FAIL":
+        verdict = judge(row)
+        status = "ok  " if verdict.passed else "FAIL"
+        if not verdict.passed:
             failures += 1
         labels = ", ".join(
             f"{i['tag']}{'*' if i['hasHint'] else ''}" for i in row["items"]
         )
+        wrapped = f", {verdict.lines} lines" if verdict.lines > 1 else ""
         print(
             f"  {status} {row['tab']:<10} row {row['index']}: "
             f"{len(row['items'])} controls [{labels}] "
-            f"top spread {max(tops) - min(tops):.2f}px, heights {sorted(heights)}"
+            f"top spread {verdict.worst_spread:.2f}px, "
+            f"heights {sorted(verdict.heights)}{wrapped}"
         )
 
     print()
     if failures:
         print(f"{failures} of {len(rows)} rows are misaligned")
         return 1
-    print(f"all {len(rows)} control rows share one baseline and height (* = has hint text)")
+    print(
+        f"all {len(rows)} control rows share one baseline per line and one height "
+        f"(* = has hint text)"
+    )
     return 0
 
 

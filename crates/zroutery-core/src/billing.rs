@@ -13,6 +13,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::config::ProviderKind;
 use crate::ir::Usage;
 
 /// Price of one model, per million tokens.
@@ -142,21 +143,30 @@ pub enum BalancePreset {
     Moonshot,
     SiliconFlow,
     OpenRouter,
+    /// Sub2API relay (`GET /v1/usage`), which reports a wallet balance, a key
+    /// quota or a subscription allowance depending on how the key was issued.
+    #[serde(rename = "sub2api")]
+    Sub2Api,
     Custom,
 }
 
 impl BalancePreset {
-    pub const ALL: [BalancePreset; 6] = [
+    pub const ALL: [BalancePreset; 7] = [
         BalancePreset::None,
         BalancePreset::DeepSeek,
         BalancePreset::Moonshot,
         BalancePreset::SiliconFlow,
         BalancePreset::OpenRouter,
+        BalancePreset::Sub2Api,
         BalancePreset::Custom,
     ];
 
     /// The built-in probe, if this preset has one.
-    pub fn probe(&self) -> Option<BalanceProbe> {
+    ///
+    /// The dialect matters because a provider's `base_url` sits at a different
+    /// depth for each: an OpenAI compatible base already ends in `/v1`, while an
+    /// Anthropic base is the API root.
+    pub fn probe_for(&self, kind: ProviderKind) -> Option<BalanceProbe> {
         match self {
             BalancePreset::None | BalancePreset::Custom => None,
             BalancePreset::DeepSeek => Some(BalanceProbe {
@@ -192,6 +202,19 @@ impl BalancePreset {
                 currency_pointer: None,
                 currency: Some("USD".into()),
             }),
+            BalancePreset::Sub2Api => Some(BalanceProbe {
+                // Every branch of its `/v1/usage` answer carries `remaining` and
+                // `unit`; a quota bound key adds the limit and the amount used.
+                path: match kind {
+                    ProviderKind::OpenAICompatible => "/usage".into(),
+                    ProviderKind::Anthropic => "/v1/usage".into(),
+                },
+                remaining_pointer: Some("/remaining".into()),
+                total_pointer: Some("/quota/limit".into()),
+                used_pointer: Some("/quota/used".into()),
+                currency_pointer: Some("/unit".into()),
+                currency: Some("USD".into()),
+            }),
         }
     }
 
@@ -202,6 +225,7 @@ impl BalancePreset {
             BalancePreset::Moonshot => "Moonshot",
             BalancePreset::SiliconFlow => "SiliconFlow",
             BalancePreset::OpenRouter => "OpenRouter",
+            BalancePreset::Sub2Api => "Sub2API",
             BalancePreset::Custom => "custom",
         }
     }
@@ -252,15 +276,15 @@ pub struct BalanceConfig {
 }
 
 impl BalanceConfig {
-    pub fn probe(&self) -> Option<BalanceProbe> {
+    pub fn probe(&self, kind: ProviderKind) -> Option<BalanceProbe> {
         match self.preset {
             BalancePreset::Custom => self.custom.clone(),
-            other => other.probe(),
+            other => other.probe_for(kind),
         }
     }
 
-    pub fn is_supported(&self) -> bool {
-        self.probe().is_some()
+    pub fn is_supported(&self, kind: ProviderKind) -> bool {
+        self.probe(kind).is_some()
     }
 }
 
@@ -429,9 +453,14 @@ mod tests {
         assert_eq!(totals.0.len(), 2);
     }
 
+    /// Most presets sit on OpenAI compatible bases; the exceptions say so.
+    fn probe_of(preset: BalancePreset) -> BalanceProbe {
+        preset.probe_for(ProviderKind::OpenAICompatible).unwrap()
+    }
+
     #[test]
     fn deepseek_payload_is_understood() {
-        let probe = BalancePreset::DeepSeek.probe().unwrap();
+        let probe = probe_of(BalancePreset::DeepSeek);
         let payload = json!({
             "is_available": true,
             "balance_infos": [
@@ -446,7 +475,7 @@ mod tests {
 
     #[test]
     fn openrouter_reports_total_and_usage() {
-        let probe = BalancePreset::OpenRouter.probe().unwrap();
+        let probe = probe_of(BalancePreset::OpenRouter);
         let payload = json!({"data": {"total_credits": 25.0, "total_usage": 4.25}});
         let balance = Balance::from_payload(&probe, &payload).unwrap();
         assert_eq!(balance.currency, "USD");
@@ -457,7 +486,7 @@ mod tests {
 
     #[test]
     fn moonshot_and_siliconflow_payloads_are_understood() {
-        let probe = BalancePreset::Moonshot.probe().unwrap();
+        let probe = probe_of(BalancePreset::Moonshot);
         let balance = Balance::from_payload(
             &probe,
             &json!({"code": 0, "data": {"available_balance": 12.5, "cash_balance": 12.5}}),
@@ -468,7 +497,7 @@ mod tests {
             ("CNY", Some(12.5))
         );
 
-        let probe = BalancePreset::SiliconFlow.probe().unwrap();
+        let probe = probe_of(BalancePreset::SiliconFlow);
         let balance = Balance::from_payload(
             &probe,
             &json!({"data": {"balance": "1.00", "totalBalance": "3.50"}}),
@@ -488,7 +517,7 @@ mod tests {
                 ..BalanceProbe::default()
             }),
         };
-        let probe = config.probe().unwrap();
+        let probe = config.probe(ProviderKind::OpenAICompatible).unwrap();
         let balance = Balance::from_payload(
             &probe,
             &json!({"wallets": [{"amount": 1, "unit": "usd"}, {"amount": "9.99", "unit": "eur"}]}),
@@ -500,21 +529,84 @@ mod tests {
 
     #[test]
     fn an_unreadable_payload_yields_nothing() {
-        let probe = BalancePreset::DeepSeek.probe().unwrap();
+        let probe = probe_of(BalancePreset::DeepSeek);
         assert!(Balance::from_payload(&probe, &json!({"error": "nope"})).is_none());
         assert!(Balance::from_payload(&probe, &json!({"balance_infos": []})).is_none());
     }
 
     #[test]
     fn providers_without_an_endpoint_are_explicit_about_it() {
-        assert!(BalancePreset::None.probe().is_none());
-        assert!(!BalanceConfig::default().is_supported());
+        let kind = ProviderKind::OpenAICompatible;
+        assert!(BalancePreset::None.probe_for(kind).is_none());
+        assert!(!BalanceConfig::default().is_supported(kind));
         // Custom without a probe is also unsupported rather than a panic.
         let config = BalanceConfig {
             preset: BalancePreset::Custom,
             custom: None,
         };
-        assert!(!config.is_supported());
+        assert!(!config.is_supported(kind));
+    }
+
+    #[test]
+    fn sub2api_reports_a_wallet_a_quota_or_a_subscription() {
+        let probe = probe_of(BalancePreset::Sub2Api);
+
+        // Wallet keys: `remaining` mirrors the account balance.
+        let wallet = Balance::from_payload(
+            &probe,
+            &json!({"mode": "unrestricted", "isValid": true, "planName": "钱包余额",
+                    "remaining": 12.5, "unit": "USD", "balance": 12.5}),
+        )
+        .unwrap();
+        assert_eq!(wallet.currency, "USD");
+        assert_eq!(wallet.remaining, Some(12.5));
+
+        // Quota bound keys add the limit and what has been spent.
+        let quota = Balance::from_payload(
+            &probe,
+            &json!({"mode": "quota_limited", "status": "active", "remaining": 7.25, "unit": "USD",
+                    "quota": {"limit": 20.0, "used": 12.75, "remaining": 7.25, "unit": "USD"}}),
+        )
+        .unwrap();
+        assert_eq!(quota.remaining, Some(7.25));
+        assert_eq!(quota.total, Some(20.0));
+        assert_eq!(quota.used, Some(12.75));
+
+        // Subscription keys report the tightest window that is left.
+        let subscription = Balance::from_payload(
+            &probe,
+            &json!({"mode": "unrestricted", "planName": "Max", "remaining": 3.0, "unit": "USD",
+                    "subscription": {"daily_limit_usd": 5.0, "daily_usage_usd": 2.0}}),
+        )
+        .unwrap();
+        assert_eq!(subscription.remaining, Some(3.0));
+
+        // A key with only rate limits reports no amount at all, which is an honest
+        // "cannot tell" rather than a zero.
+        assert!(Balance::from_payload(
+            &probe,
+            &json!({"mode": "quota_limited", "rate_limits": [{"window": "5h", "limit": 10}]}),
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn sub2api_path_follows_the_dialect() {
+        // An OpenAI compatible base already ends in /v1; an Anthropic base does not.
+        assert_eq!(
+            BalancePreset::Sub2Api
+                .probe_for(ProviderKind::OpenAICompatible)
+                .unwrap()
+                .path,
+            "/usage"
+        );
+        assert_eq!(
+            BalancePreset::Sub2Api
+                .probe_for(ProviderKind::Anthropic)
+                .unwrap()
+                .path,
+            "/v1/usage"
+        );
     }
 
     #[test]
@@ -529,6 +621,11 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&BalancePreset::SiliconFlow).unwrap(),
             "\"silicon_flow\""
+        );
+        // Spelled the way the project spells itself, not `sub2_api`.
+        assert_eq!(
+            serde_json::to_string(&BalancePreset::Sub2Api).unwrap(),
+            "\"sub2api\""
         );
     }
 }

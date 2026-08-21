@@ -26,7 +26,7 @@ pnpm dev                    # 开发模式（热更新）
 pnpm build                  # 产出 target/release/bundle/{macos,dmg}
 pnpm test                   # cargo test --workspace
 pnpm smoke                  # 起一个假 provider，端到端跑通两种方言 + 流式
-pnpm test:layout            # 无头 Chromium 渲染真实界面，量每个控件的高度和基线
+pnpm test:layout            # 先自检判定逻辑，再用无头 Chromium 量真实界面的控件
 ```
 
 > `pnpm build` 里的 DMG 步骤用 `hdiutil` + Finder，需要在正常桌面会话里跑；只要 `.app`
@@ -132,9 +132,38 @@ usage 算出每次请求的花费：
 
 ## 余额查询
 
-各家余额接口没有统一标准，所以 provider 上挂一个 *probe*：一个路径加几个 JSON pointer。内置
-DeepSeek / Moonshot / SiliconFlow / OpenRouter 四个预设，其它用 Custom 自己填；OpenAI 和 Anthropic
-根本没有这种接口，预设里就是「not supported」。
+各家余额接口没有统一标准，所以 provider 上挂一个 *probe*：一个路径加几个 JSON pointer。内置这些预设：
+
+| 预设 | 端点 | 说明 |
+| --- | --- | --- |
+| DeepSeek | `/user/balance` | 挂在 API 根而不是 `/v1` 下，所以预设里写的是绝对 URL |
+| Moonshot | `/users/me/balance` | |
+| SiliconFlow | `/user/info` | |
+| OpenRouter | `/credits` | 只给 total 和 usage，相减得余额 |
+| **Sub2API** | `/v1/usage` | 中转站，见下 |
+| Custom | 自己填 | 路径 + JSON pointer |
+
+OpenAI 和 Anthropic 根本没有这种接口，预设里就是「not supported」，不装样子。
+
+**添加 provider 时就能选**：Providers 面板的新增表单里有 Name / API dialect / Base URL / Balance endpoint
+四项，选好直接建好，不用建完再回去改。已有的 provider 也能随时在卡片上改。
+
+### Sub2API
+
+[Sub2API](https://github.com/Wei-Shaw/sub2api) 中转站有 `GET /v1/usage`，返回内容取决于 key 的类型，
+但三种情况都带 `remaining` 和 `unit`，所以一个 probe 全覆盖：
+
+- **钱包 key**：`remaining` 就是账户余额；
+- **限额 key**：额外给 `quota.limit` / `quota.used`，界面显示成「余额 of 总额」；
+- **订阅 key**：`remaining` 是日/周/月里最紧的那个窗口还剩多少。
+
+只配了速率限制（没有金额）的 key 会返回「读不到金额」而不是 0——这是实话，不是余额为零。
+
+它同时提供 Anthropic 和 OpenAI 两套接口，两种 dialect 的 base URL 深度不同（OpenAI 兼容的 base 已经
+以 `/v1` 结尾，Anthropic 的 base 是根），所以这个预设的路径**跟着 dialect 变**：前者用 `/usage`，
+后者用 `/v1/usage`。鉴权头也各按各的方言发（`Authorization: Bearer` 或 `x-api-key`），Sub2API 两个都收。
+
+它是自托管的，所以 base URL 必须你自己填，界面在选了这个预设且 URL 还空着时会提示。
 
 Providers 面板里每个 provider 一行：选预设 → 点 Check，旁边显示余额和检查时间，失败会留下原因。
 **不做定时轮询**——查一次要花一个请求，有些厂商还限流，所以只在你点的时候查。
@@ -175,10 +204,10 @@ zroutery-headless --balances     # 逐个查、打印、退出，适合塞进 cr
 ## 项目结构
 
 ```
-crates/zroutery-core/     协议转换、模型注册表、路由、计费、HTTP 服务（无 GUI 依赖，130 个测试）
+crates/zroutery-core/     协议转换、模型注册表、路由、计费、HTTP 服务（无 GUI 依赖，133 个测试）
   src/ir.rs               统一中间表示：2 个 decoder + 2 个 encoder，避免 N×M
   src/protocol/           anthropic.rs / openai.rs，含两个方向的 SSE 状态机
-  src/billing.rs          价格计算（按币种分开）、余额 probe 与四个内置预设
+  src/billing.rs          价格计算（按币种分开）、余额 probe 与五个内置预设
   src/config.rs           provider、模型身份与 id 推导、路由策略、配置迁移
   src/registry.rs         模型 id 解析：id/别名走一次哈希，class 成员表预先算好
   src/router.rs           类内候选排序、健康度、熔断、失败转移

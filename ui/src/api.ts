@@ -38,15 +38,21 @@ export type BalancePreset =
   | "moonshot"
   | "silicon_flow"
   | "open_router"
+  | "sub2api"
   | "custom";
 
-export const BALANCE_PRESETS: { id: BalancePreset; label: string }[] = [
-  { id: "none", label: "Not supported" },
-  { id: "deep_seek", label: "DeepSeek" },
-  { id: "moonshot", label: "Moonshot" },
-  { id: "silicon_flow", label: "SiliconFlow" },
-  { id: "open_router", label: "OpenRouter" },
-  { id: "custom", label: "Custom endpoint" },
+export const BALANCE_PRESETS: { id: BalancePreset; label: string; hint: string }[] = [
+  { id: "none", label: "Not supported", hint: "OpenAI and Anthropic publish no balance" },
+  { id: "deep_seek", label: "DeepSeek", hint: "/user/balance" },
+  { id: "moonshot", label: "Moonshot", hint: "/users/me/balance" },
+  { id: "silicon_flow", label: "SiliconFlow", hint: "/user/info" },
+  { id: "open_router", label: "OpenRouter", hint: "/credits" },
+  {
+    id: "sub2api",
+    label: "Sub2API relay",
+    hint: "/v1/usage — wallet, key quota or subscription",
+  },
+  { id: "custom", label: "Custom endpoint", hint: "your own path and JSON pointers" },
 ];
 
 export interface BalanceProbe {

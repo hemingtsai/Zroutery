@@ -224,6 +224,19 @@ async fn mock_balance() -> Json<Value> {
     }))
 }
 
+/// What a Sub2API relay answers on `/v1/usage` for a quota bound key.
+async fn mock_sub2api_usage() -> Json<Value> {
+    Json(json!({
+        "mode": "quota_limited",
+        "isValid": true,
+        "status": "active",
+        "remaining": 7.25,
+        "unit": "USD",
+        "quota": {"limit": 20.0, "used": 12.75, "remaining": 7.25, "unit": "USD"},
+        "usage": {"requests": 42},
+    }))
+}
+
 async fn start_mock() -> (SocketAddr, Mock) {
     let mock = Mock::default();
     let app = axum::Router::new()
@@ -231,6 +244,9 @@ async fn start_mock() -> (SocketAddr, Mock) {
         .route("/v1/messages", post(mock_anthropic_messages))
         .route("/models", get(mock_models))
         .route("/user/balance", get(mock_balance))
+        // A relay answers on both depths, because it serves both dialects.
+        .route("/usage", get(mock_sub2api_usage))
+        .route("/v1/usage", get(mock_sub2api_usage))
         .route("/v1/models", get(mock_models))
         .with_state(mock.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1071,7 +1087,7 @@ async fn a_balance_is_fetched_with_the_providers_own_key() {
         .fetch_balance(
             &provider,
             Some("sk-deepseek"),
-            &provider.balance.probe().unwrap(),
+            &provider.balance.probe(provider.kind).unwrap(),
         )
         .await
         .unwrap();
@@ -1079,7 +1095,8 @@ async fn a_balance_is_fetched_with_the_providers_own_key() {
     assert_eq!(balance.remaining, Some(48.75));
 
     // A provider that publishes nothing is not asked at all.
-    assert!(!h.state.config().providers[1].balance.is_supported());
+    let quiet = &h.state.config().providers[1];
+    assert!(!quiet.balance.is_supported(quiet.kind));
 
     // A pointer into thin air is an error rather than a silent zero.
     let mut broken = provider.clone();
@@ -1094,11 +1111,64 @@ async fn a_balance_is_fetched_with_the_providers_own_key() {
         .fetch_balance(
             &broken,
             Some("sk-deepseek"),
-            &broken.balance.probe().unwrap(),
+            &broken.balance.probe(broken.kind).unwrap(),
         )
         .await
         .unwrap_err();
     assert!(err.to_string().contains("no balance found"), "{err}");
+
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn the_sub2api_preset_reads_a_relay_of_either_dialect() {
+    let (addr, mock) = start_mock().await;
+    let mut cfg = config_for(addr);
+    // A relay reached through the OpenAI dialect: its base already ends in /v1,
+    // so the probe asks for `/usage`.
+    cfg.providers[0].balance = BalanceConfig {
+        preset: BalancePreset::Sub2Api,
+        custom: None,
+    };
+    // The same relay reached as Anthropic: the base is the API root, so the probe
+    // has to ask for `/v1/usage` instead.
+    cfg.providers[2].balance = BalanceConfig {
+        preset: BalancePreset::Sub2Api,
+        custom: None,
+    };
+    let openai_style = cfg.providers[0].clone();
+    let anthropic_style = cfg.providers[2].clone();
+    let h = Harness::start(cfg, mock).await;
+
+    for provider in [&openai_style, &anthropic_style] {
+        let key = if provider.kind == ProviderKind::Anthropic {
+            "sk-ant"
+        } else {
+            "sk-deepseek"
+        };
+        let probe = provider.balance.probe(provider.kind).unwrap();
+        let balance = h
+            .state
+            .upstream()
+            .fetch_balance(provider, Some(key), &probe)
+            .await
+            .unwrap();
+        // The relay reports the key's quota, not just a wallet total.
+        assert_eq!(balance.currency, "USD", "{}", provider.name);
+        assert_eq!(balance.remaining, Some(7.25));
+        assert_eq!(balance.total, Some(20.0));
+        assert_eq!(balance.used, Some(12.75));
+
+        // Sub2API accepts either credential header, so each dialect sending its
+        // own is enough; this is what actually goes on the wire.
+        let headers = zroutery_core::upstream::build_headers(provider, Some(key)).unwrap();
+        match provider.kind {
+            ProviderKind::Anthropic => assert_eq!(headers["x-api-key"], key),
+            ProviderKind::OpenAICompatible => {
+                assert_eq!(headers["authorization"], format!("Bearer {key}"))
+            }
+        }
+    }
 
     h.shutdown().await;
 }

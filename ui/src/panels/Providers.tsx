@@ -31,25 +31,35 @@ const KINDS: { id: ProviderKind; label: string; hint: string }[] = [
   {
     id: "openai_compatible",
     label: "OpenAI compatible",
-    hint: "OpenAI, DeepSeek, Groq, OpenRouter, Ollama, vLLM…",
+    hint: "OpenAI, DeepSeek, Groq, OpenRouter, Sub2API, Ollama, vLLM…",
   },
-  { id: "anthropic", label: "Anthropic", hint: "api.anthropic.com and compatible gateways" },
+  { id: "anthropic", label: "Anthropic", hint: "api.anthropic.com, Sub2API and other gateways" },
 ];
 
-function blankProvider(kind: ProviderKind, name: string): Provider {
+function defaultBaseUrl(kind: ProviderKind): string {
+  return kind === "anthropic" ? "https://api.anthropic.com" : "https://api.openai.com/v1";
+}
+
+function blankProvider(
+  kind: ProviderKind,
+  name: string,
+  baseUrl: string,
+  preset: BalancePreset,
+): Provider {
   const id = slugify(name);
   return {
     id,
     name: name.trim(),
     kind,
-    base_url: kind === "anthropic" ? "https://api.anthropic.com" : "https://api.openai.com/v1",
+    base_url: baseUrl.trim() || defaultBaseUrl(kind),
     key_ref: `provider:${id}`,
     extra_headers: {},
     enabled: true,
     timeout_secs: 600,
     connect_timeout_secs: 15,
     anthropic_version: null,
-    balance: { preset: "none", custom: null },
+    // The custom preset needs a probe to edit; every other one carries its own.
+    balance: { preset, custom: preset === "custom" ? defaultProbe() : null },
     quirks: {
       use_max_completion_tokens: false,
       drop_temperature: false,
@@ -76,6 +86,8 @@ export default function Providers({
   const { config, keys } = snapshot;
   const [newName, setNewName] = useState("");
   const [newKind, setNewKind] = useState<ProviderKind>("openai_compatible");
+  const [newBaseUrl, setNewBaseUrl] = useState("");
+  const [newPreset, setNewPreset] = useState<BalancePreset>("none");
   const [editing, setEditing] = useState<string | null>(null);
   const [keyDraft, setKeyDraft] = useState<Record<string, string>>({});
   const [discovered, setDiscovered] = useState<Record<string, DiscoveredModel[]>>({});
@@ -92,7 +104,7 @@ export default function Providers({
   const addProvider = () => {
     const name = newName.trim();
     if (!name) return;
-    const provider = blankProvider(newKind, name);
+    const provider = blankProvider(newKind, name, newBaseUrl, newPreset);
     if (config.providers.some((p) => p.id === provider.id)) {
       setNotice(`A provider called “${provider.id}” already exists.`);
       return;
@@ -100,6 +112,8 @@ export default function Providers({
     const next = structuredClone(config);
     next.providers.push(provider);
     setNewName("");
+    setNewBaseUrl("");
+    setNewPreset("none");
     setEditing(provider.id);
     void save(next);
   };
@@ -205,12 +219,41 @@ export default function Providers({
               ))}
             </select>
           </Field>
+          <Field label="Base URL" wide hint="Leave empty for the vendor default">
+            <input
+              value={newBaseUrl}
+              placeholder={defaultBaseUrl(newKind)}
+              onChange={(e) => setNewBaseUrl(e.currentTarget.value)}
+              onKeyDown={(e) => e.key === "Enter" && addProvider()}
+            />
+          </Field>
+          <Field
+            label="Balance endpoint"
+            hint={BALANCE_PRESETS.find((p) => p.id === newPreset)?.hint}
+          >
+            <select
+              value={newPreset}
+              onChange={(e) => setNewPreset(e.currentTarget.value as BalancePreset)}
+            >
+              {BALANCE_PRESETS.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.label}
+                </option>
+              ))}
+            </select>
+          </Field>
           <div className="field-actions">
             <Button kind="primary" onClick={addProvider} disabled={busy || !newName.trim()}>
               Add provider
             </Button>
           </div>
         </div>
+        {newPreset === "sub2api" && !newBaseUrl.trim() && (
+          <p className="field-hint">
+            A Sub2API relay is self hosted, so fill in its own base URL: the OpenAI dialect wants
+            the <code>/v1</code> root, the Anthropic dialect the host on its own.
+          </p>
+        )}
       </Card>
 
       {config.providers.length === 0 && (
@@ -513,6 +556,7 @@ function BalanceRow({
       <span className="field-label">Balance</span>
       <select
         aria-label={`Balance endpoint for ${provider.name}`}
+        title={BALANCE_PRESETS.find((p) => p.id === provider.balance.preset)?.hint}
         value={provider.balance.preset}
         onChange={(e) => onPreset(e.currentTarget.value as BalancePreset)}
       >
@@ -532,6 +576,9 @@ function BalanceRow({
           {status.balance.remaining !== null
             ? money(status.balance.currency, status.balance.remaining)
             : `${status.balance.total ?? 0} ${status.balance.currency} granted`}
+          {status.balance.remaining !== null && status.balance.total !== null
+            ? ` of ${money(status.balance.currency, status.balance.total)}`
+            : ""}
         </Badge>
       )}
       {status?.error && (

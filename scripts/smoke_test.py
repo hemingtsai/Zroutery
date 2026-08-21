@@ -43,6 +43,21 @@ class Provider(BaseHTTPRequestHandler):
         self.wfile.write(payload)
 
     def do_GET(self):
+        if self.path.endswith("/usage"):
+            # A Sub2API relay answering for a quota bound key.
+            self._send(
+                200,
+                json.dumps(
+                    {
+                        "mode": "quota_limited",
+                        "isValid": True,
+                        "remaining": 7.25,
+                        "unit": "USD",
+                        "quota": {"limit": 20.0, "used": 12.75, "remaining": 7.25},
+                    }
+                ).encode(),
+            )
+            return
         if self.path.endswith("/user/balance"):
             self._send(
                 200,
@@ -200,6 +215,18 @@ def write_config(path: str, upstream: str):
                 "enabled": True,
                 "timeout_secs": 30,
             },
+            {
+                # A Sub2API relay: the preset knows its /usage endpoint, so nothing
+                # has to be spelled out here.
+                "id": "relay",
+                "name": "Relay",
+                "kind": "openai_compatible",
+                "base_url": upstream,
+                "key_ref": "provider:relay",
+                "enabled": True,
+                "timeout_secs": 30,
+                "balance": {"preset": "sub2api", "custom": None},
+            },
         ],
         "models": [
             # Ids are derived as <provider>-<model>, so no entry carries an "id"
@@ -271,6 +298,7 @@ def main() -> int:
     env["ZROUTERY_CONFIG_DIR"] = config_dir
     env["ZROUTERY_KEY_PROVIDER_DEEPSEEK"] = "sk-mock-deepseek"
     env["ZROUTERY_KEY_PROVIDER_OPENAI"] = "sk-mock-openai"
+    env["ZROUTERY_KEY_PROVIDER_RELAY"] = "sk-mock-relay"
     env["ZROUTERY_LOG"] = "warn"
     proxy = subprocess.Popen([binary], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
 
@@ -503,6 +531,11 @@ def main() -> int:
         check(
             "providers without an endpoint are left alone",
             "openai:" not in balances.stdout,
+            balances.stdout.strip(),
+        )
+        check(
+            "the sub2api preset finds a relay's quota",
+            "relay: 7.25 USD remaining" in balances.stdout,
             balances.stdout.strip(),
         )
 

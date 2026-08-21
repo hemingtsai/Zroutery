@@ -10,7 +10,7 @@
     "ui:build": "pnpm --dir ui build",
     "test": "cargo test --workspace",
     "smoke": "cargo build -p zroutery --bin zroutery-headless && python3 scripts/smoke_test.py",
-    "test:layout": "pnpm --dir ui build && python3 scripts/ui_layout_test.py"
+    "test:layout": "pnpm --dir ui build && python3 scripts/ui_layout_test.py --self-test && python3 scripts/ui_layout_test.py"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.4"
