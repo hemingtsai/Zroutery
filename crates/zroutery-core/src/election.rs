@@ -213,6 +213,9 @@ impl Election {
 
 /// Rank one class's measurements. Pure: same input, same order out.
 ///
+/// Each axis is scored as a multiple of the best in the class, so a fiftyfold price
+/// gap outranks a twofold latency gap instead of both flattening into "worse".
+///
 /// Price only takes part when every model that answered has a price and they all
 /// bill in one currency, because there is no honest way to compare 2 CNY with
 /// 3 USD or to guess what an unpriced model costs. When price is out, the ranking
@@ -258,12 +261,11 @@ pub fn rank(
         ))
     };
 
-    // Compare against the class average, which keeps the magnitude of a
-    // difference: twice the price reads as twice as bad, and a free model does
-    // not divide anything by zero.
-    let mean_latency = mean(available.iter().map(|m| m.latency_ms.unwrap_or(0) as f64));
-    let mean_price = if priced {
-        mean(
+    // Compare against the best in the class, so the size of a difference survives:
+    // fifty times the price reads as fifty times worse, not merely "worse".
+    let best_latency = min_of(available.iter().map(|m| m.latency_ms.unwrap_or(0) as f64));
+    let best_price = if priced {
+        min_of(
             available
                 .iter()
                 .map(|m| m.price.as_ref().map_or(0.0, |p| p.amount)),
@@ -274,11 +276,11 @@ pub fn rank(
     let (price_weight, latency_weight) = scoring.normalised_weights();
 
     let score_of = |m: &Measurement| -> f64 {
-        let latency_ratio = ratio(m.latency_ms.unwrap_or(0) as f64, mean_latency);
+        let latency_ratio = ratio(m.latency_ms.unwrap_or(0) as f64, best_latency);
         if !priced {
             return latency_ratio;
         }
-        let price_ratio = ratio(m.price.as_ref().map_or(0.0, |p| p.amount), mean_price);
+        let price_ratio = ratio(m.price.as_ref().map_or(0.0, |p| p.amount), best_price);
         price_weight * price_ratio + latency_weight * latency_ratio
     };
 
@@ -347,26 +349,31 @@ fn describe(place: usize, m: &Measurement, priced: bool) -> String {
     format!("{place}: {latency}{price}")
 }
 
-fn mean(values: impl Iterator<Item = f64>) -> f64 {
-    let mut count = 0usize;
-    let mut total = 0.0;
-    for v in values {
-        total += v;
-        count += 1;
-    }
-    if count == 0 {
-        return 0.0;
-    }
-    total / count as f64
+/// How much worse than the best a model may score on one axis.
+///
+/// Without a cap a free model would make every paid one infinitely worse on price,
+/// and no weighting could balance that. A hundredfold already reads as "never pick
+/// this", and capping leaves the other axis able to speak.
+const WORST_RATIO: f64 = 100.0;
+
+fn min_of(values: impl Iterator<Item = f64>) -> f64 {
+    values.fold(f64::INFINITY, f64::min)
 }
 
-/// `value` relative to `mean`, with 1.0 when there is nothing to compare.
-fn ratio(value: f64, mean: f64) -> f64 {
-    if mean <= 0.0 || !mean.is_finite() {
-        1.0
-    } else {
-        value / mean
+/// `value` measured against the best in its class: 1.0 is the best, 2.0 is twice as
+/// bad, and [`WORST_RATIO`] is the ceiling.
+fn ratio(value: f64, best: f64) -> f64 {
+    if !value.is_finite() || !best.is_finite() {
+        return 1.0;
     }
+    if value <= best {
+        return 1.0;
+    }
+    if best <= 0.0 {
+        // The best is free, or instant, and this one is neither.
+        return WORST_RATIO;
+    }
+    (value / best).min(WORST_RATIO)
 }
 
 #[cfg(test)]
@@ -448,6 +455,50 @@ mod tests {
         ];
         let election = rank(ModelClass::Opus, &measurements, &ScoringConfig::default());
         assert_eq!(election.winner(), Some("much-faster"));
+    }
+
+    #[test]
+    fn a_large_gap_on_one_axis_outweighs_a_small_gap_on_the_other() {
+        // Fifty times the price against a fifth of the latency: scoring against the
+        // best keeps both magnitudes, so price decides.
+        let measurements = vec![
+            Measurement::new("dear").answered(100).priced("USD", 0.025),
+            Measurement::new("cheap")
+                .answered(500)
+                .priced("USD", 0.0005),
+        ];
+        let election = rank(ModelClass::Sonnet, &measurements, &ScoringConfig::default());
+        assert_eq!(election.winner(), Some("cheap"));
+
+        // Widen the latency gap past the price gap and the answer flips, which is
+        // the property a comparison against the class average could not express.
+        let measurements = vec![
+            Measurement::new("dear").answered(100).priced("USD", 0.025),
+            Measurement::new("cheap")
+                .answered(20_000)
+                .priced("USD", 0.0005),
+        ];
+        let election = rank(ModelClass::Sonnet, &measurements, &ScoringConfig::default());
+        assert_eq!(election.winner(), Some("dear"));
+    }
+
+    #[test]
+    fn no_single_axis_can_run_away_with_the_score() {
+        // Free against paid is an infinite price ratio; the cap keeps it finite so
+        // the latency term still counts for something.
+        let measurements = vec![
+            Measurement::new("free-but-glacial")
+                .answered(60_000)
+                .priced("USD", 0.0),
+            Measurement::new("paid-and-quick")
+                .answered(300)
+                .priced("USD", 1.0),
+        ];
+        let election = rank(ModelClass::Sonnet, &measurements, &ScoringConfig::default());
+        assert!(election
+            .ranked
+            .iter()
+            .all(|r| r.score.unwrap() <= WORST_RATIO));
     }
 
     #[test]

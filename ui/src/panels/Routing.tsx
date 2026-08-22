@@ -531,7 +531,7 @@ function ElectionResult({ election }: { election: Election | null }) {
                 <th>Model</th>
                 <th>Latency</th>
                 <th>Reference cost</th>
-                <th title="Lower is better; 1.0 is the class average">Score</th>
+                <th title="Lower is better; 1.0 is the best in class">Score</th>
                 <th>Why</th>
               </tr>
             </thead>
