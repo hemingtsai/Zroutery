@@ -25,7 +25,7 @@ pnpm install                # 装 tauri CLI 和前端依赖
 pnpm dev                    # 开发模式（热更新）
 pnpm build                  # 产出 target/release/bundle/{macos,dmg}
 pnpm test                   # cargo test --workspace
-pnpm smoke                  # 起一个假 provider，端到端跑通两种方言 + 流式
+pnpm smoke                  # 起一个假 provider，端到端跑通两种方言、流式、计费、选举
 pnpm test:layout            # 先自检判定逻辑，再用无头 Chromium 量真实界面的控件
 ```
 
@@ -49,7 +49,51 @@ cargo run -p zroutery --bin zroutery-headless
    点 “Fetch models” 可以把上游模型列表拉下来。
 2. **Models**：给每个模型选一个 class。**级别永远由你指定，程序不猜**。没选级别的模型仍可以用
    精确 id 调用，但不参与 `*-class` 路由，界面会一直提醒你。
-3. **Routing**：选类内策略（优先级 / 加权随机 / 轮询 / 最低延迟）、失败转移次数、熔断阈值。
+3. **Routing**：选类内策略（下面详述）、失败转移次数、熔断阈值。
+
+### 类内怎么选模型
+
+Routing 面板里五种策略：
+
+| 策略 | 行为 |
+| --- | --- |
+| **Balanced（选举）** | 按实测延迟 + 价格综合排序，见下 |
+| Priority | 优先级数字小的先用，同级按权重随机 |
+| Weighted random | 按权重随机分摊 |
+| Round robin | 轮流，忽略优先级 |
+| Lowest latency | 谁历史上快用谁 |
+
+#### 选举（Balanced）
+
+手动排优先级的问题是：同一个 class 里三个模型谁该当默认，取决于它们今天的价格和响应速度，
+而这两件事配置文件里看不出来。所以 Balanced 靠一次**选举**：
+
+1. 给每个 class 的每个成员发一个 **1 token** 的最小请求，量往返延迟；
+2. 用延迟和价格一起打分，**排好序钉住**；
+3. 之后一直用这个顺序，直到下次选举。
+
+**不是每个请求重算**——探测要花一个请求，而且路由如果随负载漂移就没法排查问题了。什么时候跑：
+
+- 启动时跑一次（Routing 里可关，默认开）；
+- 界面上点 **Re-run now**；
+- 命令行 `zroutery-headless --elect`，打印顺序然后退出。
+
+打分的几个刻意决定：
+
+- **跟类内平均值比**，不是跟最好的比，这样倍数关系不会丢：贵一倍就是差一倍，
+  「便宜 1% 但慢 10 倍」不会赢，免费模型也不会除零。
+- **价格只有在「每个应答的成员都有价格」且「币种一致」时才参与**。没法诚实地比较 2 CNY 和 3 USD，
+  也没法猜一个没标价模型的成本，所以这种情况退化成只看延迟，并且**把原因写在界面上**，
+  而不是偷偷编一个数。
+- 价格是每百万 token 的，要能比较必须先定一个**参照请求**（默认 1000 in / 500 out，可改）。
+- 权重是相对值，填 `3` 和 `1` 等于填 `0.75` 和 `0.25`。
+- 探测失败的模型排最后、不给分，错误原因留着。
+- 完全平手时退回手填的优先级，再退回 id，保证两次跑结果一致。
+
+选举没见过的模型（之后新加的，或者当时没应答的）排在见过的后面，按优先级。
+也就是说新模型立刻可用，但不会悄悄拿到它从没被测过的首选位。
+
+探测本身是走正常编码路径的真实请求，所以它同时也是最新的健康信号，会记进健康表。
 
 ### 模型 id 规则
 
@@ -173,6 +217,11 @@ Providers 面板里每个 provider 一行：选预设 → 点 Check，旁边显�
 ```sh
 zroutery-headless --balances     # 逐个查、打印、退出，适合塞进 cron
 # deepseek: 48.75 CNY remaining
+
+zroutery-headless --elect        # 跑一次选举，打印每个 class 的排序然后退出
+# sonnet-class:
+#   deepseek-deepseek-v4-pro     primary: 640 ms, 0.0060 CNY per reference request
+#   openai-gpt-sonnet            fallback 1: 710 ms, 0.0600 CNY per reference request
 ```
 
 ## 端点
@@ -213,14 +262,16 @@ zroutery-headless --balances     # 逐个查、打印、退出，适合塞进 cr
 ## 项目结构
 
 ```
-crates/zroutery-core/     协议转换、模型注册表、路由、计费、HTTP 服务（无 GUI 依赖，135 个测试）
+crates/zroutery-core/     协议转换、模型注册表、路由、计费、HTTP 服务（无 GUI 依赖，152 个测试）
   src/ir.rs               统一中间表示：2 个 decoder + 2 个 encoder，避免 N×M
   src/protocol/           anthropic.rs / openai.rs，含两个方向的 SSE 状态机
   src/billing.rs          价格计算（按币种分开）、余额 probe 与五个内置预设
   src/config.rs           provider、模型身份与 id 推导、路由策略、配置迁移
   src/registry.rs         模型 id 解析：id/别名走一次哈希，class 成员表预先算好
+  src/election.rs         按延迟+价格给类内成员打分排序（纯函数，15 个测试）
   src/router.rs           类内候选排序、健康度、熔断、失败转移
-  src/server.rs           axum 路由、鉴权、请求体上限、CORS、流式管道
+  src/server/mod.rs       axum 路由、鉴权、请求体上限、CORS、选举执行
+  src/server/pipeline.rs  单次请求的候选轮询、计费记账、SSE 管道
   src/sync.rs             容忍中毒的锁封装（一个线程 panic 不该拖垮整个代理）
 src-tauri/                桌面外壳：菜单栏、钥匙串、配置持久化、Tauri 命令
 ui/                       React + TypeScript 仪表盘
