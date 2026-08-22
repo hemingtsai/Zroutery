@@ -28,7 +28,9 @@ pub mod stats;
 mod sync;
 pub mod upstream;
 
-pub use billing::{Balance, BalanceConfig, BalancePreset, BalanceProbe, Cost, CostTotals, Pricing};
+pub use billing::{
+    Balance, BalanceConfig, BalancePreset, BalanceProbe, BaseDepth, Cost, CostTotals, Pricing,
+};
 pub use config::{
     AppConfig, ConfigIssue, IssueSeverity, MemorySecretStore, ModelClass, ModelEntry,
     ProviderConfig, ProviderKind, RoutingConfig, RoutingStrategy, SecretStore, ServerConfig,

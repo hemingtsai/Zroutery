@@ -7,7 +7,7 @@
 
 use serde_json::{json, Map, Value};
 
-use crate::config::ProviderQuirks;
+use super::ProviderQuirks;
 use crate::error::{Error, Result};
 use crate::ir::{
     ChatRequest, ChatResponse, ContentBlock, Dialect, MediaSource, Message, Role, StopReason,

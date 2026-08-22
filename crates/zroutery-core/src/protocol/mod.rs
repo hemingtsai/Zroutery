@@ -7,10 +7,56 @@
 pub mod anthropic;
 pub mod openai;
 
-use crate::config::ProviderQuirks;
 use crate::error::{Error, Result};
 use crate::ir::{ChatRequest, ChatResponse, Dialect, StreamEvent};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+/// Returns `true`; the default for the quirks that are on unless disabled.
+fn yes() -> bool {
+    true
+}
+
+/// Per provider deviations from the reference dialect.
+///
+/// These exist because "OpenAI compatible" is a spectrum: reasoning models
+/// reject `max_tokens` and `temperature`, some gateways choke on
+/// `stream_options`, and only a few accept `reasoning_effort`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProviderQuirks {
+    /// Send `max_completion_tokens` instead of `max_tokens`.
+    #[serde(default)]
+    pub use_max_completion_tokens: bool,
+    #[serde(default)]
+    pub drop_temperature: bool,
+    #[serde(default)]
+    pub drop_top_p: bool,
+    #[serde(default)]
+    pub drop_stop: bool,
+    /// Ask for a usage trailer on streaming responses.
+    #[serde(default = "yes")]
+    pub stream_usage: bool,
+    /// Use `role: "developer"` for the system prompt.
+    #[serde(default)]
+    pub system_as_developer: bool,
+    /// Translate thinking budgets into `reasoning_effort`.
+    #[serde(default)]
+    pub send_reasoning_effort: bool,
+}
+
+impl Default for ProviderQuirks {
+    fn default() -> Self {
+        ProviderQuirks {
+            use_max_completion_tokens: false,
+            drop_temperature: false,
+            drop_top_p: false,
+            drop_stop: false,
+            stream_usage: true,
+            system_as_developer: false,
+            send_reasoning_effort: false,
+        }
+    }
+}
 
 /// Decode an inbound request body of the given dialect into the IR.
 pub fn decode_request(dialect: Dialect, body: Value) -> Result<ChatRequest> {

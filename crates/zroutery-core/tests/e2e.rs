@@ -1218,7 +1218,7 @@ async fn a_balance_is_fetched_with_the_providers_own_key() {
         .fetch_balance(
             &provider,
             Some("sk-deepseek"),
-            &provider.balance.probe(provider.kind).unwrap(),
+            &provider.balance.probe(provider.base_depth()).unwrap(),
         )
         .await
         .unwrap();
@@ -1227,7 +1227,7 @@ async fn a_balance_is_fetched_with_the_providers_own_key() {
 
     // A provider that publishes nothing is not asked at all.
     let quiet = &h.state.config().providers[1];
-    assert!(!quiet.balance.is_supported(quiet.kind));
+    assert!(!quiet.balance.is_supported(quiet.base_depth()));
 
     // A pointer into thin air is an error rather than a silent zero.
     let mut broken = provider.clone();
@@ -1242,7 +1242,7 @@ async fn a_balance_is_fetched_with_the_providers_own_key() {
         .fetch_balance(
             &broken,
             Some("sk-deepseek"),
-            &broken.balance.probe(broken.kind).unwrap(),
+            &broken.balance.probe(broken.base_depth()).unwrap(),
         )
         .await
         .unwrap_err();
@@ -1277,7 +1277,7 @@ async fn the_sub2api_preset_reads_a_relay_of_either_dialect() {
         } else {
             "sk-deepseek"
         };
-        let probe = provider.balance.probe(provider.kind).unwrap();
+        let probe = provider.balance.probe(provider.base_depth()).unwrap();
         let balance = h
             .state
             .upstream()

@@ -8,8 +8,9 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::billing::{BalanceConfig, Pricing};
+use crate::billing::{BalanceConfig, BaseDepth, Pricing};
 use crate::ir::Dialect;
+pub use crate::protocol::ProviderQuirks;
 
 /// Capability tier a model belongs to. Assigned manually by the user; Zroutery
 /// never guesses.
@@ -96,47 +97,6 @@ fn default_connect_timeout() -> u64 {
     15
 }
 
-/// Per provider deviations from the reference dialect.
-///
-/// These exist because "OpenAI compatible" is a spectrum: reasoning models
-/// reject `max_tokens` and `temperature`, some gateways choke on
-/// `stream_options`, and only a few accept `reasoning_effort`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ProviderQuirks {
-    /// Send `max_completion_tokens` instead of `max_tokens`.
-    #[serde(default)]
-    pub use_max_completion_tokens: bool,
-    #[serde(default)]
-    pub drop_temperature: bool,
-    #[serde(default)]
-    pub drop_top_p: bool,
-    #[serde(default)]
-    pub drop_stop: bool,
-    /// Ask for a usage trailer on streaming responses.
-    #[serde(default = "default_true")]
-    pub stream_usage: bool,
-    /// Use `role: "developer"` for the system prompt.
-    #[serde(default)]
-    pub system_as_developer: bool,
-    /// Translate thinking budgets into `reasoning_effort`.
-    #[serde(default)]
-    pub send_reasoning_effort: bool,
-}
-
-impl Default for ProviderQuirks {
-    fn default() -> Self {
-        ProviderQuirks {
-            use_max_completion_tokens: false,
-            drop_temperature: false,
-            drop_top_p: false,
-            drop_stop: false,
-            stream_usage: true,
-            system_as_developer: false,
-            send_reasoning_effort: false,
-        }
-    }
-}
-
 /// One upstream account/endpoint.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProviderConfig {
@@ -186,6 +146,18 @@ impl ProviderConfig {
             anthropic_version: None,
             quirks: ProviderQuirks::default(),
             balance: BalanceConfig::default(),
+        }
+    }
+
+    /// How deep this provider's base URL already reaches, for appending metadata
+    /// paths such as a balance endpoint.
+    ///
+    /// By convention an OpenAI compatible base carries the version and an
+    /// Anthropic base does not, which is exactly what `chat_url` assumes below.
+    pub fn base_depth(&self) -> BaseDepth {
+        match self.kind {
+            ProviderKind::OpenAICompatible => BaseDepth::Versioned,
+            ProviderKind::Anthropic => BaseDepth::ApiRoot,
         }
     }
 

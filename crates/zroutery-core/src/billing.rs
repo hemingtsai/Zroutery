@@ -13,7 +13,6 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::config::ProviderKind;
 use crate::ir::Usage;
 
 /// Price of one model, per million tokens.
@@ -130,6 +129,21 @@ impl CostTotals {
 
 // ------------------------------------------------------------------- balances
 
+/// How deep a provider's base URL already reaches.
+///
+/// A balance path has to be appended to it, and the two dialects disagree about
+/// where the base stops: an OpenAI compatible base usually already ends in
+/// `/v1`, while an Anthropic base is the API root. Billing takes this as a plain
+/// fact rather than importing the provider type, which keeps the money code
+/// independent of how providers are configured.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BaseDepth {
+    /// The base URL is the API root, e.g. `https://relay.example.com`.
+    ApiRoot,
+    /// The base URL already carries the version, e.g. `.../v1`.
+    Versioned,
+}
+
 /// Providers that publish a balance, plus an escape hatch.
 ///
 /// OpenAI and Anthropic have no such endpoint; their consoles are the only place
@@ -163,10 +177,9 @@ impl BalancePreset {
 
     /// The built-in probe, if this preset has one.
     ///
-    /// The dialect matters because a provider's `base_url` sits at a different
-    /// depth for each: an OpenAI compatible base already ends in `/v1`, while an
-    /// Anthropic base is the API root.
-    pub fn probe_for(&self, kind: ProviderKind) -> Option<BalanceProbe> {
+    /// The depth matters because the path is appended to the provider's base URL,
+    /// which may or may not already carry the version.
+    pub fn probe_for(&self, depth: BaseDepth) -> Option<BalanceProbe> {
         match self {
             BalancePreset::None | BalancePreset::Custom => None,
             BalancePreset::DeepSeek => Some(BalanceProbe {
@@ -205,9 +218,9 @@ impl BalancePreset {
             BalancePreset::Sub2Api => Some(BalanceProbe {
                 // Every branch of its `/v1/usage` answer carries `remaining` and
                 // `unit`; a quota bound key adds the limit and the amount used.
-                path: match kind {
-                    ProviderKind::OpenAICompatible => "/usage".into(),
-                    ProviderKind::Anthropic => "/v1/usage".into(),
+                path: match depth {
+                    BaseDepth::Versioned => "/usage".into(),
+                    BaseDepth::ApiRoot => "/v1/usage".into(),
                 },
                 remaining_pointer: Some("/remaining".into()),
                 total_pointer: Some("/quota/limit".into()),
@@ -276,15 +289,15 @@ pub struct BalanceConfig {
 }
 
 impl BalanceConfig {
-    pub fn probe(&self, kind: ProviderKind) -> Option<BalanceProbe> {
+    pub fn probe(&self, depth: BaseDepth) -> Option<BalanceProbe> {
         match self.preset {
             BalancePreset::Custom => self.custom.clone(),
-            other => other.probe_for(kind),
+            other => other.probe_for(depth),
         }
     }
 
-    pub fn is_supported(&self, kind: ProviderKind) -> bool {
-        self.probe(kind).is_some()
+    pub fn is_supported(&self, depth: BaseDepth) -> bool {
+        self.probe(depth).is_some()
     }
 }
 
@@ -453,9 +466,9 @@ mod tests {
         assert_eq!(totals.0.len(), 2);
     }
 
-    /// Most presets sit on OpenAI compatible bases; the exceptions say so.
+    /// Most presets hang off a versioned base; the exceptions say so.
     fn probe_of(preset: BalancePreset) -> BalanceProbe {
-        preset.probe_for(ProviderKind::OpenAICompatible).unwrap()
+        preset.probe_for(BaseDepth::Versioned).unwrap()
     }
 
     #[test]
@@ -517,7 +530,7 @@ mod tests {
                 ..BalanceProbe::default()
             }),
         };
-        let probe = config.probe(ProviderKind::OpenAICompatible).unwrap();
+        let probe = config.probe(BaseDepth::Versioned).unwrap();
         let balance = Balance::from_payload(
             &probe,
             &json!({"wallets": [{"amount": 1, "unit": "usd"}, {"amount": "9.99", "unit": "eur"}]}),
@@ -536,7 +549,7 @@ mod tests {
 
     #[test]
     fn providers_without_an_endpoint_are_explicit_about_it() {
-        let kind = ProviderKind::OpenAICompatible;
+        let kind = BaseDepth::Versioned;
         assert!(BalancePreset::None.probe_for(kind).is_none());
         assert!(!BalanceConfig::default().is_supported(kind));
         // Custom without a probe is also unsupported rather than a panic.
@@ -592,17 +605,17 @@ mod tests {
 
     #[test]
     fn sub2api_path_follows_the_dialect() {
-        // An OpenAI compatible base already ends in /v1; an Anthropic base does not.
+        // A versioned base already ends in /v1; an API root does not.
         assert_eq!(
             BalancePreset::Sub2Api
-                .probe_for(ProviderKind::OpenAICompatible)
+                .probe_for(BaseDepth::Versioned)
                 .unwrap()
                 .path,
             "/usage"
         );
         assert_eq!(
             BalancePreset::Sub2Api
-                .probe_for(ProviderKind::Anthropic)
+                .probe_for(BaseDepth::ApiRoot)
                 .unwrap()
                 .path,
             "/v1/usage"

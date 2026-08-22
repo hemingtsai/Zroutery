@@ -7,15 +7,15 @@
 //! Security: it binds loopback by default and requires a local token. Anything
 //! that can reach this port can spend the configured API keys.
 
-use std::collections::VecDeque;
+mod pipeline;
+
 use std::net::SocketAddr;
 use std::sync::{Arc, RwLock};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use axum::body::Body;
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{DefaultBodyLimit, Path, State};
-use axum::http::{header, HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri};
+use axum::http::{header, HeaderName, HeaderValue, Method, StatusCode, Uri};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -25,15 +25,17 @@ use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 
-use crate::billing::{Cost, Pricing};
+use crate::billing::Pricing;
 use crate::config::{AppConfig, ProviderConfig, SecretStore, ServerConfig};
 use crate::error::{Error, Result};
-use crate::ir::{ChatRequest, Dialect, StreamEvent, Usage};
-use crate::protocol::{self, openai, SseFrame, StreamEncoder};
+use crate::ir::Dialect;
+use crate::protocol;
 use crate::registry::Registry;
-use crate::router::{Candidate, Router};
-use crate::stats::{RecordBuilder, Stats};
+use crate::router::Router;
+use crate::stats::Stats;
 use crate::upstream::Upstream;
+
+use pipeline::handle_chat;
 
 /// Everything a request handler needs.
 ///
@@ -496,353 +498,146 @@ fn error_response(dialect: Dialect, err: &Error) -> Response {
     (err.status(), Json(err.to_wire(dialect))).into_response()
 }
 
-// ------------------------------------------------------------------- pipeline
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::ProviderKind;
 
-async fn handle_chat(state: Arc<AppState>, dialect: Dialect, body: Value) -> Response {
-    let include_usage = dialect == Dialect::OpenAI && openai::wants_stream_usage(&body);
-
-    let req = match protocol::decode_request(dialect, body) {
-        Ok(r) => r,
-        Err(e) => return error_response(dialect, &e),
-    };
-
-    let registry = state.registry();
-    let plan = match registry
-        .resolve(&req.model)
-        .and_then(|res| state.router.plan(&registry, &res))
-    {
-        Ok(p) => p,
-        Err(e) => {
-            let mut rec = RecordBuilder::new(dialect, &req.model, req.stream);
-            rec.fail(e.status().as_u16(), e.to_string());
-            state.stats.record(rec.finish(0));
-            return error_response(dialect, &e);
-        }
-    };
-
-    if req.stream {
-        stream_chat(state, dialect, req, plan, include_usage).await
-    } else {
-        buffered_chat(state, dialect, req, plan).await
-    }
-}
-
-/// Prepare one attempt: resolve the key and encode the upstream body.
-fn prepare(
-    state: &AppState,
-    candidate: &Candidate,
-    req: &ChatRequest,
-) -> Result<(Option<String>, Value)> {
-    let key = state.api_key(&candidate.provider)?;
-    let body = crate::upstream::encode_for(
-        &candidate.provider,
-        req,
-        &candidate.entry.upstream_model,
-        candidate.entry.max_output_tokens,
-    )?;
-    Ok((key, body))
-}
-
-async fn buffered_chat(
-    state: Arc<AppState>,
-    dialect: Dialect,
-    req: ChatRequest,
-    plan: Vec<Candidate>,
-) -> Response {
-    let started = Instant::now();
-    let mut rec = RecordBuilder::new(dialect, &req.model, false);
-    let routing = state.config().routing.clone();
-    let mut last_error = Error::NoCandidate(req.model.clone());
-
-    for candidate in &plan {
-        rec.attempt();
-        rec.resolved(candidate.model_id(), &candidate.provider.name);
-        let attempt_start = Instant::now();
-
-        let (key, body) = match prepare(&state, candidate, &req) {
-            Ok(v) => v,
-            Err(e) => {
-                state
-                    .router
-                    .report_failure(candidate.model_id(), &e, &routing);
-                last_error = e;
-                continue;
-            }
-        };
-
-        match state
-            .upstream
-            .send(&candidate.provider, key.as_deref(), &body)
+    /// Read a handler's JSON body back out.
+    async fn body_json(response: Response) -> Value {
+        let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
             .await
-        {
-            Ok(mut resp) => {
-                state.router.report_success(
-                    candidate.model_id(),
-                    attempt_start.elapsed().as_millis() as u64,
-                );
-                rec.usage(resp.usage)
-                    .priced_with(candidate.entry.pricing.as_ref());
-                let cost = candidate
-                    .entry
-                    .pricing
-                    .as_ref()
-                    .map(|p| p.cost_of(&resp.usage));
-                state
-                    .stats
-                    .record(rec.finish(started.elapsed().as_millis() as u64));
-                // Report the model that actually answered, not the virtual id.
-                resp.model = candidate.exposed_id.clone();
-                let mut response = Json(protocol::encode_response(dialect, &resp)).into_response();
-                inject_routing_headers(response.headers_mut(), candidate);
-                inject_cost_header(response.headers_mut(), cost.as_ref());
-                return response;
-            }
-            Err(e) => {
-                state
-                    .router
-                    .report_failure(candidate.model_id(), &e, &routing);
-                tracing::warn!(
-                    model = candidate.model_id(),
-                    provider = candidate.provider.name.as_str(),
-                    "upstream attempt failed: {e}"
-                );
-                let retryable = e.is_retryable();
-                last_error = e;
-                if !retryable {
-                    break;
-                }
-            }
-        }
+            .expect("body");
+        serde_json::from_slice(&bytes).expect("json")
     }
 
-    rec.fail(last_error.status().as_u16(), last_error.to_string());
-    state
-        .stats
-        .record(rec.finish(started.elapsed().as_millis() as u64));
-    error_response(dialect, &last_error)
-}
-
-async fn stream_chat(
-    state: Arc<AppState>,
-    dialect: Dialect,
-    req: ChatRequest,
-    plan: Vec<Candidate>,
-    include_usage: bool,
-) -> Response {
-    let started = Instant::now();
-    let mut rec = RecordBuilder::new(dialect, &req.model, true);
-    let routing = state.config().routing.clone();
-    let mut last_error = Error::NoCandidate(req.model.clone());
-
-    for candidate in &plan {
-        rec.attempt();
-        rec.resolved(candidate.model_id(), &candidate.provider.name);
-
-        let (key, body) = match prepare(&state, candidate, &req) {
-            Ok(v) => v,
-            Err(e) => {
-                state
-                    .router
-                    .report_failure(candidate.model_id(), &e, &routing);
-                last_error = e;
-                continue;
-            }
-        };
-
-        // Only the handshake can be retried; once bytes are flowing the client
-        // has already seen part of the answer.
-        match state
-            .upstream
-            .stream(
-                &candidate.provider,
-                key.as_deref(),
-                &body,
-                &candidate.entry.upstream_model,
-            )
-            .await
-        {
-            Ok(events) => {
-                state
-                    .router
-                    .report_success(candidate.model_id(), started.elapsed().as_millis() as u64);
-                let encoder =
-                    protocol::stream_encoder(dialect, &candidate.exposed_id, include_usage);
-                let body = Body::from_stream(sse_body(
-                    Arc::clone(&state),
-                    events,
-                    encoder,
-                    StreamContext {
-                        record: rec,
-                        started,
-                        model_id: candidate.model_id().to_string(),
-                        routing: routing.clone(),
-                        pricing: candidate.entry.pricing.clone(),
-                    },
-                ));
-                // Built from a plain body and static headers, so nothing here can
-                // fail and there is no reason to unwrap.
-                let mut response = Response::new(body);
-                let headers = response.headers_mut();
-                headers.insert(
-                    header::CONTENT_TYPE,
-                    HeaderValue::from_static("text/event-stream"),
-                );
-                headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
-                headers.insert("x-accel-buffering", HeaderValue::from_static("no"));
-                inject_routing_headers(response.headers_mut(), candidate);
-                return response;
-            }
-            Err(e) => {
-                state
-                    .router
-                    .report_failure(candidate.model_id(), &e, &routing);
-                tracing::warn!(
-                    model = candidate.model_id(),
-                    "upstream stream handshake failed: {e}"
-                );
-                let retryable = e.is_retryable();
-                last_error = e;
-                if !retryable {
-                    break;
-                }
-            }
-        }
+    #[test]
+    fn token_comparison_is_length_safe_and_exact() {
+        assert!(constant_time_eq(b"zr-abc", b"zr-abc"));
+        assert!(!constant_time_eq(b"zr-abc", b"zr-abd"));
+        // A prefix must not pass, which is what a naive loop would allow.
+        assert!(!constant_time_eq(b"zr-ab", b"zr-abc"));
+        assert!(!constant_time_eq(b"", b"zr-abc"));
+        assert!(constant_time_eq(b"", b""));
     }
 
-    rec.fail(last_error.status().as_u16(), last_error.to_string());
-    state
-        .stats
-        .record(rec.finish(started.elapsed().as_millis() as u64));
-    error_response(dialect, &last_error)
-}
+    #[tokio::test]
+    async fn an_unknown_path_answers_in_the_likely_dialect() {
+        // A models path is an OpenAI client's, so use its envelope.
+        let response = unknown_route(Method::GET, "/v2/models".parse().unwrap()).await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let body = body_json(response).await;
+        assert_eq!(body["error"]["code"], "not_found_error");
+        assert!(body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("GET /v2/models"));
+        assert!(body["zroutery"]["endpoints"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e == "/v1/models"));
 
-/// Report the estimated spend of a buffered answer.
-///
-/// Streaming answers cannot carry this: the headers are long gone by the time the
-/// usage arrives, so a stream's cost shows up in the Activity tab instead.
-fn inject_cost_header(headers: &mut HeaderMap, cost: Option<&Cost>) {
-    if let Some(cost) = cost {
-        if let Ok(value) = HeaderValue::from_str(&format!("{} {:.6}", cost.currency, cost.amount)) {
-            headers.insert("x-zroutery-cost", value);
-        }
+        // Anything that mentions messages is an Anthropic client's.
+        let response = unknown_route(Method::POST, "/v1/messages/typo".parse().unwrap()).await;
+        let body = body_json(response).await;
+        assert_eq!(body["type"], "error");
+        assert_eq!(body["error"]["type"], "not_found_error");
     }
-}
 
-fn inject_routing_headers(headers: &mut HeaderMap, candidate: &Candidate) {
-    if let Ok(v) = HeaderValue::from_str(&candidate.exposed_id) {
-        headers.insert("x-zroutery-model", v);
+    #[tokio::test]
+    async fn a_doubled_version_prefix_is_named_as_the_cause() {
+        let response = unknown_route(Method::POST, "/v1/v1/messages".parse().unwrap()).await;
+        let body = body_json(response).await;
+        let cause = body["zroutery"]["likely_cause"].as_str().unwrap();
+        assert!(cause.contains("base URL already ends in /v1"), "{cause}");
+        assert!(cause.contains("/v1/messages"), "{cause}");
+
+        // A single prefix is normal and gets no lecture.
+        let response = unknown_route(Method::POST, "/v1/nope".parse().unwrap()).await;
+        assert!(body_json(response).await["zroutery"]["likely_cause"].is_null());
     }
-    if let Ok(v) = HeaderValue::from_str(&candidate.provider.name) {
-        headers.insert("x-zroutery-provider", v);
+
+    #[tokio::test]
+    async fn a_wrong_verb_names_the_verb_it_wants() {
+        let response = wrong_method(Method::GET, "/v1/chat/completions".parse().unwrap()).await;
+        assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+        let message = body_json(response).await["error"]["message"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(message.contains("POST endpoint"), "{message}");
+        assert!(message.contains("not GET"), "{message}");
+
+        // Listings are the other way round.
+        let response = wrong_method(Method::POST, "/v1/models".parse().unwrap()).await;
+        let message = body_json(response).await["error"]["message"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(message.contains("GET endpoint"), "{message}");
     }
-    if candidate.degraded {
-        headers.insert("x-zroutery-degraded", HeaderValue::from_static("1"));
+
+    #[test]
+    fn cors_is_off_unless_asked_for() {
+        let mut server = ServerConfig::default();
+        assert!(cors_layer(&server).is_none());
+        server.allow_cors = true;
+        assert!(cors_layer(&server).is_some());
+        // An empty list still builds a layer, and `validate` is what complains.
+        server.cors_origins = vec!["http://localhost:3000".into()];
+        assert!(cors_layer(&server).is_some());
+        // A malformed origin is dropped rather than rejected: the rest still works.
+        server.cors_origins = vec!["not a header value\n".into()];
+        assert!(cors_layer(&server).is_some());
     }
-}
 
-struct SseState {
-    events: crate::upstream::EventStream,
-    encoder: Box<dyn StreamEncoder>,
-    pending: VecDeque<SseFrame>,
-    rec: Option<RecordBuilder>,
-    state: Arc<AppState>,
-    started: Instant,
-    model_id: String,
-    routing: crate::config::RoutingConfig,
-    usage: Usage,
-    pricing: Option<Pricing>,
-    finished: bool,
-}
+    #[test]
+    fn a_missing_key_is_a_precondition_not_a_silent_none() {
+        let secrets =
+            Arc::new(crate::config::MemorySecretStore::new().with("provider:has", "sk-1"));
+        let state = AppState::new(AppConfig::default(), secrets);
 
-impl SseState {
-    /// Record the request exactly once, when the stream ends for any reason.
-    fn finalize(&mut self, error: Option<&Error>) {
-        if let Some(mut rec) = self.rec.take() {
-            rec.usage(self.usage).priced_with(self.pricing.as_ref());
-            if let Some(e) = error {
-                rec.fail(e.status().as_u16(), e.to_string());
-                self.state
-                    .router
-                    .report_failure(&self.model_id, e, &self.routing);
-            }
-            self.state
-                .stats
-                .record(rec.finish(self.started.elapsed().as_millis() as u64));
-        }
+        let mut provider = ProviderConfig::new("has", "Has", ProviderKind::OpenAICompatible);
+        provider.key_ref = "provider:has".into();
+        assert_eq!(state.api_key(&provider).unwrap().as_deref(), Some("sk-1"));
+
+        provider.key_ref = "provider:missing".into();
+        assert!(matches!(
+            state.api_key(&provider),
+            Err(Error::MissingApiKey(_))
+        ));
+
+        // A provider that needs no credential says so explicitly.
+        provider.key_ref = String::new();
+        assert!(state.api_key(&provider).unwrap().is_none());
     }
-}
 
-/// What the SSE pipeline needs to know about the request it is serving.
-struct StreamContext {
-    record: RecordBuilder,
-    started: Instant,
-    model_id: String,
-    routing: crate::config::RoutingConfig,
-    pricing: Option<Pricing>,
-}
+    #[test]
+    fn swapping_the_config_rebuilds_the_registry_with_it() {
+        let secrets = Arc::new(crate::config::MemorySecretStore::new());
+        let state = AppState::new(AppConfig::default(), secrets);
+        assert!(state.registry().list().is_empty());
 
-/// Pipe canonical events through the egress encoder into an SSE byte stream.
-fn sse_body(
-    app: Arc<AppState>,
-    events: crate::upstream::EventStream,
-    encoder: Box<dyn StreamEncoder>,
-    context: StreamContext,
-) -> impl futures_util::Stream<Item = std::result::Result<bytes::Bytes, std::io::Error>> {
-    use futures_util::StreamExt;
+        let mut next = AppConfig::default();
+        next.providers.push(ProviderConfig::new(
+            "p",
+            "P",
+            ProviderKind::OpenAICompatible,
+        ));
+        next.models.push(crate::config::ModelEntry::for_upstream(
+            "p",
+            "m",
+            Some(crate::config::ModelClass::Sonnet),
+        ));
+        state.set_config(next);
 
-    let state = SseState {
-        events,
-        encoder,
-        pending: VecDeque::new(),
-        rec: Some(context.record),
-        state: app,
-        started: context.started,
-        model_id: context.model_id,
-        routing: context.routing,
-        usage: Usage::default(),
-        pricing: context.pricing,
-        finished: false,
-    };
-
-    futures_util::stream::unfold(state, |mut st| async move {
-        loop {
-            if let Some(frame) = st.pending.pop_front() {
-                return Some((Ok(bytes::Bytes::from(frame.to_wire())), st));
-            }
-            if st.finished {
-                return None;
-            }
-            match st.events.next().await {
-                Some(Ok(event)) => {
-                    match &event {
-                        StreamEvent::TextDelta { .. } | StreamEvent::ThinkingDelta { .. } => {
-                            if let Some(rec) = st.rec.as_mut() {
-                                rec.ttft(st.started.elapsed().as_millis() as u64);
-                            }
-                        }
-                        StreamEvent::Start { usage, .. } => st.usage = *usage,
-                        StreamEvent::Stop { usage, .. } => st.usage = *usage,
-                        _ => {}
-                    }
-                    let frames = st.encoder.encode(&event);
-                    st.pending.extend(frames);
-                }
-                Some(Err(err)) => {
-                    st.finished = true;
-                    st.finalize(Some(&err));
-                    let frames = st.encoder.error(&err);
-                    st.pending.extend(frames);
-                }
-                None => {
-                    st.finished = true;
-                    let frames = st.encoder.finish();
-                    st.pending.extend(frames);
-                    st.state
-                        .router
-                        .report_success(&st.model_id, st.started.elapsed().as_millis() as u64);
-                    st.finalize(None);
-                }
-            }
-        }
-    })
+        // The cached index has to move with the document, not lag behind it.
+        assert_eq!(state.config().models.len(), 1);
+        assert!(state.registry().list().iter().any(|m| m.id == "p-m"));
+        assert!(state
+            .registry()
+            .resolve("sonnet-class")
+            .is_ok_and(|r| matches!(r, crate::registry::Resolution::Class(_))));
+    }
 }
