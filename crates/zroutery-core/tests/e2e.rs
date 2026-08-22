@@ -12,6 +12,7 @@ use axum::routing::{get, post};
 use axum::Json;
 use serde_json::{json, Value};
 use zroutery_core::billing::{BalanceConfig, BalancePreset, BalanceProbe, Pricing};
+use zroutery_core::budget::{Budget, BudgetPeriod, BudgetScope};
 use zroutery_core::config::{
     AppConfig, MemorySecretStore, ModelClass, ModelEntry, ProviderConfig, ProviderKind,
     RoutingStrategy,
@@ -667,6 +668,146 @@ async fn missing_api_key_fails_over_and_reports_clearly() {
     assert_eq!(h.mock.count(), 0);
 
     h.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_budget_stops_spending_once_it_is_used_up() {
+    let (addr, mock) = start_mock().await;
+    let mut cfg = config_for(addr);
+    cfg.models[1].pricing = Some(Pricing::new("USD", 1000.0, 1000.0));
+    // The mock reports 11 + 7 tokens, so one request costs 0.018 USD.
+    cfg.budgets = vec![Budget::new(
+        BudgetScope::Global,
+        BudgetPeriod::Day,
+        "USD",
+        0.01,
+    )];
+    let h = Harness::start(cfg, mock).await;
+
+    let ask = || {
+        h.post("/v1/messages")
+            .json(&json!({"model": "sonnet-class", "max_tokens": 8,
+                          "messages": [{"role": "user", "content": "hi"}]}))
+    };
+
+    // The first request fits, and the one that crosses the line still completes.
+    assert_eq!(ask().send().await.unwrap().status(), 200);
+
+    // The next is refused, naming the limit that stopped it.
+    let resp = ask().send().await.unwrap();
+    assert_eq!(resp.status(), 402);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["error"]["type"], "budget_exceeded");
+    let message = body["error"]["message"].as_str().unwrap();
+    assert!(
+        message.contains("today") && message.contains("everything"),
+        "{message}"
+    );
+
+    // Nothing reached the provider for the refused request.
+    assert_eq!(h.mock.count(), 1);
+    // A direct call to the same model is stopped too: a global budget is global.
+    assert_eq!(
+        h.post("/v1/chat/completions")
+            .json(&json!({"model": "deepseek-deepseek-v4-pro",
+                          "messages": [{"role": "user", "content": "hi"}]}))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        402
+    );
+
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_class_budget_degrades_instead_of_refusing() {
+    let (addr, mock) = start_mock().await;
+    let mut cfg = config_for(addr);
+    cfg.models[2].pricing = Some(Pricing::new("USD", 1000.0, 1000.0));
+    cfg.budgets = vec![Budget::new(
+        BudgetScope::Class {
+            class: ModelClass::Opus,
+        },
+        BudgetPeriod::Day,
+        "USD",
+        0.01,
+    )
+    .degrading_to(ModelClass::Haiku)];
+    let h = Harness::start(cfg, mock).await;
+
+    // The first opus request goes to opus and spends past the limit.
+    let resp = h
+        .post("/v1/messages")
+        .json(&json!({"model": "opus-class", "max_tokens": 8,
+                      "messages": [{"role": "user", "content": "hi"}]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.headers()["x-zroutery-model"], "openai-gpt-5.3-sol");
+
+    // The next is served by the cheap class rather than refused.
+    let resp = h
+        .post("/v1/messages")
+        .json(&json!({"model": "opus-class", "max_tokens": 8,
+                      "messages": [{"role": "user", "content": "hi"}]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_eq!(
+        resp.headers()["x-zroutery-model"],
+        "deepseek-deepseek-v4-flash"
+    );
+
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn spend_survives_a_restart() {
+    let (addr, mock) = start_mock().await;
+    let mut cfg = config_for(addr);
+    cfg.models[1].pricing = Some(Pricing::new("USD", 1000.0, 1000.0));
+    cfg.budgets = vec![Budget::new(
+        BudgetScope::Global,
+        BudgetPeriod::Day,
+        "USD",
+        0.01,
+    )];
+    let h = Harness::start(cfg.clone(), mock.clone()).await;
+
+    assert_eq!(
+        h.post("/v1/messages")
+            .json(&json!({"model": "sonnet-class", "max_tokens": 8,
+                          "messages": [{"role": "user", "content": "hi"}]}))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        200
+    );
+    let ledger = h.state.ledger();
+    assert!(!ledger.is_empty(), "the spend was recorded");
+    h.shutdown().await;
+
+    // A fresh process that adopts the ledger is already over its limit, which is the
+    // whole point: a guardrail that forgets on restart is not a guardrail.
+    let restarted = Harness::start(cfg, mock).await;
+    restarted.state.set_ledger(ledger);
+    assert_eq!(
+        restarted
+            .post("/v1/messages")
+            .json(&json!({"model": "sonnet-class", "max_tokens": 8,
+                          "messages": [{"role": "user", "content": "hi"}]}))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        402
+    );
+
+    restarted.shutdown().await;
 }
 
 #[tokio::test]

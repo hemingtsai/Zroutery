@@ -9,7 +9,8 @@ use chrono::{DateTime, Utc};
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex as AsyncMutex;
-use zroutery_core::billing::Balance;
+use zroutery_core::billing::{Balance, Cost};
+use zroutery_core::budget::{Budget, BudgetPeriod, BudgetScope};
 use zroutery_core::config::{AppConfig, ConfigIssue, IssueSeverity, RoutingStrategy, ServerConfig};
 use zroutery_core::election::Election;
 use zroutery_core::router::ModelHealth;
@@ -77,6 +78,18 @@ pub struct Snapshot {
     pub balances: BTreeMap<String, BalanceStatus>,
     /// The last election, when one has been held this run.
     pub election: Option<Election>,
+    /// Every budget with what has been spent against it, for the dashboard.
+    pub budgets: Vec<BudgetStatus>,
+}
+
+/// One budget and how much of it is gone.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BudgetStatus {
+    pub budget: Budget,
+    pub spent: Cost,
+    /// 0.0 to 1.0, and beyond: over 1.0 means the limit has been passed, which
+    /// happens because a request is only charged once it has finished.
+    pub used: f64,
 }
 
 /// The subset the Activity tab polls for.
@@ -108,6 +121,9 @@ pub fn token_hint(token: &str) -> String {
 impl Desktop {
     pub fn new(config_dir: PathBuf, config: AppConfig, secrets: Arc<KeychainSecrets>) -> Self {
         let core = Arc::new(AppState::new(config, secrets.clone() as Arc<_>));
+        // Spend is carried over from previous runs, because a budget that starts from
+        // zero on every launch protects nothing.
+        core.set_ledger(store::load_ledger(&config_dir));
         Desktop {
             core,
             secrets,
@@ -170,6 +186,7 @@ impl Desktop {
             exposed_ids: config.exposed_ids(),
             balances: self.balances(),
             election: self.core.router().election(),
+            budgets: self.budget_status(),
             config,
         }
     }
@@ -283,6 +300,51 @@ impl Desktop {
         }
     }
 
+    /// Every budget with the spend counted against it right now.
+    pub fn budget_status(&self) -> Vec<BudgetStatus> {
+        let config = self.core.config();
+        let ledger = self.core.ledger();
+        let now = chrono::Local::now();
+        config
+            .budgets
+            .iter()
+            .map(|budget| {
+                let spent = ledger.spent(budget, now);
+                BudgetStatus {
+                    used: if budget.limit.amount > 0.0 {
+                        spent / budget.limit.amount
+                    } else {
+                        0.0
+                    },
+                    spent: Cost {
+                        currency: budget.limit.currency.clone(),
+                        amount: spent,
+                    },
+                    budget: budget.clone(),
+                }
+            })
+            .collect()
+    }
+
+    /// What has been spent on one scope in the current windows, budget or not.
+    pub fn spend_on(&self, scope: &BudgetScope) -> Vec<(BudgetPeriod, Cost)> {
+        self.core.ledger().totals_for(scope, chrono::Local::now())
+    }
+
+    /// Write the ledger out if it has moved since the last time.
+    ///
+    /// Called on a timer and at shutdown rather than per request: six numbers change
+    /// on every call, and rewriting the file each time buys nothing. The cost of that
+    /// choice is losing the last few seconds of spend to a hard kill, which is a fair
+    /// trade against constant disk writes.
+    pub fn flush_ledger(&self) {
+        if let Some(ledger) = self.core.take_dirty_ledger() {
+            if let Err(e) = store::save_ledger(&self.config_dir, &ledger) {
+                tracing::warn!("cannot write the spend ledger: {e}");
+            }
+        }
+    }
+
     /// The real token. Only reached through an explicit user action.
     pub fn auth_token(&self) -> String {
         self.core.config().server.auth_token.clone()
@@ -311,6 +373,8 @@ impl Desktop {
             h.stop().await;
             tracing::info!("proxy stopped");
         }
+        // Whatever was spent while it ran must outlive the process.
+        self.flush_ledger();
     }
 
     pub async fn restart(&self) -> Result<(), String> {

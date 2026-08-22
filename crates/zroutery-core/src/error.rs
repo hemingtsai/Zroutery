@@ -24,6 +24,10 @@ pub enum Error {
     #[error("no endpoint at {0}")]
     UnknownRoute(String),
 
+    /// A spending limit the user set has been reached.
+    #[error("stopped by a budget: {0}")]
+    OverBudget(String),
+
     /// A `*-class` id has no enabled, healthy member.
     #[error("no model is available for `{0}`")]
     NoCandidate(String),
@@ -78,6 +82,8 @@ impl Error {
             Error::NoCandidate(_) => StatusCode::SERVICE_UNAVAILABLE,
             Error::Unauthorized => StatusCode::UNAUTHORIZED,
             Error::MissingApiKey(_) => StatusCode::PRECONDITION_FAILED,
+            // The request is well formed and authorised; what is missing is money.
+            Error::OverBudget(_) => StatusCode::PAYMENT_REQUIRED,
             Error::Upstream { status, .. } => {
                 StatusCode::from_u16(*status).unwrap_or(StatusCode::BAD_GATEWAY)
             }
@@ -97,6 +103,7 @@ impl Error {
             Error::NoCandidate(_) => "overloaded_error",
             Error::Unauthorized => "authentication_error",
             Error::MissingApiKey(_) => "authentication_error",
+            Error::OverBudget(_) => "budget_exceeded",
             Error::Upstream { status, .. } => match *status {
                 400 => "invalid_request_error",
                 401 | 403 => "authentication_error",
@@ -130,6 +137,7 @@ impl Error {
             Error::InvalidRequest(_)
                 | Error::UnknownModel(_)
                 | Error::UnknownRoute(_)
+                | Error::OverBudget(_)
                 | Error::TooLarge { .. }
         )
     }
@@ -194,6 +202,23 @@ mod tests {
         let o = e.to_wire(Dialect::OpenAI);
         assert_eq!(o["error"]["code"], "not_found_error");
         assert!(o["error"]["message"].as_str().unwrap().contains('x'));
+    }
+
+    #[test]
+    fn a_budget_stop_is_payment_required_and_never_retried() {
+        let e = Error::OverBudget("the today limit for everything is used up".into());
+        assert_eq!(e.status(), StatusCode::PAYMENT_REQUIRED);
+        // Retrying or failing over would spend the money the budget just refused.
+        assert!(!e.is_retryable());
+        assert!(!e.counts_against_health());
+        assert_eq!(
+            e.to_wire(Dialect::OpenAI)["error"]["code"],
+            "budget_exceeded"
+        );
+        assert_eq!(
+            e.to_wire(Dialect::Anthropic)["error"]["type"],
+            "budget_exceeded"
+        );
     }
 
     #[test]

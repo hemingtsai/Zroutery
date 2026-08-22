@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::billing::{BalanceConfig, BaseDepth, Pricing};
+use crate::budget::Budget;
 use crate::election::ScoringConfig;
 use crate::ir::Dialect;
 pub use crate::protocol::ProviderQuirks;
@@ -478,6 +479,10 @@ pub struct AppConfig {
     pub providers: Vec<ProviderConfig>,
     #[serde(default)]
     pub models: Vec<ModelEntry>,
+    /// Spending limits. Empty means no limit, which is the default because a proxy
+    /// that refuses requests out of the box would be a surprise.
+    #[serde(default)]
+    pub budgets: Vec<Budget>,
 }
 
 /// A problem found by [`AppConfig::validate`].
@@ -685,6 +690,64 @@ impl AppConfig {
                     .into(),
                 subject: None,
             });
+        }
+
+        for budget in &self.budgets {
+            let subject = format!("{} / {}", budget.scope.label(), budget.period.label());
+            for problem in budget.problems() {
+                issues.push(ConfigIssue {
+                    severity: IssueSeverity::Error,
+                    code: "budget.impossible".into(),
+                    message: format!("The budget for {subject} {problem}"),
+                    subject: Some(subject.clone()),
+                });
+            }
+            // A limit in a currency nothing bills in can never be reached, which
+            // looks like protection without being any.
+            let billed: Vec<&str> = self
+                .models
+                .iter()
+                .filter_map(|m| m.pricing.as_ref().map(|p| p.currency.as_str()))
+                .collect();
+            if !billed.is_empty() && !billed.contains(&budget.limit.currency.as_str()) {
+                issues.push(ConfigIssue {
+                    severity: IssueSeverity::Warning,
+                    code: "budget.unused_currency".into(),
+                    message: format!(
+                        "The budget for {subject} counts {}, which none of your models bill in, \
+                         so it can never be reached",
+                        budget.limit.currency
+                    ),
+                    subject: Some(subject.clone()),
+                });
+            }
+            if let crate::budget::BudgetScope::Provider { id } = &budget.scope {
+                if self.provider(id).is_none() {
+                    issues.push(ConfigIssue {
+                        severity: IssueSeverity::Warning,
+                        code: "budget.orphan".into(),
+                        message: format!("The budget for {subject} names a missing provider"),
+                        subject: Some(subject.clone()),
+                    });
+                }
+            }
+            if let crate::budget::OnExceeded::Degrade { to } = &budget.on_exceeded {
+                let reachable = self
+                    .models
+                    .iter()
+                    .any(|m| m.enabled && m.class == Some(*to));
+                if !reachable {
+                    issues.push(ConfigIssue {
+                        severity: IssueSeverity::Warning,
+                        code: "budget.degrade_nowhere".into(),
+                        message: format!(
+                            "The budget for {subject} degrades to {}, which has no enabled model",
+                            to.virtual_id()
+                        ),
+                        subject: Some(subject),
+                    });
+                }
+            }
         }
 
         issues

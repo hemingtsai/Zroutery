@@ -10,8 +10,11 @@
 mod pipeline;
 
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
+
+use chrono::Local;
 
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{DefaultBodyLimit, Path, State};
@@ -25,7 +28,8 @@ use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 
-use crate::billing::Pricing;
+use crate::billing::{Cost, Pricing};
+use crate::budget::{self, Ledger, Verdict};
 use crate::config::{AppConfig, ModelClass, ProviderConfig, SecretStore, ServerConfig};
 use crate::election::{self, Election, Measurement};
 use crate::error::{Error, Result};
@@ -49,6 +53,13 @@ pub struct AppState {
     stats: Arc<Stats>,
     upstream: Upstream,
     secrets: Arc<dyn SecretStore>,
+    /// Spend so far, which the budgets are checked against. It lives here rather
+    /// than in `Stats` because the request log is deliberately memory only, and a
+    /// guardrail that forgets on restart is not a guardrail.
+    ledger: RwLock<Ledger>,
+    /// Set when the ledger has moved since it was last written out, so the desktop
+    /// layer can flush on a timer instead of writing a file per request.
+    ledger_dirty: AtomicBool,
 }
 
 impl AppState {
@@ -60,7 +71,50 @@ impl AppState {
             stats,
             upstream: Upstream::new(),
             secrets,
+            ledger: RwLock::new(Ledger::new()),
+            ledger_dirty: AtomicBool::new(false),
         }
+    }
+
+    /// Adopt a ledger read from disk.
+    pub fn set_ledger(&self, ledger: Ledger) {
+        *crate::sync::write(&self.ledger) = ledger;
+        self.ledger_dirty.store(false, Ordering::Relaxed);
+    }
+
+    pub fn ledger(&self) -> Ledger {
+        crate::sync::read(&self.ledger).clone()
+    }
+
+    /// Take the ledger for writing out, clearing the dirty flag.
+    ///
+    /// Returns `None` when nothing has changed, so an idle proxy does not rewrite
+    /// the same file every few seconds.
+    pub fn take_dirty_ledger(&self) -> Option<Ledger> {
+        self.ledger_dirty
+            .swap(false, Ordering::Relaxed)
+            .then(|| self.ledger())
+    }
+
+    /// Record what a finished request cost, against every scope that covers it.
+    pub fn charge(&self, provider_id: &str, class: Option<ModelClass>, cost: &Cost) {
+        crate::sync::write(&self.ledger).charge(Local::now(), provider_id, class, cost);
+        self.ledger_dirty.store(true, Ordering::Relaxed);
+    }
+
+    /// What the budgets say about a request that is about to be routed.
+    pub fn budget_verdict(&self, provider_ids: &[String], class: Option<ModelClass>) -> Verdict {
+        let config = self.config();
+        if config.budgets.is_empty() {
+            return Verdict::Allow;
+        }
+        budget::check(
+            &config.budgets,
+            &crate::sync::read(&self.ledger),
+            Local::now(),
+            provider_ids,
+            class,
+        )
     }
 
     pub fn router(&self) -> &Arc<Router> {

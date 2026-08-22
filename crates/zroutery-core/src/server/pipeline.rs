@@ -17,9 +17,12 @@ use serde_json::Value;
 
 use super::{error_response, AppState};
 use crate::billing::{Cost, Pricing};
+use crate::budget::Verdict;
+use crate::config::ModelClass;
 use crate::error::{Error, Result};
 use crate::ir::{ChatRequest, Dialect, StreamEvent, Usage};
 use crate::protocol::{self, openai, SseFrame, StreamEncoder};
+use crate::registry::{Registry, Resolution};
 use crate::router::Candidate;
 use crate::stats::RecordBuilder;
 pub(super) async fn handle_chat(state: Arc<AppState>, dialect: Dialect, body: Value) -> Response {
@@ -33,7 +36,8 @@ pub(super) async fn handle_chat(state: Arc<AppState>, dialect: Dialect, body: Va
     let registry = state.registry();
     let plan = match registry
         .resolve(&req.model)
-        .and_then(|res| state.router.plan(&registry, &res))
+        .and_then(|resolution| apply_budgets(&state, &registry, resolution))
+        .and_then(|resolution| state.router.plan(&registry, &resolution))
     {
         Ok(p) => p,
         Err(e) => {
@@ -48,6 +52,62 @@ pub(super) async fn handle_chat(state: Arc<AppState>, dialect: Dialect, body: Va
         stream_chat(state, dialect, req, plan, include_usage).await
     } else {
         buffered_chat(state, dialect, req, plan).await
+    }
+}
+
+/// Apply the spending limits to a resolved request.
+///
+/// The check is "have I already spent it", not "will this request spend it", because
+/// the cost is only known once a request has finished. The one that crosses the line
+/// completes and the next is stopped, which bounds the overshoot at one request.
+///
+/// A degrade is followed at most once per class: the cheaper class's own budget still
+/// applies, so this cannot be used to route around a limit, and a cycle of degrades
+/// ends in a refusal rather than a loop.
+fn apply_budgets(
+    state: &AppState,
+    registry: &Registry,
+    resolution: Resolution,
+) -> Result<Resolution> {
+    let mut resolution = resolution;
+    let mut visited: Vec<ModelClass> = Vec::new();
+
+    loop {
+        let class = match &resolution {
+            Resolution::Class(class) => Some(*class),
+            Resolution::Direct(_) => None,
+        };
+        // Every provider the request could land on, because a provider's budget has
+        // to stop a request that might reach it.
+        let provider_ids: Vec<String> = match &resolution {
+            Resolution::Class(class) => registry
+                .class_members(*class)
+                .iter()
+                .map(|m| m.provider_id.clone())
+                .collect(),
+            Resolution::Direct(id) => registry
+                .entry(id)
+                .map(|m| vec![m.provider_id.clone()])
+                .unwrap_or_default(),
+        };
+
+        match state.budget_verdict(&provider_ids, class) {
+            Verdict::Allow => return Ok(resolution),
+            Verdict::Reject { because } => return Err(Error::OverBudget(because)),
+            Verdict::Degrade { to, because } => {
+                if let Some(current) = class {
+                    visited.push(current);
+                }
+                if visited.contains(&to) {
+                    // Following this would come back here, so refusing is the end.
+                    return Err(Error::OverBudget(format!(
+                        "{because}, and the class it degrades to is over its own limit"
+                    )));
+                }
+                tracing::info!("degrading to {}: {because}", to.virtual_id());
+                resolution = Resolution::Class(to);
+            }
+        }
     }
 }
 
@@ -111,6 +171,11 @@ async fn buffered_chat(
                     .pricing
                     .as_ref()
                     .map(|p| p.cost_of(&resp.usage));
+                if let Some(cost) = &cost {
+                    // Booked against the model that answered, so a failover spends
+                    // from the provider it actually reached.
+                    state.charge(&candidate.provider.id, candidate.entry.class, cost);
+                }
                 state
                     .stats
                     .record(rec.finish(started.elapsed().as_millis() as u64));
@@ -201,6 +266,8 @@ async fn stream_chat(
                         model_id: candidate.model_id().to_string(),
                         routing: routing.clone(),
                         pricing: candidate.entry.pricing.clone(),
+                        provider_id: candidate.provider.id.clone(),
+                        class: candidate.entry.class,
                     },
                 ));
                 // Built from a plain body and static headers, so nothing here can
@@ -275,6 +342,9 @@ struct SseState {
     routing: crate::config::RoutingConfig,
     usage: Usage,
     pricing: Option<Pricing>,
+    /// Who to bill, once the stream reports what it used.
+    provider_id: String,
+    class: Option<ModelClass>,
     finished: bool,
 }
 
@@ -283,6 +353,11 @@ impl SseState {
     fn finalize(&mut self, error: Option<&Error>) {
         if let Some(mut rec) = self.rec.take() {
             rec.usage(self.usage).priced_with(self.pricing.as_ref());
+            // A stream only reports its usage at the end, so this is the first
+            // moment its cost can be charged.
+            if let Some(cost) = self.pricing.as_ref().map(|p| p.cost_of(&self.usage)) {
+                self.state.charge(&self.provider_id, self.class, &cost);
+            }
             if let Some(e) = error {
                 rec.fail(e.status().as_u16(), e.to_string());
                 self.state
@@ -303,6 +378,8 @@ struct StreamContext {
     model_id: String,
     routing: crate::config::RoutingConfig,
     pricing: Option<Pricing>,
+    provider_id: String,
+    class: Option<ModelClass>,
 }
 
 /// Pipe canonical events through the egress encoder into an SSE byte stream.
@@ -325,6 +402,8 @@ fn sse_body(
         routing: context.routing,
         usage: Usage::default(),
         pricing: context.pricing,
+        provider_id: context.provider_id,
+        class: context.class,
         finished: false,
     };
 

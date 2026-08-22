@@ -104,6 +104,18 @@ pub fn run() {
                 // After the listener is up, so a slow round of probes cannot delay
                 // the port being ready.
                 desktop.elect_if_configured().await;
+
+                // Spend is flushed on a timer as well as at shutdown, so a hard kill
+                // loses seconds of history rather than the whole run.
+                let ledger_keeper = Arc::clone(&desktop);
+                tauri::async_runtime::spawn(async move {
+                    let mut tick = tokio::time::interval(std::time::Duration::from_secs(10));
+                    loop {
+                        tick.tick().await;
+                        ledger_keeper.flush_ledger();
+                    }
+                });
+
             });
 
             Ok(())

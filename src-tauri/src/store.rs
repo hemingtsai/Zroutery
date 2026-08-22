@@ -5,9 +5,13 @@
 
 use std::path::{Path, PathBuf};
 
+use zroutery_core::budget::Ledger;
 use zroutery_core::config::AppConfig;
 
 pub const FILE_NAME: &str = "config.json";
+/// Spend sits beside the configuration but not inside it: it is data the proxy
+/// produced, not a setting the user wrote.
+pub const LEDGER_FILE: &str = "spend.json";
 
 /// Read the configuration, falling back to defaults when the file is missing.
 ///
@@ -66,12 +70,36 @@ pub fn generate_token() -> String {
     format!("zr-{}", uuid::Uuid::new_v4().simple())
 }
 
+/// Read the spend ledger, pruning what has aged out of every budget window.
+///
+/// A missing or unreadable file is an empty ledger rather than an error: losing the
+/// history is bad, and refusing to start because of it is worse.
+pub fn load_ledger(dir: &Path) -> Ledger {
+    let mut ledger = std::fs::read_to_string(dir.join(LEDGER_FILE))
+        .ok()
+        .and_then(|text| serde_json::from_str::<Ledger>(&text).ok())
+        .unwrap_or_default();
+    ledger.prune(chrono::Local::now());
+    ledger
+}
+
+pub fn save_ledger(dir: &Path, ledger: &Ledger) -> Result<(), String> {
+    let text = serde_json::to_string(ledger).map_err(|e| e.to_string())?;
+    write_atomically(dir, LEDGER_FILE, &text).map(|_| ())
+}
+
 /// Write atomically: a crash mid-save must not truncate the config.
 pub fn save(dir: &Path, cfg: &AppConfig) -> Result<PathBuf, String> {
-    std::fs::create_dir_all(dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
-    let path = dir.join(FILE_NAME);
-    let tmp = dir.join(format!("{FILE_NAME}.tmp"));
     let text = serde_json::to_string_pretty(cfg).map_err(|e| e.to_string())?;
+    write_atomically(dir, FILE_NAME, &text)
+}
+
+/// Through a temporary file and a rename, so a crash cannot leave a half written
+/// file where a whole one used to be.
+fn write_atomically(dir: &Path, name: &str, text: &str) -> Result<PathBuf, String> {
+    std::fs::create_dir_all(dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+    let path = dir.join(name);
+    let tmp = dir.join(format!("{name}.tmp"));
     std::fs::write(&tmp, text).map_err(|e| format!("cannot write {}: {e}", tmp.display()))?;
     std::fs::rename(&tmp, &path).map_err(|e| format!("cannot replace {}: {e}", path.display()))?;
     Ok(path)
