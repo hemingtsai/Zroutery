@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::billing::{BalanceConfig, BaseDepth, Pricing};
+use crate::election::ScoringConfig;
 use crate::ir::Dialect;
 pub use crate::protocol::ProviderQuirks;
 
@@ -315,6 +316,9 @@ pub enum RoutingStrategy {
     RoundRobin,
     /// Lowest observed latency first.
     LowestLatency,
+    /// The order an election decided from measured latency and price. Falls back
+    /// to `Priority` until one has been held.
+    Balanced,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -347,6 +351,13 @@ pub struct RoutingConfig {
     /// classified by hand.
     #[serde(default = "default_true")]
     pub match_claude_names: bool,
+    /// How `Balanced` weighs latency against price.
+    #[serde(default)]
+    pub scoring: ScoringConfig,
+    /// Hold an election when the proxy starts, so the pinned order reflects today
+    /// rather than whenever it was last run. Costs one tiny request per model.
+    #[serde(default = "default_true")]
+    pub elect_on_start: bool,
 }
 
 impl RoutingConfig {
@@ -372,6 +383,8 @@ impl Default for RoutingConfig {
             unknown_model_fallback: None,
             client_aliases: BTreeMap::new(),
             match_claude_names: true,
+            scoring: ScoringConfig::default(),
+            elect_on_start: true,
         }
     }
 }

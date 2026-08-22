@@ -26,7 +26,8 @@ use tokio::sync::oneshot;
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 
 use crate::billing::Pricing;
-use crate::config::{AppConfig, ProviderConfig, SecretStore, ServerConfig};
+use crate::config::{AppConfig, ModelClass, ProviderConfig, SecretStore, ServerConfig};
+use crate::election::{self, Election, Measurement};
 use crate::error::{Error, Result};
 use crate::ir::Dialect;
 use crate::protocol;
@@ -103,6 +104,70 @@ impl AppState {
             Some(k) if !k.is_empty() => Ok(Some(k)),
             _ => Err(Error::MissingApiKey(provider.name.clone())),
         }
+    }
+
+    /// Probe every class member, rank the results, and pin the outcome.
+    ///
+    /// The runner lives here rather than in [`crate::election`] because it needs the
+    /// registry, the HTTP client and the secret store, and keeping those out of the
+    /// scoring module is what lets the scoring be a pure function with tests that
+    /// never open a socket.
+    ///
+    /// Probes run one at a time on purpose: fired together they would queue behind
+    /// each other on the same uplink and measure the queue instead of the providers.
+    pub async fn hold_election(&self) -> Election {
+        let registry = self.registry();
+        let scoring = registry.config().routing.scoring.clone();
+        let mut election = Election::new(scoring.clone());
+
+        for class in ModelClass::ALL {
+            let members = registry.class_members(class);
+            if members.is_empty() {
+                continue;
+            }
+
+            let mut measurements = Vec::with_capacity(members.len());
+            for entry in members {
+                let exposed = entry.exposed_id();
+                let mut measurement = Measurement::new(&exposed);
+                measurement.priority = entry.priority;
+                measurement.price = entry.pricing.as_ref().map(|p| scoring.reference_cost(p));
+
+                measurement = match registry
+                    .provider_of(entry)
+                    .and_then(|provider| Ok((provider, self.api_key(provider)?)))
+                {
+                    Ok((provider, key)) => {
+                        match self
+                            .upstream
+                            .probe(provider, key.as_deref(), &entry.upstream_model)
+                            .await
+                        {
+                            Ok(latency) => {
+                                // A probe is a real call, so it is also the freshest
+                                // health signal there is.
+                                self.router.report_success(&exposed, latency);
+                                measurement.answered(latency)
+                            }
+                            Err(e) => {
+                                let routing = &registry.config().routing;
+                                self.router.report_failure(&exposed, &e, routing);
+                                measurement.failed(e.to_string())
+                            }
+                        }
+                    }
+                    Err(e) => measurement.failed(e.to_string()),
+                };
+                measurements.push(measurement);
+            }
+
+            election
+                .classes
+                .insert(class, election::rank(class, &measurements, &scoring));
+        }
+
+        self.router.set_election(election.clone());
+        election
     }
 }
 

@@ -59,6 +59,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Arc::new(KeychainSecrets::with_env_fallback(KEYCHAIN_SERVICE)),
     ));
 
+    // `--elect` is the same idea for routing: probe every class member, print the
+    // order it decided, and exit. Handy from a shell, and what the smoke test drives.
+    if std::env::args().any(|a| a == "--elect") {
+        let election = desktop.hold_election().await;
+        if election.classes.is_empty() {
+            println!("no class has an enabled model to measure");
+        }
+        for (class, outcome) in &election.classes {
+            println!("{}:", class.virtual_id());
+            for ranked in &outcome.ranked {
+                println!(
+                    "  {:<34} {}",
+                    ranked.model_id,
+                    ranked.note.clone().unwrap_or_default()
+                );
+            }
+            if let Some(note) = &outcome.note {
+                println!("  ({note})");
+            }
+        }
+        return Ok(());
+    }
+
     // `--balances` is a diagnostic: ask every provider that publishes a balance,
     // print what came back, and exit without serving.
     if std::env::args().any(|a| a == "--balances") {

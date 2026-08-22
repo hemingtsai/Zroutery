@@ -9,6 +9,7 @@
 //!
 //! * [`ir`] is the canonical representation every dialect is translated through.
 //! * [`billing`] prices a request and reads provider balances.
+//! * [`election`] picks a class's primary from measured latency and price.
 //! * [`config`] holds providers, the model registry and routing policy.
 //! * [`registry`] resolves a client model id (including `*-class` virtual ids).
 //! * [`router`] picks candidates, tracks health and drives failover.
@@ -18,6 +19,7 @@
 
 pub mod billing;
 pub mod config;
+pub mod election;
 pub mod error;
 pub mod ir;
 pub mod protocol;
@@ -35,6 +37,7 @@ pub use config::{
     AppConfig, ConfigIssue, IssueSeverity, MemorySecretStore, ModelClass, ModelEntry,
     ProviderConfig, ProviderKind, RoutingConfig, RoutingStrategy, SecretStore, ServerConfig,
 };
+pub use election::{ClassElection, Election, Measurement, Ranked, ScoringConfig};
 pub use error::{Error, Result};
 pub use ir::{
     ChatRequest, ChatResponse, ContentBlock, Dialect, Message, Role, StopReason, StreamEvent, Usage,

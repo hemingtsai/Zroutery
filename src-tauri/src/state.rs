@@ -10,7 +10,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex as AsyncMutex;
 use zroutery_core::billing::Balance;
-use zroutery_core::config::{AppConfig, ConfigIssue, IssueSeverity, ServerConfig};
+use zroutery_core::config::{AppConfig, ConfigIssue, IssueSeverity, RoutingStrategy, ServerConfig};
+use zroutery_core::election::Election;
 use zroutery_core::router::ModelHealth;
 use zroutery_core::server::{AppState, ServerHandle};
 use zroutery_core::stats::{RequestRecord, StatsSummary};
@@ -74,6 +75,8 @@ pub struct Snapshot {
     pub version: String,
     /// provider id -> last balance check, for the providers that were asked.
     pub balances: BTreeMap<String, BalanceStatus>,
+    /// The last election, when one has been held this run.
+    pub election: Option<Election>,
 }
 
 /// The subset the Activity tab polls for.
@@ -166,6 +169,7 @@ impl Desktop {
             version: env!("CARGO_PKG_VERSION").to_string(),
             exposed_ids: config.exposed_ids(),
             balances: self.balances(),
+            election: self.core.router().election(),
             config,
         }
     }
@@ -247,6 +251,35 @@ impl Desktop {
             health: self.core.router().health_snapshot(),
             summary: self.core.stats().summary(),
             recent: self.core.stats().recent(200),
+        }
+    }
+
+    /// Hold an election and pin the result. Costs one tiny request per model, which
+    /// is why it happens on demand or at startup and never on a timer.
+    pub async fn hold_election(&self) -> Election {
+        self.core.hold_election().await
+    }
+
+    /// Elect at startup, when the user asked for the balanced strategy.
+    ///
+    /// Skipped for every other strategy: probing costs money, and an order nobody
+    /// reads is not worth paying for.
+    pub async fn elect_if_configured(&self) {
+        let routing = self.core.config().routing.clone();
+        if routing.strategy != RoutingStrategy::Balanced || !routing.elect_on_start {
+            return;
+        }
+        for (class, outcome) in &self.hold_election().await.classes {
+            tracing::info!(
+                "{} elected for {}{}",
+                outcome.winner().unwrap_or("nothing"),
+                class.virtual_id(),
+                outcome
+                    .note
+                    .as_ref()
+                    .map(|n| format!(" ({n})"))
+                    .unwrap_or_default()
+            );
         }
     }
 

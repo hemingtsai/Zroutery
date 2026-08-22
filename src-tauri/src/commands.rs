@@ -127,6 +127,13 @@ pub async fn fetch_provider_models(
         .map_err(|e| e.to_string())
 }
 
+/// Hold an election now and pin the outcome. Costs one tiny request per model.
+#[tauri::command]
+pub async fn run_election(app: AppHandle, desktop: State<'_, Arc<Desktop>>) -> Cmd<Snapshot> {
+    desktop.hold_election().await;
+    Ok(refreshed(&app, &desktop).await)
+}
+
 #[tauri::command]
 pub async fn start_proxy(app: AppHandle, desktop: State<'_, Arc<Desktop>>) -> Cmd<Snapshot> {
     desktop.start().await?;

@@ -41,6 +41,7 @@ pub fn run() {
             commands::fetch_provider_models,
             commands::refresh_balance,
             commands::refresh_balances,
+            commands::run_election,
             commands::start_proxy,
             commands::stop_proxy,
             commands::regenerate_token,
@@ -100,6 +101,9 @@ pub fn run() {
                     }
                 }
                 tray::refresh(&handle, &desktop).await;
+                // After the listener is up, so a slow round of probes cannot delay
+                // the port being ready.
+                desktop.elect_if_configured().await;
             });
 
             Ok(())

@@ -12,6 +12,7 @@ use rand::Rng;
 use serde::{Deserialize, Serialize};
 
 use crate::config::{ModelClass, ModelEntry, ProviderConfig, RoutingConfig, RoutingStrategy};
+use crate::election::Election;
 use crate::error::{Error, Result};
 use crate::registry::{Registry, Resolution};
 
@@ -93,6 +94,10 @@ impl Clock {
 pub struct Router {
     health: Mutex<HashMap<String, HealthState>>,
     rr: Mutex<HashMap<ModelClass, usize>>,
+    /// The last election, when one has been held. `Balanced` follows the order it
+    /// decided instead of re-deciding per request, which is the whole point: a
+    /// route that changes under load cannot be reasoned about.
+    election: Mutex<Option<Election>>,
     clock: Clock,
 }
 
@@ -107,6 +112,7 @@ impl Router {
         Router {
             health: Mutex::new(HashMap::new()),
             rr: Mutex::new(HashMap::new()),
+            election: Mutex::new(None),
             clock: Clock::new(),
         }
     }
@@ -190,6 +196,7 @@ impl Router {
             return members.to_vec();
         }
         match strategy {
+            RoutingStrategy::Balanced => self.elected_order(members, class),
             RoutingStrategy::Priority => {
                 let mut groups: Vec<(i32, Vec<&ModelEntry>)> = Vec::new();
                 for m in members {
@@ -233,6 +240,58 @@ impl Router {
                 v
             }
         }
+    }
+
+    /// The order the last election decided, for the members that still exist.
+    ///
+    /// Anything the election did not see — added since, or unavailable when it ran
+    /// — goes after what it did, in priority order, so a new model is used but does
+    /// not silently take the primary slot it was never measured for. With no
+    /// election yet this is plain priority order, which is what the user configured
+    /// by hand.
+    fn elected_order<'a>(
+        &self,
+        members: &[&'a ModelEntry],
+        class: ModelClass,
+    ) -> Vec<&'a ModelEntry> {
+        let by_priority = |list: &mut Vec<&'a ModelEntry>| {
+            list.sort_by(|a, b| {
+                a.priority
+                    .cmp(&b.priority)
+                    .then_with(|| a.exposed_id().cmp(&b.exposed_id()))
+            })
+        };
+
+        let guard = crate::sync::lock(&self.election);
+        let Some(order) = guard.as_ref().and_then(|e| e.order_for(class)) else {
+            let mut fallback = members.to_vec();
+            by_priority(&mut fallback);
+            return fallback;
+        };
+
+        let mut elected: Vec<&ModelEntry> = Vec::with_capacity(members.len());
+        for id in &order {
+            if let Some(entry) = members.iter().find(|m| m.exposed_id() == *id) {
+                elected.push(entry);
+            }
+        }
+        let mut unseen: Vec<&ModelEntry> = members
+            .iter()
+            .filter(|m| !order.iter().any(|id| *id == m.exposed_id()))
+            .copied()
+            .collect();
+        by_priority(&mut unseen);
+        elected.extend(unseen);
+        elected
+    }
+
+    /// Record an election. The order it decided is used until the next one.
+    pub fn set_election(&self, election: Election) {
+        *crate::sync::lock(&self.election) = Some(election);
+    }
+
+    pub fn election(&self) -> Option<Election> {
+        crate::sync::lock(&self.election).clone()
     }
 
     /// Order a group randomly, with probability proportional to weight.

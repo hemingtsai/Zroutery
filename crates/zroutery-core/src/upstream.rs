@@ -52,6 +52,28 @@ impl Upstream {
         Upstream { client }
     }
 
+    /// Time a minimal completion, for an election.
+    ///
+    /// One token of output is enough to measure the whole round trip: DNS, TLS, the
+    /// provider's queue and its first token. It is a real request, so it goes
+    /// through the same encoder and the same quirks as traffic does, and it costs a
+    /// fraction of a cent — which is why nothing does this on a timer.
+    pub async fn probe(
+        &self,
+        provider: &ProviderConfig,
+        api_key: Option<&str>,
+        upstream_model: &str,
+    ) -> Result<u64> {
+        let mut request = ChatRequest::new(upstream_model, provider.kind.dialect());
+        request.messages.push(crate::ir::Message::user_text("ping"));
+        request.max_tokens = Some(1);
+        let body = encode_for(provider, &request, upstream_model, Some(1))?;
+
+        let started = std::time::Instant::now();
+        self.send(provider, api_key, &body).await?;
+        Ok(started.elapsed().as_millis() as u64)
+    }
+
     /// Non streaming call. `body` is already in the provider's dialect.
     pub async fn send(
         &self,

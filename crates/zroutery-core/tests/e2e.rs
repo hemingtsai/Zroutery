@@ -14,6 +14,7 @@ use serde_json::{json, Value};
 use zroutery_core::billing::{BalanceConfig, BalancePreset, BalanceProbe, Pricing};
 use zroutery_core::config::{
     AppConfig, MemorySecretStore, ModelClass, ModelEntry, ProviderConfig, ProviderKind,
+    RoutingStrategy,
 };
 use zroutery_core::server::{AppState, ServerHandle};
 
@@ -173,6 +174,16 @@ async fn mock_anthropic_messages(
         .and_then(|v| v.to_str().ok())
         .map(str::to_string);
     mock.record("/v1/messages", key, &body);
+
+    // Same convention as the OpenAI side, so a test can make either dialect fail.
+    if body["model"].as_str().unwrap_or("").starts_with("broken") {
+        return (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"type": "error",
+                        "error": {"type": "api_error", "message": "upstream exploded"}})),
+        )
+            .into_response();
+    }
 
     let stream = body["stream"].as_bool().unwrap_or(false);
     if !stream {
@@ -654,6 +665,135 @@ async fn missing_api_key_fails_over_and_reports_clearly() {
         .unwrap()
         .contains("no API key"));
     assert_eq!(h.mock.count(), 0);
+
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn an_election_pins_the_cheap_fast_model_as_primary() {
+    let (addr, mock) = start_mock().await;
+    let mut cfg = config_for(addr);
+    cfg.routing.strategy = RoutingStrategy::Balanced;
+    // Two sonnet members priced ten to one, both answered by the same mock at the
+    // same speed, so price is what has to decide.
+    cfg.models[1].pricing = Some(Pricing::new("USD", 0.2, 0.8));
+    cfg.models.push(
+        ModelEntry::for_upstream("openai", "gpt-sonnet", Some(ModelClass::Sonnet))
+            // Priority puts this one first; the election is expected to overrule it.
+            .with_priority(-100),
+    );
+    let last = cfg.models.len() - 1;
+    cfg.models[last].pricing = Some(Pricing::new("USD", 2.0, 8.0));
+    let h = Harness::start(cfg, mock).await;
+
+    // Before any election the configured priority still rules.
+    let resp = h
+        .post("/v1/messages")
+        .json(&json!({"model": "sonnet-class", "max_tokens": 8,
+                      "messages": [{"role": "user", "content": "hi"}]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.headers()["x-zroutery-model"], "openai-gpt-sonnet");
+
+    let election = h.state.hold_election().await;
+    let sonnet = election.classes.get(&ModelClass::Sonnet).unwrap();
+    assert!(sonnet.priced, "both members are priced in one currency");
+    assert_eq!(sonnet.winner(), Some("deepseek-deepseek-v4-pro"));
+    assert!(sonnet.ranked[0].latency_ms.is_some());
+    assert!(sonnet.ranked[0].note.as_ref().unwrap().contains("primary"));
+
+    // Traffic follows the election from here on, not the priority.
+    let resp = h
+        .post("/v1/messages")
+        .json(&json!({"model": "sonnet-class", "max_tokens": 8,
+                      "messages": [{"role": "user", "content": "hi"}]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.headers()["x-zroutery-model"],
+        "deepseek-deepseek-v4-pro"
+    );
+
+    // A probe is a real call, so it doubles as the freshest health signal.
+    let health = h.state.router().health_snapshot();
+    assert!(health
+        .iter()
+        .any(|m| m.model_id == "openai-gpt-sonnet" && m.total_success > 0));
+
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn an_election_ranks_a_broken_model_last_and_says_why() {
+    let (addr, mock) = start_mock().await;
+    let mut cfg = config_for(addr);
+    cfg.routing.strategy = RoutingStrategy::Balanced;
+    // A second opus member that always fails; the election has to notice.
+    cfg.models[3].upstream_model = "broken-model".into();
+    cfg.models[3].class = Some(ModelClass::Opus);
+    let h = Harness::start(cfg, mock).await;
+
+    let election = h.state.hold_election().await;
+    let opus = election.classes.get(&ModelClass::Opus).unwrap();
+    assert_eq!(opus.winner(), Some("openai-gpt-5.3-sol"));
+    let last = opus.ranked.last().unwrap();
+    assert_eq!(last.model_id, "anthropic-broken-model");
+    assert!(last.score.is_none());
+    assert!(last.note.as_ref().unwrap().contains("did not answer"));
+
+    // Neither is priced, so latency decided and the reason is on the record.
+    assert!(!opus.priced);
+    assert!(opus
+        .note
+        .as_ref()
+        .unwrap()
+        .contains("not every model has a price"));
+
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_model_added_after_an_election_is_used_but_not_promoted() {
+    let (addr, mock) = start_mock().await;
+    let mut cfg = config_for(addr);
+    cfg.routing.strategy = RoutingStrategy::Balanced;
+    let h = Harness::start(cfg, mock).await;
+
+    let election = h.state.hold_election().await;
+    assert_eq!(
+        election.classes.get(&ModelClass::Sonnet).unwrap().winner(),
+        Some("deepseek-deepseek-v4-pro")
+    );
+
+    // Add a member whose priority would otherwise put it first.
+    let mut next = (*h.state.config()).clone();
+    next.models.push(
+        ModelEntry::for_upstream("openai", "gpt-sonnet", Some(ModelClass::Sonnet))
+            .with_priority(-100),
+    );
+    h.state.set_config(next);
+
+    // It is reachable, but the measured model keeps the primary slot until an
+    // election has something to say about the newcomer.
+    let resp = h
+        .post("/v1/messages")
+        .json(&json!({"model": "sonnet-class", "max_tokens": 8,
+                      "messages": [{"role": "user", "content": "hi"}]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.headers()["x-zroutery-model"],
+        "deepseek-deepseek-v4-pro"
+    );
+    assert!(h
+        .state
+        .registry()
+        .class_members(ModelClass::Sonnet)
+        .iter()
+        .any(|m| m.upstream_model == "gpt-sonnet"));
 
     h.shutdown().await;
 }
