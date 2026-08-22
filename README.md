@@ -175,6 +175,30 @@ usage 算出每次请求的花费：
 每百万 token 填好，之后仍可修改。流式请求拿不到 `x-zroutery-cost`（响应头早就发出去了），
 但 Activity 里照样记账。
 
+## 预算护栏
+
+给「全部 / 某个 provider / 某个 class」设日或月上限，在 Routing 面板里加。到额之后两种处理：
+**拒绝**（返回 402 并说明是哪条限额），或者**降级到便宜的 class**。
+
+三件事决定了它的行为，值得先说清楚：
+
+- **一次请求的花费只有跑完才知道**，所以预算是「越线检测」而不是「预授权」：越线那一次会正常完成，
+  下一次才被拦。也就是说最多超出一次请求的量。想做到严格不超，就得靠一个各家都不认的 token 估算，
+  那不如老实说。
+- **花费会落盘**（`spend.json`，在配置目录旁边）。重启就忘的护栏不算护栏——请求日志是刻意只放内存的，
+  所以它不适合用来记账。落盘是定时（10 秒）+ 退出时，硬杀最多丢几秒，不会丢整轮。
+- **依然不换算币种**。USD 的预算只统计 USD 花费；如果限额的币种你的模型压根不用，那它永远不会触发，
+  校验里会直接警告，而不是假装在保护你。
+
+降级不能用来绕开限额：便宜 class 自己的预算照样生效，一圈降级绕回来会变成拒绝而不是死循环。
+被预算拦下的请求不重试、不失败转移、也不计入模型健康度——重试就等于把刚拒掉的钱花出去。
+
+```
+$ curl ... -d '{"model":"sonnet-class",...}'
+{"error":{"type":"budget_exceeded",
+          "message":"stopped by a budget: the today limit for everything (5.00 USD) is used up"}}
+```
+
 ## 余额查询
 
 各家余额接口没有统一标准，所以 provider 上挂一个 *probe*：一个路径加几个 JSON pointer。内置这些预设：
@@ -236,6 +260,8 @@ zroutery-headless --elect        # 跑一次选举，打印每个 class 的排�
 | GET | `/v1/status` | 版本、模型数、provider 数（需要 token） |
 | GET | `/health` | 只回 `{"status":"ok"}`，唯一免鉴权的路由 |
 
+花费超预算时返回 **402**（`budget_exceeded`）。
+
 **`/v1` 前缀可有可无**：上面每个路径去掉 `/v1` 也一样能用（`/models`、`/chat/completions`、
 `/messages` …），因为各家客户端对「base URL 要不要带 `/v1`」的约定并不一致。所以
 `OPENAI_BASE_URL` 填 `http://127.0.0.1:8787` 或 `http://127.0.0.1:8787/v1` 都行。
@@ -263,10 +289,11 @@ zroutery-headless --elect        # 跑一次选举，打印每个 class 的排�
 ## 项目结构
 
 ```
-crates/zroutery-core/     协议转换、模型注册表、路由、计费、HTTP 服务（无 GUI 依赖，152 个测试）
+crates/zroutery-core/     协议转换、模型注册表、路由、计费、预算、HTTP 服务（无 GUI 依赖，180 个测试）
   src/ir.rs               统一中间表示：2 个 decoder + 2 个 encoder，避免 N×M
   src/protocol/           anthropic.rs / openai.rs，含两个方向的 SSE 状态机
   src/billing.rs          价格计算（按币种分开）、余额 probe 与五个内置预设
+  src/budget.rs           支出账本（落盘）与限额判定：拒绝或降级
   src/config.rs           provider、模型身份与 id 推导、路由策略、配置迁移
   src/registry.rs         模型 id 解析：id/别名走一次哈希，class 成员表预先算好
   src/election.rs         按延迟+价格给类内成员打分排序（纯函数，15 个测试）

@@ -289,6 +289,71 @@ def write_config(path: str, upstream: str):
         json.dump(config, fh, indent=2)
 
 
+def check_budgets(binary: str, upstream: str, base_env: dict) -> None:
+    """A spent budget refuses the next request, in its own instance.
+
+    Separate from the main run because a used up limit would stop everything after
+    it, which is exactly what it is supposed to do.
+    """
+    config_dir = tempfile.mkdtemp(prefix="zroutery-budget-")
+    write_config(config_dir, upstream)
+    with open(os.path.join(config_dir, "config.json")) as fh:
+        config = json.load(fh)
+    config["server"]["port"] = 8792
+    # A millionth of a cent, so the first priced request puts the ledger over it.
+    config["budgets"] = [
+        {
+            "scope": {"kind": "global"},
+            "period": "day",
+            "limit": {"currency": "CNY", "amount": 0.000001},
+            "on_exceeded": {"action": "reject"},
+        }
+    ]
+    with open(os.path.join(config_dir, "config.json"), "w") as fh:
+        json.dump(config, fh)
+
+    env = dict(base_env)
+    env["ZROUTERY_CONFIG_DIR"] = config_dir
+    proxy = subprocess.Popen([binary], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    base = "http://127.0.0.1:8792"
+    try:
+        for _ in range(100):
+            try:
+                if request(f"{base}/health", token=None)[0] == 200:
+                    break
+            except Exception:
+                time.sleep(0.1)
+
+        ask = lambda: request(
+            f"{base}/v1/messages",
+            {"model": "sonnet-class", "max_tokens": 8,
+             "messages": [{"role": "user", "content": "hi"}]},
+        )
+        first, _, _ = ask()
+        check("the request that crosses the line completes", first == 200, f"got {first}")
+        status, _, body = ask()
+        check("the next one is refused with 402", status == 402, f"got {status}: {body}")
+        check(
+            "and it names the limit that stopped it",
+            "today" in json.dumps(body) and "everything" in json.dumps(body),
+            str(body)[:160],
+        )
+    finally:
+        proxy.terminate()
+        try:
+            proxy.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proxy.kill()
+
+    # Written at shutdown, so the next launch starts from what was already spent.
+    ledger = os.path.join(config_dir, "spend.json")
+    check("spend is written out for the next run", os.path.exists(ledger), ledger)
+    if os.path.exists(ledger):
+        with open(ledger) as fh:
+            check("and it records a charge", len(json.load(fh).get("entries", {})) > 0, fh.name)
+    shutil.rmtree(config_dir, ignore_errors=True)
+
+
 def main() -> int:
     binary = sys.argv[1] if len(sys.argv) > 1 else "target/debug/zroutery-headless"
     if not os.path.exists(binary):
@@ -579,6 +644,9 @@ def main() -> int:
             "not every model has a price" in out,
             out.strip()[:300],
         )
+
+        print("budgets")
+        check_budgets(binary, upstream, env)
 
         print("balance query")
         balances = subprocess.run(

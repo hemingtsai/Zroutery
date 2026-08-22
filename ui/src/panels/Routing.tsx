@@ -4,7 +4,13 @@ import {
   CLASSES,
   costText,
   errorText,
+  money,
+  periodLabel,
+  scopeLabel,
   type AppConfig,
+  type Budget,
+  type BudgetPeriod,
+  type BudgetScope,
   type ClassElection,
   type Election,
   type ModelClass,
@@ -50,12 +56,56 @@ export default function Routing({
   const { config, server } = snapshot;
   const [aliasDraft, setAliasDraft] = useState({ from: "", to: "sonnet" as ModelClass });
   const [originDraft, setOriginDraft] = useState("");
+  const [budgetDraft, setBudgetDraft] = useState({
+    scope: "global",
+    period: "day" as BudgetPeriod,
+    amount: 0,
+    currency: "USD",
+  });
   const [revealed, setRevealed] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
   const patchRouting = (patch: Partial<AppConfig["routing"]>) => {
     const next = structuredClone(config);
     Object.assign(next.routing, patch);
+    void save(next);
+  };
+
+  /** `global`, `class:sonnet` or `provider:deepseek` back into a tagged scope. */
+  const parseScope = (value: string): BudgetScope => {
+    const [kind, rest] = value.split(":");
+    if (kind === "class") return { kind: "class", class: rest as ModelClass };
+    if (kind === "provider") return { kind: "provider", id: rest };
+    return { kind: "global" };
+  };
+
+  const addBudget = () => {
+    const next = structuredClone(config);
+    next.budgets.push({
+      scope: parseScope(budgetDraft.scope),
+      period: budgetDraft.period,
+      limit: {
+        currency: budgetDraft.currency.trim().toUpperCase() || "USD",
+        amount: budgetDraft.amount,
+      },
+      on_exceeded: { action: "reject" },
+      enabled: true,
+    });
+    setBudgetDraft({ ...budgetDraft, amount: 0 });
+    void save(next);
+  };
+
+  const patchBudget = (index: number, patch: Partial<Budget>) => {
+    const next = structuredClone(config);
+    const budget = next.budgets[index];
+    if (!budget) return;
+    Object.assign(budget, patch);
+    void save(next);
+  };
+
+  const removeBudget = (index: number) => {
+    const next = structuredClone(config);
+    next.budgets.splice(index, 1);
     void save(next);
   };
 
@@ -244,6 +294,137 @@ export default function Routing({
           <ElectionResult election={snapshot.election} />
         </Card>
       )}
+
+      <Card title="Budgets">
+        <p className="field-hint">
+          A limit stops spending once it is reached. Because a request only reveals its cost when it
+          finishes, the one that crosses the line completes and the next is stopped — the overshoot
+          is at most one request. Spend is kept across restarts, and only counts the currency the
+          limit is in.
+        </p>
+        {snapshot.budgets.length > 0 && (
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Covers</th>
+                <th>Window</th>
+                <th>Limit</th>
+                <th>Spent</th>
+                <th>When reached</th>
+                <th>On</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {snapshot.budgets.map((status, index) => {
+                const b = status.budget;
+                const over = status.used >= 1;
+                return (
+                  <tr key={index} className={over ? "row-warn" : ""}>
+                    <td>{scopeLabel(b.scope)}</td>
+                    <td>{periodLabel(b.period)}</td>
+                    <td>{money(b.limit.currency, b.limit.amount)}</td>
+                    <td>
+                      {money(status.spent.currency, status.spent.amount)}{" "}
+                      {over ? (
+                        <Badge tone="danger">used up</Badge>
+                      ) : (
+                        <span className="muted">{Math.round(status.used * 100)}%</span>
+                      )}
+                    </td>
+                    <td>
+                      <select
+                        aria-label={`When the ${scopeLabel(b.scope)} budget is reached`}
+                        value={b.on_exceeded.action === "degrade" ? b.on_exceeded.to : "reject"}
+                        onChange={(e) =>
+                          patchBudget(index, {
+                            on_exceeded:
+                              e.currentTarget.value === "reject"
+                                ? { action: "reject" }
+                                : { action: "degrade", to: e.currentTarget.value as ModelClass },
+                          })
+                        }
+                      >
+                        <option value="reject">refuse the request</option>
+                        {CLASSES.map((c) => (
+                          <option key={c} value={c}>
+                            serve from {c}-class
+                          </option>
+                        ))}
+                      </select>
+                    </td>
+                    <td>
+                      <input
+                        type="checkbox"
+                        aria-label={`Enable the ${scopeLabel(b.scope)} budget`}
+                        checked={b.enabled}
+                        onChange={(e) => patchBudget(index, { enabled: e.currentTarget.checked })}
+                      />
+                    </td>
+                    <td>
+                      <Button kind="ghost" onClick={() => removeBudget(index)}>
+                        Delete
+                      </Button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+        <div className="controls">
+          <Field label="Covers">
+            <select
+              value={budgetDraft.scope}
+              onChange={(e) => setBudgetDraft({ ...budgetDraft, scope: e.currentTarget.value })}
+            >
+              <option value="global">everything</option>
+              {CLASSES.map((c) => (
+                <option key={c} value={`class:${c}`}>
+                  {c}-class
+                </option>
+              ))}
+              {config.providers.map((p) => (
+                <option key={p.id} value={`provider:${p.id}`}>
+                  provider {p.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Window">
+            <select
+              value={budgetDraft.period}
+              onChange={(e) =>
+                setBudgetDraft({ ...budgetDraft, period: e.currentTarget.value as BudgetPeriod })
+              }
+            >
+              <option value="day">per day</option>
+              <option value="month">per month</option>
+            </select>
+          </Field>
+          <NumberField
+            label="Limit"
+            hint="In the currency your models bill in"
+            min={0}
+            value={budgetDraft.amount}
+            onCommit={(amount) => setBudgetDraft({ ...budgetDraft, amount: amount ?? 0 })}
+          />
+          <Field label="Currency">
+            <input
+              value={budgetDraft.currency}
+              onChange={(e) =>
+                setBudgetDraft({ ...budgetDraft, currency: e.currentTarget.value.toUpperCase() })
+              }
+            />
+          </Field>
+          <div className="field-actions">
+            <Button onClick={addBudget} disabled={busy || budgetDraft.amount <= 0}>
+              Add budget
+            </Button>
+          </div>
+        </div>
+      </Card>
+
 
 
       <Card title="Client model aliases">

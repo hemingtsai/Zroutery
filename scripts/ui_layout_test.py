@@ -122,6 +122,15 @@ SNAPSHOT = {
                 },
             },
         ],
+        "budgets": [
+            {
+                "scope": {"kind": "global"},
+                "period": "day",
+                "limit": {"currency": "CNY", "amount": 20.0},
+                "on_exceeded": {"action": "reject"},
+                "enabled": True,
+            }
+        ],
         "models": [
             {
                 "provider_id": "deepseek",
@@ -260,6 +269,19 @@ SNAPSHOT = {
             }
         },
     },
+    "budgets": [
+        {
+            "budget": {
+                "scope": {"kind": "global"},
+                "period": "day",
+                "limit": {"currency": "CNY", "amount": 20.0},
+                "on_exceeded": {"action": "reject"},
+                "enabled": True,
+            },
+            "spent": {"currency": "CNY", "amount": 4.5},
+            "used": 0.225,
+        }
+    ],
     "balances": {
         "deepseek": {
             "checked_at": "2026-01-01T00:00:00Z",

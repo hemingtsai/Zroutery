@@ -139,7 +139,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("token:   authentication disabled");
     }
 
-    tokio::signal::ctrl_c().await?;
+    // Spend is flushed periodically as well as at shutdown, so a kill costs seconds
+    // of history rather than the whole run.
+    let keeper = Arc::clone(&desktop);
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(10));
+        loop {
+            tick.tick().await;
+            keeper.flush_ledger();
+        }
+    });
+
+    // SIGTERM as well as Ctrl-C: a supervisor or a plain `kill` should still get the
+    // clean shutdown, because that is when the ledger is written.
+    let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {}
+        _ = term.recv() => {}
+    }
     println!("\nshutting down");
     desktop.stop().await;
     Ok(())

@@ -191,11 +191,38 @@ export interface ServerConfig {
   log_limit: number;
 }
 
+export type BudgetPeriod = "day" | "month";
+
+/** What a budget covers. Serialised with a `kind` tag by the backend. */
+export type BudgetScope =
+  | { kind: "global" }
+  | { kind: "provider"; id: string }
+  | { kind: "class"; class: ModelClass };
+
+export type OnExceeded = { action: "reject" } | { action: "degrade"; to: ModelClass };
+
+export interface Budget {
+  scope: BudgetScope;
+  period: BudgetPeriod;
+  limit: Cost;
+  on_exceeded: OnExceeded;
+  enabled: boolean;
+}
+
+/** A budget with the spend counted against it. */
+export interface BudgetStatus {
+  budget: Budget;
+  spent: Cost;
+  /** Over 1.0 means the limit has been passed. */
+  used: number;
+}
+
 export interface AppConfig {
   server: ServerConfig;
   routing: RoutingConfig;
   providers: Provider[];
   models: ModelEntry[];
+  budgets: Budget[];
 }
 
 export interface ConfigIssue {
@@ -294,6 +321,8 @@ export interface Snapshot {
   balances: Record<string, BalanceStatus>;
   /** The last election, when one has been held this run. */
   election: Election | null;
+  /** Every budget with what has been spent against it. */
+  budgets: BudgetStatus[];
 }
 
 /** One entry of a provider's catalogue, with prices when it publishes them. */
@@ -405,6 +434,21 @@ export function defaultProbe(): BalanceProbe {
     currency_pointer: null,
     currency: null,
   };
+}
+
+export function scopeLabel(scope: BudgetScope): string {
+  switch (scope.kind) {
+    case "global":
+      return "everything";
+    case "provider":
+      return `provider ${scope.id}`;
+    case "class":
+      return `${scope.class}-class`;
+  }
+}
+
+export function periodLabel(period: BudgetPeriod): string {
+  return period === "day" ? "today" : "this month";
 }
 
 /** The virtual model id a class is exposed as. */

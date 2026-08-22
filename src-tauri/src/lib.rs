@@ -115,7 +115,6 @@ pub fn run() {
                         ledger_keeper.flush_ledger();
                     }
                 });
-
             });
 
             Ok(())
