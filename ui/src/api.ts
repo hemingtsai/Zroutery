@@ -11,7 +11,8 @@ export type RoutingStrategy =
   | "priority"
   | "weighted_random"
   | "round_robin"
-  | "lowest_latency";
+  | "lowest_latency"
+  | "balanced";
 
 export const CLASSES: ModelClass[] = ["opus", "sonnet", "haiku"];
 
@@ -130,6 +131,14 @@ export interface ModelEntry {
   pricing: Pricing | null;
 }
 
+/** How `balanced` weighs the two axes, and the request it prices them against. */
+export interface ScoringConfig {
+  price_weight: number;
+  latency_weight: number;
+  reference_input_tokens: number;
+  reference_output_tokens: number;
+}
+
 export interface RoutingConfig {
   strategy: RoutingStrategy;
   failover: boolean;
@@ -139,6 +148,34 @@ export interface RoutingConfig {
   unknown_model_fallback: ModelClass | null;
   client_aliases: Record<string, ModelClass>;
   match_claude_names: boolean;
+  scoring: ScoringConfig;
+  elect_on_start: boolean;
+}
+
+/** One model's place in its class, with the numbers that put it there. */
+export interface Ranked {
+  model_id: string;
+  /** Lower is better. `null` when the model did not answer its probe. */
+  score: number | null;
+  latency_ms: number | null;
+  price: Cost | null;
+  note: string | null;
+}
+
+export interface ClassElection {
+  class: ModelClass;
+  /** Best first. */
+  ranked: Ranked[];
+  /** Whether price took part in the scoring. */
+  priced: boolean;
+  /** Why price was left out, when it was. */
+  note: string | null;
+}
+
+export interface Election {
+  decided_at: string;
+  scoring: ScoringConfig;
+  classes: Partial<Record<ModelClass, ClassElection>>;
 }
 
 export interface ServerConfig {
@@ -255,6 +292,8 @@ export interface Snapshot {
   version: string;
   /** provider id -> last balance check. */
   balances: Record<string, BalanceStatus>;
+  /** The last election, when one has been held this run. */
+  election: Election | null;
 }
 
 /** One entry of a provider's catalogue, with prices when it publishes them. */
@@ -283,6 +322,8 @@ export const api = {
   refreshBalance: (provider_id: string) =>
     invoke<Snapshot>("refresh_balance", { providerId: provider_id }),
   refreshBalances: () => invoke<Snapshot>("refresh_balances"),
+  /** Probes every class member, so it costs one tiny request each. */
+  runElection: () => invoke<Snapshot>("run_election"),
   start: () => invoke<Snapshot>("start_proxy"),
   stop: () => invoke<Snapshot>("stop_proxy"),
   regenerateToken: () => invoke<Snapshot>("regenerate_token"),

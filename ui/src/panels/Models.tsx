@@ -265,7 +265,21 @@ export default function Models({
                           ))}
                         </select>
                       </td>
-                      <td className={m.pricing ? "" : "muted"}>{priceText(m.pricing)}</td>
+                      <td>
+                        {/* The editor lives in the row detail, so the cell itself
+                            opens it: an empty column is otherwise a dead end. */}
+                        <button
+                          className="linky"
+                          onClick={() => setExpanded(expanded === index ? null : index)}
+                          title={
+                            m.pricing
+                              ? "Edit the price"
+                              : "No price yet, so requests are logged without a cost"
+                          }
+                        >
+                          {m.pricing ? priceText(m.pricing) : "set price"}
+                        </button>
+                      </td>
                       <td>
                         <input
                           className="tiny"

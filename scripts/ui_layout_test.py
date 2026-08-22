@@ -58,7 +58,7 @@ SNAPSHOT = {
             "log_limit": 500,
         },
         "routing": {
-            "strategy": "priority",
+            "strategy": "balanced",
             "failover": True,
             "max_attempts": 3,
             "break_after_failures": 3,
@@ -66,6 +66,15 @@ SNAPSHOT = {
             "unknown_model_fallback": None,
             "client_aliases": {"claude-opus-4-1-20250805": "haiku"},
             "match_claude_names": True,
+            # The balanced strategy is what shows the election card, so the layout
+            # harness has to exercise it.
+            "scoring": {
+                "price_weight": 0.5,
+                "latency_weight": 0.5,
+                "reference_input_tokens": 1000,
+                "reference_output_tokens": 500,
+            },
+            "elect_on_start": True,
         },
         "providers": [
             {
@@ -226,6 +235,31 @@ SNAPSHOT = {
     "warning": None,
     "config_path": "/tmp/config.json",
     "version": "0.3.0",
+    "election": {
+        "decided_at": "2026-01-01T00:00:00Z",
+        "scoring": {
+            "price_weight": 0.5,
+            "latency_weight": 0.5,
+            "reference_input_tokens": 1000,
+            "reference_output_tokens": 500,
+        },
+        "classes": {
+            "sonnet": {
+                "class": "sonnet",
+                "priced": True,
+                "note": None,
+                "ranked": [
+                    {
+                        "model_id": "deepseek-deepseek-chat",
+                        "score": 0.82,
+                        "latency_ms": 640,
+                        "price": {"currency": "CNY", "amount": 0.006},
+                        "note": "primary: 640 ms, 0.0060 CNY per reference request",
+                    }
+                ],
+            }
+        },
+    },
     "balances": {
         "deepseek": {
             "checked_at": "2026-01-01T00:00:00Z",

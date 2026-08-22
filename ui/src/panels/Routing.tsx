@@ -2,8 +2,11 @@ import { useState } from "react";
 import {
   api,
   CLASSES,
+  costText,
   errorText,
   type AppConfig,
+  type ClassElection,
+  type Election,
   type ModelClass,
   type RoutingStrategy,
   type Snapshot,
@@ -13,13 +16,20 @@ import {
   Banner,
   Button,
   Card,
+  Empty,
   Field,
+  ms,
   NumberField,
   TextField,
   Toggle,
 } from "../components";
 
 const STRATEGIES: { id: RoutingStrategy; label: string; hint: string }[] = [
+  {
+    id: "balanced",
+    label: "Balanced (elected)",
+    hint: "An election measures latency and price, then pins the order",
+  },
   { id: "priority", label: "Priority", hint: "Lowest priority number first; weight breaks ties" },
   { id: "weighted_random", label: "Weighted random", hint: "Spread load by weight" },
   { id: "round_robin", label: "Round robin", hint: "Rotate through the class, ignoring priority" },
@@ -46,6 +56,12 @@ export default function Routing({
   const patchRouting = (patch: Partial<AppConfig["routing"]>) => {
     const next = structuredClone(config);
     Object.assign(next.routing, patch);
+    void save(next);
+  };
+
+  const patchScoring = (patch: Partial<AppConfig["routing"]["scoring"]>) => {
+    const next = structuredClone(config);
+    Object.assign(next.routing.scoring, patch);
     void save(next);
   };
 
@@ -175,6 +191,60 @@ export default function Routing({
           </select>
         </Field>
       </Card>
+
+      {config.routing.strategy === "balanced" && (
+        <Card
+          title="Election"
+          actions={
+            <Button kind="primary" onClick={() => run(api.runElection)} disabled={busy}>
+              Re-run now
+            </Button>
+          }
+        >
+          <p className="field-hint">
+            An election sends one tiny completion to every model in every class, then pins the
+            order by latency and price together. It runs when you ask and, with the box below
+            ticked, once at startup — never on a timer, because each round costs one request per
+            model.
+          </p>
+          <div className="controls">
+            <NumberField
+              label="Price weight"
+              hint="Relative, so 3 and 1 means the same as 0.75 and 0.25"
+              min={0}
+              value={config.routing.scoring.price_weight}
+              onCommit={(v) => patchScoring({ price_weight: v ?? 0 })}
+            />
+            <NumberField
+              label="Latency weight"
+              min={0}
+              value={config.routing.scoring.latency_weight}
+              onCommit={(v) => patchScoring({ latency_weight: v ?? 0 })}
+            />
+            <NumberField
+              label="Reference input tokens"
+              hint="Prices are per Mtok, so they need a request to be compared on"
+              min={0}
+              value={config.routing.scoring.reference_input_tokens}
+              onCommit={(v) => patchScoring({ reference_input_tokens: v ?? 0 })}
+            />
+            <NumberField
+              label="Reference output tokens"
+              min={0}
+              value={config.routing.scoring.reference_output_tokens}
+              onCommit={(v) => patchScoring({ reference_output_tokens: v ?? 0 })}
+            />
+          </div>
+          <Toggle
+            label="Hold one at startup"
+            hint="so the pinned order reflects today"
+            checked={config.routing.elect_on_start}
+            onChange={(elect_on_start) => patchRouting({ elect_on_start })}
+          />
+          <ElectionResult election={snapshot.election} />
+        </Card>
+      )}
+
 
       <Card title="Client model aliases">
         <p className="field-hint">
@@ -413,3 +483,77 @@ export OPENAI_API_KEY=<paste the token>
   );
 }
 
+
+/**
+ * What the last election decided, per class, with the numbers behind it.
+ *
+ * The reason a model sits where it does matters more than the score: a class scored
+ * on latency alone because one member has no price is a fixable situation, and
+ * saying so is the only way the user finds out.
+ */
+function ElectionResult({ election }: { election: Election | null }) {
+  if (!election) {
+    return (
+      <Empty>
+        No election has been held this run, so routing follows the priorities you set by hand.
+      </Empty>
+    );
+  }
+
+  const classes = CLASSES.map((cls) => election.classes[cls]).filter(
+    (c): c is ClassElection => c !== undefined,
+  );
+
+  return (
+    <>
+      <div className="row gap wrap">
+        <span className="muted">decided {new Date(election.decided_at).toLocaleString()}</span>
+        <Badge tone="neutral">
+          priced against {election.scoring.reference_input_tokens} in /{" "}
+          {election.scoring.reference_output_tokens} out
+        </Badge>
+      </div>
+      {classes.length === 0 && <Empty>No class had an enabled model to measure.</Empty>}
+      {classes.map((outcome) => (
+        <div key={outcome.class} className="subpanel">
+          <div className="row gap wrap">
+            <Badge tone={outcome.class}>{outcome.class}-class</Badge>
+            {outcome.priced ? (
+              <Badge tone="ok">latency and price</Badge>
+            ) : (
+              <Badge tone="warn">latency only</Badge>
+            )}
+            {outcome.note && <span className="muted">{outcome.note}</span>}
+          </div>
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Model</th>
+                <th>Latency</th>
+                <th>Reference cost</th>
+                <th title="Lower is better; 1.0 is the class average">Score</th>
+                <th>Why</th>
+              </tr>
+            </thead>
+            <tbody>
+              {outcome.ranked.map((r, place) => (
+                <tr key={r.model_id} className={r.score === null ? "row-warn" : ""}>
+                  <td>
+                    {place === 0 && r.score !== null && <Badge tone="ok">primary</Badge>}{" "}
+                    {r.model_id}
+                  </td>
+                  <td>{ms(r.latency_ms)}</td>
+                  <td className={r.price ? "" : "muted"}>{costText(r.price)}</td>
+                  <td>{r.score === null ? "—" : r.score.toFixed(3)}</td>
+                  <td className="muted truncate" title={r.note ?? ""}>
+                    {r.note}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ))}
+    </>
+  );
+}

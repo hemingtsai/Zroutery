@@ -179,7 +179,15 @@ def write_config(path: str, upstream: str):
             "log_limit": 100,
         },
         "routing": {
-            "strategy": "priority",
+            # The election is what --elect exercises below.
+            "strategy": "balanced",
+            "elect_on_start": False,
+            "scoring": {
+                "price_weight": 1.0,
+                "latency_weight": 0.0,
+                "reference_input_tokens": 1000,
+                "reference_output_tokens": 500,
+            },
             "failover": True,
             "max_attempts": 3,
             "break_after_failures": 2,
@@ -547,6 +555,30 @@ def main() -> int:
             {"model": "sonnet-class", "messages": [{"role": "user", "content": "some text to count"}]},
         )
         check("count_tokens answers", status == 200 and body["input_tokens"] > 0, str(body))
+
+        print("election")
+        elected = subprocess.run(
+            [binary, "--elect"], env=env, capture_output=True, text=True, timeout=90
+        )
+        out = elected.stdout
+        check("every class is measured", out.count("-class:") == 3, out.strip()[:200])
+        # Price weight is 1.0 and only deepseek-v4-pro is priced in the sonnet
+        # class, so the unpriced sibling cannot be compared and latency decides.
+        check(
+            "the winner is reported with its numbers",
+            "primary:" in out and "ms" in out,
+            out.strip()[:200],
+        )
+        check(
+            "a model that cannot answer is called out",
+            "did not answer" in out,
+            out.strip()[:300],
+        )
+        check(
+            "and an unpriced field says price was skipped",
+            "not every model has a price" in out,
+            out.strip()[:300],
+        )
 
         print("balance query")
         balances = subprocess.run(
