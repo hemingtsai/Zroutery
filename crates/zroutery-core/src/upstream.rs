@@ -58,19 +58,30 @@ impl Upstream {
     /// provider's queue and its first token. It is a real request, so it goes
     /// through the same encoder and the same quirks as traffic does, and it costs a
     /// fraction of a cent — which is why nothing does this on a timer.
+    ///
+    /// The timeout is the probe's own, not the provider's request timeout: probes
+    /// run sequentially during an election, so one hung endpoint bound by the
+    /// default 600s would hold up every class behind it.
     pub async fn probe(
         &self,
         provider: &ProviderConfig,
         api_key: Option<&str>,
         upstream_model: &str,
     ) -> Result<u64> {
+        const PROBE_TIMEOUT_SECS: u64 = 30;
+
         let mut request = ChatRequest::new(upstream_model, provider.kind.dialect());
         request.messages.push(crate::ir::Message::user_text("ping"));
         request.max_tokens = Some(1);
         let body = encode_for(provider, &request, upstream_model, Some(1))?;
 
         let started = std::time::Instant::now();
-        self.send(provider, api_key, &body).await?;
+        tokio::time::timeout(
+            Duration::from_secs(PROBE_TIMEOUT_SECS),
+            self.send(provider, api_key, &body),
+        )
+        .await
+        .map_err(|_| Error::Timeout(PROBE_TIMEOUT_SECS))??;
         Ok(started.elapsed().as_millis() as u64)
     }
 
