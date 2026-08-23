@@ -115,6 +115,12 @@ pub(crate) fn yes() -> bool {
     true
 }
 
+/// Six decimal places is far below the smallest billed unit of any provider and
+/// still exact enough that repeated addition cannot drift visibly.
+fn round_cents(amount: f64) -> f64 {
+    (amount * 1_000_000.0).round() / 1_000_000.0
+}
+
 impl Budget {
     pub fn new(scope: BudgetScope, period: BudgetPeriod, currency: &str, amount: f64) -> Self {
         Budget {
@@ -180,6 +186,11 @@ struct LedgerKey {
 /// its provider and its class. That is more rows than a single accumulator would
 /// need, and it means a daily and a monthly limit on the same scope both work
 /// without either having to reconstruct the other.
+///
+/// Amounts are `f64` and are rounded to six decimal places as they accumulate:
+/// costs arrive as small floats and unbounded addition would drift away from the
+/// decimal amounts the pricing tables mean, which matters for a number that is
+/// compared against a limit someone typed.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Ledger {
     #[serde(default)]
@@ -219,7 +230,8 @@ impl Ledger {
                     period: period.key(at),
                     currency: cost.currency.clone(),
                 };
-                *self.entries.entry(Self::flat(&key)).or_insert(0.0) += cost.amount;
+                let entry = self.entries.entry(Self::flat(&key)).or_insert(0.0);
+                *entry = round_cents(*entry + cost.amount);
             }
         }
     }
@@ -671,6 +683,17 @@ mod tests {
         let back: Ledger = serde_json::from_str(&json).unwrap();
         assert_eq!(back, ledger);
         assert_eq!(back.spent(&daily_global(1.0), now), 0.25);
+    }
+
+    #[test]
+    fn repeated_charges_do_not_drift() {
+        let mut ledger = Ledger::new();
+        let now = at("2026-08-22 12:00:00");
+        // 0.1 is not representable in binary; a naive accumulator shows it.
+        for _ in 0..10 {
+            ledger.charge(now, "p", None, &usd(0.1));
+        }
+        assert_eq!(ledger.spent(&daily_global(999.0), now), 1.0);
     }
 
     #[test]
