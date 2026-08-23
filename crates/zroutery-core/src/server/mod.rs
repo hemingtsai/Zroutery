@@ -141,6 +141,11 @@ impl AppState {
     /// instead of per request. In-flight requests keep their snapshot.
     pub fn set_config(&self, config: AppConfig) {
         self.stats.set_limit(config.server.log_limit);
+        let known: std::collections::HashSet<String> =
+            config.models.iter().map(|m| m.exposed_id()).collect();
+        // Health rows for models that no longer exist would otherwise linger
+        // forever and keep appearing in the GUI snapshot.
+        self.router.retain_models(|id| known.contains(id));
         let registry = Arc::new(Registry::new(Arc::new(config)));
         *crate::sync::write(&self.registry) = registry;
     }

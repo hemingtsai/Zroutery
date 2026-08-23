@@ -363,6 +363,17 @@ impl Router {
         }
     }
 
+    /// Drop health entries for models that no longer exist.
+    ///
+    /// Called when the configuration changes: without this the map only ever
+    /// grew, and entries for deleted models kept showing up in the GUI snapshot
+    /// for as long as the process lived. History that still matters survives —
+    /// a re-added model id simply starts fresh, like a new install would.
+    pub fn retain_models(&self, known: impl Fn(&str) -> bool) {
+        let mut health = crate::sync::lock(&self.health);
+        health.retain(|id, _| known(id));
+    }
+
     pub fn is_cooling(&self, model_id: &str) -> bool {
         let now = self.clock.now_ms();
         self.health
@@ -543,6 +554,27 @@ mod tests {
             router.report_failure("p1-flaky", &err, &routing);
         }
         assert!(router.is_cooling("p1-flaky"));
+    }
+
+    #[test]
+    fn retain_models_drops_entries_that_no_longer_exist() {
+        let cfg = cfg_with(vec![ModelEntry::for_upstream(
+            "p1",
+            "kept",
+            Some(ModelClass::Opus),
+        )]);
+        let routing = cfg.routing.clone();
+        let router = Router::new();
+        router.report_failure("p1-kept", &Error::Timeout(1), &routing);
+        router.report_failure("p1-gone", &Error::Timeout(1), &routing);
+
+        let known: std::collections::HashSet<String> =
+            ["p1-kept".to_string()].into_iter().collect();
+        router.retain_models(|id| known.contains(id));
+
+        let snapshot = router.health_snapshot();
+        let ids: Vec<&str> = snapshot.iter().map(|h| h.model_id.as_str()).collect();
+        assert_eq!(ids, vec!["p1-kept"]);
     }
 
     #[test]
