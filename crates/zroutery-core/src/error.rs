@@ -122,6 +122,7 @@ impl Error {
     pub fn is_retryable(&self) -> bool {
         match self {
             Error::Transport { .. } | Error::Timeout(_) | Error::BadUpstreamPayload(_) => true,
+            // The next candidate may belong to a provider whose key does exist.
             Error::MissingApiKey(_) => true,
             Error::Upstream { status, .. } => {
                 matches!(*status, 408 | 409 | 425 | 429 | 500..=599)
@@ -139,6 +140,10 @@ impl Error {
                 | Error::UnknownRoute(_)
                 | Error::OverBudget(_)
                 | Error::TooLarge { .. }
+                // An absent key is a configuration problem, not evidence about
+                // the model: counting it would cool down every model of the
+                // provider until someone fixes the keychain.
+                | Error::MissingApiKey(_)
         )
     }
 
@@ -226,6 +231,16 @@ mod tests {
         assert!(!Error::invalid("nope").counts_against_health());
         assert!(!Error::TooLarge { limit_mib: 32 }.counts_against_health());
         assert!(Error::Timeout(1).counts_against_health());
+    }
+
+    #[test]
+    fn a_missing_key_fails_over_without_poisoning_health() {
+        let e = Error::MissingApiKey("p".into());
+        // Another provider's key may well exist, so keep trying candidates.
+        assert!(e.is_retryable());
+        // But the models themselves did nothing wrong.
+        assert!(!e.counts_against_health());
+        assert_eq!(e.status(), StatusCode::PRECONDITION_FAILED);
     }
 
     #[test]
