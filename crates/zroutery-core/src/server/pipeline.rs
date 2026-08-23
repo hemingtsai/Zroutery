@@ -226,6 +226,7 @@ async fn stream_chat(
     for candidate in &plan {
         rec.attempt();
         rec.resolved(candidate.model_id(), &candidate.provider.name);
+        let attempt_start = Instant::now();
 
         let (key, body) = match prepare(&state, candidate, &req) {
             Ok(v) => v,
@@ -251,9 +252,15 @@ async fn stream_chat(
             .await
         {
             Ok(events) => {
-                state
-                    .router
-                    .report_success(candidate.model_id(), started.elapsed().as_millis() as u64);
+                // Health is reported once, here: the handshake is the part a
+                // routing decision can act on (responsiveness and reachability),
+                // while total stream duration mostly measures how long the answer
+                // was. Reporting again when the stream ends would double-count
+                // every streaming request in the EWMA.
+                state.router.report_success(
+                    candidate.model_id(),
+                    attempt_start.elapsed().as_millis() as u64,
+                );
                 let encoder =
                     protocol::stream_encoder(dialect, &candidate.exposed_id, include_usage);
                 let body = Body::from_stream(sse_body(
@@ -440,9 +447,6 @@ fn sse_body(
                     st.finished = true;
                     let frames = st.encoder.finish();
                     st.pending.extend(frames);
-                    st.state
-                        .router
-                        .report_success(&st.model_id, st.started.elapsed().as_millis() as u64);
                     st.finalize(None);
                 }
             }
