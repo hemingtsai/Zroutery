@@ -485,14 +485,16 @@ async fn auth_layer(
     next.run(request).await
 }
 
-/// Length-independent comparison to avoid leaking the token via timing.
+/// Length-independent comparison so timing does not leak how much of a
+/// presented token was right, or how long the expected one is.
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    let mut diff = 0u8;
-    for (x, y) in a.iter().zip(b.iter()) {
-        diff |= x ^ y;
+    let mut diff = a.len() ^ b.len();
+    // Walk the longer side; zipping alone would stop at the shorter and give
+    // length information back through runtime.
+    for i in 0..a.len().max(b.len()) {
+        let x = a.get(i).copied().unwrap_or(0);
+        let y = b.get(i).copied().unwrap_or(0);
+        diff |= (x ^ y) as usize;
     }
     diff == 0
 }
@@ -643,6 +645,11 @@ mod tests {
         assert!(!constant_time_eq(b"zr-ab", b"zr-abc"));
         assert!(!constant_time_eq(b"", b"zr-abc"));
         assert!(constant_time_eq(b"", b""));
+        // Length differences that alias through a narrow accumulator must not
+        // sneak past either.
+        let zeros = vec![0u8; 256];
+        assert!(!constant_time_eq(b"", &zeros));
+        assert!(constant_time_eq(&zeros, &zeros));
     }
 
     #[tokio::test]
