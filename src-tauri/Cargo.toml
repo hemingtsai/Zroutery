@@ -25,7 +25,6 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 zroutery-core = { path = "../crates/zroutery-core" }
 
-anyhow = { workspace = true }
 chrono = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

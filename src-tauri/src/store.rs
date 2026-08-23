@@ -96,12 +96,28 @@ pub fn save(dir: &Path, cfg: &AppConfig) -> Result<PathBuf, String> {
 
 /// Through a temporary file and a rename, so a crash cannot leave a half written
 /// file where a whole one used to be.
+///
+/// The temporary file is flushed to disk before the rename: without that, a
+/// power cut could make the rename durable while the data was not, leaving a
+/// new name over empty bytes.
 fn write_atomically(dir: &Path, name: &str, text: &str) -> Result<PathBuf, String> {
+    use std::io::Write;
+
     std::fs::create_dir_all(dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
     let path = dir.join(name);
     let tmp = dir.join(format!("{name}.tmp"));
-    std::fs::write(&tmp, text).map_err(|e| format!("cannot write {}: {e}", tmp.display()))?;
+    let mut file =
+        std::fs::File::create(&tmp).map_err(|e| format!("cannot write {}: {e}", tmp.display()))?;
+    file.write_all(text.as_bytes())
+        .map_err(|e| format!("cannot write {}: {e}", tmp.display()))?;
+    file.sync_all()
+        .map_err(|e| format!("cannot flush {}: {e}", tmp.display()))?;
+    drop(file);
     std::fs::rename(&tmp, &path).map_err(|e| format!("cannot replace {}: {e}", path.display()))?;
+    #[cfg(unix)]
+    if let Ok(d) = std::fs::File::open(dir) {
+        let _ = d.sync_all();
+    }
     Ok(path)
 }
 

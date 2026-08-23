@@ -75,7 +75,13 @@ pub async fn set_provider_key(
     if key.is_empty() {
         return Err("the API key is empty".into());
     }
-    desktop.secrets.set(&provider.key_ref, key)?;
+    // Keychain I/O blocks; keep it off the async worker thread.
+    let secrets = Arc::clone(&desktop.secrets);
+    let key_ref = provider.key_ref.clone();
+    let key = key.to_string();
+    tauri::async_runtime::spawn_blocking(move || secrets.set(&key_ref, &key))
+        .await
+        .map_err(|e| e.to_string())??;
     Ok(refreshed(&app, &desktop).await)
 }
 
@@ -89,12 +95,14 @@ pub async fn clear_provider_key(
     let provider = config
         .provider(&provider_id)
         .ok_or_else(|| format!("unknown provider `{provider_id}`"))?;
-    desktop.secrets.delete(&provider.key_ref)?;
+    let secrets = Arc::clone(&desktop.secrets);
+    let key_ref = provider.key_ref.clone();
+    tauri::async_runtime::spawn_blocking(move || secrets.delete(&key_ref))
+        .await
+        .map_err(|e| e.to_string())??;
     Ok(refreshed(&app, &desktop).await)
 }
 
-/// Ask a provider for its model list. Works on unsaved providers too, so the
-/// user can test before committing.
 /// Ask a provider what credit is left. The stored answer, including a failure,
 /// comes back in the snapshot.
 #[tauri::command]
@@ -115,12 +123,19 @@ pub async fn refresh_balances(app: AppHandle, desktop: State<'_, Arc<Desktop>>) 
     Ok(refreshed(&app, &desktop).await)
 }
 
+/// Ask a provider for its model list. Works on unsaved providers too, so the
+/// user can test before committing.
 #[tauri::command]
 pub async fn fetch_provider_models(
     desktop: State<'_, Arc<Desktop>>,
     provider: ProviderConfig,
 ) -> Cmd<Vec<DiscoveredModel>> {
-    let key = desktop.secrets.get(&provider.key_ref);
+    // Keychain I/O blocks; keep it off the async worker thread.
+    let secrets = Arc::clone(&desktop.secrets);
+    let key_ref = provider.key_ref.clone();
+    let key = tauri::async_runtime::spawn_blocking(move || secrets.get(&key_ref))
+        .await
+        .map_err(|e| e.to_string())?;
     Upstream::new()
         .list_models(&provider, key.as_deref())
         .await
