@@ -337,6 +337,14 @@ impl Router {
         let mut health = crate::sync::lock(&self.health);
         let now = self.clock.now_ms();
         let h = health.entry(model_id.to_string()).or_default();
+        // A cooldown that has already expired was the model's second chance.
+        // Judging a fresh failure against the stale streak would re-trip the
+        // breaker on the first blip after recovery, so the streak restarts
+        // from zero and the spent cooldown is cleared so this only happens once.
+        if h.cooldown_until_ms != 0 && h.cooldown_until_ms <= now {
+            h.consecutive_failures = 0;
+            h.cooldown_until_ms = 0;
+        }
         h.consecutive_failures += 1;
         h.total_failure += 1;
         h.last_error = Some(error.to_string());
@@ -504,6 +512,37 @@ mod tests {
                 .unwrap())[0],
             "p1-bad"
         );
+    }
+
+    #[test]
+    fn a_recovered_breaker_needs_fresh_evidence_to_trip_again() {
+        let cfg = cfg_with(vec![ModelEntry::for_upstream(
+            "p1",
+            "flaky",
+            Some(ModelClass::Opus),
+        )]);
+        let routing = cfg.routing.clone();
+        let router = Router::new();
+        let err = Error::Timeout(1);
+
+        for _ in 0..routing.break_after_failures {
+            router.report_failure("p1-flaky", &err, &routing);
+        }
+        assert!(router.is_cooling("p1-flaky"));
+
+        // Cooldown over, then one transient blip: that is not a pattern yet.
+        router.advance_clock_ms(routing.cooldown_secs * 1000 + 1);
+        router.report_failure("p1-flaky", &err, &routing);
+        assert!(
+            !router.is_cooling("p1-flaky"),
+            "one failure after recovery should not re-open the breaker"
+        );
+
+        // Reaching the threshold again with new failures does.
+        for _ in 1..routing.break_after_failures {
+            router.report_failure("p1-flaky", &err, &routing);
+        }
+        assert!(router.is_cooling("p1-flaky"));
     }
 
     #[test]
