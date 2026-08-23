@@ -570,6 +570,18 @@ impl AppConfig {
                     subject: Some(p.id.clone()),
                 });
             }
+            if p.timeout_secs == 0 {
+                issues.push(ConfigIssue {
+                    severity: IssueSeverity::Error,
+                    code: "provider.zero_timeout".into(),
+                    message: format!(
+                        "Provider `{}` has a zero timeout, so every request would time out \
+                         before it is sent",
+                        p.name
+                    ),
+                    subject: Some(p.id.clone()),
+                });
+            }
         }
 
         for m in &self.models {
@@ -677,6 +689,17 @@ impl AppConfig {
                 severity: IssueSeverity::Warning,
                 code: "server.no_auth".into(),
                 message: "Authentication is disabled: any local process can spend your API credit"
+                    .into(),
+                subject: None,
+            });
+        } else if self.server.auth_token.trim().is_empty() {
+            // Auth that rejects everyone looks like a broken proxy from the
+            // outside; say so instead of letting the user debug their client.
+            issues.push(ConfigIssue {
+                severity: IssueSeverity::Error,
+                code: "server.empty_token".into(),
+                message: "Authentication is required but the token is empty, so every request \
+                          would be rejected"
                     .into(),
                 subject: None,
             });
@@ -793,6 +816,8 @@ mod tests {
 
     fn sample() -> AppConfig {
         let mut cfg = AppConfig::default();
+        // A real install has a generated token; an empty one is its own issue.
+        cfg.server.auth_token = "test-token".into();
         cfg.providers.push(ProviderConfig::new(
             "deepseek",
             "DeepSeek",
@@ -898,6 +923,31 @@ mod tests {
         // sonnet is covered, opus and haiku are not
         assert_eq!(issues.iter().filter(|i| i.code == "class.empty").count(), 2);
         assert!(issues.iter().all(|i| i.severity == IssueSeverity::Warning));
+    }
+
+    #[test]
+    fn validate_flags_impossible_timeouts_and_auth() {
+        let mut cfg = sample();
+        cfg.providers[0].timeout_secs = 0;
+        assert!(cfg
+            .validate()
+            .iter()
+            .any(|i| i.code == "provider.zero_timeout"));
+
+        let mut cfg = sample();
+        // An install that somehow has no token: requiring auth rejects everyone.
+        cfg.server.auth_token.clear();
+        assert!(cfg
+            .validate()
+            .iter()
+            .any(|i| i.code == "server.empty_token"));
+
+        let mut cfg = sample();
+        cfg.server.require_auth = false;
+        assert!(!cfg
+            .validate()
+            .iter()
+            .any(|i| i.code == "server.empty_token"));
     }
 
     #[test]
