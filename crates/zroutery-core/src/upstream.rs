@@ -297,10 +297,15 @@ impl Upstream {
         })?;
 
         let status = response.status();
-        let text = response.text().await.map_err(|source| Error::Transport {
-            provider: provider.name.clone(),
-            source,
-        })?;
+        // The body gets the same bound as the handshake: a stalled metadata
+        // endpoint would otherwise hang the GUI call that awaits it forever.
+        let text = tokio::time::timeout(Duration::from_secs(timeout_secs), response.text())
+            .await
+            .map_err(|_| Error::Timeout(timeout_secs))?
+            .map_err(|source| Error::Transport {
+                provider: provider.name.clone(),
+                source,
+            })?;
         if !status.is_success() {
             return Err(Error::Upstream {
                 provider: provider.name.clone(),
