@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, errorText, type AppConfig, type Snapshot } from "./api";
 import { Badge, Banner, Button } from "./components";
 import Providers from "./panels/Providers";
@@ -22,14 +22,30 @@ export default function App() {
   const [pollError, setPollError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  // Tasks run one at a time: every save round trips through Rust and rewrites
+  // the config file, so two overlapping saves could interleave and land out of
+  // order. A task arriving mid-flight is queued and runs when the current one
+  // settles, which keeps the last edit the last write.
+  const runningRef = useRef(false);
+  const queuedRef = useRef<(() => Promise<Snapshot>) | null>(null);
+
   const run = useCallback(async (task: () => Promise<Snapshot>) => {
+    if (runningRef.current) {
+      queuedRef.current = task;
+      return;
+    }
+    runningRef.current = true;
     setBusy(true);
     setError(null);
     try {
       setSnapshot(await task());
+      const queued = queuedRef.current;
+      queuedRef.current = null;
+      if (queued) setSnapshot(await queued());
     } catch (e) {
       setError(errorText(e));
     } finally {
+      runningRef.current = false;
       setBusy(false);
     }
   }, []);

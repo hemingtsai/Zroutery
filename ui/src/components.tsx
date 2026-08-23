@@ -174,6 +174,39 @@ export function NumberField({
   max?: number;
   placeholder?: string;
 }) {
+  return (
+    <Field label={label} hint={hint}>
+      <CompactNumber
+        value={value}
+        onCommit={onCommit}
+        min={min}
+        max={max}
+        placeholder={placeholder}
+      />
+    </Field>
+  );
+}
+
+/**
+ * A bare [`NumberField`]-style input for tight spots like table cells, where a
+ * labelled field will not fit. Commits on blur or Enter, reverts on Escape;
+ * saving half-typed numbers per keystroke would persist "1" on the way to "10".
+ */
+export function CompactNumber({
+  value,
+  onCommit,
+  min,
+  max,
+  placeholder,
+  ariaLabel,
+}: {
+  value: number | null;
+  onCommit: (value: number | null) => void;
+  min?: number;
+  max?: number;
+  placeholder?: string;
+  ariaLabel?: string;
+}) {
   const text = value === null ? "" : String(value);
   const [draft, setDraft] = useState(text);
   useEffect(() => setDraft(text), [text]);
@@ -196,25 +229,25 @@ export function NumberField({
   };
 
   return (
-    <Field label={label} hint={hint}>
-      <input
-        type="number"
-        min={min}
-        max={max}
-        value={draft}
-        placeholder={placeholder}
-        onChange={(e) => setDraft(e.currentTarget.value)}
-        onBlur={commit}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") {
-            commit();
-            e.currentTarget.blur();
-          } else if (e.key === "Escape") {
-            setDraft(text);
-          }
-        }}
-      />
-    </Field>
+    <input
+      type="number"
+      className="tiny"
+      min={min}
+      max={max}
+      placeholder={placeholder}
+      aria-label={ariaLabel}
+      value={draft}
+      onChange={(e) => setDraft(e.currentTarget.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          commit();
+          e.currentTarget.blur();
+        } else if (e.key === "Escape") {
+          setDraft(text);
+        }
+      }}
+    />
   );
 }
 

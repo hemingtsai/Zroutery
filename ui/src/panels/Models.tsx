@@ -18,6 +18,7 @@ import {
   Banner,
   Button,
   Card,
+  CompactNumber,
   Empty,
   Field,
   NumberField,
@@ -281,26 +282,19 @@ export default function Models({
                         </button>
                       </td>
                       <td>
-                        <input
-                          className="tiny"
-                          type="number"
-                          aria-label={`Priority for ${id}`}
+                        <CompactNumber
+                          ariaLabel={`Priority for ${id}`}
                           value={m.priority}
-                          onChange={(e) =>
-                            update(index, { priority: Number(e.currentTarget.value) || 0 })
-                          }
+                          min={0}
+                          onCommit={(priority) => update(index, { priority: priority ?? 0 })}
                         />
                       </td>
                       <td>
-                        <input
-                          className="tiny"
-                          type="number"
-                          min={1}
-                          aria-label={`Weight for ${id}`}
+                        <CompactNumber
+                          ariaLabel={`Weight for ${id}`}
                           value={m.weight}
-                          onChange={(e) =>
-                            update(index, { weight: Number(e.currentTarget.value) || 1 })
-                          }
+                          min={1}
+                          onCommit={(weight) => update(index, { weight: weight ?? 1 })}
                         />
                       </td>
                       <td>
