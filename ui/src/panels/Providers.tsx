@@ -79,8 +79,8 @@ export default function Providers({
   busy,
 }: {
   snapshot: Snapshot;
-  save: (config: AppConfig) => Promise<void>;
-  run: (task: () => Promise<Snapshot>) => Promise<void>;
+  save: (config: AppConfig) => Promise<boolean>;
+  run: (task: () => Promise<Snapshot>) => Promise<boolean>;
   busy: boolean;
 }) {
   const { config, keys } = snapshot;
@@ -132,8 +132,10 @@ export default function Providers({
   const saveKey = async (provider: Provider) => {
     const value = (keyDraft[provider.id] ?? "").trim();
     if (!value) return;
-    await run(() => api.setKey(provider.id, value));
-    setKeyDraft({ ...keyDraft, [provider.id]: "" });
+    const ok = await run(() => api.setKey(provider.id, value));
+    // Keep the draft when the save failed, so a long key does not have to be
+    // typed twice just because the keychain hiccupped.
+    if (ok) setKeyDraft({ ...keyDraft, [provider.id]: "" });
   };
 
   const discover = async (provider: Provider) => {

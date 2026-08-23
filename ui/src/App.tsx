@@ -29,10 +29,11 @@ export default function App() {
   const runningRef = useRef(false);
   const queuedRef = useRef<(() => Promise<Snapshot>) | null>(null);
 
-  const run = useCallback(async (task: () => Promise<Snapshot>) => {
+  const run = useCallback(async (task: () => Promise<Snapshot>): Promise<boolean> => {
     if (runningRef.current) {
       queuedRef.current = task;
-      return;
+      // The queued task's own outcome decides; this call did not fail.
+      return true;
     }
     runningRef.current = true;
     setBusy(true);
@@ -42,8 +43,10 @@ export default function App() {
       const queued = queuedRef.current;
       queuedRef.current = null;
       if (queued) setSnapshot(await queued());
+      return true;
     } catch (e) {
       setError(errorText(e));
+      return false;
     } finally {
       runningRef.current = false;
       setBusy(false);

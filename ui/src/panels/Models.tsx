@@ -38,7 +38,7 @@ export default function Models({
   busy,
 }: {
   snapshot: Snapshot;
-  save: (config: AppConfig) => Promise<void>;
+  save: (config: AppConfig) => Promise<boolean>;
   busy: boolean;
 }) {
   const { config } = snapshot;

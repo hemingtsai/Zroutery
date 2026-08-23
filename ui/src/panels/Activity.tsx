@@ -6,7 +6,7 @@ export default function Activity({
   run,
 }: {
   snapshot: Snapshot;
-  run: (task: () => Promise<Snapshot>) => Promise<void>;
+  run: (task: () => Promise<Snapshot>) => Promise<boolean>;
 }) {
   const { summary, health, recent } = snapshot;
   const success = summary.requests - summary.failures;

@@ -6,7 +6,6 @@ import { invoke } from "@tauri-apps/api/core";
 
 export type ModelClass = "opus" | "sonnet" | "haiku";
 export type ProviderKind = "anthropic" | "openai_compatible";
-export type Dialect = "anthropic" | "open_ai" | "openai";
 export type RoutingStrategy =
   | "priority"
   | "weighted_random"

@@ -49,8 +49,8 @@ export default function Routing({
   busy,
 }: {
   snapshot: Snapshot;
-  save: (config: AppConfig) => Promise<void>;
-  run: (task: () => Promise<Snapshot>) => Promise<void>;
+  save: (config: AppConfig) => Promise<boolean>;
+  run: (task: () => Promise<Snapshot>) => Promise<boolean>;
   busy: boolean;
 }) {
   const { config, server } = snapshot;
