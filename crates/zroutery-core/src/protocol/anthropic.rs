@@ -6,7 +6,7 @@ use serde_json::{json, Map, Value};
 use crate::error::{Error, Result};
 use crate::ir::{
     ChatRequest, ChatResponse, ContentBlock, Dialect, MediaSource, Message, Role, StopReason,
-    StreamEvent, ThinkingConfig, ToolChoice, ToolDef, ToolResultPart, Usage,
+    StreamEvent, SystemPart, ThinkingConfig, ToolChoice, ToolDef, ToolResultPart, Usage,
 };
 
 use super::{SseFrame, StreamEncoder, StreamParser};
@@ -46,10 +46,17 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
 
     req.system = match obj.get("system") {
         None | Some(Value::Null) => Vec::new(),
-        Some(Value::String(s)) => vec![s.clone()],
+        Some(Value::String(s)) => vec![SystemPart::new(s.clone())],
         Some(Value::Array(items)) => items
             .iter()
-            .filter_map(|b| b.get("text").and_then(Value::as_str).map(str::to_string))
+            .filter_map(|b| {
+                Some(SystemPart {
+                    text: b.get("text").and_then(Value::as_str)?.to_string(),
+                    // A breakpoint on a system block is the caller's decision about
+                    // money, so it travels with the text.
+                    cache_control: b.get("cache_control").cloned(),
+                })
+            })
             .collect(),
         Some(_) => return Err(Error::invalid("`system` must be a string or an array")),
     };
@@ -93,6 +100,7 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
                     .get("input_schema")
                     .cloned()
                     .unwrap_or_else(|| json!({"type": "object"})),
+                cache_control: t.get("cache_control").cloned(),
             });
         }
     }
@@ -178,6 +186,7 @@ fn decode_block(b: &Value) -> Result<Option<ContentBlock>> {
                 .and_then(Value::as_str)
                 .unwrap_or("")
                 .to_string(),
+            cache_control: b.get("cache_control").cloned(),
         },
         "thinking" => ContentBlock::Thinking {
             text: b
@@ -297,7 +306,12 @@ pub fn encode_request(req: &ChatRequest, upstream_model: &str) -> Result<Value> 
             Value::Array(
                 req.system
                     .iter()
-                    .map(|s| json!({"type": "text", "text": s}))
+                    .map(|part| {
+                        with_cache(
+                            json!({"type": "text", "text": part.text}),
+                            &part.cache_control,
+                        )
+                    })
                     .collect(),
             ),
         );
@@ -334,7 +348,7 @@ pub fn encode_request(req: &ChatRequest, upstream_model: &str) -> Result<Value> 
                             m.insert("description".into(), json!(d));
                         }
                         m.insert("input_schema".into(), t.input_schema.clone());
-                        Value::Object(m)
+                        with_cache(Value::Object(m), &t.cache_control)
                     })
                     .collect(),
             ),
@@ -389,7 +403,10 @@ fn encode_message(m: &Message) -> Value {
 
 pub(crate) fn encode_block(b: &ContentBlock) -> Value {
     match b {
-        ContentBlock::Text { text } => json!({"type": "text", "text": text}),
+        ContentBlock::Text {
+            text,
+            cache_control,
+        } => with_cache(json!({"type": "text", "text": text}), cache_control),
         ContentBlock::Thinking { text, signature } => {
             let mut m = Map::new();
             m.insert("type".into(), json!("thinking"));
@@ -432,6 +449,17 @@ pub(crate) fn encode_block(b: &ContentBlock) -> Value {
             })
         }
     }
+}
+
+/// Put a `cache_control` marker back on an encoded block.
+///
+/// A prompt cache breakpoint is the caller's decision about money, so it travels
+/// through the proxy untouched rather than being re-derived or quietly dropped.
+fn with_cache(mut value: Value, cache_control: &Option<Value>) -> Value {
+    if let (Some(object), Some(marker)) = (value.as_object_mut(), cache_control) {
+        object.insert("cache_control".into(), marker.clone());
+    }
+    value
 }
 
 fn encode_source(s: &MediaSource) -> Value {
@@ -1053,7 +1081,7 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(req.model, "sonnet-class");
-        assert_eq!(req.system, vec!["be brief"]);
+        assert_eq!(req.system, vec![SystemPart::new("be brief")]);
         assert_eq!(req.messages.len(), 2);
         assert_eq!(req.messages[0].content[0], ContentBlock::text("hi"));
         assert_eq!(req.max_tokens, Some(100));
@@ -1075,7 +1103,7 @@ mod tests {
             "beta_flag": true
         }))
         .unwrap();
-        assert_eq!(req.system, vec!["a", "b"]);
+        assert_eq!(req.system, vec![SystemPart::new("a"), SystemPart::new("b")]);
         assert_eq!(req.tools[0].name, "get_weather");
         assert_eq!(
             req.tool_choice,

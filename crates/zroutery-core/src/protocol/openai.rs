@@ -11,7 +11,7 @@ use super::ProviderQuirks;
 use crate::error::{Error, Result};
 use crate::ir::{
     ChatRequest, ChatResponse, ContentBlock, Dialect, MediaSource, Message, Role, StopReason,
-    StreamEvent, ThinkingConfig, ToolChoice, ToolDef, ToolResultPart, Usage,
+    StreamEvent, SystemPart, ThinkingConfig, ToolChoice, ToolDef, ToolResultPart, Usage,
 };
 
 use super::{SseFrame, StreamEncoder, StreamParser};
@@ -58,7 +58,7 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
         match role {
             "system" | "developer" => {
                 if let Some(text) = flatten_content(m.get("content")) {
-                    req.system.push(text);
+                    req.system.push(SystemPart::new(text));
                 }
             }
             "tool" | "function" => {
@@ -167,6 +167,7 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
                     .get("parameters")
                     .cloned()
                     .unwrap_or_else(|| json!({"type": "object"})),
+                cache_control: None,
             });
         }
     }
@@ -296,6 +297,18 @@ fn parse_arguments(args: Option<&str>) -> Value {
 
 // --------------------------------------------------------------- request out
 
+/// The OpenAI dialect has no block structure on the system prompt, so the
+/// parts are flattened back to text. A `cache_control` marker on a part is an
+/// Anthropic concept and has no wire representation here; it simply does not
+/// survive this direction.
+fn system_text(system: &[SystemPart]) -> String {
+    system
+        .iter()
+        .map(|p| p.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
 pub fn encode_request(req: &ChatRequest, upstream_model: &str) -> Result<Value> {
     encode_request_with(req, upstream_model, &ProviderQuirks::default())
 }
@@ -312,7 +325,7 @@ pub fn encode_request_with(
     if !req.system.is_empty() {
         messages.push(json!({
             "role": if quirks.system_as_developer { "developer" } else { "system" },
-            "content": req.system.join("\n\n"),
+            "content": system_text(&req.system),
         }));
     }
     for m in &req.messages {
@@ -413,7 +426,7 @@ fn encode_message_into(m: &Message, out: &mut Vec<Value>) {
             let mut tool_calls: Vec<Value> = Vec::new();
             for b in &m.content {
                 match b {
-                    ContentBlock::Text { text: t } => text.push_str(t),
+                    ContentBlock::Text { text: t, .. } => text.push_str(t),
                     ContentBlock::ToolUse { id, name, input } => tool_calls.push(json!({
                         "id": id,
                         "type": "function",
@@ -459,7 +472,7 @@ fn encode_message_into(m: &Message, out: &mut Vec<Value>) {
                             "content": text,
                         }));
                     }
-                    ContentBlock::Text { text } => {
+                    ContentBlock::Text { text, .. } => {
                         parts.push(json!({"type": "text", "text": text}))
                     }
                     ContentBlock::Image { source } => parts.push(json!({
@@ -623,7 +636,7 @@ pub fn encode_response(resp: &ChatResponse) -> Value {
     let mut tool_calls: Vec<Value> = Vec::new();
     for b in &resp.content {
         match b {
-            ContentBlock::Text { text: t } => text.push_str(t),
+            ContentBlock::Text { text: t, .. } => text.push_str(t),
             ContentBlock::Thinking { text: t, .. } => reasoning.push_str(t),
             ContentBlock::ToolUse { id, name, input } => tool_calls.push(json!({
                 "index": tool_calls.len(),
@@ -1164,7 +1177,7 @@ mod tests {
         }))
         .unwrap();
 
-        assert_eq!(req.system, vec!["be nice"]);
+        assert_eq!(req.system, vec![SystemPart::new("be nice")]);
         assert_eq!(req.max_tokens, Some(256));
         assert_eq!(req.stop_sequences, vec!["END"]);
         assert_eq!(req.tool_choice, Some(ToolChoice::Any));

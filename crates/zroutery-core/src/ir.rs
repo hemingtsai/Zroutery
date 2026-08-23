@@ -35,6 +35,14 @@ pub enum Role {
 pub enum ContentBlock {
     Text {
         text: String,
+        /// Anthropic's `cache_control` marker, kept verbatim.
+        ///
+        /// Passed through rather than modelled: it is where a caller asks for a
+        /// prompt cache breakpoint, and dropping it makes a caching client pay full
+        /// price on every turn. Keeping the value as it arrived means a field the
+        /// vendor adds later survives too, at the cost of not validating it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cache_control: Option<Value>,
     },
     /// Extended thinking / reasoning text.
     Thinking {
@@ -65,12 +73,23 @@ pub enum ContentBlock {
 
 impl ContentBlock {
     pub fn text(t: impl Into<String>) -> Self {
-        ContentBlock::Text { text: t.into() }
+        ContentBlock::Text {
+            text: t.into(),
+            cache_control: None,
+        }
+    }
+
+    /// A text block that ends a cacheable prefix.
+    pub fn cached_text(t: impl Into<String>, cache_control: Value) -> Self {
+        ContentBlock::Text {
+            text: t.into(),
+            cache_control: Some(cache_control),
+        }
     }
 
     pub fn as_text(&self) -> Option<&str> {
         match self {
-            ContentBlock::Text { text } => Some(text),
+            ContentBlock::Text { text, .. } => Some(text),
             _ => None,
         }
     }
@@ -128,6 +147,23 @@ impl MediaSource {
     }
 }
 
+/// One block of the system prompt.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SystemPart {
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_control: Option<Value>,
+}
+
+impl SystemPart {
+    pub fn new(text: impl Into<String>) -> Self {
+        SystemPart {
+            text: text.into(),
+            cache_control: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Message {
     pub role: Role,
@@ -155,6 +191,10 @@ pub struct ToolDef {
     pub description: Option<String>,
     /// JSON schema for the tool input.
     pub input_schema: Value,
+    /// `cache_control` on a tool definition, which is where agents most often put
+    /// their breakpoint: the tool list is long and never changes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_control: Option<Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -180,8 +220,8 @@ pub struct ChatRequest {
     /// Model id exactly as the client asked for it (may be a virtual id such as
     /// `sonnet-class`). Routing happens later.
     pub model: String,
-    /// System prompt, kept as blocks so Anthropic cache markers survive.
-    pub system: Vec<String>,
+    /// System prompt, as blocks so a cache marker on one of them survives.
+    pub system: Vec<SystemPart>,
     pub messages: Vec<Message>,
     pub max_tokens: Option<u32>,
     pub temperature: Option<f64>,
@@ -222,11 +262,15 @@ impl ChatRequest {
 
     /// Very rough token estimate, used for `count_tokens` and for logging.
     pub fn estimate_tokens(&self) -> u32 {
-        let mut chars = self.system.iter().map(|s| s.chars().count()).sum::<usize>();
+        let mut chars = self
+            .system
+            .iter()
+            .map(|s| s.text.chars().count())
+            .sum::<usize>();
         for m in &self.messages {
             for b in &m.content {
                 chars += match b {
-                    ContentBlock::Text { text } | ContentBlock::Thinking { text, .. } => {
+                    ContentBlock::Text { text, .. } | ContentBlock::Thinking { text, .. } => {
                         text.chars().count()
                     }
                     ContentBlock::RedactedThinking { data } => data.chars().count() / 4,
