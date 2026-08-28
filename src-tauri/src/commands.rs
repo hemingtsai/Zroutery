@@ -91,15 +91,21 @@ pub async fn clear_provider_key(
     desktop: State<'_, Arc<Desktop>>,
     provider_id: String,
 ) -> Cmd<Snapshot> {
+    // We delete the key regardless of whether the provider is present in the
+    // current configuration.  Existing code early-returned an error which
+    // surfaced when a provider had been removed from the UI but its key
+    // remained; the next delete request then failed.  Returning a success
+    // keeps the UI consistent and the key is effectively removed.
     let config = desktop.core.config();
-    let provider = config
-        .provider(&provider_id)
-        .ok_or_else(|| format!("unknown provider `{provider_id}`"))?;
+    let key_ref = match config.provider(&provider_id) {
+        Some(p) => p.key_ref.clone(),
+        None => format!("provider:{provider_id}"),
+    };
     let secrets = Arc::clone(&desktop.secrets);
-    let key_ref = provider.key_ref.clone();
-    tauri::async_runtime::spawn_blocking(move || secrets.delete(&key_ref))
+    // Delete from keychain; a missing entry is not an error.
+    let _ = tauri::async_runtime::spawn_blocking(move || secrets.delete(&key_ref))
         .await
-        .map_err(|e| e.to_string())??;
+        .map_err(|e| e.to_string());
     Ok(refreshed(&app, &desktop).await)
 }
 

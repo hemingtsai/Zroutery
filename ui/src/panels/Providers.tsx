@@ -118,12 +118,14 @@ export default function Providers({
     void save(next);
   };
 
-  const removeProvider = (id: string) => {
+  const removeProvider = async (id: string) => {
     const models = config.models.filter((m) => m.provider_id === id);
     const next = structuredClone(config);
     next.providers = next.providers.filter((p) => p.id !== id);
     next.models = next.models.filter((m) => m.provider_id !== id);
-    void save(next);
+    await save(next);
+    // Also delete any stored API key for this provider from the keychain.
+    await run(() => api.clearKey(id));
     if (models.length) {
       setNotice(`Removed ${models.length} model(s) that belonged to that provider.`);
     }
