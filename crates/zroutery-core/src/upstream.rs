@@ -365,6 +365,19 @@ struct StreamState {
     done: bool,
 }
 
+/// Claude Code client fingerprint (used for impersonation to pass a
+/// gateway's "Claude Code only" check).
+const CLAUDE_CODE_USER_AGENT: &str = "claude-cli/2.1.217 (external, sdk-cli)";
+const CLAUDE_CODE_SYSTEM_IDENTITY: &str = "You are Claude Code, Anthropic's official CLI for Claude.";
+
+/// Stainless SDK headers sent by real Claude Code client.
+const STAINLESS_PACKAGE_VERSION: &str = "0.81.0";
+const STAINLESS_NODE_VERSION: &str = "v24.3.0";
+
+/// Stable per-process session ID for X-Claude-Code-Session-Id.
+static CLAUDE_CODE_SESSION_ID: std::sync::LazyLock<String> =
+    std::sync::LazyLock::new(|| uuid::Uuid::new_v4().to_string());
+
 /// Build the auth and content headers for a provider.
 pub fn build_headers(provider: &ProviderConfig, api_key: Option<&str>) -> Result<HeaderMap> {
     let mut headers = HeaderMap::new();
@@ -413,6 +426,92 @@ pub fn build_headers(provider: &ProviderConfig, api_key: Option<&str>) -> Result
         headers.insert(name, value);
     }
 
+    // Claude Code impersonation: inject full set of headers to pass gateway fingerprint checks.
+    if provider.impersonate_claude_code {
+        tracing::info!(
+            provider = %provider.name,
+            "impersonation enabled – injecting Claude Code fingerprint headers"
+        );
+        // User-Agent: must match sdk-cli entrypoint for billing header validation
+        headers.insert(
+            HeaderName::from_static("user-agent"),
+            HeaderValue::from_static(CLAUDE_CODE_USER_AGENT),
+        );
+        // x-app: identifies as CLI client
+        headers.insert(
+            HeaderName::from_static("x-app"),
+            HeaderValue::from_static("cli"),
+        );
+        // anthropic-dangerous-direct-browser-access: required for direct browser access
+        headers.insert(
+            HeaderName::from_static("anthropic-dangerous-direct-browser-access"),
+            HeaderValue::from_static("true"),
+        );
+        // Session ID: stable per-process UUID for request aggregation
+        headers.insert(
+            HeaderName::from_static("x-claude-code-session-id"),
+            HeaderValue::from_str(&CLAUDE_CODE_SESSION_ID)
+                .map_err(|_| Error::internal("invalid session id"))?,
+        );
+        // Client request ID: fresh UUID per request
+        headers.insert(
+            HeaderName::from_static("x-client-request-id"),
+            HeaderValue::from_str(&uuid::Uuid::new_v4().to_string())
+                .map_err(|_| Error::internal("invalid client request id"))?,
+        );
+        // Stainless SDK headers: must match cc_entrypoint=sdk-cli
+        headers.insert(
+            HeaderName::from_static("x-stainless-arch"),
+            HeaderValue::from_static("x64"),
+        );
+        headers.insert(
+            HeaderName::from_static("x-stainless-lang"),
+            HeaderValue::from_static("js"),
+        );
+        headers.insert(
+            HeaderName::from_static("x-stainless-os"),
+            HeaderValue::from_static("MacOS"),
+        );
+        headers.insert(
+            HeaderName::from_static("x-stainless-package-version"),
+            HeaderValue::from_static(STAINLESS_PACKAGE_VERSION),
+        );
+        headers.insert(
+            HeaderName::from_static("x-stainless-retry-count"),
+            HeaderValue::from_static("0"),
+        );
+        headers.insert(
+            HeaderName::from_static("x-stainless-runtime"),
+            HeaderValue::from_static("node"),
+        );
+        headers.insert(
+            HeaderName::from_static("x-stainless-runtime-version"),
+            HeaderValue::from_static(STAINLESS_NODE_VERSION),
+        );
+        headers.insert(
+            HeaderName::from_static("x-stainless-timeout"),
+            HeaderValue::from_static("600"),
+        );
+        // anthropic-beta: ensure claude-code marker is present
+        const CLAUDE_CODE_BETA: &str = "claude-code-20250219";
+        let beta_value = match headers.get("anthropic-beta") {
+            Some(existing) => {
+                let existing_str = existing.to_str().unwrap_or("");
+                if existing_str.contains(CLAUDE_CODE_BETA) {
+                    existing_str.to_string()
+                } else {
+                    format!("{CLAUDE_CODE_BETA},{existing_str}")
+                }
+            }
+            None => CLAUDE_CODE_BETA.to_string(),
+        };
+        headers.insert(
+            HeaderName::from_static("anthropic-beta"),
+            HeaderValue::from_str(&beta_value)
+                .map_err(|_| Error::internal("invalid anthropic-beta value"))?,
+        );
+    }
+
     Ok(headers)
 }
 
@@ -427,12 +526,57 @@ pub fn encode_for(
     if let Some(cap) = max_output_tokens {
         req.max_tokens = Some(req.max_tokens.map(|m| m.min(cap)).unwrap_or(cap));
     }
-    protocol::encode_request(
+    let mut body = protocol::encode_request(
         provider.kind.dialect(),
         &req,
         upstream_model,
         &provider.quirks,
-    )
+    )?;
+
+    // Claude Code impersonation: inject identity line as the first system block
+    // to pass Anthropic subscription/OAuth plan checks.
+    if provider.impersonate_claude_code {
+        prepend_claude_code_system_prompt(&mut body);
+    }
+
+    Ok(body)
+}
+
+/// Insert the Claude Code identity as the first line of the `system` field in
+/// the Anthropic request body.
+///
+/// Anthropic subscription/OAuth plans require the first system block to be exactly
+/// this identity line.
+fn prepend_claude_code_system_prompt(body: &mut Value) {
+    // Only inject into Anthropic-style bodies that already have a "system" field.
+    // OpenAI-compatible bodies use messages for system instructions, and injecting
+    // a "system" key triggers gateway content filters.
+    if !body.get("system").is_some() {
+        return;
+    }
+
+    let identity = json!({ "type": "text", "text": CLAUDE_CODE_SYSTEM_IDENTITY });
+    let mut blocks: Vec<Value> = vec![identity];
+
+    match body.get("system") {
+        Some(Value::Array(existing)) => {
+            // Idempotent: skip re-injection if the first block is already the identity line.
+            if existing
+                .first()
+                .and_then(|b| b.get("text"))
+                .and_then(|t| t.as_str())
+                == Some(CLAUDE_CODE_SYSTEM_IDENTITY)
+            {
+                return;
+            }
+            blocks.extend(existing.iter().cloned());
+        }
+        Some(Value::String(existing)) if !existing.is_empty() => {
+            blocks.push(json!({ "type": "text", "text": existing }));
+        }
+        _ => {}
+    }
+    body["system"] = Value::Array(blocks);
 }
 
 fn truncate(s: &str, max: usize) -> String {
@@ -457,6 +601,7 @@ mod tests {
     #[test]
     fn anthropic_headers_use_x_api_key() {
         let mut p = provider(ProviderKind::Anthropic);
+        p.impersonate_claude_code = false; // Disable impersonation for this test
         p.extra_headers
             .insert("anthropic-beta".into(), "output-128k".into());
         let h = build_headers(&p, Some("sk-ant-1")).unwrap();
@@ -497,6 +642,77 @@ mod tests {
         );
         p.extra_headers.insert("bad header".into(), "v".into());
         assert!(build_headers(&p, None).is_err());
+    }
+
+    #[test]
+    fn impersonate_claude_code_injects_full_fingerprint() {
+        let mut p = provider(ProviderKind::Anthropic);
+        p.impersonate_claude_code = true;
+        let h = build_headers(&p, Some("sk-ant-1")).unwrap();
+
+        // User-Agent must match sdk-cli entrypoint
+        assert_eq!(h.get("user-agent").unwrap(), CLAUDE_CODE_USER_AGENT);
+
+        // Core identity headers
+        assert_eq!(h.get("x-app").unwrap(), "cli");
+        assert_eq!(
+            h.get("anthropic-dangerous-direct-browser-access").unwrap(),
+            "true"
+        );
+
+        // Session and request IDs (should be valid UUIDs)
+        let session_id = h.get("x-claude-code-session-id").unwrap().to_str().unwrap();
+        assert_eq!(session_id.len(), 36, "session id should be a UUID");
+        let client_request_id = h.get("x-client-request-id").unwrap().to_str().unwrap();
+        assert_eq!(client_request_id.len(), 36, "client request id should be a UUID");
+
+        // Stainless SDK headers
+        assert_eq!(h.get("x-stainless-arch").unwrap(), "x64");
+        assert_eq!(h.get("x-stainless-lang").unwrap(), "js");
+        assert_eq!(h.get("x-stainless-os").unwrap(), "MacOS");
+        assert_eq!(
+            h.get("x-stainless-package-version").unwrap(),
+            STAINLESS_PACKAGE_VERSION
+        );
+        assert_eq!(h.get("x-stainless-retry-count").unwrap(), "0");
+        assert_eq!(h.get("x-stainless-runtime").unwrap(), "node");
+        assert_eq!(
+            h.get("x-stainless-runtime-version").unwrap(),
+            STAINLESS_NODE_VERSION
+        );
+        assert_eq!(h.get("x-stainless-timeout").unwrap(), "600");
+
+        // anthropic-beta must contain claude-code marker
+        let beta = h.get("anthropic-beta").unwrap().to_str().unwrap();
+        assert!(beta.contains("claude-code-20250219"));
+
+        // Auth header
+        assert!(h.get("x-api-key").is_some());
+    }
+
+    #[test]
+    fn impersonate_claude_code_merges_existing_anthropic_beta() {
+        let mut p = provider(ProviderKind::Anthropic);
+        p.impersonate_claude_code = true;
+        p.extra_headers
+            .insert("anthropic-beta".into(), "output-128k".into());
+        let h = build_headers(&p, Some("sk-ant-1")).unwrap();
+        let beta = h.get("anthropic-beta").unwrap().to_str().unwrap();
+        assert!(beta.contains("claude-code-20250219"));
+        assert!(beta.contains("output-128k"));
+    }
+
+    #[test]
+    fn impersonate_claude_code_session_id_is_stable() {
+        let mut p = provider(ProviderKind::Anthropic);
+        p.impersonate_claude_code = true;
+        let h1 = build_headers(&p, None).unwrap();
+        let h2 = build_headers(&p, None).unwrap();
+        // Session ID should be the same across requests (LazyLock)
+        assert_eq!(
+            h1.get("x-claude-code-session-id").unwrap(),
+            h2.get("x-claude-code-session-id").unwrap()
+        );
     }
 
     #[test]

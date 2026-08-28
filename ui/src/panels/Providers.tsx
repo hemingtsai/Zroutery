@@ -54,6 +54,7 @@ function blankProvider(
     base_url: baseUrl.trim() || defaultBaseUrl(kind),
     key_ref: `provider:${id}`,
     extra_headers: {},
+    impersonate_claude_code: false,
     enabled: true,
     timeout_secs: 600,
     connect_timeout_secs: 15,
@@ -329,6 +330,11 @@ export default function Providers({
                 label="Enabled"
                 checked={provider.enabled}
                 onChange={(enabled) => update(provider.id, { enabled })}
+              />
+              <Toggle
+                label="Impersonate Claude Code"
+                checked={provider.impersonate_claude_code}
+                onChange={(impersonate_claude_code) => update(provider.id, { impersonate_claude_code })}
               />
               <span className="muted">
                 {models.length} model{models.length === 1 ? "" : "s"}

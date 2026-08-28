@@ -125,6 +125,10 @@ pub struct ProviderConfig {
     /// Anthropic API version header. Ignored for OpenAI compatible providers.
     #[serde(default)]
     pub anthropic_version: Option<String>,
+    /// Whether to impersonate Claude Code client (User-Agent, x-app, anthropic-beta headers
+    /// and system prompt identity line).
+    #[serde(default)]
+    pub impersonate_claude_code: bool,
     #[serde(default)]
     pub quirks: ProviderQuirks,
     /// How to ask this provider for the remaining credit, when it can be asked.
@@ -142,6 +146,8 @@ impl ProviderConfig {
             base_url: kind.default_base_url().to_string(),
             kind,
             extra_headers: BTreeMap::new(),
+            // Anthropic providers default to impersonation enabled for gateway compatibility
+            impersonate_claude_code: kind == ProviderKind::Anthropic,
             enabled: true,
             timeout_secs: default_timeout(),
             connect_timeout_secs: default_connect_timeout(),
