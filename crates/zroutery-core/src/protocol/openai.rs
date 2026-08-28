@@ -93,6 +93,20 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
             }
             "assistant" => {
                 let mut content = Vec::new();
+                // Reasoning models (DeepSeek et al) put their chain of thought in
+                // `reasoning_content`; some relays require it to be passed back on
+                // history turns, so it is preserved through the IR as a Thinking block.
+                if let Some(reasoning) = m
+                    .get("reasoning_content")
+                    .or_else(|| m.get("reasoning"))
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.is_empty())
+                {
+                    content.push(ContentBlock::Thinking {
+                        text: reasoning.to_string(),
+                        signature: None,
+                    });
+                }
                 if let Some(text) = flatten_content(m.get("content")) {
                     if !text.is_empty() {
                         content.push(ContentBlock::text(text));
@@ -329,7 +343,7 @@ pub fn encode_request_with(
         }));
     }
     for m in &req.messages {
-        encode_message_into(m, &mut messages);
+        encode_message_into(m, &mut messages, req.source_dialect == Dialect::OpenAI);
     }
     body.insert("messages".into(), Value::Array(messages));
 
@@ -419,10 +433,11 @@ pub fn encode_request_with(
 
 /// Anthropic keeps tool results inside user messages; OpenAI needs separate
 /// `role: "tool"` messages, and they must come before any plain user text.
-fn encode_message_into(m: &Message, out: &mut Vec<Value>) {
+fn encode_message_into(m: &Message, out: &mut Vec<Value>, echo_reasoning: bool) {
     match m.role {
         Role::Assistant => {
             let mut text = String::new();
+            let mut reasoning = String::new();
             let mut tool_calls: Vec<Value> = Vec::new();
             for b in &m.content {
                 match b {
@@ -432,8 +447,13 @@ fn encode_message_into(m: &Message, out: &mut Vec<Value>) {
                         "type": "function",
                         "function": {"name": name, "arguments": input.to_string()},
                     })),
-                    // Reasoning is never echoed back upstream: most providers
-                    // reject it and it wastes tokens.
+                    // Thinking blocks are echoed only when the client itself sent
+                    // reasoning (OpenAI source): some gateways require history
+                    // turns to carry `reasoning_content` back. For other sources
+                    // (e.g. Anthropic) it is dropped — most providers reject it.
+                    ContentBlock::Thinking { text: t, .. } if echo_reasoning => {
+                        reasoning.push_str(t)
+                    }
                     _ => {}
                 }
             }
@@ -443,6 +463,9 @@ fn encode_message_into(m: &Message, out: &mut Vec<Value>) {
                 msg.insert("content".into(), Value::Null);
             } else {
                 msg.insert("content".into(), json!(text));
+            }
+            if !reasoning.is_empty() {
+                msg.insert("reasoning_content".into(), json!(reasoning));
             }
             if !tool_calls.is_empty() {
                 msg.insert("tool_calls".into(), Value::Array(tool_calls));
@@ -1622,5 +1645,61 @@ mod tests {
         let frames = enc.error(&Error::Unauthorized);
         assert!(frames[0].data.contains("authentication_error"));
         assert_eq!(frames[1].data, "[DONE]");
+    }
+
+    #[test]
+    fn assistant_reasoning_content_survives_the_ir_round_trip() {
+        let req = decode_request(json!({
+            "model": "deepseek-v4-flash",
+            "messages": [
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": "hello", "reasoning_content": "thinking hard"},
+                {"role": "assistant", "content": null, "tool_calls": [
+                    {"id": "call_1", "type": "function",
+                     "function": {"name": "ls", "arguments": "{}"}}
+                ], "reasoning_content": "need to list"},
+                {"role": "tool", "tool_call_id": "call_1", "content": "a.txt"},
+            ]
+        }))
+        .unwrap();
+        let body = encode_request(&req, "deepseek-v4-flash").unwrap();
+        let msgs = body["messages"].as_array().unwrap();
+
+        // Plain assistant text turn keeps its reasoning.
+        assert_eq!(msgs[1]["role"], "assistant");
+        assert_eq!(msgs[1]["reasoning_content"], "thinking hard");
+        assert_eq!(msgs[1]["content"], "hello");
+
+        // Tool-call turn keeps both reasoning and the calls.
+        assert_eq!(msgs[2]["reasoning_content"], "need to list");
+        assert!(msgs[2]["tool_calls"].is_array());
+
+        // Tool result round-trips with its call id.
+        assert_eq!(msgs[3]["role"], "tool");
+        assert_eq!(msgs[3]["tool_call_id"], "call_1");
+    }
+
+    #[test]
+    fn anthropic_sourced_thinking_is_not_echoed_as_reasoning_content() {
+        let mut req = decode_request(json!({
+            "model": "m",
+            "messages": [{"role": "user", "content": "hi"}]
+        }))
+        .unwrap();
+        req.source_dialect = Dialect::Anthropic;
+        req.messages.push(crate::ir::Message {
+            role: crate::ir::Role::Assistant,
+            content: vec![
+                ContentBlock::Thinking {
+                    text: "chain of thought".into(),
+                    signature: Some("sig".into()),
+                },
+                ContentBlock::text("answer"),
+            ],
+        });
+        let body = encode_request(&req, "m").unwrap();
+        let msgs = body["messages"].as_array().unwrap();
+        assert!(msgs[1].get("reasoning_content").is_none());
+        assert_eq!(msgs[1]["content"], "answer");
     }
 }
