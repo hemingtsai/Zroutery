@@ -401,6 +401,10 @@ impl Desktop {
         }
         store::save(&self.config_dir, &next)?;
         let needs_rebind = needs_rebind(&previous.server, &next.server);
+        // Rebuild the upstream HTTP client if proxy bypass setting changed.
+        if previous.server.bypass_proxy != next.server.bypass_proxy {
+            self.core.rebuild_upstream(next.server.bypass_proxy);
+        }
         self.core.set_config(next);
         if needs_rebind && self.is_running().await {
             self.restart().await?;

@@ -8,10 +8,12 @@ use std::collections::VecDeque;
 use std::pin::Pin;
 use std::time::Duration;
 
+use std::sync::RwLock;
+
 use bytes::Bytes;
 use futures_util::{Stream, StreamExt};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, ACCEPT, AUTHORIZATION, CONTENT_TYPE};
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use crate::billing::{Balance, BalanceProbe, Pricing};
 use crate::config::{ProviderConfig, ProviderKind};
@@ -25,31 +27,49 @@ const USER_AGENT: &str = concat!("zroutery/", env!("CARGO_PKG_VERSION"));
 /// Stream of canonical events coming from one upstream call.
 pub type EventStream = Pin<Box<dyn Stream<Item = Result<StreamEvent>> + Send>>;
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Upstream {
-    client: reqwest::Client,
+    client: RwLock<reqwest::Client>,
 }
 
 impl Default for Upstream {
     fn default() -> Self {
-        Self::new()
+        Self::new(false)
     }
 }
 
+fn build_http_client(bypass_proxy: bool) -> reqwest::Client {
+    tracing::info!(bypass_proxy, "building upstream HTTP client");
+    let mut builder = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(15))
+        .pool_idle_timeout(Duration::from_secs(90))
+        .http1_only()
+        .user_agent(USER_AGENT);
+    if bypass_proxy || std::env::var("ZROUTERY_NO_PROXY").is_ok() {
+        builder = builder.no_proxy();
+    }
+    builder
+        .build()
+        .unwrap_or_else(|e| {
+            tracing::error!("falling back to a default HTTP client: {e}");
+            reqwest::Client::new()
+        })
+}
+
 impl Upstream {
-    pub fn new() -> Self {
-        let client = reqwest::Client::builder()
-            .connect_timeout(Duration::from_secs(15))
-            .pool_idle_timeout(Duration::from_secs(90))
-            .user_agent(USER_AGENT)
-            .build()
-            // The builder only fails when the TLS backend cannot initialise. A
-            // default client is a better outcome than taking the process down.
-            .unwrap_or_else(|e| {
-                tracing::error!("falling back to a default HTTP client: {e}");
-                reqwest::Client::new()
-            });
-        Upstream { client }
+    pub fn new(bypass_proxy: bool) -> Self {
+        Upstream {
+            client: RwLock::new(build_http_client(bypass_proxy)),
+        }
+    }
+
+    /// Rebuild the HTTP client (e.g. when bypass_proxy setting changes at runtime).
+    pub fn rebuild_client(&self, bypass_proxy: bool) {
+        *crate::sync::write(&self.client) = build_http_client(bypass_proxy);
+    }
+
+    fn client(&self) -> reqwest::Client {
+        crate::sync::read(&self.client).clone()
     }
 
     /// Time a minimal completion, for an election.
@@ -93,7 +113,7 @@ impl Upstream {
         body: &Value,
     ) -> Result<ChatResponse> {
         let request = self
-            .client
+            .client()
             .post(provider.chat_url())
             .headers(build_headers(provider, api_key)?)
             .json(body);
@@ -139,7 +159,7 @@ impl Upstream {
         upstream_model: &str,
     ) -> Result<EventStream> {
         let request = self
-            .client
+            .client()
             .post(provider.chat_url())
             .headers(build_headers(provider, api_key)?)
             .json(body);
@@ -284,7 +304,7 @@ impl Upstream {
     ) -> Result<Value> {
         let response = tokio::time::timeout(
             Duration::from_secs(timeout_secs),
-            self.client
+            self.client()
                 .get(url)
                 .headers(build_headers(provider, api_key)?)
                 .send(),

@@ -65,11 +65,12 @@ pub struct AppState {
 impl AppState {
     pub fn new(config: AppConfig, secrets: Arc<dyn SecretStore>) -> Self {
         let stats = Arc::new(Stats::new(config.server.log_limit));
+        let bypass_proxy = config.server.bypass_proxy;
         AppState {
             registry: RwLock::new(Arc::new(Registry::new(Arc::new(config)))),
             router: Arc::new(Router::new()),
             stats,
-            upstream: Upstream::new(),
+            upstream: Upstream::new(bypass_proxy),
             secrets,
             ledger: RwLock::new(Ledger::new()),
             ledger_dirty: AtomicBool::new(false),
@@ -127,6 +128,11 @@ impl AppState {
 
     pub fn upstream(&self) -> &Upstream {
         &self.upstream
+    }
+
+    /// Rebuild the upstream HTTP client (e.g. when bypass_proxy changes).
+    pub fn rebuild_upstream(&self, bypass_proxy: bool) {
+        self.upstream.rebuild_client(bypass_proxy);
     }
 
     pub fn secrets(&self) -> &Arc<dyn SecretStore> {

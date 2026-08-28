@@ -100,6 +100,9 @@ export interface Provider {
   base_url: string;
   key_ref: string;
   extra_headers: Record<string, string>;
+  /** Whether to impersonate Claude Code client (User-Agent, x-app, anthropic-beta headers
+   * and system prompt identity line). */
+  impersonate_claude_code: boolean;
   enabled: boolean;
   timeout_secs: number;
   connect_timeout_secs: number;
@@ -188,6 +191,8 @@ export interface ServerConfig {
   cors_origins: string[];
   max_body_mib: number;
   log_limit: number;
+  /** Bypass the system proxy for upstream requests. */
+  bypass_proxy: boolean;
 }
 
 export type BudgetPeriod = "day" | "month";

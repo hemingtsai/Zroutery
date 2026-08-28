@@ -534,6 +534,12 @@ export default function Routing({
             checked={config.server.autostart}
             onChange={(autostart) => patchServer({ autostart })}
           />
+          <Toggle
+            label="Bypass system proxy"
+            hint="Needed if proxy strips impersonation headers"
+            checked={config.server.bypass_proxy ?? false}
+            onChange={(bypass_proxy) => patchServer({ bypass_proxy })}
+          />
         </div>
 
         <div className="row gap wrap">

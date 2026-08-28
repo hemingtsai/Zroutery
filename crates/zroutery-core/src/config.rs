@@ -441,6 +441,11 @@ pub struct ServerConfig {
     /// Number of request records kept in memory for the GUI.
     #[serde(default = "ServerConfig::default_log_limit")]
     pub log_limit: usize,
+    /// Bypass the system proxy for upstream requests. Some proxies strip
+    /// non-standard headers (x-app, x-stainless-*) needed for gateway
+    /// fingerprint checks.
+    #[serde(default)]
+    pub bypass_proxy: bool,
 }
 
 impl ServerConfig {
@@ -485,6 +490,7 @@ impl Default for ServerConfig {
             cors_origins: Vec::new(),
             max_body_mib: Self::default_body_limit_mib(),
             log_limit: Self::default_log_limit(),
+            bypass_proxy: false,
         }
     }
 }

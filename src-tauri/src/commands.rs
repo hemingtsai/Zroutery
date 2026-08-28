@@ -142,7 +142,8 @@ pub async fn fetch_provider_models(
     let key = tauri::async_runtime::spawn_blocking(move || secrets.get(&key_ref))
         .await
         .map_err(|e| e.to_string())?;
-    Upstream::new()
+    let bypass_proxy = desktop.core.config().server.bypass_proxy;
+    Upstream::new(bypass_proxy)
         .list_models(&provider, key.as_deref())
         .await
         .map_err(|e| e.to_string())
