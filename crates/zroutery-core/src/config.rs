@@ -176,8 +176,23 @@ impl ProviderConfig {
     pub fn models_url(&self) -> String {
         let base = self.base_url.trim_end_matches('/');
         match self.kind {
-            ProviderKind::Anthropic => format!("{base}/v1/models"),
-            ProviderKind::OpenAICompatible => format!("{base}/models"),
+            ProviderKind::Anthropic => {
+                if base.ends_with("/v1") {
+                    format!("{base}/models")
+                } else {
+                    format!("{base}/v1/models")
+                }
+            }
+            ProviderKind::OpenAICompatible => {
+                // Standard OpenAI gateways serve models at /v1/models.
+                // If the base_url already ends with /v1, just append /models;
+                // otherwise append /v1/models so gateways like ps.air-outer.com work.
+                if base.ends_with("/v1") {
+                    format!("{base}/models")
+                } else {
+                    format!("{base}/v1/models")
+                }
+            }
         }
     }
 }
@@ -1056,5 +1071,31 @@ mod tests {
         assert_eq!(cfg.models[0].weight, 1);
         assert_eq!(cfg.models[0].class, None);
         assert_eq!(cfg.models[0].exposed_id(), "p-m");
+    }
+
+    #[test]
+    fn models_url_avoids_double_v1() {
+        // base_url without /v1
+        let p1 = ProviderConfig::new("p1", "P1", ProviderKind::Anthropic);
+        assert!(p1.models_url().ends_with("/v1/models"));
+
+        // base_url already ends with /v1
+        let mut p2 = ProviderConfig::new("p2", "P2", ProviderKind::Anthropic);
+        p2.base_url = "https://example.com/v1".to_string();
+        assert_eq!(p2.models_url(), "https://example.com/v1/models");
+
+        // base_url ends with /v1/
+        let mut p3 = ProviderConfig::new("p3", "P3", ProviderKind::Anthropic);
+        p3.base_url = "https://example.com/v1/".to_string();
+        assert_eq!(p3.models_url(), "https://example.com/v1/models");
+
+        // OpenAI compatible without /v1 also gets /v1/models
+        let p4 = ProviderConfig::new("p4", "P4", ProviderKind::OpenAICompatible);
+        assert!(p4.models_url().ends_with("/v1/models"));
+
+        // OpenAI compatible with /v1 in base_url
+        let mut p5 = ProviderConfig::new("p5", "P5", ProviderKind::OpenAICompatible);
+        p5.base_url = "https://api.openai.com/v1".to_string();
+        assert_eq!(p5.models_url(), "https://api.openai.com/v1/models");
     }
 }
