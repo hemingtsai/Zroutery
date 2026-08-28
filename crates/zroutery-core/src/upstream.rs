@@ -479,7 +479,7 @@ pub fn build_headers(provider: &ProviderConfig, api_key: Option<&str>) -> Result
             HeaderValue::from_str(&uuid::Uuid::new_v4().to_string())
                 .map_err(|_| Error::internal("invalid client request id"))?,
         );
-        // Stainless SDK headers: must match cc_entrypoint=sdk-cli
+        // Stainless SDK headers: must match the sdk-cli entry point marker
         headers.insert(
             HeaderName::from_static("x-stainless-arch"),
             HeaderValue::from_static("x64"),
