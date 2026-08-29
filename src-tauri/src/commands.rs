@@ -7,6 +7,7 @@ use tauri_plugin_clipboard_manager::ClipboardExt;
 use zroutery_core::config::{AppConfig, ProviderConfig, SecretStore};
 use zroutery_core::upstream::{DiscoveredModel, Upstream};
 
+use crate::logs::LogBuffer;
 use crate::state::{Activity, Desktop, Snapshot};
 use crate::store;
 use crate::tray;
@@ -28,6 +29,13 @@ pub async fn get_snapshot(app: AppHandle, desktop: State<'_, Arc<Desktop>>) -> C
 #[tauri::command]
 pub fn get_activity(desktop: State<'_, Arc<Desktop>>) -> Cmd<Activity> {
     Ok(desktop.activity())
+}
+
+/// Recent tracing output for the Logs tab. The buffer is capped in memory, so
+/// this is a rolling window rather than the full process log.
+#[tauri::command]
+pub fn get_logs(logs: State<'_, LogBuffer>) -> Cmd<Vec<String>> {
+    Ok(logs.lines())
 }
 
 /// The token in plain text, for the dashboard's explicit "Reveal" action. Every

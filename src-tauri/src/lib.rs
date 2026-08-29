@@ -4,6 +4,7 @@
 //! item plus a dashboard window.
 
 mod commands;
+mod logs;
 pub mod secrets;
 pub mod state;
 pub mod store;
@@ -13,6 +14,7 @@ use std::sync::Arc;
 
 use tauri::{Manager, RunEvent, WindowEvent};
 
+use crate::logs::LogBuffer;
 use crate::secrets::KeychainSecrets;
 use crate::state::Desktop;
 
@@ -20,12 +22,14 @@ const KEYCHAIN_SERVICE: &str = "app.zroutery.desktop";
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let log_buffer = LogBuffer::new(2000);
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_env("ZROUTERY_LOG")
                 .unwrap_or_else(|_| "info,zroutery_core=info".into()),
         )
         .with_target(false)
+        .with_writer(log_buffer.clone())
         .init();
 
     let app = tauri::Builder::default()
@@ -33,6 +37,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::get_snapshot,
             commands::get_activity,
+            commands::get_logs,
             commands::reveal_token,
             commands::copy_token,
             commands::save_config,
@@ -51,7 +56,7 @@ pub fn run() {
             commands::hide_window,
             commands::quit_app,
         ])
-        .setup(|app| {
+        .setup(move |app| {
             // Menu bar only: no dock icon, no app switcher entry.
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
@@ -76,6 +81,7 @@ pub fn run() {
             let desktop = Arc::new(Desktop::new(config_dir, config, secrets));
             desktop.set_warning(warning);
             app.manage(Arc::clone(&desktop));
+            app.manage(log_buffer.clone());
 
             tray::build(app.handle())?;
 

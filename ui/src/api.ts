@@ -346,6 +346,7 @@ export interface Activity {
 export const api = {
   snapshot: () => invoke<Snapshot>("get_snapshot"),
   activity: () => invoke<Activity>("get_activity"),
+  logs: () => invoke<string[]>("get_logs"),
   saveConfig: (config: AppConfig) => invoke<Snapshot>("save_config", { config }),
   setKey: (provider_id: string, api_key: string) =>
     invoke<Snapshot>("set_provider_key", { providerId: provider_id, apiKey: api_key }),

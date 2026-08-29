@@ -553,6 +553,23 @@ input[readonly] {
   color: var(--muted);
 }
 
+/* Logs tab: a scrolling monospace viewport over the in-memory tracing buffer. */
+.log-view {
+  margin: 0;
+  padding: 10px 12px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: auto;
+  max-height: 60vh;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.55;
+  color: var(--text);
+}
+
 .empty {
   color: var(--muted);
   margin: 4px 0;

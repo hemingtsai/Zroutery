@@ -5,14 +5,16 @@ import Providers from "./panels/Providers";
 import Models from "./panels/Models";
 import Routing from "./panels/Routing";
 import Activity from "./panels/Activity";
+import Logs from "./panels/Logs";
 
-type Tab = "providers" | "models" | "routing" | "activity";
+type Tab = "providers" | "models" | "routing" | "activity" | "logs";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "providers", label: "Providers" },
   { id: "models", label: "Models" },
   { id: "routing", label: "Routing" },
   { id: "activity", label: "Activity" },
+  { id: "logs", label: "Logs" },
 ];
 
 export default function App() {
@@ -228,6 +230,7 @@ export default function App() {
         {tab === "models" && <Models snapshot={snapshot} save={save} busy={busy} />}
         {tab === "routing" && <Routing snapshot={snapshot} save={save} run={run} busy={busy} />}
         {tab === "activity" && <Activity snapshot={snapshot} run={run} />}
+        {tab === "logs" && <Logs />}
       </main>
 
       <footer className="statusbar">
