@@ -253,6 +253,8 @@ async fn start_mock() -> (SocketAddr, Mock) {
     let mock = Mock::default();
     let app = axum::Router::new()
         .route("/chat/completions", post(mock_openai_chat))
+        // Bare OpenAI-compatible hosts get /v1 added by chat_url().
+        .route("/v1/chat/completions", post(mock_openai_chat))
         .route("/v1/messages", post(mock_anthropic_messages))
         .route("/models", get(mock_models))
         .route("/user/balance", get(mock_balance))

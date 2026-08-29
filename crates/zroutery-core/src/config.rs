@@ -172,9 +172,17 @@ impl ProviderConfig {
     /// Full URL for the chat endpoint of this provider.
     pub fn chat_url(&self) -> String {
         let base = self.base_url.trim_end_matches('/');
+        // Base URLs that already end in /v1 (ps.air-outer.com style) must not
+        // grow a second /v1, and bare OpenAI-compatible hosts (Ollama) need
+        // one. Mirrors the tolerance of `models_url`.
+        let with_v1 = if base.ends_with("/v1") {
+            base.to_string()
+        } else {
+            format!("{base}/v1")
+        };
         match self.kind {
-            ProviderKind::Anthropic => format!("{base}/v1/messages"),
-            ProviderKind::OpenAICompatible => format!("{base}/chat/completions"),
+            ProviderKind::Anthropic => format!("{with_v1}/messages"),
+            ProviderKind::OpenAICompatible => format!("{with_v1}/chat/completions"),
         }
     }
 
@@ -1130,6 +1138,27 @@ mod tests {
         assert_eq!(cfg.models[0].weight, 1);
         assert_eq!(cfg.models[0].class, None);
         assert_eq!(cfg.models[0].exposed_id(), "p-m");
+    }
+
+    #[test]
+    fn chat_url_tolerates_base_urls_with_or_without_v1() {
+        // OpenAI-compatible: bare hosts get /v1, /v1 bases stay single.
+        let mut p = ProviderConfig::new("p", "P", ProviderKind::OpenAICompatible);
+        p.base_url = "https://api.example.com".into();
+        assert_eq!(p.chat_url(), "https://api.example.com/v1/chat/completions");
+        let mut v1 = ProviderConfig::new("p", "P", ProviderKind::OpenAICompatible);
+        v1.base_url = "https://ps.air-outer.com/v1/".into();
+        assert_eq!(v1.chat_url(), "https://ps.air-outer.com/v1/chat/completions");
+        let mut v1 = ProviderConfig::new("p", "P", ProviderKind::OpenAICompatible);
+        v1.base_url = "https://ps.air-outer.com/v1/".into();
+        assert_eq!(v1.chat_url(), "https://ps.air-outer.com/v1/chat/completions");
+
+        // Anthropic: a /v1 base must not become /v1/v1/messages.
+        let a = ProviderConfig::new("a", "A", ProviderKind::Anthropic);
+        assert_eq!(a.chat_url(), "https://api.anthropic.com/v1/messages");
+        let mut av1 = ProviderConfig::new("a", "A", ProviderKind::Anthropic);
+        av1.base_url = "https://relay.example/v1".into();
+        assert_eq!(av1.chat_url(), "https://relay.example/v1/messages");
     }
 
     #[test]
