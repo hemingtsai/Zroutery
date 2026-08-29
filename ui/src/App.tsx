@@ -24,10 +24,10 @@ export default function App() {
 
   // Tasks run one at a time: every save round trips through Rust and rewrites
   // the config file, so two overlapping saves could interleave and land out of
-  // order. A task arriving mid-flight is queued and runs when the current one
-  // settles, which keeps the last edit the last write.
+  // order. Tasks arriving mid-flight are queued in order and re-based onto the
+  // latest committed config when they run.
   const runningRef = useRef(false);
-  const queuedRef = useRef<(() => Promise<Snapshot>) | null>(null);
+  const queuedRef = useRef<Array<() => Promise<Snapshot>>>([]);
 
   // The newest config known to have been committed (or loaded). Saves are
   // updaters against this, so an edit queued behind an in-flight save is
@@ -41,7 +41,7 @@ export default function App() {
       return s;
     };
     if (runningRef.current) {
-      queuedRef.current = task;
+      queuedRef.current.push(task);
       // The queued task's own outcome decides; this call did not fail.
       return true;
     }
@@ -50,11 +50,17 @@ export default function App() {
     setError(null);
     try {
       apply(await task());
-      const queued = queuedRef.current;
-      queuedRef.current = null;
-      if (queued) apply(await queued());
+      // Drain every edit that arrived while this one was in flight. Each task
+      // reads configRef when it runs, so later edits rebase on earlier ones.
+      while (queuedRef.current.length > 0) {
+        const queued = queuedRef.current.shift()!;
+        apply(await queued());
+      }
       return true;
     } catch (e) {
+      // A failed save invalidates the edits that were waiting behind it: they
+      // were built against a config that never became authoritative.
+      queuedRef.current = [];
       setError(errorText(e));
       return false;
     } finally {
