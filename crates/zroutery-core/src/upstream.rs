@@ -415,14 +415,6 @@ struct StreamState {
 const CLAUDE_CODE_USER_AGENT: &str = "claude-cli/2.1.217 (external, sdk-cli)";
 const CLAUDE_CODE_SYSTEM_IDENTITY: &str = "You are Claude Code, Anthropic's official CLI for Claude.";
 
-/// Stainless SDK headers sent by real Claude Code client.
-const STAINLESS_PACKAGE_VERSION: &str = "0.81.0";
-const STAINLESS_NODE_VERSION: &str = "v24.3.0";
-
-/// Stable per-process session ID for X-Claude-Code-Session-Id.
-static CLAUDE_CODE_SESSION_ID: std::sync::LazyLock<String> =
-    std::sync::LazyLock::new(|| uuid::Uuid::new_v4().to_string());
-
 /// Build the auth and content headers for a provider.
 pub fn build_headers(provider: &ProviderConfig, api_key: Option<&str>) -> Result<HeaderMap> {
     let mut headers = HeaderMap::new();
@@ -471,71 +463,31 @@ pub fn build_headers(provider: &ProviderConfig, api_key: Option<&str>) -> Result
         headers.insert(name, value);
     }
 
-    // Claude Code impersonation: inject full set of headers to pass gateway fingerprint checks.
+    // Claude Code impersonation: minimal clean fingerprint, matching what the
+    // real claude-cli sends (cc-switch's field-tested set). SDK-layer headers
+    // (x-stainless-*) and request IDs are deliberately NOT injected: a real
+    // CLI does not send them, and header/version inconsistencies are exactly
+    // what strict gateways look for. Gateways needing extras can use
+    // provider.extra_headers.
     if provider.impersonate_claude_code {
-        tracing::info!(
+        tracing::debug!(
             provider = %provider.name,
             "impersonation enabled – injecting Claude Code fingerprint headers"
         );
-        // User-Agent: must match sdk-cli entrypoint for billing header validation
+        // User-Agent: claude-cli style; gateways accept any CC-style version.
         headers.insert(
             HeaderName::from_static("user-agent"),
             HeaderValue::from_static(CLAUDE_CODE_USER_AGENT),
         );
-        // x-app: identifies as CLI client
+        // x-app: identifies as CLI client.
         headers.insert(
             HeaderName::from_static("x-app"),
             HeaderValue::from_static("cli"),
         );
-        // anthropic-dangerous-direct-browser-access: required for direct browser access
+        // Real Claude Code sends this; harmless where it is not checked.
         headers.insert(
             HeaderName::from_static("anthropic-dangerous-direct-browser-access"),
             HeaderValue::from_static("true"),
-        );
-        // Session ID: stable per-process UUID for request aggregation
-        headers.insert(
-            HeaderName::from_static("x-claude-code-session-id"),
-            HeaderValue::from_str(&CLAUDE_CODE_SESSION_ID)
-                .map_err(|_| Error::internal("invalid session id"))?,
-        );
-        // Client request ID: fresh UUID per request
-        headers.insert(
-            HeaderName::from_static("x-client-request-id"),
-            HeaderValue::from_str(&uuid::Uuid::new_v4().to_string())
-                .map_err(|_| Error::internal("invalid client request id"))?,
-        );
-        // Stainless SDK headers: must match the sdk-cli entry point marker
-        headers.insert(
-            HeaderName::from_static("x-stainless-arch"),
-            HeaderValue::from_static("x64"),
-        );
-        headers.insert(
-            HeaderName::from_static("x-stainless-lang"),
-            HeaderValue::from_static("js"),
-        );
-        headers.insert(
-            HeaderName::from_static("x-stainless-os"),
-            HeaderValue::from_static("MacOS"),
-        );
-        headers.insert(
-            HeaderName::from_static("x-stainless-package-version"),
-            HeaderValue::from_static(STAINLESS_PACKAGE_VERSION),
-        );
-        headers.insert(
-            HeaderName::from_static("x-stainless-retry-count"),
-            HeaderValue::from_static("0"),
-        );
-        headers.insert(
-            HeaderName::from_static("x-stainless-runtime"),
-            HeaderValue::from_static("node"),
-        );
-        headers.insert(
-            HeaderName::from_static("x-stainless-runtime-version"),
-            HeaderValue::from_static(STAINLESS_NODE_VERSION),
-        );
-        headers.insert(
-            HeaderName::from_static("x-stainless-timeout"),
-            HeaderValue::from_static("600"),
         );
         // anthropic-beta: ensure claude-code marker is present
         const CLAUDE_CODE_BETA: &str = "claude-code-20250219";
@@ -738,42 +690,26 @@ mod tests {
     }
 
     #[test]
-    fn impersonate_claude_code_injects_full_fingerprint() {
+    fn impersonate_claude_code_injects_clean_fingerprint() {
         let mut p = provider(ProviderKind::Anthropic);
         p.impersonate_claude_code = true;
         let h = build_headers(&p, Some("sk-ant-1")).unwrap();
 
-        // User-Agent must match sdk-cli entrypoint
+        // User-Agent must be claude-cli style.
         assert_eq!(h.get("user-agent").unwrap(), CLAUDE_CODE_USER_AGENT);
 
-        // Core identity headers
+        // Core identity headers.
         assert_eq!(h.get("x-app").unwrap(), "cli");
         assert_eq!(
             h.get("anthropic-dangerous-direct-browser-access").unwrap(),
             "true"
         );
 
-        // Session and request IDs (should be valid UUIDs)
-        let session_id = h.get("x-claude-code-session-id").unwrap().to_str().unwrap();
-        assert_eq!(session_id.len(), 36, "session id should be a UUID");
-        let client_request_id = h.get("x-client-request-id").unwrap().to_str().unwrap();
-        assert_eq!(client_request_id.len(), 36, "client request id should be a UUID");
-
-        // Stainless SDK headers
-        assert_eq!(h.get("x-stainless-arch").unwrap(), "x64");
-        assert_eq!(h.get("x-stainless-lang").unwrap(), "js");
-        assert_eq!(h.get("x-stainless-os").unwrap(), "MacOS");
-        assert_eq!(
-            h.get("x-stainless-package-version").unwrap(),
-            STAINLESS_PACKAGE_VERSION
-        );
-        assert_eq!(h.get("x-stainless-retry-count").unwrap(), "0");
-        assert_eq!(h.get("x-stainless-runtime").unwrap(), "node");
-        assert_eq!(
-            h.get("x-stainless-runtime-version").unwrap(),
-            STAINLESS_NODE_VERSION
-        );
-        assert_eq!(h.get("x-stainless-timeout").unwrap(), "600");
+        // SDK-layer headers a real CLI never sends must stay absent.
+        assert!(h.get("x-stainless-arch").is_none());
+        assert!(h.get("x-stainless-package-version").is_none());
+        assert!(h.get("x-claude-code-session-id").is_none());
+        assert!(h.get("x-client-request-id").is_none());
 
         // anthropic-beta must contain claude-code marker
         let beta = h.get("anthropic-beta").unwrap().to_str().unwrap();
@@ -793,19 +729,6 @@ mod tests {
         let beta = h.get("anthropic-beta").unwrap().to_str().unwrap();
         assert!(beta.contains("claude-code-20250219"));
         assert!(beta.contains("output-128k"));
-    }
-
-    #[test]
-    fn impersonate_claude_code_session_id_is_stable() {
-        let mut p = provider(ProviderKind::Anthropic);
-        p.impersonate_claude_code = true;
-        let h1 = build_headers(&p, None).unwrap();
-        let h2 = build_headers(&p, None).unwrap();
-        // Session ID should be the same across requests (LazyLock)
-        assert_eq!(
-            h1.get("x-claude-code-session-id").unwrap(),
-            h2.get("x-claude-code-session-id").unwrap()
-        );
     }
 
     #[test]
