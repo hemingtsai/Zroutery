@@ -160,12 +160,14 @@ impl ProviderConfig {
     /// How deep this provider's base URL already reaches, for appending metadata
     /// paths such as a balance endpoint.
     ///
-    /// By convention an OpenAI compatible base carries the version and an
-    /// Anthropic base does not, which is exactly what `chat_url` assumes below.
+    /// This mirrors the `/v1` normalisation in [`ProviderConfig::chat_url`]: a
+    /// base that already ends in `/v1` is versioned, anything else is treated as
+    /// the API root so balance paths can add the version themselves.
     pub fn base_depth(&self) -> BaseDepth {
-        match self.kind {
-            ProviderKind::OpenAICompatible => BaseDepth::Versioned,
-            ProviderKind::Anthropic => BaseDepth::ApiRoot,
+        if self.base_url.trim_end_matches('/').ends_with("/v1") {
+            BaseDepth::Versioned
+        } else {
+            BaseDepth::ApiRoot
         }
     }
 
@@ -980,6 +982,25 @@ mod tests {
 
         let a = ProviderConfig::new("a", "Anthropic", ProviderKind::Anthropic);
         assert_eq!(a.chat_url(), "https://api.anthropic.com/v1/messages");
+    }
+
+    #[test]
+    fn base_depth_matches_chat_url_v1_normalisation() {
+        let mut openai_bare = ProviderConfig::new("o", "O", ProviderKind::OpenAICompatible);
+        openai_bare.base_url = "https://api.example.com".into();
+        assert_eq!(openai_bare.base_depth(), BaseDepth::ApiRoot);
+        assert_eq!(openai_bare.chat_url(), "https://api.example.com/v1/chat/completions");
+
+        let mut openai_v1 = ProviderConfig::new("o", "O", ProviderKind::OpenAICompatible);
+        openai_v1.base_url = "https://api.example.com/v1".into();
+        assert_eq!(openai_v1.base_depth(), BaseDepth::Versioned);
+
+        let anthropic_root = ProviderConfig::new("a", "A", ProviderKind::Anthropic);
+        assert_eq!(anthropic_root.base_depth(), BaseDepth::ApiRoot);
+
+        let mut anthropic_v1 = ProviderConfig::new("a", "A", ProviderKind::Anthropic);
+        anthropic_v1.base_url = "https://relay.example/v1".into();
+        assert_eq!(anthropic_v1.base_depth(), BaseDepth::Versioned);
     }
 
     #[test]
