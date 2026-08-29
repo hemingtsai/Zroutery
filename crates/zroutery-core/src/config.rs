@@ -588,6 +588,27 @@ impl AppConfig {
         let mut issues = Vec::new();
         let mut seen_ids: BTreeMap<String, usize> = BTreeMap::new();
 
+        if self.server.allow_cors {
+            for o in &self.server.cors_origins {
+                let trimmed = o.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                if !crate::server::is_valid_origin(trimmed) {
+                    issues.push(ConfigIssue {
+                        severity: IssueSeverity::Error,
+                        code: "server.cors_origin_invalid".into(),
+                        message: format!(
+                            "`{o}` is not a valid CORS origin (expected scheme://host[:port]); \
+                             invalid entries are ignored, and if none are valid no origin is \
+                             allowed at all"
+                        ),
+                        subject: None,
+                    });
+                }
+            }
+        }
+
         for p in &self.providers {
             if p.base_url.trim().is_empty() {
                 issues.push(ConfigIssue {
@@ -934,6 +955,32 @@ mod tests {
 
         let a = ProviderConfig::new("a", "Anthropic", ProviderKind::Anthropic);
         assert_eq!(a.chat_url(), "https://api.anthropic.com/v1/messages");
+    }
+
+    #[test]
+    fn validate_flags_invalid_cors_origins() {
+        let mut cfg = sample();
+        cfg.server.allow_cors = true;
+        cfg.server.cors_origins = vec!["https://good.example".into(), "not an origin".into()];
+        let issues = cfg.validate();
+        assert_eq!(
+            issues
+                .iter()
+                .filter(|i| i.code == "server.cors_origin_invalid")
+                .count(),
+            1
+        );
+
+        // Whitespace-only entries are ignored, valid ones pass silently.
+        cfg.server.cors_origins = vec!["  ".into(), "https://good.example".into()];
+        let issues = cfg.validate();
+        assert!(!issues.iter().any(|i| i.code == "server.cors_origin_invalid"));
+
+        // No check while CORS is off.
+        cfg.server.allow_cors = false;
+        cfg.server.cors_origins = vec!["garbage".into()];
+        let issues = cfg.validate();
+        assert!(!issues.iter().any(|i| i.code == "server.cors_origin_invalid"));
     }
 
     #[test]

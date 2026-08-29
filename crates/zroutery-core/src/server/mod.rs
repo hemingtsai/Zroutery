@@ -377,17 +377,75 @@ fn cors_layer(server: &ServerConfig) -> Option<CorsLayer> {
         ])
         .max_age(Duration::from_secs(600));
 
-    let origins: Vec<HeaderValue> = server
-        .cors_origins
-        .iter()
-        .filter_map(|o| HeaderValue::from_str(o.trim()).ok())
-        .collect();
-    layer = if origins.is_empty() {
-        layer.allow_origin(Any)
-    } else {
-        layer.allow_origin(AllowOrigin::list(origins))
-    };
+    // Origins split into valid / invalid. An empty *configured* list means
+    // "allow any", but if the user configured origins and none of them are
+    // usable, deny everything rather than silently widening to `Any` — a
+    // typo must never turn into an open CORS policy.
+    match origin_policy(&server.cors_origins) {
+        OriginPolicy::Any => layer = layer.allow_origin(Any),
+        OriginPolicy::List(valid) => {
+            let origins: Vec<HeaderValue> = valid
+                .iter()
+                .filter_map(|o| HeaderValue::from_str(o).ok())
+                .collect();
+            layer = layer.allow_origin(AllowOrigin::list(origins));
+        }
+        OriginPolicy::DenyAll => layer = layer.allow_origin(AllowOrigin::list(Vec::new())),
+    }
     Some(layer)
+}
+
+/// What to allow, derived from the configured `cors_origins`.
+#[derive(Debug, PartialEq, Eq)]
+enum OriginPolicy {
+    /// No origins configured: allow any.
+    Any,
+    /// These (validated) origins are allowed.
+    List(Vec<String>),
+    /// Origins were configured but none are valid: allow none. A typo must
+    /// never widen an explicit allow-list into an open policy.
+    DenyAll,
+}
+
+fn origin_policy(configured: &[String]) -> OriginPolicy {
+    let valid: Vec<String> = configured
+        .iter()
+        .map(|o| o.trim())
+        .filter(|o| is_valid_origin(o))
+        .map(str::to_string)
+        .collect();
+    if valid.is_empty() {
+        let any_configured = configured.iter().any(|o| !o.trim().is_empty());
+        if any_configured {
+            tracing::warn!("every configured cors_origin is invalid; no origin will be allowed");
+            OriginPolicy::DenyAll
+        } else {
+            OriginPolicy::Any
+        }
+    } else {
+        if valid.len() != configured.len() {
+            tracing::warn!("some cors_origins entries are invalid and were ignored");
+        }
+        OriginPolicy::List(valid)
+    }
+}
+
+/// Whether `origin` is a well-formed `scheme://host[:port]` value usable as a
+/// CORS allow-origin entry. Rejects paths, queries, fragments, whitespace and
+/// anything without an explicit scheme — those are config mistakes, and
+/// treating them as "no origins" would silently open the proxy to `Any`.
+pub(crate) fn is_valid_origin(origin: &str) -> bool {
+    let Some((scheme, rest)) = origin.split_once("://") else {
+        return false;
+    };
+    if scheme.is_empty() || !scheme.chars().all(|c| c.is_ascii_alphanumeric() || c == '+') {
+        return false;
+    }
+    if rest.is_empty() {
+        return false;
+    }
+    // No path / query / fragment / whitespace after the authority.
+    !rest.contains(['/', '?', '#', ' ', '\t'])
 }
 
 /// A running server plus its shutdown handle.
@@ -727,6 +785,35 @@ mod tests {
         // A malformed origin is dropped rather than rejected: the rest still works.
         server.cors_origins = vec!["not a header value\n".into()];
         assert!(cors_layer(&server).is_some());
+    }
+
+    #[test]
+    fn is_valid_origin_rejects_paths_and_scheme_less_entries() {
+        assert!(is_valid_origin("http://localhost:3000"));
+        assert!(is_valid_origin("https://app.example.com"));
+        assert!(is_valid_origin("tauri://localhost"));
+        assert!(!is_valid_origin("https://app.example.com/path"));
+        assert!(!is_valid_origin("https://app.example.com?q=1"));
+        assert!(!is_valid_origin("app.example.com"));
+        assert!(!is_valid_origin(""));
+        assert!(!is_valid_origin("has space://x"));
+    }
+
+    #[test]
+    fn origin_policy_never_widens_on_invalid_entries() {
+        use OriginPolicy::*;
+        // Nothing configured: documented Any.
+        assert_eq!(origin_policy(&[]), Any);
+        // Valid entries: a list.
+        assert_eq!(
+            origin_policy(&["http://a".into(), "https://b".into()]),
+            List(vec!["http://a".to_string(), "https://b".to_string()])
+        );
+        // Mixed: invalid entries are dropped, valid ones survive.
+        assert_eq!(origin_policy(&["https://ok".into(), "garbage".into()]), List(vec!["https://ok".into()]));
+        // All invalid (or whitespace-only): deny — never widen to Any.
+        assert_eq!(origin_policy(&["garbage".into()]), DenyAll);
+        assert_eq!(origin_policy(&["   ".into()]), Any);
     }
 
     #[test]
