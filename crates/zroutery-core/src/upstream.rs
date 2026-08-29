@@ -159,9 +159,9 @@ impl Upstream {
         upstream_model: &str,
     ) -> Result<EventStream> {
         // The handshake (DNS, connect, TLS, request upload, response status) is
-        // retried a couple of times: transient transport failures and edge/WAF
-        // 405 blocks happen before any bytes of the answer exist, so replaying
-        // the request is safe and masks proxy/node flaps.
+        // retried a couple of times: transient transport failures and gateway
+        // blips (408/502/503/504) happen before any bytes of the answer exist,
+        // so replaying the request is safe and masks proxy/node flaps.
         const HANDSHAKE_ATTEMPTS: u32 = 3;
         let mut attempt = 0;
         let response = loop {
@@ -180,33 +180,58 @@ impl Upstream {
                         source,
                     })
                 });
-            match result {
-                Ok(response) => break response,
-                Err(err) if attempt < HANDSHAKE_ATTEMPTS && is_transient_handshake_failure(&err) => {
-                    tracing::warn!(
-                        provider = %provider.name,
-                        attempt,
-                        error = %err,
-                        "transient handshake failure, retrying"
-                    );
-                    tokio::time::sleep(Duration::from_millis(750 * u64::from(attempt))).await;
+            let response = match result {
+                Ok(response) => response,
+                Err(err) => {
+                    if attempt < HANDSHAKE_ATTEMPTS && is_transient_handshake_failure(&err) {
+                        tracing::warn!(
+                            provider = %provider.name,
+                            attempt,
+                            error = %err,
+                            "transient handshake failure, retrying"
+                        );
+                        tokio::time::sleep(Duration::from_millis(750 * u64::from(attempt))).await;
+                        continue;
+                    }
+                    return Err(err);
                 }
-                Err(err) => return Err(err),
-            }
-        };
+            };
 
-        let status = response.status();
-        if !status.is_success() {
-            let text = response.text().await.unwrap_or_default();
-            // DEBUG (opt-in via ZROUTERY_CAPTURE_FAILED_BODIES=1): capture the
-            // request body so relay-side rejections can be bisected offline.
-            capture_failed_body(provider, body, status.as_u16(), &text);
-            return Err(Error::Upstream {
+            let status = response.status();
+            if status.is_success() {
+                break response;
+            }
+            // Error bodies are small, but a stalled upstream must not hold the
+            // request forever on this path — non-stream calls time this read.
+            let text = match tokio::time::timeout(
+                Duration::from_secs(provider.timeout_secs),
+                response.text(),
+            )
+            .await
+            {
+                Ok(Ok(text)) => text,
+                _ => String::new(),
+            };
+            let err = Error::Upstream {
                 provider: provider.name.clone(),
                 status: status.as_u16(),
                 body: truncate(&text, 2000),
-            });
-        }
+            };
+            if attempt < HANDSHAKE_ATTEMPTS && is_transient_handshake_failure(&err) {
+                tracing::warn!(
+                    provider = %provider.name,
+                    attempt,
+                    status = status.as_u16(),
+                    "transient handshake status, retrying"
+                );
+                tokio::time::sleep(Duration::from_millis(750 * u64::from(attempt))).await;
+                continue;
+            }
+            // DEBUG (opt-in via ZROUTERY_CAPTURE_FAILED_BODIES=1): capture the
+            // request body so relay-side rejections can be bisected offline.
+            capture_failed_body(provider, body, status.as_u16(), &text);
+            return Err(err);
+        };
 
         let state = StreamState {
             body: Box::pin(response.bytes_stream()),
