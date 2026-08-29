@@ -206,6 +206,7 @@ export type BudgetScope =
 export type OnExceeded = { action: "reject" } | { action: "degrade"; to: ModelClass };
 
 export interface Budget {
+  id: string;
   scope: BudgetScope;
   period: BudgetPeriod;
   limit: Cost;

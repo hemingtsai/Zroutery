@@ -104,6 +104,7 @@ export default function Routing({
     void save((cfg) => {
       const next = structuredClone(cfg);
       next.budgets.push({
+        id: "",
         scope: parseScope(budgetDraft.scope),
         period: budgetDraft.period,
         limit: {
@@ -118,19 +119,21 @@ export default function Routing({
     setBudgetDraft({ ...budgetDraft, amount: 0 });
   };
 
-  const patchBudget = (index: number, patch: Partial<Budget>) => {
+  const patchBudget = (id: string, patch: Partial<Budget>) => {
     void save((cfg) => {
       const next = structuredClone(cfg);
-      const budget = next.budgets[index];
+      const budget = next.budgets.find((b) => b.id === id);
       if (!budget) return null;
       Object.assign(budget, patch);
       return next;
     });
   };
 
-  const removeBudget = (index: number) => {
+  const removeBudget = (id: string) => {
     void save((cfg) => {
       const next = structuredClone(cfg);
+      const index = next.budgets.findIndex((b) => b.id === id);
+      if (index < 0) return null;
       next.budgets.splice(index, 1);
       return next;
     });
@@ -385,11 +388,11 @@ export default function Routing({
               </tr>
             </thead>
             <tbody>
-              {snapshot.budgets.map((status, index) => {
+              {snapshot.budgets.map((status) => {
                 const b = status.budget;
                 const over = status.used >= 1;
                 return (
-                  <tr key={index} className={over ? "row-warn" : ""}>
+                  <tr key={b.id} className={over ? "row-warn" : ""}>
                     <td>{scopeLabel(b.scope)}</td>
                     <td>{periodLabel(b.period)}</td>
                     <td>{money(b.limit.currency, b.limit.amount)}</td>
@@ -412,7 +415,7 @@ export default function Routing({
                             : "reject"
                         }
                         onChange={(e) =>
-                          patchBudget(index, {
+                          patchBudget(b.id, {
                             on_exceeded:
                               e.currentTarget.value === "reject"
                                 ? { action: "reject" }
@@ -437,14 +440,14 @@ export default function Routing({
                         aria-label={`Enable the ${scopeLabel(b.scope)} budget`}
                         checked={b.enabled}
                         onChange={(e) =>
-                          patchBudget(index, {
+                          patchBudget(b.id, {
                             enabled: e.currentTarget.checked,
                           })
                         }
                       />
                     </td>
                     <td>
-                      <Button kind="ghost" onClick={() => removeBudget(index)}>
+                      <Button kind="ghost" onClick={() => removeBudget(b.id)}>
                         Delete
                       </Button>
                     </td>

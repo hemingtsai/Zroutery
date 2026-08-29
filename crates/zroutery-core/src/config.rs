@@ -586,6 +586,11 @@ impl AppConfig {
             model.aliases.sort();
             model.aliases.dedup();
         }
+        for budget in &mut self.budgets {
+            if budget.id.trim().is_empty() {
+                budget.id = format!("budget_{}", uuid::Uuid::new_v4().simple());
+            }
+        }
         notes
     }
 

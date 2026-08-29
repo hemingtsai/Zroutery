@@ -101,6 +101,10 @@ pub enum OnExceeded {
 /// One limit.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Budget {
+    /// Stable id used by the dashboard to edit a specific budget even when
+    /// another budget is added or removed in a queued save.
+    #[serde(default)]
+    pub id: String,
     pub scope: BudgetScope,
     pub period: BudgetPeriod,
     /// The amount, in the currency it is counted in.
@@ -124,6 +128,7 @@ fn round_cents(amount: f64) -> f64 {
 impl Budget {
     pub fn new(scope: BudgetScope, period: BudgetPeriod, currency: &str, amount: f64) -> Self {
         Budget {
+            id: String::new(),
             scope,
             period,
             limit: Cost {
