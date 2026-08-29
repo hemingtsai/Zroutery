@@ -6,6 +6,7 @@
 
 pub mod anthropic;
 pub mod openai;
+pub mod reasoning_bridge;
 
 use crate::error::{Error, Result};
 use crate::ir::{ChatRequest, ChatResponse, Dialect, StreamEvent};

@@ -7,6 +7,7 @@
 
 use serde_json::{json, Map, Value};
 
+use super::reasoning_bridge;
 use super::ProviderQuirks;
 use crate::error::{Error, Result};
 use crate::ir::{
@@ -98,7 +99,6 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
                 // history turns, so it is preserved through the IR as a Thinking block.
                 if let Some(reasoning) = m
                     .get("reasoning_content")
-                    .or_else(|| m.get("reasoning"))
                     .and_then(Value::as_str)
                     .filter(|s| !s.is_empty())
                 {
@@ -106,6 +106,24 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
                         text: reasoning.to_string(),
                         signature: None,
                     });
+                } else if let Some(reasoning) = m
+                    .get("reasoning")
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.is_empty())
+                {
+                    content.push(ContentBlock::Thinking {
+                        text: reasoning.to_string(),
+                        signature: None,
+                    });
+                }
+                // Responses-style reasoning items can carry an encrypted
+                // Anthropic thinking block through the reasoning bridge.
+                if let Some(items) = m.get("reasoning").and_then(Value::as_array) {
+                    for item in items {
+                        if let Some(block) = reasoning_bridge::decode_reasoning_item(item) {
+                            content.push(block);
+                        }
+                    }
                 }
                 if let Some(text) = flatten_content(m.get("content")) {
                     if !text.is_empty() {
@@ -438,6 +456,7 @@ fn encode_message_into(m: &Message, out: &mut Vec<Value>, echo_reasoning: bool) 
         Role::Assistant => {
             let mut text = String::new();
             let mut reasoning = String::new();
+            let mut reasoning_items: Vec<Value> = Vec::new();
             let mut tool_calls: Vec<Value> = Vec::new();
             for b in &m.content {
                 match b {
@@ -451,8 +470,18 @@ fn encode_message_into(m: &Message, out: &mut Vec<Value>, echo_reasoning: bool) 
                     // reasoning (OpenAI source): some gateways require history
                     // turns to carry `reasoning_content` back. For other sources
                     // (e.g. Anthropic) it is dropped — most providers reject it.
-                    ContentBlock::Thinking { text: t, .. } if echo_reasoning => {
-                        reasoning.push_str(t)
+                    ContentBlock::Thinking { text: t, signature } if echo_reasoning => {
+                        if let Some(item) = reasoning_bridge::encode_thinking_block(b) {
+                            reasoning_items.push(item);
+                        } else {
+                            reasoning.push_str(t);
+                        }
+                        let _ = signature;
+                    }
+                    ContentBlock::RedactedThinking { .. } if echo_reasoning => {
+                        if let Some(item) = reasoning_bridge::encode_thinking_block(b) {
+                            reasoning_items.push(item);
+                        }
                     }
                     _ => {}
                 }
@@ -466,6 +495,9 @@ fn encode_message_into(m: &Message, out: &mut Vec<Value>, echo_reasoning: bool) 
             }
             if !reasoning.is_empty() {
                 msg.insert("reasoning_content".into(), json!(reasoning));
+            }
+            if !reasoning_items.is_empty() {
+                msg.insert("reasoning".into(), Value::Array(reasoning_items));
             }
             if !tool_calls.is_empty() {
                 msg.insert("tool_calls".into(), Value::Array(tool_calls));
@@ -970,6 +1002,7 @@ pub struct OpenAiStreamEncoder {
     include_usage: bool,
     role_sent: bool,
     tool_slots: Vec<(u32, u64)>,
+    signatures: std::collections::HashMap<u32, String>,
     usage: Usage,
     done: bool,
 }
@@ -983,6 +1016,7 @@ impl OpenAiStreamEncoder {
             include_usage: false,
             role_sent: false,
             tool_slots: Vec::new(),
+            signatures: std::collections::HashMap::new(),
             usage: Usage::default(),
             done: false,
         }
@@ -1058,8 +1092,22 @@ impl StreamEncoder for OpenAiStreamEncoder {
                 self.ensure_role(&mut out);
                 out.push(self.chunk(json!({"reasoning_content": text}), None));
             }
-            // No OpenAI equivalent; dropped on purpose.
-            StreamEvent::ThinkingSignature { .. } | StreamEvent::RedactedThinking { .. } => {}
+            StreamEvent::ThinkingSignature { index, signature } => {
+                // Keep the signature around so a later request encoder can put it
+                // back into a Responses-style encrypted reasoning item.
+                self.signatures.insert(*index, signature.clone());
+            }
+            StreamEvent::RedactedThinking { index, data } => {
+                if let Some(item) = reasoning_bridge::encode_thinking_block(
+                    &ContentBlock::RedactedThinking { data: data.clone() },
+                ) {
+                    if let Some(encoded) = item.get("encrypted_content").and_then(Value::as_str) {
+                        self.ensure_role(&mut out);
+                        out.push(self.chunk(json!({"reasoning_content": encoded}), None));
+                    }
+                }
+                let _ = index;
+            }
             StreamEvent::ToolUseStart { index, id, name } => {
                 self.ensure_role(&mut out);
                 let slot = self.slot_for(*index);
