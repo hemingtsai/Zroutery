@@ -119,13 +119,19 @@ impl Error {
     }
 
     /// True when trying another candidate model could plausibly help.
+    ///
+    /// 405 is included even though it is deterministic *per provider*: edge
+    /// WAFs (e.g. Aliyun) block agent traffic by content rules that differ
+    /// per relay, so a different provider can succeed where this one 405s.
+    /// (Same-provider handshake retries deliberately exclude 405 — retrying
+    /// there just re-uploads the body.)
     pub fn is_retryable(&self) -> bool {
         match self {
             Error::Transport { .. } | Error::Timeout(_) | Error::BadUpstreamPayload(_) => true,
             // The next candidate may belong to a provider whose key does exist.
             Error::MissingApiKey(_) => true,
             Error::Upstream { status, .. } => {
-                matches!(*status, 408 | 409 | 425 | 429 | 500..=599)
+                matches!(*status, 405 | 408 | 409 | 425 | 429 | 500..=599)
             }
             _ => false,
         }
@@ -184,6 +190,14 @@ mod tests {
         assert!(Error::Upstream {
             provider: "p".into(),
             status: 503,
+            body: String::new()
+        }
+        .is_retryable());
+        // WAF content blocks are provider-specific: failing over to another
+        // relay (different WAF) can succeed.
+        assert!(Error::Upstream {
+            provider: "p".into(),
+            status: 405,
             body: String::new()
         }
         .is_retryable());
