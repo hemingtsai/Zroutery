@@ -435,21 +435,66 @@ fn origin_policy(configured: &[String]) -> OriginPolicy {
 }
 
 /// Whether `origin` is a well-formed `scheme://host[:port]` value usable as a
-/// CORS allow-origin entry. Rejects paths, queries, fragments, whitespace and
-/// anything without an explicit scheme — those are config mistakes, and
+/// CORS allow-origin entry. Rejects paths, queries, fragments, whitespace,
+/// userinfo, non-ASCII text and invalid ports — those are config mistakes, and
 /// treating them as "no origins" would silently open the proxy to `Any`.
 pub(crate) fn is_valid_origin(origin: &str) -> bool {
     let Some((scheme, rest)) = origin.split_once("://") else {
         return false;
     };
-    if scheme.is_empty() || !scheme.chars().all(|c| c.is_ascii_alphanumeric() || c == '+') {
+    if scheme.is_empty()
+        || !scheme
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+    {
         return false;
     }
-    if rest.is_empty() {
+    if rest.is_empty() || !rest.is_ascii() {
         return false;
     }
-    // No path / query / fragment / whitespace after the authority.
-    !rest.contains(['/', '?', '#', ' ', '\t'])
+    // No path / query / fragment / whitespace / userinfo after the authority.
+    if rest.contains(['/', '?', '#', ' ', '\t', '@']) {
+        return false;
+    }
+
+    let (host, port) = if let Some(stripped) = rest.strip_prefix('[') {
+        // IPv6 literal: [::1] or [::1]:8787.
+        let Some(close) = stripped.find(']') else {
+            return false;
+        };
+        let host = &stripped[..close];
+        let after = &stripped[close + 1..];
+        if host.is_empty() {
+            return false;
+        }
+        if after.is_empty() {
+            (host, None)
+        } else if let Some(port) = after.strip_prefix(':') {
+            (host, Some(port))
+        } else {
+            return false;
+        }
+    } else {
+        match rest.rsplit_once(':') {
+            None => (rest, None),
+            Some((_, "")) => return false, // trailing colon, no port
+            Some((host, _)) if host.contains(':') => return false, // bare IPv6 without []
+            Some((host, port)) => (host, Some(port)),
+        }
+    };
+
+    if host.is_empty() {
+        return false;
+    }
+    if let Some(port) = port {
+        if port.is_empty() || !port.chars().all(|c| c.is_ascii_digit()) {
+            return false;
+        }
+        if port.parse::<u16>().is_err() {
+            return false;
+        }
+    }
+    true
 }
 
 /// A running server plus its shutdown handle.
@@ -792,15 +837,22 @@ mod tests {
     }
 
     #[test]
-    fn is_valid_origin_rejects_paths_and_scheme_less_entries() {
+    fn is_valid_origin_rejects_paths_scheme_less_and_bad_ports() {
         assert!(is_valid_origin("http://localhost:3000"));
         assert!(is_valid_origin("https://app.example.com"));
         assert!(is_valid_origin("tauri://localhost"));
+        assert!(is_valid_origin("http://[::1]:8787"));
+        assert!(is_valid_origin("http://[::1]"));
         assert!(!is_valid_origin("https://app.example.com/path"));
         assert!(!is_valid_origin("https://app.example.com?q=1"));
         assert!(!is_valid_origin("app.example.com"));
         assert!(!is_valid_origin(""));
         assert!(!is_valid_origin("has space://x"));
+        assert!(!is_valid_origin("https://app.example.com:99999"));
+        assert!(!is_valid_origin("https://app.example.com:abc"));
+        assert!(!is_valid_origin("https://app.example.com:"));
+        assert!(!is_valid_origin("https://user@example.com"));
+        assert!(!is_valid_origin("https://例子.测试"));
     }
 
     #[test]
