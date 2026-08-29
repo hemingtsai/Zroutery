@@ -423,7 +423,13 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 
 /// Only these settings require tearing the listener down.
 pub fn needs_rebind(a: &ServerConfig, b: &ServerConfig) -> bool {
-    a.host != b.host || a.port != b.port || a.allow_cors != b.allow_cors
+    a.host != b.host
+        || a.port != b.port
+        || a.allow_cors != b.allow_cors
+        // CORS origins and the body limit are baked into the router at bind
+        // time; changing them needs a listener rebuild to take effect.
+        || a.cors_origins != b.cors_origins
+        || a.max_body_mib != b.max_body_mib
 }
 
 #[cfg(test)]
@@ -449,6 +455,16 @@ mod tests {
         let mut d = a.clone();
         d.host = "0.0.0.0".into();
         assert!(needs_rebind(&a, &d));
+
+        // Origins and body limit are baked into the router: they need a rebind.
+        let mut e = a.clone();
+        e.allow_cors = true;
+        e.cors_origins = vec!["http://localhost:3000".into()];
+        assert!(needs_rebind(&a, &e));
+
+        let mut f = a.clone();
+        f.max_body_mib += 1;
+        assert!(needs_rebind(&a, &f));
     }
 
     fn desktop_with(config: AppConfig) -> (Arc<Desktop>, PathBuf) {
