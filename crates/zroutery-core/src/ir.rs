@@ -19,6 +19,8 @@ pub enum Dialect {
     OpenAI,
     /// OpenAI `/v1/responses`.
     OpenAIResponses,
+    /// Google Gemini native API (`generateContent`).
+    Gemini,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

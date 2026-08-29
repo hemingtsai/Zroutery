@@ -252,6 +252,7 @@ const ENDPOINTS: &[&str] = &[
     "/v1/messages/count_tokens",
     "/v1/chat/completions",
     "/v1/responses",
+    "/v1/generateContent",
     "/v1/models",
     "/v1/models/{id}",
     "/v1/status",
@@ -272,6 +273,7 @@ pub fn build_app(state: Arc<AppState>) -> AxumRouter {
             )
             .route(&format!("{prefix}/chat/completions"), post(openai_chat))
             .route(&format!("{prefix}/responses"), post(responses_chat))
+            .route(&format!("{prefix}/generateContent"), post(gemini_generate))
             .route(&format!("{prefix}/models"), get(list_models))
             .route(&format!("{prefix}/models/{{id}}"), get(get_model))
             .route(&format!("{prefix}/status"), get(status));
@@ -313,6 +315,8 @@ async fn unknown_route(method: Method, uri: Uri) -> Response {
         Dialect::Anthropic
     } else if path.contains("responses") {
         Dialect::OpenAIResponses
+    } else if path.contains("generateContent") {
+        Dialect::Gemini
     } else {
         Dialect::OpenAI
     };
@@ -652,6 +656,14 @@ async fn responses_chat(State(state): State<Arc<AppState>>, body: JsonBody) -> R
         Err(e) => return error_response(Dialect::OpenAIResponses, &e),
     };
     handle_chat(state, Dialect::OpenAIResponses, body).await
+}
+
+async fn gemini_generate(State(state): State<Arc<AppState>>, body: JsonBody) -> Response {
+    let body = match unwrap_body(&state, body) {
+        Ok(v) => v,
+        Err(e) => return error_response(Dialect::Gemini, &e),
+    };
+    handle_chat(state, Dialect::Gemini, body).await
 }
 
 async fn count_tokens(State(state): State<Arc<AppState>>, body: JsonBody) -> Response {

@@ -5,6 +5,7 @@
 //! serialise responses and streaming events back to a client.
 
 pub mod anthropic;
+pub mod gemini;
 pub mod openai;
 pub mod reasoning_bridge;
 pub mod responses;
@@ -66,6 +67,7 @@ pub fn decode_request(dialect: Dialect, body: Value) -> Result<ChatRequest> {
         Dialect::Anthropic => anthropic::decode_request(body),
         Dialect::OpenAI => openai::decode_request(body),
         Dialect::OpenAIResponses => responses::decode_request(body),
+        Dialect::Gemini => gemini::decode_request(body),
     }
 }
 
@@ -83,6 +85,7 @@ pub fn encode_request(
         Dialect::Anthropic => anthropic::encode_request(req, upstream_model),
         Dialect::OpenAI => openai::encode_request_with(req, upstream_model, quirks),
         Dialect::OpenAIResponses => responses::encode_request(req, upstream_model),
+        Dialect::Gemini => gemini::encode_request(req, upstream_model),
     }
 }
 
@@ -92,6 +95,7 @@ pub fn decode_response(dialect: Dialect, body: Value) -> Result<ChatResponse> {
         Dialect::Anthropic => anthropic::decode_response(body),
         Dialect::OpenAI => openai::decode_response(body),
         Dialect::OpenAIResponses => responses::decode_response(body),
+        Dialect::Gemini => gemini::decode_response(body),
     }
 }
 
@@ -101,6 +105,7 @@ pub fn encode_response(dialect: Dialect, resp: &ChatResponse) -> Value {
         Dialect::Anthropic => anthropic::encode_response(resp),
         Dialect::OpenAI => openai::encode_response(resp),
         Dialect::OpenAIResponses => responses::encode_response(resp),
+        Dialect::Gemini => gemini::encode_response(resp),
     }
 }
 
@@ -207,6 +212,7 @@ pub fn stream_parser(dialect: Dialect, model: &str) -> Box<dyn StreamParser> {
         Dialect::Anthropic => Box::new(anthropic::AnthropicStreamParser::new(model)),
         Dialect::OpenAI => Box::new(openai::OpenAiStreamParser::new(model)),
         Dialect::OpenAIResponses => Box::new(responses::ResponsesStreamParser::new(model)),
+        Dialect::Gemini => Box::new(gemini::GeminiStreamParser::new(model)),
     }
 }
 
@@ -223,6 +229,7 @@ pub fn stream_encoder(
             Box::new(openai::OpenAiStreamEncoder::new(model).with_usage(include_usage))
         }
         Dialect::OpenAIResponses => Box::new(responses::ResponsesStreamEncoder::new(model)),
+        Dialect::Gemini => Box::new(gemini::GeminiStreamEncoder::new(model)),
     }
 }
 

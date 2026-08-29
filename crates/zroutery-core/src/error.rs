@@ -161,7 +161,7 @@ impl Error {
                 "type": "error",
                 "error": { "type": self.kind(), "message": msg }
             }),
-            Dialect::OpenAI | Dialect::OpenAIResponses => json!({
+            Dialect::OpenAI | Dialect::OpenAIResponses | Dialect::Gemini => json!({
                 "error": {
                     "message": msg,
                     "type": self.kind(),
