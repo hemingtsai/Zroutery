@@ -378,6 +378,17 @@ impl SseState {
     }
 }
 
+impl Drop for SseState {
+    fn drop(&mut self) {
+        // A client disconnect drops the body stream without the unfold loop
+        // reaching `None`/`Some(Err)`. Record the request anyway so Activity,
+        // stats and the budget ledger see whatever was consumed so far.
+        // `finalize` is idempotent (`rec.take()`), so streams that ended
+        // normally are unaffected.
+        self.finalize(None);
+    }
+}
+
 /// What the SSE pipeline needs to know about the request it is serving.
 struct StreamContext {
     record: RecordBuilder,
