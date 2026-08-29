@@ -90,11 +90,15 @@ impl AppState {
     /// Take the ledger for writing out, clearing the dirty flag.
     ///
     /// Returns `None` when nothing has changed, so an idle proxy does not rewrite
-    /// the same file every few seconds.
+    /// the same file every few seconds. The snapshot is pruned so long-running
+    /// processes do not accumulate stale day/month buckets in `spend.json`
+    /// (the in-memory ledger keeps its buckets; checks ignore stale ones).
     pub fn take_dirty_ledger(&self) -> Option<Ledger> {
-        self.ledger_dirty
-            .swap(false, Ordering::Relaxed)
-            .then(|| self.ledger())
+        self.ledger_dirty.swap(false, Ordering::Relaxed).then(|| {
+            let mut ledger = self.ledger();
+            ledger.prune(Local::now());
+            ledger
+        })
     }
 
     /// Record what a finished request cost, against every scope that covers it.
