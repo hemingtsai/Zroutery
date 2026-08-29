@@ -48,24 +48,30 @@ export default function Models({
     upstream_model: "",
     class: "" as ModelClass | "",
   });
-  const [expanded, setExpanded] = useState<number | null>(null);
+  const [expanded, setExpanded] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
   const unclassified = rows.filter((r) => r.model.class === null);
 
-  const update = (index: number, patch: Partial<ModelEntry>) => {
+  const update = (id: string, patch: Partial<ModelEntry>) => {
     void save((cfg) => {
       const next = structuredClone(cfg);
-      const model = next.models[index];
+      const model = next.models.find(
+        (m) => previewId(m.provider_id, m.upstream_model) === id,
+      );
       if (!model) return null;
       Object.assign(model, patch);
       return next;
     });
   };
 
-  const remove = (index: number) => {
+  const remove = (id: string) => {
     void save((cfg) => {
       const next = structuredClone(cfg);
+      const index = next.models.findIndex(
+        (m) => previewId(m.provider_id, m.upstream_model) === id,
+      );
+      if (index < 0) return null;
       next.models.splice(index, 1);
       return next;
     });
@@ -277,7 +283,7 @@ export default function Models({
               </tr>
             </thead>
             <tbody>
-              {rows.map(({ model: m, id, index }) => {
+              {rows.map(({ model: m, id }) => {
                 const provider = config.providers.find(
                   (p) => p.id === m.provider_id,
                 );
@@ -288,7 +294,7 @@ export default function Models({
                         <button
                           className="linky"
                           onClick={() =>
-                            setExpanded(expanded === index ? null : index)
+                            setExpanded(expanded === id ? null : id)
                           }
                         >
                           {id}
@@ -311,7 +317,7 @@ export default function Models({
                           aria-label={`Class for ${id}`}
                           value={m.class ?? ""}
                           onChange={(e) =>
-                            update(index, {
+                            update(id, {
                               class: (e.currentTarget.value ||
                                 null) as ModelClass | null,
                             })
@@ -331,7 +337,7 @@ export default function Models({
                         <button
                           className="linky"
                           onClick={() =>
-                            setExpanded(expanded === index ? null : index)
+                            setExpanded(expanded === id ? null : id)
                           }
                           title={
                             m.pricing
@@ -349,7 +355,7 @@ export default function Models({
                           min={0}
                           integer
                           onCommit={(priority) =>
-                            update(index, { priority: priority ?? 0 })
+                            update(id, { priority: priority ?? 0 })
                           }
                         />
                       </td>
@@ -360,7 +366,7 @@ export default function Models({
                           min={1}
                           integer
                           onCommit={(weight) =>
-                            update(index, { weight: weight ?? 1 })
+                            update(id, { weight: weight ?? 1 })
                           }
                         />
                       </td>
@@ -370,17 +376,17 @@ export default function Models({
                           aria-label={`Enable ${id}`}
                           checked={m.enabled}
                           onChange={(e) =>
-                            update(index, { enabled: e.currentTarget.checked })
+                            update(id, { enabled: e.currentTarget.checked })
                           }
                         />
                       </td>
                       <td>
-                        <Button kind="ghost" onClick={() => remove(index)}>
+                        <Button kind="ghost" onClick={() => remove(id)}>
                           Delete
                         </Button>
                       </td>
                     </tr>
-                    {expanded === index && (
+                    {expanded === id && (
                       <tr>
                         <td colSpan={9}>
                           <div className="subpanel">
@@ -391,7 +397,7 @@ export default function Models({
                                 value={m.upstream_model}
                                 onCommit={(upstream_model) =>
                                   upstream_model.trim() &&
-                                  update(index, { upstream_model })
+                                  update(id, { upstream_model })
                                 }
                               />
                               <TextField
@@ -400,7 +406,7 @@ export default function Models({
                                 value={m.display_name ?? ""}
                                 placeholder={m.upstream_model}
                                 onCommit={(v) =>
-                                  update(index, { display_name: v || null })
+                                  update(id, { display_name: v || null })
                                 }
                               />
                               <TextField
@@ -408,7 +414,7 @@ export default function Models({
                                 hint="Comma separated short names that also reach this model"
                                 value={m.aliases.join(", ")}
                                 onCommit={(v) =>
-                                  update(index, {
+                                  update(id, {
                                     aliases: v
                                       .split(",")
                                       .map((a) => a.trim())
@@ -423,7 +429,7 @@ export default function Models({
                                 placeholder="unlimited"
                                 value={m.max_output_tokens}
                                 onCommit={(max_output_tokens) =>
-                                  update(index, { max_output_tokens })
+                                  update(id, { max_output_tokens })
                                 }
 
                                 integer
@@ -438,28 +444,28 @@ export default function Models({
                             <PriceFields
                               id={id}
                               pricing={m.pricing}
-                              onChange={(pricing) => update(index, { pricing })}
+                              onChange={(pricing) => update(id, { pricing })}
                             />
                             <div className="grid-three">
                               <Toggle
                                 label="Tool use"
                                 checked={m.supports_tools}
                                 onChange={(v) =>
-                                  update(index, { supports_tools: v })
+                                  update(id, { supports_tools: v })
                                 }
                               />
                               <Toggle
                                 label="Vision"
                                 checked={m.supports_vision}
                                 onChange={(v) =>
-                                  update(index, { supports_vision: v })
+                                  update(id, { supports_vision: v })
                                 }
                               />
                               <Toggle
                                 label="Extended thinking"
                                 checked={m.supports_thinking}
                                 onChange={(v) =>
-                                  update(index, { supports_thinking: v })
+                                  update(id, { supports_thinking: v })
                                 }
                               />
                             </div>
