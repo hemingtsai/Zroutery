@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::billing::{BalanceConfig, BaseDepth, Pricing};
 use crate::budget::Budget;
+use crate::circuit_breaker::CircuitBreakerConfig;
 use crate::election::ScoringConfig;
 use crate::ir::Dialect;
 pub use crate::protocol::ProviderQuirks;
@@ -363,12 +364,9 @@ pub struct RoutingConfig {
     /// Max upstream attempts for a single client request.
     #[serde(default = "RoutingConfig::default_attempts")]
     pub max_attempts: u32,
-    /// Consecutive failures before a model is put in cooldown.
-    #[serde(default = "RoutingConfig::default_break_after")]
-    pub break_after_failures: u32,
-    /// Cooldown duration in seconds.
-    #[serde(default = "RoutingConfig::default_cooldown")]
-    pub cooldown_secs: u64,
+    /// Circuit breaker settings shared by every model.
+    #[serde(default)]
+    pub circuit_breaker: CircuitBreakerConfig,
     /// When a client asks for an unknown model id, fall back to this class
     /// instead of returning 404.
     #[serde(default)]
@@ -396,12 +394,6 @@ impl RoutingConfig {
     fn default_attempts() -> u32 {
         3
     }
-    fn default_break_after() -> u32 {
-        3
-    }
-    fn default_cooldown() -> u64 {
-        60
-    }
 }
 
 impl Default for RoutingConfig {
@@ -410,8 +402,7 @@ impl Default for RoutingConfig {
             strategy: RoutingStrategy::default(),
             failover: true,
             max_attempts: Self::default_attempts(),
-            break_after_failures: Self::default_break_after(),
-            cooldown_secs: Self::default_cooldown(),
+            circuit_breaker: CircuitBreakerConfig::default(),
             unknown_model_fallback: None,
             client_aliases: BTreeMap::new(),
             match_claude_names: true,

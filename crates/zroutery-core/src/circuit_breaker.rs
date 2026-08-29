@@ -11,7 +11,8 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 /// Public state of a circuit breaker.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum CircuitState {
     Closed,
     Open,
@@ -19,7 +20,7 @@ pub enum CircuitState {
 }
 
 /// Tunables for one breaker.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct CircuitBreakerConfig {
     /// Consecutive failures that flip `Closed → Open`.
     pub failure_threshold: u32,
@@ -110,6 +111,38 @@ impl CircuitBreaker {
 
     pub fn failed_requests(&self) -> u64 {
         self.failed_requests.load(Ordering::Relaxed)
+    }
+
+    /// Whether an open breaker's timeout has elapsed and it is ready to admit a
+    /// half-open probe. Does not consume the probe permit.
+    pub fn can_probe(&self) -> bool {
+        if self.state() != CircuitState::Open {
+            return false;
+        }
+        let opened = *self
+            .last_opened_at
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        opened
+            .map(|at| at.elapsed() >= Duration::from_secs(self.config.timeout_secs))
+            .unwrap_or(false)
+    }
+
+    /// Seconds until an open breaker is allowed to transition to `HalfOpen`.
+    pub fn open_remaining_secs(&self) -> u64 {
+        if self.state() != CircuitState::Open {
+            return 0;
+        }
+        let opened = *self
+            .last_opened_at
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let Some(opened_at) = opened else {
+            return 0;
+        };
+        self.config
+            .timeout_secs
+            .saturating_sub(opened_at.elapsed().as_secs())
     }
 
     /// Whether a request may be attempted right now.

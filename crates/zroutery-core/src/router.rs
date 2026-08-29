@@ -4,13 +4,12 @@
 //! reloads, keyed by exposed model id.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
-use std::time::Instant;
 
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 
+use crate::circuit_breaker::{CircuitBreaker, CircuitBreakerConfig, CircuitState};
 use crate::config::{ModelClass, ModelEntry, ProviderConfig, RoutingConfig, RoutingStrategy};
 use crate::election::Election;
 use crate::error::{Error, Result};
@@ -25,7 +24,7 @@ pub struct Candidate {
     pub entry: ModelEntry,
     pub provider: ProviderConfig,
     /// True when this candidate is only being tried because everything else is
-    /// in cooldown.
+    /// unavailable (open circuit) or because it is in a half-open probe.
     pub degraded: bool,
 }
 
@@ -45,48 +44,38 @@ impl Candidate {
 }
 
 /// Per model health, exposed to the GUI.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelHealth {
     pub model_id: String,
+    pub state: CircuitState,
     pub consecutive_failures: u32,
     pub total_success: u64,
     pub total_failure: u64,
     /// Exponentially weighted average latency of successful calls.
     pub avg_latency_ms: f64,
-    /// Seconds left in cooldown, 0 when healthy.
+    /// Seconds left before an open breaker may probe, 0 when not open.
     pub cooldown_remaining_secs: u64,
     pub last_error: Option<String>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct HealthState {
-    consecutive_failures: u32,
+    breaker: CircuitBreaker,
     total_success: u64,
     total_failure: u64,
     avg_latency_ms: f64,
-    cooldown_until_ms: u64,
     last_error: Option<String>,
 }
 
-/// Monotonic millisecond clock that tests can fast forward.
-#[derive(Debug)]
-struct Clock {
-    base: Instant,
-    offset_ms: AtomicU64,
-}
-
-impl Clock {
-    fn new() -> Self {
-        Clock {
-            base: Instant::now(),
-            offset_ms: AtomicU64::new(0),
+impl HealthState {
+    fn new(config: CircuitBreakerConfig) -> Self {
+        Self {
+            breaker: CircuitBreaker::new(config),
+            total_success: 0,
+            total_failure: 0,
+            avg_latency_ms: 0.0,
+            last_error: None,
         }
-    }
-    fn now_ms(&self) -> u64 {
-        self.base.elapsed().as_millis() as u64 + self.offset_ms.load(Ordering::Relaxed)
-    }
-    fn advance(&self, ms: u64) {
-        self.offset_ms.fetch_add(ms, Ordering::Relaxed);
     }
 }
 
@@ -98,7 +87,6 @@ pub struct Router {
     /// decided instead of re-deciding per request, which is the whole point: a
     /// route that changes under load cannot be reasoned about.
     election: Mutex<Option<Election>>,
-    clock: Clock,
 }
 
 impl Default for Router {
@@ -113,7 +101,6 @@ impl Router {
             health: Mutex::new(HashMap::new()),
             rr: Mutex::new(HashMap::new()),
             election: Mutex::new(None),
-            clock: Clock::new(),
         }
     }
 
@@ -144,25 +131,35 @@ impl Router {
             return Err(Error::NoCandidate(class.virtual_id().to_string()));
         }
 
-        let now = self.clock.now_ms();
-        let (healthy, cooling): (Vec<&ModelEntry>, Vec<&ModelEntry>) = {
+        let (closed, half_open): (Vec<&ModelEntry>, Vec<&ModelEntry>) = {
             let health = crate::sync::lock(&self.health);
-            members.into_iter().partition(|m| {
-                health
-                    .get(&m.exposed_id())
-                    .map(|h| h.cooldown_until_ms <= now)
-                    .unwrap_or(true)
-            })
+            let mut closed = Vec::new();
+            let mut half_open = Vec::new();
+            for m in members {
+                match health.get(&m.exposed_id()) {
+                    Some(h) => match h.breaker.state() {
+                        CircuitState::Closed => closed.push(m),
+                        CircuitState::HalfOpen => half_open.push(m),
+                        // An open circuit that has waited out its timeout is
+                        // eligible for a half-open probe; it is still degraded.
+                        CircuitState::Open if h.breaker.can_probe() => half_open.push(m),
+                        CircuitState::Open => {}
+                    },
+                    None => closed.push(m),
+                }
+            }
+            (closed, half_open)
         };
 
-        let mut ordered = self.order(&healthy, class, routing.strategy);
-        // Everything is cooling down: still try, newest cooldown last.
+        let mut ordered = self.order(&closed, class, routing.strategy);
         let mut degraded_ids: Vec<String> = Vec::new();
         if ordered.is_empty() {
-            ordered = cooling.clone();
+            // No closed candidate: fall back to half-open probes, marked degraded.
+            ordered = half_open;
             degraded_ids = ordered.iter().map(|m| m.exposed_id()).collect();
         } else if routing.failover {
-            for m in &cooling {
+            // Half-open candidates are allowed but treated as degraded.
+            for m in half_open {
                 degraded_ids.push(m.exposed_id());
                 ordered.push(m);
             }
@@ -318,9 +315,10 @@ impl Router {
 
     pub fn report_success(&self, model_id: &str, latency_ms: u64) {
         let mut health = crate::sync::lock(&self.health);
-        let h = health.entry(model_id.to_string()).or_default();
-        h.consecutive_failures = 0;
-        h.cooldown_until_ms = 0;
+        let h = health
+            .entry(model_id.to_string())
+            .or_insert_with(|| HealthState::new(CircuitBreakerConfig::default()));
+        h.breaker.record_success();
         h.total_success += 1;
         h.last_error = None;
         h.avg_latency_ms = if h.avg_latency_ms == 0.0 {
@@ -335,30 +333,41 @@ impl Router {
             return;
         }
         let mut health = crate::sync::lock(&self.health);
-        let now = self.clock.now_ms();
-        let h = health.entry(model_id.to_string()).or_default();
-        // A cooldown that has already expired was the model's second chance.
-        // Judging a fresh failure against the stale streak would re-trip the
-        // breaker on the first blip after recovery, so the streak restarts
-        // from zero and the spent cooldown is cleared so this only happens once.
-        if h.cooldown_until_ms != 0 && h.cooldown_until_ms <= now {
-            h.consecutive_failures = 0;
-            h.cooldown_until_ms = 0;
-        }
-        h.consecutive_failures += 1;
+        let h = health
+            .entry(model_id.to_string())
+            .or_insert_with(|| HealthState::new(routing.circuit_breaker.clone()));
+        h.breaker.record_failure();
         h.total_failure += 1;
         h.last_error = Some(error.to_string());
-        if h.consecutive_failures >= routing.break_after_failures.max(1) {
-            h.cooldown_until_ms = now + routing.cooldown_secs * 1000;
+    }
+
+    /// Whether a request may actually be sent to this model.
+    ///
+    /// This is the router-level wrapper around [`CircuitBreaker::allow_request`].
+    /// It is called by the pipeline right before an upstream send, so half-open
+    /// probes are limited to one in flight per model.
+    pub fn allow_request(&self, model_id: &str) -> bool {
+        let health = crate::sync::lock(&self.health);
+        match health.get(model_id) {
+            Some(h) => h.breaker.allow_request(),
+            // Models without health data are new and therefore closed.
+            None => true,
         }
     }
 
-    /// Clear cooldown and failure streak for one model (GUI "retry now").
+    /// Release a half-open probe permit after a rectifier retry.
+    pub fn release_half_open_permit(&self, model_id: &str) {
+        let health = crate::sync::lock(&self.health);
+        if let Some(h) = health.get(model_id) {
+            h.breaker.release_half_open_permit();
+        }
+    }
+
+    /// Clear circuit breaker state for one model (GUI "retry now").
     pub fn reset(&self, model_id: &str) {
         let mut health = crate::sync::lock(&self.health);
         if let Some(h) = health.get_mut(model_id) {
-            h.consecutive_failures = 0;
-            h.cooldown_until_ms = 0;
+            h.breaker.reset();
             h.last_error = None;
         }
     }
@@ -375,39 +384,36 @@ impl Router {
     }
 
     pub fn is_cooling(&self, model_id: &str) -> bool {
-        let now = self.clock.now_ms();
         self.health
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .get(model_id)
-            .map(|h| h.cooldown_until_ms > now)
+            .map(|h| h.breaker.state() == CircuitState::Open)
             .unwrap_or(false)
     }
 
     pub fn health_snapshot(&self) -> Vec<ModelHealth> {
-        let now = self.clock.now_ms();
         let health = crate::sync::lock(&self.health);
         let mut out: Vec<ModelHealth> = health
             .iter()
-            .map(|(id, h)| ModelHealth {
-                model_id: id.clone(),
-                consecutive_failures: h.consecutive_failures,
-                total_success: h.total_success,
-                total_failure: h.total_failure,
-                avg_latency_ms: h.avg_latency_ms,
-                cooldown_remaining_secs: h.cooldown_until_ms.saturating_sub(now) / 1000,
-                last_error: h.last_error.clone(),
+            .map(|(id, h)| {
+                let state = h.breaker.state();
+                ModelHealth {
+                    model_id: id.clone(),
+                    state,
+                    consecutive_failures: h.breaker.consecutive_failures(),
+                    total_success: h.total_success,
+                    total_failure: h.total_failure,
+                    avg_latency_ms: h.avg_latency_ms,
+                    cooldown_remaining_secs: h.breaker.open_remaining_secs(),
+                    last_error: h.last_error.clone(),
+                }
             })
             .collect();
         out.sort_by(|a, b| a.model_id.cmp(&b.model_id));
         out
     }
 
-    /// Test/maintenance hook: fast forward the internal clock.
-    #[doc(hidden)]
-    pub fn advance_clock_ms(&self, ms: u64) {
-        self.clock.advance(ms);
-    }
 }
 
 #[cfg(test)]
@@ -489,10 +495,11 @@ mod tests {
 
     #[test]
     fn circuit_breaker_demotes_then_recovers() {
-        let cfg = cfg_with(vec![
+        let mut cfg = cfg_with(vec![
             ModelEntry::for_upstream("p1", "bad", Some(ModelClass::Sonnet)).with_priority(0),
             ModelEntry::for_upstream("p2", "good", Some(ModelClass::Sonnet)).with_priority(5),
         ]);
+        cfg.routing.circuit_breaker.timeout_secs = 0;
         let routing = cfg.routing.clone();
         let r = reg(cfg);
         let router = Router::new();
@@ -505,7 +512,7 @@ mod tests {
         );
 
         let err = Error::Timeout(5);
-        for _ in 0..routing.break_after_failures {
+        for _ in 0..routing.circuit_breaker.failure_threshold {
             router.report_failure("p1-bad", &err, &routing);
         }
         assert!(router.is_cooling("p1-bad"));
@@ -515,8 +522,17 @@ mod tests {
         assert_eq!(ids(&plan), vec!["p2-good", "p1-bad"]);
         assert!(!plan[0].degraded && plan[1].degraded);
 
-        router.advance_clock_ms(routing.cooldown_secs * 1000 + 1);
-        assert!(!router.is_cooling("p1-bad"));
+        // The timeout has already elapsed (0s), so the router offers the model
+        // as a half-open probe. One probe success is not enough; the configured
+        // success threshold (2) must be reached before it is healthy again.
+        assert!(router.allow_request("p1-bad"));
+        router.report_success("p1-bad", 10);
+        assert!(
+            router.health_snapshot()[0].state == CircuitState::HalfOpen,
+            "a single probe success should not close the breaker yet"
+        );
+        router.report_success("p1-bad", 10);
+        assert_eq!(router.health_snapshot()[0].state, CircuitState::Closed);
         assert_eq!(
             ids(&router
                 .plan(&r, &Resolution::Class(ModelClass::Sonnet))
@@ -527,22 +543,28 @@ mod tests {
 
     #[test]
     fn a_recovered_breaker_needs_fresh_evidence_to_trip_again() {
-        let cfg = cfg_with(vec![ModelEntry::for_upstream(
+        let mut cfg = cfg_with(vec![ModelEntry::for_upstream(
             "p1",
             "flaky",
             Some(ModelClass::Opus),
         )]);
+        cfg.routing.circuit_breaker.timeout_secs = 0;
         let routing = cfg.routing.clone();
         let router = Router::new();
         let err = Error::Timeout(1);
 
-        for _ in 0..routing.break_after_failures {
+        for _ in 0..routing.circuit_breaker.failure_threshold {
             router.report_failure("p1-flaky", &err, &routing);
         }
         assert!(router.is_cooling("p1-flaky"));
 
-        // Cooldown over, then one transient blip: that is not a pattern yet.
-        router.advance_clock_ms(routing.cooldown_secs * 1000 + 1);
+        // Move through half-open to a fully closed breaker.
+        assert!(router.allow_request("p1-flaky"));
+        router.report_success("p1-flaky", 10);
+        router.report_success("p1-flaky", 10);
+        assert!(!router.is_cooling("p1-flaky"));
+
+        // A single transient blip after recovery is not a pattern yet.
         router.report_failure("p1-flaky", &err, &routing);
         assert!(
             !router.is_cooling("p1-flaky"),
@@ -550,7 +572,7 @@ mod tests {
         );
 
         // Reaching the threshold again with new failures does.
-        for _ in 1..routing.break_after_failures {
+        for _ in 1..routing.circuit_breaker.failure_threshold {
             router.report_failure("p1-flaky", &err, &routing);
         }
         assert!(router.is_cooling("p1-flaky"));
@@ -578,12 +600,13 @@ mod tests {
     }
 
     #[test]
-    fn all_cooling_still_produces_a_plan() {
-        let cfg = cfg_with(vec![ModelEntry::for_upstream(
+    fn all_open_with_timeout_elapsed_still_produces_a_probe_plan() {
+        let mut cfg = cfg_with(vec![ModelEntry::for_upstream(
             "p1",
             "only",
             Some(ModelClass::Opus),
         )]);
+        cfg.routing.circuit_breaker.timeout_secs = 0;
         let routing = cfg.routing.clone();
         let r = reg(cfg);
         let router = Router::new();

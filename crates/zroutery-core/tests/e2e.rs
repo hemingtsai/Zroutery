@@ -621,7 +621,7 @@ async fn circuit_breaker_skips_a_failing_model() {
         ModelEntry::for_upstream("openai", "gpt-sonnet", Some(ModelClass::Sonnet))
             .with_priority(10),
     );
-    cfg.routing.break_after_failures = 1;
+    cfg.routing.circuit_breaker.failure_threshold = 1;
     let h = Harness::start(cfg, mock).await;
 
     for _ in 0..2 {
