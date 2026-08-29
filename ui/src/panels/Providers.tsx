@@ -33,11 +33,17 @@ const KINDS: { id: ProviderKind; label: string; hint: string }[] = [
     label: "OpenAI compatible",
     hint: "OpenAI, DeepSeek, Groq, OpenRouter, Sub2API, Ollama, vLLM…",
   },
-  { id: "anthropic", label: "Anthropic", hint: "api.anthropic.com, Sub2API and other gateways" },
+  {
+    id: "anthropic",
+    label: "Anthropic",
+    hint: "api.anthropic.com, Sub2API and other gateways",
+  },
 ];
 
 function defaultBaseUrl(kind: ProviderKind): string {
-  return kind === "anthropic" ? "https://api.anthropic.com" : "https://api.openai.com/v1";
+  return kind === "anthropic"
+    ? "https://api.anthropic.com"
+    : "https://api.openai.com/v1";
 }
 
 function blankProvider(
@@ -80,7 +86,7 @@ export default function Providers({
   busy,
 }: {
   snapshot: Snapshot;
-  save: (config: AppConfig) => Promise<boolean>;
+  save: (mutate: (config: AppConfig) => AppConfig | null) => Promise<boolean>;
   run: (task: () => Promise<Snapshot>) => Promise<boolean>;
   busy: boolean;
 }) {
@@ -91,15 +97,19 @@ export default function Providers({
   const [newPreset, setNewPreset] = useState<BalancePreset>("none");
   const [editing, setEditing] = useState<string | null>(null);
   const [keyDraft, setKeyDraft] = useState<Record<string, string>>({});
-  const [discovered, setDiscovered] = useState<Record<string, DiscoveredModel[]>>({});
+  const [discovered, setDiscovered] = useState<
+    Record<string, DiscoveredModel[]>
+  >({});
   const [notice, setNotice] = useState<string | null>(null);
 
   const update = (id: string, patch: Partial<Provider>) => {
-    const next = structuredClone(config);
-    const provider = next.providers.find((p) => p.id === id);
-    if (!provider) return;
-    Object.assign(provider, patch);
-    void save(next);
+    void save((cfg) => {
+      const next = structuredClone(cfg);
+      const provider = next.providers.find((p) => p.id === id);
+      if (!provider) return null;
+      Object.assign(provider, patch);
+      return next;
+    });
   };
 
   const addProvider = () => {
@@ -110,25 +120,31 @@ export default function Providers({
       setNotice(`A provider called “${provider.id}” already exists.`);
       return;
     }
-    const next = structuredClone(config);
-    next.providers.push(provider);
+    void save((cfg) => {
+      const next = structuredClone(cfg);
+      next.providers.push(provider);
+      return next;
+    });
     setNewName("");
     setNewBaseUrl("");
     setNewPreset("none");
     setEditing(provider.id);
-    void save(next);
   };
 
   const removeProvider = async (id: string) => {
     const models = config.models.filter((m) => m.provider_id === id);
-    const next = structuredClone(config);
-    next.providers = next.providers.filter((p) => p.id !== id);
-    next.models = next.models.filter((m) => m.provider_id !== id);
-    await save(next);
+    await save((cfg) => {
+      const next = structuredClone(cfg);
+      next.providers = next.providers.filter((p) => p.id !== id);
+      next.models = next.models.filter((m) => m.provider_id !== id);
+      return next;
+    });
     // Also delete any stored API key for this provider from the keychain.
     await run(() => api.clearKey(id));
     if (models.length) {
-      setNotice(`Removed ${models.length} model(s) that belonged to that provider.`);
+      setNotice(
+        `Removed ${models.length} model(s) that belonged to that provider.`,
+      );
     }
   };
 
@@ -146,7 +162,8 @@ export default function Providers({
     try {
       const ids = await api.fetchModels(provider);
       setDiscovered({ ...discovered, [provider.id]: ids });
-      if (!ids.length) setNotice(`${provider.name} returned an empty model list.`);
+      if (!ids.length)
+        setNotice(`${provider.name} returned an empty model list.`);
     } catch (e) {
       setNotice(errorText(e));
     }
@@ -157,30 +174,34 @@ export default function Providers({
     // Only the same provider offering the same model is a duplicate; the same
     // name coming from another provider gets its own prefixed id.
     if (
-      config.models.some((m) => m.provider_id === provider.id && m.upstream_model === modelName)
+      config.models.some(
+        (m) => m.provider_id === provider.id && m.upstream_model === modelName,
+      )
     ) {
       setNotice(`“${modelName}” is already listed for ${provider.name}.`);
       return;
     }
-    const next = structuredClone(config);
-    next.models.push({
-      provider_id: provider.id,
-      upstream_model: modelName,
-      // Left unset on purpose: classes are always assigned by hand.
-      class: null,
-      priority: 0,
-      weight: 1,
-      enabled: true,
-      supports_tools: true,
-      supports_vision: false,
-      supports_thinking: false,
-      display_name: null,
-      aliases: [],
-      max_output_tokens: null,
-      // Prefilled when the catalogue publishes prices; still editable.
-      pricing: model.pricing,
+    void save((cfg) => {
+      const next = structuredClone(cfg);
+      next.models.push({
+        provider_id: provider.id,
+        upstream_model: modelName,
+        // Left unset on purpose: classes are always assigned by hand.
+        class: null,
+        priority: 0,
+        weight: 1,
+        enabled: true,
+        supports_tools: true,
+        supports_vision: false,
+        supports_thinking: false,
+        display_name: null,
+        aliases: [],
+        max_output_tokens: null,
+        // Prefilled when the catalogue publishes prices; still editable.
+        pricing: model.pricing,
+      });
+      return next;
     });
-    void save(next);
     setNotice(
       model.pricing
         ? `Added “${previewId(provider.id, modelName)}” with the catalogue price. Assign it a class on the Models tab.`
@@ -191,7 +212,14 @@ export default function Providers({
   return (
     <>
       {notice && (
-        <Banner tone="info" actions={<Button kind="ghost" onClick={() => setNotice(null)}>OK</Button>}>
+        <Banner
+          tone="info"
+          actions={
+            <Button kind="ghost" onClick={() => setNotice(null)}>
+              OK
+            </Button>
+          }
+        >
           {notice}
         </Banner>
       )}
@@ -200,7 +228,11 @@ export default function Providers({
         title="Add a provider"
         actions={
           config.providers.some((p) => p.balance.preset !== "none") ? (
-            <Button kind="ghost" onClick={() => run(api.refreshBalances)} disabled={busy}>
+            <Button
+              kind="ghost"
+              onClick={() => run(api.refreshBalances)}
+              disabled={busy}
+            >
               Check all balances
             </Button>
           ) : undefined
@@ -215,8 +247,16 @@ export default function Providers({
               onKeyDown={(e) => e.key === "Enter" && addProvider()}
             />
           </Field>
-          <Field label="API dialect" hint={KINDS.find((k) => k.id === newKind)?.hint}>
-            <select value={newKind} onChange={(e) => setNewKind(e.currentTarget.value as ProviderKind)}>
+          <Field
+            label="API dialect"
+            hint={KINDS.find((k) => k.id === newKind)?.hint}
+          >
+            <select
+              value={newKind}
+              onChange={(e) =>
+                setNewKind(e.currentTarget.value as ProviderKind)
+              }
+            >
               {KINDS.map((k) => (
                 <option key={k.id} value={k.id}>
                   {k.label}
@@ -224,7 +264,11 @@ export default function Providers({
               ))}
             </select>
           </Field>
-          <Field label="Base URL" wide hint="Leave empty for the vendor default">
+          <Field
+            label="Base URL"
+            wide
+            hint="Leave empty for the vendor default"
+          >
             <input
               value={newBaseUrl}
               placeholder={defaultBaseUrl(newKind)}
@@ -238,7 +282,9 @@ export default function Providers({
           >
             <select
               value={newPreset}
-              onChange={(e) => setNewPreset(e.currentTarget.value as BalancePreset)}
+              onChange={(e) =>
+                setNewPreset(e.currentTarget.value as BalancePreset)
+              }
             >
               {BALANCE_PRESETS.map((p) => (
                 <option key={p.id} value={p.id}>
@@ -248,26 +294,35 @@ export default function Providers({
             </select>
           </Field>
           <div className="field-actions">
-            <Button kind="primary" onClick={addProvider} disabled={busy || !newName.trim()}>
+            <Button
+              kind="primary"
+              onClick={addProvider}
+              disabled={busy || !newName.trim()}
+            >
               Add provider
             </Button>
           </div>
         </div>
         {newPreset === "sub2api" && !newBaseUrl.trim() && (
           <p className="field-hint">
-            A Sub2API relay is self hosted, so fill in its own base URL: the OpenAI dialect wants
-            the <code>/v1</code> root, the Anthropic dialect the host on its own.
+            A Sub2API relay is self hosted, so fill in its own base URL: the
+            OpenAI dialect wants the <code>/v1</code> root, the Anthropic
+            dialect the host on its own.
           </p>
         )}
       </Card>
 
       {config.providers.length === 0 && (
-        <Empty>No providers yet. Add DeepSeek or OpenAI above, then paste an API key.</Empty>
+        <Empty>
+          No providers yet. Add DeepSeek or OpenAI above, then paste an API key.
+        </Empty>
       )}
 
       {config.providers.map((provider) => {
         const hasKey = keys[provider.id];
-        const models = config.models.filter((m) => m.provider_id === provider.id);
+        const models = config.models.filter(
+          (m) => m.provider_id === provider.id,
+        );
         const open = editing === provider.id;
         return (
           <Card
@@ -276,8 +331,16 @@ export default function Providers({
             title={
               <span className="row gap">
                 {provider.name}
-                <Badge>{provider.kind === "anthropic" ? "Anthropic API" : "OpenAI API"}</Badge>
-                {hasKey ? <Badge tone="ok">key stored</Badge> : <Badge tone="warn">no key</Badge>}
+                <Badge>
+                  {provider.kind === "anthropic"
+                    ? "Anthropic API"
+                    : "OpenAI API"}
+                </Badge>
+                {hasKey ? (
+                  <Badge tone="ok">key stored</Badge>
+                ) : (
+                  <Badge tone="warn">no key</Badge>
+                )}
                 {!provider.enabled && <Badge tone="danger">disabled</Badge>}
               </span>
             }
@@ -286,10 +349,16 @@ export default function Providers({
                 <Button kind="ghost" onClick={() => discover(provider)}>
                   Fetch models
                 </Button>
-                <Button kind="ghost" onClick={() => setEditing(open ? null : provider.id)}>
+                <Button
+                  kind="ghost"
+                  onClick={() => setEditing(open ? null : provider.id)}
+                >
                   {open ? "Done" : "Settings"}
                 </Button>
-                <Button kind="danger" onClick={() => removeProvider(provider.id)}>
+                <Button
+                  kind="danger"
+                  onClick={() => removeProvider(provider.id)}
+                >
                   Remove
                 </Button>
               </>
@@ -303,22 +372,36 @@ export default function Providers({
                 value={provider.base_url}
                 onCommit={(base_url) => update(provider.id, { base_url })}
               />
-              <Field label="API key" hint={hasKey ? "Stored in the macOS keychain" : "Required"}>
+              <Field
+                label="API key"
+                hint={hasKey ? "Stored in the macOS keychain" : "Required"}
+              >
                 <input
                   type="password"
                   autoComplete="off"
                   placeholder={hasKey ? "••••••••••••" : "sk-…"}
                   value={keyDraft[provider.id] ?? ""}
-                  onChange={(e) => setKeyDraft({ ...keyDraft, [provider.id]: e.currentTarget.value })}
+                  onChange={(e) =>
+                    setKeyDraft({
+                      ...keyDraft,
+                      [provider.id]: e.currentTarget.value,
+                    })
+                  }
                   onKeyDown={(e) => e.key === "Enter" && saveKey(provider)}
                 />
               </Field>
               <div className="field-actions">
-                <Button onClick={() => saveKey(provider)} disabled={!(keyDraft[provider.id] ?? "").trim()}>
+                <Button
+                  onClick={() => saveKey(provider)}
+                  disabled={!(keyDraft[provider.id] ?? "").trim()}
+                >
                   Save key
                 </Button>
                 {hasKey && (
-                  <Button kind="ghost" onClick={() => run(() => api.clearKey(provider.id))}>
+                  <Button
+                    kind="ghost"
+                    onClick={() => run(() => api.clearKey(provider.id))}
+                  >
                     Remove key
                   </Button>
                 )}
@@ -334,7 +417,9 @@ export default function Providers({
               <Toggle
                 label="Impersonate Claude Code"
                 checked={provider.impersonate_claude_code}
-                onChange={(impersonate_claude_code) => update(provider.id, { impersonate_claude_code })}
+                onChange={(impersonate_claude_code) =>
+                  update(provider.id, { impersonate_claude_code })
+                }
               />
               <span className="muted">
                 {models.length} model{models.length === 1 ? "" : "s"}
@@ -358,49 +443,56 @@ export default function Providers({
               />
             </div>
 
-            {provider.balance.preset === "custom" && provider.balance.custom && (
-              <div className="controls">
-                <TextField
-                  label="Balance path"
-                  hint="Appended to the base URL, or an absolute URL"
-                  value={provider.balance.custom.path}
-                  onCommit={(path) =>
-                    update(provider.id, {
-                      balance: {
-                        preset: "custom",
-                        custom: { ...provider.balance.custom!, path },
-                      },
-                    })
-                  }
-                />
-                <TextField
-                  label="Remaining pointer"
-                  hint="JSON pointer, e.g. /data/balance"
-                  value={provider.balance.custom.remaining_pointer ?? ""}
-                  onCommit={(v) =>
-                    update(provider.id, {
-                      balance: {
-                        preset: "custom",
-                        custom: { ...provider.balance.custom!, remaining_pointer: v || null },
-                      },
-                    })
-                  }
-                />
-                <TextField
-                  label="Currency"
-                  hint="Used when the payload carries none"
-                  value={provider.balance.custom.currency ?? ""}
-                  onCommit={(v) =>
-                    update(provider.id, {
-                      balance: {
-                        preset: "custom",
-                        custom: { ...provider.balance.custom!, currency: v || null },
-                      },
-                    })
-                  }
-                />
-              </div>
-            )}
+            {provider.balance.preset === "custom" &&
+              provider.balance.custom && (
+                <div className="controls">
+                  <TextField
+                    label="Balance path"
+                    hint="Appended to the base URL, or an absolute URL"
+                    value={provider.balance.custom.path}
+                    onCommit={(path) =>
+                      update(provider.id, {
+                        balance: {
+                          preset: "custom",
+                          custom: { ...provider.balance.custom!, path },
+                        },
+                      })
+                    }
+                  />
+                  <TextField
+                    label="Remaining pointer"
+                    hint="JSON pointer, e.g. /data/balance"
+                    value={provider.balance.custom.remaining_pointer ?? ""}
+                    onCommit={(v) =>
+                      update(provider.id, {
+                        balance: {
+                          preset: "custom",
+                          custom: {
+                            ...provider.balance.custom!,
+                            remaining_pointer: v || null,
+                          },
+                        },
+                      })
+                    }
+                  />
+                  <TextField
+                    label="Currency"
+                    hint="Used when the payload carries none"
+                    value={provider.balance.custom.currency ?? ""}
+                    onCommit={(v) =>
+                      update(provider.id, {
+                        balance: {
+                          preset: "custom",
+                          custom: {
+                            ...provider.balance.custom!,
+                            currency: v || null,
+                          },
+                        },
+                      })
+                    }
+                  />
+                </div>
+              )}
 
             {open && (
               <div className="subpanel">
@@ -409,20 +501,26 @@ export default function Providers({
                     label="Request timeout (s)"
                     min={5}
                     value={provider.timeout_secs}
-                    onCommit={(v) => update(provider.id, { timeout_secs: v ?? 600 })}
+                    onCommit={(v) =>
+                      update(provider.id, { timeout_secs: v ?? 600 })
+                    }
                   />
                   <NumberField
                     label="Connect timeout (s)"
                     min={1}
                     value={provider.connect_timeout_secs}
-                    onCommit={(v) => update(provider.id, { connect_timeout_secs: v ?? 15 })}
+                    onCommit={(v) =>
+                      update(provider.id, { connect_timeout_secs: v ?? 15 })
+                    }
                   />
                   {provider.kind === "anthropic" && (
                     <TextField
                       label="anthropic-version"
                       hint="Leave empty for 2023-06-01"
                       value={provider.anthropic_version ?? ""}
-                      onCommit={(v) => update(provider.id, { anthropic_version: v || null })}
+                      onCommit={(v) =>
+                        update(provider.id, { anthropic_version: v || null })
+                      }
                     />
                   )}
                 </div>
@@ -431,8 +529,9 @@ export default function Providers({
                   <>
                     <h3>Compatibility</h3>
                     <p className="field-hint">
-                      Reasoning models such as the gpt-5 family reject <code>max_tokens</code> and{" "}
-                      <code>temperature</code>. Turn these on if the provider complains.
+                      Reasoning models such as the gpt-5 family reject{" "}
+                      <code>max_tokens</code> and <code>temperature</code>. Turn
+                      these on if the provider complains.
                     </p>
                     <div className="grid-two">
                       <Toggle
@@ -440,7 +539,10 @@ export default function Providers({
                         checked={provider.quirks.use_max_completion_tokens}
                         onChange={(v) =>
                           update(provider.id, {
-                            quirks: { ...provider.quirks, use_max_completion_tokens: v },
+                            quirks: {
+                              ...provider.quirks,
+                              use_max_completion_tokens: v,
+                            },
                           })
                         }
                       />
@@ -457,21 +559,27 @@ export default function Providers({
                         label="Drop top_p"
                         checked={provider.quirks.drop_top_p}
                         onChange={(v) =>
-                          update(provider.id, { quirks: { ...provider.quirks, drop_top_p: v } })
+                          update(provider.id, {
+                            quirks: { ...provider.quirks, drop_top_p: v },
+                          })
                         }
                       />
                       <Toggle
                         label="Drop stop sequences"
                         checked={provider.quirks.drop_stop}
                         onChange={(v) =>
-                          update(provider.id, { quirks: { ...provider.quirks, drop_stop: v } })
+                          update(provider.id, {
+                            quirks: { ...provider.quirks, drop_stop: v },
+                          })
                         }
                       />
                       <Toggle
                         label="Ask for stream usage"
                         checked={provider.quirks.stream_usage}
                         onChange={(v) =>
-                          update(provider.id, { quirks: { ...provider.quirks, stream_usage: v } })
+                          update(provider.id, {
+                            quirks: { ...provider.quirks, stream_usage: v },
+                          })
                         }
                       />
                       <Toggle
@@ -479,7 +587,10 @@ export default function Providers({
                         checked={provider.quirks.system_as_developer}
                         onChange={(v) =>
                           update(provider.id, {
-                            quirks: { ...provider.quirks, system_as_developer: v },
+                            quirks: {
+                              ...provider.quirks,
+                              system_as_developer: v,
+                            },
                           })
                         }
                       />
@@ -488,7 +599,10 @@ export default function Providers({
                         checked={provider.quirks.send_reasoning_effort}
                         onChange={(v) =>
                           update(provider.id, {
-                            quirks: { ...provider.quirks, send_reasoning_effort: v },
+                            quirks: {
+                              ...provider.quirks,
+                              send_reasoning_effort: v,
+                            },
                           })
                         }
                       />
@@ -505,7 +619,9 @@ export default function Providers({
                   {discovered[provider.id].map((model) => {
                     const name = model.id;
                     const already = config.models.some(
-                      (m) => m.provider_id === provider.id && m.upstream_model === name,
+                      (m) =>
+                        m.provider_id === provider.id &&
+                        m.upstream_model === name,
                     );
                     return (
                       <button
@@ -566,7 +682,9 @@ function BalanceRow({
       <span className="field-label">Balance</span>
       <select
         aria-label={`Balance endpoint for ${provider.name}`}
-        title={BALANCE_PRESETS.find((p) => p.id === provider.balance.preset)?.hint}
+        title={
+          BALANCE_PRESETS.find((p) => p.id === provider.balance.preset)?.hint
+        }
         value={provider.balance.preset}
         onChange={(e) => onPreset(e.currentTarget.value as BalancePreset)}
       >
@@ -600,7 +718,9 @@ function BalanceRow({
         </span>
       )}
       {status && (
-        <span className="muted">{new Date(status.checked_at).toLocaleTimeString()}</span>
+        <span className="muted">
+          {new Date(status.checked_at).toLocaleTimeString()}
+        </span>
       )}
       {!supported && provider.balance.preset === "none" && (
         <span className="muted">this provider publishes no balance</span>

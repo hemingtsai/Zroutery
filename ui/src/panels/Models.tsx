@@ -38,7 +38,7 @@ export default function Models({
   busy,
 }: {
   snapshot: Snapshot;
-  save: (config: AppConfig) => Promise<boolean>;
+  save: (mutate: (config: AppConfig) => AppConfig | null) => Promise<boolean>;
   busy: boolean;
 }) {
   const { config } = snapshot;
@@ -54,58 +54,71 @@ export default function Models({
   const unclassified = rows.filter((r) => r.model.class === null);
 
   const update = (index: number, patch: Partial<ModelEntry>) => {
-    const next = structuredClone(config);
-    const model = next.models[index];
-    if (!model) return;
-    Object.assign(model, patch);
-    void save(next);
+    void save((cfg) => {
+      const next = structuredClone(cfg);
+      const model = next.models[index];
+      if (!model) return null;
+      Object.assign(model, patch);
+      return next;
+    });
   };
 
   const remove = (index: number) => {
-    const next = structuredClone(config);
-    next.models.splice(index, 1);
-    void save(next);
+    void save((cfg) => {
+      const next = structuredClone(cfg);
+      next.models.splice(index, 1);
+      return next;
+    });
   };
 
   const add = () => {
     const upstream = draft.upstream_model.trim();
-    if (!draft.provider_id || !upstream) {
+    // Narrowed outside the save updater: TS cannot narrow state fields inside
+    // a closure that may run later.
+    const modelClass = draft.class;
+    const providerId = draft.provider_id;
+    if (!providerId || !upstream) {
       setNotice("Pick a provider and fill in the model name.");
       return;
     }
-    if (!draft.class) {
-      setNotice("Choose a class. Zroutery never guesses which tier a model belongs to.");
+    if (!modelClass) {
+      setNotice(
+        "Choose a class. Zroutery never guesses which tier a model belongs to.",
+      );
       return;
     }
     // Identity is the provider plus the upstream name, so the same model coming
     // from a second provider is a separate entry with its own id.
     const clash = config.models.some(
-      (m) => m.provider_id === draft.provider_id && m.upstream_model === upstream,
+      (m) =>
+        m.provider_id === draft.provider_id && m.upstream_model === upstream,
     );
     if (clash) {
       setNotice(`That provider already offers “${upstream}”.`);
       return;
     }
-    const next = structuredClone(config);
-    next.models.push({
-      provider_id: draft.provider_id,
-      upstream_model: upstream,
-      class: draft.class,
-      priority: 0,
-      weight: 1,
-      enabled: true,
-      supports_tools: true,
-      supports_vision: false,
-      supports_thinking: false,
-      display_name: null,
-      aliases: [],
-      max_output_tokens: null,
-      // Prices are typed in on the row, like the class: never guessed.
-      pricing: null,
+    void save((cfg) => {
+      const next = structuredClone(cfg);
+      next.models.push({
+        provider_id: providerId,
+        upstream_model: upstream,
+        class: modelClass,
+        priority: 0,
+        weight: 1,
+        enabled: true,
+        supports_tools: true,
+        supports_vision: false,
+        supports_thinking: false,
+        display_name: null,
+        aliases: [],
+        max_output_tokens: null,
+        // Prices are typed in on the row, like the class: never guessed.
+        pricing: null,
+      });
+      return next;
     });
     setDraft({ ...draft, upstream_model: "", class: "" });
     setNotice(null);
-    void save(next);
   };
 
   const preview =
@@ -116,16 +129,24 @@ export default function Models({
   return (
     <>
       {notice && (
-        <Banner tone="warn" actions={<Button kind="ghost" onClick={() => setNotice(null)}>OK</Button>}>
+        <Banner
+          tone="warn"
+          actions={
+            <Button kind="ghost" onClick={() => setNotice(null)}>
+              OK
+            </Button>
+          }
+        >
           {notice}
         </Banner>
       )}
 
       {unclassified.length > 0 && (
         <Banner tone="warn">
-          {unclassified.length} model{unclassified.length === 1 ? "" : "s"} have no class yet:{" "}
-          <code>{unclassified.map((r) => r.id).join(", ")}</code>. They stay callable by their exact
-          id, but they are excluded from <code>*-class</code> routing until you pick a tier.
+          {unclassified.length} model{unclassified.length === 1 ? "" : "s"} have
+          no class yet: <code>{unclassified.map((r) => r.id).join(", ")}</code>.
+          They stay callable by their exact id, but they are excluded from{" "}
+          <code>*-class</code> routing until you pick a tier.
         </Banner>
       )}
 
@@ -141,15 +162,22 @@ export default function Models({
                 </div>
                 {members.length === 0 ? (
                   <p className="empty small">
-                    Empty — requests to <code>{virtualId(cls)}</code> will fail with 503.
+                    Empty — requests to <code>{virtualId(cls)}</code> will fail
+                    with 503.
                   </p>
                 ) : (
                   <ol className="member-list">
                     {members.map((r, i) => (
                       <li key={r.id}>
-                        <span className="muted">{i === 0 ? "primary" : `fallback ${i}`}</span> {r.id}
+                        <span className="muted">
+                          {i === 0 ? "primary" : `fallback ${i}`}
+                        </span>{" "}
+                        {r.id}
                         {r.model.pricing && (
-                          <span className="muted"> · {priceText(r.model.pricing)}</span>
+                          <span className="muted">
+                            {" "}
+                            · {priceText(r.model.pricing)}
+                          </span>
                         )}
                       </li>
                     ))}
@@ -166,7 +194,9 @@ export default function Models({
           <Field label="Provider">
             <select
               value={draft.provider_id}
-              onChange={(e) => setDraft({ ...draft, provider_id: e.currentTarget.value })}
+              onChange={(e) =>
+                setDraft({ ...draft, provider_id: e.currentTarget.value })
+              }
             >
               {config.providers.map((p) => (
                 <option key={p.id} value={p.id}>
@@ -179,14 +209,21 @@ export default function Models({
             <input
               value={draft.upstream_model}
               placeholder="deepseek-chat"
-              onChange={(e) => setDraft({ ...draft, upstream_model: e.currentTarget.value })}
+              onChange={(e) =>
+                setDraft({ ...draft, upstream_model: e.currentTarget.value })
+              }
               onKeyDown={(e) => e.key === "Enter" && add()}
             />
           </Field>
           <Field label="Class" hint="Required">
             <select
               value={draft.class}
-              onChange={(e) => setDraft({ ...draft, class: e.currentTarget.value as ModelClass })}
+              onChange={(e) =>
+                setDraft({
+                  ...draft,
+                  class: e.currentTarget.value as ModelClass,
+                })
+              }
             >
               <option value="">— choose —</option>
               {CLASSES.map((c) => (
@@ -196,11 +233,22 @@ export default function Models({
               ))}
             </select>
           </Field>
-          <Field label="Exposed as" hint="The provider prefix keeps duplicates apart">
-            <input readOnly value={preview ?? ""} placeholder="<provider>-<model>" />
+          <Field
+            label="Exposed as"
+            hint="The provider prefix keeps duplicates apart"
+          >
+            <input
+              readOnly
+              value={preview ?? ""}
+              placeholder="<provider>-<model>"
+            />
           </Field>
           <div className="field-actions">
-            <Button kind="primary" onClick={add} disabled={busy || !config.providers.length}>
+            <Button
+              kind="primary"
+              onClick={add}
+              disabled={busy || !config.providers.length}
+            >
               Add model
             </Button>
           </div>
@@ -221,31 +269,41 @@ export default function Models({
                 <th>Class</th>
                 <th title="Per million tokens, input / output">Price</th>
                 <th title="Lower wins inside a class">Priority</th>
-                <th title="Random tie breaking among equal priorities">Weight</th>
+                <th title="Random tie breaking among equal priorities">
+                  Weight
+                </th>
                 <th>On</th>
                 <th />
               </tr>
             </thead>
             <tbody>
               {rows.map(({ model: m, id, index }) => {
-                const provider = config.providers.find((p) => p.id === m.provider_id);
+                const provider = config.providers.find(
+                  (p) => p.id === m.provider_id,
+                );
                 return (
                   <Fragment key={id}>
                     <tr className={m.class === null ? "row-warn" : ""}>
                       <td>
                         <button
                           className="linky"
-                          onClick={() => setExpanded(expanded === index ? null : index)}
+                          onClick={() =>
+                            setExpanded(expanded === index ? null : index)
+                          }
                         >
                           {id}
                         </button>
                         {m.aliases.length > 0 && (
-                          <Badge tone="neutral">+{m.aliases.length} alias</Badge>
+                          <Badge tone="neutral">
+                            +{m.aliases.length} alias
+                          </Badge>
                         )}
                       </td>
                       <td>
                         {provider?.name ?? <Badge tone="danger">missing</Badge>}
-                        {provider && !provider.enabled && <Badge tone="warn">off</Badge>}
+                        {provider && !provider.enabled && (
+                          <Badge tone="warn">off</Badge>
+                        )}
                       </td>
                       <td className="muted">{m.upstream_model}</td>
                       <td>
@@ -254,7 +312,8 @@ export default function Models({
                           value={m.class ?? ""}
                           onChange={(e) =>
                             update(index, {
-                              class: (e.currentTarget.value || null) as ModelClass | null,
+                              class: (e.currentTarget.value ||
+                                null) as ModelClass | null,
                             })
                           }
                         >
@@ -271,7 +330,9 @@ export default function Models({
                             opens it: an empty column is otherwise a dead end. */}
                         <button
                           className="linky"
-                          onClick={() => setExpanded(expanded === index ? null : index)}
+                          onClick={() =>
+                            setExpanded(expanded === index ? null : index)
+                          }
                           title={
                             m.pricing
                               ? "Edit the price"
@@ -286,7 +347,9 @@ export default function Models({
                           ariaLabel={`Priority for ${id}`}
                           value={m.priority}
                           min={0}
-                          onCommit={(priority) => update(index, { priority: priority ?? 0 })}
+                          onCommit={(priority) =>
+                            update(index, { priority: priority ?? 0 })
+                          }
                         />
                       </td>
                       <td>
@@ -294,7 +357,9 @@ export default function Models({
                           ariaLabel={`Weight for ${id}`}
                           value={m.weight}
                           min={1}
-                          onCommit={(weight) => update(index, { weight: weight ?? 1 })}
+                          onCommit={(weight) =>
+                            update(index, { weight: weight ?? 1 })
+                          }
                         />
                       </td>
                       <td>
@@ -302,7 +367,9 @@ export default function Models({
                           type="checkbox"
                           aria-label={`Enable ${id}`}
                           checked={m.enabled}
-                          onChange={(e) => update(index, { enabled: e.currentTarget.checked })}
+                          onChange={(e) =>
+                            update(index, { enabled: e.currentTarget.checked })
+                          }
                         />
                       </td>
                       <td>
@@ -321,7 +388,8 @@ export default function Models({
                                 hint="Sent upstream; renaming it changes the exposed id"
                                 value={m.upstream_model}
                                 onCommit={(upstream_model) =>
-                                  upstream_model.trim() && update(index, { upstream_model })
+                                  upstream_model.trim() &&
+                                  update(index, { upstream_model })
                                 }
                               />
                               <TextField
@@ -329,7 +397,9 @@ export default function Models({
                                 hint="Shown in /v1/models"
                                 value={m.display_name ?? ""}
                                 placeholder={m.upstream_model}
-                                onCommit={(v) => update(index, { display_name: v || null })}
+                                onCommit={(v) =>
+                                  update(index, { display_name: v || null })
+                                }
                               />
                               <TextField
                                 label="Aliases"
@@ -357,8 +427,9 @@ export default function Models({
                             </div>
                             <h3>Price per million tokens</h3>
                             <p className="field-hint">
-                              In the currency the provider bills in. Leave it off and requests are
-                              logged without a cost rather than with a guessed one.
+                              In the currency the provider bills in. Leave it
+                              off and requests are logged without a cost rather
+                              than with a guessed one.
                             </p>
                             <PriceFields
                               id={id}
@@ -369,17 +440,23 @@ export default function Models({
                               <Toggle
                                 label="Tool use"
                                 checked={m.supports_tools}
-                                onChange={(v) => update(index, { supports_tools: v })}
+                                onChange={(v) =>
+                                  update(index, { supports_tools: v })
+                                }
                               />
                               <Toggle
                                 label="Vision"
                                 checked={m.supports_vision}
-                                onChange={(v) => update(index, { supports_vision: v })}
+                                onChange={(v) =>
+                                  update(index, { supports_vision: v })
+                                }
                               />
                               <Toggle
                                 label="Extended thinking"
                                 checked={m.supports_thinking}
-                                onChange={(v) => update(index, { supports_thinking: v })}
+                                onChange={(v) =>
+                                  update(index, { supports_thinking: v })
+                                }
                               />
                             </div>
                           </div>
@@ -396,7 +473,6 @@ export default function Models({
     </>
   );
 }
-
 
 /**
  * The four numbers that make up a price. Clearing input and output removes the
@@ -429,7 +505,9 @@ function PriceFields({
         label="Currency"
         hint="USD, CNY, …"
         value={current.currency}
-        onCommit={(currency) => patch({ currency: currency.trim().toUpperCase() || "USD" })}
+        onCommit={(currency) =>
+          patch({ currency: currency.trim().toUpperCase() || "USD" })
+        }
       />
       <NumberField
         label="Input"

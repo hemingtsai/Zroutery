@@ -29,7 +29,17 @@ export default function App() {
   const runningRef = useRef(false);
   const queuedRef = useRef<(() => Promise<Snapshot>) | null>(null);
 
+  // The newest config known to have been committed (or loaded). Saves are
+  // updaters against this, so an edit queued behind an in-flight save is
+  // applied on top of it instead of overwriting it with a stale snapshot.
+  const configRef = useRef<AppConfig | null>(null);
+
   const run = useCallback(async (task: () => Promise<Snapshot>): Promise<boolean> => {
+    const apply = (s: Snapshot) => {
+      configRef.current = s.config;
+      setSnapshot(s);
+      return s;
+    };
     if (runningRef.current) {
       queuedRef.current = task;
       // The queued task's own outcome decides; this call did not fail.
@@ -39,10 +49,10 @@ export default function App() {
     setBusy(true);
     setError(null);
     try {
-      setSnapshot(await task());
+      apply(await task());
       const queued = queuedRef.current;
       queuedRef.current = null;
-      if (queued) setSnapshot(await queued());
+      if (queued) apply(await queued());
       return true;
     } catch (e) {
       setError(errorText(e));
@@ -81,8 +91,20 @@ export default function App() {
     };
   }, [tab]);
 
+  /**
+   * Apply a mutation to the freshest committed config and save it. Panels hand
+   * in an updater so an edit that queues behind an in-flight save rebases onto
+   * that save's result rather than clobbering it with a stale snapshot. An
+   * updater may return null to mean "nothing to change".
+   */
   const save = useCallback(
-    (config: AppConfig) => run(() => api.saveConfig(config)),
+    (mutate: (config: AppConfig) => AppConfig | null) =>
+      run(async () => {
+        const base = configRef.current;
+        if (!base) throw new Error("not ready");
+        const next = mutate(structuredClone(base));
+        return next ? api.saveConfig(next) : api.snapshot();
+      }),
     [run],
   );
 
