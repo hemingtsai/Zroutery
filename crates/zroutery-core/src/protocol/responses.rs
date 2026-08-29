@@ -63,7 +63,10 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
             };
             req.tools.push(ToolDef {
                 name: name.to_string(),
-                description: t.get("description").and_then(Value::as_str).map(str::to_string),
+                description: t
+                    .get("description")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
                 input_schema: t
                     .get("parameters")
                     .cloned()
@@ -80,12 +83,13 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
             "required" | "any" => Some(ToolChoice::Any),
             _ => None,
         },
-        Some(Value::Object(o)) => o
-            .get("name")
-            .and_then(Value::as_str)
-            .map(|n| ToolChoice::Specific {
-                name: n.to_string(),
-            }),
+        Some(Value::Object(o)) => {
+            o.get("name")
+                .and_then(Value::as_str)
+                .map(|n| ToolChoice::Specific {
+                    name: n.to_string(),
+                })
+        }
         _ => None,
     };
 
@@ -125,7 +129,8 @@ fn decode_input_item(item: &Value, req: &mut ChatRequest) -> Result<()> {
                 .get("arguments")
                 .and_then(Value::as_str)
                 .unwrap_or("{}");
-            let input = serde_json::from_str(arguments).unwrap_or_else(|_| json!({"__raw": arguments}));
+            let input =
+                serde_json::from_str(arguments).unwrap_or_else(|_| json!({"__raw": arguments}));
             req.messages.push(Message {
                 role: Role::Assistant,
                 content: vec![ContentBlock::ToolUse {
@@ -182,7 +187,18 @@ fn decode_input_item(item: &Value, req: &mut ChatRequest) -> Result<()> {
             });
         }
         "reasoning" => {
-            if let Some(block) = reasoning_bridge::decode_reasoning_item(item) {
+            let block = reasoning_bridge::decode_reasoning_item(item).or_else(|| {
+                item.get("summary")
+                    .and_then(Value::as_array)
+                    .and_then(|a| a.first())
+                    .and_then(|s| s.get("text"))
+                    .and_then(Value::as_str)
+                    .map(|text| ContentBlock::Thinking {
+                        text: text.to_string(),
+                        signature: None,
+                    })
+            });
+            if let Some(block) = block {
                 req.messages.push(Message {
                     role: Role::Assistant,
                     content: vec![block],
@@ -231,23 +247,34 @@ fn decode_input_item(item: &Value, req: &mut ChatRequest) -> Result<()> {
 pub fn encode_request(req: &ChatRequest, upstream_model: &str) -> Result<Value> {
     let mut input: Vec<Value> = Vec::new();
     for m in &req.messages {
+        let mut parts: Vec<Value> = Vec::new();
+        let mut separate_items: Vec<Value> = Vec::new();
+
         for b in &m.content {
             match b {
-                ContentBlock::Text { text, .. } => input.push(json!({
+                ContentBlock::Text { text, .. } => parts.push(json!({
                     "type": "input_text",
                     "text": text,
                 })),
-                ContentBlock::Image { source } => input.push(json!({
+                ContentBlock::Image { source } => parts.push(json!({
                     "type": "input_image",
                     "image_url": {"url": source.to_data_url()},
                 })),
-                ContentBlock::ToolUse { id, name, input: tool_input } => input.push(json!({
+                ContentBlock::ToolUse {
+                    id,
+                    name,
+                    input: tool_input,
+                } => separate_items.push(json!({
                     "type": "function_call",
                     "call_id": id,
                     "name": name,
                     "arguments": tool_input.to_string(),
                 })),
-                ContentBlock::ToolResult { tool_use_id, content, .. } => {
+                ContentBlock::ToolResult {
+                    tool_use_id,
+                    content,
+                    ..
+                } => {
                     let text = content
                         .iter()
                         .map(|p| match p {
@@ -256,20 +283,39 @@ pub fn encode_request(req: &ChatRequest, upstream_model: &str) -> Result<Value> 
                         })
                         .collect::<Vec<_>>()
                         .join("\n");
-                    input.push(json!({
+                    separate_items.push(json!({
                         "type": "function_call_output",
                         "call_id": tool_use_id,
                         "output": text,
                     }));
                 }
-                ContentBlock::Thinking { .. } | ContentBlock::RedactedThinking { .. } => {
+                ContentBlock::Thinking { text, signature } => {
                     if let Some(item) = reasoning_bridge::encode_thinking_block(b) {
-                        input.push(item);
+                        separate_items.push(item);
+                    } else if signature.is_none() {
+                        separate_items.push(json!({
+                            "type": "reasoning",
+                            "summary": [{"type": "summary_text", "text": text}],
+                        }));
+                    }
+                }
+                ContentBlock::RedactedThinking { .. } => {
+                    if let Some(item) = reasoning_bridge::encode_thinking_block(b) {
+                        separate_items.push(item);
                     }
                 }
                 ContentBlock::Document { .. } => {}
             }
         }
+
+        if !parts.is_empty() {
+            input.push(json!({
+                "type": "message",
+                "role": if m.role == Role::Assistant { "assistant" } else { "user" },
+                "content": parts,
+            }));
+        }
+        input.extend(separate_items);
     }
 
     let mut body = Map::new();
@@ -350,13 +396,10 @@ pub fn decode_response(body: Value) -> Result<ChatResponse> {
                 Some("message") => {
                     if let Some(parts) = item.get("content").and_then(Value::as_array) {
                         for part in parts {
-                            match part.get("type").and_then(Value::as_str) {
-                                Some("output_text") => {
-                                    if let Some(text) = part.get("text").and_then(Value::as_str) {
-                                        content.push(ContentBlock::text(text));
-                                    }
+                            if let Some("output_text") = part.get("type").and_then(Value::as_str) {
+                                if let Some(text) = part.get("text").and_then(Value::as_str) {
+                                    content.push(ContentBlock::text(text));
                                 }
-                                _ => {}
                             }
                         }
                     }
@@ -516,6 +559,7 @@ pub struct ResponsesStreamParser {
     stopped: bool,
     next_index: u32,
     text_index: Option<u32>,
+    thinking_index: Option<u32>,
     tool_indices: HashMap<String, u32>,
     usage: Usage,
 }
@@ -529,22 +573,33 @@ impl ResponsesStreamParser {
             stopped: false,
             next_index: 0,
             text_index: None,
+            thinking_index: None,
             tool_indices: HashMap::new(),
             usage: Usage::default(),
         }
     }
 
     fn open_index(&mut self, kind: &str) -> u32 {
-        // Reuse an open text block for consecutive text deltas.
-        if kind == "text" {
-            if let Some(i) = self.text_index {
-                return i;
+        // Reuse an open block while deltas for the same part keep arriving.
+        match kind {
+            "text" => {
+                if let Some(i) = self.text_index {
+                    return i;
+                }
             }
+            "thinking" => {
+                if let Some(i) = self.thinking_index {
+                    return i;
+                }
+            }
+            _ => {}
         }
         let index = self.next_index;
         self.next_index += 1;
-        if kind == "text" {
-            self.text_index = Some(index);
+        match kind {
+            "text" => self.text_index = Some(index),
+            "thinking" => self.thinking_index = Some(index),
+            _ => {}
         }
         index
     }
@@ -583,15 +638,25 @@ impl StreamParser for ResponsesStreamParser {
                 if item.get("type").and_then(Value::as_str) == Some("function_call") {
                     let index = self.next_index;
                     self.next_index += 1;
-                    let id = item
+                    let item_id = item
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string();
+                    let call_id = item
                         .get("call_id")
                         .and_then(Value::as_str)
                         .unwrap_or_default()
                         .to_string();
-                    self.tool_indices.insert(id.clone(), index);
+                    if !item_id.is_empty() {
+                        self.tool_indices.insert(item_id.clone(), index);
+                    }
+                    if !call_id.is_empty() {
+                        self.tool_indices.insert(call_id.clone(), index);
+                    }
                     out.push(StreamEvent::ToolUseStart {
                         index,
-                        id,
+                        id: call_id,
                         name: item
                             .get("name")
                             .and_then(Value::as_str)
@@ -606,8 +671,23 @@ impl StreamParser for ResponsesStreamParser {
                     Some("output_text") => {
                         self.open_index("text");
                     }
+                    Some("reasoning") => {
+                        self.open_index("thinking");
+                    }
                     _ => {}
                 }
+            }
+            "response.content_part.done" => {
+                let part = event.get("part").cloned().unwrap_or_default();
+                match part.get("type").and_then(Value::as_str) {
+                    Some("output_text") => self.text_index = None,
+                    Some("reasoning") => self.thinking_index = None,
+                    _ => {}
+                }
+            }
+            "response.output_item.done" => {
+                self.text_index = None;
+                self.thinking_index = None;
             }
             "response.output_text.delta" => {
                 let index = self.open_index("text");
@@ -619,13 +699,17 @@ impl StreamParser for ResponsesStreamParser {
                 }
             }
             "response.function_call_arguments.delta" => {
-                let call_id = event
+                let item_id = event
                     .get("item_id")
-                    .or_else(|| event.get("call_id"))
                     .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string();
-                if let Some(index) = self.tool_indices.get(&call_id).copied() {
+                    .unwrap_or_default();
+                let index = self.tool_indices.get(item_id).copied().or_else(|| {
+                    event
+                        .get("call_id")
+                        .and_then(Value::as_str)
+                        .and_then(|id| self.tool_indices.get(id).copied())
+                });
+                if let Some(index) = index {
                     if let Some(delta) = event.get("delta").and_then(Value::as_str) {
                         out.push(StreamEvent::ToolUseDelta {
                             index,
@@ -692,6 +776,7 @@ pub struct ResponsesStreamEncoder {
     done: bool,
     output_index: u32,
     content_index: u32,
+    tool_item_ids: HashMap<u32, String>,
 }
 
 impl ResponsesStreamEncoder {
@@ -703,6 +788,7 @@ impl ResponsesStreamEncoder {
             done: false,
             output_index: 0,
             content_index: 0,
+            tool_item_ids: HashMap::new(),
         }
     }
 
@@ -764,14 +850,18 @@ impl StreamEncoder for ResponsesStreamEncoder {
                     }),
                 ));
             }
-            StreamEvent::ToolUseStart { id, name, .. } => {
+            StreamEvent::ToolUseStart {
+                index, id, name, ..
+            } => {
+                let item_id = format!("fc_{id}");
+                self.tool_item_ids.insert(*index, item_id.clone());
                 out.push(self.frame(
                     "response.output_item.added",
                     json!({
                         "type": "response.output_item.added",
                         "output_index": self.output_index,
                         "item": {
-                            "id": format!("fc_{id}"),
+                            "id": item_id,
                             "type": "function_call",
                             "call_id": id,
                             "name": name,
@@ -783,14 +873,20 @@ impl StreamEncoder for ResponsesStreamEncoder {
                 self.output_index += 1;
             }
             StreamEvent::ToolUseDelta {
-                partial_json, index, ..
+                partial_json,
+                index,
+                ..
             } => {
-                let call_id = format!("call_{index}");
+                let item_id = self
+                    .tool_item_ids
+                    .get(index)
+                    .cloned()
+                    .unwrap_or_else(|| format!("fc_{index}"));
                 out.push(self.frame(
                     "response.function_call_arguments.delta",
                     json!({
                         "type": "response.function_call_arguments.delta",
-                        "item_id": call_id,
+                        "item_id": item_id,
                         "output_index": self.output_index.saturating_sub(1),
                         "content_index": 0,
                         "delta": partial_json,

@@ -94,7 +94,10 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
                     }
                 }
             }
-            req.messages.push(Message { role, content: blocks });
+            req.messages.push(Message {
+                role,
+                content: blocks,
+            });
         }
     }
 
@@ -124,7 +127,10 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
                     };
                     req.tools.push(ToolDef {
                         name: name.to_string(),
-                        description: decl.get("description").and_then(Value::as_str).map(str::to_string),
+                        description: decl
+                            .get("description")
+                            .and_then(Value::as_str)
+                            .map(str::to_string),
                         input_schema: decl
                             .get("parameters")
                             .cloned()
@@ -141,10 +147,10 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
         .and_then(|c| c.get("functionCallingConfig"))
         .and_then(|c| c.get("mode"))
         .and_then(Value::as_str)
-        .and_then(|mode| match mode {
-            "NONE" => Some(ToolChoice::None),
-            "ANY" => Some(ToolChoice::Any),
-            _ => Some(ToolChoice::Auto),
+        .map(|mode| match mode {
+            "NONE" => ToolChoice::None,
+            "ANY" => ToolChoice::Any,
+            _ => ToolChoice::Auto,
         });
 
     Ok(req)
@@ -182,7 +188,11 @@ pub fn encode_request(req: &ChatRequest, upstream_model: &str) -> Result<Value> 
                 ContentBlock::ToolUse { id, name, input } => parts.push(json!({
                     "functionCall": {"id": id, "name": name, "args": input}
                 })),
-                ContentBlock::ToolResult { tool_use_id, content, .. } => {
+                ContentBlock::ToolResult {
+                    tool_use_id,
+                    content,
+                    ..
+                } => {
                     let text = content
                         .iter()
                         .map(|p| match p {
@@ -195,7 +205,9 @@ pub fn encode_request(req: &ChatRequest, upstream_model: &str) -> Result<Value> 
                         "functionResponse": {"id": tool_use_id, "name": "", "response": {"text": text}}
                     }));
                 }
-                ContentBlock::Thinking { .. } | ContentBlock::RedactedThinking { .. } | ContentBlock::Document { .. } => {}
+                ContentBlock::Thinking { .. }
+                | ContentBlock::RedactedThinking { .. }
+                | ContentBlock::Document { .. } => {}
             }
         }
         contents.push(json!({"role": role, "parts": parts}));
@@ -233,22 +245,15 @@ pub fn encode_request(req: &ChatRequest, upstream_model: &str) -> Result<Value> 
     }
 
     if let Some(tc) = &req.tool_choice {
-        let mode = match tc {
-            ToolChoice::Auto => "AUTO",
-            ToolChoice::None => "NONE",
-            ToolChoice::Any => "ANY",
-            ToolChoice::Specific { name } => {
-                body.insert(
-                    "toolConfig".into(),
-                    json!({"functionCallingConfig": {"mode": "ANY", "allowedFunctionNames": [name]}}),
-                );
-                "ANY"
-            }
+        let tool_config = match tc {
+            ToolChoice::Auto => json!({"functionCallingConfig": {"mode": "AUTO"}}),
+            ToolChoice::None => json!({"functionCallingConfig": {"mode": "NONE"}}),
+            ToolChoice::Any => json!({"functionCallingConfig": {"mode": "ANY"}}),
+            ToolChoice::Specific { name } => json!({
+                "functionCallingConfig": {"mode": "ANY", "allowedFunctionNames": [name]}
+            }),
         };
-        body.insert(
-            "toolConfig".into(),
-            json!({"functionCallingConfig": {"mode": mode}}),
-        );
+        body.insert("toolConfig".into(), tool_config);
     }
 
     Ok(Value::Object(body))
@@ -311,12 +316,18 @@ pub fn decode_response(body: Value) -> Result<ChatResponse> {
     let usage = body
         .get("usageMetadata")
         .map(|u| Usage {
-            input_tokens: u.get("promptTokenCount").and_then(Value::as_u64).unwrap_or(0) as u32,
+            input_tokens: u
+                .get("promptTokenCount")
+                .and_then(Value::as_u64)
+                .unwrap_or(0) as u32,
             output_tokens: u
                 .get("candidatesTokenCount")
                 .and_then(Value::as_u64)
                 .unwrap_or(0) as u32,
-            reasoning_tokens: u.get("thoughtsTokenCount").and_then(Value::as_u64).unwrap_or(0) as u32,
+            reasoning_tokens: u
+                .get("thoughtsTokenCount")
+                .and_then(Value::as_u64)
+                .unwrap_or(0) as u32,
             ..Usage::default()
         })
         .unwrap_or_default();
@@ -375,6 +386,8 @@ pub struct GeminiStreamParser {
     model: String,
     started: bool,
     stopped: bool,
+    next_index: u32,
+    text_index: Option<u32>,
     usage: Usage,
 }
 
@@ -384,6 +397,8 @@ impl GeminiStreamParser {
             model: model.to_string(),
             started: false,
             stopped: false,
+            next_index: 0,
+            text_index: None,
             usage: Usage::default(),
         }
     }
@@ -406,6 +421,24 @@ impl StreamParser for GeminiStreamParser {
                 usage: self.usage,
             });
         }
+        if let Some(usage) = value.get("usageMetadata") {
+            self.usage = Usage {
+                input_tokens: usage
+                    .get("promptTokenCount")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0) as u32,
+                output_tokens: usage
+                    .get("candidatesTokenCount")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0) as u32,
+                reasoning_tokens: usage
+                    .get("thoughtsTokenCount")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0) as u32,
+                ..Usage::default()
+            };
+        }
+
         if let Some(candidate) = value
             .get("candidates")
             .and_then(Value::as_array)
@@ -418,13 +451,25 @@ impl StreamParser for GeminiStreamParser {
             {
                 for part in parts {
                     if let Some(text) = part.get("text").and_then(Value::as_str) {
+                        let index = match self.text_index {
+                            Some(i) => i,
+                            None => {
+                                let i = self.next_index;
+                                self.next_index += 1;
+                                self.text_index = Some(i);
+                                i
+                            }
+                        };
                         out.push(StreamEvent::TextDelta {
-                            index: 0,
+                            index,
                             text: text.to_string(),
                         });
                     } else if let Some(call) = part.get("functionCall") {
+                        let index = self.next_index;
+                        self.next_index += 1;
+                        self.text_index = None;
                         out.push(StreamEvent::ToolUseStart {
-                            index: 0,
+                            index,
                             id: call
                                 .get("id")
                                 .and_then(Value::as_str)
@@ -438,29 +483,25 @@ impl StreamParser for GeminiStreamParser {
                         });
                         if let Some(args) = call.get("args") {
                             out.push(StreamEvent::ToolUseDelta {
-                                index: 0,
+                                index,
                                 partial_json: args.to_string(),
                             });
                         }
                     }
                 }
             }
-            if candidate.get("finishReason").is_some() {
+            if let Some(finish_reason) = candidate.get("finishReason").and_then(Value::as_str) {
                 self.stopped = true;
                 out.push(StreamEvent::Stop {
-                    stop_reason: StopReason::EndTurn,
+                    stop_reason: match finish_reason {
+                        "MAX_TOKENS" => StopReason::MaxTokens,
+                        "SAFETY" => StopReason::Refusal,
+                        _ => StopReason::EndTurn,
+                    },
                     stop_sequence: None,
                     usage: self.usage,
                 });
             }
-        }
-        if let Some(usage) = value.get("usageMetadata") {
-            self.usage = Usage {
-                input_tokens: usage.get("promptTokenCount").and_then(Value::as_u64).unwrap_or(0) as u32,
-                output_tokens: usage.get("candidatesTokenCount").and_then(Value::as_u64).unwrap_or(0) as u32,
-                reasoning_tokens: usage.get("thoughtsTokenCount").and_then(Value::as_u64).unwrap_or(0) as u32,
-                ..Usage::default()
-            };
         }
         Ok(out)
     }
@@ -519,11 +560,12 @@ impl StreamEncoder for GeminiStreamEncoder {
                 .to_string(),
             }],
             StreamEvent::ToolUseDelta {
-                partial_json, index, ..
+                partial_json,
+                index,
+                ..
             } => {
-                let parsed = serde_json::from_str::<Value>(partial_json).unwrap_or_else(|_| {
-                    json!({"__raw": partial_json})
-                });
+                let parsed = serde_json::from_str::<Value>(partial_json)
+                    .unwrap_or_else(|_| json!({"__raw": partial_json}));
                 vec![SseFrame {
                     event: None,
                     data: json!({
@@ -534,14 +576,21 @@ impl StreamEncoder for GeminiStreamEncoder {
                     .to_string(),
                 }]
             }
-            StreamEvent::Stop { usage, .. } => {
+            StreamEvent::Stop {
+                stop_reason, usage, ..
+            } => {
                 self.done = true;
+                let finish_reason = match stop_reason {
+                    StopReason::MaxTokens => "MAX_TOKENS",
+                    StopReason::Refusal => "SAFETY",
+                    _ => "STOP",
+                };
                 vec![SseFrame {
                     event: None,
                     data: json!({
                         "candidates": [{
                             "content": {"role": "model", "parts": []},
-                            "finishReason": "STOP"
+                            "finishReason": finish_reason
                         }],
                         "usageMetadata": {
                             "promptTokenCount": usage.input_tokens,

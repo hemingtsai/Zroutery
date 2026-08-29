@@ -34,7 +34,10 @@ pub fn encode_thinking_block(block: &ContentBlock) -> Option<Value> {
         }),
         _ => return None,
     };
-    let encoded = format!("{PREFIX}{}", base64url_encode(payload.to_string().as_bytes()));
+    let encoded = format!(
+        "{PREFIX}{}",
+        base64url_encode(payload.to_string().as_bytes())
+    );
     Some(json!({
         "type": "reasoning",
         "encrypted_content": encoded,

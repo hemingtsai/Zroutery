@@ -1002,7 +1002,6 @@ pub struct OpenAiStreamEncoder {
     include_usage: bool,
     role_sent: bool,
     tool_slots: Vec<(u32, u64)>,
-    signatures: std::collections::HashMap<u32, String>,
     usage: Usage,
     done: bool,
 }
@@ -1016,7 +1015,6 @@ impl OpenAiStreamEncoder {
             include_usage: false,
             role_sent: false,
             tool_slots: Vec::new(),
-            signatures: std::collections::HashMap::new(),
             usage: Usage::default(),
             done: false,
         }
@@ -1092,15 +1090,15 @@ impl StreamEncoder for OpenAiStreamEncoder {
                 self.ensure_role(&mut out);
                 out.push(self.chunk(json!({"reasoning_content": text}), None));
             }
-            StreamEvent::ThinkingSignature { index, signature } => {
-                // Keep the signature around so a later request encoder can put it
-                // back into a Responses-style encrypted reasoning item.
-                self.signatures.insert(*index, signature.clone());
-            }
+            // No Chat Completions wire equivalent; signatures are only meaningful
+            // when a later request is encoded through the reasoning bridge.
+            StreamEvent::ThinkingSignature { .. } => {}
             StreamEvent::RedactedThinking { index, data } => {
-                if let Some(item) = reasoning_bridge::encode_thinking_block(
-                    &ContentBlock::RedactedThinking { data: data.clone() },
-                ) {
+                if let Some(item) =
+                    reasoning_bridge::encode_thinking_block(&ContentBlock::RedactedThinking {
+                        data: data.clone(),
+                    })
+                {
                     if let Some(encoded) = item.get("encrypted_content").and_then(Value::as_str) {
                         self.ensure_role(&mut out);
                         out.push(self.chunk(json!({"reasoning_content": encoded}), None));

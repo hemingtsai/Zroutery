@@ -47,9 +47,18 @@ fn request_decodes_instructions_lifting_and_reasoning_bridge() {
     assert_eq!(req.tool_choice, Some(zroutery_core::ToolChoice::Any));
     assert_eq!(req.thinking.unwrap().budget_tokens, Some(16384));
     assert_eq!(req.messages.len(), 4);
-    assert!(matches!(req.messages[1].content[0], ContentBlock::ToolUse { .. }));
-    assert!(matches!(req.messages[2].content[0], ContentBlock::ToolResult { .. }));
-    assert!(matches!(req.messages[3].content[0], ContentBlock::Thinking { .. }));
+    assert!(matches!(
+        req.messages[1].content[0],
+        ContentBlock::ToolUse { .. }
+    ));
+    assert!(matches!(
+        req.messages[2].content[0],
+        ContentBlock::ToolResult { .. }
+    ));
+    assert!(matches!(
+        req.messages[3].content[0],
+        ContentBlock::Thinking { .. }
+    ));
 }
 
 #[test]
@@ -101,7 +110,7 @@ fn stream_parser_handles_responses_lifecycle() {
         r#"{"type":"response.reasoning_summary_text.delta","item_id":"rs_1","output_index":1,"content_index":0,"delta":"think"}"#,
         "\n\n",
         "event: response.function_call_arguments.delta\ndata: ",
-        r#"{"type":"response.function_call_arguments.delta","item_id":"call_1","output_index":0,"content_index":0,"delta":"{\"city\":\"SH\"}"}"#,
+        r#"{"type":"response.function_call_arguments.delta","item_id":"fc_1","output_index":0,"content_index":0,"delta":"{\"city\":\"SH\"}"}"#,
         "\n\n",
         "event: response.completed\ndata: ",
         r#"{"type":"response.completed","response":{"id":"resp_1","model":"m","usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5}}}"#,
@@ -116,10 +125,18 @@ fn stream_parser_handles_responses_lifecycle() {
     }
     events.extend(parser.finish());
 
-    assert!(events.iter().any(|e| matches!(e, StreamEvent::Start { .. })));
-    assert!(events.iter().any(|e| matches!(e, StreamEvent::TextDelta { text, .. } if text == "Hel")));
-    assert!(events.iter().any(|e| matches!(e, StreamEvent::ThinkingDelta { text, .. } if text == "think")));
-    assert!(events.iter().any(|e| matches!(e, StreamEvent::ToolUseStart { id, .. } if id == "call_1")));
+    assert!(events
+        .iter()
+        .any(|e| matches!(e, StreamEvent::Start { .. })));
+    assert!(events
+        .iter()
+        .any(|e| matches!(e, StreamEvent::TextDelta { text, .. } if text == "Hel")));
+    assert!(events
+        .iter()
+        .any(|e| matches!(e, StreamEvent::ThinkingDelta { text, .. } if text == "think")));
+    assert!(events
+        .iter()
+        .any(|e| matches!(e, StreamEvent::ToolUseStart { id, .. } if id == "call_1")));
     assert!(events.iter().any(|e| matches!(e, StreamEvent::ToolUseDelta { partial_json, .. } if partial_json.contains("city"))));
     assert!(events.iter().any(|e| matches!(e, StreamEvent::Stop { .. })));
 }
@@ -157,10 +174,26 @@ fn stream_encoder_emits_responses_sse() {
     }));
 
     assert_eq!(frames[0].event.as_deref(), Some("response.created"));
-    assert_eq!(frames[1].event.as_deref(), Some("response.output_text.delta"));
-    assert_eq!(frames[2].event.as_deref(), Some("response.output_item.added"));
-    assert_eq!(frames[3].event.as_deref(), Some("response.function_call_arguments.delta"));
-    assert_eq!(frames[4].event.as_deref(), Some("response.reasoning_summary_text.delta"));
+    assert_eq!(
+        frames[1].event.as_deref(),
+        Some("response.output_text.delta")
+    );
+    assert_eq!(
+        frames[2].event.as_deref(),
+        Some("response.output_item.added")
+    );
+    assert_eq!(
+        frames[3].event.as_deref(),
+        Some("response.function_call_arguments.delta")
+    );
+    assert!(
+        frames[3].data.contains("\"item_id\":\"fc_call_1\""),
+        "delta should reference the function_call item id emitted in output_item.added"
+    );
+    assert_eq!(
+        frames[4].event.as_deref(),
+        Some("response.reasoning_summary_text.delta")
+    );
     assert_eq!(frames[5].event.as_deref(), Some("response.completed"));
 }
 
@@ -169,7 +202,8 @@ fn responses_request_round_trips_through_ir() {
     let mut req = ChatRequest::new("gpt-5", Dialect::OpenAIResponses);
     req.system.push(zroutery_core::SystemPart::new("sys"));
     req.max_tokens = Some(128);
-    req.messages.push(zroutery_core::Message::user_text("hello"));
+    req.messages
+        .push(zroutery_core::Message::user_text("hello"));
     req.messages.push(zroutery_core::Message {
         role: Role::Assistant,
         content: vec![ContentBlock::ToolUse {
@@ -180,6 +214,12 @@ fn responses_request_round_trips_through_ir() {
     });
 
     let wire = encode_request(&req, "upstream-model").unwrap();
+    let input = wire["input"].as_array().unwrap();
+    assert_eq!(input[0]["type"], "message");
+    assert_eq!(input[0]["role"], "user");
+    assert_eq!(input[0]["content"][0]["type"], "input_text");
+    assert_eq!(input[1]["type"], "function_call");
+
     let decoded = decode_request(wire).unwrap();
     assert_eq!(decoded.system[0].text, "sys");
     assert_eq!(decoded.max_tokens, Some(128));

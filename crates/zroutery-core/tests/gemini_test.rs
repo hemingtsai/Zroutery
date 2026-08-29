@@ -29,8 +29,14 @@ fn request_decodes_system_contents_and_function_calls() {
     assert_eq!(req.max_tokens, Some(128));
     assert_eq!(req.temperature, Some(0.5));
     assert_eq!(req.messages.len(), 3);
-    assert!(matches!(req.messages[1].content[0], ContentBlock::ToolUse { .. }));
-    assert!(matches!(req.messages[2].content[0], ContentBlock::ToolResult { .. }));
+    assert!(matches!(
+        req.messages[1].content[0],
+        ContentBlock::ToolUse { .. }
+    ));
+    assert!(matches!(
+        req.messages[2].content[0],
+        ContentBlock::ToolResult { .. }
+    ));
 }
 
 #[test]
@@ -65,7 +71,8 @@ fn response_round_trips_through_ir() {
 fn request_round_trips_through_ir() {
     let mut req = ChatRequest::new("gemini-2.0-flash", Dialect::Gemini);
     req.system.push(zroutery_core::SystemPart::new("sys"));
-    req.messages.push(zroutery_core::Message::user_text("hello"));
+    req.messages
+        .push(zroutery_core::Message::user_text("hello"));
     req.messages.push(zroutery_core::Message {
         role: Role::Assistant,
         content: vec![ContentBlock::ToolUse {
@@ -75,7 +82,13 @@ fn request_round_trips_through_ir() {
         }],
     });
     req.max_tokens = Some(64);
+    req.tool_choice = Some(zroutery_core::ToolChoice::Specific { name: "f".into() });
     let wire = encode_request(&req, "gemini-2.0-flash").unwrap();
+    assert_eq!(
+        wire["toolConfig"]["functionCallingConfig"]["allowedFunctionNames"][0],
+        "f"
+    );
+
     let decoded = decode_request(wire).unwrap();
     assert_eq!(decoded.system[0].text, "sys");
     assert_eq!(decoded.messages.len(), 2);
@@ -96,8 +109,12 @@ fn stream_parser_emits_text_and_stop() {
         events.extend(parser.push(&frame).unwrap());
     }
     events.extend(parser.finish());
-    assert!(events.iter().any(|e| matches!(e, StreamEvent::Start { .. })));
-    assert!(events.iter().any(|e| matches!(e, StreamEvent::TextDelta { text, .. } if text == "hello")));
+    assert!(events
+        .iter()
+        .any(|e| matches!(e, StreamEvent::Start { .. })));
+    assert!(events
+        .iter()
+        .any(|e| matches!(e, StreamEvent::TextDelta { text, .. } if text == "hello")));
     assert!(events.iter().any(|e| matches!(e, StreamEvent::Stop { .. })));
 }
 
