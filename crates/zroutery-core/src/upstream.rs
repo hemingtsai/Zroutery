@@ -570,10 +570,11 @@ pub fn encode_for(
 /// Anthropic subscription/OAuth plans require the first system block to be exactly
 /// this identity line.
 fn prepend_claude_code_system_prompt(body: &mut Value) {
-    // Only inject into Anthropic-style bodies that already have a "system" field.
-    // OpenAI-compatible bodies use messages for system instructions, and injecting
-    // a "system" key triggers gateway content filters.
+    // Only inject into Anthropic-style bodies. OpenAI-compatible bodies use
+    // messages for system instructions, and injecting a "system" key triggers
+    // gateway content filters.
     if !body.get("system").is_some() {
+        body["system"] = Value::Array(vec![json!({ "type": "text", "text": CLAUDE_CODE_SYSTEM_IDENTITY })]);
         return;
     }
 
@@ -784,6 +785,17 @@ mod tests {
         };
         let body = encode_for(&p, &req, "gpt-5.3-sol", None).unwrap();
         assert_eq!(body["max_completion_tokens"], 100);
+    }
+
+    #[test]
+    fn impersonation_injects_identity_even_without_a_system_prompt() {
+        let mut req = ChatRequest::new("m", Dialect::Anthropic);
+        req.messages.push(Message::user_text("hi"));
+        let mut p = provider(ProviderKind::Anthropic);
+        p.impersonate_claude_code = true;
+        let body = encode_for(&p, &req, "claude-sonnet-4-5", None).unwrap();
+        let system = body["system"].as_array().unwrap();
+        assert_eq!(system[0]["text"], CLAUDE_CODE_SYSTEM_IDENTITY);
     }
 
     #[test]
