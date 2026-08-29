@@ -506,6 +506,7 @@ export default function Providers({
                     onCommit={(v) =>
                       update(provider.id, { timeout_secs: v ?? 600 })
                     }
+                    integer
                   />
                   <NumberField
                     label="Connect timeout (s)"
@@ -514,6 +515,7 @@ export default function Providers({
                     onCommit={(v) =>
                       update(provider.id, { connect_timeout_secs: v ?? 15 })
                     }
+                    integer
                   />
                   {provider.kind === "anthropic" && (
                     <TextField

@@ -347,6 +347,7 @@ export default function Models({
                           ariaLabel={`Priority for ${id}`}
                           value={m.priority}
                           min={0}
+                          integer
                           onCommit={(priority) =>
                             update(index, { priority: priority ?? 0 })
                           }
@@ -357,6 +358,7 @@ export default function Models({
                           ariaLabel={`Weight for ${id}`}
                           value={m.weight}
                           min={1}
+                          integer
                           onCommit={(weight) =>
                             update(index, { weight: weight ?? 1 })
                           }
@@ -423,6 +425,8 @@ export default function Models({
                                 onCommit={(max_output_tokens) =>
                                   update(index, { max_output_tokens })
                                 }
+
+                                integer
                               />
                             </div>
                             <h3>Price per million tokens</h3>

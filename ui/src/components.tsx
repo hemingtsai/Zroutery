@@ -165,6 +165,7 @@ export function NumberField({
   min,
   max,
   placeholder,
+  integer,
 }: {
   label: string;
   hint?: string;
@@ -173,6 +174,8 @@ export function NumberField({
   min?: number;
   max?: number;
   placeholder?: string;
+  /** Round committed values to whole numbers (counts, ports, seconds). */
+  integer?: boolean;
 }) {
   return (
     <Field label={label} hint={hint}>
@@ -182,6 +185,7 @@ export function NumberField({
         min={min}
         max={max}
         placeholder={placeholder}
+        integer={integer}
       />
     </Field>
   );
@@ -199,6 +203,7 @@ export function CompactNumber({
   max,
   placeholder,
   ariaLabel,
+  integer,
 }: {
   value: number | null;
   onCommit: (value: number | null) => void;
@@ -206,6 +211,8 @@ export function CompactNumber({
   max?: number;
   placeholder?: string;
   ariaLabel?: string;
+  /** Round committed values to whole numbers (counts, ports, seconds). */
+  integer?: boolean;
 }) {
   const text = value === null ? "" : String(value);
   const [draft, setDraft] = useState(text);
@@ -221,7 +228,7 @@ export function CompactNumber({
       setDraft(text);
       return;
     }
-    let next = Math.round(parsed);
+    let next = integer ? Math.round(parsed) : parsed;
     if (min !== undefined) next = Math.max(min, next);
     if (max !== undefined) next = Math.min(max, next);
     if (next !== value) onCommit(next);
@@ -271,7 +278,10 @@ export function Banner({
   actions?: ReactNode;
 }) {
   return (
-    <div className={`banner banner-${tone}`} role={tone === "info" ? "status" : "alert"}>
+    <div
+      className={`banner banner-${tone}`}
+      role={tone === "info" ? "status" : "alert"}
+    >
       <div>{children}</div>
       {actions && <div className="row gap">{actions}</div>}
     </div>

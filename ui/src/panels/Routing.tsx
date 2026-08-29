@@ -245,6 +245,7 @@ export default function Routing({
             max={10}
             value={config.routing.max_attempts}
             onCommit={(v) => patchRouting({ max_attempts: v ?? 1 })}
+            integer
           />
           <NumberField
             label="Break after failures"
@@ -252,12 +253,14 @@ export default function Routing({
             min={1}
             value={config.routing.break_after_failures}
             onCommit={(v) => patchRouting({ break_after_failures: v ?? 1 })}
+            integer
           />
           <NumberField
             label="Cooldown (s)"
             min={1}
             value={config.routing.cooldown_secs}
             onCommit={(v) => patchRouting({ cooldown_secs: v ?? 60 })}
+            integer
           />
         </div>
         <div className="grid-two">
@@ -338,6 +341,7 @@ export default function Routing({
               min={0}
               value={config.routing.scoring.reference_input_tokens}
               onCommit={(v) => patchScoring({ reference_input_tokens: v ?? 0 })}
+              integer
             />
             <NumberField
               label="Reference output tokens"
@@ -346,6 +350,7 @@ export default function Routing({
               onCommit={(v) =>
                 patchScoring({ reference_output_tokens: v ?? 0 })
               }
+              integer
             />
           </div>
           <Toggle
@@ -601,6 +606,7 @@ export default function Routing({
             max={65535}
             value={config.server.port}
             onCommit={(port) => port && patchServer({ port })}
+            integer
           />
           <NumberField
             label="Max request body (MiB)"
@@ -609,6 +615,7 @@ export default function Routing({
             max={512}
             value={config.server.max_body_mib}
             onCommit={(v) => patchServer({ max_body_mib: v ?? 32 })}
+            integer
           />
           <NumberField
             label="Kept requests"
@@ -617,6 +624,7 @@ export default function Routing({
             max={5000}
             value={config.server.log_limit}
             onCommit={(v) => patchServer({ log_limit: v ?? 500 })}
+            integer
           />
         </div>
 
