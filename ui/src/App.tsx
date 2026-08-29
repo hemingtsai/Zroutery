@@ -197,6 +197,13 @@ export default function App() {
           <Banner tone="warn">Live updates stopped: {pollError}</Banner>
         )}
         {snapshot.warning && <Banner tone="warn">{snapshot.warning}</Banner>}
+        {snapshot.issues
+          .filter((i) => i.severity === "error")
+          .map((i) => (
+            <Banner key={`${i.code}:${i.subject ?? ""}`} tone="danger">
+              {i.message}
+            </Banner>
+          ))}
         {server.exposed && (
           <Banner tone="danger">
             The proxy is bound to <code>{server.host}</code>, so other machines on your network
