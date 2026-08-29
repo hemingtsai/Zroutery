@@ -241,6 +241,7 @@ export function CompactNumber({
       className="tiny"
       min={min}
       max={max}
+      step={integer ? 1 : "any"}
       placeholder={placeholder}
       aria-label={ariaLabel}
       value={draft}
