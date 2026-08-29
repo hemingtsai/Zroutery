@@ -158,20 +158,42 @@ impl Upstream {
         body: &Value,
         upstream_model: &str,
     ) -> Result<EventStream> {
-        let request = self
-            .client()
-            .post(provider.chat_url())
-            .headers(build_headers(provider, api_key)?)
-            .json(body);
-
-        let response =
-            tokio::time::timeout(Duration::from_secs(provider.timeout_secs), request.send())
+        // The handshake (DNS, connect, TLS, request upload, response status) is
+        // retried a couple of times: transient transport failures and edge/WAF
+        // 405 blocks happen before any bytes of the answer exist, so replaying
+        // the request is safe and masks proxy/node flaps.
+        const HANDSHAKE_ATTEMPTS: u32 = 3;
+        let mut attempt = 0;
+        let response = loop {
+            attempt += 1;
+            let request = self
+                .client()
+                .post(provider.chat_url())
+                .headers(build_headers(provider, api_key)?)
+                .json(body);
+            let result = tokio::time::timeout(Duration::from_secs(provider.timeout_secs), request.send())
                 .await
-                .map_err(|_| Error::Timeout(provider.timeout_secs))?
-                .map_err(|source| Error::Transport {
-                    provider: provider.name.clone(),
-                    source,
-                })?;
+                .map_err(|_| Error::Timeout(provider.timeout_secs))
+                .and_then(|r| {
+                    r.map_err(|source| Error::Transport {
+                        provider: provider.name.clone(),
+                        source,
+                    })
+                });
+            match result {
+                Ok(response) => break response,
+                Err(err) if attempt < HANDSHAKE_ATTEMPTS && is_transient_handshake_failure(&err) => {
+                    tracing::warn!(
+                        provider = %provider.name,
+                        attempt,
+                        error = %err,
+                        "transient handshake failure, retrying"
+                    );
+                    tokio::time::sleep(Duration::from_millis(750 * u64::from(attempt))).await;
+                }
+                Err(err) => return Err(err),
+            }
+        };
 
         let status = response.status();
         if !status.is_success() {
@@ -597,6 +619,23 @@ fn prepend_claude_code_system_prompt(body: &mut Value) {
         _ => {}
     }
     body["system"] = Value::Array(blocks);
+}
+
+/// Whether a handshake error is worth retrying: failures that happen before
+/// the provider processed anything (connection problems, TLS issues) or
+/// gateway-level blips (408/502/503/504).
+///
+/// Deliberately excluded: 405 (both known modes — TLS-fingerprint and
+/// content rules on the relay's WAF — are deterministic, so replaying just
+/// re-uploads the body for nothing), 429 (retrying deepens relay rate-limit
+/// blocks) and 500 (this relay reports deterministic content rejections as
+/// 500, and replaying those just burns quota).
+fn is_transient_handshake_failure(err: &Error) -> bool {
+    match err {
+        Error::Transport { .. } => true,
+        Error::Upstream { status, .. } => matches!(status, 408 | 502 | 503 | 504),
+        _ => false,
+    }
 }
 
 fn truncate(s: &str, max: usize) -> String {
