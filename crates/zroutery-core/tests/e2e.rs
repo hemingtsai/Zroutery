@@ -765,6 +765,52 @@ async fn a_class_budget_degrades_instead_of_refusing() {
 }
 
 #[tokio::test]
+async fn a_class_budget_also_gates_direct_id_requests() {
+    let (addr, mock) = start_mock().await;
+    let mut cfg = config_for(addr);
+    cfg.models[2].pricing = Some(Pricing::new("USD", 1000.0, 1000.0));
+    cfg.budgets = vec![Budget::new(
+        BudgetScope::Class {
+            class: ModelClass::Opus,
+        },
+        BudgetPeriod::Day,
+        "USD",
+        0.01,
+    )
+    .degrading_to(ModelClass::Haiku)];
+    let h = Harness::start(cfg, mock).await;
+
+    // The direct call spends past the opus budget…
+    let resp = h
+        .post("/v1/messages")
+        .json(&json!({"model": "openai-gpt-5.3-sol", "max_tokens": 8,
+                      "messages": [{"role": "user", "content": "hi"}]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_eq!(resp.headers()["x-zroutery-model"], "openai-gpt-5.3-sol");
+
+    // …so the next direct call to the same id degrades to the cheap class
+    // rather than spending on: charging already bills direct calls against
+    // the model's class, so gating must match.
+    let resp = h
+        .post("/v1/messages")
+        .json(&json!({"model": "openai-gpt-5.3-sol", "max_tokens": 8,
+                      "messages": [{"role": "user", "content": "hi"}]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_eq!(
+        resp.headers()["x-zroutery-model"],
+        "deepseek-deepseek-v4-flash"
+    );
+
+    h.shutdown().await;
+}
+
+#[tokio::test]
 async fn spend_survives_a_restart() {
     let (addr, mock) = start_mock().await;
     let mut cfg = config_for(addr);

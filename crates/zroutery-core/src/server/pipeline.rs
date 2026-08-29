@@ -73,9 +73,13 @@ fn apply_budgets(
     let mut visited: Vec<ModelClass> = Vec::new();
 
     loop {
+        // The class the request will be billed under. Direct ids participate
+        // too: charging uses the target model's class, so a class budget must
+        // also gate requests that reach the class by exact id, or the limit
+        // could be spent around while still being charged.
         let class = match &resolution {
             Resolution::Class(class) => Some(*class),
-            Resolution::Direct(_) => None,
+            Resolution::Direct(id) => registry.entry(id).ok().and_then(|m| m.class),
         };
         // Every provider the request could land on, because a provider's budget has
         // to stop a request that might reach it.
