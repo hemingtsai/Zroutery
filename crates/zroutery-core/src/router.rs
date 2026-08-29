@@ -44,7 +44,7 @@ impl Candidate {
 }
 
 /// Per model health, exposed to the GUI.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ModelHealth {
     pub model_id: String,
     pub state: CircuitState,

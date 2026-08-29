@@ -5,7 +5,7 @@
 //! file is about which paths exist; this one is about what happens once a request
 //! is on one of them.
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -22,6 +22,7 @@ use crate::config::ModelClass;
 use crate::error::{Error, Result};
 use crate::ir::{ChatRequest, Dialect, StreamEvent, Usage};
 use crate::protocol::{self, openai, SseFrame, StreamEncoder};
+use crate::rectifier;
 use crate::registry::{Registry, Resolution};
 use crate::router::Candidate;
 use crate::stats::RecordBuilder;
@@ -131,6 +132,106 @@ fn prepare(
     Ok((key, body))
 }
 
+/// Try every enabled rectifier once. A rectifier retry is deliberately not
+/// reported to the circuit breaker: it is the same provider and same model, and
+/// the failure was a fixable request-shape problem.
+async fn try_rectify_buffered(
+    state: &AppState,
+    candidate: &Candidate,
+    key: Option<&str>,
+    body: &Value,
+    error: &Error,
+) -> std::result::Result<Option<crate::ir::ChatResponse>, Error> {
+    let rectifiers = rectifier::from_config(&state.config().routing.rectifier);
+    if rectifiers.is_empty() {
+        return Ok(None);
+    }
+    let mut tried: HashSet<&'static str> = HashSet::new();
+    for rectifier in rectifiers {
+        if !rectifier.should_apply(error, body) || !tried.insert(rectifier.name()) {
+            continue;
+        }
+        let mut modified = body.clone();
+        let result = rectifier.rectify(&mut modified);
+        if !result.applied {
+            continue;
+        }
+        tracing::info!(
+            model = candidate.model_id(),
+            provider = candidate.provider.name.as_str(),
+            rectifier = rectifier.name(),
+            "request repaired, retrying same provider without health accounting"
+        );
+        return match state
+            .upstream
+            .send(&candidate.provider, key, &modified)
+            .await
+        {
+            Ok(resp) => Ok(Some(resp)),
+            Err(e) => {
+                tracing::warn!(
+                    model = candidate.model_id(),
+                    rectifier = rectifier.name(),
+                    "rectifier retry also failed: {e}"
+                );
+                Err(e)
+            }
+        };
+    }
+    Ok(None)
+}
+
+async fn try_rectify_stream(
+    state: &AppState,
+    candidate: &Candidate,
+    key: Option<&str>,
+    body: &Value,
+    error: &Error,
+) -> std::result::Result<Option<crate::upstream::EventStream>, Error> {
+    let rectifiers = rectifier::from_config(&state.config().routing.rectifier);
+    if rectifiers.is_empty() {
+        return Ok(None);
+    }
+    let mut tried: HashSet<&'static str> = HashSet::new();
+    for rectifier in rectifiers {
+        if !rectifier.should_apply(error, body) || !tried.insert(rectifier.name()) {
+            continue;
+        }
+        let mut modified = body.clone();
+        let result = rectifier.rectify(&mut modified);
+        if !result.applied {
+            continue;
+        }
+        tracing::info!(
+            model = candidate.model_id(),
+            provider = candidate.provider.name.as_str(),
+            rectifier = rectifier.name(),
+            "stream request repaired, retrying same provider without health accounting"
+        );
+        return match state
+            .upstream
+            .stream(
+                &candidate.provider,
+                key,
+                &modified,
+                &candidate.entry.upstream_model,
+            )
+            .await
+        {
+            Ok(events) => Ok(Some(events)),
+            Err(e) => {
+                tracing::warn!(
+                    model = candidate.model_id(),
+                    rectifier = rectifier.name(),
+                    "rectifier stream retry also failed: {e}"
+                );
+                Err(e)
+            }
+        };
+    }
+    Ok(None)
+}
+
 async fn buffered_chat(
     state: Arc<AppState>,
     dialect: Dialect,
@@ -157,6 +258,15 @@ async fn buffered_chat(
                 continue;
             }
         };
+
+        // Enforce the half-open single-probe rule at the point of send.
+        if !state.router.allow_request(candidate.model_id()) {
+            tracing::debug!(
+                model = candidate.model_id(),
+                "half-open probe already in flight; skipping candidate"
+            );
+            continue;
+        }
 
         match state
             .upstream
@@ -191,18 +301,63 @@ async fn buffered_chat(
                 return response;
             }
             Err(e) => {
-                state
-                    .router
-                    .report_failure(candidate.model_id(), &e, &routing);
-                tracing::warn!(
-                    model = candidate.model_id(),
-                    provider = candidate.provider.name.as_str(),
-                    "upstream attempt failed: {e}"
-                );
-                let retryable = e.is_retryable();
-                last_error = e;
-                if !retryable {
-                    break;
+                // Rectifier cascade: try to repair the request and retry the
+                // same provider without touching circuit-breaker health.
+                match try_rectify_buffered(&state, candidate, key.as_deref(), &body, &e).await {
+                    Ok(Some(mut resp)) => {
+                        // The repaired retry is not a fresh probe: give the
+                        // half-open permit back without recording health.
+                        state.router.release_half_open_permit(candidate.model_id());
+                        rec.usage(resp.usage)
+                            .priced_with(candidate.entry.pricing.as_ref());
+                        let cost = candidate
+                            .entry
+                            .pricing
+                            .as_ref()
+                            .map(|p| p.cost_of(&resp.usage));
+                        if let Some(cost) = &cost {
+                            state.charge(&candidate.provider.id, candidate.entry.class, cost);
+                        }
+                        state
+                            .stats
+                            .record(rec.finish(started.elapsed().as_millis() as u64));
+                        resp.model = candidate.exposed_id.clone();
+                        let mut response =
+                            Json(protocol::encode_response(dialect, &resp)).into_response();
+                        inject_routing_headers(response.headers_mut(), candidate);
+                        inject_cost_header(response.headers_mut(), cost.as_ref());
+                        return response;
+                    }
+                    Ok(None) => {
+                        state
+                            .router
+                            .report_failure(candidate.model_id(), &e, &routing);
+                        tracing::warn!(
+                            model = candidate.model_id(),
+                            provider = candidate.provider.name.as_str(),
+                            "upstream attempt failed: {e}"
+                        );
+                        let retryable = e.is_retryable();
+                        last_error = e;
+                        if !retryable {
+                            break;
+                        }
+                    }
+                    Err(rectified_err) => {
+                        state
+                            .router
+                            .report_failure(candidate.model_id(), &rectified_err, &routing);
+                        tracing::warn!(
+                            model = candidate.model_id(),
+                            provider = candidate.provider.name.as_str(),
+                            "rectifier retry failed: {rectified_err}"
+                        );
+                        let retryable = rectified_err.is_retryable();
+                        last_error = rectified_err;
+                        if !retryable {
+                            break;
+                        }
+                    }
                 }
             }
         }
@@ -242,6 +397,15 @@ async fn stream_chat(
                 continue;
             }
         };
+
+        // Enforce the half-open single-probe rule at the point of send.
+        if !state.router.allow_request(candidate.model_id()) {
+            tracing::debug!(
+                model = candidate.model_id(),
+                "half-open probe already in flight; skipping candidate"
+            );
+            continue;
+        }
 
         // Only the handshake can be retried; once bytes are flowing the client
         // has already seen part of the answer.
@@ -295,17 +459,73 @@ async fn stream_chat(
                 return response;
             }
             Err(e) => {
-                state
-                    .router
-                    .report_failure(candidate.model_id(), &e, &routing);
-                tracing::warn!(
-                    model = candidate.model_id(),
-                    "upstream stream handshake failed: {e}"
-                );
-                let retryable = e.is_retryable();
-                last_error = e;
-                if !retryable {
-                    break;
+                // Rectifier cascade for handshake failures. A successful repaired
+                // stream is served to the client without reporting health.
+                match try_rectify_stream(&state, candidate, key.as_deref(), &body, &e).await {
+                    Ok(Some(events)) => {
+                        // The repaired stream is not a fresh half-open probe.
+                        state.router.release_half_open_permit(candidate.model_id());
+                        let encoder = protocol::stream_encoder(
+                            dialect,
+                            &candidate.exposed_id,
+                            include_usage,
+                        );
+                        let body = Body::from_stream(sse_body(
+                            Arc::clone(&state),
+                            events,
+                            encoder,
+                            StreamContext {
+                                record: rec,
+                                started,
+                                model_id: candidate.model_id().to_string(),
+                                routing: routing.clone(),
+                                pricing: candidate.entry.pricing.clone(),
+                                provider_id: candidate.provider.id.clone(),
+                                class: candidate.entry.class,
+                            },
+                        ));
+                        let mut response = Response::new(body);
+                        let headers = response.headers_mut();
+                        headers.insert(
+                            header::CONTENT_TYPE,
+                            HeaderValue::from_static("text/event-stream"),
+                        );
+                        headers.insert(
+                            header::CACHE_CONTROL,
+                            HeaderValue::from_static("no-cache"),
+                        );
+                        headers.insert("x-accel-buffering", HeaderValue::from_static("no"));
+                        inject_routing_headers(response.headers_mut(), candidate);
+                        return response;
+                    }
+                    Ok(None) => {
+                        state
+                            .router
+                            .report_failure(candidate.model_id(), &e, &routing);
+                        tracing::warn!(
+                            model = candidate.model_id(),
+                            "upstream stream handshake failed: {e}"
+                        );
+                        let retryable = e.is_retryable();
+                        last_error = e;
+                        if !retryable {
+                            break;
+                        }
+                    }
+                    Err(rectified_err) => {
+                        state
+                            .router
+                            .report_failure(candidate.model_id(), &rectified_err, &routing);
+                        tracing::warn!(
+                            model = candidate.model_id(),
+                            "rectifier stream retry failed: {rectified_err}"
+                        );
+                        let retryable = rectified_err.is_retryable();
+                        last_error = rectified_err;
+                        if !retryable {
+                            break;
+                        }
+                    }
                 }
             }
         }

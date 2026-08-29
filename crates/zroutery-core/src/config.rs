@@ -354,6 +354,30 @@ pub enum RoutingStrategy {
     Balanced,
 }
 
+/// Which request-repair rectifiers are active.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RectifierConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_true")]
+    pub thinking_signature: bool,
+    #[serde(default = "default_true")]
+    pub media_fallback: bool,
+    #[serde(default = "default_true")]
+    pub thinking_budget: bool,
+}
+
+impl Default for RectifierConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            thinking_signature: true,
+            media_fallback: true,
+            thinking_budget: true,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RoutingConfig {
     #[serde(default)]
@@ -367,6 +391,9 @@ pub struct RoutingConfig {
     /// Circuit breaker settings shared by every model.
     #[serde(default)]
     pub circuit_breaker: CircuitBreakerConfig,
+    /// Request rectifier toggles.
+    #[serde(default)]
+    pub rectifier: RectifierConfig,
     /// When a client asks for an unknown model id, fall back to this class
     /// instead of returning 404.
     #[serde(default)]
@@ -403,6 +430,7 @@ impl Default for RoutingConfig {
             failover: true,
             max_attempts: Self::default_attempts(),
             circuit_breaker: CircuitBreakerConfig::default(),
+            rectifier: RectifierConfig::default(),
             unknown_model_fallback: None,
             client_aliases: BTreeMap::new(),
             match_claude_names: true,

@@ -26,6 +26,7 @@ pub mod election;
 pub mod error;
 pub mod ir;
 pub mod protocol;
+pub mod rectifier;
 pub mod registry;
 pub mod router;
 pub mod server;
@@ -40,7 +41,8 @@ pub use circuit_breaker::{CircuitBreaker, CircuitBreakerConfig, CircuitState};
 pub use budget::{Budget, BudgetPeriod, BudgetScope, Ledger, OnExceeded, Verdict};
 pub use config::{
     AppConfig, ConfigIssue, IssueSeverity, MemorySecretStore, ModelClass, ModelEntry,
-    ProviderConfig, ProviderKind, RoutingConfig, RoutingStrategy, SecretStore, ServerConfig,
+    ProviderConfig, ProviderKind, RectifierConfig, RoutingConfig, RoutingStrategy, SecretStore,
+    ServerConfig,
 };
 pub use election::{ClassElection, Election, Measurement, Ranked, ScoringConfig};
 pub use error::{Error, Result};
