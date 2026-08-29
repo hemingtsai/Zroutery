@@ -595,6 +595,23 @@ impl AppConfig {
     pub fn validate(&self) -> Vec<ConfigIssue> {
         let mut issues = Vec::new();
         let mut seen_ids: BTreeMap<String, usize> = BTreeMap::new();
+        let mut seen_providers: BTreeMap<String, usize> = BTreeMap::new();
+
+        for p in &self.providers {
+            *seen_providers.entry(p.id.clone()).or_insert(0) += 1;
+        }
+        for (id, count) in seen_providers {
+            if count > 1 {
+                issues.push(ConfigIssue {
+                    severity: IssueSeverity::Error,
+                    code: "provider.duplicate_id".into(),
+                    message: format!(
+                        "Provider id `{id}` is used {count} times; provider ids have to be unique"
+                    ),
+                    subject: Some(id),
+                });
+            }
+        }
 
         if self.server.allow_cors {
             for o in &self.server.cors_origins {
@@ -1053,6 +1070,19 @@ mod tests {
         assert!(issues.iter().any(|i| i.code == "model.duplicate_id"
             && i.subject.as_deref() == Some("deepseek-deepseek-chat")));
         assert!(issues.iter().any(|i| i.code == "model.orphan"));
+    }
+
+    #[test]
+    fn validate_rejects_duplicate_provider_ids() {
+        let mut cfg = sample();
+        cfg.providers.push(ProviderConfig::new(
+            "deepseek",
+            "DeepSeek Again",
+            ProviderKind::OpenAICompatible,
+        ));
+        let issues = cfg.validate();
+        assert!(issues.iter().any(|i| i.code == "provider.duplicate_id"
+            && i.subject.as_deref() == Some("deepseek")));
     }
 
     #[test]

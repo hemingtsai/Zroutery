@@ -123,6 +123,12 @@ export default function Providers({
       return;
     }
     void save((cfg) => {
+      // Re-check inside the updater: a duplicate can be queued behind an
+      // in-flight save that already added the same id.
+      if (cfg.providers.some((p) => p.id === provider.id)) {
+        setNotice(`A provider called “${provider.id}” already exists.`);
+        return null;
+      }
       const next = structuredClone(cfg);
       next.providers.push(provider);
       return next;
