@@ -191,6 +191,16 @@ export default function Providers({
       return;
     }
     void save((cfg) => {
+      // Re-check inside the updater so queued adds cannot slip past the
+      // snapshot-based check above.
+      if (
+        cfg.models.some(
+          (m) => m.provider_id === provider.id && m.upstream_model === modelName,
+        )
+      ) {
+        setNotice(`“${modelName}” is already listed for ${provider.name}.`);
+        return null;
+      }
       const next = structuredClone(cfg);
       next.models.push({
         provider_id: provider.id,

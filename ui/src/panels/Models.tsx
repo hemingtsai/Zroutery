@@ -104,6 +104,16 @@ export default function Models({
       return;
     }
     void save((cfg) => {
+      // Re-check inside the updater so queued adds cannot slip past the
+      // snapshot-based check above.
+      if (
+        cfg.models.some(
+          (m) => m.provider_id === providerId && m.upstream_model === upstream,
+        )
+      ) {
+        setNotice(`That provider already offers “${upstream}”.`);
+        return null;
+      }
       const next = structuredClone(cfg);
       next.models.push({
         provider_id: providerId,
