@@ -60,7 +60,9 @@ function blankProvider(
     base_url: baseUrl.trim() || defaultBaseUrl(kind),
     key_ref: `provider:${id}`,
     extra_headers: {},
-    impersonate_claude_code: false,
+    // Match the backend default: Anthropic gateways usually want the
+    // Claude Code fingerprint.
+    impersonate_claude_code: kind === "anthropic",
     enabled: true,
     timeout_secs: 600,
     connect_timeout_secs: 15,
