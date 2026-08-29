@@ -65,25 +65,28 @@ impl Rectifier for ThinkingSignatureRectifier {
             .and_then(Value::as_str)
             == Some("enabled");
         if thinking_ok {
-            let last_assistant_starts_with_thinking = body
+            let last_assistant = body
                 .get("messages")
                 .and_then(Value::as_array)
                 .and_then(|ms| {
                     ms.iter()
                         .rev()
                         .find(|m| m.get("role").and_then(Value::as_str) == Some("assistant"))
-                })
-                .and_then(|m| m.get("content"))
-                .and_then(Value::as_array)
-                .and_then(|blocks| blocks.first())
-                .and_then(|b| b.get("type"))
-                .and_then(Value::as_str)
-                == Some("thinking");
-            if !last_assistant_starts_with_thinking {
-                if let Some(obj) = body.as_object_mut() {
-                    obj.remove("thinking");
+                });
+            if let Some(last_assistant) = last_assistant {
+                let starts_with_thinking = last_assistant
+                    .get("content")
+                    .and_then(Value::as_array)
+                    .and_then(|blocks| blocks.first())
+                    .and_then(|b| b.get("type"))
+                    .and_then(Value::as_str)
+                    == Some("thinking");
+                if !starts_with_thinking {
+                    if let Some(obj) = body.as_object_mut() {
+                        obj.remove("thinking");
+                    }
+                    applied = true;
                 }
-                applied = true;
             }
         }
 

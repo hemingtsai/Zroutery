@@ -33,7 +33,10 @@ fn thinking_signature_matches_all_seven_error_patterns() {
         "redacted_thinking cannot be modified",
     ];
     for msg in cases {
-        assert!(r.should_apply(&upstream(msg, 400), &body), "should match: {msg}");
+        assert!(
+            r.should_apply(&upstream(msg, 400), &body),
+            "should match: {msg}"
+        );
     }
     assert!(!r.should_apply(&upstream("ordinary provider error", 500), &body));
 }
@@ -60,6 +63,23 @@ fn thinking_signature_removes_thinking_blocks_and_signature_fields() {
     assert_eq!(blocks[0]["type"], "text");
     assert!(blocks[0].get("signature").is_none());
     assert!(body.get("thinking").is_none());
+}
+
+#[test]
+fn thinking_signature_keeps_thinking_config_when_no_assistant_history() {
+    let r = ThinkingSignatureRectifier;
+    let mut body = json!({
+        "thinking": {"type": "enabled", "budget_tokens": 4096},
+        "messages": [
+            {"role": "user", "content": [{"type": "text", "text": "first message"}]}
+        ]
+    });
+    let result = r.rectify(&mut body);
+    assert!(!result.applied);
+    assert!(
+        body.get("thinking").is_some(),
+        "first turn must keep thinking enabled"
+    );
 }
 
 #[test]
@@ -135,6 +155,7 @@ impl Rectifier for MarkerRectifier {
 #[test]
 fn rectifier_retry_success_does_not_touch_circuit_breaker_health() {
     let router = Router::new();
+    let routing = zroutery_core::RoutingConfig::default();
     let breaker_config = CircuitBreakerConfig {
         failure_threshold: 1,
         ..CircuitBreakerConfig::default()
@@ -143,7 +164,7 @@ fn rectifier_retry_success_does_not_touch_circuit_breaker_health() {
     let model = "m1";
 
     // A closed breaker with one prior success in the router's own health map.
-    router.report_success(model, 10);
+    router.report_success(model, 10, &routing);
     let before = router.health_snapshot();
 
     // Simulate: original send fails with a fixable error, rectifier repairs,

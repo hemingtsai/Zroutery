@@ -313,11 +313,11 @@ impl Router {
         out
     }
 
-    pub fn report_success(&self, model_id: &str, latency_ms: u64) {
+    pub fn report_success(&self, model_id: &str, latency_ms: u64, routing: &RoutingConfig) {
         let mut health = crate::sync::lock(&self.health);
         let h = health
             .entry(model_id.to_string())
-            .or_insert_with(|| HealthState::new(CircuitBreakerConfig::default()));
+            .or_insert_with(|| HealthState::new(routing.circuit_breaker.clone()));
         h.breaker.record_success();
         h.total_success += 1;
         h.last_error = None;
@@ -413,7 +413,6 @@ impl Router {
         out.sort_by(|a, b| a.model_id.cmp(&b.model_id));
         out
     }
-
 }
 
 #[cfg(test)]
@@ -526,12 +525,12 @@ mod tests {
         // as a half-open probe. One probe success is not enough; the configured
         // success threshold (2) must be reached before it is healthy again.
         assert!(router.allow_request("p1-bad"));
-        router.report_success("p1-bad", 10);
+        router.report_success("p1-bad", 10, &routing);
         assert!(
             router.health_snapshot()[0].state == CircuitState::HalfOpen,
             "a single probe success should not close the breaker yet"
         );
-        router.report_success("p1-bad", 10);
+        router.report_success("p1-bad", 10, &routing);
         assert_eq!(router.health_snapshot()[0].state, CircuitState::Closed);
         assert_eq!(
             ids(&router
@@ -560,8 +559,8 @@ mod tests {
 
         // Move through half-open to a fully closed breaker.
         assert!(router.allow_request("p1-flaky"));
-        router.report_success("p1-flaky", 10);
-        router.report_success("p1-flaky", 10);
+        router.report_success("p1-flaky", 10, &routing);
+        router.report_success("p1-flaky", 10, &routing);
         assert!(!router.is_cooling("p1-flaky"));
 
         // A single transient blip after recovery is not a pattern yet.
@@ -646,14 +645,35 @@ mod tests {
         let routing = cfg.routing.clone();
         let router = Router::new();
         router.report_failure("p1-a", &Error::Timeout(1), &routing);
-        router.report_success("p1-a", 200);
+        router.report_success("p1-a", 200, &routing);
         let snap = router.health_snapshot();
         assert_eq!(snap[0].consecutive_failures, 0);
         assert_eq!(snap[0].total_success, 1);
         assert_eq!(snap[0].total_failure, 1);
         assert_eq!(snap[0].avg_latency_ms, 200.0);
-        router.report_success("p1-a", 400);
+        router.report_success("p1-a", 400, &routing);
         assert!((router.health_snapshot()[0].avg_latency_ms - 260.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn success_creates_health_with_routing_breaker_config() {
+        let mut cfg = cfg_with(vec![ModelEntry::for_upstream(
+            "p1",
+            "a",
+            Some(ModelClass::Opus),
+        )]);
+        cfg.routing.circuit_breaker.failure_threshold = 1;
+        let routing = cfg.routing.clone();
+        let router = Router::new();
+
+        // First observation is a success, so the health entry must be created
+        // with the routing config rather than the default breaker config.
+        router.report_success("p1-a", 10, &routing);
+        router.report_failure("p1-a", &Error::Timeout(1), &routing);
+        assert!(
+            router.is_cooling("p1-a"),
+            "routing failure_threshold=1 should open after one failure"
+        );
     }
 
     #[test]
@@ -683,10 +703,11 @@ mod tests {
             ModelEntry::for_upstream("p2", "fast", Some(ModelClass::Sonnet)),
         ]);
         cfg.routing.strategy = RoutingStrategy::LowestLatency;
+        let routing = cfg.routing.clone();
         let r = reg(cfg);
         let router = Router::new();
-        router.report_success("p1-slow", 3000);
-        router.report_success("p2-fast", 300);
+        router.report_success("p1-slow", 3000, &routing);
+        router.report_success("p2-fast", 300, &routing);
         assert_eq!(
             ids(&router
                 .plan(&r, &Resolution::Class(ModelClass::Sonnet))

@@ -5,7 +5,7 @@
 //! file is about which paths exist; this one is about what happens once a request
 //! is on one of them.
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -132,9 +132,10 @@ fn prepare(
     Ok((key, body))
 }
 
-/// Try every enabled rectifier once. A rectifier retry is deliberately not
-/// reported to the circuit breaker: it is the same provider and same model, and
-/// the failure was a fixable request-shape problem.
+/// Try every enabled rectifier, allowing each rectifier up to three repair
+/// rounds. A rectifier retry is deliberately not reported to the circuit
+/// breaker: it is the same provider and same model, and the failure was a
+/// fixable request-shape problem.
 async fn try_rectify_buffered(
     state: &AppState,
     candidate: &Candidate,
@@ -146,39 +147,56 @@ async fn try_rectify_buffered(
     if rectifiers.is_empty() {
         return Ok(None);
     }
-    let mut tried: HashSet<&'static str> = HashSet::new();
+
+    let mut current_body = body.clone();
+    let mut last_error: Option<Error> = None;
+    let mut current_error: &Error = error;
+
     for rectifier in rectifiers {
-        if !rectifier.should_apply(error, body) || !tried.insert(rectifier.name()) {
-            continue;
-        }
-        let mut modified = body.clone();
-        let result = rectifier.rectify(&mut modified);
-        if !result.applied {
-            continue;
-        }
-        tracing::info!(
-            model = candidate.model_id(),
-            provider = candidate.provider.name.as_str(),
-            rectifier = rectifier.name(),
-            "request repaired, retrying same provider without health accounting"
-        );
-        return match state
-            .upstream
-            .send(&candidate.provider, key, &modified)
-            .await
-        {
-            Ok(resp) => Ok(Some(resp)),
-            Err(e) => {
-                tracing::warn!(
-                    model = candidate.model_id(),
-                    rectifier = rectifier.name(),
-                    "rectifier retry also failed: {e}"
-                );
-                Err(e)
+        let mut rounds = 0;
+        loop {
+            if !rectifier.should_apply(current_error, &current_body) {
+                break;
             }
-        };
+            let mut modified = current_body.clone();
+            let result = rectifier.rectify(&mut modified);
+            if !result.applied {
+                break;
+            }
+            tracing::info!(
+                model = candidate.model_id(),
+                provider = candidate.provider.name.as_str(),
+                rectifier = rectifier.name(),
+                "request repaired, retrying same provider without health accounting"
+            );
+            match state
+                .upstream
+                .send(&candidate.provider, key, &modified)
+                .await
+            {
+                Ok(resp) => return Ok(Some(resp)),
+                Err(e) => {
+                    tracing::warn!(
+                        model = candidate.model_id(),
+                        rectifier = rectifier.name(),
+                        "rectifier retry also failed: {e}"
+                    );
+                    last_error = Some(e);
+                    current_body = modified;
+                    current_error = last_error.as_ref().expect("just set");
+                    rounds += 1;
+                    if rounds >= 3 {
+                        break;
+                    }
+                }
+            }
+        }
     }
-    Ok(None)
+
+    match last_error {
+        Some(e) => Err(e),
+        None => Ok(None),
+    }
 }
 
 async fn try_rectify_stream(
@@ -192,44 +210,61 @@ async fn try_rectify_stream(
     if rectifiers.is_empty() {
         return Ok(None);
     }
-    let mut tried: HashSet<&'static str> = HashSet::new();
+
+    let mut current_body = body.clone();
+    let mut last_error: Option<Error> = None;
+    let mut current_error: &Error = error;
+
     for rectifier in rectifiers {
-        if !rectifier.should_apply(error, body) || !tried.insert(rectifier.name()) {
-            continue;
-        }
-        let mut modified = body.clone();
-        let result = rectifier.rectify(&mut modified);
-        if !result.applied {
-            continue;
-        }
-        tracing::info!(
-            model = candidate.model_id(),
-            provider = candidate.provider.name.as_str(),
-            rectifier = rectifier.name(),
-            "stream request repaired, retrying same provider without health accounting"
-        );
-        return match state
-            .upstream
-            .stream(
-                &candidate.provider,
-                key,
-                &modified,
-                &candidate.entry.upstream_model,
-            )
-            .await
-        {
-            Ok(events) => Ok(Some(events)),
-            Err(e) => {
-                tracing::warn!(
-                    model = candidate.model_id(),
-                    rectifier = rectifier.name(),
-                    "rectifier stream retry also failed: {e}"
-                );
-                Err(e)
+        let mut rounds = 0;
+        loop {
+            if !rectifier.should_apply(current_error, &current_body) {
+                break;
             }
-        };
+            let mut modified = current_body.clone();
+            let result = rectifier.rectify(&mut modified);
+            if !result.applied {
+                break;
+            }
+            tracing::info!(
+                model = candidate.model_id(),
+                provider = candidate.provider.name.as_str(),
+                rectifier = rectifier.name(),
+                "stream request repaired, retrying same provider without health accounting"
+            );
+            match state
+                .upstream
+                .stream(
+                    &candidate.provider,
+                    key,
+                    &modified,
+                    &candidate.entry.upstream_model,
+                )
+                .await
+            {
+                Ok(events) => return Ok(Some(events)),
+                Err(e) => {
+                    tracing::warn!(
+                        model = candidate.model_id(),
+                        rectifier = rectifier.name(),
+                        "rectifier stream retry also failed: {e}"
+                    );
+                    last_error = Some(e);
+                    current_body = modified;
+                    current_error = last_error.as_ref().expect("just set");
+                    rounds += 1;
+                    if rounds >= 3 {
+                        break;
+                    }
+                }
+            }
+        }
     }
-    Ok(None)
+
+    match last_error {
+        Some(e) => Err(e),
+        None => Ok(None),
+    }
 }
 
 async fn buffered_chat(
@@ -277,6 +312,7 @@ async fn buffered_chat(
                 state.router.report_success(
                     candidate.model_id(),
                     attempt_start.elapsed().as_millis() as u64,
+                    &routing,
                 );
                 rec.usage(resp.usage)
                     .priced_with(candidate.entry.pricing.as_ref());
@@ -428,6 +464,7 @@ async fn stream_chat(
                 state.router.report_success(
                     candidate.model_id(),
                     attempt_start.elapsed().as_millis() as u64,
+                    &routing,
                 );
                 let encoder =
                     protocol::stream_encoder(dialect, &candidate.exposed_id, include_usage);
@@ -465,11 +502,8 @@ async fn stream_chat(
                     Ok(Some(events)) => {
                         // The repaired stream is not a fresh half-open probe.
                         state.router.release_half_open_permit(candidate.model_id());
-                        let encoder = protocol::stream_encoder(
-                            dialect,
-                            &candidate.exposed_id,
-                            include_usage,
-                        );
+                        let encoder =
+                            protocol::stream_encoder(dialect, &candidate.exposed_id, include_usage);
                         let body = Body::from_stream(sse_body(
                             Arc::clone(&state),
                             events,
@@ -490,10 +524,7 @@ async fn stream_chat(
                             header::CONTENT_TYPE,
                             HeaderValue::from_static("text/event-stream"),
                         );
-                        headers.insert(
-                            header::CACHE_CONTROL,
-                            HeaderValue::from_static("no-cache"),
-                        );
+                        headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
                         headers.insert("x-accel-buffering", HeaderValue::from_static("no"));
                         inject_routing_headers(response.headers_mut(), candidate);
                         return response;

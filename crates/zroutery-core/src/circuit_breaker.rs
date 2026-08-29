@@ -219,6 +219,13 @@ impl CircuitBreaker {
                     self.consecutive_successes.store(0, Ordering::Relaxed);
                     self.consecutive_failures.store(0, Ordering::Relaxed);
                     self.half_open_permits.store(1, Ordering::Relaxed);
+                    // A fresh closed period starts with a clean error-rate slate.
+                    self.total_requests.store(0, Ordering::Relaxed);
+                    self.failed_requests.store(0, Ordering::Relaxed);
+                } else {
+                    // The probe succeeded but more evidence is required. Release
+                    // the single half-open permit so another probe can run.
+                    self.half_open_permits.store(1, Ordering::Relaxed);
                 }
             }
             CircuitState::Open => {}

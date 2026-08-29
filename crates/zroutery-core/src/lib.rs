@@ -37,8 +37,8 @@ pub mod upstream;
 pub use billing::{
     Balance, BalanceConfig, BalancePreset, BalanceProbe, BaseDepth, Cost, CostTotals, Pricing,
 };
-pub use circuit_breaker::{CircuitBreaker, CircuitBreakerConfig, CircuitState};
 pub use budget::{Budget, BudgetPeriod, BudgetScope, Ledger, OnExceeded, Verdict};
+pub use circuit_breaker::{CircuitBreaker, CircuitBreakerConfig, CircuitState};
 pub use config::{
     AppConfig, ConfigIssue, IssueSeverity, MemorySecretStore, ModelClass, ModelEntry,
     ProviderConfig, ProviderKind, RectifierConfig, RoutingConfig, RoutingStrategy, SecretStore,

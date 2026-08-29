@@ -215,7 +215,8 @@ impl AppState {
                             Ok(latency) => {
                                 // A probe is a real call, so it is also the freshest
                                 // health signal there is.
-                                self.router.report_success(&exposed, latency);
+                                let routing = &registry.config().routing;
+                                self.router.report_success(&exposed, latency, routing);
                                 measurement.answered(latency)
                             }
                             Err(e) => {
@@ -890,7 +891,10 @@ mod tests {
             List(vec!["http://a".to_string(), "https://b".to_string()])
         );
         // Mixed: invalid entries are dropped, valid ones survive.
-        assert_eq!(origin_policy(&["https://ok".into(), "garbage".into()]), List(vec!["https://ok".into()]));
+        assert_eq!(
+            origin_policy(&["https://ok".into(), "garbage".into()]),
+            List(vec!["https://ok".into()])
+        );
         // All invalid (or whitespace-only): deny — never widen to Any.
         assert_eq!(origin_policy(&["garbage".into()]), DenyAll);
         assert_eq!(origin_policy(&["   ".into()]), Any);

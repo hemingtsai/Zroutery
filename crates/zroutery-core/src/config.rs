@@ -394,6 +394,13 @@ pub struct RoutingConfig {
     /// Request rectifier toggles.
     #[serde(default)]
     pub rectifier: RectifierConfig,
+    /// Legacy field, migrated into `circuit_breaker.failure_threshold` by
+    /// [`RoutingConfig::apply_legacy`]. Kept only for deserializing old configs.
+    #[serde(default, skip_serializing)]
+    pub break_after_failures: Option<u32>,
+    /// Legacy field, migrated into `circuit_breaker.timeout_secs`.
+    #[serde(default, skip_serializing)]
+    pub cooldown_secs: Option<u64>,
     /// When a client asks for an unknown model id, fall back to this class
     /// instead of returning 404.
     #[serde(default)]
@@ -421,6 +428,17 @@ impl RoutingConfig {
     fn default_attempts() -> u32 {
         3
     }
+
+    /// Fold legacy `break_after_failures` / `cooldown_secs` into the nested
+    /// circuit breaker settings.
+    pub fn apply_legacy(&mut self) {
+        if let Some(failure_threshold) = self.break_after_failures.take() {
+            self.circuit_breaker.failure_threshold = failure_threshold;
+        }
+        if let Some(timeout_secs) = self.cooldown_secs.take() {
+            self.circuit_breaker.timeout_secs = timeout_secs;
+        }
+    }
 }
 
 impl Default for RoutingConfig {
@@ -431,6 +449,8 @@ impl Default for RoutingConfig {
             max_attempts: Self::default_attempts(),
             circuit_breaker: CircuitBreakerConfig::default(),
             rectifier: RectifierConfig::default(),
+            break_after_failures: None,
+            cooldown_secs: None,
             unknown_model_fallback: None,
             client_aliases: BTreeMap::new(),
             match_claude_names: true,
@@ -588,6 +608,7 @@ impl AppConfig {
     /// Returns a note for every id that moved, so the UI can explain itself.
     pub fn normalize(&mut self) -> Vec<String> {
         let mut notes = Vec::new();
+        self.routing.apply_legacy();
         for model in &mut self.models {
             let exposed = qualified_id(&model.provider_id, &model.upstream_model);
             if let Some(legacy) = model.legacy_id.take() {
@@ -1017,7 +1038,10 @@ mod tests {
         let mut openai_bare = ProviderConfig::new("o", "O", ProviderKind::OpenAICompatible);
         openai_bare.base_url = "https://api.example.com".into();
         assert_eq!(openai_bare.base_depth(), BaseDepth::ApiRoot);
-        assert_eq!(openai_bare.chat_url(), "https://api.example.com/v1/chat/completions");
+        assert_eq!(
+            openai_bare.chat_url(),
+            "https://api.example.com/v1/chat/completions"
+        );
 
         let mut openai_v1 = ProviderConfig::new("o", "O", ProviderKind::OpenAICompatible);
         openai_v1.base_url = "https://api.example.com/v1".into();
@@ -1048,13 +1072,17 @@ mod tests {
         // Whitespace-only entries are ignored, valid ones pass silently.
         cfg.server.cors_origins = vec!["  ".into(), "https://good.example".into()];
         let issues = cfg.validate();
-        assert!(!issues.iter().any(|i| i.code == "server.cors_origin_invalid"));
+        assert!(!issues
+            .iter()
+            .any(|i| i.code == "server.cors_origin_invalid"));
 
         // No check while CORS is off.
         cfg.server.allow_cors = false;
         cfg.server.cors_origins = vec!["garbage".into()];
         let issues = cfg.validate();
-        assert!(!issues.iter().any(|i| i.code == "server.cors_origin_invalid"));
+        assert!(!issues
+            .iter()
+            .any(|i| i.code == "server.cors_origin_invalid"));
     }
 
     #[test]
@@ -1141,8 +1169,12 @@ mod tests {
             ProviderKind::OpenAICompatible,
         ));
         let issues = cfg.validate();
-        assert!(issues.iter().any(|i| i.code == "provider.duplicate_id"
-            && i.subject.as_deref() == Some("deepseek")));
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.code == "provider.duplicate_id"
+                    && i.subject.as_deref() == Some("deepseek"))
+        );
     }
 
     #[test]
@@ -1181,6 +1213,28 @@ mod tests {
         assert!(!json.contains("\"id\":\"deepseek-deepseek-chat\""));
         let back: AppConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(cfg, back);
+    }
+
+    #[test]
+    fn legacy_breaker_fields_migrate_into_circuit_breaker() {
+        let cfg: AppConfig = serde_json::from_str(
+            r#"{
+                "routing": {
+                    "break_after_failures": 2,
+                    "cooldown_secs": 7
+                }
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(cfg.routing.circuit_breaker.failure_threshold, 4);
+        assert_eq!(cfg.routing.circuit_breaker.timeout_secs, 60);
+
+        let mut cfg = cfg;
+        cfg.normalize();
+        assert_eq!(cfg.routing.circuit_breaker.failure_threshold, 2);
+        assert_eq!(cfg.routing.circuit_breaker.timeout_secs, 7);
+        assert!(cfg.routing.break_after_failures.is_none());
+        assert!(cfg.routing.cooldown_secs.is_none());
     }
 
     #[test]
@@ -1238,10 +1292,16 @@ mod tests {
         assert_eq!(p.chat_url(), "https://api.example.com/v1/chat/completions");
         let mut v1 = ProviderConfig::new("p", "P", ProviderKind::OpenAICompatible);
         v1.base_url = "https://ps.air-outer.com/v1/".into();
-        assert_eq!(v1.chat_url(), "https://ps.air-outer.com/v1/chat/completions");
+        assert_eq!(
+            v1.chat_url(),
+            "https://ps.air-outer.com/v1/chat/completions"
+        );
         let mut v1 = ProviderConfig::new("p", "P", ProviderKind::OpenAICompatible);
         v1.base_url = "https://ps.air-outer.com/v1/".into();
-        assert_eq!(v1.chat_url(), "https://ps.air-outer.com/v1/chat/completions");
+        assert_eq!(
+            v1.chat_url(),
+            "https://ps.air-outer.com/v1/chat/completions"
+        );
 
         // Anthropic: a /v1 base must not become /v1/v1/messages.
         let a = ProviderConfig::new("a", "A", ProviderKind::Anthropic);

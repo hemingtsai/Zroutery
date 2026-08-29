@@ -48,12 +48,10 @@ fn build_http_client(bypass_proxy: bool) -> reqwest::Client {
     if bypass_proxy || std::env::var("ZROUTERY_NO_PROXY").is_ok() {
         builder = builder.no_proxy();
     }
-    builder
-        .build()
-        .unwrap_or_else(|e| {
-            tracing::error!("falling back to a default HTTP client: {e}");
-            reqwest::Client::new()
-        })
+    builder.build().unwrap_or_else(|e| {
+        tracing::error!("falling back to a default HTTP client: {e}");
+        reqwest::Client::new()
+    })
 }
 
 impl Upstream {
@@ -171,15 +169,16 @@ impl Upstream {
                 .post(provider.chat_url())
                 .headers(build_headers(provider, api_key)?)
                 .json(body);
-            let result = tokio::time::timeout(Duration::from_secs(provider.timeout_secs), request.send())
-                .await
-                .map_err(|_| Error::Timeout(provider.timeout_secs))
-                .and_then(|r| {
-                    r.map_err(|source| Error::Transport {
-                        provider: provider.name.clone(),
-                        source,
-                    })
-                });
+            let result =
+                tokio::time::timeout(Duration::from_secs(provider.timeout_secs), request.send())
+                    .await
+                    .map_err(|_| Error::Timeout(provider.timeout_secs))
+                    .and_then(|r| {
+                        r.map_err(|source| Error::Transport {
+                            provider: provider.name.clone(),
+                            source,
+                        })
+                    });
             let response = match result {
                 Ok(response) => response,
                 Err(err) => {
@@ -438,7 +437,8 @@ struct StreamState {
 /// Claude Code client fingerprint (used for impersonation to pass a
 /// gateway's "Claude Code only" check).
 const CLAUDE_CODE_USER_AGENT: &str = "claude-cli/2.1.217 (external, sdk-cli)";
-const CLAUDE_CODE_SYSTEM_IDENTITY: &str = "You are Claude Code, Anthropic's official CLI for Claude.";
+const CLAUDE_CODE_SYSTEM_IDENTITY: &str =
+    "You are Claude Code, Anthropic's official CLI for Claude.";
 
 /// Build the auth and content headers for a provider.
 pub fn build_headers(provider: &ProviderConfig, api_key: Option<&str>) -> Result<HeaderMap> {
@@ -574,7 +574,9 @@ fn prepend_claude_code_system_prompt(body: &mut Value) {
     // messages for system instructions, and injecting a "system" key triggers
     // gateway content filters.
     if !body.get("system").is_some() {
-        body["system"] = Value::Array(vec![json!({ "type": "text", "text": CLAUDE_CODE_SYSTEM_IDENTITY })]);
+        body["system"] = Value::Array(vec![
+            json!({ "type": "text", "text": CLAUDE_CODE_SYSTEM_IDENTITY }),
+        ]);
         return;
     }
 
@@ -641,7 +643,10 @@ fn capture_failed_body(provider: &ProviderConfig, body: &Value, status: u16, tex
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or_default();
-    let path = dir.join(format!("{ts}_s{status}_{}.json", provider.name.replace(' ', "_")));
+    let path = dir.join(format!(
+        "{ts}_s{status}_{}.json",
+        provider.name.replace(' ', "_")
+    ));
     if let Ok(pretty) = serde_json::to_string_pretty(body) {
         let _ = std::fs::write(&path, pretty);
         let meta = format!("status: {status}\nresponse: {text}\n");

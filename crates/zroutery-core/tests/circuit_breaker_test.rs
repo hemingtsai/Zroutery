@@ -78,6 +78,12 @@ fn half_open_closes_after_success_threshold() {
     b.record_success();
     assert_eq!(b.state(), CircuitState::HalfOpen);
 
+    // The first success did not meet the threshold yet, so the permit must be
+    // released before the next real request can probe again.
+    assert!(
+        b.allow_request(),
+        "half-open permit should be released after a sub-threshold success"
+    );
     b.record_success();
     assert_eq!(b.state(), CircuitState::Closed);
 }
@@ -103,10 +109,16 @@ fn half_open_allows_only_one_concurrent_probe() {
     assert_eq!(b.state(), CircuitState::Open);
 
     assert!(b.allow_request());
-    assert!(!b.allow_request(), "the second half-open probe must be rejected");
+    assert!(
+        !b.allow_request(),
+        "the second half-open probe must be rejected"
+    );
 
     b.release_half_open_permit();
-    assert!(b.allow_request(), "releasing the permit lets the next probe through");
+    assert!(
+        b.allow_request(),
+        "releasing the permit lets the next probe through"
+    );
 }
 
 #[test]
