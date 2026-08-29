@@ -17,6 +17,8 @@ pub enum Dialect {
     Anthropic,
     /// OpenAI `/v1/chat/completions` (also DeepSeek and most "OpenAI compatible" APIs).
     OpenAI,
+    /// OpenAI `/v1/responses`.
+    OpenAIResponses,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

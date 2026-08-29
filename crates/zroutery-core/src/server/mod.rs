@@ -251,6 +251,7 @@ const ENDPOINTS: &[&str] = &[
     "/v1/messages",
     "/v1/messages/count_tokens",
     "/v1/chat/completions",
+    "/v1/responses",
     "/v1/models",
     "/v1/models/{id}",
     "/v1/status",
@@ -270,6 +271,7 @@ pub fn build_app(state: Arc<AppState>) -> AxumRouter {
                 post(count_tokens),
             )
             .route(&format!("{prefix}/chat/completions"), post(openai_chat))
+            .route(&format!("{prefix}/responses"), post(responses_chat))
             .route(&format!("{prefix}/models"), get(list_models))
             .route(&format!("{prefix}/models/{{id}}"), get(get_model))
             .route(&format!("{prefix}/status"), get(status));
@@ -309,6 +311,8 @@ async fn unknown_route(method: Method, uri: Uri) -> Response {
     // the caller is most likely to understand.
     let dialect = if path.contains("messages") || path.contains("count_tokens") {
         Dialect::Anthropic
+    } else if path.contains("responses") {
+        Dialect::OpenAIResponses
     } else {
         Dialect::OpenAI
     };
@@ -640,6 +644,14 @@ async fn openai_chat(State(state): State<Arc<AppState>>, body: JsonBody) -> Resp
         Err(e) => return error_response(Dialect::OpenAI, &e),
     };
     handle_chat(state, Dialect::OpenAI, body).await
+}
+
+async fn responses_chat(State(state): State<Arc<AppState>>, body: JsonBody) -> Response {
+    let body = match unwrap_body(&state, body) {
+        Ok(v) => v,
+        Err(e) => return error_response(Dialect::OpenAIResponses, &e),
+    };
+    handle_chat(state, Dialect::OpenAIResponses, body).await
 }
 
 async fn count_tokens(State(state): State<Arc<AppState>>, body: JsonBody) -> Response {

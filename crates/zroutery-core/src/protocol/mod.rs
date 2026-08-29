@@ -7,6 +7,7 @@
 pub mod anthropic;
 pub mod openai;
 pub mod reasoning_bridge;
+pub mod responses;
 
 use crate::error::{Error, Result};
 use crate::ir::{ChatRequest, ChatResponse, Dialect, StreamEvent};
@@ -64,6 +65,7 @@ pub fn decode_request(dialect: Dialect, body: Value) -> Result<ChatRequest> {
     match dialect {
         Dialect::Anthropic => anthropic::decode_request(body),
         Dialect::OpenAI => openai::decode_request(body),
+        Dialect::OpenAIResponses => responses::decode_request(body),
     }
 }
 
@@ -80,6 +82,7 @@ pub fn encode_request(
     match dialect {
         Dialect::Anthropic => anthropic::encode_request(req, upstream_model),
         Dialect::OpenAI => openai::encode_request_with(req, upstream_model, quirks),
+        Dialect::OpenAIResponses => responses::encode_request(req, upstream_model),
     }
 }
 
@@ -88,6 +91,7 @@ pub fn decode_response(dialect: Dialect, body: Value) -> Result<ChatResponse> {
     match dialect {
         Dialect::Anthropic => anthropic::decode_response(body),
         Dialect::OpenAI => openai::decode_response(body),
+        Dialect::OpenAIResponses => responses::decode_response(body),
     }
 }
 
@@ -96,6 +100,7 @@ pub fn encode_response(dialect: Dialect, resp: &ChatResponse) -> Value {
     match dialect {
         Dialect::Anthropic => anthropic::encode_response(resp),
         Dialect::OpenAI => openai::encode_response(resp),
+        Dialect::OpenAIResponses => responses::encode_response(resp),
     }
 }
 
@@ -201,6 +206,7 @@ pub fn stream_parser(dialect: Dialect, model: &str) -> Box<dyn StreamParser> {
     match dialect {
         Dialect::Anthropic => Box::new(anthropic::AnthropicStreamParser::new(model)),
         Dialect::OpenAI => Box::new(openai::OpenAiStreamParser::new(model)),
+        Dialect::OpenAIResponses => Box::new(responses::ResponsesStreamParser::new(model)),
     }
 }
 
@@ -216,6 +222,7 @@ pub fn stream_encoder(
         Dialect::OpenAI => {
             Box::new(openai::OpenAiStreamEncoder::new(model).with_usage(include_usage))
         }
+        Dialect::OpenAIResponses => Box::new(responses::ResponsesStreamEncoder::new(model)),
     }
 }
 
