@@ -731,10 +731,14 @@ impl AppConfig {
         }
 
         for class in ModelClass::ALL {
-            let has = self
-                .models
-                .iter()
-                .any(|m| m.enabled && m.class == Some(class));
+            let has = self.models.iter().any(|m| {
+                m.enabled
+                    && m.class == Some(class)
+                    && self
+                        .provider(&m.provider_id)
+                        .map(|p| p.enabled)
+                        .unwrap_or(false)
+            });
             if !has {
                 issues.push(ConfigIssue {
                     severity: IssueSeverity::Warning,
@@ -1043,6 +1047,17 @@ mod tests {
         // sonnet is covered, opus and haiku are not
         assert_eq!(issues.iter().filter(|i| i.code == "class.empty").count(), 2);
         assert!(issues.iter().all(|i| i.severity == IssueSeverity::Warning));
+    }
+
+    #[test]
+    fn validate_flags_a_class_whose_only_members_are_on_disabled_providers() {
+        let mut cfg = sample();
+        cfg.providers[0].enabled = false;
+        let issues = cfg.validate();
+        // sonnet is assigned but its provider is disabled, so it is effectively empty.
+        assert!(issues
+            .iter()
+            .any(|i| i.code == "class.empty" && i.subject.as_deref() == Some("sonnet-class")));
     }
 
     #[test]
