@@ -131,12 +131,33 @@ impl Registry {
     /// Order: exact model id or alias (one hash lookup), `*-class` virtual id,
     /// configured client alias, Claude-style name heuristic (opt-in),
     /// unknown-model fallback class.
+    ///
+    /// Client-side window modifiers such as the `[1m]` in
+    /// `claude-opus-4-8[1m]` are not part of any model's name, so when the
+    /// exact spelling fails the modifier is stripped and the ladder is tried
+    /// again on the bare name. The original string is what gets logged and
+    /// echoed to the client; only resolution sees the stripped form.
     pub fn resolve(&self, requested: &str) -> Result<Resolution> {
         let asked = requested.trim();
         if asked.is_empty() {
             return Err(Error::invalid("`model` must not be empty"));
         }
+        match self.resolve_exact(asked) {
+            Ok(resolution) => Ok(resolution),
+            Err(err) => {
+                let bare = crate::query::strip_client_model_modifier(asked);
+                if bare != asked {
+                    if let Ok(resolution) = self.resolve_exact(bare) {
+                        return Ok(resolution);
+                    }
+                }
+                Err(err)
+            }
+        }
+    }
 
+    /// The resolution ladder for one exact candidate name.
+    fn resolve_exact(&self, asked: &str) -> Result<Resolution> {
         let known = self.index.by_name.get(asked).copied();
         if let Some(position) = known {
             if self.config.models[position].enabled {
@@ -515,6 +536,37 @@ mod tests {
         assert!(r.entry("pro").is_ok());
         assert!(r.class_members(ModelClass::Sonnet).is_empty());
         assert!(!r.list().iter().any(|m| m.id == "sonnet-class"));
+    }
+
+    #[test]
+    fn window_modifiers_are_stripped_for_resolution_only() {
+        // An exact id exists for the bare name; the [1m] spelling must reach
+        // the same model. With the Claude-name heuristic this already worked;
+        // turn it off to prove the stripped retry is what resolves.
+        let mut cfg = brief_config();
+        cfg.routing.match_claude_names = false;
+        let r = registry(cfg);
+        assert_eq!(
+            r.resolve("openai-gpt-5.3-sol[1m]").unwrap(),
+            Resolution::Direct("openai-gpt-5.3-sol".into())
+        );
+        // Same for an alias, and for the fallback class.
+        let mut cfg = brief_config();
+        cfg.routing.match_claude_names = false;
+        cfg.models[2].aliases.push("fast-opus".into());
+        let r = registry(cfg);
+        assert_eq!(
+            r.resolve("fast-opus[16m]").unwrap(),
+            Resolution::Direct("openai-gpt-5.3-sol".into())
+        );
+
+        // The modifier is not an id: with nothing to strip to, the original
+        // error names the string the client actually sent.
+        let mut cfg = brief_config();
+        cfg.routing.match_claude_names = false;
+        let r = registry(cfg);
+        let err = r.resolve("does-not-exist[1m]").unwrap_err();
+        assert!(err.to_string().contains("does-not-exist[1m]"));
     }
 
     #[test]

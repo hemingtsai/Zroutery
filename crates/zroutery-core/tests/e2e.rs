@@ -101,6 +101,13 @@ async fn mock_openai_chat(
             })
         } else if model.starts_with("think") {
             json!({"role": "assistant", "content": "final", "reasoning_content": "reasoning"})
+        } else if ["stop", "stop_sequences"].iter().any(|key| {
+            body[key]
+                .as_array()
+                .is_some_and(|s| s.iter().any(|v| v == "</block>"))
+        }) {
+            // A classifier query: answer with a well-formed verdict.
+            json!({"role": "assistant", "content": "<block>no</block>"})
         } else {
             json!({"role": "assistant", "content": "hello from mock"})
         };

@@ -236,6 +236,52 @@ pub fn stream_encoder(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ir::Dialect;
+
+    #[test]
+    fn classifier_round_trip_preserves_every_judging_field() {
+        // The full Auto Mode stage-1 shape, decoded from Anthropic and encoded
+        // for an OpenAI-compatible upstream. Every field here is part of how
+        // the classifier is judged: the system prompt carries the policy, the
+        // transcript carries the evidence, the stop sequence terminates the
+        // verdict, and temperature 0 makes the verdict reproducible.
+        let incoming = serde_json::json!({
+            "model": "claude-opus-4-8[1m]",
+            "max_tokens": 64,
+            "temperature": 0,
+            "stop_sequences": ["</block>"],
+            "system": [
+                {"type": "text", "text": "You are a security monitor.",
+                 "cache_control": {"type": "ephemeral"}}
+            ],
+            "messages": [
+                {"role": "user", "content": [{"type": "text", "text": "transcript",
+                                              "cache_control": {"type": "ephemeral"}}]}
+            ]
+        });
+        let req = anthropic::decode_request(incoming).unwrap();
+        let body = openai::encode_request_with(&req, "glm-5.3", &ProviderQuirks::default()).unwrap();
+
+        assert_eq!(body["model"], "glm-5.3");
+        assert_eq!(body["max_tokens"], 64);
+        assert_eq!(body["temperature"], 0.0);
+        // The stop sequence survives *as an array*, the exact wire shape that
+        // broke real classifier traffic on a compatible endpoint once.
+        assert_eq!(body["stop"], serde_json::json!(["</block>"]));
+        // System becomes the first message; content and cache markers survive
+        // in their OpenAI-appropriate places (system text, message text).
+        assert_eq!(body["messages"][0]["role"], "system");
+        assert_eq!(body["messages"][0]["content"], "You are a security monitor.");
+        assert_eq!(body["messages"][1]["content"], "transcript");
+
+        // And an Anthropic upstream keeps the same request in its own dialect.
+        let body = anthropic::encode_request(&req, "claude-opus-4-8").unwrap();
+        assert_eq!(body["stop_sequences"], serde_json::json!(["</block>"]));
+        assert_eq!(body["system"][0]["cache_control"]["type"], "ephemeral");
+        assert_eq!(body["temperature"], 0.0);
+        assert_eq!(body["max_tokens"], 64);
+        let _ = Dialect::Anthropic;
+    }
 
     #[test]
     fn splits_frames_across_chunk_boundaries() {

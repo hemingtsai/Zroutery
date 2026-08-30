@@ -157,19 +157,33 @@ fn apply_budgets(
 }
 
 /// Prepare one attempt: resolve the key and encode the upstream body.
+///
+/// `mode` is derived from the request kind: classifier queries are encoded in
+/// fidelity mode so the verdict protocol survives providers whose quirks would
+/// drop the stop sequence or the frozen temperature.
 fn prepare(
     state: &AppState,
     candidate: &Candidate,
     req: &ChatRequest,
+    mode: crate::upstream::EncodeMode,
 ) -> Result<(Option<String>, Value)> {
     let key = state.api_key(&candidate.provider)?;
-    let body = crate::upstream::encode_for(
+    let body = crate::upstream::encode_for_mode(
         &candidate.provider,
         req,
         &candidate.entry.upstream_model,
         candidate.entry.max_output_tokens,
+        mode,
     )?;
     Ok((key, body))
+}
+
+/// The encoding fidelity a request kind needs.
+fn encode_mode_for(kind: RequestKind) -> crate::upstream::EncodeMode {
+    match kind {
+        RequestKind::Main => crate::upstream::EncodeMode::Normal,
+        RequestKind::Side(_) => crate::upstream::EncodeMode::Classifier,
+    }
 }
 
 /// Try every enabled rectifier, allowing each rectifier up to three repair
@@ -318,6 +332,7 @@ async fn buffered_chat(
     let mut rec = RecordBuilder::new(dialect, &req.model, false);
     rec.kind(kind);
     let routing = state.config().routing.clone();
+    let mode = encode_mode_for(kind);
     let mut last_error = Error::NoCandidate(req.model.clone());
 
     for candidate in &plan {
@@ -337,7 +352,7 @@ async fn buffered_chat(
         }
         let attempt_start = Instant::now();
 
-        let (key, body) = match prepare(&state, candidate, &req) {
+        let (key, body) = match prepare(&state, candidate, &req, mode) {
             Ok(v) => v,
             Err(e) => {
                 state
@@ -363,6 +378,41 @@ async fn buffered_chat(
             .await
         {
             Ok(mut resp) => {
+                // A classifier answer is only a success when it carries a
+                // verdict. HTTP 200 without `<block>…</block>` is not an
+                // approval — the model failed to do its job, so the attempt
+                // is reported, the failure is recorded and the next candidate
+                // is tried. There is no "looks safe" fallback.
+                if !kind.is_main() {
+                    match crate::classifier::parse_verdict(&resp.text()) {
+                        crate::classifier::ClassifierVerdict::Allow
+                        | crate::classifier::ClassifierVerdict::Block => {
+                            tracing::debug!(
+                                kind = kind.as_str(),
+                                candidate_model = candidate.model_id(),
+                                verdict = "parsed",
+                                "classifier response validated"
+                            );
+                        }
+                        crate::classifier::ClassifierVerdict::Unparseable => {
+                            let e = Error::BadUpstreamPayload(format!(
+                                "classifier response from `{}` carried no <block> verdict",
+                                candidate.model_id()
+                            ));
+                            state
+                                .router
+                                .report_failure(candidate.model_id(), &e, &routing);
+                            tracing::warn!(
+                                kind = kind.as_str(),
+                                candidate_model = candidate.model_id(),
+                                upstream_model = %candidate.entry.upstream_model,
+                                "classifier response had no <block> verdict; failing over"
+                            );
+                            last_error = e;
+                            continue;
+                        }
+                    }
+                }
                 state.router.report_success(
                     candidate.model_id(),
                     attempt_start.elapsed().as_millis() as u64,
@@ -398,6 +448,25 @@ async fn buffered_chat(
                         // The repaired retry is not a fresh probe: give the
                         // half-open permit back without recording health.
                         state.router.release_half_open_permit(candidate.model_id());
+                        // A repaired classifier answer still has to carry a
+                        // verdict; the same fail-closed rule as the direct
+                        // path applies, minus the health report (this was a
+                        // repaired retry, which never records health).
+                        if !kind.is_main()
+                            && crate::classifier::parse_verdict(&resp.text())
+                                == crate::classifier::ClassifierVerdict::Unparseable
+                        {
+                            tracing::warn!(
+                                kind = kind.as_str(),
+                                candidate_model = candidate.model_id(),
+                                "rectified classifier response still had no <block> verdict; failing over"
+                            );
+                            last_error = Error::BadUpstreamPayload(format!(
+                                "classifier response from `{}` carried no <block> verdict",
+                                candidate.model_id()
+                            ));
+                            continue;
+                        }
                         rec.usage(resp.usage)
                             .priced_with(candidate.entry.pricing.as_ref());
                         let cost = candidate
@@ -472,6 +541,7 @@ async fn stream_chat(
     let mut rec = RecordBuilder::new(dialect, &req.model, true);
     rec.kind(kind);
     let routing = state.config().routing.clone();
+    let mode = encode_mode_for(kind);
     let mut last_error = Error::NoCandidate(req.model.clone());
 
     for candidate in &plan {
@@ -488,7 +558,7 @@ async fn stream_chat(
         }
         let attempt_start = Instant::now();
 
-        let (key, body) = match prepare(&state, candidate, &req) {
+        let (key, body) = match prepare(&state, candidate, &req, mode) {
             Ok(v) => v,
             Err(e) => {
                 state
@@ -545,6 +615,7 @@ async fn stream_chat(
                         pricing: candidate.entry.pricing.clone(),
                         provider_id: candidate.provider.id.clone(),
                         class: candidate.entry.class,
+                        kind,
                     },
                 ));
                 // Built from a plain body and static headers, so nothing here can
@@ -581,6 +652,7 @@ async fn stream_chat(
                                 pricing: candidate.entry.pricing.clone(),
                                 provider_id: candidate.provider.id.clone(),
                                 class: candidate.entry.class,
+                                kind,
                             },
                         ));
                         let mut response = Response::new(body);
@@ -675,12 +747,31 @@ struct SseState {
     /// Who to bill, once the stream reports what it used.
     provider_id: String,
     class: Option<ModelClass>,
+    /// Set for classifier streams, which accumulate their text so the verdict
+    /// can be checked once the stream ends. Main streams never pay for this.
+    classifier_text: Option<String>,
     finished: bool,
 }
 
 impl SseState {
     /// Record the request exactly once, when the stream ends for any reason.
     fn finalize(&mut self, error: Option<&Error>) {
+        // A classifier stream that reached its end without producing a verdict
+        // is worth a warning. The bytes have already gone out, so there is
+        // nothing to fail over to — but the client will fail closed on its own
+        // parse, and this line is how that shows up in the proxy's log.
+        if error.is_none() {
+            if let Some(text) = self.classifier_text.take() {
+                if crate::classifier::parse_verdict(&text)
+                    == crate::classifier::ClassifierVerdict::Unparseable
+                {
+                    tracing::warn!(
+                        model = %self.model_id,
+                        "streamed classifier response carried no <block> verdict"
+                    );
+                }
+            }
+        }
         if let Some(mut rec) = self.rec.take() {
             rec.usage(self.usage).priced_with(self.pricing.as_ref());
             // A stream only reports its usage at the end, so this is the first
@@ -721,6 +812,7 @@ struct StreamContext {
     pricing: Option<Pricing>,
     provider_id: String,
     class: Option<ModelClass>,
+    kind: RequestKind,
 }
 
 /// Pipe canonical events through the egress encoder into an SSE byte stream.
@@ -732,6 +824,7 @@ fn sse_body(
 ) -> impl futures_util::Stream<Item = std::result::Result<bytes::Bytes, std::io::Error>> {
     use futures_util::StreamExt;
 
+    let classifier_text = (!context.kind.is_main()).then(String::new);
     let state = SseState {
         events,
         encoder,
@@ -745,6 +838,7 @@ fn sse_body(
         pricing: context.pricing,
         provider_id: context.provider_id,
         class: context.class,
+        classifier_text,
         finished: false,
     };
 
@@ -762,6 +856,11 @@ fn sse_body(
                         StreamEvent::TextDelta { .. } | StreamEvent::ThinkingDelta { .. } => {
                             if let Some(rec) = st.rec.as_mut() {
                                 rec.ttft(st.started.elapsed().as_millis() as u64);
+                            }
+                        }
+                        StreamEvent::TextDelta { text, .. } => {
+                            if let Some(acc) = st.classifier_text.as_mut() {
+                                acc.push_str(text);
                             }
                         }
                         StreamEvent::Start { usage, .. } => st.usage = *usage,
