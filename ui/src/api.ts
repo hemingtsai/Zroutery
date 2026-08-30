@@ -141,6 +141,50 @@ export interface ScoringConfig {
   reference_output_tokens: number;
 }
 
+/** A structural fingerprint of one classifier stage. All present fields must match. */
+export interface ClassifierSignature {
+  name: string;
+  max_tokens: number | null;
+  temperature: number | null;
+  stop_sequence: string | null;
+  system_contains: string[];
+}
+
+export interface BuiltinDetectors {
+  anthropic_beta: boolean;
+  xml_classifier_signature: boolean;
+  model_1m_signature: boolean;
+}
+
+export interface DetectionConfig {
+  enabled: boolean;
+  minimum_confidence: number;
+  builtins: BuiltinDetectors;
+  /** Extra fingerprints on top of the built-ins. */
+  signatures: ClassifierSignature[];
+}
+
+/** One member of the classifier pool: an existing model id, plus its place. */
+export interface ClassifierCandidate {
+  /** Exposed id (or alias) of an existing model entry. */
+  model: string;
+  priority: number;
+  enabled: boolean;
+}
+
+/** Routing policy for Auto Mode classifier side queries. */
+export interface ClassifierConfig {
+  enabled: boolean;
+  strategy: RoutingStrategy;
+  failover: boolean;
+  max_attempts: number;
+  candidates: ClassifierCandidate[];
+  detection: DetectionConfig;
+}
+
+/** What a request was for: the main conversation or a side query. */
+export type RequestKind = "main" | "auto_mode";
+
 export interface RoutingConfig {
   strategy: RoutingStrategy;
   failover: boolean;
@@ -225,6 +269,8 @@ export interface BudgetStatus {
 export interface AppConfig {
   server: ServerConfig;
   routing: RoutingConfig;
+  /** Auto Mode classifier routing; orthogonal to `routing`. */
+  classifier: ClassifierConfig;
   providers: Provider[];
   models: ModelEntry[];
   budgets: Budget[];
@@ -261,6 +307,8 @@ export interface RequestRecord {
   id: string;
   at: string;
   ingress: string;
+  /** `main` or `auto_mode`. */
+  kind: RequestKind;
   requested_model: string;
   resolved_model: string | null;
   provider_name: string | null;
@@ -298,6 +346,16 @@ export interface ModelTotals {
   avg_latency_ms: number;
 }
 
+/** Counters for one request kind, so classifier traffic is visible as itself. */
+export interface KindTotals {
+  kind: string;
+  requests: number;
+  failures: number;
+  input_tokens: number;
+  output_tokens: number;
+  avg_latency_ms: number;
+}
+
 export interface StatsSummary {
   since: string;
   requests: number;
@@ -306,6 +364,7 @@ export interface StatsSummary {
   output_tokens: number;
   cost: CostTotals;
   per_model: ModelTotals[];
+  per_kind: KindTotals[];
 }
 
 export interface Snapshot {

@@ -101,6 +101,13 @@ async fn mock_openai_chat(
             })
         } else if model.starts_with("think") {
             json!({"role": "assistant", "content": "final", "reasoning_content": "reasoning"})
+        } else if ["stop", "stop_sequences"].iter().any(|key| {
+            body[key]
+                .as_array()
+                .is_some_and(|s| s.iter().any(|v| v == "</block>"))
+        }) {
+            // A classifier query: answer with a well-formed verdict.
+            json!({"role": "assistant", "content": "<block>no</block>"})
         } else {
             json!({"role": "assistant", "content": "hello from mock"})
         };
@@ -363,6 +370,50 @@ impl Harness {
 }
 
 // ------------------------------------------------------------------ the tests
+
+#[tokio::test]
+async fn classifier_requests_route_to_the_classifier_pool() {
+    let (addr, mock) = start_mock().await;
+    let mut cfg = config_for(addr);
+    cfg.classifier = zroutery_core::config::ClassifierConfig {
+        enabled: true,
+        candidates: vec![zroutery_core::config::ClassifierCandidate {
+            model: "deepseek-deepseek-v4-flash".into(),
+            priority: 10,
+            enabled: true,
+        }],
+        ..zroutery_core::config::ClassifierConfig::default()
+    };
+    let h = Harness::start(cfg, mock).await;
+
+    // An Auto Mode stage-1 shaped request, asking for a model the registry
+    // does not even have: the classifier pool must answer regardless.
+    let resp = h
+        .post("/v1/messages")
+        .json(&json!({
+            "model": "claude-opus-4-8[1m]",
+            "max_tokens": 64,
+            "temperature": 0,
+            "stop_sequences": ["</block>"],
+            "system": [{"type": "text", "text":
+                "You are a security monitor for autonomous AI coding agents."}],
+            "messages": [{"role": "user", "content": "should this run?"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    assert_eq!(resp.headers()["x-zroutery-model"], "deepseek-deepseek-v4-flash");
+    assert_eq!(resp.headers()["x-zroutery-classifier"], "1");
+    // The candidate's own model name went upstream.
+    assert_eq!(h.mock.bodies()[0]["model"], "deepseek-v4-flash");
+    // And it was recorded as classifier traffic, not main traffic.
+    let kind = &h.state.stats().summary().per_kind;
+    assert!(kind.iter().any(|k| k.kind == "auto_mode" && k.requests == 1));
+
+    h.shutdown().await;
+}
 
 #[tokio::test]
 async fn anthropic_in_openai_out_non_streaming() {

@@ -19,7 +19,7 @@ use crate::billing::{Balance, BalanceProbe, Pricing};
 use crate::config::{ProviderConfig, ProviderKind};
 use crate::error::{Error, Result};
 use crate::ir::{ChatRequest, ChatResponse, StreamEvent};
-use crate::protocol::{self, SseDecoder, StreamParser};
+use crate::protocol::{self, ProviderQuirks, SseDecoder, StreamParser};
 
 const DEFAULT_ANTHROPIC_VERSION: &str = "2023-06-01";
 const USER_AGENT: &str = concat!("zroutery/", env!("CARGO_PKG_VERSION"));
@@ -537,12 +537,51 @@ pub fn build_headers(provider: &ProviderConfig, api_key: Option<&str>) -> Result
     Ok(headers)
 }
 
+/// How faithfully a request must be encoded upstream.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EncodeMode {
+    /// Normal chat traffic: provider quirks may drop fields for compatibility.
+    Normal,
+    /// Classifier side queries. The stop sequences, temperature and top_p are
+    /// part of the judging protocol, not preferences: `drop_*` quirks that
+    /// would silently strip them are overridden so the verdict contract
+    /// (`<block>…</block>` terminated by the stop sequence) reaches the model
+    /// intact.
+    Classifier,
+}
+
+impl EncodeMode {
+    /// The quirks that may be dropped in this mode.
+    fn apply(self, quirks: &ProviderQuirks) -> ProviderQuirks {
+        match self {
+            EncodeMode::Normal => quirks.clone(),
+            EncodeMode::Classifier => ProviderQuirks {
+                drop_temperature: false,
+                drop_top_p: false,
+                drop_stop: false,
+                ..quirks.clone()
+            },
+        }
+    }
+}
+
 /// Prepare the upstream body for a candidate.
 pub fn encode_for(
     provider: &ProviderConfig,
     req: &ChatRequest,
     upstream_model: &str,
     max_output_tokens: Option<u32>,
+) -> Result<Value> {
+    encode_for_mode(provider, req, upstream_model, max_output_tokens, EncodeMode::Normal)
+}
+
+/// Prepare the upstream body for a candidate, with an explicit fidelity mode.
+pub fn encode_for_mode(
+    provider: &ProviderConfig,
+    req: &ChatRequest,
+    upstream_model: &str,
+    max_output_tokens: Option<u32>,
+    mode: EncodeMode,
 ) -> Result<Value> {
     let mut req = req.clone();
     if let Some(cap) = max_output_tokens {
@@ -552,7 +591,7 @@ pub fn encode_for(
         provider.kind.dialect(),
         &req,
         upstream_model,
-        &provider.quirks,
+        &mode.apply(&provider.quirks),
     )?;
 
     // Claude Code impersonation: inject identity line as the first system block
@@ -801,6 +840,42 @@ mod tests {
         let body = encode_for(&p, &req, "claude-sonnet-4-5", None).unwrap();
         let system = body["system"].as_array().unwrap();
         assert_eq!(system[0]["text"], CLAUDE_CODE_SYSTEM_IDENTITY);
+    }
+
+    #[test]
+    fn classifier_mode_keeps_stop_and_temperature_despite_quirks() {
+        // A provider configured to drop the fields a classifier depends on:
+        // in classifier mode the verdict protocol wins over compatibility.
+        let mut req = ChatRequest::new("claude-opus-4-8[1m]", Dialect::Anthropic);
+        req.messages.push(Message::user_text("transcript"));
+        req.max_tokens = Some(64);
+        req.temperature = Some(0.0);
+        req.stop_sequences = vec!["</block>".into()];
+
+        let mut p = provider(ProviderKind::OpenAICompatible);
+        p.quirks = ProviderQuirks {
+            drop_stop: true,
+            drop_temperature: true,
+            drop_top_p: true,
+            ..ProviderQuirks::default()
+        };
+
+        let body = encode_for_mode(&p, &req, "glm-5.3", None, EncodeMode::Classifier).unwrap();
+        // The array-ness is the contract: `"stop": ["</block>"]`, not a joined
+        // string and not dropped.
+        assert_eq!(
+            body["stop"],
+            serde_json::json!(["</block>"]),
+            "classifier stop sequences must survive as an array"
+        );
+        assert_eq!(body["temperature"], 0.0);
+        assert_eq!(body["max_tokens"], 64);
+        assert_eq!(body["model"], "glm-5.3");
+
+        // Normal mode keeps honouring the quirks.
+        let body = encode_for_mode(&p, &req, "glm-5.3", None, EncodeMode::Normal).unwrap();
+        assert!(body.get("stop").is_none());
+        assert!(body.get("temperature").is_none());
     }
 
     #[test]

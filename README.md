@@ -199,6 +199,45 @@ $ curl ... -d '{"model":"sonnet-class",...}'
           "message":"stopped by a budget: the today limit for everything (5.00 USD) is used up"}}
 ```
 
+## Classifier Routing（Auto Mode 分类器路由）
+
+Claude Code 的 Auto Mode 在执行 Bash / Edit 之前会发一个独立的**侧查询**：一个很小的判定请求，
+让模型回答 `<block>yes|no</block>`。这个请求和主对话走同一个端点，甚至经常带同一个模型名
+（比如 `claude-opus-4-8[1m]`）——但它们是两种完全不同的流量。
+
+Zroutery 按**请求形态**而不是模型名来区分它们：温度 0、`max_tokens` 64、`stop_sequences` 里
+有 `</block>`、加上判定 prompt 的标记，这些一起构成分类器的指纹（打分制，参数相似但 prompt
+不符的普通小请求不会被误判）。识别出来之后送进一个独立的候选池：
+
+```json
+"classifier": {
+  "enabled": true,
+  "strategy": "priority",
+  "failover": true,
+  "max_attempts": 2,
+  "candidates": [
+    {"model": "zai-glm-5.3", "priority": 10},
+    {"model": "deepseek-deepseek-v4", "priority": 20}
+  ],
+  "detection": {"enabled": true, "minimum_confidence": 0.85}
+}
+```
+
+几条边界值得知道：
+
+- **候选引用的是已有的模型**（`<provider>-<upstream model>`）。provider、密钥、协议、价格、健康度全部复用，
+  不存在第二套 provider 配置。
+- **主请求永远不进分类器池，分类器请求永远不进主池**——这是被集成测试锁死的不变量。
+- **模型健康度两个池共享**：provider 挂了就是挂了。但请求统计按 main / auto_mode 分开，
+  Activity 面板里「审批慢」和「模型慢」能分得清。
+- **判定协议必须保真**：`stop_sequences` 跨方言保持数组，provider 上「兼容性」quirks
+  （drop_stop 之类）对分类器请求不生效。
+- **fail closed**。候选全部失败、或者返回的东西里没有 `<block>` 判定，就把错误原样还给
+  Claude Code——它会退回人工审批。Zroutery 绝不把「看起来安全」翻译成放行：输出解析器
+  不参与审批决策。
+- Claude Code 的判定 prompt / 参数随版本变化，所以指纹是可配置的
+  （`detection.signatures`），新版本来了改配置就行，不用等 Zroutery 发版。
+
 ## 余额查询
 
 各家余额接口没有统一标准，所以 provider 上挂一个 *probe*：一个路径加几个 JSON pointer。内置这些预设：

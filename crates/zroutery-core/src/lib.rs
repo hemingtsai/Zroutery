@@ -10,8 +10,11 @@
 //! * [`ir`] is the canonical representation every dialect is translated through.
 //! * [`billing`] prices a request and reads provider balances.
 //! * [`budget`] stops spending once a limit is reached, and remembers across restarts.
+//! * [`classifier`] detects Auto Mode classifier side queries and reads their verdicts.
 //! * [`election`] picks a class's primary from measured latency and price.
 //! * [`config`] holds providers, the model registry and routing policy.
+//! * [`query`] says what a request is *for* (main vs side query), as opposed to
+//!   [`registry`], which says which model it wants.
 //! * [`registry`] resolves a client model id (including `*-class` virtual ids).
 //! * [`router`] picks candidates, tracks health and drives failover.
 //! * [`protocol`] contains the two decoders and two encoders plus SSE handling.
@@ -21,11 +24,13 @@
 pub mod billing;
 pub mod budget;
 pub mod circuit_breaker;
+pub mod classifier;
 pub mod config;
 pub mod election;
 pub mod error;
 pub mod ir;
 pub mod protocol;
+pub mod query;
 pub mod rectifier;
 pub mod registry;
 pub mod router;
@@ -39,10 +44,13 @@ pub use billing::{
 };
 pub use budget::{Budget, BudgetPeriod, BudgetScope, Ledger, OnExceeded, Verdict};
 pub use circuit_breaker::{CircuitBreaker, CircuitBreakerConfig, CircuitState};
+pub use classifier::{
+    ClassifierSignature, ClassifierVerdict, Detection as ClassifierDetection, DetectionConfig,
+};
 pub use config::{
-    AppConfig, ConfigIssue, IssueSeverity, MemorySecretStore, ModelClass, ModelEntry,
-    ProviderConfig, ProviderKind, RectifierConfig, RoutingConfig, RoutingStrategy, SecretStore,
-    ServerConfig,
+    AppConfig, ClassifierCandidate, ClassifierConfig, ConfigIssue, IssueSeverity,
+    MemorySecretStore, ModelClass, ModelEntry, ProviderConfig, ProviderKind, RectifierConfig,
+    RoutingConfig, RoutingStrategy, SecretStore, ServerConfig,
 };
 pub use election::{ClassElection, Election, Measurement, Ranked, ScoringConfig};
 pub use error::{Error, Result};
@@ -50,6 +58,7 @@ pub use ir::{
     ChatRequest, ChatResponse, ContentBlock, Dialect, Message, Role, StopReason, StreamEvent,
     SystemPart, ToolChoice, Usage,
 };
+pub use query::{RequestKind, SideQueryKind};
 pub use registry::{Registry, Resolution};
 pub use router::{Candidate, Router};
 pub use server::{build_app, AppState, ServerHandle};
