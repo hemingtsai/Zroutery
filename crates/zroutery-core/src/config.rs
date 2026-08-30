@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::billing::{BalanceConfig, BaseDepth, Pricing};
 use crate::budget::Budget;
 use crate::circuit_breaker::CircuitBreakerConfig;
+use crate::classifier::DetectionConfig;
 use crate::election::ScoringConfig;
 use crate::ir::Dialect;
 pub use crate::protocol::ProviderQuirks;
@@ -460,6 +461,67 @@ impl Default for RoutingConfig {
     }
 }
 
+/// One member of the Auto Mode classifier pool.
+///
+/// `model` is an existing exposed model id (or alias): the classifier pool is a
+/// *selection* of models, not a second set of provider credentials. Everything
+/// the entry already has — provider, secret, protocol, pricing, health — is
+/// reused as-is, which is why there is no base url or key here.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ClassifierCandidate {
+    /// Exposed id (or alias) of the model to use, e.g. `zai-glm-5.3`.
+    pub model: String,
+    /// Lower wins, exactly like a class member's priority.
+    #[serde(default)]
+    pub priority: i32,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+/// Routing policy for Claude Code Auto Mode classifier side queries.
+///
+/// Main requests and classifier requests are two orthogonal dimensions: a
+/// `*-class` id routes by *capability*, this routes by *purpose*. The pools
+/// share model health (a provider that is down is down for both) but keep
+/// their own strategy, failover and attempt budget.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ClassifierConfig {
+    /// Master switch: off means every request is routed as a main request.
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub strategy: RoutingStrategy,
+    #[serde(default = "default_true")]
+    pub failover: bool,
+    /// Max upstream attempts for one classifier request.
+    #[serde(default = "ClassifierConfig::default_attempts")]
+    pub max_attempts: u32,
+    /// The classifier pool, in no particular order; the strategy orders it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub candidates: Vec<ClassifierCandidate>,
+    #[serde(default)]
+    pub detection: DetectionConfig,
+}
+
+impl ClassifierConfig {
+    fn default_attempts() -> u32 {
+        2
+    }
+}
+
+impl Default for ClassifierConfig {
+    fn default() -> Self {
+        ClassifierConfig {
+            enabled: false,
+            strategy: RoutingStrategy::Priority,
+            failover: true,
+            max_attempts: Self::default_attempts(),
+            candidates: Vec::new(),
+            detection: DetectionConfig::default(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ServerConfig {
     /// Loopback by default. Changing this exposes your API keys to the network.
@@ -551,6 +613,10 @@ pub struct AppConfig {
     pub server: ServerConfig,
     #[serde(default)]
     pub routing: RoutingConfig,
+    /// Routing for Auto Mode classifier side queries. Orthogonal to
+    /// `routing`, which stays about the main conversation.
+    #[serde(default)]
+    pub classifier: ClassifierConfig,
     #[serde(default)]
     pub providers: Vec<ProviderConfig>,
     #[serde(default)]
@@ -793,6 +859,77 @@ impl AppConfig {
                         class.virtual_id()
                     ),
                     subject: Some(class.virtual_id().to_string()),
+                });
+            }
+        }
+
+        // Classifier candidates reference models by exposed id or alias; a
+        // dangling reference means a classifier request would fail at routing
+        // time, which is better caught at save time.
+        if self.classifier.enabled {
+            for candidate in &self.classifier.candidates {
+                if candidate.model.trim().is_empty() {
+                    issues.push(ConfigIssue {
+                        severity: IssueSeverity::Error,
+                        code: "classifier.candidate_empty".into(),
+                        message: "A classifier candidate has no model id".into(),
+                        subject: None,
+                    });
+                    continue;
+                }
+                let entry = self.model(&candidate.model);
+                if let Some(entry) = entry {
+                    let exposed = entry.exposed_id();
+                    if !entry.enabled {
+                        issues.push(ConfigIssue {
+                            severity: IssueSeverity::Warning,
+                            code: "classifier.candidate_disabled".into(),
+                            message: format!(
+                                "Classifier candidate `{}` is a disabled model",
+                                candidate.model
+                            ),
+                            subject: Some(exposed),
+                        });
+                    } else if self
+                        .provider(&entry.provider_id)
+                        .map(|p| !p.enabled)
+                        .unwrap_or(true)
+                    {
+                        issues.push(ConfigIssue {
+                            severity: IssueSeverity::Warning,
+                            code: "classifier.candidate_provider_off".into(),
+                            message: format!(
+                                "Classifier candidate `{}` sits on a disabled provider",
+                                candidate.model
+                            ),
+                            subject: Some(exposed),
+                        });
+                    }
+                } else {
+                    issues.push(ConfigIssue {
+                        severity: IssueSeverity::Error,
+                        code: "classifier.candidate_unknown".into(),
+                        message: format!(
+                            "Classifier candidate `{}` is not a configured model",
+                            candidate.model
+                        ),
+                        subject: Some(candidate.model.clone()),
+                    });
+                }
+            }
+            if self
+                .classifier
+                .candidates
+                .iter()
+                .all(|c| !c.enabled)
+            {
+                issues.push(ConfigIssue {
+                    severity: IssueSeverity::Warning,
+                    code: "classifier.no_candidates".into(),
+                    message: "Classifier routing is on but no candidate is enabled, so \
+                              classifier requests will fail"
+                        .into(),
+                    subject: None,
                 });
             }
         }
@@ -1267,6 +1404,76 @@ mod tests {
         .unwrap();
         cfg.normalize();
         assert_eq!(cfg.models[0].aliases, vec!["dup"]);
+    }
+
+    #[test]
+    fn classifier_config_round_trips_and_stays_off_by_default() {
+        let cfg = sample();
+        assert!(!cfg.classifier.enabled);
+        assert!(cfg.classifier.candidates.is_empty());
+        let json = serde_json::to_string(&cfg).unwrap();
+        let back: AppConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(cfg, back);
+
+        // And a config that predates classifier routing loads without it.
+        let legacy: AppConfig = serde_json::from_str(
+            r#"{"server":{"auth_token":"zr-x"},"models":[]}"#,
+        )
+        .unwrap();
+        assert!(!legacy.classifier.enabled);
+    }
+
+    #[test]
+    fn classifier_candidates_are_validated_against_the_registry() {
+        let mut cfg = sample();
+        cfg.classifier.enabled = true;
+
+        // A candidate naming a model that does not exist is an error.
+        cfg.classifier.candidates.push(ClassifierCandidate {
+            model: "nope-missing".into(),
+            priority: 10,
+            enabled: true,
+        });
+        assert!(cfg
+            .validate()
+            .iter()
+            .any(|i| i.code == "classifier.candidate_unknown"));
+
+        // A valid candidate on an enabled model is fine...
+        cfg.classifier.candidates[0].model = "deepseek-deepseek-chat".into();
+        assert!(!cfg
+            .validate()
+            .iter()
+            .any(|i| i.code.starts_with("classifier.")));
+
+        // ...until the model itself is disabled, which is only a warning.
+        cfg.models[0].enabled = false;
+        assert!(cfg
+            .validate()
+            .iter()
+            .any(|i| i.code == "classifier.candidate_disabled"));
+    }
+
+    #[test]
+    fn an_enabled_classifier_with_no_live_candidate_warns() {
+        let mut cfg = sample();
+        cfg.classifier.enabled = true;
+        cfg.classifier.candidates.push(ClassifierCandidate {
+            model: "deepseek-deepseek-chat".into(),
+            priority: 10,
+            enabled: false,
+        });
+        assert!(cfg
+            .validate()
+            .iter()
+            .any(|i| i.code == "classifier.no_candidates"));
+
+        // Nothing is checked while the feature is off.
+        cfg.classifier.enabled = false;
+        assert!(!cfg
+            .validate()
+            .iter()
+            .any(|i| i.code.starts_with("classifier.")));
     }
 
     #[test]

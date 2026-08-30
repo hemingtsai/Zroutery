@@ -306,7 +306,7 @@ impl Router {
                 elected.push(entry);
             }
         }
-        let mut unseen: Vec<&ModelEntry> = members
+        let unseen: Vec<&ModelEntry> = members
             .iter()
             .filter(|m| !order.iter().any(|id| *id == m.exposed_id()))
             .copied()
