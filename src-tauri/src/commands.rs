@@ -7,6 +7,7 @@ use tauri_plugin_clipboard_manager::ClipboardExt;
 use zroutery_core::config::{AppConfig, ProviderConfig, SecretStore};
 use zroutery_core::upstream::{DiscoveredModel, Upstream};
 
+use crate::ccswitch;
 use crate::logs::LogBuffer;
 use crate::state::{Activity, Desktop, Snapshot};
 use crate::store;
@@ -218,4 +219,120 @@ pub fn hide_window(app: AppHandle) -> Cmd<()> {
 pub fn quit_app(app: AppHandle) -> Cmd<()> {
     tray::quit(&app);
     Ok(())
+}
+
+// ------------------------------------------------------- CC Switch import
+
+/// What CC Switch has, reduced to what an import decision needs.
+///
+/// The API key travels with the draft but the dashboard never renders it;
+/// it exists so the import command can be a single round trip without
+/// re-reading the database.
+#[derive(serde::Serialize)]
+pub struct CcSwitchPreview {
+    /// The source path the providers came from, for the panel's subtitle.
+    pub source: String,
+    /// Every provider found; `already_imported` marks the ones that would be
+    /// skipped because a provider with that id exists.
+    pub providers: Vec<ccswitch::CcProviderDraft>,
+}
+
+#[tauri::command]
+pub async fn ccswitch_preview(
+    desktop: State<'_, Arc<Desktop>>,
+) -> Cmd<CcSwitchPreview> {
+    // SQLite and file reads block; keep them off the async worker thread.
+    let found = tauri::async_runtime::spawn_blocking(ccswitch::read_providers)
+        .await
+        .map_err(|e| e.to_string())??;
+
+    let config = desktop.core.config();
+    let providers = found
+        .into_iter()
+        .map(|p| {
+            // A provider talking to the same endpoint is the same relay as
+            // far as an import is concerned, whatever it is called here.
+            let existing = config.providers.iter().find(|existing| {
+                existing.base_url.trim_end_matches('/') == p.base_url.trim_end_matches('/')
+            });
+            let (target_id, already_imported) = match existing {
+                Some(existing) => (existing.id.clone(), true),
+                None => {
+                    let taken = |id: &str| config.provider(id).is_some();
+                    (ccswitch::unique_provider_id(&p.name, &taken), false)
+                }
+            };
+            ccswitch::CcProviderDraft {
+                provider: p,
+                target_id,
+                already_imported,
+            }
+        })
+        .collect();
+
+    Ok(CcSwitchPreview {
+        source: ccswitch::cc_switch_dir()
+            .map(|d| d.display().to_string())
+            .unwrap_or_default(),
+        providers,
+    })
+}
+
+/// Import the selected CC Switch providers.
+///
+/// Providers are matched by CC Switch's own provider id (stored in the
+/// preview draft), so the selection survives re-ordering in CC Switch.
+/// API keys go straight into the credential store; the config file keeps
+/// only key refs, exactly like a hand-entered provider.
+#[tauri::command]
+pub async fn ccswitch_import(
+    app: AppHandle,
+    desktop: State<'_, Arc<Desktop>>,
+    ids: Vec<String>,
+) -> Cmd<Snapshot> {
+    let drafts = {
+        let providers = ccswitch::read_providers()?;
+        providers
+            .into_iter()
+            .filter(|p| ids.contains(&p.source_id))
+            .collect::<Vec<_>>()
+    };
+
+    let mut config = (*desktop.core.config()).clone();
+    let mut imported_keys: Vec<(String, String)> = Vec::new();
+
+    // The current CC Switch provider becomes the class primary; the rest keep
+    // CC Switch's order behind it.
+    let mut priority = 0;
+    for draft in &drafts {
+        let taken = |id: &str| config.provider(id).is_some();
+        let provider_id = ccswitch::unique_provider_id(&draft.name, &taken);
+        let (provider, models) = ccswitch::to_zroutery(
+            draft,
+            provider_id.clone(),
+            if draft.is_current { 0 } else { priority.max(10) },
+            None,
+        );
+        if let Some(key) = draft.api_key.clone() {
+            imported_keys.push((provider.key_ref.clone(), key));
+        }
+        config.providers.push(provider);
+        config.models.extend(models);
+        priority += 10;
+    }
+
+    // Store the keys first: an import whose providers reference keys that do
+    // not exist yet would look broken in the dashboard.
+    let secrets = Arc::clone(&desktop.secrets);
+    tauri::async_runtime::spawn_blocking(move || {
+        for (key_ref, key) in &imported_keys {
+            secrets.set(key_ref, key)?;
+        }
+        Ok::<_, String>(())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    desktop.apply_config(config).await?;
+    Ok(refreshed(&app, &desktop).await)
 }

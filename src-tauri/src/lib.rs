@@ -4,6 +4,7 @@
 //! item plus a dashboard window.
 
 mod commands;
+pub mod ccswitch;
 mod logs;
 pub mod platform;
 pub mod secrets;
@@ -56,6 +57,8 @@ pub fn run() {
             commands::copy_text,
             commands::hide_window,
             commands::quit_app,
+            commands::ccswitch_preview,
+            commands::ccswitch_import,
         ])
         .setup(move |app| {
             // Menu bar only: no dock icon, no app switcher entry.
