@@ -33,6 +33,14 @@ tracing = { workspace = true }
 tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
 uuid = { workspace = true }
 
-keyring = { version = "3.6.3", features = ["apple-native"] }
 tauri = { version = "2", features = ["tray-icon", "macos-private-api", "image-png"] }
 tauri-plugin-clipboard-manager = "2"
+
+# Each platform uses its native credential store: the macOS keychain or the
+# Windows Credential Manager. Both backends exist in the same keyring version
+# under target-specific features.
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3.6.3", features = ["apple-native"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { version = "3.6.3", features = ["windows-native"] }

@@ -5,6 +5,7 @@
 
 mod commands;
 mod logs;
+pub mod platform;
 pub mod secrets;
 pub mod state;
 pub mod store;
@@ -18,7 +19,7 @@ use crate::logs::LogBuffer;
 use crate::secrets::KeychainSecrets;
 use crate::state::Desktop;
 
-const KEYCHAIN_SERVICE: &str = "app.zroutery.desktop";
+pub const KEYCHAIN_SERVICE: &str = platform::APP_ID;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -61,15 +62,10 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
-            let config_dir = match std::env::var("ZROUTERY_CONFIG_DIR") {
-                // Escape hatch for testing and for keeping the config with a
-                // dotfile repo.
-                Ok(dir) => std::path::PathBuf::from(dir),
-                Err(_) => app
-                    .path()
-                    .app_config_dir()
-                    .map_err(|e| format!("cannot resolve the config directory: {e}"))?,
-            };
+            // ZROUTERY_CONFIG_DIR wins; otherwise Tauri's own resolution,
+            // which agrees with platform::default_config_dir on every
+            // platform we ship.
+            let config_dir = platform::default_config_dir();
             std::fs::create_dir_all(&config_dir)?;
 
             let (config, warning) = store::load(&config_dir);

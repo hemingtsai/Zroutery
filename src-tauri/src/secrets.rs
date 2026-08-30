@@ -193,4 +193,30 @@ mod tests {
         store.delete(&key).unwrap();
         assert!(!store.has(&key), "the deletion must win over the fallback");
     }
+
+    /// A real round trip through the platform's native credential store —
+    /// the Windows Credential Manager via the `windows-native` keyring
+    /// backend. Proves the target-specific feature actually wires up, which
+    /// compiling alone does not.
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn the_native_credential_store_round_trips() {
+        let store = KeychainSecrets::new("app.zroutery.test.credential-manager");
+        let key = format!("provider:{}", uuid::Uuid::new_v4().simple());
+
+        store.set(&key, "sk-roundtrip").unwrap();
+        assert_eq!(store.get(&key).as_deref(), Some("sk-roundtrip"));
+
+        // A second instance reads the same entry: the store is the OS's, not
+        // ours (ours only caches).
+        let fresh = KeychainSecrets::new("app.zroutery.test.credential-manager");
+        assert_eq!(fresh.get(&key).as_deref(), Some("sk-roundtrip"));
+
+        store.delete(&key).unwrap();
+        assert!(store.get(&key).is_none());
+        // Each instance caches reads independently, so a brand new one is the
+        // honest witness that the deletion reached the OS store.
+        let later = KeychainSecrets::new("app.zroutery.test.credential-manager");
+        assert!(later.get(&key).is_none());
+    }
 }

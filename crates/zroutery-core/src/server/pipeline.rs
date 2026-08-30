@@ -853,12 +853,17 @@ fn sse_body(
             match st.events.next().await {
                 Some(Ok(event)) => {
                     match &event {
-                        StreamEvent::TextDelta { .. } | StreamEvent::ThinkingDelta { .. } => {
+                        StreamEvent::ThinkingDelta { .. } => {
                             if let Some(rec) = st.rec.as_mut() {
                                 rec.ttft(st.started.elapsed().as_millis() as u64);
                             }
                         }
                         StreamEvent::TextDelta { text, .. } => {
+                            if let Some(rec) = st.rec.as_mut() {
+                                rec.ttft(st.started.elapsed().as_millis() as u64);
+                            }
+                            // Classifier streams keep their text so the verdict
+                            // can be checked once the stream ends.
                             if let Some(acc) = st.classifier_text.as_mut() {
                                 acc.push_str(text);
                             }
