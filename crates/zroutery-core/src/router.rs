@@ -82,7 +82,10 @@ impl HealthState {
 #[derive(Debug)]
 pub struct Router {
     health: Mutex<HashMap<String, HealthState>>,
-    rr: Mutex<HashMap<ModelClass, usize>>,
+    /// Round robin cursors, keyed by pool name (a class's virtual id, or the
+    /// classifier pool) rather than by `ModelClass`: routing pools exist that
+    /// are not a class.
+    rr: Mutex<HashMap<String, usize>>,
     /// The last election, when one has been held. `Balanced` follows the order it
     /// decided instead of re-deciding per request, which is the whole point: a
     /// route that changes under load cannot be reasoned about.
@@ -130,7 +133,42 @@ impl Router {
         if members.is_empty() {
             return Err(Error::NoCandidate(class.virtual_id().to_string()));
         }
+        self.plan_candidates(
+            registry,
+            members,
+            class.virtual_id(),
+            Some(class),
+            routing.strategy,
+            routing.failover,
+            routing.max_attempts,
+            class.virtual_id().to_string(),
+        )
+    }
 
+    /// Turn a pool of models into an ordered list of attempts, applying health,
+    /// circuit breakers, the strategy's ordering, failover and the attempt cap.
+    ///
+    /// Every routing pool — a class today, the Auto Mode classifier pool next —
+    /// shares this one implementation, so a candidate means the same thing
+    /// wherever it came from: health filtering, degraded marking and failover
+    /// cannot drift between pools.
+    ///
+    /// `counter_key` names the pool for the round robin cursor. `election_class`
+    /// is `Some` only for class pools: `Balanced` follows the last election's
+    /// order, and elections only exist per class, so a pool without one orders
+    /// by priority instead.
+    #[allow(clippy::too_many_arguments)]
+    fn plan_candidates(
+        &self,
+        registry: &Registry,
+        members: Vec<&ModelEntry>,
+        counter_key: &str,
+        election_class: Option<ModelClass>,
+        strategy: RoutingStrategy,
+        failover: bool,
+        max_attempts: u32,
+        pool_name: String,
+    ) -> Result<Vec<Candidate>> {
         let (closed, half_open): (Vec<&ModelEntry>, Vec<&ModelEntry>) = {
             let health = crate::sync::lock(&self.health);
             let mut closed = Vec::new();
@@ -151,13 +189,13 @@ impl Router {
             (closed, half_open)
         };
 
-        let mut ordered = self.order(&closed, class, routing.strategy);
+        let mut ordered = self.order(&closed, counter_key, election_class, strategy);
         let mut degraded_ids: Vec<String> = Vec::new();
         if ordered.is_empty() {
             // No closed candidate: fall back to half-open probes, marked degraded.
             ordered = half_open;
             degraded_ids = ordered.iter().map(|m| m.exposed_id()).collect();
-        } else if routing.failover {
+        } else if failover {
             // Half-open candidates are allowed but treated as degraded.
             for m in half_open {
                 degraded_ids.push(m.exposed_id());
@@ -165,8 +203,8 @@ impl Router {
             }
         }
 
-        let limit = if routing.failover {
-            routing.max_attempts.max(1) as usize
+        let limit = if failover {
+            max_attempts.max(1) as usize
         } else {
             1
         };
@@ -178,7 +216,7 @@ impl Router {
             out.push(Candidate::new(entry, provider, degraded));
         }
         if out.is_empty() {
-            return Err(Error::NoCandidate(class.virtual_id().to_string()));
+            return Err(Error::NoCandidate(pool_name));
         }
         Ok(out)
     }
@@ -186,14 +224,20 @@ impl Router {
     fn order<'a>(
         &self,
         members: &[&'a ModelEntry],
-        class: ModelClass,
+        counter_key: &str,
+        election_class: Option<ModelClass>,
         strategy: RoutingStrategy,
     ) -> Vec<&'a ModelEntry> {
         if members.len() <= 1 {
             return members.to_vec();
         }
         match strategy {
-            RoutingStrategy::Balanced => self.elected_order(members, class),
+            // Elections are held per class; a pool that has none (the classifier
+            // pool) falls back to priority, which is what the user configured.
+            RoutingStrategy::Balanced => match election_class {
+                Some(class) => self.elected_order(members, class),
+                None => by_priority(members),
+            },
             RoutingStrategy::Priority => {
                 let mut groups: Vec<(i32, Vec<&ModelEntry>)> = Vec::new();
                 for m in members {
@@ -211,7 +255,7 @@ impl Router {
             RoutingStrategy::WeightedRandom => self.weighted_shuffle(members),
             RoutingStrategy::RoundRobin => {
                 let mut rr = crate::sync::lock(&self.rr);
-                let counter = rr.entry(class).or_insert(0);
+                let counter = rr.entry(counter_key.to_string()).or_insert(0);
                 let start = *counter % members.len();
                 *counter = counter.wrapping_add(1);
                 let mut v = Vec::with_capacity(members.len());
@@ -251,19 +295,9 @@ impl Router {
         members: &[&'a ModelEntry],
         class: ModelClass,
     ) -> Vec<&'a ModelEntry> {
-        let by_priority = |list: &mut Vec<&'a ModelEntry>| {
-            list.sort_by(|a, b| {
-                a.priority
-                    .cmp(&b.priority)
-                    .then_with(|| a.exposed_id().cmp(&b.exposed_id()))
-            })
-        };
-
         let guard = crate::sync::lock(&self.election);
         let Some(order) = guard.as_ref().and_then(|e| e.order_for(class)) else {
-            let mut fallback = members.to_vec();
-            by_priority(&mut fallback);
-            return fallback;
+            return by_priority(members);
         };
 
         let mut elected: Vec<&ModelEntry> = Vec::with_capacity(members.len());
@@ -277,8 +311,7 @@ impl Router {
             .filter(|m| !order.iter().any(|id| *id == m.exposed_id()))
             .copied()
             .collect();
-        by_priority(&mut unseen);
-        elected.extend(unseen);
+        elected.extend(by_priority(&unseen));
         elected
     }
 
@@ -415,12 +448,23 @@ impl Router {
     }
 }
 
+/// Priority order with a stable tiebreak, shared by the `Priority` strategy and
+/// by `Balanced` when no election has been held (or the pool has no class).
+fn by_priority<'a>(members: &[&'a ModelEntry]) -> Vec<&'a ModelEntry> {
+    let mut sorted = members.to_vec();
+    sorted.sort_by(|a, b| {
+        a.priority
+            .cmp(&b.priority)
+            .then_with(|| a.exposed_id().cmp(&b.exposed_id()))
+    });
+    sorted
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::{AppConfig, ProviderKind};
     use std::sync::Arc;
-
     fn cfg_with(models: Vec<ModelEntry>) -> AppConfig {
         let mut cfg = AppConfig::default();
         cfg.providers.push(ProviderConfig::new(
