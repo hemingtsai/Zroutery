@@ -75,6 +75,16 @@ pub fn run() {
             // Make sure a freshly generated token reaches disk.
             store::save(&config_dir, &config)?;
 
+            // On macOS the app is a menu bar accessory: the window stays
+            // hidden until the tray is used. Everywhere else a hidden window
+            // reads as "the app did not start", so the dashboard opens on
+            // launch and the tray is the secondary entry point.
+            #[cfg(not(target_os = "macos"))]
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+
             let autostart = config.server.autostart;
             let secrets = Arc::new(KeychainSecrets::new(KEYCHAIN_SERVICE));
             let desktop = Arc::new(Desktop::new(config_dir, config, secrets));
