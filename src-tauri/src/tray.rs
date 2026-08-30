@@ -1,8 +1,9 @@
-//! Menu bar presence.
+//! Tray presence.
 //!
 //! On macOS the app runs as an accessory: no dock icon, no menu bar app menu,
-//! just this tray item. Everything the user needs while working is reachable
-//! from here without opening the window.
+//! just this tray item. On Windows it lives in the notification area. Either
+//! way, everything the user needs while working is reachable from here
+//! without opening the window.
 
 use std::sync::Arc;
 
@@ -55,9 +56,17 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
         });
 
     // A monochrome template image is what macOS expects in the menu bar; it
-    // adapts to light and dark automatically.
+    // adapts to light and dark automatically. Windows and Linux have no
+    // template concept — there the icon must carry its own colour.
     if let Ok(icon) = tauri::image::Image::from_bytes(include_bytes!("../icons/tray.png")) {
-        builder = builder.icon(icon).icon_as_template(true);
+        #[cfg(target_os = "macos")]
+        {
+            builder = builder.icon(icon).icon_as_template(true);
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            builder = builder.icon(icon);
+        }
     } else if let Some(icon) = app.default_window_icon() {
         builder = builder.icon(icon.clone());
     }
