@@ -635,36 +635,52 @@ fn unwrap_body(state: &AppState, body: JsonBody) -> Result<Value> {
     }
 }
 
-async fn anthropic_messages(State(state): State<Arc<AppState>>, body: JsonBody) -> Response {
+async fn anthropic_messages(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    body: JsonBody,
+) -> Response {
     let body = match unwrap_body(&state, body) {
         Ok(v) => v,
         Err(e) => return error_response(Dialect::Anthropic, &e),
     };
-    handle_chat(state, Dialect::Anthropic, body).await
+    handle_chat(state, Dialect::Anthropic, headers, body).await
 }
 
-async fn openai_chat(State(state): State<Arc<AppState>>, body: JsonBody) -> Response {
+async fn openai_chat(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    body: JsonBody,
+) -> Response {
     let body = match unwrap_body(&state, body) {
         Ok(v) => v,
         Err(e) => return error_response(Dialect::OpenAI, &e),
     };
-    handle_chat(state, Dialect::OpenAI, body).await
+    handle_chat(state, Dialect::OpenAI, headers, body).await
 }
 
-async fn responses_chat(State(state): State<Arc<AppState>>, body: JsonBody) -> Response {
+async fn responses_chat(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    body: JsonBody,
+) -> Response {
     let body = match unwrap_body(&state, body) {
         Ok(v) => v,
         Err(e) => return error_response(Dialect::OpenAIResponses, &e),
     };
-    handle_chat(state, Dialect::OpenAIResponses, body).await
+    handle_chat(state, Dialect::OpenAIResponses, headers, body).await
 }
 
-async fn gemini_generate(State(state): State<Arc<AppState>>, body: JsonBody) -> Response {
+async fn gemini_generate(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    body: JsonBody,
+) -> Response {
     let body = match unwrap_body(&state, body) {
         Ok(v) => v,
         Err(e) => return error_response(Dialect::Gemini, &e),
     };
-    handle_chat(state, Dialect::Gemini, body).await
+    handle_chat(state, Dialect::Gemini, headers, body).await
 }
 
 async fn count_tokens(State(state): State<Arc<AppState>>, body: JsonBody) -> Response {

@@ -22,27 +22,67 @@ use crate::config::ModelClass;
 use crate::error::{Error, Result};
 use crate::ir::{ChatRequest, Dialect, StreamEvent, Usage};
 use crate::protocol::{self, openai, SseFrame, StreamEncoder};
+use crate::query::RequestKind;
 use crate::rectifier;
 use crate::registry::{Registry, Resolution};
 use crate::router::Candidate;
 use crate::stats::RecordBuilder;
-pub(super) async fn handle_chat(state: Arc<AppState>, dialect: Dialect, body: Value) -> Response {
+pub(super) async fn handle_chat(
+    state: Arc<AppState>,
+    dialect: Dialect,
+    headers: axum::http::HeaderMap,
+    body: Value,
+) -> Response {
     let include_usage = dialect == Dialect::OpenAI && openai::wants_stream_usage(&body);
 
-    let req = match protocol::decode_request(dialect, body) {
+    let req = match protocol::decode_request(dialect, body.clone()) {
         Ok(r) => r,
         Err(e) => return error_response(dialect, &e),
     };
 
     let registry = state.registry();
-    let plan = match registry
-        .resolve(&req.model)
-        .and_then(|resolution| apply_budgets(&state, &registry, resolution))
-        .and_then(|resolution| state.router.plan(&registry, &resolution))
-    {
+    let config = registry.config();
+
+    // Routing intent: is this the client's main conversation, or a side query
+    // (today: Claude Code's Auto Mode classifier) issued alongside it? The
+    // classifier arrives with the same model string as main traffic, so the
+    // answer comes from the request's shape, never from the model name — and
+    // when classifier routing is off, everything is a main request.
+    let kind = if config.classifier.enabled {
+        let detection = crate::classifier::detect(&headers, &body, &config.classifier.detection);
+        if !detection.kind.is_main() {
+            tracing::info!(
+                requested_model = %req.model,
+                signature = detection.matched.as_deref().unwrap_or_default(),
+                confidence = %format!("{:.2}", detection.confidence),
+                "classifier request detected"
+            );
+        }
+        detection.kind
+    } else {
+        RequestKind::Main
+    };
+
+    let plan = match kind {
+        RequestKind::Main => registry
+            .resolve(&req.model)
+            .and_then(|resolution| apply_budgets(&state, &registry, resolution))
+            .and_then(|resolution| state.router.plan(&registry, &resolution)),
+        // The classifier pool is resolved directly: the model the client named
+        // (e.g. `claude-opus-4-8[1m]`) is irrelevant to *which model judges*,
+        // and may not even exist in the registry. Budgets are main-path
+        // policy; classifier requests are billed under the model that answers
+        // but are never degraded or rejected by a class budget.
+        RequestKind::Side(_) => {
+            let classifier = config.classifier.clone();
+            state.router.plan_classifier(&registry, &classifier)
+        }
+    };
+    let plan = match plan {
         Ok(p) => p,
         Err(e) => {
             let mut rec = RecordBuilder::new(dialect, &req.model, req.stream);
+            rec.kind(kind);
             rec.fail(e.status().as_u16(), e.to_string());
             state.stats.record(rec.finish(0));
             return error_response(dialect, &e);
@@ -50,9 +90,9 @@ pub(super) async fn handle_chat(state: Arc<AppState>, dialect: Dialect, body: Va
     };
 
     if req.stream {
-        stream_chat(state, dialect, req, plan, include_usage).await
+        stream_chat(state, dialect, req, plan, kind, include_usage).await
     } else {
-        buffered_chat(state, dialect, req, plan).await
+        buffered_chat(state, dialect, req, plan, kind).await
     }
 }
 
@@ -272,15 +312,29 @@ async fn buffered_chat(
     dialect: Dialect,
     req: ChatRequest,
     plan: Vec<Candidate>,
+    kind: RequestKind,
 ) -> Response {
     let started = Instant::now();
     let mut rec = RecordBuilder::new(dialect, &req.model, false);
+    rec.kind(kind);
     let routing = state.config().routing.clone();
     let mut last_error = Error::NoCandidate(req.model.clone());
 
     for candidate in &plan {
         rec.attempt();
         rec.resolved(candidate.model_id(), &candidate.provider.name);
+        if !kind.is_main() {
+            // The three names the debugging session needs: what the client
+            // asked for, which pool member was chosen, and what the provider
+            // actually receives.
+            tracing::debug!(
+                kind = kind.as_str(),
+                requested_model = %req.model,
+                candidate_model = candidate.model_id(),
+                upstream_model = %candidate.entry.upstream_model,
+                "classifier attempt"
+            );
+        }
         let attempt_start = Instant::now();
 
         let (key, body) = match prepare(&state, candidate, &req) {
@@ -332,7 +386,7 @@ async fn buffered_chat(
                 // Report the model that actually answered, not the virtual id.
                 resp.model = candidate.exposed_id.clone();
                 let mut response = Json(protocol::encode_response(dialect, &resp)).into_response();
-                inject_routing_headers(response.headers_mut(), candidate);
+                inject_routing_headers(response.headers_mut(), candidate, kind);
                 inject_cost_header(response.headers_mut(), cost.as_ref());
                 return response;
             }
@@ -360,7 +414,7 @@ async fn buffered_chat(
                         resp.model = candidate.exposed_id.clone();
                         let mut response =
                             Json(protocol::encode_response(dialect, &resp)).into_response();
-                        inject_routing_headers(response.headers_mut(), candidate);
+                        inject_routing_headers(response.headers_mut(), candidate, kind);
                         inject_cost_header(response.headers_mut(), cost.as_ref());
                         return response;
                     }
@@ -411,16 +465,27 @@ async fn stream_chat(
     dialect: Dialect,
     req: ChatRequest,
     plan: Vec<Candidate>,
+    kind: RequestKind,
     include_usage: bool,
 ) -> Response {
     let started = Instant::now();
     let mut rec = RecordBuilder::new(dialect, &req.model, true);
+    rec.kind(kind);
     let routing = state.config().routing.clone();
     let mut last_error = Error::NoCandidate(req.model.clone());
 
     for candidate in &plan {
         rec.attempt();
         rec.resolved(candidate.model_id(), &candidate.provider.name);
+        if !kind.is_main() {
+            tracing::debug!(
+                kind = kind.as_str(),
+                requested_model = %req.model,
+                candidate_model = candidate.model_id(),
+                upstream_model = %candidate.entry.upstream_model,
+                "classifier stream attempt"
+            );
+        }
         let attempt_start = Instant::now();
 
         let (key, body) = match prepare(&state, candidate, &req) {
@@ -492,7 +557,7 @@ async fn stream_chat(
                 );
                 headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
                 headers.insert("x-accel-buffering", HeaderValue::from_static("no"));
-                inject_routing_headers(response.headers_mut(), candidate);
+                inject_routing_headers(response.headers_mut(), candidate, kind);
                 return response;
             }
             Err(e) => {
@@ -526,7 +591,7 @@ async fn stream_chat(
                         );
                         headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
                         headers.insert("x-accel-buffering", HeaderValue::from_static("no"));
-                        inject_routing_headers(response.headers_mut(), candidate);
+                        inject_routing_headers(response.headers_mut(), candidate, kind);
                         return response;
                     }
                     Ok(None) => {
@@ -581,7 +646,7 @@ fn inject_cost_header(headers: &mut HeaderMap, cost: Option<&Cost>) {
     }
 }
 
-fn inject_routing_headers(headers: &mut HeaderMap, candidate: &Candidate) {
+fn inject_routing_headers(headers: &mut HeaderMap, candidate: &Candidate, kind: RequestKind) {
     if let Ok(v) = HeaderValue::from_str(&candidate.exposed_id) {
         headers.insert("x-zroutery-model", v);
     }
@@ -590,6 +655,9 @@ fn inject_routing_headers(headers: &mut HeaderMap, candidate: &Candidate) {
     }
     if candidate.degraded {
         headers.insert("x-zroutery-degraded", HeaderValue::from_static("1"));
+    }
+    if !kind.is_main() {
+        headers.insert("x-zroutery-classifier", HeaderValue::from_static("1"));
     }
 }
 

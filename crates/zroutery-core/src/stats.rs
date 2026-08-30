@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::billing::{Cost, CostTotals};
 use crate::ir::{Dialect, Usage};
+use crate::query::RequestKind;
 
 /// One completed (or failed) client request.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -19,6 +20,10 @@ pub struct RequestRecord {
     pub at: DateTime<Utc>,
     /// Which API the client used.
     pub ingress: Dialect,
+    /// What the request was *for*: the main conversation or a side query such
+    /// as the Auto Mode classifier. Orthogonal to the model.
+    #[serde(default)]
+    pub kind: RequestKind,
     /// What the client asked for, e.g. `sonnet-class`.
     pub requested_model: String,
     /// Which concrete model answered, if any.
@@ -53,6 +58,36 @@ pub struct ModelTotals {
     pub avg_latency_ms: f64,
 }
 
+/// Counters for one request kind (`main` / `auto_mode`).
+///
+/// Model health says whether a *model* is responsive; this says how a kind of
+/// traffic is doing. The same GLM endpoint can carry the main conversation and
+/// the classifier, and without this split the dashboard cannot tell whether
+/// "GLM is slow" means coding is slow or approvals are slow.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct KindTotals {
+    pub kind: String,
+    pub requests: u64,
+    pub failures: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    /// Average end to end latency in milliseconds.
+    pub avg_latency_ms: f64,
+}
+
+impl KindTotals {
+    fn observe(&mut self, record: &RequestRecord) {
+        self.requests += 1;
+        if !record.ok {
+            self.failures += 1;
+        }
+        self.input_tokens += record.usage.input_tokens as u64;
+        self.output_tokens += record.usage.output_tokens as u64;
+        let n = self.requests as f64;
+        self.avg_latency_ms += (record.latency_ms as f64 - self.avg_latency_ms) / n;
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StatsSummary {
     pub since: DateTime<Utc>,
@@ -63,6 +98,8 @@ pub struct StatsSummary {
     /// Spend per currency; never summed across currencies.
     pub cost: CostTotals,
     pub per_model: Vec<ModelTotals>,
+    /// Counters per request kind, sorted by kind name.
+    pub per_kind: Vec<KindTotals>,
 }
 
 #[derive(Debug)]
@@ -76,6 +113,7 @@ struct Inner {
     since: DateTime<Utc>,
     records: VecDeque<RequestRecord>,
     per_model: BTreeMap<String, ModelTotals>,
+    per_kind: BTreeMap<String, KindTotals>,
     requests: u64,
     failures: u64,
     input_tokens: u64,
@@ -91,6 +129,7 @@ impl Stats {
                 since: Utc::now(),
                 records: VecDeque::new(),
                 per_model: BTreeMap::new(),
+                per_kind: BTreeMap::new(),
                 requests: 0,
                 failures: 0,
                 input_tokens: 0,
@@ -145,6 +184,15 @@ impl Stats {
         let n = totals.requests as f64;
         totals.avg_latency_ms += (record.latency_ms as f64 - totals.avg_latency_ms) / n;
 
+        inner
+            .per_kind
+            .entry(record.kind.as_str().to_string())
+            .or_insert_with(|| KindTotals {
+                kind: record.kind.as_str().to_string(),
+                ..KindTotals::default()
+            })
+            .observe(&record);
+
         let limit = inner.limit;
         inner.records.push_back(record);
         while inner.records.len() > limit {
@@ -168,6 +216,7 @@ impl Stats {
             output_tokens: inner.output_tokens,
             cost: inner.cost.clone(),
             per_model: inner.per_model.values().cloned().collect(),
+            per_kind: inner.per_kind.values().cloned().collect(),
         }
     }
 
@@ -175,6 +224,7 @@ impl Stats {
         let mut inner = crate::sync::lock(&self.inner);
         inner.records.clear();
         inner.per_model.clear();
+        inner.per_kind.clear();
         inner.requests = 0;
         inner.failures = 0;
         inner.input_tokens = 0;
@@ -202,6 +252,7 @@ impl RecordBuilder {
                 id: format!("req_{}", uuid::Uuid::new_v4().simple()),
                 at: Utc::now(),
                 ingress,
+                kind: RequestKind::Main,
                 requested_model: requested_model.to_string(),
                 resolved_model: None,
                 provider_name: None,
@@ -216,6 +267,12 @@ impl RecordBuilder {
                 attempts: 0,
             },
         }
+    }
+
+    /// Stamp the request's kind. Set once, before the record is finished.
+    pub fn kind(&mut self, kind: RequestKind) -> &mut Self {
+        self.record.kind = kind;
+        self
     }
 
     pub fn id(&self) -> &str {
@@ -407,6 +464,70 @@ mod tests {
         assert!(stats.recent(4).is_empty());
         assert_eq!(stats.summary().requests, 0);
         assert!(stats.summary().per_model.is_empty());
+    }
+
+    #[test]
+    fn kind_totals_separate_main_from_side_queries() {
+        let stats = Stats::new(10);
+        // Same model, two kinds: the per-model row must not be able to say
+        // which traffic was which, the per-kind rows must.
+        let main_rec = {
+            let mut b = RecordBuilder::new(Dialect::Anthropic, "claude-opus-4-8[1m]", false);
+            b.kind(RequestKind::Main);
+            b.resolved("zai-glm", "Z.ai").attempt();
+            b.usage(Usage {
+                input_tokens: 100,
+                output_tokens: 5,
+                ..Usage::default()
+            });
+            b.finish(600)
+        };
+        let classifier_rec = {
+            let mut b = RecordBuilder::new(Dialect::Anthropic, "claude-opus-4-8[1m]", false);
+            b.kind(RequestKind::Side(crate::query::SideQueryKind::AutoMode));
+            b.resolved("zai-glm", "Z.ai").attempt();
+            b.usage(Usage {
+                input_tokens: 400,
+                output_tokens: 20,
+                ..Usage::default()
+            });
+            b.finish(100)
+        };
+        stats.record(main_rec);
+        stats.record(classifier_rec.clone());
+        stats.record(classifier_rec);
+
+        let summary = stats.summary();
+        let main = summary.per_kind.iter().find(|k| k.kind == "main").unwrap();
+        let auto = summary.per_kind.iter().find(|k| k.kind == "auto_mode").unwrap();
+        assert_eq!(main.requests, 1);
+        assert_eq!(main.input_tokens, 100);
+        assert!((main.avg_latency_ms - 600.0).abs() < 0.001);
+        assert_eq!(auto.requests, 2);
+        assert_eq!(auto.input_tokens, 800);
+        assert!((auto.avg_latency_ms - 100.0).abs() < 0.001);
+        // Model totals stay whole: both kinds hit the same model row.
+        let model = summary.per_model.iter().find(|m| m.model_id == "zai-glm").unwrap();
+        assert_eq!(model.requests, 3);
+
+        stats.clear();
+        assert!(stats.summary().per_kind.is_empty());
+    }
+
+    #[test]
+    fn old_records_without_a_kind_deserialize_as_main() {
+        // A record serialized before the field existed still loads.
+        let legacy = serde_json::json!({
+            "id": "req_x", "at": "2026-01-01T00:00:00Z", "ingress": "anthropic",
+            "requested_model": "m", "resolved_model": null, "provider_name": null,
+            "stream": false, "status": 200, "ok": true, "error": null,
+            "latency_ms": 10, "ttft_ms": null,
+            "usage": {"input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0,
+                      "cache_write_tokens": 0, "reasoning_tokens": 0},
+            "cost": null, "attempts": 1
+        });
+        let rec: RequestRecord = serde_json::from_value(legacy).unwrap();
+        assert_eq!(rec.kind, RequestKind::Main);
     }
 
     #[test]
