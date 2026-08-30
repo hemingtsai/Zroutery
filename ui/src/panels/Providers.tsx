@@ -10,6 +10,8 @@ import {
   type AppConfig,
   type BalancePreset,
   type BalanceStatus,
+  type CcProviderDraft,
+  type CcSwitchPreview,
   type DiscoveredModel,
   type Provider,
   type ProviderKind,
@@ -103,6 +105,9 @@ export default function Providers({
     Record<string, DiscoveredModel[]>
   >({});
   const [notice, setNotice] = useState<string | null>(null);
+  const [ccPreview, setCcPreview] = useState<CcSwitchPreview | null>(null);
+  const [ccLoading, setCcLoading] = useState(false);
+  const [ccSelected, setCcSelected] = useState<Record<string, boolean>>({});
 
   const update = (id: string, patch: Partial<Provider>) => {
     void save((cfg) => {
@@ -228,6 +233,43 @@ export default function Providers({
     );
   };
 
+  // ------------------------------------------------------- CC Switch import
+
+  const loadCcPreview = async () => {
+    setCcLoading(true);
+    setNotice(null);
+    try {
+      const preview = await api.ccswitchPreview();
+      setCcPreview(preview);
+      // Pre-tick everything that would be a fresh import; the already
+      // imported ones start unchecked.
+      const selection: Record<string, boolean> = {};
+      for (const p of preview.providers) {
+        selection[p.source_id] = !p.already_imported;
+      }
+      setCcSelected(selection);
+    } catch (e) {
+      setNotice(errorText(e));
+    } finally {
+      setCcLoading(false);
+    }
+  };
+
+  const importSelected = async () => {
+    const ids = Object.entries(ccSelected)
+      .filter(([, on]) => on)
+      .map(([id]) => id);
+    if (ids.length === 0) return;
+    const ok = await run(() => api.ccswitchImport(ids));
+    if (!ok) return;
+    const count = ids.length;
+    setNotice(
+      `Imported ${count} provider${count === 1 ? "" : "s"}. API keys went straight into the credential store; assign classes on the Models tab.`,
+    );
+    // Reload the preview so the imported ones now show as such.
+    await loadCcPreview();
+  };
+
   return (
     <>
       {notice && (
@@ -242,6 +284,16 @@ export default function Providers({
           {notice}
         </Banner>
       )}
+
+      <CcSwitchCard
+        preview={ccPreview}
+        loading={ccLoading}
+        selected={ccSelected}
+        busy={busy}
+        onLoad={loadCcPreview}
+        onSelect={(id, on) => setCcSelected({ ...ccSelected, [id]: on })}
+        onImport={importSelected}
+      />
 
       <Card
         title="Add a provider"
@@ -747,5 +799,163 @@ function BalanceRow({
         <span className="muted">this provider publishes no balance</span>
       )}
     </span>
+  );
+}
+
+/**
+ * Importing providers from CC Switch.
+ *
+ * CC Switch already holds every relay a Claude Code user switches between —
+ * base URL, key and tier defaults — and its tier defaults map straight onto
+ * Zroutery's classes. The card is read-only until Import is pressed: the
+ * preview lists what CC Switch has, marks what is already here by endpoint,
+ * and never renders the API key.
+ */
+function CcSwitchCard({
+  preview,
+  loading,
+  selected,
+  busy,
+  onLoad,
+  onSelect,
+  onImport,
+}: {
+  preview: CcSwitchPreview | null;
+  loading: boolean;
+  selected: Record<string, boolean>;
+  busy: boolean;
+  onLoad: () => Promise<void>;
+  onSelect: (id: string, on: boolean) => void;
+  onImport: () => Promise<void>;
+}) {
+  const importable = (preview?.providers ?? []).filter(
+    (p) => !p.already_imported,
+  );
+  const checkedCount = importable.filter((p) => selected[p.source_id]).length;
+
+  if (!preview) {
+    return (
+      <Card title="Import from CC Switch">
+        <p className="field-hint">
+          Already switching Claude Code between relays with CC Switch? Read its
+          provider list — base URLs, API keys and model tiers — straight into
+          Zroutery. Nothing is written until you confirm the selection.
+        </p>
+        <Button kind="primary" onClick={onLoad} disabled={loading || busy}>
+          {loading ? "Reading CC Switch…" : "Read CC Switch providers"}
+        </Button>
+      </Card>
+    );
+  }
+
+  return (
+    <Card
+      title="Import from CC Switch"
+      actions={
+        <>
+          <Button kind="ghost" onClick={onLoad} disabled={loading || busy}>
+            Reload
+          </Button>
+          <Button
+            kind="primary"
+            onClick={onImport}
+            disabled={busy || checkedCount === 0}
+            title={
+              checkedCount === 0 ? "Tick at least one provider" : undefined
+            }
+          >
+            Import {checkedCount > 0 ? `(${checkedCount})` : ""}
+          </Button>
+        </>
+      }
+    >
+      {preview.source && (
+        <p className="field-hint">
+          Read from <code>{preview.source}</code>. API keys are stored in the
+          OS credential store, never in the configuration file.
+        </p>
+      )}
+      {preview.providers.length === 0 ? (
+        <Empty>No Claude Code providers found in CC Switch.</Empty>
+      ) : (
+        <table className="table">
+          <thead>
+            <tr>
+              <th>Import</th>
+              <th>Name</th>
+              <th>Endpoint</th>
+              <th>Models</th>
+              <th>Would become</th>
+            </tr>
+          </thead>
+          <tbody>
+            {preview.providers.map((p) => (
+              <CcSwitchRow
+                key={p.source_id}
+                draft={p}
+                checked={selected[p.source_id] ?? false}
+                onSelect={onSelect}
+              />
+            ))}
+          </tbody>
+        </table>
+      )}
+    </Card>
+  );
+}
+
+function CcSwitchRow({
+  draft,
+  checked,
+  onSelect,
+}: {
+  draft: CcProviderDraft;
+  checked: boolean;
+  onSelect: (id: string, on: boolean) => void;
+}) {
+  return (
+    <tr className={draft.already_imported ? "row-warn" : ""}>
+      <td>
+        <input
+          type="checkbox"
+          aria-label={`Import ${draft.name}`}
+          checked={checked}
+          disabled={draft.already_imported}
+          onChange={(e) => onSelect(draft.source_id, e.currentTarget.checked)}
+        />
+      </td>
+      <td>
+        {draft.name}
+        {draft.is_current && (
+          <>
+            {" "}
+            <Badge tone="ok">active in CC Switch</Badge>
+          </>
+        )}
+        {draft.already_imported && (
+          <>
+            {" "}
+            <Badge tone="neutral">already here</Badge>
+          </>
+        )}
+      </td>
+      <td className="muted truncate" title={draft.base_url}>
+        {draft.base_url}
+      </td>
+      <td className="muted">
+        {draft.models.length === 0 ? (
+          "—"
+        ) : (
+          draft.models
+            .map((m) =>
+              m.class ? `${m.upstream_model} (${m.class})` : m.upstream_model,
+            )
+            .join(", ")
+        )}
+      </td>
+      <td>
+        <code>{draft.already_imported ? draft.target_id : previewId(draft.target_id, "")}</code>
+      </td>
+    </tr>
   );
 }

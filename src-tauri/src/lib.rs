@@ -4,6 +4,7 @@
 //! item plus a dashboard window.
 
 mod commands;
+pub mod ccswitch;
 mod logs;
 pub mod platform;
 pub mod secrets;
@@ -56,6 +57,8 @@ pub fn run() {
             commands::copy_text,
             commands::hide_window,
             commands::quit_app,
+            commands::ccswitch_preview,
+            commands::ccswitch_import,
         ])
         .setup(move |app| {
             // Menu bar only: no dock icon, no app switcher entry.
@@ -71,6 +74,16 @@ pub fn run() {
             let (config, warning) = store::load(&config_dir);
             // Make sure a freshly generated token reaches disk.
             store::save(&config_dir, &config)?;
+
+            // On macOS the app is a menu bar accessory: the window stays
+            // hidden until the tray is used. Everywhere else a hidden window
+            // reads as "the app did not start", so the dashboard opens on
+            // launch and the tray is the secondary entry point.
+            #[cfg(not(target_os = "macos"))]
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
 
             let autostart = config.server.autostart;
             let secrets = Arc::new(KeychainSecrets::new(KEYCHAIN_SERVICE));

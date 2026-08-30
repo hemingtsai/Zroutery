@@ -33,6 +33,9 @@ tracing = { workspace = true }
 tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
 uuid = { workspace = true }
 
+# Reading CC Switch's provider database; bundled so no system SQLite is needed.
+rusqlite = { version = "0.40", features = ["bundled"] }
+
 tauri = { version = "2", features = ["tray-icon", "macos-private-api", "image-png"] }
 tauri-plugin-clipboard-manager = "2"
 

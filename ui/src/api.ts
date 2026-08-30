@@ -395,6 +395,36 @@ export interface DiscoveredModel {
   pricing: Pricing | null;
 }
 
+/** A CC Switch provider reduced to what an import decision needs. */
+export interface CcProvider {
+  source_id: string;
+  name: string;
+  base_url: string;
+  /** Present in the payload, never rendered. */
+  api_key: string | null;
+  models: { upstream_model: string; class: ModelClass | null }[];
+  is_current: boolean;
+}
+
+/** A CC Switch provider plus what an import would do with it. */
+export interface CcProviderDraft {
+  source_id: string;
+  name: string;
+  base_url: string;
+  api_key: string | null;
+  models: { upstream_model: string; class: ModelClass | null }[];
+  is_current: boolean;
+  /** The Zroutery provider id this would get. */
+  target_id: string;
+  /** A provider with the same endpoint already exists. */
+  already_imported: boolean;
+}
+
+export interface CcSwitchPreview {
+  source: string;
+  providers: CcProviderDraft[];
+}
+
 /** The counters the Activity tab polls for, without the configuration. */
 export interface Activity {
   health: ModelHealth[];
@@ -431,6 +461,11 @@ export const api = {
   copy: (text: string) => invoke<void>("copy_text", { text }),
   hide: () => invoke<void>("hide_window"),
   quit: () => invoke<void>("quit_app"),
+  /** What CC Switch has on this machine, without importing anything. */
+  ccswitchPreview: () => invoke<CcSwitchPreview>("ccswitch_preview"),
+  /** Import the selected providers; ids are CC Switch's own provider ids. */
+  ccswitchImport: (ids: string[]) =>
+    invoke<Snapshot>("ccswitch_import", { ids }),
 };
 
 /**
