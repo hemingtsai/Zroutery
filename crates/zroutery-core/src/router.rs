@@ -10,10 +10,13 @@ use rand::Rng;
 use serde::{Deserialize, Serialize};
 
 use crate::circuit_breaker::{CircuitBreaker, CircuitBreakerConfig, CircuitState};
-use crate::config::{ModelClass, ModelEntry, ProviderConfig, RoutingConfig, RoutingStrategy};
+use crate::config::{ClassifierConfig, ModelClass, ModelEntry, ProviderConfig, RoutingConfig, RoutingStrategy};
 use crate::election::Election;
 use crate::error::{Error, Result};
 use crate::registry::{Registry, Resolution};
+
+/// Round robin cursor key for the classifier pool, which is not a class.
+const CLASSIFIER_POOL: &str = "classifier";
 
 /// One attempt: which model, on which provider.
 #[derive(Debug, Clone, PartialEq)]
@@ -121,6 +124,71 @@ impl Router {
             }
             Resolution::Class(class) => self.plan_class(registry, *class, routing),
         }
+    }
+
+    /// Build the ordered attempts for an Auto Mode classifier request.
+    ///
+    /// The pool is a selection of existing models, so candidates reuse the
+    /// registry's identity: provider, secret, protocol, pricing and — through
+    /// [`plan_candidates`] — the *same* health state a main request sees. A
+    /// provider that is open is open for both; there is deliberately no
+    /// separate "classifier health", because the model does not get sicker
+    /// depending on who asked.
+    ///
+    /// Candidates name models by exposed id or alias. Unknown or disabled
+    /// references are skipped here rather than failing the plan: validation
+    /// already reported them at save time, and one stale entry must not take
+    /// the whole classifier pool down.
+    pub fn plan_classifier(
+        &self,
+        registry: &Registry,
+        config: &ClassifierConfig,
+    ) -> Result<Vec<Candidate>> {
+        let mut members: Vec<ModelEntry> = Vec::new();
+        for candidate in &config.candidates {
+            if !candidate.enabled {
+                continue;
+            }
+            let Ok(entry) = registry.entry(&candidate.model) else {
+                tracing::debug!(
+                    model = %candidate.model,
+                    "classifier candidate is not a configured model; skipping"
+                );
+                continue;
+            };
+            if !entry.enabled {
+                continue;
+            }
+            if !registry
+                .provider_of(entry)
+                .map(|p| p.enabled)
+                .unwrap_or(false)
+            {
+                continue;
+            }
+            // The pool's own priority orders the candidate here, not the
+            // model's class priority: a model can be last in its class and
+            // first in the classifier pool.
+            let mut entry = entry.clone();
+            entry.priority = candidate.priority;
+            members.push(entry);
+        }
+        if members.is_empty() {
+            return Err(Error::NoCandidate("classifier".to_string()));
+        }
+        let refs: Vec<&ModelEntry> = members.iter().collect();
+        self.plan_candidates(
+            registry,
+            refs,
+            CLASSIFIER_POOL,
+            // Elections are held per class; the classifier pool has no class,
+            // so Balanced degrades to priority order inside `order`.
+            None,
+            config.strategy,
+            config.failover,
+            config.max_attempts,
+            "classifier".to_string(),
+        )
     }
 
     fn plan_class(
@@ -786,5 +854,184 @@ mod tests {
             }
         }
         assert!(heavy_first > 280, "heavy won only {heavy_first}/400");
+    }
+
+    // ------------------------------------------------------- classifier pool
+
+    fn classifier_cfg_with(models: Vec<ModelEntry>, candidates: &[(&str, i32)]) -> AppConfig {
+        let mut cfg = cfg_with(models);
+        cfg.classifier = ClassifierConfig {
+            enabled: true,
+            candidates: candidates
+                .iter()
+                .map(|(model, priority)| crate::config::ClassifierCandidate {
+                    model: (*model).to_string(),
+                    priority: *priority,
+                    enabled: true,
+                })
+                .collect(),
+            ..ClassifierConfig::default()
+        };
+        cfg
+    }
+
+    #[test]
+    fn classifier_pool_follows_candidate_priority_not_class_priority() {
+        // glm is the *last* member of its class but the *first* classifier
+        // candidate; the two orderings are independent.
+        let r = reg(classifier_cfg_with(
+            vec![
+                ModelEntry::for_upstream("p1", "glm", Some(ModelClass::Haiku)).with_priority(50),
+                ModelEntry::for_upstream("p2", "deepseek", Some(ModelClass::Sonnet))
+                    .with_priority(0),
+            ],
+            &[("p2-deepseek", 20), ("p1-glm", 10)],
+        ));
+        let plan = Router::new().plan_classifier(&r, &r.config().classifier).unwrap();
+        assert_eq!(ids(&plan), vec!["p1-glm", "p2-deepseek"]);
+    }
+
+    #[test]
+    fn classifier_candidates_may_point_at_unclassified_models() {
+        // A model with no class is still a perfectly good classifier.
+        let r = reg(classifier_cfg_with(
+            vec![ModelEntry::for_upstream("p1", "glm", None)],
+            &[("p1-glm", 10)],
+        ));
+        let plan = Router::new().plan_classifier(&r, &r.config().classifier).unwrap();
+        assert_eq!(ids(&plan), vec!["p1-glm"]);
+    }
+
+    #[test]
+    fn classifier_pool_respects_its_own_attempt_budget() {
+        let mut cfg = classifier_cfg_with(
+            vec![
+                ModelEntry::for_upstream("p1", "a", None),
+                ModelEntry::for_upstream("p2", "b", None),
+                ModelEntry::for_upstream("p1", "c", None),
+            ],
+            &[("p1-a", 10), ("p2-b", 20), ("p1-c", 30)],
+        );
+        cfg.classifier.max_attempts = 2;
+        let r = reg(cfg);
+        let plan = Router::new().plan_classifier(&r, &r.config().classifier).unwrap();
+        assert_eq!(ids(&plan), vec!["p1-a", "p2-b"]);
+    }
+
+    #[test]
+    fn classifier_failover_off_yields_one_attempt() {
+        let mut cfg = classifier_cfg_with(
+            vec![
+                ModelEntry::for_upstream("p1", "a", None),
+                ModelEntry::for_upstream("p2", "b", None),
+            ],
+            &[("p1-a", 10), ("p2-b", 20)],
+        );
+        cfg.classifier.failover = false;
+        let r = reg(cfg);
+        let plan = Router::new().plan_classifier(&r, &r.config().classifier).unwrap();
+        assert_eq!(plan.len(), 1);
+    }
+
+    #[test]
+    fn unknown_or_disabled_candidates_are_skipped_not_fatal() {
+        // Two live candidates and one dangling reference: the pool still works.
+        let mut cfg = classifier_cfg_with(
+            vec![
+                ModelEntry::for_upstream("p1", "a", None),
+                ModelEntry::for_upstream("p2", "b", None),
+            ],
+            &[("p1-a", 10), ("p3-missing", 5), ("p2-b", 20)],
+        );
+        // A disabled candidate entry is skipped too.
+        cfg.classifier.candidates[2].enabled = false;
+        let r = reg(cfg);
+        let plan = Router::new().plan_classifier(&r, &r.config().classifier).unwrap();
+        assert_eq!(ids(&plan), vec!["p1-a"]);
+    }
+
+    #[test]
+    fn an_empty_classifier_pool_is_an_error() {
+        // No candidates at all, or only ones that resolve to nothing: the
+        // request must fail rather than silently fall through to the main pool.
+        let cfg = classifier_cfg_with(vec![ModelEntry::for_upstream("p1", "a", None)], &[]);
+        let r = reg(cfg);
+        let err = Router::new()
+            .plan_classifier(&r, &r.config().classifier)
+            .unwrap_err();
+        assert!(matches!(err, Error::NoCandidate(_)));
+
+        let cfg = classifier_cfg_with(vec![], &[("p1-gone", 10)]);
+        let r = reg(cfg);
+        assert!(Router::new()
+            .plan_classifier(&r, &r.config().classifier)
+            .is_err());
+    }
+
+    #[test]
+    fn classifier_health_is_shared_with_the_main_pool() {
+        // A model that fails as a classifier must be demoted for main requests
+        // too: the circuit breaker is keyed by model, not by pool.
+        let cfg = classifier_cfg_with(
+            vec![
+                ModelEntry::for_upstream("p1", "glm", Some(ModelClass::Sonnet)).with_priority(0),
+                ModelEntry::for_upstream("p2", "main", Some(ModelClass::Sonnet)).with_priority(5),
+            ],
+            &[("p1-glm", 10)],
+        );
+        let routing = cfg.routing.clone();
+        let r = reg(cfg);
+        let router = Router::new();
+
+        for _ in 0..routing.circuit_breaker.failure_threshold {
+            router.report_failure("p1-glm", &Error::Timeout(1), &routing);
+        }
+        // The classifier pool has nothing left: glm is cooling and it was the
+        // only candidate.
+        assert!(router
+            .plan_classifier(&r, &r.config().classifier)
+            .is_err());
+
+        // ...and the main class plan demotes glm for main requests as well.
+        let plan = router
+            .plan(&r, &Resolution::Class(ModelClass::Sonnet))
+            .unwrap();
+        assert_eq!(ids(&plan)[0], "p2-main");
+    }
+
+    #[test]
+    fn classifier_balanced_strategy_falls_back_to_priority() {
+        // Elections are per class; the classifier pool has none, so Balanced
+        // must not silently produce an unsorted plan.
+        let mut cfg = classifier_cfg_with(
+            vec![
+                ModelEntry::for_upstream("p1", "a", None).with_priority(30),
+                ModelEntry::for_upstream("p2", "b", None).with_priority(10),
+            ],
+            &[("p1-a", 30), ("p2-b", 10)],
+        );
+        cfg.classifier.strategy = RoutingStrategy::Balanced;
+        let r = reg(cfg);
+        let plan = Router::new().plan_classifier(&r, &r.config().classifier).unwrap();
+        assert_eq!(ids(&plan), vec!["p2-b", "p1-a"]);
+    }
+
+    #[test]
+    fn classifier_round_robin_rotates_independently_of_classes() {
+        let mut cfg = classifier_cfg_with(
+            vec![
+                ModelEntry::for_upstream("p1", "a", Some(ModelClass::Sonnet)),
+                ModelEntry::for_upstream("p2", "b", Some(ModelClass::Sonnet)),
+            ],
+            &[("p1-a", 10), ("p2-b", 10)],
+        );
+        cfg.classifier.strategy = RoutingStrategy::RoundRobin;
+        let r = reg(cfg);
+        let router = Router::new();
+        let first = ids(&router.plan_classifier(&r, &r.config().classifier).unwrap())[0]
+            .to_string();
+        let second = ids(&router.plan_classifier(&r, &r.config().classifier).unwrap())[0]
+            .to_string();
+        assert_ne!(first, second);
     }
 }
