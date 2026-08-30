@@ -11,6 +11,13 @@ export default function Activity({
   const { summary, health, recent } = snapshot;
   const success = summary.requests - summary.failures;
   const rate = summary.requests ? Math.round((success / summary.requests) * 100) : 100;
+  const classifier = summary.per_kind.find((k) => k.kind === "auto_mode");
+  const classifierRate =
+    classifier && classifier.requests > 0
+      ? Math.round(
+          ((classifier.requests - classifier.failures) / classifier.requests) * 1000,
+        ) / 10
+      : null;
 
   return (
     <>
@@ -48,6 +55,17 @@ export default function Activity({
           Spend is computed from the prices you entered and the usage each provider reported.
           Unpriced models contribute nothing, so a total is a floor, not a bill.
         </p>
+
+        {classifier && classifier.requests > 0 && (
+          <p className="field-hint">
+            <Badge tone={classifierRate !== null && classifierRate >= 90 ? "ok" : "warn"}>
+              auto mode {classifierRate}%
+            </Badge>{" "}
+            {classifier.requests.toLocaleString()} classifier queries ({classifier.failures}{" "}
+            failed, avg {ms(classifier.avg_latency_ms)}) — counted separately from main
+            traffic, so a slow classifier never reads as a slow model.
+          </p>
+        )}
 
         {summary.per_model.length > 0 && (
           <table className="table">
@@ -155,6 +173,7 @@ export default function Activity({
                   <td>
                     <Badge>{r.ingress === "anthropic" ? "messages" : "chat"}</Badge>
                     {r.stream && <Badge tone="neutral">stream</Badge>}
+                    {r.kind === "auto_mode" && <Badge tone="warn">auto mode</Badge>}
                   </td>
                   <td>{r.requested_model}</td>
                   <td>

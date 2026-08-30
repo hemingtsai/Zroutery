@@ -497,7 +497,8 @@ pub struct ClassifierConfig {
     #[serde(default = "ClassifierConfig::default_attempts")]
     pub max_attempts: u32,
     /// The classifier pool, in no particular order; the strategy orders it.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// Always serialized so the GUI round-trips the list without special cases.
+    #[serde(default)]
     pub candidates: Vec<ClassifierCandidate>,
     #[serde(default)]
     pub detection: DetectionConfig,

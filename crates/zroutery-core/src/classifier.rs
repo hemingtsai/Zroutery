@@ -161,8 +161,9 @@ pub struct DetectionConfig {
     #[serde(default)]
     pub builtins: BuiltinDetectors,
     /// Fingerprints on top of the built-ins, so a new Claude Code version can
-    /// be supported by editing the config instead of the code.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// be supported by editing the config instead of the code. Always
+    /// serialized so the GUI round-trips the list.
+    #[serde(default)]
     pub signatures: Vec<ClassifierSignature>,
 }
 

@@ -4,6 +4,7 @@ import {
   CLASSES,
   costText,
   errorText,
+  modelRows,
   money,
   periodLabel,
   scopeLabel,
@@ -12,6 +13,7 @@ import {
   type BudgetPeriod,
   type BudgetScope,
   type ClassElection,
+  type ClassifierCandidate,
   type Election,
   type ModelClass,
   type RoutingStrategy,
@@ -304,6 +306,8 @@ export default function Routing({
           </select>
         </Field>
       </Card>
+
+      <ClassifierCard snapshot={snapshot} save={save} busy={busy} />
 
       {config.routing.strategy === "balanced" && (
         <Card
@@ -799,6 +803,298 @@ export OPENAI_API_KEY=<paste the token>
         </div>
       </Card>
     </>
+  );
+}
+
+/**
+ * The Auto Mode classifier pool.
+ *
+ * Main routing is about *capability* (which model answers the conversation);
+ * this is about *purpose* (which model judges Auto Mode's permission queries).
+ * The two are deliberately separate cards so that mixing them up — putting a
+ * model in the classifier pool and finding the main conversation moved too —
+ * is not something the UI suggests.
+ */
+function ClassifierCard({
+  snapshot,
+  save,
+  busy,
+}: {
+  snapshot: Snapshot;
+  save: (mutate: (config: AppConfig) => AppConfig | null) => Promise<boolean>;
+  busy: boolean;
+}) {
+  const { config } = snapshot;
+  const classifier = config.classifier;
+  const [candidateDraft, setCandidateDraft] = useState("");
+
+  const rows = modelRows(snapshot);
+  const enabledRows = rows.filter(
+    (r) => r.model.enabled && config.providers.find((p) => p.id === r.model.provider_id)?.enabled,
+  );
+  const nextPriority =
+    classifier.candidates.reduce((max, c) => Math.max(max, c.priority), 0) + 10;
+
+  const patch = (mutate: Partial<AppConfig["classifier"]>) => {
+    void save((cfg) => {
+      const next = structuredClone(cfg);
+      Object.assign(next.classifier, mutate);
+      return next;
+    });
+  };
+
+  const addCandidate = (model: string) => {
+    const trimmed = model.trim();
+    if (!trimmed) return;
+    setCandidateDraft("");
+    void save((cfg) => {
+      if (cfg.classifier.candidates.some((c) => c.model === trimmed)) return null;
+      const next = structuredClone(cfg);
+      next.classifier.candidates.push({
+        model: trimmed,
+        priority:
+          next.classifier.candidates.reduce((max, c) => Math.max(max, c.priority), 0) + 10,
+        enabled: true,
+      });
+      return next;
+    });
+  };
+
+  const patchCandidate = (model: string, mutate: Partial<ClassifierCandidate>) => {
+    void save((cfg) => {
+      const next = structuredClone(cfg);
+      const candidate = next.classifier.candidates.find((c) => c.model === model);
+      if (!candidate) return null;
+      Object.assign(candidate, mutate);
+      return next;
+    });
+  };
+
+  const removeCandidate = (model: string) => {
+    void save((cfg) => {
+      const next = structuredClone(cfg);
+      const index = next.classifier.candidates.findIndex((c) => c.model === model);
+      if (index < 0) return null;
+      next.classifier.candidates.splice(index, 1);
+      return next;
+    });
+  };
+
+  const moveCandidate = (model: string, delta: -1 | 1) => {
+    void save((cfg) => {
+      const next = structuredClone(cfg);
+      const candidates = next.classifier.candidates;
+      const index = candidates.findIndex((c) => c.model === model);
+      const swap = index + delta;
+      if (index < 0 || swap < 0 || swap >= candidates.length) return null;
+      [candidates[index], candidates[swap]] = [candidates[swap], candidates[index]];
+      return next;
+    });
+  };
+
+  // Live classifier counters, so the card can answer "is this working?"
+  // without opening the Activity tab.
+  const totals = snapshot.summary.per_kind.find((k) => k.kind === "auto_mode");
+  const successRate =
+    totals && totals.requests > 0
+      ? Math.round(((totals.requests - totals.failures) / totals.requests) * 1000) / 10
+      : null;
+
+  // Candidates that no longer resolve to a configured model: validation flags
+  // them; say it here too, next to the row it belongs to.
+  const knownIds = new Set(
+    rows.flatMap((r) => [r.id, ...r.model.aliases]),
+  );
+
+  return (
+    <Card title="Auto Mode classifier" tone={classifier.enabled && classifier.candidates.length === 0 ? "warn" : undefined}>
+      <p className="field-hint">
+        Claude Code's Auto Mode asks a small side query before running Bash and
+        Edit. By default it goes wherever the main conversation goes; with a
+        pool configured here it goes to the models you pick instead — e.g. a
+        cheap fast one — while your main models keep doing the coding. The
+        models come from the Models tab: providers, keys and prices are reused,
+        so there is nothing to configure twice.
+      </p>
+      <div className="grid-two">
+        <Toggle
+          label="Route classifier side queries"
+          hint="Detected Auto Mode queries go to the pool below"
+          checked={classifier.enabled}
+          onChange={(enabled) => patch({ enabled })}
+        />
+        <Toggle
+          label="Fail over inside the pool"
+          hint="Try the next candidate when one errors"
+          checked={classifier.failover}
+          onChange={(failover) => patch({ failover })}
+        />
+      </div>
+
+      {classifier.enabled && (
+        <>
+          <div className="controls">
+            <Field
+              label="Strategy"
+              hint="How the pool picks who judges. Balanced needs an election, which only classes have."
+            >
+              <select
+                value={classifier.strategy}
+                onChange={(e) =>
+                  patch({ strategy: e.currentTarget.value as RoutingStrategy })
+                }
+              >
+                <option value="priority">Priority</option>
+                <option value="weighted_random">Weighted random</option>
+                <option value="round_robin">Round robin</option>
+                <option value="lowest_latency">Lowest latency</option>
+              </select>
+            </Field>
+            <NumberField
+              label="Max attempts"
+              min={1}
+              max={10}
+              value={classifier.max_attempts}
+              onCommit={(v) => patch({ max_attempts: v ?? 2 })}
+              integer
+            />
+          </div>
+
+          {classifier.candidates.length > 0 ? (
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Model</th>
+                  <th>Priority</th>
+                  <th>Enabled</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {classifier.candidates.map((c, i) => {
+                  const missing = !knownIds.has(c.model);
+                  return (
+                    <tr key={c.model} className={missing ? "row-warn" : ""}>
+                      <td>
+                        <code>{c.model}</code>
+                        {missing && (
+                          <>
+                            {" "}
+                            <Badge tone="warn">not a configured model</Badge>
+                          </>
+                        )}
+                      </td>
+                      <td>
+                        <input
+                          type="number"
+                          className="tiny"
+                          aria-label={`Priority for ${c.model}`}
+                          value={c.priority}
+                          onChange={(e) =>
+                            patchCandidate(c.model, {
+                              priority: Number(e.currentTarget.value) || 0,
+                            })
+                          }
+                          onBlur={(e) =>
+                            patchCandidate(c.model, {
+                              priority: Math.round(Number(e.currentTarget.value) || 0),
+                            })
+                          }
+                        />
+                      </td>
+                      <td>
+                        <input
+                          type="checkbox"
+                          aria-label={`Enable ${c.model} as a classifier`}
+                          checked={c.enabled}
+                          onChange={(e) =>
+                            patchCandidate(c.model, { enabled: e.currentTarget.checked })
+                          }
+                        />
+                      </td>
+                      <td>
+                        <div className="row gap">
+                          <Button
+                            kind="ghost"
+                            disabled={busy || i === 0}
+                            onClick={() => moveCandidate(c.model, -1)}
+                            title="Move up"
+                          >
+                            ↑
+                          </Button>
+                          <Button
+                            kind="ghost"
+                            disabled={busy || i === classifier.candidates.length - 1}
+                            onClick={() => moveCandidate(c.model, 1)}
+                            title="Move down"
+                          >
+                            ↓
+                          </Button>
+                          <Button kind="ghost" onClick={() => removeCandidate(c.model)}>
+                            Remove
+                          </Button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          ) : (
+            <Empty>
+              No candidates yet. Pick a model below — anything from the Models
+              tab works, including models with no class.
+            </Empty>
+          )}
+
+          <div className="controls">
+            <Field label="Add candidate" hint={`Next priority: ${nextPriority}`}>
+              <select
+                value={candidateDraft}
+                onChange={(e) => setCandidateDraft(e.currentTarget.value)}
+              >
+                <option value="">Pick a model…</option>
+                {enabledRows.map((r) => (
+                  <option
+                    key={r.id}
+                    value={r.id}
+                    disabled={classifier.candidates.some((c) => c.model === r.id)}
+                  >
+                    {r.id}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <div className="field-actions">
+              <Button
+                onClick={() => addCandidate(candidateDraft)}
+                disabled={busy || !candidateDraft}
+              >
+                Add
+              </Button>
+            </div>
+          </div>
+
+          {totals && totals.requests > 0 && (
+            <div className="row gap wrap">
+              <Badge tone={successRate !== null && successRate >= 90 ? "ok" : "warn"}>
+                {successRate}% succeeded
+              </Badge>
+              <span className="muted">
+                {totals.requests.toLocaleString()} classifier queries · avg{" "}
+                {ms(totals.avg_latency_ms)}
+              </span>
+            </div>
+          )}
+          <p className="field-hint">
+            Detection is automatic: requests are scored against the known
+            Auto Mode signatures plus any you add to the configuration file,
+            and a verdict the classifier cannot parse fails closed — Zroutery
+            never approves on the model's behalf.
+          </p>
+        </>
+      )}
+    </Card>
   );
 }
 
