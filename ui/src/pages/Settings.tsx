@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, costText, money, virtualId } from "../api";
+import { api, costText, modelRows, money, virtualId } from "../api";
 import {
   CLASSES,
   type AppConfig,
@@ -46,6 +46,14 @@ export default function Settings({
 }) {
   const { config, server } = snapshot;
   const { t, lang, setLang } = useI18n();
+  // Candidates for the vision fallback: enabled models that can see, on
+  // enabled providers. Mirrors what the backend resolver accepts.
+  const visionCapable = modelRows(snapshot).filter(
+    (r) =>
+      r.model.enabled &&
+      r.model.supports_vision &&
+      config.providers.find((p) => p.id === r.model.provider_id)?.enabled,
+  );
   const [notice, setNotice] = useState<string | null>(null);
   const [aliasDraft, setAliasDraft] = useState({ from: "", to: "sonnet" as ModelClass });
   const [originDraft, setOriginDraft] = useState("");
@@ -70,6 +78,14 @@ export default function Settings({
     void save((cfg) => {
       const next = structuredClone(cfg);
       Object.assign(next.window, patch);
+      return next;
+    });
+  };
+
+  const patchVision = (patch: Partial<AppConfig["vision"]>) => {
+    void save((cfg) => {
+      const next = structuredClone(cfg);
+      Object.assign(next.vision, patch);
       return next;
     });
   };
@@ -246,6 +262,43 @@ export default function Settings({
             onChange={(keep_in_tray) => patchWindow({ keep_in_tray })}
           />
         </div>
+      </Section>
+
+      <Section title={t("vision.title")} hint={t("vision.hint")}>
+        <Toggle
+          label={t("vision.enable")}
+          checked={config.vision.enabled}
+          onChange={(enabled) => patchVision({ enabled })}
+        />
+        {config.vision.enabled && (
+          <>
+            <div className="controls">
+              <Field label={t("vision.model")} hint={t("vision.model_hint")}>
+                <Select
+                  ariaLabel={t("vision.model")}
+                  value={config.vision.model}
+                  onChange={(model) => patchVision({ model: model || null })}
+                  placeholder="—"
+                  options={visionCapable.map((r) => ({
+                    value: r.id,
+                    label: r.id,
+                  }))}
+                />
+              </Field>
+              <TextField
+                label={t("vision.placeholder")}
+                hint={t("vision.placeholder_hint")}
+                value={config.vision.placeholder}
+                onCommit={(placeholder) =>
+                  placeholder.trim() && patchVision({ placeholder })
+                }
+              />
+            </div>
+            {visionCapable.length === 0 && (
+              <p className="field-hint">{t("vision.model_required")}</p>
+            )}
+          </>
+        )}
       </Section>
 
       <Section

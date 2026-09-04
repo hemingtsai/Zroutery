@@ -192,6 +192,15 @@ export interface WindowBehavior {
   keep_in_tray: boolean;
 }
 
+/** Vision fallback: describing images for models that cannot see them. */
+export interface VisionConfig {
+  enabled: boolean;
+  /** Exposed id of an existing model that can describe images. */
+  model: string | null;
+  /** What replaces an image when no description is possible. */
+  placeholder: string;
+}
+
 /** What a request was for: the main conversation or a side query. */
 export type RequestKind = "main" | "auto_mode";
 
@@ -283,6 +292,8 @@ export interface AppConfig {
   classifier: ClassifierConfig;
   /** Desktop application lifecycle. */
   window: WindowBehavior;
+  /** Vision fallback for models that cannot see. */
+  vision: VisionConfig;
   providers: Provider[];
   models: ModelEntry[];
   budgets: Budget[];

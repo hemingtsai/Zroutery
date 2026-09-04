@@ -400,6 +400,16 @@ const en = {
   "win.keep_in_tray": "Keep in tray on close",
   "win.keep_in_tray_hint":
     "Closing the window leaves Zroutery running in the tray; off — closing quits and stops the gateway",
+  "vision.title": "Vision fallback",
+  "vision.hint":
+    "Models that cannot see still receive the image's content: a vision model describes it, and the description travels in its place. Failing that, an honest placeholder — never a silent drop.",
+  "vision.enable": "Describe images for non-vision models",
+  "vision.model": "Vision model",
+  "vision.model_hint":
+    "An existing model that can see, from the Models page; its provider and pricing are reused",
+  "vision.model_required": "Pick a model that supports vision on the Models page first.",
+  "vision.placeholder": "Placeholder",
+  "vision.placeholder_hint": "What replaces an image when no description was possible",
 } as const;
 
 export type TKey = keyof typeof en;
@@ -769,6 +779,15 @@ const zh: Dict = {
   "win.keep_in_tray": "关闭窗口时保留在托盘",
   "win.keep_in_tray_hint":
     "关闭窗口后 Zroutery 将继续在后台运行;关闭此选项则关闭窗口即退出并停止网关",
+  "vision.title": "视觉降级",
+  "vision.hint":
+    "让看不见图片的模型也能收到图片内容:由视觉模型生成描述,代替原图进入请求。失败时以诚实的占位符兜底,绝不静默丢弃。",
+  "vision.enable": "为不支持视觉的模型描述图片",
+  "vision.model": "视觉模型",
+  "vision.model_hint": "模型页中一个支持视觉的现有模型;复用其提供商与价格",
+  "vision.model_required": "请先在模型页选择一个支持视觉的模型。",
+  "vision.placeholder": "占位符",
+  "vision.placeholder_hint": "无法生成描述时,替代图片的文本",
 };
 
 const dicts: Record<Lang, Dict> = { en: en as Dict, zh };
