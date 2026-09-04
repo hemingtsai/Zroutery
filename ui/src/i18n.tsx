@@ -199,6 +199,9 @@ const en = {
   "providers.f_version_hint": "Empty sends the standard 2023-06-01",
   "providers.impersonate": "Send the Claude Code fingerprint",
   "providers.impersonate_hint": "User-Agent and beta headers, for gateways that check",
+  "providers.bearer_auth": "Also send Bearer auth",
+  "providers.bearer_auth_hint":
+    "For relays that read Authorization: Bearer instead of x-api-key; both headers are sent, so either check passes",
   "providers.balance": "Balance",
   "providers.balance_hint": "Some providers publish the credit that is left.",
   "field.probe": "Probe",
@@ -590,6 +593,9 @@ const zh: Dict = {
   "providers.f_version_hint": "留空发送标准 2023-06-01",
   "providers.impersonate": "发送 Claude Code 指纹",
   "providers.impersonate_hint": "User-Agent 与 beta 头,供网关校验",
+  "providers.bearer_auth": "同时发送 Bearer 认证",
+  "providers.bearer_auth_hint":
+    "用于读取 Authorization: Bearer 而非 x-api-key 的中转;两个头都会发送,任一校验均可通过",
   "providers.balance": "余额",
   "providers.balance_hint": "部分提供商公布剩余额度。",
   "field.probe": "探针",

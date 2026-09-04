@@ -158,6 +158,21 @@ impl Error {
         )
     }
 
+    /// The message safe to show a client or the GUI.
+    ///
+    /// `Display` includes everything — upstream response bodies among it —
+    /// which is right for the log and wrong for anywhere a user reads. This
+    /// is the redacted view: upstream failures keep provider and status, and
+    /// nothing of the provider's own error page.
+    pub fn safe_message(&self) -> String {
+        match self {
+            Error::Upstream { provider, status, .. } => {
+                format!("upstream {provider} returned {status}")
+            }
+            _ => self.to_string(),
+        }
+    }
+
     /// Serialize into the shape the given dialect expects.
     ///
     /// Upstream response bodies never reach the client: they can contain the
@@ -168,12 +183,7 @@ impl Error {
     /// provider's name and the status, which is everything a user needs to
     /// know about the failure.
     pub fn to_wire(&self, dialect: Dialect) -> Value {
-        let msg = match self {
-            Error::Upstream { provider, status, .. } => {
-                format!("upstream {provider} returned {status}")
-            }
-            _ => self.to_string(),
-        };
+        let msg = self.safe_message();
         match dialect {
             Dialect::Anthropic => json!({
                 "type": "error",

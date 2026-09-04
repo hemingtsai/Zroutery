@@ -105,6 +105,7 @@ export default function Providers({
         key_ref: `provider:${id}`,
         extra_headers: {},
         impersonate_claude_code: newKind === "anthropic",
+        bearer_auth: false,
         enabled: true,
         timeout_secs: 600,
         connect_timeout_secs: 15,
@@ -650,6 +651,14 @@ function ProviderDrawer({
             checked={provider.impersonate_claude_code}
             onChange={(impersonate_claude_code) => onUpdate({ impersonate_claude_code })}
           />
+          {provider.kind === "anthropic" && (
+            <Toggle
+              label={t("providers.bearer_auth")}
+              hint={t("providers.bearer_auth_hint")}
+              checked={provider.bearer_auth}
+              onChange={(bearer_auth) => onUpdate({ bearer_auth })}
+            />
+          )}
         </div>
       </Section>
 

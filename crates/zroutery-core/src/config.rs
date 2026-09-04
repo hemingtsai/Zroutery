@@ -131,6 +131,12 @@ pub struct ProviderConfig {
     /// and system prompt identity line).
     #[serde(default)]
     pub impersonate_claude_code: bool,
+    /// Send the key as `Authorization: Bearer <key>` in addition to
+    /// `x-api-key`, for Anthropic-protocol relays whose gateway reads the
+    /// Bearer header — some reject a request carrying only `x-api-key` with
+    /// "Authorization 格式错误".
+    #[serde(default)]
+    pub bearer_auth: bool,
     #[serde(default)]
     pub quirks: ProviderQuirks,
     /// How to ask this provider for the remaining credit, when it can be asked.
@@ -150,6 +156,7 @@ impl ProviderConfig {
             extra_headers: BTreeMap::new(),
             // Anthropic providers default to impersonation enabled for gateway compatibility
             impersonate_claude_code: kind == ProviderKind::Anthropic,
+            bearer_auth: false,
             enabled: true,
             timeout_secs: default_timeout(),
             connect_timeout_secs: default_connect_timeout(),
