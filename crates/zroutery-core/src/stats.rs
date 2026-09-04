@@ -316,10 +316,15 @@ impl RecordBuilder {
         self
     }
 
+    /// Record the failure message shown in Activity.
+    ///
+    /// Callers pass `Error::to_string()`, which for upstream failures embeds
+    /// the provider's response body — the same internal-page leak `to_wire`
+    /// guards against. Redact here so every failure path is covered at once.
     pub fn fail(&mut self, status: u16, error: String) -> &mut Self {
         self.record.ok = false;
         self.record.status = status;
-        self.record.error = Some(error);
+        self.record.error = Some(redact_upstream_body(&error));
         self
     }
 
@@ -327,6 +332,24 @@ impl RecordBuilder {
         self.record.latency_ms = latency_ms;
         self.record
     }
+}
+
+/// Strip an upstream response body out of an error string.
+///
+/// Error strings look like `upstream Xiaomi MiMo returned 404: <html>...`; the
+/// provider's page after the status can be HTML with server fingerprints and
+/// internal URLs. Keep the prefix — provider and status are the useful part —
+/// and drop everything after the status code that introduces the body.
+fn redact_upstream_body(error: &str) -> String {
+    if let Some(marker) = error.find(": <") {
+        // Only redact the body-position marker of upstream errors, not colons
+        // in arbitrary messages.
+        let prefix = &error[..marker];
+        if prefix.contains("returned ") && prefix.starts_with("upstream ") {
+            return prefix.to_string();
+        }
+    }
+    error.to_string()
 }
 
 #[cfg(test)]
@@ -528,6 +551,21 @@ mod tests {
         });
         let rec: RequestRecord = serde_json::from_value(legacy).unwrap();
         assert_eq!(rec.kind, RequestKind::Main);
+    }
+
+    #[test]
+    fn upstream_bodies_are_redacted_from_activity_errors() {
+        let raw = "upstream Xiaomi MiMo returned 404: <html> <head><title>404 Not Found</title></head> <body>openresty</body></html>";
+        assert_eq!(
+            redact_upstream_body(raw),
+            "upstream Xiaomi MiMo returned 404"
+        );
+        // Non-upstream messages pass through untouched, colons included.
+        assert_eq!(
+            redact_upstream_body("stopped by a budget: the today limit is used up"),
+            "stopped by a budget: the today limit is used up"
+        );
+        assert_eq!(redact_upstream_body("plain error"), "plain error");
     }
 
     #[test]
