@@ -64,9 +64,45 @@ pub async fn save_config(
     desktop: State<'_, Arc<Desktop>>,
     config: AppConfig,
 ) -> Cmd<Snapshot> {
+    let launch_on_login = config.window.launch_on_login;
     desktop.apply_config(config).await?;
     desktop.set_warning(None);
+    // Login launch is an OS registration, not a document field: converge the
+    // registry towards the setting now that the document carrying it is saved.
+    #[cfg(desktop)]
+    sync_autostart(&app, launch_on_login);
     Ok(refreshed(&app, &desktop).await)
+}
+
+/// Bring the OS login registration in line with the setting.
+///
+/// Mirrors the startup-time sync in lib.rs; kept here as well because a save
+/// is the only other moment the setting can change. Failures are warnings —
+/// a machine whose policy blocks autostart still gets a working gateway.
+#[cfg(desktop)]
+pub(crate) fn sync_autostart_public(app: &AppHandle, enable: bool) {
+    sync_autostart(app, enable);
+}
+
+#[cfg(desktop)]
+fn sync_autostart(app: &AppHandle, enable: bool) {
+    use tauri_plugin_autostart::ManagerExt;
+
+    let current = app.autolaunch().is_enabled().unwrap_or(false);
+    if current == enable {
+        return;
+    }
+    let result = if enable {
+        app.autolaunch().enable()
+    } else {
+        app.autolaunch().disable()
+    };
+    if let Err(e) = result {
+        tracing::warn!(
+            "cannot {} login launch: {e}",
+            if enable { "register" } else { "unregister" }
+        );
+    }
 }
 
 #[tauri::command]

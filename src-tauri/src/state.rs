@@ -30,6 +30,16 @@ pub struct Desktop {
     /// Last answer from each provider's balance endpoint. Never fetched on a
     /// timer: it costs a request and some vendors rate limit it.
     balances: Mutex<BTreeMap<String, BalanceStatus>>,
+    /// The window layer's live view of the lifecycle settings: the close
+    /// handler reads this synchronously, `apply_config` keeps it current.
+    pub(crate) window_rules: Mutex<WindowRules>,
+}
+
+/// How the close button behaves, held where the window layer can read it
+/// without going through the whole config document.
+#[derive(Debug, Clone, Default)]
+pub struct WindowRules {
+    pub keep_in_tray: bool,
 }
 
 /// What the last balance check found, per provider.
@@ -124,6 +134,9 @@ impl Desktop {
         // Spend is carried over from previous runs, because a budget that starts from
         // zero on every launch protects nothing.
         core.set_ledger(store::load_ledger(&config_dir));
+        let window_rules = WindowRules {
+            keep_in_tray: core.config().window.keep_in_tray,
+        };
         Desktop {
             core,
             secrets,
@@ -131,6 +144,7 @@ impl Desktop {
             server: AsyncMutex::new(None),
             warning: Mutex::new(None),
             balances: Mutex::new(BTreeMap::new()),
+            window_rules: Mutex::new(window_rules),
         }
     }
 
@@ -140,6 +154,11 @@ impl Desktop {
 
     pub fn warning(&self) -> Option<String> {
         lock(&self.warning).clone()
+    }
+
+    /// A snapshot of the window-layer rules, for the close handler.
+    pub fn window_rules(&self) -> WindowRules {
+        lock(&self.window_rules).clone()
     }
 
     pub async fn snapshot(&self) -> Snapshot {
@@ -405,6 +424,13 @@ impl Desktop {
         if previous.server.bypass_proxy != next.server.bypass_proxy {
             self.core.rebuild_upstream(next.server.bypass_proxy);
         }
+        // The close button reads the rules synchronously, so the window layer
+        // is told directly rather than discovering the change later.
+        // The close button reads the rules synchronously, so the window layer
+        // is told directly rather than discovering the change later.
+        *lock(&self.window_rules) = WindowRules {
+            keep_in_tray: next.window.keep_in_tray,
+        };
         self.core.set_config(next);
         if needs_rebind && self.is_running().await {
             self.restart().await?;

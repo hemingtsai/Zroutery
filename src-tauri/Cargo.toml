@@ -38,6 +38,7 @@ rusqlite = { version = "0.40", features = ["bundled"] }
 
 tauri = { version = "2", features = ["tray-icon", "macos-private-api", "image-png"] }
 tauri-plugin-clipboard-manager = "2"
+tauri-plugin-autostart = "2"
 
 # Each platform uses its native credential store: the macOS keychain or the
 # Windows Credential Manager. Both backends exist in the same keyring version
@@ -47,3 +48,6 @@ keyring = { version = "3.6.3", features = ["apple-native"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 keyring = { version = "3.6.3", features = ["windows-native"] }
+# Reading the user's UI language for the tray menu, which is drawn before any
+# webview (and its locale machinery) exists.
+windows-sys = { version = "0.60", features = ["Win32_Globalization"] }

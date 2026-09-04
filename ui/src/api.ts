@@ -182,6 +182,16 @@ export interface ClassifierConfig {
   detection: DetectionConfig;
 }
 
+/** How the desktop app behaves as a resident process. */
+export interface WindowBehavior {
+  /** Launch Zroutery at OS login. */
+  launch_on_login: boolean;
+  /** Start without showing the main window; the tray is the only presence. */
+  silent_start: boolean;
+  /** Closing the window keeps the process and the gateway alive in the tray. */
+  keep_in_tray: boolean;
+}
+
 /** What a request was for: the main conversation or a side query. */
 export type RequestKind = "main" | "auto_mode";
 
@@ -271,6 +281,8 @@ export interface AppConfig {
   routing: RoutingConfig;
   /** Auto Mode classifier routing; orthogonal to `routing`. */
   classifier: ClassifierConfig;
+  /** Desktop application lifecycle. */
+  window: WindowBehavior;
   providers: Provider[];
   models: ModelEntry[];
   budgets: Budget[];

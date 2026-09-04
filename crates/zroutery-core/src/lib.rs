@@ -29,6 +29,7 @@ pub mod config;
 pub mod election;
 pub mod error;
 pub mod ir;
+pub mod media;
 pub mod protocol;
 pub mod query;
 pub mod rectifier;
@@ -50,7 +51,7 @@ pub use classifier::{
 pub use config::{
     AppConfig, ClassifierCandidate, ClassifierConfig, ConfigIssue, IssueSeverity,
     MemorySecretStore, ModelClass, ModelEntry, ProviderConfig, ProviderKind, RectifierConfig,
-    RoutingConfig, RoutingStrategy, SecretStore, ServerConfig,
+    RoutingConfig, RoutingStrategy, SecretStore, ServerConfig, VisionConfig, WindowBehavior,
 };
 pub use election::{ClassElection, Election, Measurement, Ranked, ScoringConfig};
 pub use error::{Error, Result};
