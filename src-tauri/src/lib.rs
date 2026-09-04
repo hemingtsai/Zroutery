@@ -65,6 +65,16 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
+            // Autostart is an OS registration, so the plugin owns it; no
+            // arguments — a login launch should behave exactly like a manual
+            // one, including silent-start handling.
+            #[cfg(desktop)]
+            {
+                use tauri_plugin_autostart::MacosLauncher;
+                app.handle()
+                    .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, None))?;
+            }
+
             // ZROUTERY_CONFIG_DIR wins; otherwise Tauri's own resolution,
             // which agrees with platform::default_config_dir on every
             // platform we ship.
@@ -75,14 +85,26 @@ pub fn run() {
             // Make sure a freshly generated token reaches disk.
             store::save(&config_dir, &config)?;
 
-            // On macOS the app is a menu bar accessory: the window stays
-            // hidden until the tray is used. Everywhere else a hidden window
-            // reads as "the app did not start", so the dashboard opens on
-            // launch and the tray is the secondary entry point.
-            #[cfg(not(target_os = "macos"))]
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.show();
-                let _ = window.set_focus();
+            // Sync the OS registration with the setting, so a manual config
+            // edit (or an uninstaller that removed the entry) converges back
+            // to what the user asked for.
+            #[cfg(desktop)]
+            crate::commands::sync_autostart_public(app.handle(), config.window.launch_on_login);
+
+            // The window opens on launch unless silent start is asked for —
+            // and always on macOS, where the app is a menu bar accessory:
+            // there "the window never opens by itself" is the platform
+            // convention, not a hidden process.
+            let show_window = if cfg!(target_os = "macos") {
+                false
+            } else {
+                !config.window.silent_start
+            };
+            if show_window {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
             }
 
             let autostart = config.server.autostart;
@@ -135,10 +157,26 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            // Closing the dashboard keeps the proxy running in the menu bar.
             if let WindowEvent::CloseRequested { api, .. } = event {
-                api.prevent_close();
-                let _ = window.hide();
+                // The close button is a window action; what it does to the
+                // process is the user's setting. Keep-in-tray hides the
+                // window and everything keeps running; otherwise closing
+                // quits through the same path the tray's Quit item uses, so
+                // the gateway stops and the ledger is flushed either way.
+                let desktop = window
+                    .app_handle()
+                    .try_state::<Arc<Desktop>>()
+                    .map(|s| s.inner().clone());
+                let keep_in_tray = desktop
+                    .as_ref()
+                    .map(|d| d.window_rules().keep_in_tray)
+                    .unwrap_or(true);
+                if keep_in_tray {
+                    api.prevent_close();
+                    let _ = window.hide();
+                } else {
+                    crate::tray::quit(window.app_handle());
+                }
             }
         })
         .build(tauri::generate_context!());

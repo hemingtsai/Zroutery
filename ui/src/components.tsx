@@ -1,5 +1,177 @@
 /** Small presentational building blocks shared by the panels. */
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import * as RadixSelect from "@radix-ui/react-select";
+
+/**
+ * A select, drawn by us. Native <select> menus are rendered by the OS, so
+ * their open state cannot follow the design system across Windows and macOS —
+ * the closed box is the only part we ever control, and the moment it opens
+ * the interface stops looking like itself. This wrapper owns the visuals and
+ * leaves keyboard navigation, focus and ARIA to the headless primitives.
+ *
+ * Radix rejects empty-string values, so "no choice" is expressed by passing
+ * value={null} (the trigger shows the placeholder) and using a real sentinel
+ * in the options where a "none" entry is needed.
+ */
+export function Select<T extends string>({
+  value,
+  onChange,
+  options,
+  ariaLabel,
+  placeholder,
+  disabled,
+  wide,
+}: {
+  value: T | null;
+  onChange: (value: T) => void;
+  options: { value: T; label: ReactNode }[];
+  ariaLabel?: string;
+  placeholder?: string;
+  disabled?: boolean;
+  /** Stretch to the enclosing field instead of the widest option. */
+  wide?: boolean;
+}) {
+  return (
+    <RadixSelect.Root
+      value={value ?? undefined}
+      onValueChange={(next) => onChange(next as T)}
+      disabled={disabled}
+    >
+      <RadixSelect.Trigger className={`select-trigger ${wide ? "select-wide" : ""}`} aria-label={ariaLabel}>
+        <RadixSelect.Value placeholder={placeholder ?? "—"} />
+        <RadixSelect.Icon className="select-icon" aria-hidden>
+          <svg width="10" height="6" viewBox="0 0 10 6">
+            <path
+              d="M1 1l4 4 4-4"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              strokeLinecap="round"
+            />
+          </svg>
+        </RadixSelect.Icon>
+      </RadixSelect.Trigger>
+      <RadixSelect.Portal>
+        <RadixSelect.Content className="select-menu" position="popper" sideOffset={4}>
+          <RadixSelect.Viewport className="select-viewport">
+            {options.map((option) => (
+              <RadixSelect.Item key={option.value} value={option.value} className="select-item">
+                <RadixSelect.ItemText>{option.label}</RadixSelect.ItemText>
+                <RadixSelect.ItemIndicator className="select-indicator" aria-hidden>
+                  <span className="select-indicator-dot" />
+                </RadixSelect.ItemIndicator>
+              </RadixSelect.Item>
+            ))}
+          </RadixSelect.Viewport>
+        </RadixSelect.Content>
+      </RadixSelect.Portal>
+    </RadixSelect.Root>
+  );
+}
+
+/**
+ * Two or three mutually exclusive choices, as a quiet segmented control: the
+ * active segment is marked by a two-pixel rule under it and nothing else —
+ * the professional-application switch, not the web-form dropdown.
+ */
+export function Segment<T extends string>({
+  value,
+  onChange,
+  options,
+  ariaLabel,
+}: {
+  value: T;
+  onChange: (value: T) => void;
+  options: { value: T; label: ReactNode }[];
+  ariaLabel?: string;
+}) {
+  return (
+    <div className="segment" role="radiogroup" aria-label={ariaLabel}>
+      {options.map((option) => (
+        <button
+          key={option.value}
+          type="button"
+          role="radio"
+          aria-checked={option.value === value}
+          className="segment-item"
+          data-active={option.value === value}
+          onClick={() => onChange(option.value)}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * A small anchored menu: the desktop pattern for global, infrequent controls.
+ * Opens under its trigger, closes on outside click or Escape.
+ */
+export function Popover({
+  trigger,
+  title,
+  children,
+}: {
+  trigger: ReactNode;
+  title?: ReactNode;
+  children: ReactNode | ((close: () => void) => ReactNode);
+}) {
+  const [open, setOpen] = useState(false);
+  const anchor = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (!anchor.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  return (
+    <div className="popover-anchor" ref={anchor}>
+      <button
+        className="bar-action"
+        aria-expanded={open}
+        onClick={() => setOpen(!open)}
+      >
+        {trigger}
+      </button>
+      {open && (
+        <div className="popover" role="menu">
+          {title && <div className="menu-title">{title}</div>}
+          {typeof children === "function" ? children(() => setOpen(false)) : children}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** One row inside a popover menu; the dot marks the current choice. */
+export function MenuItem({
+  active,
+  onClick,
+  children,
+}: {
+  active?: boolean;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <button className={`menu-item ${active ? "active" : ""}`} role="menuitem" onClick={onClick}>
+      <span className="menu-radio" aria-hidden />
+      {children}
+    </button>
+  );
+}
 
 export function Card({
   title,
@@ -22,6 +194,124 @@ export function Card({
       )}
       {children}
     </section>
+  );
+}
+
+/**
+ * A page's opening line. The page name itself lives in the main bar; repeating
+ * it bigger in the content is a web-app habit, so only the summary line and
+ * the quiet actions render here.
+ */
+export function PageHead({
+  lede,
+  actions,
+}: {
+  lede?: ReactNode;
+  actions?: ReactNode;
+}) {
+  return (
+    <div className="page-head">
+      <p className="lede">{lede}</p>
+      {actions && <div className="page-head-actions">{actions}</div>}
+    </div>
+  );
+}
+
+/** A band inside a page: label + hint, above whatever the band contains. */
+export function Section({
+  title,
+  hint,
+  actions,
+  children,
+}: {
+  title: ReactNode;
+  hint?: ReactNode;
+  actions?: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <section className="section">
+      <div className="section-head">
+        <span className="section-title">{title}</span>
+        {actions}
+      </div>
+      {hint && <p className="section-hint">{hint}</p>}
+      {children}
+    </section>
+  );
+}
+
+/**
+ * The right-hand detail surface. Clicking a row opens its whole story here
+ * instead of navigating — the interaction model of a desktop application
+ * rather than a page-based admin tool.
+ */
+export function Drawer({
+  title,
+  onClose,
+  children,
+}: {
+  title: ReactNode;
+  onClose: () => void;
+  children: ReactNode;
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return (
+    <>
+      <div className="drawer-veil" onClick={onClose} aria-hidden />
+      <aside className="drawer" role="dialog" aria-modal>
+        <header className="drawer-head">
+          <div className="drawer-title">{title}</div>
+          <button className="linky" onClick={onClose} title="Close (Esc)">
+            ×
+          </button>
+        </header>
+        <div className="drawer-body">{children}</div>
+      </aside>
+    </>
+  );
+}
+
+/** Facts about one thing, as label/value rows. */
+export function KeyValue({ rows }: { rows: [ReactNode, ReactNode][] }) {
+  return (
+    <div className="kv">
+      {rows.map(([key, value], i) => (
+        <div className="kv-row" key={i}>
+          <span className="kv-key">{key}</span>
+          <span className="kv-val">{value}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * A status, as a small dot and a word. The dot is deliberately tiny: status
+ * is information, not decoration, and full-width pills shout.
+ */
+export function StatusDot({
+  tone,
+  label,
+}: {
+  tone: "ok" | "warn" | "danger" | "off";
+  label?: string;
+}) {
+  const cls =
+    tone === "ok" ? "dot-ok" : tone === "warn" ? "dot-warn" : tone === "danger" ? "dot-danger" : "";
+  if (!label) return <span className={`dot ${cls}`} aria-hidden />;
+  return (
+    <span className="dot-label">
+      <span className={`dot ${cls}`} />
+      {label}
+    </span>
   );
 }
 

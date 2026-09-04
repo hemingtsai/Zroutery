@@ -16,6 +16,62 @@ use crate::state::Desktop;
 
 pub const TRAY_ID: &str = "zroutery-tray";
 
+/// Menu labels, in the OS language. The webview has its own locale machinery;
+/// the tray is drawn by the OS before any webview exists, so it follows the
+/// system directly.
+struct Labels {
+    open: &'static str,
+    gateway_stopped: &'static str,
+    start: &'static str,
+    copy_url: &'static str,
+    copy_token: &'static str,
+    quit: &'static str,
+    stop: &'static str,
+}
+
+fn labels() -> Labels {
+    if system_language_is_chinese() {
+        Labels {
+            open: "打开 Zroutery",
+            gateway_stopped: "网关:已停止",
+            start: "启动网关",
+            copy_url: "复制 Base URL",
+            copy_token: "复制令牌",
+            quit: "退出 Zroutery",
+            stop: "停止网关",
+        }
+    } else {
+        Labels {
+            open: "Open Zroutery",
+            gateway_stopped: "Gateway: stopped",
+            start: "Start gateway",
+            copy_url: "Copy base URL",
+            copy_token: "Copy API token",
+            quit: "Quit Zroutery",
+            stop: "Stop gateway",
+        }
+    }
+}
+
+/// Whether the OS UI language is Chinese.
+///
+/// The tray is drawn by the OS before any webview exists, so the webview's
+/// locale cannot inform it — this reads the system directly.
+#[cfg(target_os = "windows")]
+fn system_language_is_chinese() -> bool {
+    // PRIMARYLANGID of the user's default UI language: 0x04 is Chinese.
+    let lang = unsafe { windows_sys::Win32::Globalization::GetUserDefaultUILanguage() } & 0x3ff;
+    lang == 0x04
+}
+
+#[cfg(not(target_os = "windows"))]
+fn system_language_is_chinese() -> bool {
+    std::env::var("LANG")
+        .or_else(|_| std::env::var("LC_ALL"))
+        .map(|v| v.to_ascii_lowercase().starts_with("zh"))
+        .unwrap_or(false)
+}
+
 /// Menu items whose labels change with the proxy state.
 pub struct TrayHandles {
     pub status: MenuItem<Wry>,
@@ -23,20 +79,22 @@ pub struct TrayHandles {
 }
 
 pub fn build(app: &AppHandle) -> tauri::Result<()> {
-    let status = MenuItem::with_id(app, "status", "Proxy: stopped", false, None::<&str>)?;
-    let open = MenuItem::with_id(app, "open", "Open dashboard", true, None::<&str>)?;
-    let toggle = MenuItem::with_id(app, "toggle", "Start proxy", true, None::<&str>)?;
-    let copy_url = MenuItem::with_id(app, "copy_url", "Copy base URL", true, None::<&str>)?;
-    let copy_token = MenuItem::with_id(app, "copy_token", "Copy API token", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "Quit Zroutery", true, None::<&str>)?;
+    let l = labels();
+    let open = MenuItem::with_id(app, "open", l.open, true, None::<&str>)?;
+    let status = MenuItem::with_id(app, "status", l.gateway_stopped, false, None::<&str>)?;
+    let toggle = MenuItem::with_id(app, "toggle", l.start, true, None::<&str>)?;
+    let copy_url = MenuItem::with_id(app, "copy_url", l.copy_url, true, None::<&str>)?;
+    let copy_token = MenuItem::with_id(app, "copy_token", l.copy_token, true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", l.quit, true, None::<&str>)?;
 
     let menu = Menu::with_items(
         app,
         &[
-            &status,
-            &PredefinedMenuItem::separator(app)?,
             &open,
+            &PredefinedMenuItem::separator(app)?,
+            &status,
             &toggle,
+            &PredefinedMenuItem::separator(app)?,
             &copy_url,
             &copy_token,
             &PredefinedMenuItem::separator(app)?,
@@ -144,20 +202,31 @@ pub fn quit(app: &AppHandle) {
 pub async fn refresh(app: &AppHandle, desktop: &Desktop) {
     let running = desktop.is_running().await;
     let config = desktop.core.config();
+    let zh = system_language_is_chinese();
     let label = if running {
-        format!("Proxy: {}:{}", config.server.host, config.server.port)
+        format!(
+            "{} {}:{}",
+            if zh { "网关" } else { "Gateway" },
+            config.server.host,
+            config.server.port
+        )
+    } else if zh {
+        "网关:已停止".to_string()
     } else {
-        "Proxy: stopped".to_string()
+        "Gateway: stopped".to_string()
     };
 
     if let Some(handles) = app.try_state::<TrayHandles>() {
         let _ = handles.status.set_text(&label);
-        let _ = handles
-            .toggle
-            .set_text(if running { "Stop proxy" } else { "Start proxy" });
+        let _ = handles.toggle.set_text(if running {
+            if zh { "停止网关" } else { "Stop gateway" }
+        } else if zh {
+            "启动网关"
+        } else {
+            "Start gateway"
+        });
     }
     if let Some(tray) = app.tray_by_id(TRAY_ID) {
-        let models = config.models.iter().filter(|m| m.enabled).count();
-        let _ = tray.set_tooltip(Some(format!("Zroutery — {label} — {models} models")));
+        let _ = tray.set_tooltip(Some(format!("Zroutery — {label}")));
     }
 }

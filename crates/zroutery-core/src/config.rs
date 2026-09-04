@@ -523,6 +523,41 @@ impl Default for ClassifierConfig {
     }
 }
 
+/// Vision fallback: turning images into descriptions for models that cannot
+/// see.
+///
+/// A text model in front of an image either fails the whole request or
+/// silently loses the image's meaning. The fallback routes the image, once,
+/// through a model that can see, and puts the description where the text was
+/// going — the conversation continues with the image's content instead of a
+/// placeholder.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct VisionConfig {
+    /// Master switch. Off: images go to non-vision models as-is (and the old
+    /// placeholder rectifier still catches the rejection).
+    #[serde(default)]
+    pub enabled: bool,
+    /// Exposed id (or alias) of an existing model that can describe images.
+    /// Reuses the provider, secret and pricing of that model, exactly like a
+    /// classifier candidate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// What to put when even the vision model fails or none is configured:
+    /// a placeholder beats a dead request, but it must be honest about what
+    /// happened to the image.
+    pub placeholder: String,
+}
+
+impl Default for VisionConfig {
+    fn default() -> Self {
+        VisionConfig {
+            enabled: false,
+            model: None,
+            placeholder: "[Unsupported Image]".into(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ServerConfig {
     /// Loopback by default. Changing this exposes your API keys to the network.
@@ -607,6 +642,37 @@ impl Default for ServerConfig {
     }
 }
 
+/// How the desktop app behaves as a resident process: what autostart, the
+/// launch, and the close button do.
+///
+/// One set of names on every platform — the tray is a tray, the close button
+/// is the close button, and "minimize" is deliberately not used: minimizing is
+/// a window state, hiding to the tray is a lifecycle, and conflating them is
+/// how users lose track of whether the app is still running.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WindowBehavior {
+    /// Register with the OS to launch Zroutery at login.
+    #[serde(default)]
+    pub launch_on_login: bool,
+    /// Start without showing the main window; the tray is the only presence.
+    #[serde(default)]
+    pub silent_start: bool,
+    /// Closing the window keeps the process (and the gateway) alive in the
+    /// tray. Off: closing the window quits, stopping the gateway with it.
+    #[serde(default = "default_true")]
+    pub keep_in_tray: bool,
+}
+
+impl Default for WindowBehavior {
+    fn default() -> Self {
+        WindowBehavior {
+            launch_on_login: false,
+            silent_start: false,
+            keep_in_tray: true,
+        }
+    }
+}
+
 /// Root persisted document.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct AppConfig {
@@ -618,6 +684,13 @@ pub struct AppConfig {
     /// `routing`, which stays about the main conversation.
     #[serde(default)]
     pub classifier: ClassifierConfig,
+    /// Desktop application lifecycle. The gateway itself never reads this —
+    /// it belongs to the window layer.
+    #[serde(default)]
+    pub window: WindowBehavior,
+    /// Vision fallback for non-vision models.
+    #[serde(default)]
+    pub vision: VisionConfig,
     #[serde(default)]
     pub providers: Vec<ProviderConfig>,
     #[serde(default)]

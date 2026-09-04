@@ -1,28 +1,72 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, errorText, type AppConfig, type Snapshot } from "./api";
-import { Badge, Banner, Button } from "./components";
-import Providers from "./panels/Providers";
-import Models from "./panels/Models";
-import Routing from "./panels/Routing";
-import Activity from "./panels/Activity";
-import Logs from "./panels/Logs";
+import { Banner, MenuItem, Popover, StatusDot } from "./components";
+import { I18nProvider, useI18n } from "./i18n";
+import Overview from "./pages/Overview";
+import Models from "./pages/Models";
+import Providers from "./pages/Providers";
+import Routing from "./pages/Routing";
+import Activity from "./pages/Activity";
+import Settings from "./pages/Settings";
 
-type Tab = "providers" | "models" | "routing" | "activity" | "logs";
+/**
+ * The doors into Zroutery. No icons, no section headers — a desktop utility's
+ * navigation is a plain list of words, and the active one is simply the one
+ * that reads darkest. Everything else lives inside a page: Auto review inside
+ * Routing, the gateway inside Settings, diagnostics inside Settings.
+ */
+type Page = "overview" | "models" | "providers" | "routing" | "activity" | "settings";
 
-const TABS: { id: Tab; label: string }[] = [
-  { id: "providers", label: "Providers" },
-  { id: "models", label: "Models" },
-  { id: "routing", label: "Routing" },
-  { id: "activity", label: "Activity" },
-  { id: "logs", label: "Logs" },
+const NAV: { id: Page; labelKey: Parameters<ReturnType<typeof useI18n>["t"]>[0] }[] = [
+  { id: "overview", labelKey: "nav.overview" },
+  { id: "models", labelKey: "nav.models" },
+  { id: "providers", labelKey: "nav.providers" },
+  { id: "routing", labelKey: "nav.routing" },
+  { id: "activity", labelKey: "nav.activity" },
+  { id: "settings", labelKey: "nav.settings" },
 ];
 
+type ThemePref = "system" | "light" | "dark";
+
+function loadThemePref(): ThemePref {
+  const stored = localStorage.getItem("zroutery-theme");
+  return stored === "light" || stored === "dark" ? stored : "system";
+}
+
+/** The concrete theme a preference resolves to right now. */
+function resolveTheme(pref: ThemePref): "light" | "dark" {
+  if (pref !== "system") return pref;
+  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
 export default function App() {
+  return (
+    <I18nProvider>
+      <Shell />
+    </I18nProvider>
+  );
+}
+
+function Shell() {
+  const { t } = useI18n();
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
-  const [tab, setTab] = useState<Tab>("providers");
+  const [page, setPage] = useState<Page>("overview");
+  const [themePref, setThemePref] = useState<ThemePref>(loadThemePref);
   const [error, setError] = useState<string | null>(null);
   const [pollError, setPollError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    const apply = () => {
+      document.documentElement.dataset.theme = resolveTheme(themePref);
+    };
+    apply();
+    localStorage.setItem("zroutery-theme", themePref);
+    // "Follow system" has to keep following: listen while it is the preference.
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    media.addEventListener("change", apply);
+    return () => media.removeEventListener("change", apply);
+  }, [themePref]);
 
   // Tasks run one at a time: every save round trips through Rust and rewrites
   // the config file, so two overlapping saves could interleave and land out of
@@ -75,11 +119,11 @@ export default function App() {
     void run(api.snapshot);
   }, [run]);
 
-  // The Activity tab needs fresh numbers. It polls the counters only, and a
-  // failure is reported rather than swallowed: silence would look like an idle
-  // proxy.
+  // Overview and Activity show live state; their pages poll the counters
+  // only. A failure is reported rather than swallowed: silence would look
+  // like an idle proxy.
   useEffect(() => {
-    if (tab !== "activity") return;
+    if (page !== "activity" && page !== "overview") return;
     let cancelled = false;
     const poll = async () => {
       try {
@@ -97,10 +141,10 @@ export default function App() {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [tab]);
+  }, [page]);
 
   /**
-   * Apply a mutation to the freshest committed config and save it. Panels hand
+   * Apply a mutation to the freshest committed config and save it. Pages hand
    * in an updater so an edit that queues behind an in-flight save rebases onto
    * that save's result rather than clobbering it with a stale snapshot. An
    * updater may return null to mean "nothing to change".
@@ -124,127 +168,168 @@ export default function App() {
   if (!snapshot) {
     return (
       <main className="loading">
-        <p>{error ?? "Loading…"}</p>
+        <p>{error ?? t("common.loading")}</p>
       </main>
     );
   }
 
   const { server } = snapshot;
-  const baseUrl = server.base_url ?? `http://${server.host}:${server.port}`;
 
   return (
-    <div className="app">
-      <header className="titlebar" data-tauri-drag-region>
-        <div className="brand">
-          <span className={`dot ${server.running ? "dot-on" : "dot-off"}`} aria-hidden />
-          <strong>Zroutery</strong>
-          <span className="muted">v{snapshot.version}</span>
+    <div className="shell">
+      <nav className="sidebar" aria-label="Main">
+        <div className="sidebar-brand">
+          Zroutery<span className="mono">v{snapshot.version}</span>
         </div>
 
-        <div className="row gap">
-          <code className="url" title={baseUrl}>
-            {baseUrl}
-          </code>
-          <Button kind="ghost" onClick={() => api.copy(baseUrl)} title="Copy the base URL">
-            Copy URL
-          </Button>
-          <Button
-            kind="ghost"
-            onClick={() => api.copyToken()}
-            title="Copy the local API token to the clipboard"
-          >
-            Copy token
-          </Button>
-          <Button
-            kind={server.running ? "default" : "primary"}
-            disabled={busy}
-            onClick={() => run(server.running ? api.stop : api.start)}
-          >
-            {server.running ? "Stop proxy" : "Start proxy"}
-          </Button>
-        </div>
-      </header>
-
-      <nav className="tabs" role="tablist">
-        {TABS.map((t) => (
+        {NAV.map((item) => (
           <button
-            key={t.id}
-            role="tab"
-            aria-selected={tab === t.id}
-            className={`tab ${tab === t.id ? "tab-active" : ""}`}
-            onClick={() => setTab(t.id)}
+            key={item.id}
+            className={`nav-item ${page === item.id ? "active" : ""}`}
+            onClick={() => setPage(item.id)}
           >
-            {t.label}
-            {t.id === "models" && unclassified.length > 0 && (
-              <Badge tone="warn">{unclassified.length}</Badge>
+            {t(item.labelKey)}
+            {item.id === "models" && unclassified.length > 0 && (
+              <span className="nav-count" title={t("nav.unclassified_title", { n: unclassified.length })}>
+                {unclassified.length}
+              </span>
             )}
           </button>
         ))}
+
+        <div className="sidebar-spacer" />
       </nav>
 
-      <main className="content">
-        {error && (
-          <Banner
-            tone="danger"
-            actions={
-              <Button kind="ghost" onClick={() => setError(null)}>
-                Dismiss
-              </Button>
-            }
-          >
-            {error}
-          </Banner>
-        )}
-        {pollError && (
-          <Banner tone="warn">Live updates stopped: {pollError}</Banner>
-        )}
-        {snapshot.warning && <Banner tone="warn">{snapshot.warning}</Banner>}
-        {snapshot.issues
-          .filter((i) => i.severity === "error")
-          .map((i) => (
-            <Banner key={`${i.code}:${i.subject ?? ""}`} tone="danger">
-              {i.message}
-            </Banner>
-          ))}
-        {server.exposed && (
-          <Banner tone="danger">
-            The proxy is bound to <code>{server.host}</code>, so other machines on your network
-            can use your API keys. Keep authentication enabled or switch back to{" "}
-            <code>127.0.0.1</code>.
-          </Banner>
-        )}
-        {!server.require_auth && (
-          <Banner tone="warn">
-            Authentication is off: any local process can spend your API credit.
-          </Banner>
-        )}
-        {snapshot.issues
-          .filter((i) => i.code === "server.cors_any_origin")
-          .map((i) => (
-            <Banner key={i.code} tone="danger">
-              {i.message}
-            </Banner>
-          ))}
+      <div className="main">
+        <header className="mainbar">
+          <span className="page-title">{t(NAV.find((n) => n.id === page)!.labelKey)}</span>
+          <div className="mainbar-right">
+            {/* The gateway lives here, not in a bottom strip: top of the
+                window is where a desktop app keeps global state. */}
+            <Popover
+              title={t("settings.gateway")}
+              trigger={
+                <>
+                  <StatusDot tone={server.running ? "ok" : "danger"} />
+                  {t("settings.gateway")}
+                </>
+              }
+            >
+              {(close) => (
+                <>
+                  <div className="menu-row">
+                    <StatusDot tone={server.running ? "ok" : "danger"} />
+                    {t(server.running ? "status.running" : "status.stopped")}
+                  </div>
+                  {server.running && (
+                    <div className="menu-row">
+                      <span className="menu-key">{t("gw.address")}</span>
+                      <span className="mono">
+                        {server.host}:{server.port}
+                      </span>
+                    </div>
+                  )}
+                  <div className="menu-sep" />
+                  <MenuItem
+                    onClick={() => {
+                      void api.copy(`http://${server.host}:${server.port}`);
+                      close();
+                    }}
+                  >
+                    {t("gw.copy_address")}
+                  </MenuItem>
+                  <MenuItem
+                    onClick={() => {
+                      void api.copyToken();
+                      close();
+                    }}
+                  >
+                    {t("action.copy_token")}
+                  </MenuItem>
+                  <div className="menu-sep" />
+                  <MenuItem
+                    onClick={() => {
+                      void run(server.running ? api.stop : api.start);
+                      close();
+                    }}
+                  >
+                    {t(server.running ? "gw.stop" : "gw.start")}
+                  </MenuItem>
+                </>
+              )}
+            </Popover>
 
-        {tab === "providers" && <Providers snapshot={snapshot} save={save} run={run} busy={busy} />}
-        {tab === "models" && <Models snapshot={snapshot} save={save} busy={busy} />}
-        {tab === "routing" && <Routing snapshot={snapshot} save={save} run={run} busy={busy} />}
-        {tab === "activity" && <Activity snapshot={snapshot} run={run} />}
-        {tab === "logs" && <Logs />}
-      </main>
+            {/* Appearance: a half-moon reads as "Appearance", not "dark
+                mode", and the three-way choice includes following the OS. */}
+            <Popover
+              title={t("appearance.title")}
+              trigger={
+                <span aria-hidden className="glyph">
+                  {"◐"}
+                </span>
+              }
+            >
+              <MenuItem active={themePref === "system"} onClick={() => setThemePref("system")}>
+                {t("theme.system")}
+              </MenuItem>
+              <MenuItem active={themePref === "light"} onClick={() => setThemePref("light")}>
+                {t("theme.light")}
+              </MenuItem>
+              <MenuItem active={themePref === "dark"} onClick={() => setThemePref("dark")}>
+                {t("theme.dark")}
+              </MenuItem>
+            </Popover>
+          </div>
+        </header>
 
-      <footer className="statusbar">
-        <span className="muted">{snapshot.config_path}</span>
-        <span className="row gap">
-          <Button kind="ghost" onClick={() => api.hide()}>
-            Hide window
-          </Button>
-          <Button kind="ghost" onClick={() => api.quit()} title="Stop the proxy and quit">
-            Quit
-          </Button>
-        </span>
-      </footer>
+        <main className="content">
+          <div className="page">
+            {error && (
+              <Banner
+                tone="danger"
+                actions={
+                  <button className="linky" onClick={() => setError(null)}>
+                    {t("common.dismiss")}
+                  </button>
+                }
+              >
+                {error}
+              </Banner>
+            )}
+            {pollError && <Banner tone="warn">{t("app.live_stopped", { err: pollError })}</Banner>}
+            {snapshot.warning && <Banner tone="warn">{snapshot.warning}</Banner>}
+            {snapshot.issues
+              .filter((i) => i.severity === "error")
+              .map((i) => (
+                <Banner key={`${i.code}:${i.subject ?? ""}`} tone="danger">
+                  {i.message}
+                </Banner>
+              ))}
+            {server.exposed && (
+              <Banner tone="danger">{t("app.exposed", { host: server.host })}</Banner>
+            )}
+            {!server.require_auth && <Banner tone="warn">{t("app.no_auth")}</Banner>}
+
+            {page === "overview" && <Overview snapshot={snapshot} onNavigate={setPage} />}
+            {page === "models" && <Models snapshot={snapshot} save={save} busy={busy} />}
+            {page === "providers" && (
+              <Providers snapshot={snapshot} save={save} run={run} busy={busy} />
+            )}
+            {page === "routing" && <Routing snapshot={snapshot} save={save} run={run} busy={busy} />}
+            {page === "activity" && <Activity snapshot={snapshot} run={run} />}
+            {page === "settings" && (
+              <Settings
+                snapshot={snapshot}
+                save={save}
+                run={run}
+                busy={busy}
+                themePref={themePref}
+                onThemePref={setThemePref}
+              />
+            )}
+          </div>
+        </main>
+      </div>
     </div>
   );
 }
-
