@@ -48,7 +48,12 @@ pub enum Error {
     },
 
     /// Network level failure talking to the upstream.
-    #[error("cannot reach upstream {provider}: {source}")]
+    ///
+    /// The reqwest source can embed the full request URL — which for some
+    /// providers includes path segments that carry account identifiers. The
+    /// client-facing message stays at provider name + failure kind; the source
+    /// is preserved for the log through the error chain.
+    #[error("cannot reach upstream {provider}")]
     Transport {
         provider: String,
         #[source]
@@ -154,8 +159,21 @@ impl Error {
     }
 
     /// Serialize into the shape the given dialect expects.
+    ///
+    /// Upstream response bodies never reach the client: they can contain the
+    /// provider's error page (server fingerprints, internal URLs, account
+    /// hints) and they are in whatever format the provider chose — HTML in
+    /// the wild — while the client expects this proxy's protocol. The body is
+    /// for the log and the Activity drawer; the wire carries only the
+    /// provider's name and the status, which is everything a user needs to
+    /// know about the failure.
     pub fn to_wire(&self, dialect: Dialect) -> Value {
-        let msg = self.to_string();
+        let msg = match self {
+            Error::Upstream { provider, status, .. } => {
+                format!("upstream {provider} returned {status}")
+            }
+            _ => self.to_string(),
+        };
         match dialect {
             Dialect::Anthropic => json!({
                 "type": "error",
