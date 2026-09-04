@@ -6,9 +6,9 @@
 //! provider works. Its outcome decides between two honest results — the
 //! description, or the failure that leaves the placeholder.
 
-use crate::config::{AppConfig, ModelEntry, ProviderConfig, SecretStore};
+use crate::config::{AppConfig, ModelEntry, ProviderConfig};
 use crate::error::Result;
-use crate::ir::{ChatRequest, ChatResponse, ContentBlock, Dialect, Message};
+use crate::ir::{ChatRequest, ChatResponse, ContentBlock, Message};
 use crate::upstream::Upstream;
 
 /// The prompt for the describing model. Short on purpose: the description is
@@ -28,7 +28,7 @@ pub struct VisionTarget {
 /// `None` when vision fallback is off, no model is set, or the reference does
 /// not resolve — in every one of those cases the caller falls back to the
 /// placeholder, never to silence.
-pub fn resolve(config: &AppConfig, secrets: &dyn SecretStore) -> Option<VisionTarget> {
+pub fn resolve(config: &AppConfig) -> Option<VisionTarget> {
     if !config.vision.enabled {
         return None;
     }
@@ -86,7 +86,7 @@ pub fn description_text(resp: &ChatResponse) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{MemorySecretStore, ModelClass};
+    use crate::config::ModelClass;
 
     fn config_with(vision: Option<&str>) -> AppConfig {
         let mut cfg = AppConfig::default();
@@ -108,26 +108,25 @@ mod tests {
 
     #[test]
     fn resolves_only_when_everything_lines_up() {
-        let secrets = MemorySecretStore::new();
-        assert!(resolve(&config_with(None), &secrets).is_none());
+        assert!(resolve(&config_with(None)).is_none());
 
         let with = config_with(Some("p-vision-model"));
-        assert!(resolve(&with, &secrets).is_some());
+        assert!(resolve(&with).is_some());
 
         // Off: no resolution even with a model configured.
         let mut off = with.clone();
         off.vision.enabled = false;
-        assert!(resolve(&off, &secrets).is_none());
+        assert!(resolve(&off).is_none());
 
         // A model that cannot see is not a vision fallback.
         let mut blind = with.clone();
         blind.models[0].supports_vision = false;
-        assert!(resolve(&blind, &secrets).is_none());
+        assert!(resolve(&blind).is_none());
 
         // A dangling reference resolves to nothing, not an error.
         let mut dangling = with.clone();
         dangling.vision.model = Some("nope".into());
-        assert!(resolve(&dangling, &secrets).is_none());
+        assert!(resolve(&dangling).is_none());
     }
 
     #[test]

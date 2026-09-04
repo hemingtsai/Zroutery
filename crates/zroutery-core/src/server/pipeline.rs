@@ -23,7 +23,8 @@ use crate::error::{Error, Result};
 use crate::ir::{ChatRequest, Dialect, StreamEvent, Usage};
 use crate::protocol::{self, openai, SseFrame, StreamEncoder};
 use crate::query::RequestKind;
-use crate::rectifier;
+use crate::rectifier::{self, Rectifier};
+use crate::rectifier::media_fallback::MediaFallbackRectifier;
 use crate::registry::{Registry, Resolution};
 use crate::router::Candidate;
 use crate::stats::RecordBuilder;
@@ -186,23 +187,145 @@ fn encode_mode_for(kind: RequestKind) -> crate::upstream::EncodeMode {
     }
 }
 
+/// Describe the images in a request so a model that cannot see still
+/// receives their content.
+///
+/// Called from two places with one body: the preflight (the target model is
+/// known not to support vision, so describe before sending) and the
+/// media-fallback retry (the upstream rejected the image, so describe and
+/// retry the same candidate). Each image is described independently — one
+/// blind image must not sink the others.
+///
+/// Images that cannot be described get the placeholder, never a silent drop:
+/// a text model that receives nothing where an image was has no way to know
+/// it is missing something.
+async fn apply_vision_fallback(
+    state: &AppState,
+    req: &mut ChatRequest,
+    reason: &str,
+) {
+    let config = state.config();
+    let images = crate::media::collect::collect(req);
+    if images.is_empty() {
+        return;
+    }
+    let target = crate::media::vision::resolve(&config);
+    if target.is_none() {
+        // No vision model configured: every image becomes the honest
+        // placeholder rather than an error, so the request can still go.
+        for (slot, _) in &images {
+            crate::media::transform::replace(
+                req,
+                slot,
+                &crate::media::transform::Replacement::Placeholder(
+                    config.vision.placeholder.clone(),
+                ),
+            );
+        }
+        tracing::warn!(
+            images = images.len(),
+            reason,
+            "no vision model configured; images replaced with the placeholder"
+        );
+        return;
+    }
+    let target = target.unwrap();
+    let key = state
+        .api_key(&target.provider)
+        .ok()
+        .flatten();
+
+    let mut described = 0;
+    let mut placeholders = 0;
+    for (slot, source) in &images {
+        let replacement = match crate::media::vision::describe(
+            &state.upstream,
+            &target,
+            key.as_deref(),
+            source,
+        )
+        .await
+        {
+            Ok(resp) => {
+                described += 1;
+                crate::media::transform::Replacement::Description(
+                    crate::media::vision::description_text(&resp),
+                )
+            }
+            Err(e) => {
+                placeholders += 1;
+                tracing::warn!(
+                    vision_model = target.entry.exposed_id(),
+                    error = %e,
+                    "vision description failed; using the placeholder for this image"
+                );
+                crate::media::transform::Replacement::Placeholder(
+                    config.vision.placeholder.clone(),
+                )
+            }
+        };
+        crate::media::transform::replace(req, slot, &replacement);
+    }
+    tracing::info!(
+        reason,
+        vision_model = target.entry.exposed_id(),
+        described,
+        placeholders,
+        "vision fallback applied"
+    );
+}
+
 /// Try every enabled rectifier, allowing each rectifier up to three repair
 /// rounds. A rectifier retry is deliberately not reported to the circuit
 /// breaker: it is the same provider and same model, and the failure was a
 /// fixable request-shape problem.
+///
+/// A media rejection is upgraded before the ordinary cascade runs: instead of
+/// a placeholder, the images get described by the vision model (falling back
+/// to the placeholder when it fails), and the repaired request retries the
+/// same provider — the upstream rejected the *image*, not the question.
 async fn try_rectify_buffered(
     state: &AppState,
     candidate: &Candidate,
     key: Option<&str>,
-    body: &Value,
+    req: &mut ChatRequest,
     error: &Error,
 ) -> std::result::Result<Option<crate::ir::ChatResponse>, Error> {
+    // The reactive vision path: only when the upstream said "no images" and
+    // the request still carries them.
+    if state.config().vision.enabled
+        && MediaFallbackRectifier.should_apply(error, &serde_json::Value::Null)
+        && !crate::media::collect::collect(req).is_empty()
+    {
+        apply_vision_fallback(state, req, "upstream rejected media").await;
+        let key_owned = key.map(str::to_string);
+        if let Some(body) = reencode(candidate, req) {
+            match state
+                .upstream
+                .send(&candidate.provider, key_owned.as_deref(), &body)
+                .await
+            {
+                Ok(resp) => return Ok(Some(resp)),
+                Err(e) => tracing::warn!(
+                    model = candidate.model_id(),
+                    "vision-repaired retry also failed: {e}"
+                ),
+            }
+        }
+    }
+
     let rectifiers = rectifier::from_config(&state.config().routing.rectifier);
     if rectifiers.is_empty() {
         return Ok(None);
     }
 
-    let mut current_body = body.clone();
+    // Rectifiers operate on the encoded body; re-encode the (possibly
+    // vision-repaired) request for them.
+    let base_body = match reencode(candidate, req) {
+        Some(body) => body,
+        None => return Ok(None),
+    };
+    let mut current_body = base_body.clone();
     let mut last_error: Option<Error> = None;
     let mut current_error: &Error = error;
 
@@ -251,6 +374,18 @@ async fn try_rectify_buffered(
         Some(e) => Err(e),
         None => Ok(None),
     }
+}
+
+/// Re-encode a (possibly repaired) IR request for one candidate.
+fn reencode(candidate: &Candidate, req: &ChatRequest) -> Option<Value> {
+    crate::upstream::encode_for_mode(
+        &candidate.provider,
+        req,
+        &candidate.entry.upstream_model,
+        candidate.entry.max_output_tokens,
+        encode_mode_for(crate::query::RequestKind::Main),
+    )
+    .ok()
 }
 
 async fn try_rectify_stream(
@@ -352,6 +487,20 @@ async fn buffered_chat(
         }
         let attempt_start = Instant::now();
 
+        // Preflight: a target known not to see gets the images described
+        // before the first byte leaves, so the attempt is not wasted on a
+        // rejection we could predict. Unknown capability is deliberately
+        // left alone — the upstream decides, and the rectifier reacts.
+        // And with vision fallback off entirely, nothing happens here: off
+        // means the request goes out as it came, promise kept.
+        let mut req = req.clone();
+        if state.config().vision.enabled && !candidate.entry.supports_vision {
+            let needs_vision = crate::media::collect::collect(&req);
+            if !needs_vision.is_empty() {
+                apply_vision_fallback(&state, &mut req, "preflight").await;
+            }
+        }
+
         let (key, body) = match prepare(&state, candidate, &req, mode) {
             Ok(v) => v,
             Err(e) => {
@@ -443,7 +592,7 @@ async fn buffered_chat(
             Err(e) => {
                 // Rectifier cascade: try to repair the request and retry the
                 // same provider without touching circuit-breaker health.
-                match try_rectify_buffered(&state, candidate, key.as_deref(), &body, &e).await {
+                match try_rectify_buffered(&state, candidate, key.as_deref(), &mut req, &e).await {
                     Ok(Some(mut resp)) => {
                         // The repaired retry is not a fresh probe: give the
                         // half-open permit back without recording health.
