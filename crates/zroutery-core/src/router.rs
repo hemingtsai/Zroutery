@@ -439,7 +439,9 @@ impl Router {
             .or_insert_with(|| HealthState::new(routing.circuit_breaker.clone()));
         h.breaker.record_failure();
         h.total_failure += 1;
-        h.last_error = Some(error.to_string());
+        // The GUI shows this string in the health table; the unredacted body
+        // stays in the log where it belongs.
+        h.last_error = Some(error.safe_message());
     }
 
     /// Whether a request may actually be sent to this model.

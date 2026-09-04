@@ -457,6 +457,17 @@ pub fn build_headers(provider: &ProviderConfig, api_key: Option<&str>) -> Result
                     HeaderValue::from_str(key)
                         .map_err(|_| Error::internal("API key contains invalid characters"))?,
                 );
+                // Some Anthropic-protocol relays read Authorization and reject
+                // a request carrying only x-api-key. Sending both costs
+                // nothing — the standard API accepts either header — and
+                // satisfies gateways that check exactly one of them.
+                if provider.bearer_auth {
+                    headers.insert(
+                        AUTHORIZATION,
+                        HeaderValue::from_str(&format!("Bearer {key}"))
+                            .map_err(|_| Error::internal("API key contains invalid characters"))?,
+                    );
+                }
             }
             ProviderKind::OpenAICompatible => {
                 headers.insert(
@@ -727,6 +738,28 @@ mod tests {
         );
         assert_eq!(h.get("anthropic-beta").unwrap(), "output-128k");
         assert!(h.get(AUTHORIZATION).is_none());
+    }
+
+    #[test]
+    fn bearer_auth_sends_both_headers_for_anthropic_relays() {
+        let mut p = provider(ProviderKind::Anthropic);
+        p.impersonate_claude_code = false;
+        p.bearer_auth = true;
+        let h = build_headers(&p, Some("sk-relay")).unwrap();
+        // Both headers: the relay reads Authorization, the standard API still
+        // finds its x-api-key.
+        assert_eq!(h.get("x-api-key").unwrap(), "sk-relay");
+        assert_eq!(h.get(AUTHORIZATION).unwrap(), "Bearer sk-relay");
+    }
+
+    #[test]
+    fn bearer_auth_does_not_apply_to_openai_providers() {
+        let mut p = provider(ProviderKind::OpenAICompatible);
+        p.bearer_auth = true;
+        let h = build_headers(&p, Some("sk-1")).unwrap();
+        assert_eq!(h.get(AUTHORIZATION).unwrap(), "Bearer sk-1");
+        // x-api-key would be redundant and unusual on the OpenAI dialect.
+        assert!(h.get("x-api-key").is_none());
     }
 
     #[test]

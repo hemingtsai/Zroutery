@@ -103,6 +103,9 @@ export interface Provider {
   /** Whether to impersonate Claude Code client (User-Agent, x-app, anthropic-beta headers
    * and system prompt identity line). */
   impersonate_claude_code: boolean;
+  /** Also send the key as `Authorization: Bearer`, for Anthropic relays that
+   * read the Bearer header instead of `x-api-key`. */
+  bearer_auth: boolean;
   enabled: boolean;
   timeout_secs: number;
   connect_timeout_secs: number;
