@@ -30,18 +30,20 @@ pub type EventStream = Pin<Box<dyn Stream<Item = Result<StreamEvent>> + Send>>;
 #[derive(Debug)]
 pub struct Upstream {
     client: RwLock<reqwest::Client>,
+    bypass_proxy: bool,
+    connect_timeout_secs: u64,
 }
 
 impl Default for Upstream {
     fn default() -> Self {
-        Self::new(false)
+        Self::new(false, 15)
     }
 }
 
-fn build_http_client(bypass_proxy: bool) -> reqwest::Client {
-    tracing::info!(bypass_proxy, "building upstream HTTP client");
+fn build_http_client(bypass_proxy: bool, connect_timeout_secs: u64) -> reqwest::Client {
+    tracing::info!(bypass_proxy, connect_timeout_secs, "building upstream HTTP client");
     let mut builder = reqwest::Client::builder()
-        .connect_timeout(Duration::from_secs(15))
+        .connect_timeout(Duration::from_secs(connect_timeout_secs))
         .pool_idle_timeout(Duration::from_secs(90))
         .http1_only()
         .user_agent(USER_AGENT);
@@ -55,15 +57,17 @@ fn build_http_client(bypass_proxy: bool) -> reqwest::Client {
 }
 
 impl Upstream {
-    pub fn new(bypass_proxy: bool) -> Self {
+    pub fn new(bypass_proxy: bool, connect_timeout_secs: u64) -> Self {
         Upstream {
-            client: RwLock::new(build_http_client(bypass_proxy)),
+            client: RwLock::new(build_http_client(bypass_proxy, connect_timeout_secs)),
+            bypass_proxy,
+            connect_timeout_secs,
         }
     }
 
     /// Rebuild the HTTP client (e.g. when bypass_proxy setting changes at runtime).
     pub fn rebuild_client(&self, bypass_proxy: bool) {
-        *crate::sync::write(&self.client) = build_http_client(bypass_proxy);
+        *crate::sync::write(&self.client) = build_http_client(bypass_proxy, self.connect_timeout_secs);
     }
 
     fn client(&self) -> reqwest::Client {

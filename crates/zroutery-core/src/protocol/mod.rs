@@ -144,8 +144,8 @@ impl SseDecoder {
 
     /// Feed raw bytes, returning every complete frame that became available.
     pub fn push(&mut self, chunk: &[u8]) -> Vec<SseFrame> {
-        self.buffer
-            .push_str(&String::from_utf8_lossy(chunk).replace("\r\n", "\n"));
+        self.buffer.push_str(&String::from_utf8_lossy(chunk));
+        self.buffer = self.buffer.replace("\r\n", "\n");
         let mut frames = Vec::new();
         while let Some(pos) = self.buffer.find("\n\n") {
             let raw: String = self.buffer.drain(..pos + 2).collect();
