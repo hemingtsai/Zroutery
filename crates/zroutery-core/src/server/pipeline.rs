@@ -1173,20 +1173,28 @@ fn sse_body(
             if st.finished {
                 return None;
             }
-            match st.events.next().await {
-                Some(Ok(event)) => {
-                    // Check for cancellation (Responses API).
-                    if let Some(ref rx) = st.cancel_rx {
-                        if *rx.borrow() {
+            // Race upstream events against cancellation signal for immediate abort.
+            let next_event = if let Some(ref mut rx) = st.cancel_rx {
+                tokio::select! {
+                    event = st.events.next() => event,
+                    result = rx.changed() => {
+                        if result.is_ok() && *rx.borrow() {
                             st.finished = true;
-                            // Store a Cancelled response so GET returns it.
                             if let Some(ref id) = st.response_id {
                                 st.state.response_store.mark_cancelled(id, st.model_id.clone());
                             }
                             st.finalize(None);
                             return None;
                         }
+                        // Spurious wakeup or channel closed — continue
+                        st.events.next().await
                     }
+                }
+            } else {
+                st.events.next().await
+            };
+            match next_event {
+                Some(Ok(event)) => {
                     // Override response ID with pre-generated one if the
                     // upstream did not supply one.
                     let event =

@@ -498,6 +498,7 @@ fn encode_source(s: &MediaSource) -> Value {
             json!({"type": "base64", "media_type": media_type, "data": data})
         }
         MediaSource::Url { url } => json!({"type": "url", "url": url}),
+        MediaSource::Reference { id } => json!({"type": "url", "url": id}),
     }
 }
 

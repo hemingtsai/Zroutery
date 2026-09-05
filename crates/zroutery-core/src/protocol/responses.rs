@@ -233,6 +233,63 @@ fn decode_input_item(item: &Value, req: &mut ChatRequest) -> Result<()> {
                 });
             }
         }
+        "input_file" => {
+            let name = item
+                .get("filename")
+                .and_then(Value::as_str)
+                .map(String::from);
+            if let Some(data) = item.get("file_data").and_then(Value::as_str) {
+                // Base64-encoded file data
+                let media_type = item
+                    .get("media_type")
+                    .and_then(Value::as_str)
+                    .unwrap_or("application/octet-stream")
+                    .to_string();
+                req.messages.push(Message {
+                    role: Role::User,
+                    content: vec![ContentBlock::File {
+                        source: MediaSource::Base64 {
+                            media_type: media_type.clone(),
+                            data: data.to_string(),
+                        },
+                        media_type,
+                        name,
+                    }],
+                });
+            } else if let Some(url) = item.get("file_url").and_then(Value::as_str) {
+                let media_type = item
+                    .get("media_type")
+                    .and_then(Value::as_str)
+                    .unwrap_or("application/octet-stream")
+                    .to_string();
+                req.messages.push(Message {
+                    role: Role::User,
+                    content: vec![ContentBlock::File {
+                        source: MediaSource::Url {
+                            url: url.to_string(),
+                        },
+                        media_type,
+                        name,
+                    }],
+                });
+            } else if let Some(file_id) = item.get("file_id").and_then(Value::as_str) {
+                let media_type = item
+                    .get("media_type")
+                    .and_then(Value::as_str)
+                    .unwrap_or("application/octet-stream")
+                    .to_string();
+                req.messages.push(Message {
+                    role: Role::User,
+                    content: vec![ContentBlock::File {
+                        source: MediaSource::Reference {
+                            id: file_id.to_string(),
+                        },
+                        media_type,
+                        name,
+                    }],
+                });
+            }
+        }
         "reasoning" => {
             let block = reasoning_bridge::decode_reasoning_item(item).or_else(|| {
                 item.get("summary")
@@ -297,6 +354,55 @@ fn decode_input_item(item: &Value, req: &mut ChatRequest) -> Result<()> {
                                         data,
                                     },
                                     media_type,
+                                });
+                            }
+                        }
+                        Some("input_file") => {
+                            let name = part
+                                .get("filename")
+                                .and_then(Value::as_str)
+                                .map(String::from);
+                            if let Some(data) = part.get("file_data").and_then(Value::as_str) {
+                                let media_type = part
+                                    .get("media_type")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("application/octet-stream")
+                                    .to_string();
+                                content.push(ContentBlock::File {
+                                    source: MediaSource::Base64 {
+                                        media_type: media_type.clone(),
+                                        data: data.to_string(),
+                                    },
+                                    media_type,
+                                    name,
+                                });
+                            } else if let Some(url) = part.get("file_url").and_then(Value::as_str) {
+                                let media_type = part
+                                    .get("media_type")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("application/octet-stream")
+                                    .to_string();
+                                content.push(ContentBlock::File {
+                                    source: MediaSource::Url {
+                                        url: url.to_string(),
+                                    },
+                                    media_type,
+                                    name,
+                                });
+                            } else if let Some(file_id) =
+                                part.get("file_id").and_then(Value::as_str)
+                            {
+                                let media_type = part
+                                    .get("media_type")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("application/octet-stream")
+                                    .to_string();
+                                content.push(ContentBlock::File {
+                                    source: MediaSource::Reference {
+                                        id: file_id.to_string(),
+                                    },
+                                    media_type,
+                                    name,
                                 });
                             }
                         }
@@ -404,8 +510,8 @@ pub fn encode_request(req: &ChatRequest, upstream_model: &str) -> Result<Value> 
                                 "input_audio": {"data": data, "format": format},
                             }));
                         }
-                        MediaSource::Url { .. } => {
-                            // URL audio cannot be encoded inline; apply the policy.
+                        MediaSource::Url { .. } | MediaSource::Reference { .. } => {
+                            // URL/reference audio cannot be encoded inline; apply the policy.
                             if let Some(replacement) =
                                 apply_content_policy(req.unsupported_content_policy, b)?
                             {

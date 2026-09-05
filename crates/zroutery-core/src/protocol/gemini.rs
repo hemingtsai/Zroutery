@@ -193,8 +193,18 @@ pub fn encode_request(req: &ChatRequest, upstream_model: &str) -> Result<Value> 
                     MediaSource::Base64 { media_type, data } => parts.push(json!({
                         "inlineData": {"mimeType": media_type, "data": data}
                     })),
-                    MediaSource::Url { url } => parts.push(json!({"text": format!(
-                        "[Image URL: {url} -- URL images not supported by Gemini API, use base64 encoding instead]"
+                    MediaSource::Url { .. } => {
+                        match apply_content_policy(req.unsupported_content_policy, b)? {
+                            Some(replacement) => {
+                                if let Some(text) = replacement.as_text() {
+                                    parts.push(json!({"text": text}));
+                                }
+                            }
+                            None => {} // Drop
+                        }
+                    }
+                    MediaSource::Reference { id } => parts.push(json!({"text": format!(
+                        "[Image reference: {id}]"
                     )})),
                 },
                 ContentBlock::ToolUse { id, name, input } => parts.push(json!({
@@ -238,6 +248,9 @@ pub fn encode_request(req: &ChatRequest, upstream_model: &str) -> Result<Value> 
                             None => {} // Drop
                         }
                     }
+                    MediaSource::Reference { id } => parts.push(json!({"text": format!(
+                        "[Document reference: {id}]"
+                    )})),
                 },
                 ContentBlock::File {
                     source, media_type, ..
@@ -261,6 +274,9 @@ pub fn encode_request(req: &ChatRequest, upstream_model: &str) -> Result<Value> 
                             None => {} // Drop
                         }
                     }
+                    MediaSource::Reference { id } => parts.push(json!({"text": format!(
+                        "[File reference: {id}]"
+                    )})),
                 },
                 // Citation and Annotation have no Gemini equivalent.
                 ContentBlock::Citation { .. } | ContentBlock::Annotation { .. } => {

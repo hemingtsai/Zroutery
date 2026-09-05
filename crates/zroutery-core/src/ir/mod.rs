@@ -198,6 +198,10 @@ pub enum MediaSource {
     Url {
         url: String,
     },
+    /// A server-side file reference (e.g. OpenAI file_id).
+    Reference {
+        id: String,
+    },
 }
 
 impl MediaSource {
@@ -208,6 +212,7 @@ impl MediaSource {
                 format!("data:{media_type};base64,{data}")
             }
             MediaSource::Url { url } => url.clone(),
+            MediaSource::Reference { id } => id.clone(),
         }
     }
 

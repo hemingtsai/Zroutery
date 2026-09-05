@@ -328,37 +328,81 @@ fn decode_user_content(v: Option<&Value>) -> Result<Vec<ContentBlock>> {
                         }
                     }
                     Some("file") => {
-                        if let Some(file) = p.get("file") {
-                            let media_type = file
+                        // Support both legacy {file: {data, url, media_type}} and
+                        // Responses-style {file_data, file_url, file_id, filename, media_type}
+                        let (source, media_type, name) = if let Some(file_obj) = p.get("file") {
+                            // Legacy nested format
+                            let data = file_obj.get("data").and_then(Value::as_str);
+                            let url = file_obj.get("url").and_then(Value::as_str);
+                            let mt = file_obj
                                 .get("media_type")
-                                .or_else(|| file.get("mime_type"))
+                                .or_else(|| file_obj.get("mime_type"))
                                 .and_then(Value::as_str)
                                 .unwrap_or("application/octet-stream")
                                 .to_string();
-                            let name = file
+                            let n = file_obj
                                 .get("filename")
-                                .or_else(|| file.get("name"))
+                                .or_else(|| file_obj.get("name"))
                                 .and_then(Value::as_str)
                                 .map(String::from);
-                            if let Some(data) = file.get("data").and_then(Value::as_str) {
-                                out.push(ContentBlock::File {
-                                    source: MediaSource::Base64 {
-                                        media_type: media_type.clone(),
-                                        data: data.to_string(),
+                            let src = if let Some(d) = data {
+                                MediaSource::Base64 {
+                                    media_type: mt.clone(),
+                                    data: d.to_string(),
+                                }
+                            } else if let Some(u) = url {
+                                MediaSource::Url {
+                                    url: u.to_string(),
+                                }
+                            } else {
+                                continue; // No data or url
+                            };
+                            (src, mt, n)
+                        } else {
+                            // Responses-style flat format
+                            let mt = p
+                                .get("media_type")
+                                .and_then(Value::as_str)
+                                .unwrap_or("application/octet-stream")
+                                .to_string();
+                            let n = p
+                                .get("filename")
+                                .and_then(Value::as_str)
+                                .map(String::from);
+                            if let Some(d) = p.get("file_data").and_then(Value::as_str) {
+                                (
+                                    MediaSource::Base64 {
+                                        media_type: mt.clone(),
+                                        data: d.to_string(),
                                     },
-                                    media_type,
-                                    name,
-                                });
-                            } else if let Some(url) = file.get("url").and_then(Value::as_str) {
-                                out.push(ContentBlock::File {
-                                    source: MediaSource::Url {
-                                        url: url.to_string(),
+                                    mt,
+                                    n,
+                                )
+                            } else if let Some(u) = p.get("file_url").and_then(Value::as_str) {
+                                (
+                                    MediaSource::Url {
+                                        url: u.to_string(),
                                     },
-                                    media_type,
-                                    name,
-                                });
+                                    mt,
+                                    n,
+                                )
+                            } else if let Some(id) = p.get("file_id").and_then(Value::as_str) {
+                                (
+                                    MediaSource::Reference {
+                                        id: id.to_string(),
+                                    },
+                                    mt,
+                                    n,
+                                )
+                            } else {
+                                continue;
                             }
-                        }
+                        };
+                        out.push(ContentBlock::File {
+                            source,
+                            media_type,
+                            name,
+                        });
                     }
                     _ => {}
                 }
@@ -626,7 +670,7 @@ fn encode_message_into(
                                     "input_audio": {"data": data, "format": format},
                                 }));
                             }
-                            MediaSource::Url { .. } => {
+                            MediaSource::Url { .. } | MediaSource::Reference { .. } => {
                                 // URL audio cannot be represented as input_audio;
                                 // apply the policy.
                                 if let Some(replacement) = apply_content_policy(policy, b)? {
