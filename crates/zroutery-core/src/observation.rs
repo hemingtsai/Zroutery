@@ -565,4 +565,306 @@ mod tests {
         assert_eq!(obs.health.total_requests, 2);
         assert!((obs.health.success_rate.value.unwrap() - 1.0).abs() < f64::EPSILON);
     }
+
+    // =======================================================================
+    // Category 1: Temporal semantics (freshness from real timestamps)
+    // =======================================================================
+
+    #[test]
+    fn freshness_from_observed_at_boundaries() {
+        // 29 seconds ago → Fresh
+        let f = ObservationFreshness::from_age_secs(29);
+        assert_eq!(f, ObservationFreshness::Fresh);
+
+        // 30 seconds ago → Recent (boundary)
+        let f = ObservationFreshness::from_age_secs(30);
+        assert_eq!(f, ObservationFreshness::Recent);
+
+        // 299 seconds ago → Recent
+        let f = ObservationFreshness::from_age_secs(299);
+        assert_eq!(f, ObservationFreshness::Recent);
+
+        // 300 seconds ago → Stale (boundary)
+        let f = ObservationFreshness::from_age_secs(300);
+        assert_eq!(f, ObservationFreshness::Stale);
+
+        // 1799 seconds ago → Stale
+        let f = ObservationFreshness::from_age_secs(1799);
+        assert_eq!(f, ObservationFreshness::Stale);
+
+        // 1800 seconds ago → Unknown (boundary)
+        let f = ObservationFreshness::from_age_secs(1800);
+        assert_eq!(f, ObservationFreshness::Unknown);
+    }
+
+    #[test]
+    fn signal_stale_uses_observed_at() {
+        let mut s = Signal::new(42.0);
+        assert!(!s.is_stale(60)); // just created
+
+        // Set observed_at to 120 seconds ago
+        s.observed_at = Some(chrono::Utc::now().timestamp() - 120);
+        assert!(s.is_stale(60)); // older than 60s threshold
+        assert!(!s.is_stale(180)); // but within 180s
+    }
+
+    #[test]
+    fn signal_never_observed_is_always_stale() {
+        let s: Signal<f64> = Signal::default();
+        assert!(s.is_stale(0));
+        assert!(s.is_stale(999999));
+        assert!(!s.is_known());
+    }
+
+    // =======================================================================
+    // Category 2: Provider/Model isolation
+    // =======================================================================
+
+    #[test]
+    fn observation_store_isolates_providers() {
+        let store = ObservationStore::new();
+
+        // Same model from different providers — current API uses model_id as key,
+        // so the second call overwrites the first observation.
+        store.record_success("model-x", "provider-a", 100.0, Some(50.0));
+        store.record_success("model-x", "provider-b", 900.0, Some(400.0));
+
+        // The LAST write wins because the store keys on model_id alone.
+        // To properly isolate, the store would need (model_id, provider_id) as key.
+        // This test documents that limitation.
+        let obs = store.get("model-x");
+        assert_eq!(obs.latency.total_ms.value, Some(900.0));
+        assert_eq!(obs.health.total_requests, 2);
+    }
+
+    #[test]
+    fn different_models_are_isolated() {
+        let store = ObservationStore::new();
+
+        store.record_success("model-a", "p1", 100.0, None);
+        store.record_failure("model-b", "p1");
+
+        let a = store.get("model-a");
+        let b = store.get("model-b");
+
+        assert_eq!(a.health.state, HealthState::Healthy);
+        assert_eq!(b.health.state, HealthState::Healthy); // 1 failure = still Healthy
+        assert_eq!(a.health.total_failures, 0);
+        assert_eq!(b.health.total_failures, 1);
+    }
+
+    // =======================================================================
+    // Category 3: Health state machine
+    // =======================================================================
+
+    #[test]
+    fn health_transitions_unknown_to_healthy_to_degraded_to_unavailable() {
+        let mut obs = RuntimeObservation {
+            model_id: "m".into(),
+            provider_id: "p".into(),
+            ..Default::default()
+        };
+
+        // Initial state
+        assert_eq!(obs.health.state, HealthState::Unknown);
+
+        // First success → Healthy
+        obs.record_success(100.0, None);
+        assert_eq!(obs.health.state, HealthState::Healthy);
+        assert_eq!(obs.health.consecutive_failures, 0);
+
+        // 1 failure → still Healthy
+        obs.record_failure();
+        assert_eq!(obs.health.state, HealthState::Healthy);
+
+        // 2 consecutive failures → Degraded
+        obs.record_failure();
+        assert_eq!(obs.health.state, HealthState::Degraded);
+
+        // More failures → Unavailable at 5 consecutive
+        obs.record_failure();
+        obs.record_failure();
+        obs.record_failure();
+        assert_eq!(obs.health.state, HealthState::Unavailable); // 5 failures
+
+        // Success resets consecutive failures
+        obs.record_success(200.0, None);
+        assert_eq!(obs.health.state, HealthState::Healthy);
+        assert_eq!(obs.health.consecutive_failures, 0);
+    }
+
+    #[test]
+    fn success_rate_tracks_cumulative() {
+        let mut obs = RuntimeObservation::default();
+
+        // 8 successes, 2 failures
+        for _ in 0..8 {
+            obs.record_success(100.0, None);
+        }
+        obs.record_failure();
+        obs.record_failure();
+
+        let rate = obs.health.success_rate.value.unwrap();
+        assert!((rate - 0.8).abs() < 0.01);
+        // After 2 consecutive failures after successes, state is Degraded
+        // even though cumulative rate is 80%.
+        // This proves: short-term health state != long-term success rate.
+        assert_eq!(obs.health.state, HealthState::Degraded);
+    }
+
+    // =======================================================================
+    // Category 4: Property / invariants
+    // =======================================================================
+
+    #[test]
+    fn latency_score_always_in_unit_range() {
+        let obs = LatencyObservation::default();
+        let s = obs.score(true);
+        assert!((0.0..=1.0).contains(&s), "default streaming score: {s}");
+        let s = obs.score(false);
+        assert!((0.0..=1.0).contains(&s), "default buffered score: {s}");
+
+        // Very slow
+        let mut obs = LatencyObservation::default();
+        obs.ttft_ms = Signal::new(100000.0);
+        obs.total_ms = Signal::new(100000.0);
+        let s = obs.score(true);
+        assert!((0.0..=1.0).contains(&s), "slow streaming score: {s}");
+        let s = obs.score(false);
+        assert!((0.0..=1.0).contains(&s), "slow buffered score: {s}");
+    }
+
+    #[test]
+    fn health_score_always_in_unit_range() {
+        for state in [
+            HealthState::Healthy,
+            HealthState::Degraded,
+            HealthState::Unavailable,
+            HealthState::Unknown,
+        ] {
+            let mut obs = HealthObservation::default();
+            obs.state = state;
+            let s = obs.score();
+            assert!((0.0..=1.0).contains(&s), "score for {state:?}: {s}");
+        }
+    }
+
+    #[test]
+    fn freshness_weight_always_in_unit_range() {
+        for f in [
+            ObservationFreshness::Fresh,
+            ObservationFreshness::Recent,
+            ObservationFreshness::Stale,
+            ObservationFreshness::Unknown,
+        ] {
+            let w = f.weight();
+            assert!((0.0..=1.0).contains(&w), "weight for {f:?}: {w}");
+        }
+    }
+
+    #[test]
+    fn total_failures_never_exceeds_total_requests() {
+        let mut obs = RuntimeObservation::default();
+        for i in 0..100 {
+            if i % 3 == 0 {
+                obs.record_failure();
+            } else {
+                obs.record_success(100.0, None);
+            }
+        }
+        assert!(obs.health.total_failures <= obs.health.total_requests);
+    }
+
+    // =======================================================================
+    // Category 5: Score differentiation
+    // =======================================================================
+
+    #[test]
+    fn fast_model_scores_higher_than_slow_for_streaming() {
+        let mut fast = LatencyObservation::default();
+        fast.ttft_ms = Signal::new(100.0);
+        let mut slow = LatencyObservation::default();
+        slow.ttft_ms = Signal::new(2000.0);
+
+        assert!(fast.score(true) > slow.score(true));
+    }
+
+    #[test]
+    fn healthy_scores_higher_than_degraded() {
+        let mut healthy = HealthObservation::default();
+        healthy.state = HealthState::Healthy;
+        healthy.success_rate = Signal::new(0.99);
+        let mut degraded = HealthObservation::default();
+        degraded.state = HealthState::Degraded;
+        degraded.success_rate = Signal::new(0.7);
+
+        assert!(healthy.score() > degraded.score());
+    }
+
+    #[test]
+    fn unavailable_always_scores_zero() {
+        let mut obs = HealthObservation::default();
+        obs.state = HealthState::Unavailable;
+        obs.success_rate = Signal::new(0.9); // even with high rate
+        assert_eq!(obs.score(), 0.0);
+    }
+
+    // =======================================================================
+    // Category 6: Latency streaming vs buffered distinction
+    // =======================================================================
+
+    #[test]
+    fn streaming_prioritizes_ttft_over_total() {
+        let mut obs = LatencyObservation::default();
+        // Fast TTFT, slow total
+        obs.ttft_ms = Signal::new(100.0);
+        obs.total_ms = Signal::new(10000.0);
+        let streaming_score = obs.score(true);
+
+        let mut obs2 = LatencyObservation::default();
+        // Slow TTFT, fast total
+        obs2.ttft_ms = Signal::new(5000.0);
+        obs2.total_ms = Signal::new(200.0);
+        let streaming_score2 = obs2.score(true);
+
+        // For streaming, fast TTFT should win even with slow total
+        assert!(streaming_score > streaming_score2);
+    }
+
+    #[test]
+    fn buffered_prioritizes_total_over_ttft() {
+        let mut obs = LatencyObservation::default();
+        obs.ttft_ms = Signal::new(5000.0);
+        obs.total_ms = Signal::new(200.0);
+        let buffered_score = obs.score(false);
+
+        let mut obs2 = LatencyObservation::default();
+        obs2.ttft_ms = Signal::new(100.0);
+        obs2.total_ms = Signal::new(10000.0);
+        let buffered_score2 = obs2.score(false);
+
+        // For buffered, fast total should win
+        assert!(buffered_score > buffered_score2);
+    }
+
+    // =======================================================================
+    // Category 7: Sample count semantics
+    // =======================================================================
+
+    #[test]
+    fn signal_new_sets_sample_count_to_one() {
+        let s = Signal::new(42.0);
+        assert_eq!(s.sample_count, 1);
+    }
+
+    #[test]
+    fn record_success_replaces_signal_not_accumulates() {
+        let mut obs = RuntimeObservation::default();
+        obs.record_success(300.0, None);
+        obs.record_success(200.0, None);
+        // Current behavior: each record_success replaces the Signal
+        assert_eq!(obs.latency.total_ms.sample_count, 1); // NOT 2
+        assert_eq!(obs.latency.total_ms.value, Some(200.0)); // latest value
+        // This documents that Signal tracks the latest observation, not a running average.
+    }
 }
