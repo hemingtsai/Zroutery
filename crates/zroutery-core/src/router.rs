@@ -16,7 +16,8 @@ use crate::error::{Error, Result};
 use crate::ir::Capability;
 use crate::policy::{
     CandidateDecision, DecisionReason, PolicyFallback, PolicyPreference, PolicyRequirements,
-    RouteDecision, ScoringContext, TaskProfile, TaskProfileSummary, score_candidate,
+    PolicyRevision, RouteDecision, ScoringContext, TaskProfile, TaskProfileSummary,
+    score_candidate, hash_to_u64,
 };
 use crate::registry::{Registry, Resolution};
 
@@ -353,6 +354,13 @@ impl Router {
             DecisionReason::PolicySelected
         };
 
+        let policy_revision = PolicyRevision {
+            policy_id: String::new(), // filled by caller
+            policy_enabled: true,     // filled by caller
+            requirements_hash: hash_to_u64(requirements),
+            preference_hash: hash_to_u64(preference),
+        };
+
         let decision = RouteDecision {
             decision_id: format!("dec-{}", uuid::Uuid::new_v4().simple()),
             timestamp: chrono::Utc::now().timestamp(),
@@ -374,6 +382,7 @@ impl Router {
             selected: candidates.first().map(|c| c.exposed_id.clone()),
             fallback_chain,
             reason,
+            policy_revision,
         };
 
         Ok((candidates, decision))

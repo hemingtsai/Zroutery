@@ -26,6 +26,13 @@ pub enum ResponseStatus {
 }
 
 /// A stored response, matching the OpenAI Responses API wire format.
+///
+/// NOTE: This is an in-memory replay snapshot, not a durable replay artifact.
+/// The [`ResponseStore`] has bounded capacity and evicts oldest entries.
+/// For durable replay, [`RouteDecision`](crate::policy::RouteDecision) should
+/// be persisted separately.  The `routing_decision` field captures the decision
+/// inputs and outputs for diagnostic replay, but policy revisions may change
+/// between restarts.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoredResponse {
     pub id: String,
