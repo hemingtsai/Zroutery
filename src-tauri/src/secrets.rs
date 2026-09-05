@@ -81,7 +81,10 @@ impl KeychainSecrets {
             Ok(secret) => Some(secret),
             Err(err) => {
                 // Not found is the normal case; anything else is worth a line.
-                if !err.contains("No matching entry") && !err.contains("not found") {
+                // keyring returns lowercase messages that vary across backends,
+                // so we match on common substrings rather than a typed enum.
+                let lower = err.to_lowercase();
+                if !lower.contains("not found") && !lower.contains("no matching") {
                     tracing::debug!("keychain read for {key_ref} failed: {err}");
                 }
                 self.fallback.as_ref().and_then(|f| f(key_ref))

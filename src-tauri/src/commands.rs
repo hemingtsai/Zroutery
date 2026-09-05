@@ -120,6 +120,9 @@ pub async fn set_provider_key(
     if key.is_empty() {
         return Err("the API key is empty".into());
     }
+    if key.len() > 4096 {
+        return Err("the API key exceeds 4096 bytes".into());
+    }
     // Keychain I/O blocks; keep it off the async worker thread.
     let secrets = Arc::clone(&desktop.secrets);
     let key_ref = provider.key_ref.clone();

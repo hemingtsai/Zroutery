@@ -47,7 +47,10 @@ fn config_dir_from(env_override: Option<&str>) -> PathBuf {
                             .join("Roaming")
                             .join(APP_ID)
                     })
-                    .unwrap_or_else(|_| PathBuf::from(".").join(APP_ID))
+                    .unwrap_or_else(|_| {
+                        tracing::warn!("APPDATA and USERPROFILE both unset; falling back to current directory");
+                        PathBuf::from(".").join(APP_ID)
+                    })
             })
     }
 
