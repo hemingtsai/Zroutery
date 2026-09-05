@@ -328,7 +328,37 @@ fn decode_user_content(v: Option<&Value>) -> Result<Vec<ContentBlock>> {
                         }
                     }
                     Some("file") => {
-                        // OpenAI `file` type is not yet standard; drop it.
+                        if let Some(file) = p.get("file") {
+                            let media_type = file
+                                .get("media_type")
+                                .or_else(|| file.get("mime_type"))
+                                .and_then(Value::as_str)
+                                .unwrap_or("application/octet-stream")
+                                .to_string();
+                            let name = file
+                                .get("filename")
+                                .or_else(|| file.get("name"))
+                                .and_then(Value::as_str)
+                                .map(String::from);
+                            if let Some(data) = file.get("data").and_then(Value::as_str) {
+                                out.push(ContentBlock::File {
+                                    source: MediaSource::Base64 {
+                                        media_type: media_type.clone(),
+                                        data: data.to_string(),
+                                    },
+                                    media_type,
+                                    name,
+                                });
+                            } else if let Some(url) = file.get("url").and_then(Value::as_str) {
+                                out.push(ContentBlock::File {
+                                    source: MediaSource::Url {
+                                        url: url.to_string(),
+                                    },
+                                    media_type,
+                                    name,
+                                });
+                            }
+                        }
                     }
                     _ => {}
                 }

@@ -228,9 +228,16 @@ pub fn encode_request(req: &ChatRequest, upstream_model: &str) -> Result<Value> 
                     } => parts.push(json!({
                         "inlineData": {"mimeType": media_type, "data": data}
                     })),
-                    MediaSource::Url { url } => parts.push(json!({"text": format!(
-                        "[Document URL: {url} -- URL media not supported by Gemini API, use base64 encoding instead]"
-                    )})),
+                    MediaSource::Url { .. } => {
+                        match apply_content_policy(req.unsupported_content_policy, b)? {
+                            Some(replacement) => {
+                                if let Some(t) = replacement.as_text() {
+                                    parts.push(json!({"text": t}));
+                                }
+                            }
+                            None => {} // Drop
+                        }
+                    }
                 },
                 ContentBlock::File {
                     source, media_type, ..
@@ -244,17 +251,15 @@ pub fn encode_request(req: &ChatRequest, upstream_model: &str) -> Result<Value> 
                     MediaSource::Base64 { data, .. } => parts.push(json!({
                         "inlineData": {"mimeType": media_type, "data": data}
                     })),
-                    MediaSource::Url { url } => {
-                        let kind = if matches!(b, ContentBlock::File { .. }) {
-                            "File"
-                        } else if matches!(b, ContentBlock::Audio { .. }) {
-                            "Audio"
-                        } else {
-                            "Video"
-                        };
-                        parts.push(json!({"text": format!(
-                            "[{kind} URL: {url} -- URL media not supported by Gemini API, use base64 encoding instead]"
-                        )}))
+                    MediaSource::Url { .. } => {
+                        match apply_content_policy(req.unsupported_content_policy, b)? {
+                            Some(replacement) => {
+                                if let Some(t) = replacement.as_text() {
+                                    parts.push(json!({"text": t}));
+                                }
+                            }
+                            None => {} // Drop
+                        }
                     }
                 },
                 // Citation and Annotation have no Gemini equivalent.

@@ -33,7 +33,7 @@ use crate::budget::{self, Ledger, Verdict};
 use crate::config::{AppConfig, ModelTier, ProviderConfig, SecretStore, ServerConfig};
 use crate::election::{self, Election, Measurement};
 use crate::error::{Error, Result};
-use crate::ir::{Dialect, ResponseStatus, ResponseStore};
+use crate::ir::{Dialect, ResponseStore};
 use crate::protocol;
 use crate::registry::Registry;
 use crate::router::Router;
@@ -828,21 +828,17 @@ async fn cancel_response(
     Path(response_id): Path<String>,
 ) -> Response {
     if state.response_store.cancel(&response_id) {
-        // In-flight response cancelled — check if it has been stored yet.
+        // Store a cancelled placeholder so GET immediately after returns it.
+        state
+            .response_store
+            .mark_cancelled(&response_id, "unknown".to_string());
+        // Return the cancelled response.
         match state.response_store.get(&response_id) {
-            Some(mut resp) => {
-                resp.status = ResponseStatus::Cancelled;
-                Json(serde_json::to_value(&resp).unwrap()).into_response()
-            }
-            None => {
-                // Still in-flight, not yet stored — return minimal response.
-                Json(json!({
-                    "id": response_id,
-                    "object": "response",
-                    "status": "cancelled"
-                }))
-                .into_response()
-            }
+            Some(resp) => Json(serde_json::to_value(&resp).unwrap()).into_response(),
+            None => Json(json!({
+                "id": response_id, "object": "response", "status": "cancelled"
+            }))
+            .into_response(),
         }
     } else {
         // Not in-flight — check if it is a completed response.

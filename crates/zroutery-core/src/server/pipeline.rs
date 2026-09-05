@@ -1179,6 +1179,10 @@ fn sse_body(
                     if let Some(ref rx) = st.cancel_rx {
                         if *rx.borrow() {
                             st.finished = true;
+                            // Store a Cancelled response so GET returns it.
+                            if let Some(ref id) = st.response_id {
+                                st.state.response_store.mark_cancelled(id, st.model_id.clone());
+                            }
                             st.finalize(None);
                             return None;
                         }

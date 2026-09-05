@@ -170,6 +170,23 @@ impl ResponseStore {
         }
     }
 
+    /// Store a cancelled response placeholder. Used when cancellation is requested
+    /// but the pipeline hasn't finished yet.
+    pub fn mark_cancelled(&self, id: &str, model: String) {
+        let resp = StoredResponse {
+            id: id.to_string(),
+            status: ResponseStatus::Cancelled,
+            model,
+            created_at: chrono::Utc::now().timestamp(),
+            input: Vec::new(),
+            output: Vec::new(),
+            usage: None,
+            error: None,
+            previous_response_id: None,
+        };
+        self.put(resp);
+    }
+
     /// Check if cancellation has been requested for an in-flight response.
     pub fn is_cancelled(&self, id: &str) -> bool {
         crate::sync::lock(&self.inner.in_flight)
