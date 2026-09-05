@@ -234,7 +234,7 @@ export interface Ranked {
   note: string | null;
 }
 
-export interface ClassElection {
+export interface TierElection {
   tier: ModelTier;
   /** Best first. */
   ranked: Ranked[];
@@ -243,11 +243,13 @@ export interface ClassElection {
   /** Why price was left out, when it was. */
   note: string | null;
 }
+/** @deprecated Use TierElection. */
+export type ClassElection = TierElection;
 
 export interface Election {
   decided_at: string;
   scoring: ScoringConfig;
-  classes: Partial<Record<ModelTier, ClassElection>>;
+  tiers: Partial<Record<ModelTier, TierElection>>;
 }
 
 export interface ServerConfig {
@@ -603,7 +605,7 @@ export function modelRows(snapshot: Snapshot): ModelRow[] {
 }
 
 /** Members of a tier in the order the router would try them. */
-export function classMembers(
+export function tierMembers(
   rows: ModelRow[],
   providers: Provider[],
   tier: ModelTier,
@@ -613,6 +615,8 @@ export function classMembers(
     .filter((r) => providers.find((p) => p.id === r.model.provider_id)?.enabled)
     .sort((a, b) => a.model.priority - b.model.priority || a.id.localeCompare(b.id));
 }
+/** @deprecated Use tierMembers. */
+export const classMembers = tierMembers;
 
 /**
  * Preview of the id a model will get. Display only: the backend derives the real

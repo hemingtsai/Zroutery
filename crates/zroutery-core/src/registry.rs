@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-use crate::config::{AppConfig, ModelTier, ModelEntry, ProviderConfig};
+use crate::config::{AppConfig, ModelCapabilities, ModelTier, ModelEntry, ProviderConfig};
 use crate::error::{Error, Result};
 
 /// Outcome of resolving a client model id.
@@ -102,9 +102,7 @@ pub struct ModelInfo {
     pub member_count: usize,
     /// Extra ids that also resolve to this model.
     pub aliases: Vec<String>,
-    pub supports_tools: bool,
-    pub supports_vision: bool,
-    pub supports_thinking: bool,
+    pub capabilities: ModelCapabilities,
 }
 
 impl Registry {
@@ -235,9 +233,7 @@ impl Registry {
                 virtual_model: false,
                 member_count: 0,
                 aliases: m.aliases.clone(),
-                supports_tools: m.supports_tools,
-                supports_vision: m.supports_vision,
-                supports_thinking: m.supports_thinking,
+                capabilities: m.capabilities.clone(),
             });
         }
         out.sort_by(|a, b| a.id.cmp(&b.id));
@@ -247,11 +243,20 @@ impl Registry {
             let Some(members) = self.index.by_tier.get(&tier) else {
                 continue;
             };
-            let mut capabilities = (true, true, true);
+            let mut caps = ModelCapabilities {
+                vision: true,
+                tools: true,
+                thinking: true,
+                ..ModelCapabilities::default()
+            };
             for m in members.iter().map(|i| &self.config.models[*i]) {
-                capabilities.0 &= m.supports_tools;
-                capabilities.1 &= m.supports_vision;
-                capabilities.2 &= m.supports_thinking;
+                caps.tools &= m.capabilities.tools;
+                caps.vision &= m.capabilities.vision;
+                caps.thinking &= m.capabilities.thinking;
+                caps.structured_output |= m.capabilities.structured_output;
+                caps.audio |= m.capabilities.audio;
+                caps.video |= m.capabilities.video;
+                caps.files |= m.capabilities.files;
             }
             out.push(ModelInfo {
                 id: tier.virtual_id().to_string(),
@@ -261,9 +266,7 @@ impl Registry {
                 virtual_model: true,
                 member_count: members.len(),
                 aliases: Vec::new(),
-                supports_tools: capabilities.0,
-                supports_vision: capabilities.1,
-                supports_thinking: capabilities.2,
+                capabilities: caps,
             });
         }
         out
@@ -272,17 +275,28 @@ impl Registry {
 
 /// Recognise Anthropic-style model names sent by clients such as Claude Code.
 fn tier_from_name(name: &str) -> Option<ModelTier> {
-    let n = name.to_ascii_lowercase();
-    if n.contains("opus") {
+    let lower = name.to_lowercase();
+    if lower.starts_with("opus") || lower.starts_with("reasoning") {
         Some(ModelTier::Reasoning)
-    } else if n.contains("sonnet") {
+    } else if lower.starts_with("sonnet") || lower.starts_with("standard") {
         Some(ModelTier::Standard)
-    } else if n.contains("haiku") {
+    } else if lower.starts_with("haiku") || lower.starts_with("fast") {
         Some(ModelTier::Fast)
-    } else if n.contains("frontier") {
+    } else if lower.starts_with("fable") || lower.starts_with("frontier") {
         Some(ModelTier::Frontier)
     } else {
-        None
+        // Fall back to substring matching for names like "claude-opus-4".
+        if lower.contains("opus") {
+            Some(ModelTier::Reasoning)
+        } else if lower.contains("sonnet") {
+            Some(ModelTier::Standard)
+        } else if lower.contains("haiku") {
+            Some(ModelTier::Fast)
+        } else if lower.contains("fable") || lower.contains("frontier") {
+            Some(ModelTier::Frontier)
+        } else {
+            None
+        }
     }
 }
 
@@ -449,6 +463,32 @@ mod tests {
         cfg.routing.match_claude_names = false;
         let r = registry(cfg);
         assert!(r.resolve("claude-sonnet-4-5-20250929").is_err());
+    }
+
+    #[test]
+    fn fable_model_names_map_to_frontier() {
+        let r = registry(brief_config());
+        assert_eq!(
+            r.resolve("fable").unwrap(),
+            Resolution::Tier(ModelTier::Frontier)
+        );
+        assert_eq!(
+            r.resolve("claude-fable-5").unwrap(),
+            Resolution::Tier(ModelTier::Frontier)
+        );
+        assert_eq!(
+            r.resolve("fable-class").unwrap(),
+            Resolution::Tier(ModelTier::Frontier)
+        );
+        // "frontier" prefix also works
+        assert_eq!(
+            r.resolve("frontier").unwrap(),
+            Resolution::Tier(ModelTier::Frontier)
+        );
+        assert_eq!(
+            r.resolve("claude-frontier-5").unwrap(),
+            Resolution::Tier(ModelTier::Frontier)
+        );
     }
 
     #[test]

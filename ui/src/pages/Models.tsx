@@ -176,7 +176,7 @@ export default function Models({
                   <span className="row-sub">
                     {provider?.name ?? t("models.missing_provider")}
                     {provider?.enabled === false && ` ${t("providers.provider_off")}`}
-                    {r.model.tier ? ` · ${r.model.tier}` : ` · ${t("models.no_class")}`}
+                    {r.model.tier ? ` · ${r.model.tier}` : ` · ${t("models.no_tier")}`}
                   </span>
                 </div>
                 <span className="col-num">
@@ -272,9 +272,9 @@ function ModelDrawer({
           [t("models.provider"), provider?.name ?? t("models.missing_provider")],
           [t("models.upstream"), <span className="mono">{m.upstream_model}</span>],
           [
-            t("models.class"),
+            t("models.tier"),
             <Select<ModelTier | "none">
-              ariaLabel={t("models.class")}
+              ariaLabel={t("models.tier")}
               value={m.tier ?? "none"}
               disabled={busy}
               onChange={(next) => onUpdate({ tier: next === "none" ? null : next })}

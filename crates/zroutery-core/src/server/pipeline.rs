@@ -566,7 +566,7 @@ async fn buffered_chat(
         // And with vision fallback off entirely, nothing happens here: off
         // means the request goes out as it came, promise kept.
         let mut req = req.clone();
-        if state.config().vision.enabled && !candidate.entry.supports_vision {
+        if state.config().vision.enabled && !candidate.entry.capabilities.vision {
             let needs_vision = crate::media::collect::collect(&req);
             if !needs_vision.is_empty() {
                 apply_vision_fallback(&state, &mut req, "preflight").await;
@@ -786,7 +786,7 @@ async fn stream_chat(
         // And with vision fallback off entirely, nothing happens here: off
         // means the request goes out as it came, promise kept.
         let mut req = req.clone();
-        if state.config().vision.enabled && !candidate.entry.supports_vision {
+        if state.config().vision.enabled && !candidate.entry.capabilities.vision {
             let needs_vision = crate::media::collect::collect(&req);
             if !needs_vision.is_empty() {
                 apply_vision_fallback(&state, &mut req, "preflight").await;

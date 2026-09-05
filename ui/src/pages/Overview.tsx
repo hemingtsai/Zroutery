@@ -1,4 +1,4 @@
-import { api, classMembers, modelRows, TIERS, type Snapshot } from "../api";
+import { api, tierMembers, modelRows, TIERS, type Snapshot } from "../api";
 import { StatusDot, useToast } from "../components";
 import { useI18n } from "../i18n";
 
@@ -28,8 +28,8 @@ export default function Overview({
     (r) => r.model.enabled && providers.some((p) => p.id === r.model.provider_id && p.enabled),
   );
 
-  const classRoutes = TIERS
-    .map((tier) => ({ cls: tier, members: classMembers(rows, config.providers, tier) }))
+  const tierRoutes = TIERS
+    .map((tier) => ({ tier, members: tierMembers(rows, config.providers, tier) }))
     .filter((r) => r.members.length > 0);
 
   const reviewCandidates = config.classifier.enabled
@@ -88,12 +88,12 @@ export default function Overview({
               <span className="flow-kind-hint">{t("route.default_hint")}</span>
             </div>
             <div className="flow-routes">
-              {classRoutes.length === 0 ? (
-                <span className="flow-empty">{t("route.no_class")}</span>
+              {tierRoutes.length === 0 ? (
+                <span className="flow-empty">{t("route.no_tier")}</span>
               ) : (
-                classRoutes.map(({ cls, members }) => (
-                  <span className="flow-route" key={cls}>
-                    <span className="flow-src mono">{cls}-class</span>
+                tierRoutes.map(({ tier, members }) => (
+                  <span className="flow-route" key={tier}>
+                    <span className="flow-src mono">{tier}-class</span>
                     <span className="flow-arrow" aria-hidden>{"→"}</span>
                     <span className="flow-target">
                       {members[0].id}

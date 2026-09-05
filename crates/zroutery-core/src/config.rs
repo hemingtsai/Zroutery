@@ -63,14 +63,26 @@ impl ModelTier {
 
     pub fn from_virtual_id(id: &str) -> Option<ModelTier> {
         match id {
-            "fast-class" => Some(ModelTier::Fast),
-            "standard-class" => Some(ModelTier::Standard),
-            "reasoning-class" => Some(ModelTier::Reasoning),
-            "frontier-class" => Some(ModelTier::Frontier),
-            // Backward compat
-            "haiku-class" => Some(ModelTier::Fast),
-            "sonnet-class" => Some(ModelTier::Standard),
-            "opus-class" => Some(ModelTier::Reasoning),
+            // Internal
+            "fast-class" | "standard-class" | "reasoning-class" | "frontier-class" |
+            // Anthropic
+            "haiku-class" | "sonnet-class" | "opus-class" | "fable-class" |
+            // OpenAI
+            "luna-class" | "terra-class" | "sol-class" | "astra-class" => {
+                // Parse by prefix to determine the tier.
+                let lower = id.strip_suffix("-class").unwrap_or(id);
+                if matches!(lower, "fast" | "haiku" | "luna") {
+                    Some(ModelTier::Fast)
+                } else if matches!(lower, "standard" | "sonnet" | "terra") {
+                    Some(ModelTier::Standard)
+                } else if matches!(lower, "reasoning" | "opus" | "sol") {
+                    Some(ModelTier::Reasoning)
+                } else if matches!(lower, "frontier" | "fable" | "astra") {
+                    Some(ModelTier::Frontier)
+                } else {
+                    None
+                }
+            }
             _ => None,
         }
     }
@@ -94,6 +106,55 @@ impl ModelTier {
             ModelTier::Frontier => Some(ModelTier::Reasoning),
         }
     }
+
+    /// Display name for the given naming style.
+    pub fn display_name(&self, style: NamingStyle) -> &'static str {
+        match (self, style) {
+            (ModelTier::Fast, NamingStyle::Internal) => "Fast",
+            (ModelTier::Fast, NamingStyle::Anthropic) => "Haiku",
+            (ModelTier::Fast, NamingStyle::OpenAI) => "Luna",
+            (ModelTier::Standard, NamingStyle::Internal) => "Standard",
+            (ModelTier::Standard, NamingStyle::Anthropic) => "Sonnet",
+            (ModelTier::Standard, NamingStyle::OpenAI) => "Terra",
+            (ModelTier::Reasoning, NamingStyle::Internal) => "Reasoning",
+            (ModelTier::Reasoning, NamingStyle::Anthropic) => "Opus",
+            (ModelTier::Reasoning, NamingStyle::OpenAI) => "Sol",
+            (ModelTier::Frontier, NamingStyle::Internal) => "Frontier",
+            (ModelTier::Frontier, NamingStyle::Anthropic) => "Fable",
+            (ModelTier::Frontier, NamingStyle::OpenAI) => "Astra",
+        }
+    }
+
+    /// Virtual model id for the given naming style, e.g. "haiku-class".
+    pub fn virtual_id_styled(&self, style: NamingStyle) -> &'static str {
+        match (self, style) {
+            (ModelTier::Fast, NamingStyle::Internal) => "fast-class",
+            (ModelTier::Fast, NamingStyle::Anthropic) => "haiku-class",
+            (ModelTier::Fast, NamingStyle::OpenAI) => "luna-class",
+            (ModelTier::Standard, NamingStyle::Internal) => "standard-class",
+            (ModelTier::Standard, NamingStyle::Anthropic) => "sonnet-class",
+            (ModelTier::Standard, NamingStyle::OpenAI) => "terra-class",
+            (ModelTier::Reasoning, NamingStyle::Internal) => "reasoning-class",
+            (ModelTier::Reasoning, NamingStyle::Anthropic) => "opus-class",
+            (ModelTier::Reasoning, NamingStyle::OpenAI) => "sol-class",
+            (ModelTier::Frontier, NamingStyle::Internal) => "frontier-class",
+            (ModelTier::Frontier, NamingStyle::Anthropic) => "fable-class",
+            (ModelTier::Frontier, NamingStyle::OpenAI) => "astra-class",
+        }
+    }
+}
+
+/// How tiers and virtual model ids are presented to clients.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum NamingStyle {
+    /// Internal names: fast, standard, reasoning, frontier.
+    #[default]
+    Internal,
+    /// Anthropic-style: Haiku, Sonnet, Opus, Fable.
+    Anthropic,
+    /// OpenAI-style: Luna, Terra, Sol, Astra.
+    OpenAI,
 }
 
 /// Declared capabilities of a model. Independent of tier.
@@ -330,12 +391,15 @@ pub struct ModelEntry {
     pub weight: u32,
     #[serde(default = "default_true")]
     pub enabled: bool,
+    /// Legacy field — use `capabilities.tools` at runtime. Kept for serde compat.
     #[serde(default)]
     #[deprecated(note = "use capabilities.tools instead")]
     pub supports_tools: bool,
+    /// Legacy field — use `capabilities.vision` at runtime. Kept for serde compat.
     #[serde(default)]
     #[deprecated(note = "use capabilities.vision instead")]
     pub supports_vision: bool,
+    /// Legacy field — use `capabilities.thinking` at runtime. Kept for serde compat.
     #[serde(default)]
     #[deprecated(note = "use capabilities.thinking instead")]
     pub supports_thinking: bool,
@@ -368,7 +432,10 @@ impl ModelEntry {
             upstream_model: upstream_model.into(),
             legacy_id: None,
             tier,
-            capabilities: ModelCapabilities::default(),
+            capabilities: ModelCapabilities {
+                tools: true,
+                ..ModelCapabilities::default()
+            },
             priority: 0,
             weight: default_weight(),
             enabled: true,
@@ -494,6 +561,9 @@ pub struct RoutingConfig {
     /// rather than whenever it was last run. Costs one tiny request per model.
     #[serde(default = "default_true")]
     pub elect_on_start: bool,
+    /// How tiers and virtual model ids are presented to clients.
+    #[serde(default)]
+    pub naming_style: NamingStyle,
 }
 
 impl RoutingConfig {
@@ -528,6 +598,7 @@ impl Default for RoutingConfig {
             match_claude_names: true,
             scoring: ScoringConfig::default(),
             elect_on_start: true,
+            naming_style: NamingStyle::default(),
         }
     }
 }
@@ -1351,10 +1422,16 @@ mod tests {
             assert_eq!(ModelTier::from_virtual_id(t.virtual_id()), Some(t));
         }
         assert_eq!(ModelTier::from_virtual_id("gpt-5.3-sol"), None);
-        // Backward compat: old class names resolve to new tiers.
+        // Anthropic aliases
         assert_eq!(ModelTier::from_virtual_id("haiku-class"), Some(ModelTier::Fast));
         assert_eq!(ModelTier::from_virtual_id("sonnet-class"), Some(ModelTier::Standard));
         assert_eq!(ModelTier::from_virtual_id("opus-class"), Some(ModelTier::Reasoning));
+        assert_eq!(ModelTier::from_virtual_id("fable-class"), Some(ModelTier::Frontier));
+        // OpenAI aliases
+        assert_eq!(ModelTier::from_virtual_id("luna-class"), Some(ModelTier::Fast));
+        assert_eq!(ModelTier::from_virtual_id("terra-class"), Some(ModelTier::Standard));
+        assert_eq!(ModelTier::from_virtual_id("sol-class"), Some(ModelTier::Reasoning));
+        assert_eq!(ModelTier::from_virtual_id("astra-class"), Some(ModelTier::Frontier));
     }
 
     #[test]

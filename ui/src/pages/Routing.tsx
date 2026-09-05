@@ -1,7 +1,7 @@
 import { useState } from "react";
 import {
   TIERS,
-  classMembers,
+  tierMembers,
   modelRows,
   virtualId,
   type AppConfig,
@@ -60,8 +60,8 @@ export default function Routing({
     health.filter((h) => h.cooldown_remaining_secs > 0).map((h) => h.model_id),
   );
 
-  const classRoutes = TIERS
-    .map((tier) => ({ cls: tier, members: classMembers(rows, config.providers, tier) }));
+  const tierRoutes = TIERS
+    .map((tier) => ({ tier, members: tierMembers(rows, config.providers, tier) }));
 
   const classifierCandidates = config.classifier.enabled
     ? config.classifier.candidates
@@ -85,16 +85,16 @@ export default function Routing({
       >
         <div className="list">
           <div className="flow">
-            {classRoutes.map(({ cls, members }) => (
-              <div className="flow-row" key={cls}>
+            {tierRoutes.map(({ tier, members }) => (
+              <div className="flow-row" key={tier}>
                 <div className="flow-kind">
-                  <span className="flow-kind-name mono">{virtualId(cls)}</span>
-                  <span className="flow-kind-hint">{t(CLASS_HINT_KEY[cls])}</span>
+                  <span className="flow-kind-name mono">{virtualId(tier)}</span>
+                  <span className="flow-kind-hint">{t(TIER_HINT_KEY[tier])}</span>
                 </div>
                 <div className="flow-routes">
                   {members.length === 0 ? (
                     <span className="flow-empty">
-                      {t("routing.class_empty", { id: virtualId(cls) })}
+                      {t("routing.tier_empty", { id: virtualId(tier) })}
                     </span>
                   ) : (
                     members.map((r, i) => (
@@ -202,7 +202,7 @@ export default function Routing({
   );
 }
 
-const CLASS_HINT_KEY: Record<ModelTier, "tier.hint.fast" | "tier.hint.standard" | "tier.hint.reasoning" | "tier.hint.frontier"> = {
+const TIER_HINT_KEY: Record<ModelTier, "tier.hint.fast" | "tier.hint.standard" | "tier.hint.reasoning" | "tier.hint.frontier"> = {
   fast: "tier.hint.fast",
   standard: "tier.hint.standard",
   reasoning: "tier.hint.reasoning",
@@ -325,13 +325,13 @@ function ElectionResult({ election }: { election: Election | null }) {
   if (!election) {
     return <p className="empty">{t("routing.no_election")}</p>;
   }
-  const classes = TIERS.map((tier) => election.classes[tier]).filter(
+  const tierOutcomes = TIERS.map((tier) => election.tiers[tier]).filter(
     (c): c is NonNullable<typeof c> => c !== undefined,
   );
-  if (classes.length === 0) return <p className="empty">{t("routing.no_election_classes")}</p>;
+  if (tierOutcomes.length === 0) return <p className="empty">{t("routing.no_election_tiers")}</p>;
   return (
     <>
-      {classes.map((outcome) => (
+      {tierOutcomes.map((outcome) => (
         <div key={outcome.tier}>
           <div className="row gap" style={{ marginBottom: 4 }}>
             <span className="mono">{virtualId(outcome.tier)}</span>
