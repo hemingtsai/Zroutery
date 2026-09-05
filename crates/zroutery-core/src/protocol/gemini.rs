@@ -203,9 +203,16 @@ pub fn encode_request(req: &ChatRequest, upstream_model: &str) -> Result<Value> 
                             None => {} // Drop
                         }
                     }
-                    MediaSource::Reference { id } => parts.push(json!({"text": format!(
-                        "[Image reference: {id}]"
-                    )})),
+                    MediaSource::Reference { .. } => {
+                        match apply_content_policy(req.unsupported_content_policy, b)? {
+                            Some(replacement) => {
+                                if let Some(text) = replacement.as_text() {
+                                    parts.push(json!({"text": text}));
+                                }
+                            }
+                            None => {} // Drop
+                        }
+                    }
                 },
                 ContentBlock::ToolUse { id, name, input } => parts.push(json!({
                     "functionCall": {"id": id, "name": name, "args": input}
@@ -248,9 +255,16 @@ pub fn encode_request(req: &ChatRequest, upstream_model: &str) -> Result<Value> 
                             None => {} // Drop
                         }
                     }
-                    MediaSource::Reference { id } => parts.push(json!({"text": format!(
-                        "[Document reference: {id}]"
-                    )})),
+                    MediaSource::Reference { .. } => {
+                        match apply_content_policy(req.unsupported_content_policy, b)? {
+                            Some(replacement) => {
+                                if let Some(t) = replacement.as_text() {
+                                    parts.push(json!({"text": t}));
+                                }
+                            }
+                            None => {} // Drop
+                        }
+                    }
                 },
                 ContentBlock::File {
                     source, media_type, ..
@@ -274,9 +288,16 @@ pub fn encode_request(req: &ChatRequest, upstream_model: &str) -> Result<Value> 
                             None => {} // Drop
                         }
                     }
-                    MediaSource::Reference { id } => parts.push(json!({"text": format!(
-                        "[File reference: {id}]"
-                    )})),
+                    MediaSource::Reference { .. } => {
+                        match apply_content_policy(req.unsupported_content_policy, b)? {
+                            Some(replacement) => {
+                                if let Some(t) = replacement.as_text() {
+                                    parts.push(json!({"text": t}));
+                                }
+                            }
+                            None => {} // Drop
+                        }
+                    }
                 },
                 // Citation and Annotation have no Gemini equivalent.
                 ContentBlock::Citation { .. } | ContentBlock::Annotation { .. } => {

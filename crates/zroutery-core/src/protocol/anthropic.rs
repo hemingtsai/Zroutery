@@ -419,6 +419,18 @@ fn encode_message(m: &Message, policy: UnsupportedContentPolicy) -> Result<Value
                     content.push(encode_block(&replacement));
                 }
             }
+            // Image/Document with Reference source cannot be encoded natively
+            // by Anthropic; apply the content policy.
+            ContentBlock::Image {
+                source: MediaSource::Reference { .. },
+            }
+            | ContentBlock::Document {
+                source: MediaSource::Reference { .. },
+            } => {
+                if let Some(replacement) = apply_content_policy(policy, b)? {
+                    content.push(encode_block(&replacement));
+                }
+            }
             _ => content.push(encode_block(b)),
         }
     }

@@ -197,17 +197,26 @@ fn decode_input_item(item: &Value, req: &mut ChatRequest) -> Result<()> {
             ));
         }
         "input_image" => {
-            let url = item
-                .get("image_url")
-                .and_then(|i| i.get("url"))
+            if let Some(url) = item
+                .pointer("/image_url/url")
                 .and_then(Value::as_str)
-                .unwrap_or_default();
-            req.messages.push(Message {
-                role: Role::User,
-                content: vec![ContentBlock::Image {
-                    source: MediaSource::from_url(url),
-                }],
-            });
+            {
+                req.messages.push(Message {
+                    role: Role::User,
+                    content: vec![ContentBlock::Image {
+                        source: MediaSource::from_url(url),
+                    }],
+                });
+            } else if let Some(file_id) = item.get("file_id").and_then(Value::as_str) {
+                req.messages.push(Message {
+                    role: Role::User,
+                    content: vec![ContentBlock::Image {
+                        source: MediaSource::Reference {
+                            id: file_id.to_string(),
+                        },
+                    }],
+                });
+            }
         }
         "input_audio" => {
             if let Some(audio) = item.get("input_audio") {
@@ -333,6 +342,14 @@ fn decode_input_item(item: &Value, req: &mut ChatRequest) -> Result<()> {
                                 content.push(ContentBlock::Image {
                                     source: MediaSource::from_url(url),
                                 });
+                            } else if let Some(file_id) =
+                                part.get("file_id").and_then(Value::as_str)
+                            {
+                                content.push(ContentBlock::Image {
+                                    source: MediaSource::Reference {
+                                        id: file_id.to_string(),
+                                    },
+                                });
                             }
                         }
                         Some("input_audio") => {
@@ -453,10 +470,20 @@ pub fn encode_request(req: &ChatRequest, upstream_model: &str) -> Result<Value> 
                     "type": "input_text",
                     "text": text,
                 })),
-                ContentBlock::Image { source } => parts.push(json!({
-                    "type": "input_image",
-                    "image_url": {"url": source.to_data_url()},
-                })),
+                ContentBlock::Image { source } => match source {
+                    MediaSource::Base64 { media_type, data } => {
+                        parts.push(json!({
+                            "type": "input_image",
+                            "image_url": {"url": format!("data:{media_type};base64,{data}")}
+                        }));
+                    }
+                    MediaSource::Url { url } => {
+                        parts.push(json!({"type": "input_image", "image_url": {"url": url}}));
+                    }
+                    MediaSource::Reference { id } => {
+                        parts.push(json!({"type": "input_image", "file_id": id}));
+                    }
+                },
                 ContentBlock::ToolUse {
                     id,
                     name,
@@ -522,8 +549,41 @@ pub fn encode_request(req: &ChatRequest, upstream_model: &str) -> Result<Value> 
                         }
                     }
                 }
+                ContentBlock::File { source, media_type: _, name } => {
+                    match source {
+                        MediaSource::Base64 { data, .. } => {
+                            let mut item = json!({
+                                "type": "input_file",
+                                "file_data": data,
+                            });
+                            if let Some(n) = name {
+                                item["filename"] = json!(n);
+                            }
+                            parts.push(item);
+                        }
+                        MediaSource::Url { url } => {
+                            let mut item = json!({
+                                "type": "input_file",
+                                "file_url": url,
+                            });
+                            if let Some(n) = name {
+                                item["filename"] = json!(n);
+                            }
+                            parts.push(item);
+                        }
+                        MediaSource::Reference { id } => {
+                            let mut item = json!({
+                                "type": "input_file",
+                                "file_id": id,
+                            });
+                            if let Some(n) = name {
+                                item["filename"] = json!(n);
+                            }
+                            parts.push(item);
+                        }
+                    }
+                }
                 ContentBlock::Document { .. }
-                | ContentBlock::File { .. }
                 | ContentBlock::Video { .. }
                 | ContentBlock::Citation { .. }
                 | ContentBlock::Annotation { .. } => {
@@ -1085,6 +1145,12 @@ pub struct ResponsesStreamEncoder {
     /// yet received its `response.output_item.done`.
     output_item_open: bool,
     tool_item_ids: HashMap<u32, String>,
+    /// Accumulated output items for the terminal response.completed event.
+    output_items: Vec<Value>,
+    /// Text accumulator for the current message being built.
+    current_text: String,
+    /// Tool call accumulator: (item_id, call_id, name, arguments).
+    current_tool_call: Option<(String, String, String, String)>,
 }
 
 impl ResponsesStreamEncoder {
@@ -1100,6 +1166,9 @@ impl ResponsesStreamEncoder {
             content_part_open: false,
             output_item_open: false,
             tool_item_ids: HashMap::new(),
+            output_items: Vec::new(),
+            current_text: String::new(),
+            current_tool_call: None,
         }
     }
 
@@ -1134,11 +1203,12 @@ impl ResponsesStreamEncoder {
     }
 
     /// Close the currently open output item (`response.output_item.done`),
-    /// if any.
+    /// if any. Also finalizes the accumulated output item for response.completed.
     fn close_output_item(&mut self) -> Option<SseFrame> {
         if !self.output_item_open {
             return None;
         }
+        self.finalize_output_item();
         self.output_item_open = false;
         let item_id = match self.current_kind {
             Some(OutputItemKind::Text) => format!("msg_{}", self.output_index),
@@ -1157,6 +1227,37 @@ impl ResponsesStreamEncoder {
                 },
             }),
         ))
+    }
+
+    /// Finalize the current output item and push it to `output_items` for
+    /// inclusion in the terminal `response.completed` event.
+    fn finalize_output_item(&mut self) {
+        match self.current_kind {
+            Some(OutputItemKind::Text) => {
+                if !self.current_text.is_empty() {
+                    self.output_items.push(json!({
+                        "type": "message",
+                        "role": "assistant",
+                        "status": "completed",
+                        "content": [{"type": "output_text", "text": self.current_text}],
+                    }));
+                    self.current_text.clear();
+                }
+            }
+            Some(OutputItemKind::Tool) => {
+                if let Some((item_id, call_id, name, args)) = self.current_tool_call.take() {
+                    self.output_items.push(json!({
+                        "type": "function_call",
+                        "id": item_id,
+                        "call_id": call_id,
+                        "name": name,
+                        "arguments": args,
+                        "status": "completed",
+                    }));
+                }
+            }
+            _ => {}
+        }
     }
 }
 
@@ -1200,6 +1301,7 @@ impl StreamEncoder for ResponsesStreamEncoder {
                     self.content_index = 0;
                     self.current_kind = Some(OutputItemKind::Text);
                     self.output_item_open = true;
+                    self.current_text.clear();
                 }
                 if !self.content_part_open {
                     self.content_part_open = true;
@@ -1223,6 +1325,7 @@ impl StreamEncoder for ResponsesStreamEncoder {
                         "delta": text,
                     }),
                 ));
+                self.current_text.push_str(text);
             }
             StreamEvent::ThinkingDelta { text, .. } => {
                 if self.current_kind != Some(OutputItemKind::Thinking) {
@@ -1273,6 +1376,7 @@ impl StreamEncoder for ResponsesStreamEncoder {
                 }
                 let item_id = format!("fc_{id}");
                 self.tool_item_ids.insert(*index, item_id.clone());
+                self.current_tool_call = Some((item_id.clone(), id.clone(), name.clone(), String::new()));
                 self.output_item_open = true;
                 self.current_kind = Some(OutputItemKind::Tool);
                 out.push(self.frame(
@@ -1312,12 +1416,16 @@ impl StreamEncoder for ResponsesStreamEncoder {
                         "delta": partial_json,
                     }),
                 ));
+                if let Some((_, _, _, ref mut args)) = self.current_tool_call {
+                    args.push_str(partial_json);
+                }
             }
             StreamEvent::BlockStop { .. } => {
                 // A tool call is its own output item; close it when the block
                 // stops.  For text/thinking blocks, `content_part.done` is
                 // emitted when the next kind arrives or at Stop.
                 if self.current_kind == Some(OutputItemKind::Tool) {
+                    self.finalize_output_item();
                     self.output_item_open = false;
                     self.current_kind = None;
                 }
@@ -1331,6 +1439,7 @@ impl StreamEncoder for ResponsesStreamEncoder {
                 if let Some(f) = self.close_output_item() {
                     out.push(f);
                 }
+                let output = Value::Array(std::mem::take(&mut self.output_items));
                 out.push(self.frame(
                     "response.completed",
                     json!({
@@ -1341,7 +1450,7 @@ impl StreamEncoder for ResponsesStreamEncoder {
                             "created_at": self.created_at,
                             "status": "completed",
                             "model": self.model,
-                            "output": [],
+                            "output": output,
                             "usage": encode_usage(usage),
                         }
                     }),
@@ -1365,6 +1474,7 @@ impl StreamEncoder for ResponsesStreamEncoder {
         if let Some(f) = self.close_output_item() {
             out.push(f);
         }
+        let output = Value::Array(std::mem::take(&mut self.output_items));
         out.push(self.frame(
             "response.completed",
             json!({
@@ -1375,7 +1485,7 @@ impl StreamEncoder for ResponsesStreamEncoder {
                     "created_at": self.created_at,
                     "status": "completed",
                     "model": self.model,
-                    "output": [],
+                    "output": output,
                 }
             }),
         ));
@@ -1404,6 +1514,7 @@ impl StreamEncoder for ResponsesStreamEncoder {
             if let Some(f) = self.close_output_item() {
                 out.push(f);
             }
+            let output = Value::Array(std::mem::take(&mut self.output_items));
             out.push(self.frame(
                 "response.completed",
                 json!({
@@ -1413,7 +1524,7 @@ impl StreamEncoder for ResponsesStreamEncoder {
                         "object": "response",
                         "status": "failed",
                         "model": self.model,
-                        "output": [],
+                        "output": output,
                     }
                 }),
             ));
