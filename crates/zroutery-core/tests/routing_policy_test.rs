@@ -758,6 +758,7 @@ fn client_profile_user_agent_case_insensitive() {
         client_id: None,
         user_agent: Some("curl/7.68.0"),
         api_key_prefix: None,
+        application: None,
         headers: &[],
         model: "gpt-4",
     };
@@ -765,6 +766,7 @@ fn client_profile_user_agent_case_insensitive() {
         client_id: None,
         user_agent: Some("CURL/7.68.0"),
         api_key_prefix: None,
+        application: None,
         headers: &[],
         model: "gpt-4",
     };
@@ -772,6 +774,7 @@ fn client_profile_user_agent_case_insensitive() {
         client_id: None,
         user_agent: Some("python-requests/2.28"),
         api_key_prefix: None,
+        application: None,
         headers: &[],
         model: "gpt-4",
     };
@@ -794,6 +797,7 @@ fn client_profile_model_prefix() {
         client_id: None,
         user_agent: None,
         api_key_prefix: None,
+        application: None,
         headers: &[],
         model: "gpt-4o",
     };
@@ -801,6 +805,7 @@ fn client_profile_model_prefix() {
         client_id: None,
         user_agent: None,
         api_key_prefix: None,
+        application: None,
         headers: &[],
         model: "claude-3",
     };
@@ -822,6 +827,7 @@ fn client_profile_api_key_prefix() {
         client_id: None,
         user_agent: None,
         api_key_prefix: Some("sk-bot-abc123"),
+        application: None,
         headers: &[],
         model: "gpt-4",
     };
@@ -829,6 +835,7 @@ fn client_profile_api_key_prefix() {
         client_id: None,
         user_agent: None,
         api_key_prefix: Some("sk-proj-abc"),
+        application: None,
         headers: &[],
         model: "gpt-4",
     };
@@ -854,6 +861,7 @@ fn client_profile_header_case_insensitive_name() {
         client_id: None,
         user_agent: None,
         api_key_prefix: None,
+        application: None,
         headers: &headers_match,
         model: "gpt-4",
     };
@@ -861,6 +869,7 @@ fn client_profile_header_case_insensitive_name() {
         client_id: None,
         user_agent: None,
         api_key_prefix: None,
+        application: None,
         headers: &headers_case,
         model: "gpt-4",
     };
@@ -868,6 +877,7 @@ fn client_profile_header_case_insensitive_name() {
         client_id: None,
         user_agent: None,
         api_key_prefix: None,
+        application: None,
         headers: &headers_miss,
         model: "gpt-4",
     };
@@ -888,6 +898,7 @@ fn client_profile_empty_matchers_never_match() {
         client_id: Some("anything"),
         user_agent: None,
         api_key_prefix: None,
+        application: None,
         headers: &[],
         model: "gpt-4",
     };
@@ -913,6 +924,7 @@ fn client_profile_multiple_matchers_all_must_pass() {
         client_id: Some("codex"),
         user_agent: None,
         api_key_prefix: None,
+        application: None,
         headers: &[],
         model: "gpt-4",
     };
@@ -920,6 +932,7 @@ fn client_profile_multiple_matchers_all_must_pass() {
         client_id: Some("codex"),
         user_agent: None,
         api_key_prefix: None,
+        application: None,
         headers: &[],
         model: "claude-3",
     };
@@ -938,6 +951,7 @@ fn resolve_client_returns_first_match() {
         client_id: Some("codex"),
         user_agent: Some("curl/7.0"),
         api_key_prefix: Some("sk-bot-x"),
+        application: None,
         headers: &[],
         model: "gpt-4",
     };
@@ -953,6 +967,7 @@ fn resolve_client_returns_none_when_no_match() {
         client_id: Some("unknown"),
         user_agent: None,
         api_key_prefix: None,
+        application: None,
         headers: &[],
         model: "gpt-4",
     };
@@ -966,6 +981,7 @@ fn resolve_client_empty_profiles() {
         client_id: Some("codex"),
         user_agent: None,
         api_key_prefix: None,
+        application: None,
         headers: &[],
         model: "gpt-4",
     };
@@ -979,6 +995,7 @@ fn resolve_client_second_profile_matches() {
         client_id: None,
         user_agent: None,
         api_key_prefix: Some("sk-bot-key123"),
+        application: None,
         headers: &[],
         model: "gpt-4",
     };
@@ -1176,13 +1193,13 @@ fn simple_match_ctx<'a>(model: &'a str) -> MatchContext<'a> {
     }
 }
 
-fn make_scoring_ctx(
+fn make_scoring_ctx<'a>(
     health: f64,
     latency: f64,
     cost: Option<f64>,
     priority: i32,
     tier: Option<ModelTier>,
-) -> ScoringContext {
+) -> ScoringContext<'a> {
     ScoringContext {
         health,
         avg_latency_ms: latency,
@@ -1285,6 +1302,7 @@ fn e2e_selects_best_candidate_by_scoring() {
             &requirements,
             &preference,
             &fallback,
+            None,
         )
         .unwrap();
 
@@ -1325,6 +1343,7 @@ fn e2e_rejects_when_capability_missing() {
             &requirements,
             &PolicyPreference::default(),
             &fallback,
+            None,
         )
         .unwrap_err();
 
@@ -1377,6 +1396,7 @@ fn e2e_escalates_tier_on_fallback() {
             &requirements,
             &preference,
             &fallback,
+            None,
         )
         .unwrap();
 
@@ -1415,6 +1435,7 @@ fn e2e_forbidden_provider_never_selected() {
             &requirements,
             &PolicyPreference::default(),
             &fallback,
+            None,
         )
         .unwrap();
 
@@ -1456,6 +1477,7 @@ fn e2e_tier_bounds_enforced() {
             &requirements,
             &PolicyPreference::default(),
             &fallback,
+            None,
         )
         .unwrap();
     assert_eq!(candidates.len(), 1);
@@ -1470,6 +1492,7 @@ fn e2e_tier_bounds_enforced() {
             &requirements,
             &PolicyPreference::default(),
             &fallback,
+            None,
         )
         .unwrap();
     assert_eq!(candidates.len(), 1);
@@ -1490,10 +1513,113 @@ fn e2e_tier_bounds_enforced() {
             &requirements,
             &PolicyPreference::default(),
             &PolicyFallback::Reject,
+            None,
         )
         .unwrap_err();
     assert!(
         matches!(err, Error::NoCandidate(_)),
         "Fast model below min_tier should produce NoCandidate, got: {err:?}"
+    );
+}
+
+// ========================================================================
+// 9. Escalation / De-escalation E2E tests
+// ========================================================================
+
+#[test]
+fn escalation_finds_higher_tier() {
+    // Standard has no eligible candidates (circuit open)
+    // Escalate to Reasoning which has eligible candidates
+    // Verify Reasoning candidate is selected
+    let cfg = e2e_cfg_with(vec![
+        ModelEntry::for_upstream("p1", "std-m", Some(ModelTier::Standard)).with_priority(0),
+        ModelEntry::for_upstream("p1", "reas-m", Some(ModelTier::Reasoning)).with_priority(0),
+    ]);
+    let routing = cfg.routing.clone();
+    let reg = e2e_reg(cfg);
+    let router = Router::new();
+
+    // Trip the circuit breaker on the Standard model so it is ineligible.
+    let timeout_err = Error::Timeout(5);
+    for _ in 0..routing.circuit_breaker.failure_threshold {
+        router.report_failure("p1-std-m", &timeout_err, &routing);
+    }
+    assert!(
+        !router.allow_request("p1-std-m"),
+        "circuit should be open after enough failures"
+    );
+
+    let requirements = PolicyRequirements::default();
+    let preference = PolicyPreference::default();
+    let fallback = PolicyFallback::Escalate {
+        enabled: true,
+        max_steps: 1,
+    };
+
+    let candidates = router
+        .plan_with_policy(
+            &reg,
+            &Resolution::Tier(ModelTier::Standard),
+            &[],
+            &requirements,
+            &preference,
+            &fallback,
+            None,
+        )
+        .unwrap();
+
+    assert!(!candidates.is_empty(), "escalation should find a candidate");
+    assert_eq!(
+        candidates[0].exposed_id, "p1-reas-m",
+        "escalation should land on the Reasoning model"
+    );
+}
+
+#[test]
+fn degradation_finds_lower_tier() {
+    // Frontier has no eligible candidates (circuit open)
+    // Degrade to Reasoning which has eligible candidates
+    // Verify Reasoning candidate is selected
+    let cfg = e2e_cfg_with(vec![
+        ModelEntry::for_upstream("p1", "front-m", Some(ModelTier::Frontier)).with_priority(0),
+        ModelEntry::for_upstream("p1", "reas-m", Some(ModelTier::Reasoning)).with_priority(0),
+    ]);
+    let routing = cfg.routing.clone();
+    let reg = e2e_reg(cfg);
+    let router = Router::new();
+
+    // Trip the circuit breaker on the Frontier model so it is ineligible.
+    let timeout_err = Error::Timeout(5);
+    for _ in 0..routing.circuit_breaker.failure_threshold {
+        router.report_failure("p1-front-m", &timeout_err, &routing);
+    }
+    assert!(
+        !router.allow_request("p1-front-m"),
+        "circuit should be open after enough failures"
+    );
+
+    let requirements = PolicyRequirements::default();
+    let preference = PolicyPreference::default();
+    let fallback = PolicyFallback::Degrade {
+        enabled: true,
+        max_steps: 1,
+    };
+
+    let candidates = router
+        .plan_with_policy(
+            &reg,
+            &Resolution::Tier(ModelTier::Frontier),
+            &[],
+            &requirements,
+            &preference,
+            &fallback,
+            None,
+        )
+        .unwrap();
+
+    assert!(!candidates.is_empty(), "degradation should find a candidate");
+    assert_eq!(
+        candidates[0].exposed_id, "p1-reas-m",
+        "degradation should land on the Reasoning model"
     );
 }

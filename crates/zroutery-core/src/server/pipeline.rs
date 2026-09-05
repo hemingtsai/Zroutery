@@ -124,6 +124,7 @@ pub(super) async fn handle_chat(
                                     &policy.requirements,
                                     &policy.preference,
                                     &policy.fallback,
+                                    Some(&task_profile),
                                 )
                             }
                             None => {
@@ -1107,6 +1108,9 @@ fn build_client_context<'a>(
         client_id,
         user_agent,
         api_key_prefix: None,
+        application: headers
+            .get("x-zroutery-application")
+            .and_then(|v| v.to_str().ok()),
         headers: header_pairs,
         model,
     }
@@ -1138,9 +1142,9 @@ fn resolve_policy<'a>(
     // Step 2: Try policy matchers.
     let match_ctx = policy::MatchContext {
         client_id: client_ctx.client_id,
-        application: None,
+        application: client_ctx.application,
         model: client_ctx.model,
-        streaming: false,
+        streaming: task.streaming,
         has_tools: task.has_tools,
         has_vision: task.has_vision,
         task: Some(task),

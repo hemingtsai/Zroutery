@@ -472,7 +472,7 @@ pub struct ScoredCandidate {
 ///
 /// The caller supplies runtime signals (health, latency) that the policy
 /// engine itself does not own.
-pub struct ScoringContext {
+pub struct ScoringContext<'a> {
     /// Health score 0.0-1.0, from the router's circuit breaker state.
     pub health: f64,
     /// EWMA latency in milliseconds, from the router.
@@ -486,7 +486,7 @@ pub struct ScoringContext {
     /// The candidate's tier, if assigned.
     pub tier: Option<ModelTier>,
     /// The task profile for request-aware cost estimation.
-    pub task: Option<&'static TaskProfile>,
+    pub task: Option<&'a TaskProfile>,
 }
 
 const LATENCY_BASELINE_MS: f64 = 1000.0;
@@ -502,7 +502,7 @@ const PRIORITY_CAP: f64 = 100.0;
 /// Each dimension produces a value in [0.0, 1.0]. The final score is the
 /// weighted sum, also in [0.0, 1.0] (weights are normalized internally so
 /// they do not need to sum to 1.0).
-pub fn score_candidate(pref: &PolicyPreference, ctx: &ScoringContext) -> ScoredCandidate {
+pub fn score_candidate<'a>(pref: &PolicyPreference, ctx: &ScoringContext<'a>) -> ScoredCandidate {
     let health = ctx.health.clamp(0.0, 1.0);
 
     // Latency: lower is better. Inverse-normalized to 1000ms baseline.
@@ -657,6 +657,8 @@ pub struct ClientContext<'a> {
     pub user_agent: Option<&'a str>,
     /// Prefix of the API key used (first few characters, for privacy).
     pub api_key_prefix: Option<&'a str>,
+    /// Application name from x-zroutery-application header.
+    pub application: Option<&'a str>,
     /// All request headers as (name, value) pairs.
     pub headers: &'a [(&'a str, &'a str)],
     /// The requested model id.
@@ -1101,7 +1103,7 @@ mod tests {
 
     // ------------------------------------------------ Scoring
 
-    fn scoring_ctx(health: f64, latency: f64, cost: Option<f64>, priority: i32, tier: Option<ModelTier>) -> ScoringContext {
+    fn scoring_ctx<'a>(health: f64, latency: f64, cost: Option<f64>, priority: i32, tier: Option<ModelTier>) -> ScoringContext<'a> {
         ScoringContext {
             health,
             avg_latency_ms: latency,
@@ -1355,6 +1357,7 @@ mod tests {
             client_id,
             user_agent,
             api_key_prefix,
+            application: None,
             headers,
             model,
         }
