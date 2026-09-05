@@ -176,7 +176,7 @@ pub enum PolicyMatcher {
 // ---------------------------------------------------------- Requirements
 
 /// Hard constraints for candidate eligibility.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct PolicyRequirements {
     /// Candidates must support all of these capabilities.
     #[serde(default)]
@@ -248,6 +248,17 @@ impl Default for PolicyPreference {
 
 fn default_weight() -> f64 {
     0.2
+}
+
+impl std::hash::Hash for PolicyPreference {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.preferred_tier.hash(state);
+        self.health_weight.to_bits().hash(state);
+        self.latency_weight.to_bits().hash(state);
+        self.cost_weight.to_bits().hash(state);
+        self.priority_weight.to_bits().hash(state);
+        self.tier_weight.to_bits().hash(state);
+    }
 }
 
 // ----------------------------------------------------------- Fallback
@@ -356,6 +367,8 @@ pub enum RejectionReason {
     MissingCapability(Capability),
     BelowMinTier,
     AboveMaxTier,
+    /// Candidate has no tier assigned but policy requires tier bounds.
+    UnknownTier,
     ProviderForbidden,
     ProviderNotAllowed,
     ModelForbidden,
@@ -373,6 +386,7 @@ impl std::fmt::Display for RejectionReason {
             }
             RejectionReason::BelowMinTier => write!(f, "below_min_tier"),
             RejectionReason::AboveMaxTier => write!(f, "above_max_tier"),
+            RejectionReason::UnknownTier => write!(f, "unknown_tier"),
             RejectionReason::ProviderForbidden => write!(f, "provider_forbidden"),
             RejectionReason::ProviderNotAllowed => write!(f, "provider_not_allowed"),
             RejectionReason::ModelForbidden => write!(f, "model_forbidden"),
@@ -410,15 +424,25 @@ impl PolicyRequirements {
             }
         }
 
-        // Tier bounds
-        if let (Some(min), Some(tier)) = (self.min_tier, tier) {
-            if tier < min {
-                reasons.push(RejectionReason::BelowMinTier);
-            }
-        }
-        if let (Some(max), Some(tier)) = (self.max_tier, tier) {
-            if tier > max {
-                reasons.push(RejectionReason::AboveMaxTier);
+        // Tier bounds: if the policy sets min/max tier and the candidate has
+        // no tier, the candidate cannot satisfy tier constraints.
+        if self.min_tier.is_some() || self.max_tier.is_some() {
+            match tier {
+                Some(t) => {
+                    if let Some(min) = self.min_tier {
+                        if t < min {
+                            reasons.push(RejectionReason::BelowMinTier);
+                        }
+                    }
+                    if let Some(max) = self.max_tier {
+                        if t > max {
+                            reasons.push(RejectionReason::AboveMaxTier);
+                        }
+                    }
+                }
+                None => {
+                    reasons.push(RejectionReason::UnknownTier);
+                }
             }
         }
 
@@ -808,6 +832,31 @@ pub enum DecisionReason {
     NoCandidate,
 }
 
+/// Identifies the exact policy configuration used for a routing decision.
+///
+/// Captures the policy id, enabled state, and hashes of the requirements and
+/// preference structs so that decisions can be correlated with the exact
+/// configuration version that produced them.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PolicyRevision {
+    /// The id of the policy that was applied.
+    pub policy_id: String,
+    /// Whether the policy was enabled at decision time.
+    pub policy_enabled: bool,
+    /// Hash of the [`PolicyRequirements`] struct.
+    pub requirements_hash: u64,
+    /// Hash of the [`PolicyPreference`] struct.
+    pub preference_hash: u64,
+}
+
+/// Compute a deterministic `u64` hash of any [`Hash`](std::hash::Hash)-able value.
+pub fn hash_to_u64<T: std::hash::Hash>(item: &T) -> u64 {
+    use std::hash::Hasher;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    item.hash(&mut hasher);
+    hasher.finish()
+}
+
 /// Complete routing decision for a single request.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RouteDecision {
@@ -829,6 +878,8 @@ pub struct RouteDecision {
     pub fallback_chain: Vec<String>,
     /// Why this decision was made.
     pub reason: DecisionReason,
+    /// Identifies the exact policy/config version used.
+    pub policy_revision: PolicyRevision,
 }
 
 // ------------------------------------------------------------ Tests
@@ -937,6 +988,30 @@ mod tests {
         // Above max
         let check = reqs.check("m", "p", Some(ModelTier::Frontier), &caps, false);
         assert!(!check.eligible);
+    }
+
+    #[test]
+    fn unknown_tier_rejected_when_bounds_set() {
+        let reqs = PolicyRequirements {
+            min_tier: Some(ModelTier::Standard),
+            ..Default::default()
+        };
+        let caps = ModelCapabilities::default();
+
+        // Candidate with no tier should be rejected when min_tier is set.
+        let check = reqs.check("m", "p", None, &caps, false);
+        assert!(!check.eligible);
+        assert!(matches!(check.reasons[0], RejectionReason::UnknownTier));
+    }
+
+    #[test]
+    fn unknown_tier_accepted_when_no_bounds() {
+        let reqs = PolicyRequirements::default();
+        let caps = ModelCapabilities::default();
+
+        // Candidate with no tier passes when no tier bounds are configured.
+        let check = reqs.check("m", "p", None, &caps, false);
+        assert!(check.eligible);
     }
 
     #[test]
@@ -1716,6 +1791,12 @@ mod tests {
             selected: Some("gpt-4".into()),
             fallback_chain: vec!["claude-3".into()],
             reason: DecisionReason::PolicySelected,
+            policy_revision: PolicyRevision {
+                policy_id: "code-policy".into(),
+                policy_enabled: true,
+                requirements_hash: 12345,
+                preference_hash: 67890,
+            },
         };
 
         let json = serde_json::to_string(&decision).unwrap();
@@ -1867,6 +1948,7 @@ mod tests {
         );
         assert_eq!(RejectionReason::BelowMinTier.to_string(), "below_min_tier");
         assert_eq!(RejectionReason::AboveMaxTier.to_string(), "above_max_tier");
+        assert_eq!(RejectionReason::UnknownTier.to_string(), "unknown_tier");
         assert_eq!(
             RejectionReason::ProviderForbidden.to_string(),
             "provider_forbidden"

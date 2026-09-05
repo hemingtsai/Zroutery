@@ -30,6 +30,7 @@ pub mod election;
 pub mod error;
 pub mod ir;
 pub mod media;
+pub mod observation;
 pub mod policy;
 pub mod protocol;
 pub mod query;
@@ -62,6 +63,10 @@ pub use ir::{
     StreamEvent, SystemPart, ToolChoice, Usage,
 };
 pub use ir::response::{ResponseStatus, ResponseStore, StoredResponse};
+pub use observation::{
+    HealthState, LatencyObservation, ObservationFreshness, ObservationStore, RuntimeObservation,
+    Signal,
+};
 pub use policy::{
     ClientContext, ClientMatcher, ClientProfile, EligibilityCheck, PolicyConfig, PolicyFallback,
     PolicyMatcher, PolicyPreference, PolicyRequirements, RejectionReason, RoutingPolicy,

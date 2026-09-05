@@ -146,6 +146,8 @@ pub(super) async fn handle_chat(
                                         Some(&task_profile),
                                     ).map(|(plan, mut decision)| {
                                         decision.policy_id = policy.id.clone();
+                                        decision.policy_revision.policy_id = policy.id.clone();
+                                        decision.policy_revision.policy_enabled = policy.enabled;
                                         (plan, Some(decision))
                                     })
                                 }
