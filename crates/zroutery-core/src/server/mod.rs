@@ -33,7 +33,7 @@ use crate::budget::{self, Ledger, Verdict};
 use crate::config::{AppConfig, ModelTier, ProviderConfig, SecretStore, ServerConfig};
 use crate::election::{self, Election, Measurement};
 use crate::error::{Error, Result};
-use crate::ir::Dialect;
+use crate::ir::{Dialect, ResponseStatus, ResponseStore};
 use crate::protocol;
 use crate::registry::Registry;
 use crate::router::Router;
@@ -60,6 +60,7 @@ pub struct AppState {
     /// Set when the ledger has moved since it was last written out, so the desktop
     /// layer can flush on a timer instead of writing a file per request.
     ledger_dirty: AtomicBool,
+    pub response_store: ResponseStore,
 }
 
 impl AppState {
@@ -79,6 +80,7 @@ impl AppState {
             secrets,
             ledger: RwLock::new(Ledger::new()),
             ledger_dirty: AtomicBool::new(false),
+            response_store: ResponseStore::default(),
         }
     }
 
@@ -258,6 +260,8 @@ const ENDPOINTS: &[&str] = &[
     "/v1/messages/count_tokens",
     "/v1/chat/completions",
     "/v1/responses",
+    "/v1/responses/{response_id}",
+    "/v1/responses/{response_id}/cancel",
     "/v1/generateContent",
     "/v1/models",
     "/v1/models/{id}",
@@ -279,6 +283,14 @@ pub fn build_app(state: Arc<AppState>) -> AxumRouter {
             )
             .route(&format!("{prefix}/chat/completions"), post(openai_chat))
             .route(&format!("{prefix}/responses"), post(responses_chat))
+            .route(
+                &format!("{prefix}/responses/{{response_id}}"),
+                get(get_response).delete(delete_response),
+            )
+            .route(
+                &format!("{prefix}/responses/{{response_id}}/cancel"),
+                post(cancel_response),
+            )
             .route(&format!("{prefix}/generateContent"), post(gemini_generate))
             .route(&format!("{prefix}/models"), get(list_models))
             .route(&format!("{prefix}/models/{{id}}"), get(get_model))
@@ -788,6 +800,60 @@ fn model_json(info: &crate::registry::ModelInfo) -> Value {
             "capabilities": info.capabilities,
         }
     })
+}
+
+async fn get_response(
+    State(state): State<Arc<AppState>>,
+    Path(response_id): Path<String>,
+) -> Response {
+    match state.response_store.get(&response_id) {
+        Some(resp) => Json(serde_json::to_value(&resp).unwrap()).into_response(),
+        None => error_response(Dialect::OpenAIResponses, &Error::invalid("response not found")),
+    }
+}
+
+async fn delete_response(
+    State(state): State<Arc<AppState>>,
+    Path(response_id): Path<String>,
+) -> Response {
+    if state.response_store.delete(&response_id) {
+        Json(json!({"id": response_id, "object": "response", "deleted": true})).into_response()
+    } else {
+        error_response(Dialect::OpenAIResponses, &Error::invalid("response not found"))
+    }
+}
+
+async fn cancel_response(
+    State(state): State<Arc<AppState>>,
+    Path(response_id): Path<String>,
+) -> Response {
+    if state.response_store.cancel(&response_id) {
+        // In-flight response cancelled — check if it has been stored yet.
+        match state.response_store.get(&response_id) {
+            Some(mut resp) => {
+                resp.status = ResponseStatus::Cancelled;
+                Json(serde_json::to_value(&resp).unwrap()).into_response()
+            }
+            None => {
+                // Still in-flight, not yet stored — return minimal response.
+                Json(json!({
+                    "id": response_id,
+                    "object": "response",
+                    "status": "cancelled"
+                }))
+                .into_response()
+            }
+        }
+    } else {
+        // Not in-flight — check if it is a completed response.
+        match state.response_store.get(&response_id) {
+            Some(resp) => Json(serde_json::to_value(&resp).unwrap()).into_response(),
+            None => error_response(
+                Dialect::OpenAIResponses,
+                &Error::invalid("response not found"),
+            ),
+        }
+    }
 }
 
 fn error_response(dialect: Dialect, err: &Error) -> Response {

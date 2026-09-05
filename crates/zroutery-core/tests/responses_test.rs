@@ -81,6 +81,7 @@ fn response_encodes_text_tool_use_and_reasoning() {
         stop_reason: StopReason::EndTurn,
         stop_sequence: None,
         usage: Usage::default(),
+        passthrough: serde_json::Map::new(),
     };
 
     let value = encode_response(&resp);
@@ -262,6 +263,7 @@ fn responses_response_round_trips_through_ir() {
             reasoning_tokens: 0,
             ..Usage::default()
         },
+        passthrough: serde_json::Map::new(),
     };
 
     let wire = encode_response(&resp);

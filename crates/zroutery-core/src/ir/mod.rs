@@ -499,6 +499,9 @@ pub struct ChatResponse {
     pub stop_reason: StopReason,
     pub stop_sequence: Option<String>,
     pub usage: Usage,
+    /// Vendor specific fields we do not understand but pass through untouched.
+    #[serde(default)]
+    pub passthrough: Map<String, Value>,
 }
 
 impl ChatResponse {

@@ -57,6 +57,26 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
         .map(|v| v.min(u32::MAX as u64) as u32);
     req.stream = obj.get("stream").and_then(Value::as_bool).unwrap_or(false);
 
+    if let Some(temp) = obj.get("temperature").and_then(Value::as_f64) {
+        req.temperature = Some(temp);
+    }
+    if let Some(top_p) = obj.get("top_p").and_then(Value::as_f64) {
+        req.top_p = Some(top_p);
+    }
+    if let Some(user) = obj
+        .get("metadata")
+        .and_then(|m| m.get("user"))
+        .and_then(Value::as_str)
+    {
+        req.metadata_user = Some(user.to_string());
+    }
+    // Store fields we pass through but don't interpret yet
+    for field in ["store", "previous_response_id", "truncation", "include"] {
+        if let Some(val) = obj.get(field) {
+            req.passthrough.insert(field.to_string(), val.clone());
+        }
+    }
+
     if let Some(tools) = obj.get("tools").and_then(Value::as_array) {
         for t in tools {
             let Some(name) = t.get("name").and_then(Value::as_str) else {
@@ -189,6 +209,30 @@ fn decode_input_item(item: &Value, req: &mut ChatRequest) -> Result<()> {
                 }],
             });
         }
+        "input_audio" => {
+            if let Some(audio) = item.get("input_audio") {
+                let data = audio
+                    .get("data")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                let format = audio
+                    .get("format")
+                    .and_then(Value::as_str)
+                    .unwrap_or("wav");
+                let media_type = format!("audio/{}", normalize_audio_format_to_mime(format));
+                req.messages.push(Message {
+                    role: Role::User,
+                    content: vec![ContentBlock::Audio {
+                        source: MediaSource::Base64 {
+                            media_type: media_type.clone(),
+                            data,
+                        },
+                        media_type,
+                    }],
+                });
+            }
+        }
         "reasoning" => {
             let block = reasoning_bridge::decode_reasoning_item(item).or_else(|| {
                 item.get("summary")
@@ -234,6 +278,28 @@ fn decode_input_item(item: &Value, req: &mut ChatRequest) -> Result<()> {
                                 });
                             }
                         }
+                        Some("input_audio") => {
+                            if let Some(audio) = part.get("input_audio") {
+                                let data = audio
+                                    .get("data")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or_default()
+                                    .to_string();
+                                let format = audio
+                                    .get("format")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("wav");
+                                let media_type =
+                                    format!("audio/{}", normalize_audio_format_to_mime(format));
+                                content.push(ContentBlock::Audio {
+                                    source: MediaSource::Base64 {
+                                        media_type: media_type.clone(),
+                                        data,
+                                    },
+                                    media_type,
+                                });
+                            }
+                        }
                         _ => {}
                     }
                 }
@@ -257,6 +323,15 @@ fn arguments_json(input: &Value) -> String {
     match input {
         Value::String(s) => s.clone(),
         other => other.to_string(),
+    }
+}
+
+/// Convert an OpenAI audio format string to a MIME subtype.
+fn normalize_audio_format_to_mime(format: &str) -> &str {
+    match format {
+        "mp3" => "mpeg",
+        "wav" => "wav",
+        other => other,
     }
 }
 
@@ -425,6 +500,21 @@ pub fn encode_request(req: &ChatRequest, upstream_model: &str) -> Result<Value> 
         };
         body.insert("reasoning".into(), json!({"effort": effort}));
     }
+    if let Some(temp) = req.temperature {
+        body.insert("temperature".into(), json!(temp));
+    }
+    if let Some(top_p) = req.top_p {
+        body.insert("top_p".into(), json!(top_p));
+    }
+    if let Some(user) = &req.metadata_user {
+        body.insert("metadata".into(), json!({"user": user}));
+    }
+    // Pass through fields we stored but don't interpret
+    for field in ["store", "previous_response_id", "truncation", "include"] {
+        if let Some(val) = req.passthrough.get(field) {
+            body.insert(field.to_string(), val.clone());
+        }
+    }
     Ok(Value::Object(body))
 }
 
@@ -494,6 +584,23 @@ pub fn decode_response(body: Value) -> Result<ChatResponse> {
         }
     }
 
+    let mut passthrough = Map::new();
+    if let Some(prev_id) = body.get("previous_response_id").and_then(Value::as_str) {
+        passthrough.insert("previous_response_id".to_string(), json!(prev_id));
+    }
+
+    if body.get("status").and_then(Value::as_str) == Some("incomplete") {
+        if let Some(reason) = body
+            .pointer("/incomplete_details/reason")
+            .and_then(Value::as_str)
+        {
+            passthrough.insert(
+                "incomplete_details".to_string(),
+                json!({"reason": reason}),
+            );
+        }
+    }
+
     Ok(ChatResponse {
         id: body
             .get("id")
@@ -513,6 +620,7 @@ pub fn decode_response(body: Value) -> Result<ChatResponse> {
         },
         stop_sequence: None,
         usage: decode_usage(body.get("usage")),
+        passthrough,
     })
 }
 
@@ -556,16 +664,35 @@ pub fn encode_response(resp: &ChatResponse) -> Value {
         }
     }
     let text = resp.text();
-    json!({
+    let status = if resp.stop_reason == StopReason::MaxTokens {
+        "incomplete"
+    } else {
+        "completed"
+    };
+    let mut resp_json = json!({
         "id": resp.id,
         "object": "response",
         "created_at": chrono::Utc::now().timestamp(),
-        "status": if resp.stop_reason == StopReason::MaxTokens { "incomplete" } else { "completed" },
+        "status": status,
         "model": resp.model,
         "output": output,
         "output_text": text,
         "usage": encode_usage(&resp.usage),
-    })
+    });
+    if let Some(prev_id) = resp.passthrough.get("previous_response_id") {
+        resp_json["previous_response_id"] = prev_id.clone();
+    }
+    if let Some(metadata) = resp.passthrough.get("metadata") {
+        resp_json["metadata"] = metadata.clone();
+    }
+    if status == "incomplete" {
+        if let Some(details) = resp.passthrough.get("incomplete_details") {
+            resp_json["incomplete_details"] = details.clone();
+        } else {
+            resp_json["incomplete_details"] = json!({"reason": "max_output_tokens"});
+        }
+    }
+    resp_json
 }
 
 pub(crate) fn decode_usage(v: Option<&Value>) -> Usage {

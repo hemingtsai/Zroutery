@@ -396,6 +396,7 @@ pub fn decode_response(body: Value) -> Result<ChatResponse> {
         stop_reason,
         stop_sequence: None,
         usage,
+        passthrough: Map::new(),
     })
 }
 

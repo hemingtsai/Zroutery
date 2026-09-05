@@ -604,6 +604,7 @@ pub fn decode_response(body: Value) -> Result<ChatResponse> {
             .and_then(Value::as_str)
             .map(str::to_string),
         usage: decode_usage(body.get("usage")),
+        passthrough: Map::new(),
     })
 }
 

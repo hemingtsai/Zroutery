@@ -772,6 +772,7 @@ pub fn decode_response(body: Value) -> Result<ChatResponse> {
             .unwrap_or(StopReason::Unknown),
         stop_sequence: None,
         usage: decode_usage(body.get("usage")),
+        passthrough: Map::new(),
     })
 }
 

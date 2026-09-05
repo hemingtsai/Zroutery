@@ -14,13 +14,14 @@ use axum::http::{header, HeaderMap, HeaderValue};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde_json::Value;
+use tokio::sync::watch;
 
 use super::{error_response, AppState};
 use crate::billing::{Cost, Pricing};
 use crate::budget::Verdict;
 use crate::config::ModelTier;
 use crate::error::{Error, Result};
-use crate::ir::{ChatRequest, Dialect, StreamEvent, Usage};
+use crate::ir::{ChatRequest, Dialect, StoredResponse, StreamEvent, Usage};
 use crate::protocol::{self, openai, SseFrame, StreamEncoder};
 use crate::query::RequestKind;
 use crate::rectifier::{self, Rectifier};
@@ -41,6 +42,22 @@ pub(super) async fn handle_chat(
         Err(e) => return error_response(dialect, &e),
     };
     req.required_capabilities = req.compute_required_capabilities();
+
+    // Extract Responses API fields from the raw body for storage.
+    let (input_items, previous_response_id) = if dialect == Dialect::OpenAIResponses {
+        let input = body
+            .get("input")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        let prev = body
+            .get("previous_response_id")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+        (input, prev)
+    } else {
+        (Vec::new(), None)
+    };
 
     let registry = state.registry();
     let config = registry.config();
@@ -96,7 +113,7 @@ pub(super) async fn handle_chat(
     if req.stream {
         stream_chat(state, dialect, req, plan, kind, include_usage).await
     } else {
-        buffered_chat(state, dialect, req, plan, kind).await
+        buffered_chat(state, dialect, req, plan, kind, input_items, previous_response_id).await
     }
 }
 
@@ -537,6 +554,8 @@ async fn buffered_chat(
     req: ChatRequest,
     plan: Vec<Candidate>,
     kind: RequestKind,
+    input_items: Vec<Value>,
+    previous_response_id: Option<String>,
 ) -> Response {
     let started = Instant::now();
     let mut rec = RecordBuilder::new(dialect, &req.model, false);
@@ -659,7 +678,24 @@ async fn buffered_chat(
                     .record(rec.finish(started.elapsed().as_millis() as u64));
                 // Report the model that actually answered, not the virtual id.
                 resp.model = candidate.exposed_id.clone();
-                let mut response = Json(protocol::encode_response(dialect, &resp)).into_response();
+                let wire = protocol::encode_response(dialect, &resp);
+                if dialect == Dialect::OpenAIResponses {
+                    let output = wire
+                        .get("output")
+                        .cloned()
+                        .and_then(|v| v.as_array().cloned())
+                        .unwrap_or_default();
+                    let stored = StoredResponse::completed(
+                        resp.id.clone(),
+                        resp.model.clone(),
+                        input_items.clone(),
+                        output,
+                        resp.usage.clone(),
+                        previous_response_id.clone(),
+                    );
+                    state.response_store.put(stored);
+                }
+                let mut response = Json(wire).into_response();
                 inject_routing_headers(response.headers_mut(), candidate, kind);
                 inject_cost_header(response.headers_mut(), cost.as_ref());
                 return response;
@@ -705,8 +741,25 @@ async fn buffered_chat(
                             .stats
                             .record(rec.finish(started.elapsed().as_millis() as u64));
                         resp.model = candidate.exposed_id.clone();
+                        let wire = protocol::encode_response(dialect, &resp);
+                        if dialect == Dialect::OpenAIResponses {
+                            let output = wire
+                                .get("output")
+                                .cloned()
+                                .and_then(|v| v.as_array().cloned())
+                                .unwrap_or_default();
+                            let stored = StoredResponse::completed(
+                                resp.id.clone(),
+                                resp.model.clone(),
+                                input_items.clone(),
+                                output,
+                                resp.usage.clone(),
+                                previous_response_id.clone(),
+                            );
+                            state.response_store.put(stored);
+                        }
                         let mut response =
-                            Json(protocol::encode_response(dialect, &resp)).into_response();
+                            Json(wire).into_response();
                         inject_routing_headers(response.headers_mut(), candidate, kind);
                         inject_cost_header(response.headers_mut(), cost.as_ref());
                         return response;
@@ -839,6 +892,13 @@ async fn stream_chat(
                     attempt_start.elapsed().as_millis() as u64,
                     &routing,
                 );
+                let (response_id, cancel_rx) = if dialect == Dialect::OpenAIResponses {
+                    let id = format!("resp-{}", uuid::Uuid::new_v4().simple());
+                    let rx = state.response_store.register_in_flight(id.clone());
+                    (Some(id), Some(rx))
+                } else {
+                    (None, None)
+                };
                 let encoder =
                     protocol::stream_encoder(dialect, &candidate.exposed_id, include_usage);
                 let body = Body::from_stream(sse_body(
@@ -854,6 +914,8 @@ async fn stream_chat(
                         provider_id: candidate.provider.id.clone(),
                         tier: candidate.entry.tier,
                         kind,
+                        response_id,
+                        cancel_rx,
                     },
                 ));
                 // Built from a plain body and static headers, so nothing here can
@@ -876,6 +938,13 @@ async fn stream_chat(
                     Ok(Some(events)) => {
                         // The repaired stream is not a fresh half-open probe.
                         state.router.release_half_open_permit(candidate.model_id());
+                        let (response_id, cancel_rx) = if dialect == Dialect::OpenAIResponses {
+                            let id = format!("resp-{}", uuid::Uuid::new_v4().simple());
+                            let rx = state.response_store.register_in_flight(id.clone());
+                            (Some(id), Some(rx))
+                        } else {
+                            (None, None)
+                        };
                         let encoder =
                             protocol::stream_encoder(dialect, &candidate.exposed_id, include_usage);
                         let body = Body::from_stream(sse_body(
@@ -891,6 +960,8 @@ async fn stream_chat(
                                 provider_id: candidate.provider.id.clone(),
                                 tier: candidate.entry.tier,
                                 kind,
+                                response_id,
+                                cancel_rx,
                             },
                         ));
                         let mut response = Response::new(body);
@@ -989,11 +1060,19 @@ struct SseState {
     /// can be checked once the stream ends. Main streams never pay for this.
     classifier_text: Option<String>,
     finished: bool,
+    /// Pre-generated response ID for in-flight tracking (Responses API).
+    response_id: Option<String>,
+    /// Cancel receiver for cancellation detection (Responses API).
+    cancel_rx: Option<watch::Receiver<bool>>,
 }
 
 impl SseState {
     /// Record the request exactly once, when the stream ends for any reason.
     fn finalize(&mut self, error: Option<&Error>) {
+        // Clean up in-flight tracking for Responses API streams.
+        if let Some(ref id) = self.response_id {
+            self.state.response_store.complete_in_flight(id);
+        }
         // A classifier stream that reached its end without producing a verdict
         // is worth a warning. The bytes have already gone out, so there is
         // nothing to fail over to — but the client will fail closed on its own
@@ -1051,6 +1130,10 @@ struct StreamContext {
     provider_id: String,
     tier: Option<ModelTier>,
     kind: RequestKind,
+    /// Pre-generated response ID for in-flight tracking (Responses API).
+    response_id: Option<String>,
+    /// Cancel receiver for cancellation detection (Responses API).
+    cancel_rx: Option<watch::Receiver<bool>>,
 }
 
 /// Pipe canonical events through the egress encoder into an SSE byte stream.
@@ -1078,6 +1161,8 @@ fn sse_body(
         tier: context.tier,
         classifier_text,
         finished: false,
+        response_id: context.response_id,
+        cancel_rx: context.cancel_rx,
     };
 
     futures_util::stream::unfold(state, |mut st| async move {
@@ -1090,6 +1175,28 @@ fn sse_body(
             }
             match st.events.next().await {
                 Some(Ok(event)) => {
+                    // Check for cancellation (Responses API).
+                    if let Some(ref rx) = st.cancel_rx {
+                        if *rx.borrow() {
+                            st.finished = true;
+                            st.finalize(None);
+                            return None;
+                        }
+                    }
+                    // Override response ID with pre-generated one if the
+                    // upstream did not supply one.
+                    let event =
+                        match (&st.response_id, &event) {
+                            (
+                                Some(ref pregen_id),
+                                StreamEvent::Start { id, model, usage },
+                            ) if id.is_empty() => StreamEvent::Start {
+                                id: pregen_id.clone(),
+                                model: model.clone(),
+                                usage: *usage,
+                            },
+                            _ => event,
+                        };
                     match &event {
                         StreamEvent::ThinkingDelta { .. } => {
                             if let Some(rec) = st.rec.as_mut() {
