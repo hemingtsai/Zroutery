@@ -10,14 +10,18 @@
 //! - PolicyConfig serde round-trip
 
 use serde_json::json;
+use std::sync::Arc;
 
-use zroutery_core::config::{ModelCapabilities, ModelTier};
+use zroutery_core::config::{AppConfig, ModelCapabilities, ModelEntry, ModelTier, ProviderConfig, ProviderKind};
+use zroutery_core::error::Error;
 use zroutery_core::ir::{Capability, ChatRequest, ContentBlock, Dialect, MediaSource, ToolDef};
 use zroutery_core::policy::{
     self, ClientContext, ClientMatcher, ClientProfile, Complexity, MatchContext, PolicyConfig,
     PolicyFallback, PolicyMatcher, PolicyPreference, PolicyRequirements, RejectionReason,
     RoutingPolicy, ScoringContext, TaskProfile, TaskType, resolve_client, score_candidate,
 };
+use zroutery_core::registry::{Registry, Resolution};
+use zroutery_core::router::Router;
 
 // ========================================================================
 // 1. TaskProfile::from_request
@@ -187,26 +191,24 @@ fn policy_multiple_matchers_all_must_pass() {
         PolicyMatcher::Client {
             value: "codex".into(),
         },
-        PolicyMatcher::RequiresCapability {
-            value: Capability::Tools,
-        },
         PolicyMatcher::HasTools { value: true },
+        PolicyMatcher::Streaming { value: true },
     ];
 
     // All three match.
     let mut ctx = simple_match_ctx("m");
     ctx.client_id = Some("codex");
-    ctx.required_capabilities = &[Capability::Tools];
     ctx.has_tools = true;
+    ctx.streaming = true;
     assert!(policy.matches(&ctx));
 
-    // Missing one: capability.
-    ctx.required_capabilities = &[];
+    // Missing one: has_tools.
+    ctx.has_tools = false;
     assert!(!policy.matches(&ctx));
 
-    // Missing one: has_tools.
-    ctx.required_capabilities = &[Capability::Tools];
-    ctx.has_tools = false;
+    // Missing one: streaming.
+    ctx.has_tools = true;
+    ctx.streaming = false;
     assert!(!policy.matches(&ctx));
 }
 
@@ -245,17 +247,22 @@ fn policy_has_vision_matcher() {
 
 #[test]
 fn policy_tier_matcher() {
-    let mut policy = default_policy();
-    policy.matchers = vec![PolicyMatcher::Tier {
-        value: ModelTier::Reasoning,
-    }];
-    let mut ctx = simple_match_ctx("m");
-    ctx.tier = Some(ModelTier::Reasoning);
-    assert!(policy.matches(&ctx));
-    ctx.tier = Some(ModelTier::Fast);
-    assert!(!policy.matches(&ctx));
-    ctx.tier = None;
-    assert!(!policy.matches(&ctx));
+    // Tier matching is now a PolicyRequirement, not a PolicyMatcher.
+    // This test verifies that a policy with min/max tier requirements
+    // correctly filters candidates via eligibility, not matchers.
+    let reqs = PolicyRequirements {
+        min_tier: Some(ModelTier::Reasoning),
+        max_tier: Some(ModelTier::Reasoning),
+        ..Default::default()
+    };
+    let caps = ModelCapabilities::default();
+    let check = reqs.check("m", "p", Some(ModelTier::Reasoning), &caps, false);
+    assert!(check.eligible);
+    let check = reqs.check("m", "p", Some(ModelTier::Fast), &caps, false);
+    assert!(!check.eligible);
+    let check = reqs.check("m", "p", None, &caps, false);
+    // None tier: min_tier/max_tier checks use if-let, so None passes.
+    assert!(check.eligible);
 }
 
 #[test]
@@ -301,15 +308,25 @@ fn policy_task_type_matcher() {
 
 #[test]
 fn policy_requires_capability_matcher() {
-    let mut policy = default_policy();
-    policy.matchers = vec![PolicyMatcher::RequiresCapability {
-        value: Capability::Vision,
-    }];
-    let mut ctx = simple_match_ctx("m");
-    ctx.required_capabilities = &[Capability::Vision];
-    assert!(policy.matches(&ctx));
-    ctx.required_capabilities = &[Capability::Tools];
-    assert!(!policy.matches(&ctx));
+    // RequiresCapability is now a PolicyRequirement, not a PolicyMatcher.
+    // This test verifies that capability filtering works via eligibility check.
+    let reqs = PolicyRequirements {
+        required_capabilities: vec![Capability::Vision],
+        strict_capabilities: true, // strict mode rejects unknown
+        ..Default::default()
+    };
+    let caps_vision = ModelCapabilities {
+        vision: true,
+        ..Default::default()
+    };
+    let caps_tools = ModelCapabilities {
+        tools: true,
+        ..Default::default()
+    };
+    let check = reqs.check("m", "p", Some(ModelTier::Standard), &caps_vision, false);
+    assert!(check.eligible);
+    let check = reqs.check("m", "p", Some(ModelTier::Standard), &caps_tools, false);
+    assert!(!check.eligible);
 }
 
 // ========================================================================
@@ -413,8 +430,10 @@ fn eligibility_forbidden_provider_other_accepted() {
 
 #[test]
 fn eligibility_missing_capability_rejected() {
+    // With strict_capabilities = true, unknown capabilities are rejected.
     let reqs = PolicyRequirements {
         required_capabilities: vec![Capability::Vision],
+        strict_capabilities: true,
         ..Default::default()
     };
     let caps = ModelCapabilities {
@@ -427,6 +446,23 @@ fn eligibility_missing_capability_rejected() {
         r,
         RejectionReason::MissingCapability(Capability::Vision)
     )));
+}
+
+#[test]
+fn eligibility_unknown_capability_soft_fallback() {
+    // With strict_capabilities = false (default), unknown capabilities
+    // are a soft fallback — the candidate remains eligible.
+    let reqs = PolicyRequirements {
+        required_capabilities: vec![Capability::Vision],
+        strict_capabilities: false,
+        ..Default::default()
+    };
+    let caps = ModelCapabilities {
+        vision: false,
+        ..Default::default()
+    };
+    let check = reqs.check("m", "p", Some(ModelTier::Standard), &caps, false);
+    assert!(check.eligible, "unknown capability should be soft fallback");
 }
 
 #[test]
@@ -459,6 +495,7 @@ fn eligibility_circuit_open_rejected() {
 fn eligibility_multiple_failures_reported() {
     let reqs = PolicyRequirements {
         required_capabilities: vec![Capability::Vision],
+        strict_capabilities: true, // so unknown vision counts as a failure
         forbidden_providers: vec!["bad".into()],
         ..Default::default()
     };
@@ -721,6 +758,7 @@ fn client_profile_user_agent_case_insensitive() {
         client_id: None,
         user_agent: Some("curl/7.68.0"),
         api_key_prefix: None,
+        application: None,
         headers: &[],
         model: "gpt-4",
     };
@@ -728,6 +766,7 @@ fn client_profile_user_agent_case_insensitive() {
         client_id: None,
         user_agent: Some("CURL/7.68.0"),
         api_key_prefix: None,
+        application: None,
         headers: &[],
         model: "gpt-4",
     };
@@ -735,6 +774,7 @@ fn client_profile_user_agent_case_insensitive() {
         client_id: None,
         user_agent: Some("python-requests/2.28"),
         api_key_prefix: None,
+        application: None,
         headers: &[],
         model: "gpt-4",
     };
@@ -757,6 +797,7 @@ fn client_profile_model_prefix() {
         client_id: None,
         user_agent: None,
         api_key_prefix: None,
+        application: None,
         headers: &[],
         model: "gpt-4o",
     };
@@ -764,6 +805,7 @@ fn client_profile_model_prefix() {
         client_id: None,
         user_agent: None,
         api_key_prefix: None,
+        application: None,
         headers: &[],
         model: "claude-3",
     };
@@ -785,6 +827,7 @@ fn client_profile_api_key_prefix() {
         client_id: None,
         user_agent: None,
         api_key_prefix: Some("sk-bot-abc123"),
+        application: None,
         headers: &[],
         model: "gpt-4",
     };
@@ -792,6 +835,7 @@ fn client_profile_api_key_prefix() {
         client_id: None,
         user_agent: None,
         api_key_prefix: Some("sk-proj-abc"),
+        application: None,
         headers: &[],
         model: "gpt-4",
     };
@@ -817,6 +861,7 @@ fn client_profile_header_case_insensitive_name() {
         client_id: None,
         user_agent: None,
         api_key_prefix: None,
+        application: None,
         headers: &headers_match,
         model: "gpt-4",
     };
@@ -824,6 +869,7 @@ fn client_profile_header_case_insensitive_name() {
         client_id: None,
         user_agent: None,
         api_key_prefix: None,
+        application: None,
         headers: &headers_case,
         model: "gpt-4",
     };
@@ -831,6 +877,7 @@ fn client_profile_header_case_insensitive_name() {
         client_id: None,
         user_agent: None,
         api_key_prefix: None,
+        application: None,
         headers: &headers_miss,
         model: "gpt-4",
     };
@@ -851,6 +898,7 @@ fn client_profile_empty_matchers_never_match() {
         client_id: Some("anything"),
         user_agent: None,
         api_key_prefix: None,
+        application: None,
         headers: &[],
         model: "gpt-4",
     };
@@ -876,6 +924,7 @@ fn client_profile_multiple_matchers_all_must_pass() {
         client_id: Some("codex"),
         user_agent: None,
         api_key_prefix: None,
+        application: None,
         headers: &[],
         model: "gpt-4",
     };
@@ -883,6 +932,7 @@ fn client_profile_multiple_matchers_all_must_pass() {
         client_id: Some("codex"),
         user_agent: None,
         api_key_prefix: None,
+        application: None,
         headers: &[],
         model: "claude-3",
     };
@@ -901,6 +951,7 @@ fn resolve_client_returns_first_match() {
         client_id: Some("codex"),
         user_agent: Some("curl/7.0"),
         api_key_prefix: Some("sk-bot-x"),
+        application: None,
         headers: &[],
         model: "gpt-4",
     };
@@ -916,6 +967,7 @@ fn resolve_client_returns_none_when_no_match() {
         client_id: Some("unknown"),
         user_agent: None,
         api_key_prefix: None,
+        application: None,
         headers: &[],
         model: "gpt-4",
     };
@@ -929,6 +981,7 @@ fn resolve_client_empty_profiles() {
         client_id: Some("codex"),
         user_agent: None,
         api_key_prefix: None,
+        application: None,
         headers: &[],
         model: "gpt-4",
     };
@@ -942,6 +995,7 @@ fn resolve_client_second_profile_matches() {
         client_id: None,
         user_agent: None,
         api_key_prefix: Some("sk-bot-key123"),
+        application: None,
         headers: &[],
         model: "gpt-4",
     };
@@ -1017,20 +1071,8 @@ fn policy_config_serde_round_trip_all_matcher_types() {
                 PolicyMatcher::Application {
                     value: "app".into(),
                 },
-                PolicyMatcher::Model {
-                    value: "m".into(),
-                },
                 PolicyMatcher::ModelPrefix {
                     value: "mp".into(),
-                },
-                PolicyMatcher::Provider {
-                    value: "p".into(),
-                },
-                PolicyMatcher::Tier {
-                    value: ModelTier::Standard,
-                },
-                PolicyMatcher::RequiresCapability {
-                    value: Capability::Vision,
                 },
                 PolicyMatcher::Streaming { value: true },
                 PolicyMatcher::HasTools { value: true },
@@ -1052,7 +1094,7 @@ fn policy_config_serde_round_trip_all_matcher_types() {
     let json = serde_json::to_string(&config).unwrap();
     let back: PolicyConfig = serde_json::from_str(&json).unwrap();
     assert_eq!(config, back);
-    assert_eq!(back.policies[0].matchers.len(), 12);
+    assert_eq!(back.policies[0].matchers.len(), 8);
 }
 
 #[test]
@@ -1144,9 +1186,6 @@ fn simple_match_ctx<'a>(model: &'a str) -> MatchContext<'a> {
         client_id: None,
         application: None,
         model,
-        provider: "p",
-        tier: Some(ModelTier::Standard),
-        required_capabilities: &[],
         streaming: false,
         has_tools: false,
         has_vision: false,
@@ -1154,19 +1193,21 @@ fn simple_match_ctx<'a>(model: &'a str) -> MatchContext<'a> {
     }
 }
 
-fn make_scoring_ctx(
+fn make_scoring_ctx<'a>(
     health: f64,
     latency: f64,
     cost: Option<f64>,
     priority: i32,
     tier: Option<ModelTier>,
-) -> ScoringContext {
+) -> ScoringContext<'a> {
     ScoringContext {
         health,
         avg_latency_ms: latency,
-        cost_per_mtok: cost,
+        input_per_mtok: cost,
+        output_per_mtok: cost,
         priority,
         tier,
+        task: None,
     }
 }
 
@@ -1201,4 +1242,384 @@ fn ua_profile() -> ClientProfile {
         }],
         policy_id: "default".into(),
     }
+}
+
+// ========================================================================
+// 8. E2E decision: policy -> eligibility -> scoring -> candidate selection
+// ========================================================================
+
+fn e2e_cfg_with(models: Vec<ModelEntry>) -> AppConfig {
+    let mut cfg = AppConfig::default();
+    cfg.providers
+        .push(ProviderConfig::new("p1", "P1", ProviderKind::OpenAICompatible));
+    cfg.providers
+        .push(ProviderConfig::new("p2", "P2", ProviderKind::OpenAICompatible));
+    cfg.models = models;
+    cfg
+}
+
+fn e2e_reg(cfg: AppConfig) -> Registry {
+    Registry::new(Arc::new(cfg))
+}
+
+/// Test 1: Policy selects best candidate based on requirements + scoring.
+///
+/// Three models all in the Reasoning tier, all with tools capability.
+/// Policy requires Tools and prefers the Reasoning tier.  Scoring with
+/// priority weight selects the model with the best (lowest) priority.
+#[test]
+fn e2e_selects_best_candidate_by_scoring() {
+    let cfg = e2e_cfg_with(vec![
+        ModelEntry::for_upstream("p1", "std-m", Some(ModelTier::Reasoning)).with_priority(10),
+        ModelEntry::for_upstream("p1", "reas-m", Some(ModelTier::Reasoning)).with_priority(0),
+        ModelEntry::for_upstream("p1", "front-m", Some(ModelTier::Reasoning)).with_priority(20),
+    ]);
+    let reg = e2e_reg(cfg);
+    let router = Router::new();
+
+    let requirements = PolicyRequirements {
+        required_capabilities: vec![Capability::Tools],
+        ..Default::default()
+    };
+    // Tier weight and priority weight are both active so scoring actually
+    // differentiates: all three are at distance-0 from preferred (Reasoning),
+    // but priority 0 scores highest.
+    let preference = PolicyPreference {
+        preferred_tier: Some(ModelTier::Reasoning),
+        tier_weight: 0.5,
+        priority_weight: 0.5,
+        health_weight: 0.0,
+        latency_weight: 0.0,
+        cost_weight: 0.0,
+    };
+    let fallback = PolicyFallback::Reject;
+
+    let candidates = router
+        .plan_with_policy(
+            &reg,
+            &Resolution::Tier(ModelTier::Reasoning),
+            &[],
+            &requirements,
+            &preference,
+            &fallback,
+            None,
+        )
+        .unwrap();
+
+    assert!(!candidates.is_empty(), "at least one candidate expected");
+    assert_eq!(candidates[0].exposed_id, "p1-reas-m");
+}
+
+/// Test 2: Policy rejects when required capability is missing.
+///
+/// Two models in the Standard tier: one has tools only, the other has no
+/// capabilities at all.  The policy requires both Tools and Vision with
+/// strict mode.  Neither model qualifies, and the Reject fallback produces
+/// a `NoCandidate` error.
+#[test]
+fn e2e_rejects_when_capability_missing() {
+    let mut no_caps = ModelEntry::for_upstream("p1", "no-caps", Some(ModelTier::Standard));
+    no_caps.capabilities = ModelCapabilities::default(); // all false
+
+    let cfg = e2e_cfg_with(vec![
+        ModelEntry::for_upstream("p1", "tools-only", Some(ModelTier::Standard)),
+        no_caps,
+    ]);
+    let reg = e2e_reg(cfg);
+    let router = Router::new();
+
+    let requirements = PolicyRequirements {
+        required_capabilities: vec![Capability::Tools, Capability::Vision],
+        strict_capabilities: true,
+        ..Default::default()
+    };
+    let fallback = PolicyFallback::Reject;
+
+    let err = router
+        .plan_with_policy(
+            &reg,
+            &Resolution::Tier(ModelTier::Standard),
+            &[],
+            &requirements,
+            &PolicyPreference::default(),
+            &fallback,
+            None,
+        )
+        .unwrap_err();
+
+    assert!(
+        matches!(err, Error::NoCandidate(_)),
+        "expected NoCandidate, got: {err:?}"
+    );
+}
+
+/// Test 3: Policy escalates tier on fallback.
+///
+/// The Standard-tier model has an open circuit breaker so it is filtered
+/// out by eligibility.  With `Escalate { max_steps: 1 }` the router moves
+/// up to the Reasoning tier and selects the healthy model there.
+#[test]
+fn e2e_escalates_tier_on_fallback() {
+    let cfg = e2e_cfg_with(vec![
+        ModelEntry::for_upstream("p1", "std-m", Some(ModelTier::Standard)).with_priority(0),
+        ModelEntry::for_upstream("p1", "reas-m", Some(ModelTier::Reasoning)).with_priority(0),
+    ]);
+    let routing = cfg.routing.clone();
+    let reg = e2e_reg(cfg);
+    let router = Router::new();
+
+    // Trip the circuit breaker on the Standard model.
+    let timeout_err = Error::Timeout(5);
+    for _ in 0..routing.circuit_breaker.failure_threshold {
+        router.report_failure("p1-std-m", &timeout_err, &routing);
+    }
+    assert!(
+        !router.allow_request("p1-std-m"),
+        "circuit should be open after enough failures"
+    );
+
+    let requirements = PolicyRequirements::default();
+    let preference = PolicyPreference {
+        preferred_tier: Some(ModelTier::Standard),
+        ..Default::default()
+    };
+    let fallback = PolicyFallback::Escalate {
+        enabled: true,
+        max_steps: 1,
+    };
+
+    let candidates = router
+        .plan_with_policy(
+            &reg,
+            &Resolution::Tier(ModelTier::Standard),
+            &[],
+            &requirements,
+            &preference,
+            &fallback,
+            None,
+        )
+        .unwrap();
+
+    assert!(!candidates.is_empty(), "escalation should find a candidate");
+    assert_eq!(
+        candidates[0].exposed_id, "p1-reas-m",
+        "escalation should land on the Reasoning model"
+    );
+}
+
+/// Test 4: Forbidden provider is never selected.
+///
+/// Two models in the Standard tier: one from the forbidden provider "p1"
+/// (with better priority) and one from the allowed provider "p2".  The
+/// policy must select the "p2" model and never include the "p1" model.
+#[test]
+fn e2e_forbidden_provider_never_selected() {
+    let cfg = e2e_cfg_with(vec![
+        ModelEntry::for_upstream("p1", "bad-m", Some(ModelTier::Standard)).with_priority(0),
+        ModelEntry::for_upstream("p2", "good-m", Some(ModelTier::Standard)).with_priority(10),
+    ]);
+    let reg = e2e_reg(cfg);
+    let router = Router::new();
+
+    let requirements = PolicyRequirements {
+        forbidden_providers: vec!["p1".into()],
+        ..Default::default()
+    };
+    let fallback = PolicyFallback::Reject;
+
+    let candidates = router
+        .plan_with_policy(
+            &reg,
+            &Resolution::Tier(ModelTier::Standard),
+            &[],
+            &requirements,
+            &PolicyPreference::default(),
+            &fallback,
+            None,
+        )
+        .unwrap();
+
+    assert!(!candidates.is_empty());
+    assert_eq!(candidates[0].exposed_id, "p2-good-m");
+    assert!(
+        candidates.iter().all(|c| c.exposed_id != "p1-bad-m"),
+        "forbidden provider model must not appear in candidates"
+    );
+}
+
+/// Test 5: Tier bounds are enforced.
+///
+/// Policy: `min_tier = Standard`, `max_tier = Reasoning`.
+/// Standard and Reasoning models are within bounds and eligible.
+/// A Fast-tier model is below `min_tier` and produces `NoCandidate`.
+#[test]
+fn e2e_tier_bounds_enforced() {
+    let cfg = e2e_cfg_with(vec![
+        ModelEntry::for_upstream("p1", "std-m", Some(ModelTier::Standard)),
+        ModelEntry::for_upstream("p1", "reas-m", Some(ModelTier::Reasoning)),
+    ]);
+    let reg = e2e_reg(cfg);
+    let router = Router::new();
+
+    let requirements = PolicyRequirements {
+        min_tier: Some(ModelTier::Standard),
+        max_tier: Some(ModelTier::Reasoning),
+        ..Default::default()
+    };
+    let fallback = PolicyFallback::Reject;
+
+    // Standard model is within [Standard, Reasoning] → eligible.
+    let candidates = router
+        .plan_with_policy(
+            &reg,
+            &Resolution::Tier(ModelTier::Standard),
+            &[],
+            &requirements,
+            &PolicyPreference::default(),
+            &fallback,
+            None,
+        )
+        .unwrap();
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].exposed_id, "p1-std-m");
+
+    // Reasoning model is within [Standard, Reasoning] → eligible.
+    let candidates = router
+        .plan_with_policy(
+            &reg,
+            &Resolution::Tier(ModelTier::Reasoning),
+            &[],
+            &requirements,
+            &PolicyPreference::default(),
+            &fallback,
+            None,
+        )
+        .unwrap();
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].exposed_id, "p1-reas-m");
+
+    // Fast model is below min_tier=Standard → rejected.
+    let cfg_fast = e2e_cfg_with(vec![ModelEntry::for_upstream(
+        "p1",
+        "fast-m",
+        Some(ModelTier::Fast),
+    )]);
+    let reg_fast = e2e_reg(cfg_fast);
+    let err = router
+        .plan_with_policy(
+            &reg_fast,
+            &Resolution::Tier(ModelTier::Fast),
+            &[],
+            &requirements,
+            &PolicyPreference::default(),
+            &PolicyFallback::Reject,
+            None,
+        )
+        .unwrap_err();
+    assert!(
+        matches!(err, Error::NoCandidate(_)),
+        "Fast model below min_tier should produce NoCandidate, got: {err:?}"
+    );
+}
+
+// ========================================================================
+// 9. Escalation / De-escalation E2E tests
+// ========================================================================
+
+#[test]
+fn escalation_finds_higher_tier() {
+    // Standard has no eligible candidates (circuit open)
+    // Escalate to Reasoning which has eligible candidates
+    // Verify Reasoning candidate is selected
+    let cfg = e2e_cfg_with(vec![
+        ModelEntry::for_upstream("p1", "std-m", Some(ModelTier::Standard)).with_priority(0),
+        ModelEntry::for_upstream("p1", "reas-m", Some(ModelTier::Reasoning)).with_priority(0),
+    ]);
+    let routing = cfg.routing.clone();
+    let reg = e2e_reg(cfg);
+    let router = Router::new();
+
+    // Trip the circuit breaker on the Standard model so it is ineligible.
+    let timeout_err = Error::Timeout(5);
+    for _ in 0..routing.circuit_breaker.failure_threshold {
+        router.report_failure("p1-std-m", &timeout_err, &routing);
+    }
+    assert!(
+        !router.allow_request("p1-std-m"),
+        "circuit should be open after enough failures"
+    );
+
+    let requirements = PolicyRequirements::default();
+    let preference = PolicyPreference::default();
+    let fallback = PolicyFallback::Escalate {
+        enabled: true,
+        max_steps: 1,
+    };
+
+    let candidates = router
+        .plan_with_policy(
+            &reg,
+            &Resolution::Tier(ModelTier::Standard),
+            &[],
+            &requirements,
+            &preference,
+            &fallback,
+            None,
+        )
+        .unwrap();
+
+    assert!(!candidates.is_empty(), "escalation should find a candidate");
+    assert_eq!(
+        candidates[0].exposed_id, "p1-reas-m",
+        "escalation should land on the Reasoning model"
+    );
+}
+
+#[test]
+fn degradation_finds_lower_tier() {
+    // Frontier has no eligible candidates (circuit open)
+    // Degrade to Reasoning which has eligible candidates
+    // Verify Reasoning candidate is selected
+    let cfg = e2e_cfg_with(vec![
+        ModelEntry::for_upstream("p1", "front-m", Some(ModelTier::Frontier)).with_priority(0),
+        ModelEntry::for_upstream("p1", "reas-m", Some(ModelTier::Reasoning)).with_priority(0),
+    ]);
+    let routing = cfg.routing.clone();
+    let reg = e2e_reg(cfg);
+    let router = Router::new();
+
+    // Trip the circuit breaker on the Frontier model so it is ineligible.
+    let timeout_err = Error::Timeout(5);
+    for _ in 0..routing.circuit_breaker.failure_threshold {
+        router.report_failure("p1-front-m", &timeout_err, &routing);
+    }
+    assert!(
+        !router.allow_request("p1-front-m"),
+        "circuit should be open after enough failures"
+    );
+
+    let requirements = PolicyRequirements::default();
+    let preference = PolicyPreference::default();
+    let fallback = PolicyFallback::Degrade {
+        enabled: true,
+        max_steps: 1,
+    };
+
+    let candidates = router
+        .plan_with_policy(
+            &reg,
+            &Resolution::Tier(ModelTier::Frontier),
+            &[],
+            &requirements,
+            &preference,
+            &fallback,
+            None,
+        )
+        .unwrap();
+
+    assert!(!candidates.is_empty(), "degradation should find a candidate");
+    assert_eq!(
+        candidates[0].exposed_id, "p1-reas-m",
+        "degradation should land on the Reasoning model"
+    );
 }

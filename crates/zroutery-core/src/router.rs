@@ -14,7 +14,7 @@ use crate::config::{ClassifierConfig, ModelTier, ModelEntry, ProviderConfig, Rou
 use crate::election::Election;
 use crate::error::{Error, Result};
 use crate::ir::Capability;
-use crate::policy::{PolicyPreference, PolicyRequirements, ScoringContext, score_candidate};
+use crate::policy::{PolicyFallback, PolicyPreference, PolicyRequirements, ScoringContext, TaskProfile, score_candidate};
 use crate::registry::{Registry, Resolution};
 
 /// Round robin cursor key for the classifier pool, which is not a tier.
@@ -144,10 +144,13 @@ impl Router {
     ///
     /// Like [`plan`] but candidates are first filtered through
     /// [`PolicyRequirements::check`], then scored and sorted by
-    /// [`PolicyPreference`] weights. If no candidate passes and the policy
-    /// is not strict (`strict` = false), the unfiltered candidate list is used
-    /// as a soft fallback. If `strict` = true and no candidate is eligible,
-    /// [`Error::NoCandidate`] is returned.
+    /// [`PolicyPreference`] weights. When no candidate passes eligibility,
+    /// the [`PolicyFallback`] determines what happens next:
+    ///
+    /// - [`PolicyFallback::Reject`] — return [`Error::NoCandidate`].
+    /// - [`PolicyFallback::Escalate`] — try higher tiers up to `max_steps`.
+    /// - [`PolicyFallback::Degrade`] — try lower tiers up to `max_steps`.
+    /// - [`PolicyFallback::IgnoreRequirements`] — use all members without filtering.
     pub fn plan_with_policy(
         &self,
         registry: &Registry,
@@ -155,7 +158,8 @@ impl Router {
         required_capabilities: &[Capability],
         requirements: &PolicyRequirements,
         preference: &PolicyPreference,
-        strict: bool,
+        fallback: &PolicyFallback,
+        task: Option<&TaskProfile>,
     ) -> Result<Vec<Candidate>> {
         // Collect the raw candidate pool from the registry.
         let members: Vec<&ModelEntry> = match resolution {
@@ -178,72 +182,88 @@ impl Router {
         }
 
         // Apply policy eligibility to each candidate.
-        let filtered: Vec<&ModelEntry> = members
-            .iter()
-            .copied()
-            .filter(|m| {
-                let circuit_open = !self.allow_request(&m.exposed_id());
-                let check = requirements.check(
-                    &m.exposed_id(),
-                    &m.provider_id,
-                    m.tier,
-                    &m.capabilities,
-                    circuit_open,
-                );
-                check.eligible
-            })
-            .collect();
+        let filtered: Vec<&ModelEntry> = self.filter_eligible(&members, requirements);
+
+        // Track the actual tier used (may differ from resolution after fallback).
+        let mut effective_tier: Option<ModelTier> = match resolution {
+            Resolution::Tier(tier) => Some(*tier),
+            Resolution::Direct(_) => None,
+        };
 
         let effective = if filtered.is_empty() {
-            if strict {
-                let name = match resolution {
-                    Resolution::Direct(id) => id.clone(),
-                    Resolution::Tier(tier) => tier.virtual_id().to_string(),
-                };
-                tracing::warn!(
-                    pool = %name,
-                    "no candidate satisfies policy requirements; strict mode rejects"
-                );
-                return Err(Error::NoCandidate(name));
+            // No candidate passed eligibility — apply fallback.
+            match fallback {
+                PolicyFallback::Reject => {
+                    let name = match resolution {
+                        Resolution::Direct(id) => id.clone(),
+                        Resolution::Tier(tier) => tier.virtual_id().to_string(),
+                    };
+                    tracing::warn!(
+                        pool = %name,
+                        "no candidate satisfies policy requirements; fallback=reject"
+                    );
+                    return Err(Error::NoCandidate(name));
+                }
+                PolicyFallback::Escalate { enabled, max_steps } if *enabled => {
+                    let (candidates, tier) = self.fallback_tier(
+                        registry, requirements, resolution,
+                        *max_steps, true, // escalate = higher tiers
+                    )?;
+                    effective_tier = Some(tier);
+                    candidates
+                }
+                PolicyFallback::Escalate { .. } => {
+                    // Escalate disabled — reject.
+                    let name = match resolution {
+                        Resolution::Direct(id) => id.clone(),
+                        Resolution::Tier(tier) => tier.virtual_id().to_string(),
+                    };
+                    return Err(Error::NoCandidate(name));
+                }
+                PolicyFallback::Degrade { enabled, max_steps } if *enabled => {
+                    let (candidates, tier) = self.fallback_tier(
+                        registry, requirements, resolution,
+                        *max_steps, false, // degrade = lower tiers
+                    )?;
+                    effective_tier = Some(tier);
+                    candidates
+                }
+                PolicyFallback::Degrade { .. } => {
+                    let name = match resolution {
+                        Resolution::Direct(id) => id.clone(),
+                        Resolution::Tier(tier) => tier.virtual_id().to_string(),
+                    };
+                    return Err(Error::NoCandidate(name));
+                }
+                PolicyFallback::IgnoreRequirements => {
+                    tracing::warn!(
+                        "no candidate satisfies policy requirements; ignoring requirements"
+                    );
+                    members
+                }
             }
-            tracing::warn!(
-                "no candidate satisfies policy requirements; falling back to unfiltered list"
-            );
-            members
         } else {
             filtered
         };
 
         // Score and sort by policy preferences before delegating to
         // plan_candidates for health gating, failover and attempt capping.
-        let mut scored: Vec<(&ModelEntry, f64)> = effective
-            .iter()
-            .map(|m| {
-                let ctx = ScoringContext {
-                    health: self.health_score(&m.exposed_id()),
-                    avg_latency_ms: self.avg_latency(&m.exposed_id()),
-                    cost_per_mtok: m
-                        .pricing
-                        .as_ref()
-                        .map(|p| (p.input_per_mtok + p.output_per_mtok) / 2.0),
-                    priority: m.priority,
-                    tier: m.tier,
-                };
-                let s = score_candidate(preference, &ctx);
-                (*m, s.total_score)
-            })
-            .collect();
-        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        let effective: Vec<&ModelEntry> = scored.into_iter().map(|(m, _)| m).collect();
+        let scored = self.score_and_sort(effective, preference, task);
+        let effective: Vec<&ModelEntry> = scored;
 
         // Delegate to the standard routing machinery for health, ordering and
         // failover — but pass the already-filtered (or fallback) member list
         // through the same plan_candidates pipeline so everything else (circuit
         // breakers, strategy, attempt cap) works identically.
         let routing = &registry.config().routing;
-        let (pool_name, election_tier) = match resolution {
-            Resolution::Direct(id) => (id.clone(), None),
-            Resolution::Tier(tier) => (tier.virtual_id().to_string(), Some(*tier)),
+        // Use the effective tier (which may have changed due to fallback)
+        // for pool_name and election_tier.
+        let (pool_name, election_tier) = match effective_tier {
+            Some(tier) => (tier.virtual_id().to_string(), Some(tier)),
+            None => match resolution {
+                Resolution::Direct(id) => (id.clone(), None),
+                Resolution::Tier(tier) => (tier.virtual_id().to_string(), Some(*tier)),
+            },
         };
         self.plan_candidates(
             registry,
@@ -258,6 +278,123 @@ impl Router {
             false, // capability filtering already applied above
             false,
         )
+    }
+
+    /// Filter members through policy requirements eligibility check.
+    ///
+    /// Uses a read-only health check (`is_circuit_open`) to avoid consuming
+    /// half-open permits, which would be a side effect during eligibility
+    /// filtering. The actual `allow_request()` is called later at the point
+    /// of send.
+    fn filter_eligible<'a>(
+        &self,
+        members: &[&'a ModelEntry],
+        requirements: &PolicyRequirements,
+    ) -> Vec<&'a ModelEntry> {
+        members
+            .iter()
+            .copied()
+            .filter(|m| {
+                let circuit_open = self.is_circuit_open(&m.exposed_id());
+                let check = requirements.check(
+                    &m.exposed_id(),
+                    &m.provider_id,
+                    m.tier,
+                    &m.capabilities,
+                    circuit_open,
+                );
+                check.eligible
+            })
+            .collect()
+    }
+
+    /// Try escalating or degrading through tiers until eligible candidates are found.
+    ///
+    /// `up` = true means escalate (higher tiers), false means degrade (lower tiers).
+    ///
+    /// Returns the filtered candidates AND the tier they were found in.
+    fn fallback_tier<'a>(
+        &'a self,
+        registry: &'a Registry,
+        requirements: &PolicyRequirements,
+        resolution: &Resolution,
+        max_steps: u32,
+        up: bool,
+    ) -> Result<(Vec<&'a ModelEntry>, ModelTier)> {
+        // Determine the starting tier.
+        let start_tier = match resolution {
+            Resolution::Tier(tier) => *tier,
+            Resolution::Direct(_) => {
+                // Direct resolution: cannot escalate/degrade across tiers.
+                let name = match resolution {
+                    Resolution::Direct(id) => id.clone(),
+                    _ => unreachable!(),
+                };
+                return Err(Error::NoCandidate(name));
+            }
+        };
+
+        let mut current = start_tier;
+        for _ in 0..max_steps {
+            let next = if up { current.higher() } else { current.lower() };
+            match next {
+                Some(tier) => current = tier,
+                None => break, // No more tiers in this direction.
+            }
+            let members = registry.tier_members(current);
+            if members.is_empty() {
+                continue;
+            }
+            let filtered = self.filter_eligible(&members, requirements);
+            if !filtered.is_empty() {
+                tracing::info!(
+                    from = %start_tier.virtual_id(),
+                    to = %current.virtual_id(),
+                    candidates = filtered.len(),
+                    "fallback tier found eligible candidates"
+                );
+                return Ok((filtered, current));
+            }
+        }
+
+        let name = match resolution {
+            Resolution::Direct(id) => id.clone(),
+            Resolution::Tier(tier) => tier.virtual_id().to_string(),
+        };
+        tracing::warn!(
+            pool = %name,
+            direction = if up { "escalate" } else { "degrade" },
+            max_steps,
+            "fallback exhausted; no eligible candidates found"
+        );
+        Err(Error::NoCandidate(name))
+    }
+
+    /// Score candidates by policy preferences and return them sorted (best first).
+    fn score_and_sort<'a>(
+        &self,
+        members: Vec<&'a ModelEntry>,
+        preference: &PolicyPreference,
+        task: Option<&TaskProfile>,
+    ) -> Vec<&'a ModelEntry> {
+        let mut scored: Vec<(&ModelEntry, f64)> = members
+            .iter()
+            .map(|m| {
+                let ctx = ScoringContext {
+                    health: self.health_score(&m.exposed_id()),
+                    avg_latency_ms: self.avg_latency(&m.exposed_id()),
+                    input_per_mtok: m.pricing.as_ref().map(|p| p.input_per_mtok),
+                    output_per_mtok: m.pricing.as_ref().map(|p| p.output_per_mtok),
+                    priority: m.priority,
+                    tier: m.tier,
+                    task,
+                };
+                let s = score_candidate(preference, &ctx);
+                (*m, s.total_score)
+            })
+            .collect();
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        scored.into_iter().map(|(m, _)| m).collect()
     }
 
     /// Build the ordered attempts for an Auto Mode classifier request.
@@ -700,6 +837,18 @@ impl Router {
     }
 
     pub fn is_cooling(&self, model_id: &str) -> bool {
+        crate::sync::lock(&self.health)
+            .get(model_id)
+            .map(|h| h.breaker.state() == CircuitState::Open)
+            .unwrap_or(false)
+    }
+
+    /// Read-only check: is the circuit breaker in Open state?
+    ///
+    /// Unlike [`allow_request`], this does not consume half-open probe permits
+    /// and is safe to call during eligibility filtering where side effects are
+    /// not desired.
+    pub fn is_circuit_open(&self, model_id: &str) -> bool {
         crate::sync::lock(&self.health)
             .get(model_id)
             .map(|h| h.breaker.state() == CircuitState::Open)
