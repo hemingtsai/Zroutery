@@ -45,9 +45,10 @@ impl SideQueryKind {
 ///
 /// Serialises as its stable name (`"main"` / `"auto_mode"`) so request records
 /// stay flat and readable in the activity log.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum RequestKind {
     /// A normal request from the client's conversation.
+    #[default]
     Main,
     /// A side query the client issued alongside the main conversation.
     Side(SideQueryKind),
@@ -64,12 +65,6 @@ impl RequestKind {
 
     pub fn is_main(&self) -> bool {
         matches!(self, RequestKind::Main)
-    }
-}
-
-impl Default for RequestKind {
-    fn default() -> Self {
-        RequestKind::Main
     }
 }
 

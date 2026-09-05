@@ -30,7 +30,6 @@ pub type EventStream = Pin<Box<dyn Stream<Item = Result<StreamEvent>> + Send>>;
 #[derive(Debug)]
 pub struct Upstream {
     client: RwLock<reqwest::Client>,
-    bypass_proxy: bool,
     connect_timeout_secs: u64,
 }
 
@@ -60,7 +59,6 @@ impl Upstream {
     pub fn new(bypass_proxy: bool, connect_timeout_secs: u64) -> Self {
         Upstream {
             client: RwLock::new(build_http_client(bypass_proxy, connect_timeout_secs)),
-            bypass_proxy,
             connect_timeout_secs,
         }
     }

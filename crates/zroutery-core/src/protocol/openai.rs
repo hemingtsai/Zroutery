@@ -170,7 +170,7 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
         .get("max_completion_tokens")
         .or_else(|| obj.get("max_tokens"))
         .and_then(Value::as_u64)
-        .map(|v| v as u32);
+        .map(|v| v.min(u32::MAX as u64) as u32);
     req.temperature = obj.get("temperature").and_then(Value::as_f64);
     req.top_p = obj.get("top_p").and_then(Value::as_f64);
     req.stream = obj.get("stream").and_then(Value::as_bool).unwrap_or(false);
@@ -323,9 +323,22 @@ fn decode_user_content(v: Option<&Value>) -> Result<Vec<ContentBlock>> {
 fn parse_arguments(args: Option<&str>) -> Value {
     match args {
         Some(s) if !s.trim().is_empty() => {
-            serde_json::from_str(s).unwrap_or_else(|_| json!({"__raw": s}))
+            serde_json::from_str(s).unwrap_or(Value::String(s.to_string()))
         }
         _ => json!({}),
+    }
+}
+
+/// Render a tool-use `input` value back into the `arguments` JSON string.
+///
+/// When the original arguments could not be parsed (invalid JSON), the IR stores
+/// them as `Value::String(raw)` rather than wrapping them in a synthetic object.
+/// This helper returns the raw string unchanged in that case, and serialises
+/// Object values as usual.
+fn arguments_json(input: &Value) -> String {
+    match input {
+        Value::String(s) => s.clone(),
+        other => other.to_string(),
     }
 }
 
@@ -466,7 +479,7 @@ fn encode_message_into(m: &Message, out: &mut Vec<Value>, echo_reasoning: bool) 
                     ContentBlock::ToolUse { id, name, input } => tool_calls.push(json!({
                         "id": id,
                         "type": "function",
-                        "function": {"name": name, "arguments": input.to_string()},
+                        "function": {"name": name, "arguments": arguments_json(input)},
                     })),
                     // Thinking blocks are echoed only when the client itself sent
                     // reasoning (OpenAI source): some gateways require history
@@ -584,23 +597,30 @@ pub(crate) fn decode_usage(v: Option<&Value>) -> Usage {
         return Usage::default();
     };
     Usage {
-        input_tokens: u.get("prompt_tokens").and_then(Value::as_u64).unwrap_or(0) as u32,
+        input_tokens: u
+            .get("prompt_tokens")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            .min(u32::MAX as u64) as u32,
         output_tokens: u
             .get("completion_tokens")
             .and_then(Value::as_u64)
-            .unwrap_or(0) as u32,
+            .unwrap_or(0)
+            .min(u32::MAX as u64) as u32,
         cache_read_tokens: u
             .get("prompt_tokens_details")
             .and_then(|d| d.get("cached_tokens"))
             .and_then(Value::as_u64)
             .or_else(|| u.get("prompt_cache_hit_tokens").and_then(Value::as_u64))
-            .unwrap_or(0) as u32,
+            .unwrap_or(0)
+            .min(u32::MAX as u64) as u32,
         cache_write_tokens: 0,
         reasoning_tokens: u
             .get("completion_tokens_details")
             .and_then(|d| d.get("reasoning_tokens"))
             .and_then(Value::as_u64)
-            .unwrap_or(0) as u32,
+            .unwrap_or(0)
+            .min(u32::MAX as u64) as u32,
     }
 }
 

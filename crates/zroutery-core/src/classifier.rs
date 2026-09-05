@@ -88,7 +88,7 @@ impl ClassifierSignature {
                 .and_then(Value::as_array)
                 .map(|a| a.iter().filter_map(Value::as_str).collect::<Vec<_>>())
                 .unwrap_or_default();
-            if !stops.iter().any(|s| *s == want.as_str()) {
+            if !stops.contains(&want.as_str()) {
                 return (0.0, Vec::new());
             }
             reasons.push("stop_sequence");

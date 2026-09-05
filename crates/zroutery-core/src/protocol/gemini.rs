@@ -110,7 +110,7 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
         req.max_tokens = gc
             .get("maxOutputTokens")
             .and_then(Value::as_u64)
-            .map(|v| v as u32);
+            .map(|v| v.min(u32::MAX as u64) as u32);
         req.temperature = gc.get("temperature").and_then(Value::as_f64);
         req.top_p = gc.get("topP").and_then(Value::as_f64);
         req.stop_sequences = match gc.get("stopSequences").and_then(Value::as_array) {
@@ -328,15 +328,18 @@ pub fn decode_response(body: Value) -> Result<ChatResponse> {
             input_tokens: u
                 .get("promptTokenCount")
                 .and_then(Value::as_u64)
-                .unwrap_or(0) as u32,
+                .unwrap_or(0)
+                .min(u32::MAX as u64) as u32,
             output_tokens: u
                 .get("candidatesTokenCount")
                 .and_then(Value::as_u64)
-                .unwrap_or(0) as u32,
+                .unwrap_or(0)
+                .min(u32::MAX as u64) as u32,
             reasoning_tokens: u
                 .get("thoughtsTokenCount")
                 .and_then(Value::as_u64)
-                .unwrap_or(0) as u32,
+                .unwrap_or(0)
+                .min(u32::MAX as u64) as u32,
             ..Usage::default()
         })
         .unwrap_or_default();
@@ -437,15 +440,18 @@ impl StreamParser for GeminiStreamParser {
                 input_tokens: usage
                     .get("promptTokenCount")
                     .and_then(Value::as_u64)
-                    .unwrap_or(0) as u32,
+                    .unwrap_or(0)
+                    .min(u32::MAX as u64) as u32,
                 output_tokens: usage
                     .get("candidatesTokenCount")
                     .and_then(Value::as_u64)
-                    .unwrap_or(0) as u32,
+                    .unwrap_or(0)
+                    .min(u32::MAX as u64) as u32,
                 reasoning_tokens: usage
                     .get("thoughtsTokenCount")
                     .and_then(Value::as_u64)
-                    .unwrap_or(0) as u32,
+                    .unwrap_or(0)
+                    .min(u32::MAX as u64) as u32,
                 ..Usage::default()
             };
         }

@@ -72,10 +72,13 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
     req.max_tokens = obj
         .get("max_tokens")
         .and_then(Value::as_u64)
-        .map(|v| v as u32);
+        .map(|v| v.min(u32::MAX as u64) as u32);
     req.temperature = obj.get("temperature").and_then(Value::as_f64);
     req.top_p = obj.get("top_p").and_then(Value::as_f64);
-    req.top_k = obj.get("top_k").and_then(Value::as_u64).map(|v| v as u32);
+    req.top_k = obj
+        .get("top_k")
+        .and_then(Value::as_u64)
+        .map(|v| v.min(u32::MAX as u64) as u32);
     req.stream = obj.get("stream").and_then(Value::as_bool).unwrap_or(false);
     if let Some(stops) = obj.get("stop_sequences").and_then(Value::as_array) {
         req.stop_sequences = stops
@@ -128,7 +131,7 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
             budget_tokens: th
                 .get("budget_tokens")
                 .and_then(Value::as_u64)
-                .map(|v| v as u32),
+                .map(|v| v.min(u32::MAX as u64) as u32),
         });
     }
 
@@ -501,16 +504,26 @@ pub fn stop_reason_to_str(r: StopReason) -> Option<&'static str> {
 pub(crate) fn decode_usage(v: Option<&Value>) -> Usage {
     let Some(u) = v else { return Usage::default() };
     Usage {
-        input_tokens: u.get("input_tokens").and_then(Value::as_u64).unwrap_or(0) as u32,
-        output_tokens: u.get("output_tokens").and_then(Value::as_u64).unwrap_or(0) as u32,
+        input_tokens: u
+            .get("input_tokens")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            .min(u32::MAX as u64) as u32,
+        output_tokens: u
+            .get("output_tokens")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            .min(u32::MAX as u64) as u32,
         cache_read_tokens: u
             .get("cache_read_input_tokens")
             .and_then(Value::as_u64)
-            .unwrap_or(0) as u32,
+            .unwrap_or(0)
+            .min(u32::MAX as u64) as u32,
         cache_write_tokens: u
             .get("cache_creation_input_tokens")
             .and_then(Value::as_u64)
-            .unwrap_or(0) as u32,
+            .unwrap_or(0)
+            .min(u32::MAX as u64) as u32,
         reasoning_tokens: 0,
     }
 }
@@ -617,7 +630,11 @@ impl StreamParser for AnthropicStreamParser {
             .as_deref()
             .or_else(|| v.get("type").and_then(Value::as_str))
             .unwrap_or_default();
-        let index = v.get("index").and_then(Value::as_u64).unwrap_or(0) as u32;
+        let index = v
+            .get("index")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            .min(u32::MAX as u64) as u32;
 
         let events = match kind {
             "message_start" => {

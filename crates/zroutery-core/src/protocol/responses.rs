@@ -53,7 +53,7 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
     req.max_tokens = obj
         .get("max_output_tokens")
         .and_then(Value::as_u64)
-        .map(|v| v as u32);
+        .map(|v| v.min(u32::MAX as u64) as u32);
     req.stream = obj.get("stream").and_then(Value::as_bool).unwrap_or(false);
 
     if let Some(tools) = obj.get("tools").and_then(Value::as_array) {
@@ -526,19 +526,29 @@ pub(crate) fn decode_usage(v: Option<&Value>) -> Usage {
         return Usage::default();
     };
     Usage {
-        input_tokens: u.get("input_tokens").and_then(Value::as_u64).unwrap_or(0) as u32,
-        output_tokens: u.get("output_tokens").and_then(Value::as_u64).unwrap_or(0) as u32,
+        input_tokens: u
+            .get("input_tokens")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            .min(u32::MAX as u64) as u32,
+        output_tokens: u
+            .get("output_tokens")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            .min(u32::MAX as u64) as u32,
         cache_read_tokens: u
             .get("input_tokens_details")
             .and_then(|d| d.get("cached_tokens"))
             .and_then(Value::as_u64)
-            .unwrap_or(0) as u32,
+            .unwrap_or(0)
+            .min(u32::MAX as u64) as u32,
         cache_write_tokens: 0,
         reasoning_tokens: u
             .get("output_tokens_details")
             .and_then(|d| d.get("reasoning_tokens"))
             .and_then(Value::as_u64)
-            .unwrap_or(0) as u32,
+            .unwrap_or(0)
+            .min(u32::MAX as u64) as u32,
     }
 }
 
