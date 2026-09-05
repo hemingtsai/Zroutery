@@ -1532,19 +1532,30 @@ impl StreamEncoder for ResponsesStreamEncoder {
             }
             StreamEvent::Stop { usage, .. } => {
                 out.extend(self.close_output_item());
-                // Flush any incomplete tool calls as partial items.
-                for (_, ts) in self.tool_states.drain() {
-                    self.output_items.insert(
-                        ts.output_index,
-                        json!({
-                            "type": "function_call",
-                            "id": ts.item_id,
-                            "call_id": ts.call_id,
-                            "name": ts.name,
-                            "arguments": if ts.arguments.is_empty() { "{}".to_string() } else { ts.arguments },
-                            "status": "incomplete",
-                        }),
-                    );
+                // Flush incomplete tool calls with full terminal events.
+                let incomplete_tools: Vec<_> = self.tool_states.drain().map(|(_, v)| v).collect();
+                for ts in incomplete_tools {
+                    out.push(self.frame("response.function_call_arguments.done", json!({
+                        "type": "response.function_call_arguments.done",
+                        "item_id": ts.item_id,
+                        "output_index": ts.output_index,
+                        "content_index": 0,
+                        "arguments": if ts.arguments.is_empty() { "{}" } else { &ts.arguments },
+                    })));
+                    let item = json!({
+                        "type": "function_call",
+                        "id": ts.item_id,
+                        "call_id": ts.call_id,
+                        "name": ts.name,
+                        "arguments": if ts.arguments.is_empty() { "{}".to_string() } else { ts.arguments },
+                        "status": "incomplete",
+                    });
+                    self.output_items.insert(ts.output_index, item.clone());
+                    out.push(self.frame("response.output_item.done", json!({
+                        "type": "response.output_item.done",
+                        "output_index": ts.output_index,
+                        "item": item,
+                    })));
                 }
                 let output = self.sorted_output();
                 out.push(self.frame(
@@ -1570,47 +1581,48 @@ impl StreamEncoder for ResponsesStreamEncoder {
     }
 
     fn finish(&mut self) -> Vec<SseFrame> {
-        if self.done {
-            return Vec::new();
-        }
+        if self.done { return Vec::new(); }
         self.done = true;
         let mut out = Vec::new();
         out.extend(self.close_output_item());
-        // Flush any incomplete tool calls.
         let has_incomplete = !self.tool_states.is_empty();
-        for (_, ts) in self.tool_states.drain() {
-            self.output_items.insert(
-                ts.output_index,
-                json!({
-                    "type": "function_call",
-                    "id": ts.item_id,
-                    "call_id": ts.call_id,
-                    "name": ts.name,
-                    "arguments": if ts.arguments.is_empty() { "{}".to_string() } else { ts.arguments },
-                    "status": "incomplete",
-                }),
-            );
+        let incomplete_tools: Vec<_> = self.tool_states.drain().map(|(_, v)| v).collect();
+        for ts in incomplete_tools {
+            out.push(self.frame("response.function_call_arguments.done", json!({
+                "type": "response.function_call_arguments.done",
+                "item_id": ts.item_id,
+                "output_index": ts.output_index,
+                "content_index": 0,
+                "arguments": if ts.arguments.is_empty() { "{}" } else { &ts.arguments },
+            })));
+            let item = json!({
+                "type": "function_call",
+                "id": ts.item_id,
+                "call_id": ts.call_id,
+                "name": ts.name,
+                "arguments": if ts.arguments.is_empty() { "{}".to_string() } else { ts.arguments },
+                "status": "incomplete",
+            });
+            self.output_items.insert(ts.output_index, item.clone());
+            out.push(self.frame("response.output_item.done", json!({
+                "type": "response.output_item.done",
+                "output_index": ts.output_index,
+                "item": item,
+            })));
         }
         let output = self.sorted_output();
-        let status = if has_incomplete {
-            "incomplete"
-        } else {
-            "completed"
-        };
-        out.push(self.frame(
-            "response.completed",
-            json!({
-                "type": "response.completed",
-                "response": {
-                    "id": self.id,
-                    "object": "response",
-                    "created_at": self.created_at,
-                    "status": status,
-                    "model": self.model,
-                    "output": output,
-                }
-            }),
-        ));
+        let status = if has_incomplete { "incomplete" } else { "completed" };
+        out.push(self.frame("response.completed", json!({
+            "type": "response.completed",
+            "response": {
+                "id": self.id,
+                "object": "response",
+                "created_at": self.created_at,
+                "status": status,
+                "model": self.model,
+                "output": output,
+            }
+        })));
         out
     }
 
