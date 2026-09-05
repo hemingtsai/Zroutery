@@ -1121,13 +1121,19 @@ impl StreamParser for ResponsesStreamParser {
 
 // --------------------------------------------------------------- stream out
 
-/// Tracks the kind of output item currently being streamed, so that
-/// `output_index` is incremented on every distinct item boundary.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum OutputItemKind {
     Text,
     Thinking,
-    Tool,
+}
+
+/// Per-tool-call state, fully independent of the global Text/Thinking state.
+struct ToolOutputState {
+    output_index: u32,
+    item_id: String,
+    call_id: String,
+    name: String,
+    arguments: String,
 }
 
 pub struct ResponsesStreamEncoder {
@@ -1135,26 +1141,20 @@ pub struct ResponsesStreamEncoder {
     model: String,
     created_at: i64,
     done: bool,
-    /// Next output_index to assign. Starts at 0.
     next_output_index: u32,
-    /// The output_index of the currently open output item.
+    // --- Text/Thinking state (sequential, one at a time) ---
     current_output_index: u32,
     content_index: u32,
     current_kind: Option<OutputItemKind>,
     content_part_open: bool,
     output_item_open: bool,
-    /// Item id for the currently open output item.
     current_item_id: String,
-    /// Accumulated output items indexed by output_index for correct ordering.
-    output_items: HashMap<u32, Value>,
-    /// Text accumulator.
     current_text: String,
-    /// Thinking accumulator.
     current_thinking: String,
-    /// Tool call accumulators indexed by block index → (item_id, call_id, name, args).
-    tool_calls: HashMap<u32, (String, String, String, String)>,
-    /// Maps block index → output_index for tool calls.
-    tool_output_indices: HashMap<u32, u32>,
+    // --- Tool state (parallel, per-index) ---
+    tool_states: HashMap<u32, ToolOutputState>,
+    // --- Output accumulator (indexed by output_index) ---
+    output_items: HashMap<u32, Value>,
 }
 
 impl ResponsesStreamEncoder {
@@ -1171,11 +1171,10 @@ impl ResponsesStreamEncoder {
             content_part_open: false,
             output_item_open: false,
             current_item_id: String::new(),
-            output_items: HashMap::new(),
             current_text: String::new(),
             current_thinking: String::new(),
-            tool_calls: HashMap::new(),
-            tool_output_indices: HashMap::new(),
+            tool_states: HashMap::new(),
+            output_items: HashMap::new(),
         }
     }
 
@@ -1207,6 +1206,7 @@ impl ResponsesStreamEncoder {
             "response.content_part.done",
             json!({
                 "type": "response.content_part.done",
+                "item_id": self.current_item_id,
                 "output_index": self.current_output_index,
                 "content_index": self.content_index,
                 "part": {"type": part_type},
@@ -1221,7 +1221,7 @@ impl ResponsesStreamEncoder {
         Value::Array(items.into_iter().map(|(_, v)| v).collect())
     }
 
-    /// Finalize the current output item into output_items for response.completed.
+    /// Finalize the current Text/Thinking output item into output_items.
     fn finalize_output_item(&mut self) {
         match self.current_kind {
             Some(OutputItemKind::Text) => {
@@ -1250,37 +1250,78 @@ impl ResponsesStreamEncoder {
         }
     }
 
-    /// Close the current output item: emit output_item.done with the full item,
-    /// finalize into output_items.
-    fn close_output_item(&mut self) -> Option<SseFrame> {
+    /// Close the current Text/Thinking output item.
+    /// Returns multiple events: terminal text/thinking event, content_part.done,
+    /// output_item.done. Only operates on Text/Thinking global state.
+    fn close_output_item(&mut self) -> Vec<SseFrame> {
         if !self.output_item_open {
-            return None;
+            return Vec::new();
         }
+        let mut out = Vec::new();
+
+        // 1. Emit terminal text/thinking event (before content_part.done).
+        if self.content_part_open {
+            match self.current_kind {
+                Some(OutputItemKind::Text) => {
+                    out.push(self.frame("response.output_text.done", json!({
+                        "type": "response.output_text.done",
+                        "item_id": self.current_item_id,
+                        "output_index": self.current_output_index,
+                        "content_index": self.content_index,
+                        "text": self.current_text,
+                    })));
+                }
+                Some(OutputItemKind::Thinking) => {
+                    out.push(self.frame("response.reasoning_summary_text.done", json!({
+                        "type": "response.reasoning_summary_text.done",
+                        "item_id": self.current_item_id,
+                        "output_index": self.current_output_index,
+                        "content_index": self.content_index,
+                        "text": self.current_thinking,
+                    })));
+                }
+                _ => {}
+            }
+        }
+
+        // 2. Emit content_part.done (with item_id).
+        if let Some(f) = self.close_content_part() {
+            out.push(f);
+        }
+
+        // 3. Finalize into output_items.
         self.finalize_output_item();
+
+        // 4. Emit output_item.done with the complete item.
         self.output_item_open = false;
-        let done_item = self.output_items.get(&self.current_output_index)
+        let done_item = self
+            .output_items
+            .get(&self.current_output_index)
             .cloned()
             .unwrap_or(json!({
                 "id": self.current_item_id,
                 "type": "message",
                 "status": "completed",
             }));
-        let frame = self.frame("response.output_item.done", json!({
-            "type": "response.output_item.done",
-            "output_index": self.current_output_index,
-            "item": done_item,
-        }));
+        out.push(self.frame(
+            "response.output_item.done",
+            json!({
+                "type": "response.output_item.done",
+                "output_index": self.current_output_index,
+                "item": done_item,
+            }),
+        ));
         self.current_kind = None;
-        Some(frame)
+        out
     }
 
     /// Emit response.output_item.added for a new item.
-    fn emit_output_item_added(&mut self, item: Value) -> SseFrame {
+    fn emit_output_item_added(&self, output_index: u32, item: Value) -> SseFrame {
         self.frame(
             "response.output_item.added",
             json!({
                 "type": "response.output_item.added",
-                "output_index": self.current_output_index,
+                "output_index": output_index,
                 "item": item,
             }),
         )
@@ -1292,25 +1333,31 @@ impl StreamEncoder for ResponsesStreamEncoder {
         let mut out = Vec::new();
         match event {
             StreamEvent::Start { id, model, .. } => {
-                if !id.is_empty() { self.id = id.clone(); }
-                if !model.is_empty() { self.model = model.clone(); }
-                out.push(self.frame("response.created", json!({
-                    "type": "response.created",
-                    "response": {
-                        "id": self.id,
-                        "object": "response",
-                        "created_at": self.created_at,
-                        "status": "in_progress",
-                        "model": self.model,
-                        "output": [],
-                    }
-                })));
+                if !id.is_empty() {
+                    self.id = id.clone();
+                }
+                if !model.is_empty() {
+                    self.model = model.clone();
+                }
+                out.push(self.frame(
+                    "response.created",
+                    json!({
+                        "type": "response.created",
+                        "response": {
+                            "id": self.id,
+                            "object": "response",
+                            "created_at": self.created_at,
+                            "status": "in_progress",
+                            "model": self.model,
+                            "output": [],
+                        }
+                    }),
+                ));
             }
             StreamEvent::TextDelta { text, .. } => {
                 // Switch to Text kind if needed.
                 if self.current_kind != Some(OutputItemKind::Text) {
-                    if let Some(f) = self.close_content_part() { out.push(f); }
-                    if let Some(f) = self.close_output_item() { out.push(f); }
+                    out.extend(self.close_output_item());
                     self.current_output_index = self.alloc_output_index();
                     self.content_index = 0;
                     self.current_kind = Some(OutputItemKind::Text);
@@ -1318,158 +1365,203 @@ impl StreamEncoder for ResponsesStreamEncoder {
                     self.current_text.clear();
                     self.current_item_id = format!("msg_{}", self.current_output_index);
                     // Emit output_item.added
-                    out.push(self.emit_output_item_added(json!({
-                        "id": self.current_item_id,
-                        "type": "message",
-                        "role": "assistant",
-                        "status": "in_progress",
-                        "content": [],
-                    })));
+                    out.push(self.emit_output_item_added(
+                        self.current_output_index,
+                        json!({
+                            "id": self.current_item_id,
+                            "type": "message",
+                            "role": "assistant",
+                            "status": "in_progress",
+                            "content": [],
+                        }),
+                    ));
                 }
                 // Emit content_part.added if needed.
                 if !self.content_part_open {
                     self.content_part_open = true;
-                    out.push(self.frame("response.content_part.added", json!({
-                        "type": "response.content_part.added",
+                    out.push(self.frame(
+                        "response.content_part.added",
+                        json!({
+                            "type": "response.content_part.added",
+                            "item_id": self.current_item_id,
+                            "output_index": self.current_output_index,
+                            "content_index": self.content_index,
+                            "part": {"type": "output_text"},
+                        }),
+                    ));
+                }
+                out.push(self.frame(
+                    "response.output_text.delta",
+                    json!({
+                        "type": "response.output_text.delta",
+                        "item_id": self.current_item_id,
                         "output_index": self.current_output_index,
                         "content_index": self.content_index,
-                        "part": {"type": "output_text"},
-                    })));
-                }
-                out.push(self.frame("response.output_text.delta", json!({
-                    "type": "response.output_text.delta",
-                    "item_id": self.current_item_id,
-                    "output_index": self.current_output_index,
-                    "content_index": self.content_index,
-                    "delta": text,
-                })));
+                        "delta": text,
+                    }),
+                ));
                 self.current_text.push_str(text);
             }
             StreamEvent::ThinkingDelta { text, .. } => {
                 if self.current_kind != Some(OutputItemKind::Thinking) {
-                    if let Some(f) = self.close_content_part() { out.push(f); }
-                    if let Some(f) = self.close_output_item() { out.push(f); }
+                    out.extend(self.close_output_item());
                     self.current_output_index = self.alloc_output_index();
                     self.content_index = 0;
                     self.current_kind = Some(OutputItemKind::Thinking);
                     self.output_item_open = true;
                     self.current_thinking.clear();
                     self.current_item_id = format!("rs_{}", self.current_output_index);
-                    out.push(self.emit_output_item_added(json!({
-                        "id": self.current_item_id,
-                        "type": "reasoning",
-                        "summary": [],
-                    })));
+                    out.push(self.emit_output_item_added(
+                        self.current_output_index,
+                        json!({
+                            "id": self.current_item_id,
+                            "type": "reasoning",
+                            "summary": [],
+                        }),
+                    ));
                 }
                 if !self.content_part_open {
                     self.content_part_open = true;
-                    out.push(self.frame("response.content_part.added", json!({
-                        "type": "response.content_part.added",
+                    out.push(self.frame(
+                        "response.content_part.added",
+                        json!({
+                            "type": "response.content_part.added",
+                            "item_id": self.current_item_id,
+                            "output_index": self.current_output_index,
+                            "content_index": self.content_index,
+                            "part": {"type": "reasoning"},
+                        }),
+                    ));
+                }
+                out.push(self.frame(
+                    "response.reasoning_summary_text.delta",
+                    json!({
+                        "type": "response.reasoning_summary_text.delta",
+                        "item_id": self.current_item_id,
                         "output_index": self.current_output_index,
                         "content_index": self.content_index,
-                        "part": {"type": "reasoning"},
-                    })));
-                }
-                out.push(self.frame("response.reasoning_summary_text.delta", json!({
-                    "type": "response.reasoning_summary_text.delta",
-                    "item_id": self.current_item_id,
-                    "output_index": self.current_output_index,
-                    "content_index": self.content_index,
-                    "delta": text,
-                })));
+                        "delta": text,
+                    }),
+                ));
                 self.current_thinking.push_str(text);
             }
             StreamEvent::ToolUseStart { index, id, name, .. } => {
-                if let Some(f) = self.close_content_part() { out.push(f); }
-                if let Some(f) = self.close_output_item() { out.push(f); }
+                // Does NOT close Text/Thinking — tools are independent.
                 let oi = self.alloc_output_index();
-                self.tool_output_indices.insert(*index, oi);
                 let item_id = format!("fc_{id}");
-                self.tool_calls.insert(*index, (item_id.clone(), id.clone(), name.clone(), String::new()));
-                self.current_output_index = oi;
-                self.output_item_open = true;
-                self.current_kind = Some(OutputItemKind::Tool);
-                self.current_item_id = item_id.clone();
-                out.push(self.emit_output_item_added(json!({
-                    "id": item_id,
-                    "type": "function_call",
-                    "call_id": id,
-                    "name": name,
-                    "arguments": "",
-                    "status": "in_progress",
-                })));
+                self.tool_states.insert(
+                    *index,
+                    ToolOutputState {
+                        output_index: oi,
+                        item_id: item_id.clone(),
+                        call_id: id.clone(),
+                        name: name.clone(),
+                        arguments: String::new(),
+                    },
+                );
+                out.push(self.emit_output_item_added(
+                    oi,
+                    json!({
+                        "id": item_id,
+                        "type": "function_call",
+                        "call_id": id,
+                        "name": name,
+                        "arguments": "",
+                        "status": "in_progress",
+                    }),
+                ));
             }
-            StreamEvent::ToolUseDelta { partial_json, index, .. } => {
-                let item_id = self.tool_calls.get(index)
-                    .map(|(id, _, _, _)| id.clone())
-                    .unwrap_or_else(|| format!("fc_{index}"));
-                let oi = self.tool_output_indices.get(index).copied().unwrap_or(0);
-                out.push(self.frame("response.function_call_arguments.delta", json!({
-                    "type": "response.function_call_arguments.delta",
-                    "item_id": item_id,
-                    "output_index": oi,
-                    "content_index": 0,
-                    "delta": partial_json,
-                })));
-                if let Some((_, _, _, ref mut args)) = self.tool_calls.get_mut(index) {
-                    args.push_str(partial_json);
+            StreamEvent::ToolUseDelta {
+                partial_json, index, ..
+            } => {
+                if let Some(ts) = self.tool_states.get_mut(index) {
+                    ts.arguments.push_str(partial_json);
+                    let item_id = ts.item_id.clone();
+                    let output_index = ts.output_index;
+                    let delta = partial_json.clone();
+                    let frame = self.frame(
+                        "response.function_call_arguments.delta",
+                        json!({
+                            "type": "response.function_call_arguments.delta",
+                            "item_id": item_id,
+                            "output_index": output_index,
+                            "content_index": 0,
+                            "delta": delta,
+                        }),
+                    );
+                    out.push(frame);
                 }
             }
             StreamEvent::BlockStop { index } => {
-                if let Some((item_id, call_id, name, args)) = self.tool_calls.remove(index) {
-                    let oi = self.tool_output_indices.remove(index).unwrap_or(0);
-                    out.push(self.frame("response.function_call_arguments.done", json!({
-                        "type": "response.function_call_arguments.done",
-                        "item_id": item_id,
-                        "output_index": oi,
-                        "content_index": 0,
-                        "arguments": args,
-                    })));
-                    // arguments stays as JSON string per Responses API spec.
-                    self.output_items.insert(oi, json!({
+                if let Some(ts) = self.tool_states.remove(index) {
+                    let oi = ts.output_index;
+                    let args_display = if ts.arguments.is_empty() {
+                        "{}".to_string()
+                    } else {
+                        ts.arguments.clone()
+                    };
+                    out.push(self.frame(
+                        "response.function_call_arguments.done",
+                        json!({
+                            "type": "response.function_call_arguments.done",
+                            "item_id": ts.item_id,
+                            "output_index": oi,
+                            "content_index": 0,
+                            "arguments": ts.arguments,
+                        }),
+                    ));
+                    let item = json!({
                         "type": "function_call",
-                        "id": item_id,
-                        "call_id": call_id,
-                        "name": name,
-                        "arguments": if args.is_empty() { "{}".to_string() } else { args },
+                        "id": ts.item_id,
+                        "call_id": ts.call_id,
+                        "name": ts.name,
+                        "arguments": args_display,
                         "status": "completed",
-                    }));
-                    out.push(self.frame("response.output_item.done", json!({
-                        "type": "response.output_item.done",
-                        "output_index": oi,
-                        "item": self.output_items.get(&oi).unwrap(),
-                    })));
-                    self.output_item_open = false;
-                    self.current_kind = None;
+                    });
+                    self.output_items.insert(oi, item.clone());
+                    out.push(self.frame(
+                        "response.output_item.done",
+                        json!({
+                            "type": "response.output_item.done",
+                            "output_index": oi,
+                            "item": item,
+                        }),
+                    ));
+                    // Does NOT touch global current_* state.
                 }
             }
             StreamEvent::Stop { usage, .. } => {
-                if let Some(f) = self.close_content_part() { out.push(f); }
-                if let Some(f) = self.close_output_item() { out.push(f); }
+                out.extend(self.close_output_item());
                 // Flush any incomplete tool calls as partial items.
-                for (oi, (item_id, call_id, name, args)) in self.tool_calls.drain() {
-                    self.output_items.insert(oi, json!({
-                        "type": "function_call",
-                        "id": item_id,
-                        "call_id": call_id,
-                        "name": name,
-                        "arguments": if args.is_empty() { "{}".to_string() } else { args },
-                        "status": "incomplete",
-                    }));
+                for (_, ts) in self.tool_states.drain() {
+                    self.output_items.insert(
+                        ts.output_index,
+                        json!({
+                            "type": "function_call",
+                            "id": ts.item_id,
+                            "call_id": ts.call_id,
+                            "name": ts.name,
+                            "arguments": if ts.arguments.is_empty() { "{}".to_string() } else { ts.arguments },
+                            "status": "incomplete",
+                        }),
+                    );
                 }
                 let output = self.sorted_output();
-                out.push(self.frame("response.completed", json!({
-                    "type": "response.completed",
-                    "response": {
-                        "id": self.id,
-                        "object": "response",
-                        "created_at": self.created_at,
-                        "status": "completed",
-                        "model": self.model,
-                        "output": output,
-                        "usage": encode_usage(usage),
-                    }
-                })));
+                out.push(self.frame(
+                    "response.completed",
+                    json!({
+                        "type": "response.completed",
+                        "response": {
+                            "id": self.id,
+                            "object": "response",
+                            "created_at": self.created_at,
+                            "status": "completed",
+                            "model": self.model,
+                            "output": output,
+                            "usage": encode_usage(usage),
+                        }
+                    }),
+                ));
                 self.done = true;
             }
             _ => {}
@@ -1478,36 +1570,47 @@ impl StreamEncoder for ResponsesStreamEncoder {
     }
 
     fn finish(&mut self) -> Vec<SseFrame> {
-        if self.done { return Vec::new(); }
+        if self.done {
+            return Vec::new();
+        }
         self.done = true;
         let mut out = Vec::new();
-        if let Some(f) = self.close_content_part() { out.push(f); }
-        if let Some(f) = self.close_output_item() { out.push(f); }
+        out.extend(self.close_output_item());
         // Flush any incomplete tool calls.
-        let has_incomplete = !self.tool_calls.is_empty();
-        for (oi, (item_id, call_id, name, args)) in self.tool_calls.drain() {
-            self.output_items.insert(oi, json!({
-                "type": "function_call",
-                "id": item_id,
-                "call_id": call_id,
-                "name": name,
-                "arguments": if args.is_empty() { "{}".to_string() } else { args },
-                "status": "incomplete",
-            }));
+        let has_incomplete = !self.tool_states.is_empty();
+        for (_, ts) in self.tool_states.drain() {
+            self.output_items.insert(
+                ts.output_index,
+                json!({
+                    "type": "function_call",
+                    "id": ts.item_id,
+                    "call_id": ts.call_id,
+                    "name": ts.name,
+                    "arguments": if ts.arguments.is_empty() { "{}".to_string() } else { ts.arguments },
+                    "status": "incomplete",
+                }),
+            );
         }
         let output = self.sorted_output();
-        let status = if has_incomplete { "incomplete" } else { "completed" };
-        out.push(self.frame("response.completed", json!({
-            "type": "response.completed",
-            "response": {
-                "id": self.id,
-                "object": "response",
-                "created_at": self.created_at,
-                "status": status,
-                "model": self.model,
-                "output": output,
-            }
-        })));
+        let status = if has_incomplete {
+            "incomplete"
+        } else {
+            "completed"
+        };
+        out.push(self.frame(
+            "response.completed",
+            json!({
+                "type": "response.completed",
+                "response": {
+                    "id": self.id,
+                    "object": "response",
+                    "created_at": self.created_at,
+                    "status": status,
+                    "model": self.model,
+                    "output": output,
+                }
+            }),
+        ));
         out
     }
 
@@ -1515,21 +1618,23 @@ impl StreamEncoder for ResponsesStreamEncoder {
         let mut out = Vec::new();
         if !self.done {
             self.done = true;
-            if let Some(f) = self.close_content_part() { out.push(f); }
-            if let Some(f) = self.close_output_item() { out.push(f); }
+            out.extend(self.close_output_item());
         }
         let output = self.sorted_output();
-        out.push(self.frame("response.failed", json!({
-            "type": "response.failed",
-            "response": {
-                "id": self.id,
-                "object": "response",
-                "status": "failed",
-                "model": self.model,
-                "error": err.to_wire(Dialect::OpenAIResponses),
-                "output": output,
-            }
-        })));
+        out.push(self.frame(
+            "response.failed",
+            json!({
+                "type": "response.failed",
+                "response": {
+                    "id": self.id,
+                    "object": "response",
+                    "status": "failed",
+                    "model": self.model,
+                    "error": err.to_wire(Dialect::OpenAIResponses),
+                    "output": output,
+                }
+            }),
+        ));
         out
     }
 }
