@@ -78,7 +78,7 @@ impl ClassifierSignature {
         }
         if let Some(want) = self.temperature {
             match req.get("temperature").and_then(Value::as_f64) {
-                Some(got) if (got - want).abs() < f64::EPSILON => reasons.push("temperature"),
+                Some(got) if (got - want).abs() < 1e-9 => reasons.push("temperature"),
                 _ => return (0.0, Vec::new()),
             }
         }

@@ -113,9 +113,16 @@ pub struct Cost {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct CostTotals(pub BTreeMap<String, f64>);
 
+/// Six decimal places is far below the smallest billed unit of any provider and
+/// still exact enough that repeated addition cannot drift visibly.
+fn round_cents(amount: f64) -> f64 {
+    (amount * 1_000_000.0).round() / 1_000_000.0
+}
+
 impl CostTotals {
     pub fn add(&mut self, cost: &Cost) {
-        *self.0.entry(cost.currency.clone()).or_insert(0.0) += cost.amount;
+        let entry = self.0.entry(cost.currency.clone()).or_insert(0.0);
+        *entry = round_cents(*entry + cost.amount);
     }
 
     pub fn is_empty(&self) -> bool {

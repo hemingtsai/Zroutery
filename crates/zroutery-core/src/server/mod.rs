@@ -66,11 +66,16 @@ impl AppState {
     pub fn new(config: AppConfig, secrets: Arc<dyn SecretStore>) -> Self {
         let stats = Arc::new(Stats::new(config.server.log_limit));
         let bypass_proxy = config.server.bypass_proxy;
+        let connect_timeout_secs = config
+            .providers
+            .first()
+            .map(|p| p.connect_timeout_secs)
+            .unwrap_or(15);
         AppState {
             registry: RwLock::new(Arc::new(Registry::new(Arc::new(config)))),
             router: Arc::new(Router::new()),
             stats,
-            upstream: Upstream::new(bypass_proxy),
+            upstream: Upstream::new(bypass_proxy, connect_timeout_secs),
             secrets,
             ledger: RwLock::new(Ledger::new()),
             ledger_dirty: AtomicBool::new(false),
