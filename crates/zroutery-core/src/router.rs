@@ -14,6 +14,7 @@ use crate::config::{ClassifierConfig, ModelTier, ModelEntry, ProviderConfig, Rou
 use crate::election::Election;
 use crate::error::{Error, Result};
 use crate::ir::Capability;
+use crate::policy::{PolicyPreference, PolicyRequirements, ScoringContext, score_candidate};
 use crate::registry::{Registry, Resolution};
 
 /// Round robin cursor key for the classifier pool, which is not a tier.
@@ -136,6 +137,127 @@ impl Router {
                 routing.capability_filter,
             ),
         }
+    }
+
+    /// Build the ordered list of attempts, applying policy eligibility filtering
+    /// and preference-based scoring.
+    ///
+    /// Like [`plan`] but candidates are first filtered through
+    /// [`PolicyRequirements::check`], then scored and sorted by
+    /// [`PolicyPreference`] weights. If no candidate passes and the policy
+    /// is not strict (`strict` = false), the unfiltered candidate list is used
+    /// as a soft fallback. If `strict` = true and no candidate is eligible,
+    /// [`Error::NoCandidate`] is returned.
+    pub fn plan_with_policy(
+        &self,
+        registry: &Registry,
+        resolution: &Resolution,
+        required_capabilities: &[Capability],
+        requirements: &PolicyRequirements,
+        preference: &PolicyPreference,
+        strict: bool,
+    ) -> Result<Vec<Candidate>> {
+        // Collect the raw candidate pool from the registry.
+        let members: Vec<&ModelEntry> = match resolution {
+            Resolution::Direct(id) => {
+                let entry = registry.entry(id)?;
+                let provider = registry.provider_of(entry)?;
+                if !provider.enabled {
+                    return Err(Error::UnknownModel(format!("{id} (provider disabled)")));
+                }
+                vec![entry]
+            }
+            Resolution::Tier(tier) => registry.tier_members(*tier),
+        };
+        if members.is_empty() {
+            let name = match resolution {
+                Resolution::Direct(id) => id.clone(),
+                Resolution::Tier(tier) => tier.virtual_id().to_string(),
+            };
+            return Err(Error::NoCandidate(name));
+        }
+
+        // Apply policy eligibility to each candidate.
+        let filtered: Vec<&ModelEntry> = members
+            .iter()
+            .copied()
+            .filter(|m| {
+                let circuit_open = !self.allow_request(&m.exposed_id());
+                let check = requirements.check(
+                    &m.exposed_id(),
+                    &m.provider_id,
+                    m.tier,
+                    &m.capabilities,
+                    circuit_open,
+                );
+                check.eligible
+            })
+            .collect();
+
+        let effective = if filtered.is_empty() {
+            if strict {
+                let name = match resolution {
+                    Resolution::Direct(id) => id.clone(),
+                    Resolution::Tier(tier) => tier.virtual_id().to_string(),
+                };
+                tracing::warn!(
+                    pool = %name,
+                    "no candidate satisfies policy requirements; strict mode rejects"
+                );
+                return Err(Error::NoCandidate(name));
+            }
+            tracing::warn!(
+                "no candidate satisfies policy requirements; falling back to unfiltered list"
+            );
+            members
+        } else {
+            filtered
+        };
+
+        // Score and sort by policy preferences before delegating to
+        // plan_candidates for health gating, failover and attempt capping.
+        let mut scored: Vec<(&ModelEntry, f64)> = effective
+            .iter()
+            .map(|m| {
+                let ctx = ScoringContext {
+                    health: self.health_score(&m.exposed_id()),
+                    avg_latency_ms: self.avg_latency(&m.exposed_id()),
+                    cost_per_mtok: m
+                        .pricing
+                        .as_ref()
+                        .map(|p| (p.input_per_mtok + p.output_per_mtok) / 2.0),
+                    priority: m.priority,
+                    tier: m.tier,
+                };
+                let s = score_candidate(preference, &ctx);
+                (*m, s.total_score)
+            })
+            .collect();
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        let effective: Vec<&ModelEntry> = scored.into_iter().map(|(m, _)| m).collect();
+
+        // Delegate to the standard routing machinery for health, ordering and
+        // failover — but pass the already-filtered (or fallback) member list
+        // through the same plan_candidates pipeline so everything else (circuit
+        // breakers, strategy, attempt cap) works identically.
+        let routing = &registry.config().routing;
+        let (pool_name, election_tier) = match resolution {
+            Resolution::Direct(id) => (id.clone(), None),
+            Resolution::Tier(tier) => (tier.virtual_id().to_string(), Some(*tier)),
+        };
+        self.plan_candidates(
+            registry,
+            effective,
+            pool_name.as_str(),
+            election_tier,
+            routing.strategy,
+            routing.failover,
+            routing.max_attempts,
+            pool_name.clone(),
+            required_capabilities,
+            false, // capability filtering already applied above
+            false,
+        )
     }
 
     /// Build the ordered attempts for an Auto Mode classifier request.
@@ -471,6 +593,38 @@ impl Router {
             out.push(pool.remove(chosen));
         }
         out
+    }
+
+    /// Health score for a model, 0.0 (circuit open / unknown) to 1.0 (healthy).
+    ///
+    /// Factors in circuit breaker state and consecutive failure count.
+    pub fn health_score(&self, model_id: &str) -> f64 {
+        let health = crate::sync::lock(&self.health);
+        match health.get(model_id) {
+            Some(h) => match h.breaker.state() {
+                CircuitState::Closed => {
+                    if h.total_success + h.total_failure == 0 {
+                        1.0 // no data yet — optimistic
+                    } else {
+                        let ratio =
+                            h.total_success as f64 / (h.total_success + h.total_failure) as f64;
+                        ratio.clamp(0.0, 1.0)
+                    }
+                }
+                CircuitState::HalfOpen => 0.3,
+                CircuitState::Open => 0.0,
+            },
+            None => 1.0, // no health data = new model, treat as healthy
+        }
+    }
+
+    /// Exponentially weighted moving average latency in milliseconds.
+    /// Returns 0.0 when no successful request has been recorded.
+    pub fn avg_latency(&self, model_id: &str) -> f64 {
+        crate::sync::lock(&self.health)
+            .get(model_id)
+            .map(|h| h.avg_latency_ms)
+            .unwrap_or(0.0)
     }
 
     pub fn report_success(&self, model_id: &str, latency_ms: u64, routing: &RoutingConfig) {

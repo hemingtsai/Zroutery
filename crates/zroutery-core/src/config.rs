@@ -14,6 +14,7 @@ use crate::circuit_breaker::CircuitBreakerConfig;
 use crate::classifier::DetectionConfig;
 use crate::election::ScoringConfig;
 use crate::ir::{CapabilityState, Dialect};
+use crate::policy::PolicyConfig;
 pub use crate::protocol::ProviderQuirks;
 
 /// Capability tier a model belongs to. Assigned manually by the user; Zroutery
@@ -619,6 +620,9 @@ pub struct RoutingConfig {
     /// is also `true`.
     #[serde(default)]
     pub strict_capability_filter: bool,
+    /// Named routing policies with eligibility requirements.
+    #[serde(default)]
+    pub policies: PolicyConfig,
 }
 
 impl RoutingConfig {
@@ -656,6 +660,7 @@ impl Default for RoutingConfig {
             naming_style: NamingStyle::default(),
             capability_filter: true,
             strict_capability_filter: false,
+            policies: PolicyConfig::default(),
         }
     }
 }
