@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::billing::{Cost, CostTotals};
 use crate::ir::{Dialect, Usage};
+use crate::policy::RouteDecision;
 use crate::query::RequestKind;
 
 /// One completed (or failed) client request.
@@ -47,6 +48,9 @@ pub struct RequestRecord {
     pub cost: Option<Cost>,
     /// How many upstream attempts it took (>1 means failover happened).
     pub attempts: u32,
+    /// Routing decision trace (for diagnostics).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub routing_decision: Option<RouteDecision>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -271,6 +275,7 @@ impl RecordBuilder {
                 usage: Usage::default(),
                 cost: None,
                 attempts: 0,
+                routing_decision: None,
             },
         }
     }
@@ -337,6 +342,12 @@ impl RecordBuilder {
     pub fn finish(mut self, latency_ms: u64) -> RequestRecord {
         self.record.latency_ms = latency_ms;
         self.record
+    }
+
+    /// Attach a routing decision trace for diagnostics.
+    pub fn routing_decision(&mut self, decision: RouteDecision) -> &mut Self {
+        self.record.routing_decision = Some(decision);
+        self
     }
 }
 

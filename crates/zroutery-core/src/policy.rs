@@ -363,6 +363,25 @@ pub enum RejectionReason {
     CircuitOpen,
 }
 
+impl std::fmt::Display for RejectionReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RejectionReason::MissingCapability(cap) => {
+                // Produce "missing_capability:vision" style strings.
+                let name = format!("{:?}", cap).to_lowercase();
+                write!(f, "missing_capability:{}", name)
+            }
+            RejectionReason::BelowMinTier => write!(f, "below_min_tier"),
+            RejectionReason::AboveMaxTier => write!(f, "above_max_tier"),
+            RejectionReason::ProviderForbidden => write!(f, "provider_forbidden"),
+            RejectionReason::ProviderNotAllowed => write!(f, "provider_not_allowed"),
+            RejectionReason::ModelForbidden => write!(f, "model_forbidden"),
+            RejectionReason::ModelNotAllowed => write!(f, "model_not_allowed"),
+            RejectionReason::CircuitOpen => write!(f, "circuit_open"),
+        }
+    }
+}
+
 impl PolicyRequirements {
     /// Check whether a candidate satisfies all hard constraints.
     pub fn check(
@@ -446,7 +465,7 @@ impl PolicyRequirements {
 // ---------------------------------------------------------- Scoring
 
 /// Individual dimension scores for a candidate, each in [0.0, 1.0].
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ScoreBreakdown {
     /// 1.0 = perfectly healthy, 0.0 = circuit open.
     pub health: f64,
@@ -720,6 +739,96 @@ pub struct PolicyConfig {
     /// Client/application profiles that map request metadata to policies.
     #[serde(default)]
     pub clients: Vec<ClientProfile>,
+}
+
+// ---------------------------------------------------- Decision Trace
+
+/// Serializable summary of a [`TaskProfile`], suitable for embedding in
+/// decision traces.  All fields are owned (no borrows).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TaskProfileSummary {
+    pub complexity: String,
+    pub task_type: String,
+    pub context_tokens: u64,
+    pub estimated_output_tokens: u64,
+    pub streaming: bool,
+    pub has_tools: bool,
+    pub has_vision: bool,
+    pub required_capabilities: Vec<String>,
+}
+
+impl From<&TaskProfile> for TaskProfileSummary {
+    fn from(p: &TaskProfile) -> Self {
+        TaskProfileSummary {
+            complexity: format!("{:?}", p.complexity).to_lowercase(),
+            task_type: format!("{:?}", p.task_type).to_lowercase(),
+            context_tokens: p.context_tokens,
+            estimated_output_tokens: p.estimated_output_tokens,
+            streaming: p.streaming,
+            has_tools: p.has_tools,
+            has_vision: p.has_vision,
+            required_capabilities: p
+                .required_capabilities
+                .iter()
+                .map(|c| format!("{:?}", c).to_lowercase())
+                .collect(),
+        }
+    }
+}
+
+/// Per-candidate evaluation in a routing decision.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CandidateDecision {
+    pub model_id: String,
+    pub provider_id: String,
+    pub tier: Option<String>,
+    pub eligible: bool,
+    /// Why this candidate was rejected (if not eligible).
+    pub rejection: Option<String>,
+    /// Score breakdown (if eligible).
+    pub score: Option<ScoreBreakdown>,
+    pub final_score: Option<f64>,
+}
+
+/// Why a specific model was selected.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum DecisionReason {
+    /// Direct model resolution (client specified exact model).
+    Direct,
+    /// Policy selected the highest-scoring eligible candidate.
+    PolicySelected,
+    /// Fallback after primary candidate failed.
+    Fallback { from: String, reason: String },
+    /// Escalation to higher tier.
+    Escalated { from_tier: String },
+    /// Degradation to lower tier.
+    Degraded { from_tier: String },
+    /// No eligible candidate found.
+    NoCandidate,
+}
+
+/// Complete routing decision for a single request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RouteDecision {
+    /// Unique id for this decision (for correlation).
+    pub decision_id: String,
+    /// Timestamp when the decision was made.
+    pub timestamp: i64,
+    /// The task profile derived from the request.
+    pub task: TaskProfileSummary,
+    /// The policy that was applied.
+    pub policy_id: String,
+    /// Client profile that matched (if any).
+    pub client_id: Option<String>,
+    /// Per-candidate evaluation.
+    pub candidates: Vec<CandidateDecision>,
+    /// The selected candidate (model id).
+    pub selected: Option<String>,
+    /// Fallback chain: models tried before the final selection.
+    pub fallback_chain: Vec<String>,
+    /// Why this decision was made.
+    pub reason: DecisionReason,
 }
 
 // ------------------------------------------------------------ Tests
@@ -1502,5 +1611,275 @@ mod tests {
         let json = r#"{"policies": []}"#;
         let config: PolicyConfig = serde_json::from_str(json).unwrap();
         assert!(config.clients.is_empty());
+    }
+
+    // ------------------------------------------------ Decision Trace
+
+    #[test]
+    fn task_profile_summary_from_profile() {
+        let profile = TaskProfile {
+            tier: Some(ModelTier::Standard),
+            required_capabilities: vec![Capability::Vision, Capability::Tools],
+            context_tokens: 5000,
+            estimated_output_tokens: 2048,
+            streaming: true,
+            has_tools: true,
+            has_vision: true,
+            complexity: Complexity::Complex,
+            task_type: TaskType::ToolUse,
+        };
+
+        let summary = TaskProfileSummary::from(&profile);
+        assert_eq!(summary.complexity, "complex");
+        assert_eq!(summary.task_type, "tooluse");
+        assert_eq!(summary.context_tokens, 5000);
+        assert_eq!(summary.estimated_output_tokens, 2048);
+        assert!(summary.streaming);
+        assert!(summary.has_tools);
+        assert!(summary.has_vision);
+        assert!(summary.required_capabilities.contains(&"vision".to_string()));
+        assert!(summary.required_capabilities.contains(&"tools".to_string()));
+    }
+
+    #[test]
+    fn task_profile_summary_default() {
+        let summary = TaskProfileSummary::default();
+        assert!(summary.complexity.is_empty());
+        assert!(summary.task_type.is_empty());
+        assert_eq!(summary.context_tokens, 0);
+        assert!(!summary.streaming);
+        assert!(summary.required_capabilities.is_empty());
+    }
+
+    #[test]
+    fn task_profile_summary_serde_roundtrip() {
+        let summary = TaskProfileSummary {
+            complexity: "standard".into(),
+            task_type: "chat".into(),
+            context_tokens: 1000,
+            estimated_output_tokens: 4096,
+            streaming: false,
+            has_tools: false,
+            has_vision: false,
+            required_capabilities: vec!["tools".into(), "vision".into()],
+        };
+        let json = serde_json::to_string(&summary).unwrap();
+        let back: TaskProfileSummary = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.complexity, "standard");
+        assert_eq!(back.context_tokens, 1000);
+        assert_eq!(back.required_capabilities.len(), 2);
+    }
+
+    #[test]
+    fn route_decision_serde_roundtrip() {
+        let decision = RouteDecision {
+            decision_id: "dec-001".into(),
+            timestamp: 1700000000,
+            task: TaskProfileSummary {
+                complexity: "complex".into(),
+                task_type: "tooluse".into(),
+                context_tokens: 50000,
+                estimated_output_tokens: 8192,
+                streaming: true,
+                has_tools: true,
+                has_vision: false,
+                required_capabilities: vec!["tools".into()],
+            },
+            policy_id: "code-policy".into(),
+            client_id: Some("codex".into()),
+            candidates: vec![
+                CandidateDecision {
+                    model_id: "gpt-4".into(),
+                    provider_id: "openai".into(),
+                    tier: Some("standard".into()),
+                    eligible: true,
+                    rejection: None,
+                    score: Some(ScoreBreakdown {
+                        health: 0.95,
+                        latency: 0.8,
+                        cost: 0.6,
+                        priority: 1.0,
+                        tier: 0.9,
+                    }),
+                    final_score: Some(0.85),
+                },
+                CandidateDecision {
+                    model_id: "llama-3".into(),
+                    provider_id: "ollama".into(),
+                    tier: Some("fast".into()),
+                    eligible: false,
+                    rejection: Some("below_min_tier".into()),
+                    score: None,
+                    final_score: None,
+                },
+            ],
+            selected: Some("gpt-4".into()),
+            fallback_chain: vec!["claude-3".into()],
+            reason: DecisionReason::PolicySelected,
+        };
+
+        let json = serde_json::to_string(&decision).unwrap();
+        let back: RouteDecision = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(back.decision_id, "dec-001");
+        assert_eq!(back.timestamp, 1700000000);
+        assert_eq!(back.task.complexity, "complex");
+        assert_eq!(back.policy_id, "code-policy");
+        assert_eq!(back.client_id, Some("codex".into()));
+        assert_eq!(back.candidates.len(), 2);
+        assert!(back.candidates[0].eligible);
+        assert!(!back.candidates[1].eligible);
+        assert_eq!(back.candidates[1].rejection, Some("below_min_tier".into()));
+        assert_eq!(back.selected, Some("gpt-4".into()));
+        assert_eq!(back.fallback_chain, vec!["claude-3"]);
+    }
+
+    #[test]
+    fn candidate_decision_with_score() {
+        let cd = CandidateDecision {
+            model_id: "gpt-4".into(),
+            provider_id: "openai".into(),
+            tier: Some("standard".into()),
+            eligible: true,
+            rejection: None,
+            score: Some(ScoreBreakdown {
+                health: 1.0,
+                latency: 0.9,
+                cost: 0.7,
+                priority: 0.8,
+                tier: 1.0,
+            }),
+            final_score: Some(0.88),
+        };
+        let json = serde_json::to_string(&cd).unwrap();
+        let back: CandidateDecision = serde_json::from_str(&json).unwrap();
+        assert!(back.eligible);
+        assert!(back.score.is_some());
+        assert!((back.final_score.unwrap() - 0.88).abs() < 0.001);
+        assert!(back.rejection.is_none());
+    }
+
+    #[test]
+    fn candidate_decision_without_score() {
+        let cd = CandidateDecision {
+            model_id: "llama-3".into(),
+            provider_id: "ollama".into(),
+            tier: None,
+            eligible: false,
+            rejection: Some("circuit_open".into()),
+            score: None,
+            final_score: None,
+        };
+        let json = serde_json::to_string(&cd).unwrap();
+        let back: CandidateDecision = serde_json::from_str(&json).unwrap();
+        assert!(!back.eligible);
+        assert!(back.score.is_none());
+        assert!(back.final_score.is_none());
+        assert_eq!(back.rejection.as_deref(), Some("circuit_open"));
+    }
+
+    #[test]
+    fn decision_reason_direct_serializes() {
+        let reason = DecisionReason::Direct;
+        let json = serde_json::to_string(&reason).unwrap();
+        assert!(json.contains("\"direct\""));
+        let back: DecisionReason = serde_json::from_str(&json).unwrap();
+        assert!(matches!(back, DecisionReason::Direct));
+    }
+
+    #[test]
+    fn decision_reason_policy_selected_serializes() {
+        let reason = DecisionReason::PolicySelected;
+        let json = serde_json::to_string(&reason).unwrap();
+        assert!(json.contains("\"policy_selected\""));
+        let back: DecisionReason = serde_json::from_str(&json).unwrap();
+        assert!(matches!(back, DecisionReason::PolicySelected));
+    }
+
+    #[test]
+    fn decision_reason_fallback_serializes() {
+        let reason = DecisionReason::Fallback {
+            from: "gpt-4".into(),
+            reason: "timeout".into(),
+        };
+        let json = serde_json::to_string(&reason).unwrap();
+        assert!(json.contains("fallback"));
+        assert!(json.contains("gpt-4"));
+        assert!(json.contains("timeout"));
+        let back: DecisionReason = serde_json::from_str(&json).unwrap();
+        if let DecisionReason::Fallback { from, reason } = back {
+            assert_eq!(from, "gpt-4");
+            assert_eq!(reason, "timeout");
+        } else {
+            panic!("expected Fallback variant");
+        }
+    }
+
+    #[test]
+    fn decision_reason_escalated_serializes() {
+        let reason = DecisionReason::Escalated {
+            from_tier: "fast".into(),
+        };
+        let json = serde_json::to_string(&reason).unwrap();
+        assert!(json.contains("escalated"));
+        assert!(json.contains("fast"));
+        let back: DecisionReason = serde_json::from_str(&json).unwrap();
+        if let DecisionReason::Escalated { from_tier } = back {
+            assert_eq!(from_tier, "fast");
+        } else {
+            panic!("expected Escalated variant");
+        }
+    }
+
+    #[test]
+    fn decision_reason_degraded_serializes() {
+        let reason = DecisionReason::Degraded {
+            from_tier: "frontier".into(),
+        };
+        let json = serde_json::to_string(&reason).unwrap();
+        assert!(json.contains("degraded"));
+        let back: DecisionReason = serde_json::from_str(&json).unwrap();
+        if let DecisionReason::Degraded { from_tier } = back {
+            assert_eq!(from_tier, "frontier");
+        } else {
+            panic!("expected Degraded variant");
+        }
+    }
+
+    #[test]
+    fn decision_reason_no_candidate_serializes() {
+        let reason = DecisionReason::NoCandidate;
+        let json = serde_json::to_string(&reason).unwrap();
+        assert!(json.contains("no_candidate"));
+        let back: DecisionReason = serde_json::from_str(&json).unwrap();
+        assert!(matches!(back, DecisionReason::NoCandidate));
+    }
+
+    #[test]
+    fn rejection_reason_display() {
+        assert_eq!(
+            RejectionReason::MissingCapability(Capability::Vision).to_string(),
+            "missing_capability:vision"
+        );
+        assert_eq!(
+            RejectionReason::MissingCapability(Capability::Tools).to_string(),
+            "missing_capability:tools"
+        );
+        assert_eq!(RejectionReason::BelowMinTier.to_string(), "below_min_tier");
+        assert_eq!(RejectionReason::AboveMaxTier.to_string(), "above_max_tier");
+        assert_eq!(
+            RejectionReason::ProviderForbidden.to_string(),
+            "provider_forbidden"
+        );
+        assert_eq!(
+            RejectionReason::ProviderNotAllowed.to_string(),
+            "provider_not_allowed"
+        );
+        assert_eq!(RejectionReason::ModelForbidden.to_string(), "model_forbidden");
+        assert_eq!(
+            RejectionReason::ModelNotAllowed.to_string(),
+            "model_not_allowed"
+        );
+        assert_eq!(RejectionReason::CircuitOpen.to_string(), "circuit_open");
     }
 }
