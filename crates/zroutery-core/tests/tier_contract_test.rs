@@ -364,3 +364,46 @@ fn display_name_matches_style() {
     assert_eq!(ModelTier::Frontier.display_name(NamingStyle::Anthropic), "Fable");
     assert_eq!(ModelTier::Frontier.display_name(NamingStyle::OpenAI), "Astra");
 }
+
+// ---------------------------------------- supports_* skip_serializing
+
+#[test]
+fn legacy_supports_fields_not_written_to_json() {
+    // Simulate a legacy config with supports_* fields.
+    let json = json!({
+        "provider_id": "p",
+        "upstream_model": "m",
+        "supports_tools": true,
+        "supports_vision": true,
+        "supports_thinking": false,
+        "enabled": true,
+    });
+    let mut entry: zroutery_core::config::ModelEntry = serde_json::from_value(json).unwrap();
+    // Before migration, capabilities is default (all false) and supports_* are set.
+    #[allow(deprecated)]
+    {
+        assert!(entry.supports_tools);
+    }
+    assert!(!entry.capabilities.tools);
+
+    // Simulate what AppConfig::normalize() does: migrate supports_* → capabilities.
+    #[allow(deprecated)]
+    if entry.capabilities == ModelCapabilities::default()
+        && (entry.supports_tools || entry.supports_vision || entry.supports_thinking)
+    {
+        entry.capabilities.tools = entry.supports_tools;
+        entry.capabilities.vision = entry.supports_vision;
+        entry.capabilities.thinking = entry.supports_thinking;
+    }
+    assert!(entry.capabilities.tools);
+    assert!(entry.capabilities.vision);
+    assert!(!entry.capabilities.thinking);
+
+    // After serialize, supports_* should NOT appear (skip_serializing).
+    let out = serde_json::to_value(&entry).unwrap();
+    assert!(out.get("supports_tools").is_none(), "supports_tools should be skipped");
+    assert!(out.get("supports_vision").is_none(), "supports_vision should be skipped");
+    assert!(out.get("supports_thinking").is_none(), "supports_thinking should be skipped");
+    // capabilities SHOULD appear.
+    assert!(out.get("capabilities").is_some());
+}

@@ -392,15 +392,15 @@ pub struct ModelEntry {
     #[serde(default = "default_true")]
     pub enabled: bool,
     /// Legacy field — use `capabilities.tools` at runtime. Kept for serde compat.
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     #[deprecated(note = "use capabilities.tools instead")]
     pub supports_tools: bool,
     /// Legacy field — use `capabilities.vision` at runtime. Kept for serde compat.
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     #[deprecated(note = "use capabilities.vision instead")]
     pub supports_vision: bool,
     /// Legacy field — use `capabilities.thinking` at runtime. Kept for serde compat.
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     #[deprecated(note = "use capabilities.thinking instead")]
     pub supports_thinking: bool,
     /// Optional display name for `/v1/models`.
@@ -922,6 +922,13 @@ impl AppConfig {
                 model.capabilities.tools = model.supports_tools;
                 model.capabilities.vision = model.supports_vision;
                 model.capabilities.thinking = model.supports_thinking;
+            }
+            // Clear deprecated fields so they don't persist in new configs.
+            #[allow(deprecated)]
+            {
+                model.supports_tools = false;
+                model.supports_vision = false;
+                model.supports_thinking = false;
             }
         }
         for budget in &mut self.budgets {
@@ -1617,12 +1624,16 @@ mod tests {
 
     #[test]
     fn config_json_round_trip() {
-        let cfg = sample();
+        let mut cfg = sample();
+        cfg.normalize();
         let json = serde_json::to_string(&cfg).unwrap();
         // Identity is persisted, the derived id is not.
         assert!(json.contains("\"upstream_model\":\"deepseek-chat\""));
         assert!(!json.contains("\"id\":\"deepseek-deepseek-chat\""));
-        let back: AppConfig = serde_json::from_str(&json).unwrap();
+        // Legacy supports_* fields should not appear in serialized output.
+        assert!(!json.contains("\"supports_tools\""));
+        let mut back: AppConfig = serde_json::from_str(&json).unwrap();
+        back.normalize();
         assert_eq!(cfg, back);
     }
 
@@ -1682,11 +1693,13 @@ mod tests {
 
     #[test]
     fn classifier_config_round_trips_and_stays_off_by_default() {
-        let cfg = sample();
+        let mut cfg = sample();
+        cfg.normalize();
         assert!(!cfg.classifier.enabled);
         assert!(cfg.classifier.candidates.is_empty());
         let json = serde_json::to_string(&cfg).unwrap();
-        let back: AppConfig = serde_json::from_str(&json).unwrap();
+        let mut back: AppConfig = serde_json::from_str(&json).unwrap();
+        back.normalize();
         assert_eq!(cfg, back);
 
         // And a config that predates classifier routing loads without it.
