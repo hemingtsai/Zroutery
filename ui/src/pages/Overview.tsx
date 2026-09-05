@@ -1,4 +1,4 @@
-import { api, tierMembers, modelRows, TIERS, type Snapshot } from "../api";
+import { api, tierMembers, modelRows, TIERS, virtualId, type Snapshot } from "../api";
 import { StatusDot, useToast } from "../components";
 import { useI18n } from "../i18n";
 
@@ -93,7 +93,7 @@ export default function Overview({
               ) : (
                 tierRoutes.map(({ tier, members }) => (
                   <span className="flow-route" key={tier}>
-                    <span className="flow-src mono">{tier}-class</span>
+                    <span className="flow-src mono">{virtualId(tier, config.routing.naming_style)}</span>
                     <span className="flow-arrow" aria-hidden>{"→"}</span>
                     <span className="flow-target">
                       {members[0].id}

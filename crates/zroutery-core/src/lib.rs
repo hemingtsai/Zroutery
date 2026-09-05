@@ -11,7 +11,7 @@
 //! * [`billing`] prices a request and reads provider balances.
 //! * [`budget`] stops spending once a limit is reached, and remembers across restarts.
 //! * [`classifier`] detects Auto Mode classifier side queries and reads their verdicts.
-//! * [`election`] picks a class's primary from measured latency and price.
+//! * [`election`] picks a tier's primary from measured latency and price.
 //! * [`config`] holds providers, the model registry and routing policy.
 //! * [`query`] says what a request is *for* (main vs side query), as opposed to
 //!   [`registry`], which says which model it wants.

@@ -311,3 +311,56 @@ fn model_entry_legacy_class_field_deserializes_to_tier() {
     let entry: zroutery_core::config::ModelEntry = serde_json::from_value(json).unwrap();
     assert_eq!(entry.tier, Some(ModelTier::Reasoning));
 }
+
+// ------------------------------------------------ fable model name mapping
+
+#[test]
+fn from_virtual_id_fable_class_maps_to_frontier() {
+    assert_eq!(
+        ModelTier::from_virtual_id("fable-class"),
+        Some(ModelTier::Frontier)
+    );
+}
+
+// ------------------------------------------------ naming style integration
+
+/// The key contract: /v1/models only exposes the configured style's virtual
+/// IDs, but the resolver accepts ALL styles. This test locks that distinction.
+#[test]
+fn naming_style_display_vs_resolution_contract() {
+    // Internal style displays fast-class, standard-class, reasoning-class, frontier-class
+    assert_eq!(ModelTier::Fast.virtual_id_styled(NamingStyle::Internal), "fast-class");
+    assert_eq!(ModelTier::Standard.virtual_id_styled(NamingStyle::Internal), "standard-class");
+    assert_eq!(ModelTier::Reasoning.virtual_id_styled(NamingStyle::Internal), "reasoning-class");
+    assert_eq!(ModelTier::Frontier.virtual_id_styled(NamingStyle::Internal), "frontier-class");
+
+    // Anthropic style displays haiku-class, sonnet-class, opus-class, fable-class
+    assert_eq!(ModelTier::Fast.virtual_id_styled(NamingStyle::Anthropic), "haiku-class");
+    assert_eq!(ModelTier::Standard.virtual_id_styled(NamingStyle::Anthropic), "sonnet-class");
+    assert_eq!(ModelTier::Reasoning.virtual_id_styled(NamingStyle::Anthropic), "opus-class");
+    assert_eq!(ModelTier::Frontier.virtual_id_styled(NamingStyle::Anthropic), "fable-class");
+
+    // OpenAI style displays luna-class, terra-class, sol-class, astra-class
+    assert_eq!(ModelTier::Fast.virtual_id_styled(NamingStyle::OpenAI), "luna-class");
+    assert_eq!(ModelTier::Standard.virtual_id_styled(NamingStyle::OpenAI), "terra-class");
+    assert_eq!(ModelTier::Reasoning.virtual_id_styled(NamingStyle::OpenAI), "sol-class");
+    assert_eq!(ModelTier::Frontier.virtual_id_styled(NamingStyle::OpenAI), "astra-class");
+
+    // But ALL of these resolve to the same tier, regardless of active style.
+    // This is the backward-compat contract.
+    assert_eq!(ModelTier::from_virtual_id("reasoning-class"), Some(ModelTier::Reasoning));
+    assert_eq!(ModelTier::from_virtual_id("opus-class"), Some(ModelTier::Reasoning));
+    assert_eq!(ModelTier::from_virtual_id("sol-class"), Some(ModelTier::Reasoning));
+
+    assert_eq!(ModelTier::from_virtual_id("frontier-class"), Some(ModelTier::Frontier));
+    assert_eq!(ModelTier::from_virtual_id("fable-class"), Some(ModelTier::Frontier));
+    assert_eq!(ModelTier::from_virtual_id("astra-class"), Some(ModelTier::Frontier));
+}
+
+/// display_name follows the same style contract.
+#[test]
+fn display_name_matches_style() {
+    assert_eq!(ModelTier::Frontier.display_name(NamingStyle::Internal), "Frontier");
+    assert_eq!(ModelTier::Frontier.display_name(NamingStyle::Anthropic), "Fable");
+    assert_eq!(ModelTier::Frontier.display_name(NamingStyle::OpenAI), "Astra");
+}

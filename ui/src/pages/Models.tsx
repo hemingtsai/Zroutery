@@ -10,6 +10,7 @@ import {
   type ModelTier,
   type ModelEntry,
   type ModelRow,
+  type NamingStyle,
   type Pricing,
   type Provider,
   type Snapshot,
@@ -113,9 +114,15 @@ export default function Models({
         priority: 0,
         weight: 1,
         enabled: true,
-        supports_tools: true,
-        supports_vision: false,
-        supports_thinking: false,
+        capabilities: {
+          vision: false,
+          tools: true,
+          thinking: false,
+          structured_output: false,
+          audio: false,
+          video: false,
+          files: false,
+        },
         display_name: null,
         aliases: [],
         max_output_tokens: null,
@@ -223,6 +230,7 @@ export default function Models({
           provider={config.providers.find((p) => p.id === open.model.provider_id)}
           health={health.find((h) => h.model_id === open.id)}
           busy={busy}
+          namingStyle={config.routing.naming_style}
           onClose={() => setOpenId(null)}
           onUpdate={(patch) => update(open.id, patch)}
           onRemove={() =>
@@ -249,6 +257,7 @@ function ModelDrawer({
   provider,
   health,
   busy,
+  namingStyle,
   onClose,
   onUpdate,
   onRemove,
@@ -257,6 +266,7 @@ function ModelDrawer({
   provider: Provider | undefined;
   health: Snapshot["health"][number] | undefined;
   busy: boolean;
+  namingStyle: NamingStyle;
   onClose: () => void;
   onUpdate: (patch: Partial<ModelEntry>) => void;
   onRemove: () => void;
@@ -280,7 +290,7 @@ function ModelDrawer({
               onChange={(next) => onUpdate({ tier: next === "none" ? null : next })}
               options={[
                 { value: "none", label: "—" },
-                ...TIERS.map((c) => ({ value: c, label: virtualId(c) })),
+                ...TIERS.map((c) => ({ value: c, label: virtualId(c, namingStyle) })),
               ]}
             />,
           ],
@@ -364,12 +374,12 @@ function ModelDrawer({
           />
         </div>
         <div className="grid-two">
-          <Toggle label={t("models.tool_use")} checked={m.supports_tools} onChange={(v) => onUpdate({ supports_tools: v })} />
-          <Toggle label={t("models.vision")} checked={m.supports_vision} onChange={(v) => onUpdate({ supports_vision: v })} />
+          <Toggle label={t("models.tool_use")} checked={m.capabilities.tools} onChange={(v) => onUpdate({ capabilities: { ...m.capabilities, tools: v } })} />
+          <Toggle label={t("models.vision")} checked={m.capabilities.vision} onChange={(v) => onUpdate({ capabilities: { ...m.capabilities, vision: v } })} />
           <Toggle
             label={t("models.thinking")}
-            checked={m.supports_thinking}
-            onChange={(v) => onUpdate({ supports_thinking: v })}
+            checked={m.capabilities.thinking}
+            onChange={(v) => onUpdate({ capabilities: { ...m.capabilities, thinking: v } })}
           />
         </div>
       </Section>

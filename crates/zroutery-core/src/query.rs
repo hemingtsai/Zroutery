@@ -1,6 +1,6 @@
 //! What kind of request this is, as opposed to which model it asks for.
 //!
-//! `Resolution` answers "which model" — a direct id or a class. This module
+//! `Resolution` answers "which model" — a direct id or a tier. This module
 //! answers "which *purpose*": a request from the client's main conversation, or
 //! one of the side queries a client such as Claude Code issues alongside it.
 //!

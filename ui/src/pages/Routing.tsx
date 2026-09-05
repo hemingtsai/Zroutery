@@ -9,6 +9,7 @@ import {
   type Election,
   type ModelTier,
   type ModelRow,
+  type NamingStyle,
   type RoutingStrategy,
   type Snapshot,
 } from "../api";
@@ -88,13 +89,13 @@ export default function Routing({
             {tierRoutes.map(({ tier, members }) => (
               <div className="flow-row" key={tier}>
                 <div className="flow-kind">
-                  <span className="flow-kind-name mono">{virtualId(tier)}</span>
+                  <span className="flow-kind-name mono">{virtualId(tier, config.routing.naming_style)}</span>
                   <span className="flow-kind-hint">{t(TIER_HINT_KEY[tier])}</span>
                 </div>
                 <div className="flow-routes">
                   {members.length === 0 ? (
                     <span className="flow-empty">
-                      {t("routing.tier_empty", { id: virtualId(tier) })}
+                      {t("routing.tier_empty", { id: virtualId(tier, config.routing.naming_style) })}
                     </span>
                   ) : (
                     members.map((r, i) => (
@@ -275,7 +276,7 @@ function DefaultDrawer({
               { value: "unset", label: t("routing.unknown_404") },
               ...TIERS.map((c) => ({
                 value: c as ModelTier,
-                label: t("routing.unknown_serve", { id: virtualId(c) }),
+                label: t("routing.unknown_serve", { id: virtualId(c, snapshot.config.routing.naming_style) }),
               })),
             ]}
           />
@@ -312,7 +313,7 @@ function DefaultDrawer({
             checked={routing.elect_on_start}
             onChange={(elect_on_start) => patch({ elect_on_start })}
           />
-          <ElectionResult election={snapshot.election} />
+          <ElectionResult election={snapshot.election} namingStyle={snapshot.config.routing.naming_style} />
         </Section>
       )}
     </Drawer>
@@ -320,7 +321,7 @@ function DefaultDrawer({
 }
 
 /** What the last election decided, per tier, with the numbers behind it. */
-function ElectionResult({ election }: { election: Election | null }) {
+function ElectionResult({ election, namingStyle }: { election: Election | null; namingStyle: NamingStyle }) {
   const { t } = useI18n();
   if (!election) {
     return <p className="empty">{t("routing.no_election")}</p>;
@@ -334,7 +335,7 @@ function ElectionResult({ election }: { election: Election | null }) {
       {tierOutcomes.map((outcome) => (
         <div key={outcome.tier}>
           <div className="row gap" style={{ marginBottom: 4 }}>
-            <span className="mono">{virtualId(outcome.tier)}</span>
+            <span className="mono">{virtualId(outcome.tier, namingStyle)}</span>
             {outcome.note && <span className="muted">{outcome.note}</span>}
           </div>
           <table className="table">
