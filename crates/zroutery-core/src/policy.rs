@@ -16,8 +16,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::config::ModelTier;
-use crate::ir::{Capability, ChatRequest};
+use crate::config::{ModelCapabilities, ModelTier};
+use crate::ir::{Capability, CapabilityState, ChatRequest};
 
 // ----------------------------------------------------------- Profile
 
@@ -80,7 +80,9 @@ impl TaskProfile {
         let thinking_enabled = req.thinking.as_ref().is_some_and(|t| t.enabled);
         let total_tokens = context_tokens + estimated_output_tokens;
 
-        let complexity = if thinking_enabled || total_tokens > 100_000 {
+        let complexity = if context_tokens > 200_000 && thinking_enabled && has_tools {
+            Complexity::Frontier
+        } else if thinking_enabled || total_tokens > 100_000 {
             Complexity::Complex
         } else if total_tokens > 10_000 || has_tools {
             Complexity::Standard
@@ -157,16 +159,8 @@ pub enum PolicyMatcher {
     Client { value: String },
     /// Match by application name.
     Application { value: String },
-    /// Match by exact model id.
-    Model { value: String },
     /// Match by model id prefix.
     ModelPrefix { value: String },
-    /// Match by provider id.
-    Provider { value: String },
-    /// Match by tier.
-    Tier { value: ModelTier },
-    /// Match if request requires this capability.
-    RequiresCapability { value: Capability },
     /// Match if request is streaming.
     Streaming { value: bool },
     /// Match if request uses tools.
@@ -187,6 +181,11 @@ pub struct PolicyRequirements {
     /// Candidates must support all of these capabilities.
     #[serde(default)]
     pub required_capabilities: Vec<Capability>,
+    /// When `true`, candidates with [`CapabilityState::Unknown`] for a
+    /// required capability are rejected. When `false`, unknown capabilities
+    /// are treated as a soft fallback (the candidate is still eligible).
+    #[serde(default)]
+    pub strict_capabilities: bool,
     /// Minimum tier (candidate tier must be >= this).
     #[serde(default)]
     pub min_tier: Option<ModelTier>,
@@ -294,14 +293,14 @@ fn default_max_escalations() -> u32 {
 // ------------------------------------------------------------ Matching
 
 /// Context available to matchers during policy evaluation.
+///
+/// Only contains request/client properties. Candidate constraints
+/// (model, provider, tier, capabilities) belong in [`PolicyRequirements`].
 #[derive(Debug)]
 pub struct MatchContext<'a> {
     pub client_id: Option<&'a str>,
     pub application: Option<&'a str>,
     pub model: &'a str,
-    pub provider: &'a str,
-    pub tier: Option<ModelTier>,
-    pub required_capabilities: &'a [Capability],
     pub streaming: bool,
     pub has_tools: bool,
     pub has_vision: bool,
@@ -328,13 +327,7 @@ impl PolicyMatcher {
             PolicyMatcher::Application { value } => {
                 ctx.application.map_or(false, |app| app == value)
             }
-            PolicyMatcher::Model { value } => ctx.model == value,
             PolicyMatcher::ModelPrefix { value } => ctx.model.starts_with(value),
-            PolicyMatcher::Provider { value } => ctx.provider == value,
-            PolicyMatcher::Tier { value } => ctx.tier == Some(*value),
-            PolicyMatcher::RequiresCapability { value } => {
-                ctx.required_capabilities.contains(value)
-            }
             PolicyMatcher::Streaming { value } => ctx.streaming == *value,
             PolicyMatcher::HasTools { value } => ctx.has_tools == *value,
             PolicyMatcher::HasVision { value } => ctx.has_vision == *value,
@@ -377,15 +370,24 @@ impl PolicyRequirements {
         model_id: &str,
         provider_id: &str,
         tier: Option<ModelTier>,
-        capabilities: &crate::config::ModelCapabilities,
+        capabilities: &ModelCapabilities,
         circuit_open: bool,
     ) -> EligibilityCheck {
         let mut reasons = Vec::new();
 
-        // Capability check
+        // Capability check using tri-state capability_state()
         for cap in &self.required_capabilities {
-            if !capabilities.supports(*cap) {
-                reasons.push(RejectionReason::MissingCapability(*cap));
+            match capabilities.capability_state(*cap) {
+                CapabilityState::Supported => {} // eligible
+                CapabilityState::Unsupported => {
+                    reasons.push(RejectionReason::MissingCapability(*cap));
+                }
+                CapabilityState::Unknown => {
+                    if self.strict_capabilities {
+                        reasons.push(RejectionReason::MissingCapability(*cap));
+                    }
+                    // When not strict, unknown = soft fallback (eligible)
+                }
             }
         }
 
@@ -475,13 +477,16 @@ pub struct ScoringContext {
     pub health: f64,
     /// EWMA latency in milliseconds, from the router.
     pub avg_latency_ms: f64,
-    /// The candidate's cost per million tokens (averaged input+output).
-    /// `None` when pricing is not configured.
-    pub cost_per_mtok: Option<f64>,
+    /// Input price per million tokens. `None` when pricing is not configured.
+    pub input_per_mtok: Option<f64>,
+    /// Output price per million tokens. `None` when pricing is not configured.
+    pub output_per_mtok: Option<f64>,
     /// Lower value = higher priority (from ModelEntry).
     pub priority: i32,
     /// The candidate's tier, if assigned.
     pub tier: Option<ModelTier>,
+    /// The task profile for request-aware cost estimation.
+    pub task: Option<&'static TaskProfile>,
 }
 
 const LATENCY_BASELINE_MS: f64 = 1000.0;
@@ -507,9 +512,20 @@ pub fn score_candidate(pref: &PolicyPreference, ctx: &ScoringContext) -> ScoredC
         (LATENCY_BASELINE_MS / ctx.avg_latency_ms).min(1.0)
     };
 
-    // Cost: lower is better. Inverse-normalized to $10/MTok baseline.
-    let cost = match ctx.cost_per_mtok {
-        Some(c) if c > 0.0 => (COST_BASELINE_MTOK / c).min(1.0),
+    // Cost: request-aware estimation when pricing and task profile are available.
+    // estimated_cost = context_tokens * input_per_mtok / 1M + output_tokens * output_per_mtok / 1M
+    // Normalize against $1.0 reference: lower cost → higher score.
+    let cost = match (ctx.input_per_mtok, ctx.output_per_mtok, ctx.task) {
+        (Some(inp), Some(out), Some(task)) => {
+            let estimated_cost = task.context_tokens as f64 * inp / 1_000_000.0
+                + task.estimated_output_tokens as f64 * out / 1_000_000.0;
+            (1.0 / (1.0 + estimated_cost)).min(1.0)
+        }
+        (Some(inp), Some(out), None) => {
+            // No task profile: fall back to average cost with baseline normalization.
+            let avg = (inp + out) / 2.0;
+            if avg > 0.0 { (COST_BASELINE_MTOK / avg).min(1.0) } else { 0.5 }
+        }
         _ => 0.5, // unknown cost = neutral
     };
 
@@ -586,7 +602,10 @@ pub fn default_policy() -> RoutingPolicy {
         enabled: true,
         matchers: Vec::new(),
         requirements: PolicyRequirements::default(),
-        preference: PolicyPreference::default(),
+        preference: PolicyPreference {
+            preferred_tier: Some(ModelTier::Standard),
+            ..PolicyPreference::default()
+        },
         fallback: PolicyFallback::Escalate {
             enabled: true,
             max_steps: 2,
@@ -713,9 +732,6 @@ mod tests {
             client_id: None,
             application: None,
             model,
-            provider: "p",
-            tier: Some(ModelTier::Standard),
-            required_capabilities: &[],
             streaming: false,
             has_tools: false,
             has_vision: false,
@@ -751,8 +767,10 @@ mod tests {
 
     #[test]
     fn capability_requirement_filters() {
+        // With strict_capabilities = true, unknown capabilities are rejected.
         let reqs = PolicyRequirements {
             required_capabilities: vec![Capability::Vision],
+            strict_capabilities: true,
             ..Default::default()
         };
         let caps = ModelCapabilities {
@@ -765,6 +783,23 @@ mod tests {
             check.reasons[0],
             RejectionReason::MissingCapability(Capability::Vision)
         ));
+    }
+
+    #[test]
+    fn capability_unknown_is_soft_fallback_when_not_strict() {
+        // With strict_capabilities = false (default), unknown capabilities
+        // are a soft fallback — the candidate remains eligible.
+        let reqs = PolicyRequirements {
+            required_capabilities: vec![Capability::Vision],
+            strict_capabilities: false,
+            ..Default::default()
+        };
+        let caps = ModelCapabilities {
+            vision: false,
+            ..Default::default()
+        };
+        let check = reqs.check("m", "p", Some(ModelTier::Standard), &caps, false);
+        assert!(check.eligible, "unknown capability should be soft fallback");
     }
 
     #[test]
@@ -836,15 +871,15 @@ mod tests {
         let mut p = default_policy();
         p.matchers = vec![
             PolicyMatcher::Client { value: "codex".into() },
-            PolicyMatcher::RequiresCapability { value: Capability::Tools },
+            PolicyMatcher::HasTools { value: true },
         ];
         let mut c = ctx("m");
         c.client_id = Some("codex");
-        c.required_capabilities = &[Capability::Tools];
+        c.has_tools = true;
         assert!(p.matches(&c));
 
         // Missing one matcher
-        c.required_capabilities = &[];
+        c.has_tools = false;
         assert!(!p.matches(&c));
     }
 
@@ -1070,9 +1105,11 @@ mod tests {
         ScoringContext {
             health,
             avg_latency_ms: latency,
-            cost_per_mtok: cost,
+            input_per_mtok: cost,
+            output_per_mtok: cost,
             priority,
             tier,
+            task: None,
         }
     }
 

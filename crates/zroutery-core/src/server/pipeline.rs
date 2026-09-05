@@ -5,6 +5,7 @@
 //! file is about which paths exist; this one is about what happens once a request
 //! is on one of them.
 
+use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Instant;
@@ -22,6 +23,7 @@ use crate::budget::Verdict;
 use crate::config::ModelTier;
 use crate::error::{Error, Result};
 use crate::ir::{ChatRequest, Dialect, StoredResponse, StreamEvent, Usage};
+use crate::policy::{self, ClientContext, RoutingPolicy};
 use crate::protocol::{self, openai, SseFrame, StreamEncoder};
 use crate::query::RequestKind;
 use crate::rectifier::{self, Rectifier};
@@ -82,12 +84,54 @@ pub(super) async fn handle_chat(
         RequestKind::Main
     };
 
+    // Build task profile and client context for policy resolution.
+    let task_profile = policy::TaskProfile::from_request(&req);
+    let header_pairs: Vec<(&str, &str)> = headers
+        .iter()
+        .filter_map(|(name, value)| {
+            let val = value.to_str().ok()?;
+            Some((name.as_str(), val))
+        })
+        .collect();
+    let client_ctx = build_client_context(&headers, &req.model, &header_pairs);
+    let policy_config = &config.routing.policies;
+    let matched_policy = resolve_policy(policy_config, &client_ctx, &task_profile);
+
     let plan = match kind {
         RequestKind::Main => registry
             .resolve(&req.model)
             .and_then(|resolution| apply_budgets(&state, &registry, resolution))
             .and_then(|resolution| {
-                state.router.plan(&registry, &resolution, &req.required_capabilities)
+                // Resolution::Direct skips policy: the client named an exact
+                // model, so policy filtering would be surprising.
+                // Resolution::Tier uses policy-aware routing when a policy is
+                // resolved (via client profile, matchers, or default).
+                match &resolution {
+                    Resolution::Direct(_) => {
+                        state.router.plan(&registry, &resolution, &req.required_capabilities)
+                    }
+                    Resolution::Tier(_) => {
+                        match &matched_policy {
+                            Some(policy) => {
+                                tracing::debug!(
+                                    policy_id = %policy.id,
+                                    "using policy-aware routing"
+                                );
+                                state.router.plan_with_policy(
+                                    &registry,
+                                    &resolution,
+                                    &req.required_capabilities,
+                                    &policy.requirements,
+                                    &policy.preference,
+                                    &policy.fallback,
+                                )
+                            }
+                            None => {
+                                state.router.plan(&registry, &resolution, &req.required_capabilities)
+                            }
+                        }
+                    }
+                }
             }),
         // The classifier pool is resolved directly: the model the client named
         // (e.g. `claude-opus-4-8[1m]`) is irrelevant to *which model judges*,
@@ -1040,6 +1084,90 @@ fn inject_routing_headers(headers: &mut HeaderMap, candidate: &Candidate, kind: 
     if !kind.is_main() {
         headers.insert("x-zroutery-classifier", HeaderValue::from_static("1"));
     }
+}
+
+/// Build a [`ClientContext`] from the request headers and model.
+///
+/// Extracts the User-Agent, any `x-zroutery-client` header, and uses the
+/// pre-collected header pairs for policy matching.
+fn build_client_context<'a>(
+    headers: &'a HeaderMap,
+    model: &'a str,
+    header_pairs: &'a [(&'a str, &'a str)],
+) -> ClientContext<'a> {
+    let user_agent = headers
+        .get(header::USER_AGENT)
+        .and_then(|v| v.to_str().ok());
+
+    let client_id = headers
+        .get("x-zroutery-client")
+        .and_then(|v| v.to_str().ok());
+
+    ClientContext {
+        client_id,
+        user_agent,
+        api_key_prefix: None,
+        headers: header_pairs,
+        model,
+    }
+}
+
+/// Resolve the routing policy for this request.
+///
+/// Resolution order:
+/// 1. Client profile match (first matching profile's `policy_id`)
+/// 2. Policy matchers (first policy whose matchers all pass)
+/// 3. Default policy (by `default_policy` id, or the built-in default)
+fn resolve_policy<'a>(
+    config: &'a policy::PolicyConfig,
+    client_ctx: &ClientContext,
+    task: &policy::TaskProfile,
+) -> Option<Cow<'a, RoutingPolicy>> {
+    // Step 1: Try client profiles.
+    if let Some(profile) = policy::resolve_client(&config.clients, client_ctx) {
+        if let Some(policy) = config.policies.iter().find(|p| p.id == profile.policy_id && p.enabled) {
+            tracing::debug!(
+                client_profile = %profile.id,
+                policy_id = %policy.id,
+                "policy resolved via client profile"
+            );
+            return Some(Cow::Borrowed(policy));
+        }
+    }
+
+    // Step 2: Try policy matchers.
+    let match_ctx = policy::MatchContext {
+        client_id: client_ctx.client_id,
+        application: None,
+        model: client_ctx.model,
+        streaming: false,
+        has_tools: task.has_tools,
+        has_vision: task.has_vision,
+        task: Some(task),
+    };
+    for policy in &config.policies {
+        if policy.matches(&match_ctx) {
+            tracing::debug!(
+                policy_id = %policy.id,
+                "policy resolved via matchers"
+            );
+            return Some(Cow::Borrowed(policy));
+        }
+    }
+
+    // Step 3: Fall back to default policy.
+    if let Some(ref default_id) = config.default_policy {
+        if let Some(policy) = config.policies.iter().find(|p| p.id == *default_id && p.enabled) {
+            tracing::debug!(
+                policy_id = %policy.id,
+                "policy resolved via default_policy config"
+            );
+            return Some(Cow::Borrowed(policy));
+        }
+    }
+
+    // Built-in default when nothing is configured.
+    Some(Cow::Owned(policy::default_policy()))
 }
 
 struct SseState {
