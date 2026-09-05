@@ -6,6 +6,10 @@
 //! keeps the number of conversions at `2 decoders + 2 encoders` instead of a
 //! full N x M matrix.
 
+pub mod response;
+
+pub use response::{ResponseStatus, ResponseStore, StoredResponse};
+
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
