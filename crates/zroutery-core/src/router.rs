@@ -578,21 +578,7 @@ fn by_priority<'a>(members: &[&'a ModelEntry]) -> Vec<&'a ModelEntry> {
 /// Every listed capability must be present on the model. With a typed enum,
 /// there are no unknown capabilities — every variant is known.
 fn satisfies_capabilities(model: &ModelEntry, required: &[Capability]) -> bool {
-    for cap in required {
-        let ok = match cap {
-            Capability::Vision => model.capabilities.vision,
-            Capability::Tools => model.capabilities.tools,
-            Capability::Thinking => model.capabilities.thinking,
-            Capability::StructuredOutput => model.capabilities.structured_output,
-            Capability::Audio => model.capabilities.audio,
-            Capability::Video => model.capabilities.video,
-            Capability::Files => model.capabilities.files,
-        };
-        if !ok {
-            return false;
-        }
-    }
-    true
+    required.iter().all(|cap| model.capabilities.supports(*cap))
 }
 
 #[cfg(test)]

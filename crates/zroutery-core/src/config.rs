@@ -176,6 +176,32 @@ pub struct ModelCapabilities {
     pub files: bool,
 }
 
+impl ModelCapabilities {
+    /// Whether this model supports the given capability.
+    pub fn supports(&self, cap: crate::ir::Capability) -> bool {
+        match cap {
+            crate::ir::Capability::Vision => self.vision,
+            crate::ir::Capability::Tools => self.tools,
+            crate::ir::Capability::Thinking => self.thinking,
+            crate::ir::Capability::StructuredOutput => self.structured_output,
+            crate::ir::Capability::Audio => self.audio,
+            crate::ir::Capability::Video => self.video,
+            crate::ir::Capability::Files => self.files,
+        }
+    }
+
+    /// True if all capabilities are false (default/unset).
+    pub fn is_empty(&self) -> bool {
+        !self.vision
+            && !self.tools
+            && !self.thinking
+            && !self.structured_output
+            && !self.audio
+            && !self.video
+            && !self.files
+    }
+}
+
 /// Upstream wire protocol of a provider.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
