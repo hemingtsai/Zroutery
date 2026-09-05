@@ -1145,8 +1145,8 @@ pub struct ResponsesStreamEncoder {
     output_item_open: bool,
     /// Item id for the currently open output item.
     current_item_id: String,
-    /// Accumulated output items for response.completed.
-    output_items: Vec<Value>,
+    /// Accumulated output items indexed by output_index for correct ordering.
+    output_items: HashMap<u32, Value>,
     /// Text accumulator.
     current_text: String,
     /// Thinking accumulator.
@@ -1171,7 +1171,7 @@ impl ResponsesStreamEncoder {
             content_part_open: false,
             output_item_open: false,
             current_item_id: String::new(),
-            output_items: Vec::new(),
+            output_items: HashMap::new(),
             current_text: String::new(),
             current_thinking: String::new(),
             tool_calls: HashMap::new(),
@@ -1214,12 +1214,19 @@ impl ResponsesStreamEncoder {
         ))
     }
 
+    /// Collect output_items into a sorted Vec by output_index.
+    fn sorted_output(&mut self) -> Value {
+        let mut items: Vec<_> = std::mem::take(&mut self.output_items).into_iter().collect();
+        items.sort_by_key(|(k, _)| *k);
+        Value::Array(items.into_iter().map(|(_, v)| v).collect())
+    }
+
     /// Finalize the current output item into output_items for response.completed.
     fn finalize_output_item(&mut self) {
         match self.current_kind {
             Some(OutputItemKind::Text) => {
                 if !self.current_text.is_empty() {
-                    self.output_items.push(json!({
+                    self.output_items.insert(self.current_output_index, json!({
                         "id": self.current_item_id,
                         "type": "message",
                         "role": "assistant",
@@ -1231,7 +1238,7 @@ impl ResponsesStreamEncoder {
             }
             Some(OutputItemKind::Thinking) => {
                 if !self.current_thinking.is_empty() {
-                    self.output_items.push(json!({
+                    self.output_items.insert(self.current_output_index, json!({
                         "id": self.current_item_id,
                         "type": "reasoning",
                         "summary": [{"type": "summary_text", "text": self.current_thinking}],
@@ -1251,24 +1258,18 @@ impl ResponsesStreamEncoder {
         }
         self.finalize_output_item();
         self.output_item_open = false;
-        // Build the done item from the last finalized output_items entry.
-        let done_item = self.output_items.last().cloned().unwrap_or(json!({
-            "id": self.current_item_id,
-            "type": "message",
-            "status": "completed",
+        let done_item = self.output_items.get(&self.current_output_index)
+            .cloned()
+            .unwrap_or(json!({
+                "id": self.current_item_id,
+                "type": "message",
+                "status": "completed",
+            }));
+        let frame = self.frame("response.output_item.done", json!({
+            "type": "response.output_item.done",
+            "output_index": self.current_output_index,
+            "item": done_item,
         }));
-        let event_type = match self.current_kind {
-            Some(OutputItemKind::Text) | Some(OutputItemKind::Thinking) => "response.output_item.done",
-            _ => "response.output_item.done",
-        };
-        let frame = self.frame(
-            event_type,
-            json!({
-                "type": "response.output_item.done",
-                "output_index": self.current_output_index,
-                "item": done_item,
-            }),
-        );
         self.current_kind = None;
         Some(frame)
     }
@@ -1415,7 +1416,6 @@ impl StreamEncoder for ResponsesStreamEncoder {
                 }
             }
             StreamEvent::BlockStop { index } => {
-                // If this is a tool call block, emit arguments.done + output_item.done.
                 if let Some((item_id, call_id, name, args)) = self.tool_calls.remove(index) {
                     let oi = self.tool_output_indices.remove(index).unwrap_or(0);
                     out.push(self.frame("response.function_call_arguments.done", json!({
@@ -1425,20 +1425,19 @@ impl StreamEncoder for ResponsesStreamEncoder {
                         "content_index": 0,
                         "arguments": args,
                     })));
-                    let parsed_args: Value = if args.is_empty() { json!({}) }
-                        else { serde_json::from_str(&args).unwrap_or_else(|_| json!({"__raw": args})) };
-                    self.output_items.push(json!({
+                    // arguments stays as JSON string per Responses API spec.
+                    self.output_items.insert(oi, json!({
                         "type": "function_call",
                         "id": item_id,
                         "call_id": call_id,
                         "name": name,
-                        "arguments": parsed_args,
+                        "arguments": if args.is_empty() { "{}".to_string() } else { args },
                         "status": "completed",
                     }));
                     out.push(self.frame("response.output_item.done", json!({
                         "type": "response.output_item.done",
                         "output_index": oi,
-                        "item": self.output_items.last().unwrap(),
+                        "item": self.output_items.get(&oi).unwrap(),
                     })));
                     self.output_item_open = false;
                     self.current_kind = None;
@@ -1447,7 +1446,18 @@ impl StreamEncoder for ResponsesStreamEncoder {
             StreamEvent::Stop { usage, .. } => {
                 if let Some(f) = self.close_content_part() { out.push(f); }
                 if let Some(f) = self.close_output_item() { out.push(f); }
-                let output = Value::Array(std::mem::take(&mut self.output_items));
+                // Flush any incomplete tool calls as partial items.
+                for (oi, (item_id, call_id, name, args)) in self.tool_calls.drain() {
+                    self.output_items.insert(oi, json!({
+                        "type": "function_call",
+                        "id": item_id,
+                        "call_id": call_id,
+                        "name": name,
+                        "arguments": if args.is_empty() { "{}".to_string() } else { args },
+                        "status": "incomplete",
+                    }));
+                }
+                let output = self.sorted_output();
                 out.push(self.frame("response.completed", json!({
                     "type": "response.completed",
                     "response": {
@@ -1473,14 +1483,27 @@ impl StreamEncoder for ResponsesStreamEncoder {
         let mut out = Vec::new();
         if let Some(f) = self.close_content_part() { out.push(f); }
         if let Some(f) = self.close_output_item() { out.push(f); }
-        let output = Value::Array(std::mem::take(&mut self.output_items));
+        // Flush any incomplete tool calls.
+        let has_incomplete = !self.tool_calls.is_empty();
+        for (oi, (item_id, call_id, name, args)) in self.tool_calls.drain() {
+            self.output_items.insert(oi, json!({
+                "type": "function_call",
+                "id": item_id,
+                "call_id": call_id,
+                "name": name,
+                "arguments": if args.is_empty() { "{}".to_string() } else { args },
+                "status": "incomplete",
+            }));
+        }
+        let output = self.sorted_output();
+        let status = if has_incomplete { "incomplete" } else { "completed" };
         out.push(self.frame("response.completed", json!({
             "type": "response.completed",
             "response": {
                 "id": self.id,
                 "object": "response",
                 "created_at": self.created_at,
-                "status": "completed",
+                "status": status,
                 "model": self.model,
                 "output": output,
             }
@@ -1489,7 +1512,14 @@ impl StreamEncoder for ResponsesStreamEncoder {
     }
 
     fn error(&mut self, err: &Error) -> Vec<SseFrame> {
-        let mut out = vec![self.frame("response.failed", json!({
+        let mut out = Vec::new();
+        if !self.done {
+            self.done = true;
+            if let Some(f) = self.close_content_part() { out.push(f); }
+            if let Some(f) = self.close_output_item() { out.push(f); }
+        }
+        let output = self.sorted_output();
+        out.push(self.frame("response.failed", json!({
             "type": "response.failed",
             "response": {
                 "id": self.id,
@@ -1497,24 +1527,9 @@ impl StreamEncoder for ResponsesStreamEncoder {
                 "status": "failed",
                 "model": self.model,
                 "error": err.to_wire(Dialect::OpenAIResponses),
+                "output": output,
             }
-        }))];
-        if !self.done {
-            self.done = true;
-            if let Some(f) = self.close_content_part() { out.push(f); }
-            if let Some(f) = self.close_output_item() { out.push(f); }
-            let output = Value::Array(std::mem::take(&mut self.output_items));
-            out.push(self.frame("response.completed", json!({
-                "type": "response.completed",
-                "response": {
-                    "id": self.id,
-                    "object": "response",
-                    "status": "failed",
-                    "model": self.model,
-                    "output": output,
-                }
-            })));
-        }
+        })));
         out
     }
 }
