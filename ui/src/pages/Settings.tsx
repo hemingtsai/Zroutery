@@ -11,8 +11,8 @@ import {
 } from "../api";
 import {
   Badge,
-  Banner,
   Button,
+  ConfirmDialog,
   Field,
   NumberField,
   PageHead,
@@ -21,6 +21,8 @@ import {
   Select,
   TextField,
   Toggle,
+  useToast,
+  type ConfirmRequest,
 } from "../components";
 import { useI18n } from "../i18n";
 
@@ -46,6 +48,7 @@ export default function Settings({
 }) {
   const { config, server } = snapshot;
   const { t, lang, setLang } = useI18n();
+  const notify = useToast();
   // Candidates for the vision fallback: enabled models that can see, on
   // enabled providers. Mirrors what the backend resolver accepts.
   const visionCapable = modelRows(snapshot).filter(
@@ -54,7 +57,8 @@ export default function Settings({
       r.model.supports_vision &&
       config.providers.find((p) => p.id === r.model.provider_id)?.enabled,
   );
-  const [notice, setNotice] = useState<string | null>(null);
+  const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
+  const [originError, setOriginError] = useState<string | null>(null);
   const [aliasDraft, setAliasDraft] = useState({ from: "", to: "sonnet" as ModelClass });
   const [originDraft, setOriginDraft] = useState("");
   const [budgetDraft, setBudgetDraft] = useState({
@@ -142,9 +146,7 @@ export default function Settings({
       next.budgets.splice(index, 1);
       return next;
     });
-  };
-
-  const addAlias = () => {
+  };  const addAlias = () => {
     const from = aliasDraft.from.trim();
     if (!from) return;
     void save((cfg) => {
@@ -167,11 +169,11 @@ export default function Settings({
     const origin = originDraft.trim().replace(/\/$/, "");
     if (!origin) return;
     if (!/^https?:\/\//.test(origin)) {
-      setNotice(t("settings.origin_notice"));
+      setOriginError(t("settings.origin_notice"));
       return;
     }
     setOriginDraft("");
-    setNotice(null);
+    setOriginError(null);
     void save((cfg) => {
       if (cfg.server.cors_origins.includes(origin)) return null;
       const next = structuredClone(cfg);
@@ -198,18 +200,7 @@ export default function Settings({
 
   return (
     <>
-      {notice && (
-        <Banner
-          tone="warn"
-          actions={
-            <Button kind="ghost" onClick={() => setNotice(null)}>
-              {t("common.ok")}
-            </Button>
-          }
-        >
-          {notice}
-        </Banner>
-      )}
+      <ConfirmDialog request={confirm} onClose={() => setConfirm(null)} />
 
       <PageHead lede={t("settings.lede")} />
 
@@ -373,7 +364,7 @@ export default function Settings({
                 try {
                   setRevealed(await api.revealToken());
                 } catch (e) {
-                  setNotice(errorText(e));
+                  notify("error", errorText(e));
                 }
               }}
               title={t("settings.reveal_title")}
@@ -381,15 +372,23 @@ export default function Settings({
               {t("settings.reveal")}
             </Button>
           )}
-          <Button kind="ghost" onClick={() => api.copyToken()}>
+          <Button kind="ghost" onClick={() => api.copyToken().then(() => notify("ok", t("toast.copied")))}>
             {t("settings.copy")}
           </Button>
           <Button
             kind="danger"
-            onClick={() => {
-              setRevealed(null);
-              void run(api.regenerateToken);
-            }}
+            onClick={() =>
+              setConfirm({
+                title: t("confirm.regenerate_token"),
+                body: t("confirm.regenerate_token_body"),
+                confirmLabel: t("settings.regenerate"),
+                danger: true,
+                onConfirm: () => {
+                  setRevealed(null);
+                  void run(api.regenerateToken);
+                },
+              })
+            }
             title={t("settings.regenerate_title")}
           >
             {t("settings.regenerate")}
@@ -444,11 +443,19 @@ ${t("settings.snippet_comment")}`}
               </div>
             )}
             <div className="controls">
-              <Field label={t("field.allowed_origin")} hint={t("field.allowed_origin_hint")}>
+              <Field
+                label={t("field.allowed_origin")}
+                hint={originError ?? t("field.allowed_origin_hint")}
+                danger={Boolean(originError)}
+              >
                 <input
                   value={originDraft}
                   placeholder="http://localhost:3000"
-                  onChange={(e) => setOriginDraft(e.currentTarget.value)}
+                  className={originError ? "input-error" : undefined}
+                  onChange={(e) => {
+                    setOriginDraft(e.currentTarget.value);
+                    setOriginError(null);
+                  }}
                   onKeyDown={(e) => e.key === "Enter" && addOrigin()}
                 />
               </Field>
@@ -524,7 +531,17 @@ ${t("settings.snippet_comment")}`}
                       />
                     </td>
                     <td>
-                      <Button kind="ghost" onClick={() => removeBudget(b.id)}>
+                      <Button
+                        kind="ghost"
+                        onClick={() =>
+                          setConfirm({
+                            title: t("confirm.remove_budget"),
+                            confirmLabel: t("common.delete"),
+                            danger: true,
+                            onConfirm: () => removeBudget(b.id),
+                          })
+                        }
+                      >
                         {t("common.delete")}
                       </Button>
                     </td>

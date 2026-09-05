@@ -1,6 +1,128 @@
 /** Small presentational building blocks shared by the panels. */
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import * as RadixSelect from "@radix-ui/react-select";
+import { useI18n } from "./i18n";
+
+/**
+ * Transient operation feedback, bottom-right, auto-dismissed. Banners stay
+ * for state a user must act on (exposed gateway, failed saves); toasts are
+ * for confirmations the user would otherwise have to take on faith — a
+ * copy that worked, an import that landed.
+ */
+type Toast = { id: number; kind: "ok" | "error"; text: string; timer: number };
+
+const ToastContext = createContext<(kind: "ok" | "error", text: string) => void>(() => {});
+
+export function ToastProvider({ children }: { children: ReactNode }) {
+  const [toasts, setToasts] = useState<Toast[]>([]);
+  const nextId = useRef(0);
+
+  const notify = useCallback((kind: "ok" | "error", text: string) => {
+    const id = nextId.current++;
+    const timer = window.setTimeout(() => {
+      setToasts((current) => current.filter((t) => t.id !== id));
+    }, kind === "ok" ? 3200 : 6000);
+    setToasts((current) => [...current.slice(-3), { id, kind, text, timer }]);
+  }, []);
+
+  const dismiss = (toast: Toast) => {
+    window.clearTimeout(toast.timer);
+    setToasts((current) => current.filter((t) => t.id !== toast.id));
+  };
+
+  return (
+    <ToastContext.Provider value={notify}>
+      {children}
+      <div className="toast-host" role="status" aria-live="polite">
+        {toasts.map((toast) => (
+          <button
+            key={toast.id}
+            className={`toast toast-${toast.kind}`}
+            onClick={() => dismiss(toast)}
+            title="Dismiss"
+          >
+            {toast.text}
+          </button>
+        ))}
+      </div>
+    </ToastContext.Provider>
+  );
+}
+
+/** Fire a transient confirmation or error message. */
+export function useToast() {
+  return useContext(ToastContext);
+}
+
+/**
+ * A modal question the user must answer before something happens. Used for
+ * everything irreversible — removals, token regeneration — because a
+ * one-click destructive action is one mis-click away from data loss.
+ */
+export type ConfirmRequest = {
+  title: string;
+  body?: string;
+  confirmLabel?: string;
+  danger?: boolean;
+  onConfirm: () => void;
+};
+
+export function ConfirmDialog({
+  request,
+  onClose,
+}: {
+  request: ConfirmRequest | null;
+  onClose: () => void;
+}) {
+  const confirmRef = useRef<HTMLButtonElement>(null);
+  const { t } = useI18n();
+
+  useEffect(() => {
+    if (!request) return;
+    confirmRef.current?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [request, onClose]);
+
+  if (!request) return null;
+
+  return (
+    <>
+      <div className="drawer-veil" onClick={onClose} aria-hidden />
+      <div className="confirm" role="alertdialog" aria-modal aria-label={request.title}>
+        <h2 className="confirm-title">{request.title}</h2>
+        {request.body && <p className="confirm-body">{request.body}</p>}
+        <div className="confirm-actions">
+          <Button kind="ghost" onClick={onClose}>
+            {t("common.cancel")}
+          </Button>
+          <Button
+            buttonRef={confirmRef}
+            kind={request.danger ? "danger" : "primary"}
+            onClick={() => {
+              request.onConfirm();
+              onClose();
+            }}
+          >
+            {request.confirmLabel ?? request.title}
+          </Button>
+        </div>
+      </div>
+    </>
+  );
+}
 
 /**
  * A select, drawn by us. Native <select> menus are rendered by the OS, so
@@ -326,6 +448,7 @@ export function Button({
   disabled,
   title,
   type = "button",
+  buttonRef,
 }: {
   children: ReactNode;
   onClick?: () => void;
@@ -333,9 +456,11 @@ export function Button({
   disabled?: boolean;
   title?: string;
   type?: "button" | "submit";
+  buttonRef?: React.Ref<HTMLButtonElement>;
 }) {
   return (
     <button
+      ref={buttonRef}
       type={type}
       className={`btn btn-${kind}`}
       onClick={onClick}
@@ -352,17 +477,20 @@ export function Field({
   hint,
   children,
   wide,
+  danger,
 }: {
   label: string;
   hint?: string;
   children: ReactNode;
   wide?: boolean;
+  /** Render the hint in danger tone — the label of a validation problem. */
+  danger?: boolean;
 }) {
   return (
     <label className={`field ${wide ? "field-wide" : ""}`}>
       <span className="field-label">{label}</span>
       {children}
-      {hint && <span className="field-hint">{hint}</span>}
+      {hint && <span className={danger ? "field-hint field-hint-danger" : "field-hint"}>{hint}</span>}
     </label>
   );
 }
@@ -409,6 +537,7 @@ export function TextField({
   wide,
   readOnly,
   password,
+  error,
 }: {
   label: string;
   hint?: string;
@@ -418,6 +547,8 @@ export function TextField({
   wide?: boolean;
   readOnly?: boolean;
   password?: boolean;
+  /** Inline problem with the current value; shown under the input in danger tone. */
+  error?: string | null;
 }) {
   const [draft, setDraft] = useState(value);
   // Adopt values that changed underneath us, e.g. after a save elsewhere.
@@ -428,8 +559,9 @@ export function TextField({
   };
 
   return (
-    <Field label={label} hint={hint} wide={wide}>
+    <Field label={label} hint={error ?? hint} wide={wide} danger={Boolean(error)}>
       <input
+        className={error ? "input-error" : undefined}
         type={password ? "password" : "text"}
         autoComplete={password ? "off" : undefined}
         value={draft}

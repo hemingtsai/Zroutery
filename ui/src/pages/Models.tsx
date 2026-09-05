@@ -19,6 +19,7 @@ import {
   Badge,
   Banner,
   Button,
+  ConfirmDialog,
   Drawer,
   KeyValue,
   NumberField,
@@ -28,6 +29,8 @@ import {
   StatusDot,
   TextField,
   Toggle,
+  useToast,
+  type ConfirmRequest,
   ms,
 } from "../components";
 
@@ -47,9 +50,11 @@ export default function Models({
 }) {
   const { config, health } = snapshot;
   const { t } = useI18n();
+  const notify = useToast();
   const rows = modelRows(snapshot);
   const [openId, setOpenId] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
+  const [nameError, setNameError] = useState<string | null>(null);
   const [draft, setDraft] = useState({ provider_id: config.providers[0]?.id ?? "", upstream_model: "" });
 
   const unclassified = rows.filter((r) => r.model.class === null);
@@ -86,18 +91,18 @@ export default function Models({
     const upstream = draft.upstream_model.trim();
     const providerId = draft.provider_id;
     if (!providerId || !upstream) {
-      setNotice(t("models.pick_provider_name"));
+      notify("error", t("models.pick_provider_name"));
       return;
     }
     if (config.models.some((m) => m.provider_id === providerId && m.upstream_model === upstream)) {
-      setNotice(t("models.duplicate", { model: upstream }));
+      setNameError(t("models.duplicate", { model: upstream }));
       return;
     }
     void save((cfg) => {
       if (
         cfg.models.some((m) => m.provider_id === providerId && m.upstream_model === upstream)
       ) {
-        setNotice(t("models.duplicate", { model: upstream }));
+        setNameError(t("models.duplicate", { model: upstream }));
         return null;
       }
       const next = structuredClone(cfg);
@@ -119,25 +124,14 @@ export default function Models({
       return next;
     });
     setDraft({ ...draft, upstream_model: "" });
-    setNotice(null);
+    setNameError(null);
   };
 
   const open = rows.find((r) => r.id === openId) ?? null;
 
   return (
     <>
-      {notice && (
-        <Banner
-          tone="warn"
-          actions={
-            <Button kind="ghost" onClick={() => setNotice(null)}>
-              {t("common.ok")}
-            </Button>
-          }
-        >
-          {notice}
-        </Banner>
-      )}
+      <ConfirmDialog request={confirm} onClose={() => setConfirm(null)} />
 
       {unclassified.length > 0 && (
         <Banner tone="warn">
@@ -207,14 +201,19 @@ export default function Models({
           <input
             aria-label={t("field.model_name")}
             placeholder="deepseek-chat"
+            className={nameError ? "input-error" : undefined}
             value={draft.upstream_model}
-            onChange={(e) => setDraft({ ...draft, upstream_model: e.currentTarget.value })}
+            onChange={(e) => {
+              setDraft({ ...draft, upstream_model: e.currentTarget.value });
+              setNameError(null);
+            }}
             onKeyDown={(e) => e.key === "Enter" && add()}
           />
           <Button kind="primary" onClick={add} disabled={busy || !config.providers.length}>
             {t("models.add")}
           </Button>
         </div>
+        {nameError && <p className="field-hint field-hint-danger">{nameError}</p>}
         {!config.providers.length && <p className="field-hint">{t("models.add_provider_first")}</p>}
       </Section>
 
@@ -226,7 +225,15 @@ export default function Models({
           busy={busy}
           onClose={() => setOpenId(null)}
           onUpdate={(patch) => update(open.id, patch)}
-          onRemove={() => remove(open.id)}
+          onRemove={() =>
+            setConfirm({
+              title: t("confirm.remove_model"),
+              body: t("confirm.remove_model_body"),
+              confirmLabel: t("models.remove"),
+              danger: true,
+              onConfirm: () => remove(open.id),
+            })
+          }
         />
       )}
     </>

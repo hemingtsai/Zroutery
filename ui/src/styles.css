@@ -1542,3 +1542,138 @@ input::placeholder {
   flex-direction: column;
   gap: 12px;
 }
+
+/* ------------------------------------------------------------- busybar
+   A two-pixel indeterminate progress line under the main bar. A save that
+   round-trips through Rust can take a moment; without this the interface
+   looks frozen rather than working. */
+.mainbar {
+  position: relative;
+}
+
+.busybar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 2px;
+  overflow: hidden;
+  background: transparent;
+}
+
+.busybar::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 30%;
+  background: var(--primary);
+  animation: busy-slide 900ms var(--ease) infinite;
+}
+
+@keyframes busy-slide {
+  from {
+    left: -30%;
+  }
+  to {
+    left: 100%;
+  }
+}
+
+/* ---------------------------------------------------------------- toasts
+   Transient confirmations, bottom-right, above every floating layer. They
+   are buttons so a click dismisses them; errors stay a little longer. */
+.toast-host {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 70;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  pointer-events: none;
+}
+
+.toast {
+  pointer-events: auto;
+  max-width: 360px;
+  padding: 8px 12px;
+  border: 1px solid var(--line-strong);
+  border-left: 2px solid var(--ok);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-layer);
+  cursor: default;
+  animation: toast-in 140ms var(--ease);
+}
+
+.toast-error {
+  border-left-color: var(--danger);
+}
+
+.toast:hover {
+  background: var(--hover);
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* ---------------------------------------------------------------- confirm
+   The modal question for irreversible actions. Shares the drawer's veil;
+   sits one layer above it so it can ask about things inside a drawer. */
+.confirm {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 50;
+  width: min(400px, 88vw);
+  padding: 18px 20px;
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-layer);
+  animation: drawer-in var(--t-drawer) var(--ease);
+}
+
+.confirm-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.confirm-body {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--text-2);
+  line-height: 1.5;
+}
+
+.confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+/* ------------------------------------------------------- invalid fields */
+.input-error {
+  border-color: var(--danger) !important;
+}
+
+.field-hint-danger {
+  color: var(--danger);
+}

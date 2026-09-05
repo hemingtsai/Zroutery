@@ -18,8 +18,8 @@ import {
 } from "../api";
 import {
   Badge,
-  Banner,
   Button,
+  ConfirmDialog,
   Drawer,
   Empty,
   Field,
@@ -32,6 +32,8 @@ import {
   StatusDot,
   TextField,
   Toggle,
+  useToast,
+  type ConfirmRequest,
 } from "../components";
 import { useI18n } from "../i18n";
 
@@ -62,8 +64,10 @@ export default function Providers({
 }) {
   const { config, keys, balances } = snapshot;
   const { t } = useI18n();
+  const notify = useToast();
   const [openId, setOpenId] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
+  const [nameError, setNameError] = useState<string | null>(null);
 
   const [newName, setNewName] = useState("");
   const [newKind, setNewKind] = useState<ProviderKind>("openai_compatible");
@@ -90,12 +94,12 @@ export default function Providers({
     if (!name) return;
     const id = slugify(name);
     if (config.providers.some((p) => p.id === id)) {
-      setNotice(t("providers.duplicate", { id }));
+      setNameError(t("providers.duplicate", { id }));
       return;
     }
     void save((cfg) => {
       if (cfg.providers.some((p) => p.id === id)) {
-        setNotice(t("providers.duplicate", { id }));
+        setNameError(t("providers.duplicate", { id }));
         return null;
       }
       const next = structuredClone(cfg);
@@ -127,6 +131,7 @@ export default function Providers({
     });
     setNewName("");
     setNewBaseUrl("");
+    setNameError(null);
     setOpenId(id);
   };
 
@@ -143,7 +148,7 @@ export default function Providers({
     if (!isMounted.current) return;
     setOpenId(null);
     if (models.length) {
-      setNotice(t("providers.removed_models_notice", { n: models.length }));
+      notify("ok", t("providers.removed_models_notice", { n: models.length }));
     }
   };
 
@@ -151,7 +156,6 @@ export default function Providers({
 
   const loadCcPreview = async () => {
     setCcLoading(true);
-    setNotice(null);
     try {
       const preview = await api.ccswitchPreview();
       setCcPreview(preview);
@@ -161,7 +165,7 @@ export default function Providers({
       }
       setCcSelected(selection);
     } catch (e) {
-      setNotice(errorText(e));
+      notify("error", errorText(e));
     } finally {
       setCcLoading(false);
     }
@@ -174,9 +178,7 @@ export default function Providers({
     if (ids.length === 0) return;
     const ok = await run(() => api.ccswitchImport(ids));
     if (!ok || !isMounted.current) return;
-    setNotice(
-      t("cc.imported_notice", { n: ids.length }),
-    );
+    notify("ok", t("cc.imported_notice", { n: ids.length }));
     await loadCcPreview();
   };
 
@@ -184,18 +186,7 @@ export default function Providers({
 
   return (
     <>
-      {notice && (
-        <Banner
-          tone="info"
-          actions={
-            <Button kind="ghost" onClick={() => setNotice(null)}>
-              {t("common.ok")}
-            </Button>
-          }
-        >
-          {notice}
-        </Banner>
-      )}
+      <ConfirmDialog request={confirm} onClose={() => setConfirm(null)} />
 
       <PageHead
         lede={
@@ -249,11 +240,15 @@ export default function Providers({
 
       <Section title={t("providers.add_section")} hint={t("providers.add_hint")}>
         <div className="controls">
-          <Field label={t("field.name")}>
+          <Field label={t("field.name")} danger={Boolean(nameError)} hint={nameError ?? undefined}>
             <input
               value={newName}
               placeholder="DeepSeek"
-              onChange={(e) => setNewName(e.currentTarget.value)}
+              className={nameError ? "input-error" : undefined}
+              onChange={(e) => {
+                setNewName(e.currentTarget.value);
+                setNameError(null);
+              }}
               onKeyDown={(e) => e.key === "Enter" && addProvider()}
             />
           </Field>
@@ -336,8 +331,15 @@ export default function Providers({
           run={run}
           onClose={() => setOpenId(null)}
           onUpdate={(patch) => update(open.id, patch)}
-          onRemove={() => removeProvider(open.id)}
-          onNotice={setNotice}
+          onRemove={() =>
+            setConfirm({
+              title: t("confirm.remove_provider"),
+              body: t("confirm.remove_provider_body"),
+              confirmLabel: t("providers.remove"),
+              danger: true,
+              onConfirm: () => void removeProvider(open.id),
+            })
+          }
         />
       )}
     </>
@@ -422,7 +424,6 @@ function ProviderDrawer({
   onClose,
   onUpdate,
   onRemove,
-  onNotice,
 }: {
   provider: Provider;
   snapshot: Snapshot;
@@ -432,13 +433,15 @@ function ProviderDrawer({
   onClose: () => void;
   onUpdate: (patch: Partial<Provider>) => void;
   onRemove: () => void;
-  onNotice: (message: string | null) => void;
 }) {
   const models = snapshot.config.models.filter((m) => m.provider_id === provider.id);
   const { t } = useI18n();
+  const notify = useToast();
   const hasKey = snapshot.keys[provider.id] ?? false;
   const [keyDraft, setKeyDraft] = useState("");
   const [discovered, setDiscovered] = useState<DiscoveredModel[] | null>(null);
+  const [discovering, setDiscovering] = useState(false);
+  const [checkingBalance, setCheckingBalance] = useState(false);
 
   const saveKey = async () => {
     const value = keyDraft.trim();
@@ -448,12 +451,15 @@ function ProviderDrawer({
   };
 
   const discover = async () => {
+    setDiscovering(true);
     try {
       const ids = await api.fetchModels(provider);
       setDiscovered(ids);
-      if (ids.length === 0) onNotice(t("providers.empty_catalogue", { name: provider.name }));
+      if (ids.length === 0) notify("error", t("providers.empty_catalogue", { name: provider.name }));
     } catch (e) {
-      onNotice(errorText(e));
+      notify("error", errorText(e));
+    } finally {
+      setDiscovering(false);
     }
   };
 
@@ -466,7 +472,7 @@ function ProviderDrawer({
           (m) => m.provider_id === provider.id && m.upstream_model === model.id,
         )
       ) {
-        onNotice(t("models.duplicate", { model: model.id }));
+        notify("error", t("models.duplicate", { model: model.id }));
         return null;
       }
       const next = structuredClone(cfg);
@@ -556,8 +562,8 @@ function ProviderDrawer({
               ))}
             </span>
           )}
-          <Button kind="ghost" onClick={discover} disabled={busy}>
-            {t("providers.fetch")}
+          <Button kind="ghost" onClick={() => void discover()} disabled={busy || discovering}>
+            {discovering ? t("providers.discovering") : t("providers.fetch")}
           </Button>
         </div>
         {discovered && discovered.length > 0 && (
@@ -687,10 +693,15 @@ function ProviderDrawer({
           <div className="field-actions">
             <Button
               kind="ghost"
-              onClick={() => void run(() => api.refreshBalance(provider.id))}
-              disabled={busy || provider.balance.preset === "none"}
+              onClick={() => {
+                setCheckingBalance(true);
+                void run(() => api.refreshBalance(provider.id)).finally(() =>
+                  setCheckingBalance(false),
+                );
+              }}
+              disabled={busy || checkingBalance || provider.balance.preset === "none"}
             >
-              {t("providers.check_now")}
+              {checkingBalance ? t("providers.checking") : t("providers.check_now")}
             </Button>
           </div>
         </div>

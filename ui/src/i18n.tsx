@@ -25,6 +25,8 @@ const en = {
   // ------------------------------------------------------------ shared
   "common.dismiss": "Dismiss",
   "common.ok": "OK",
+  "common.cancel": "Cancel",
+  "common.confirm": "Confirm",
   "common.loading": "Loading…",
   "common.remove": "Remove",
   "common.delete": "Delete",
@@ -68,6 +70,24 @@ const en = {
   "action.hide": "Hide",
   "action.quit": "Quit",
   "action.quit_title": "Stop the gateway and quit",
+  "toast.copied": "Copied to the clipboard.",
+  "toast.queued_discarded":
+    "Edits made while the failed save was in flight were discarded.",
+
+  // ---------------------------------------------------------------- confirm
+  "confirm.remove_provider": "Remove provider",
+  "confirm.remove_provider_body":
+    "This deletes the provider and every model that belongs to it, and clears its stored key. This cannot be undone.",
+  "confirm.remove_model": "Remove model",
+  "confirm.remove_model_body":
+    "Clients calling this model by id will get errors. This cannot be undone.",
+  "confirm.remove_budget": "Delete budget",
+  "confirm.reset_stats": "Reset counters",
+  "confirm.reset_stats_body":
+    "Request history, per-model health and spend estimates are cleared.",
+  "confirm.regenerate_token": "Regenerate token",
+  "confirm.regenerate_token_body":
+    "Every client configured with the current token stops working until you update it.",
 
   // ------------------------------------------------------------ overview
   "overview.gateway": "gateway",
@@ -190,6 +210,7 @@ const en = {
   "providers.models_section": "Models",
   "providers.models_hint": "Fetch the provider's catalogue, then add what you want to expose.",
   "providers.fetch": "Fetch catalogue",
+  "providers.discovering": "Fetching…",
   "providers.empty_catalogue": "{name} returned an empty model list.",
   "providers.configuration": "Configuration",
   "field.timeout": "Timeout (s)",
@@ -206,6 +227,7 @@ const en = {
   "providers.balance_hint": "Some providers publish the credit that is left.",
   "field.probe": "Probe",
   "providers.check_now": "Check now",
+  "providers.checking": "Checking…",
   "providers.compatibility": "Compatibility",
   "providers.compatibility_hint":
     "For providers that deviate from the dialect; leave everything off unless a request fails.",
@@ -423,6 +445,8 @@ const zh: Dict = {
   // ------------------------------------------------------------ shared
   "common.dismiss": "知道了",
   "common.ok": "确定",
+  "common.cancel": "取消",
+  "common.confirm": "确认",
   "common.loading": "加载中…",
   "common.remove": "移除",
   "common.delete": "删除",
@@ -466,6 +490,20 @@ const zh: Dict = {
   "action.hide": "隐藏",
   "action.quit": "退出",
   "action.quit_title": "停止网关并退出",
+  "toast.copied": "已复制到剪贴板。",
+  "toast.queued_discarded": "失败的保存期间所做的编辑已被丢弃。",
+
+  // ---------------------------------------------------------------- confirm
+  "confirm.remove_provider": "移除提供商",
+  "confirm.remove_provider_body":
+    "将删除该提供商及其全部模型,并清除已存的密钥。此操作不可撤销。",
+  "confirm.remove_model": "移除模型",
+  "confirm.remove_model_body": "以该 id 调用的客户端将收到错误。此操作不可撤销。",
+  "confirm.remove_budget": "删除预算",
+  "confirm.reset_stats": "重置计数",
+  "confirm.reset_stats_body": "请求历史、模型健康状态与花费估算都会被清除。",
+  "confirm.regenerate_token": "重新生成令牌",
+  "confirm.regenerate_token_body": "所有使用当前令牌的客户端在你更新前都无法继续工作。",
 
   // ------------------------------------------------------------ overview
   "overview.gateway": "网关",
@@ -585,6 +623,7 @@ const zh: Dict = {
   "providers.models_section": "模型",
   "providers.models_hint": "抓取提供商目录,再添加要暴露的模型。",
   "providers.fetch": "抓取目录",
+  "providers.discovering": "抓取中…",
   "providers.empty_catalogue": "{name} 返回了空模型列表。",
   "providers.configuration": "配置",
   "field.timeout": "超时 (秒)",
@@ -601,6 +640,7 @@ const zh: Dict = {
   "providers.balance_hint": "部分提供商公布剩余额度。",
   "field.probe": "探针",
   "providers.check_now": "立即查询",
+  "providers.checking": "查询中…",
   "providers.compatibility": "兼容性",
   "providers.compatibility_hint": "用于偏离标准协议的提供商;除非请求失败,否则保持全部关闭。",
   "quirk.max_completion_tokens": "使用 max_completion_tokens",

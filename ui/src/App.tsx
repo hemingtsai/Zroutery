@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, errorText, type AppConfig, type Snapshot } from "./api";
-import { Banner, MenuItem, Popover, StatusDot } from "./components";
+import { Banner, MenuItem, Popover, StatusDot, ToastProvider, useToast } from "./components";
 import { I18nProvider, useI18n } from "./i18n";
 import Overview from "./pages/Overview";
 import Models from "./pages/Models";
@@ -42,13 +42,16 @@ function resolveTheme(pref: ThemePref): "light" | "dark" {
 export default function App() {
   return (
     <I18nProvider>
-      <Shell />
+      <ToastProvider>
+        <Shell />
+      </ToastProvider>
     </I18nProvider>
   );
 }
 
 function Shell() {
   const { t } = useI18n();
+  const notify = useToast();
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [page, setPage] = useState<Page>("overview");
   const [themePref, setThemePref] = useState<ThemePref>(loadThemePref);
@@ -106,14 +109,16 @@ function Shell() {
     } catch (e) {
       // A failed save invalidates the edits that were waiting behind it: they
       // were built against a config that never became authoritative.
+      const dropped = queuedRef.current.length;
       queuedRef.current = [];
       setError(errorText(e));
+      if (dropped > 0) notify("error", t("toast.queued_discarded"));
       return false;
     } finally {
       runningRef.current = false;
       setBusy(false);
     }
-  }, []);
+  }, [notify, t]);
 
   useEffect(() => {
     void run(api.snapshot);
@@ -202,6 +207,7 @@ function Shell() {
 
       <div className="main">
         <header className="mainbar">
+          {busy && <div className="busybar" aria-hidden />}
           <span className="page-title">{t(NAV.find((n) => n.id === page)!.labelKey)}</span>
           <div className="mainbar-right">
             {/* The gateway lives here, not in a bottom strip: top of the
@@ -232,7 +238,9 @@ function Shell() {
                   <div className="menu-sep" />
                   <MenuItem
                     onClick={() => {
-                      void api.copy(`http://${server.host}:${server.port}`);
+                      void api.copy(`http://${server.host}:${server.port}`).then(() =>
+                        notify("ok", t("toast.copied")),
+                      );
                       close();
                     }}
                   >
@@ -240,7 +248,7 @@ function Shell() {
                   </MenuItem>
                   <MenuItem
                     onClick={() => {
-                      void api.copyToken();
+                      void api.copyToken().then(() => notify("ok", t("toast.copied")));
                       close();
                     }}
                   >

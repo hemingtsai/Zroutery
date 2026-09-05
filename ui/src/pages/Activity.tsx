@@ -3,6 +3,7 @@ import { api, costText, totalsText, type RequestRecord, type Snapshot } from "..
 import {
   Badge,
   Button,
+  ConfirmDialog,
   Drawer,
   KeyValue,
   PageHead,
@@ -10,6 +11,7 @@ import {
   StatusDot,
   ms,
   num,
+  type ConfirmRequest,
 } from "../components";
 import { useI18n } from "../i18n";
 
@@ -28,6 +30,7 @@ export default function Activity({
   const { summary, recent, health } = snapshot;
   const { t } = useI18n();
   const [openId, setOpenId] = useState<string | null>(null);
+  const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
 
   const successRate =
     summary.requests > 0
@@ -39,6 +42,8 @@ export default function Activity({
 
   return (
     <>
+      <ConfirmDialog request={confirm} onClose={() => setConfirm(null)} />
+
       <PageHead
         lede={
           summary.requests === 0
@@ -51,7 +56,18 @@ export default function Activity({
               })
         }
         actions={
-          <Button kind="ghost" onClick={() => run(api.clearStats)}>
+          <Button
+            kind="ghost"
+            onClick={() =>
+              setConfirm({
+                title: t("confirm.reset_stats"),
+                body: t("confirm.reset_stats_body"),
+                confirmLabel: t("activity.reset"),
+                danger: true,
+                onConfirm: () => void run(api.clearStats),
+              })
+            }
+          >
             {t("activity.reset")}
           </Button>
         }

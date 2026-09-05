@@ -1,5 +1,5 @@
 import { api, classMembers, modelRows, type Snapshot } from "../api";
-import { StatusDot } from "../components";
+import { StatusDot, useToast } from "../components";
 import { useI18n } from "../i18n";
 
 /**
@@ -20,6 +20,7 @@ export default function Overview({
 }) {
   const { config, server, recent } = snapshot;
   const { t } = useI18n();
+  const notify = useToast();
 
   const rows = modelRows(snapshot);
   const providers = config.providers.filter((p) => p.enabled);
@@ -56,11 +57,17 @@ export default function Overview({
           </span>
         </p>
         <div className="page-head-actions text-actions">
-          <button className="linky" onClick={() => api.copy(`http://${server.host}:${server.port}`)}>
+          <button
+            className="linky"
+            onClick={() => api.copy(`http://${server.host}:${server.port}`).then(() => notify("ok", t("toast.copied")))}
+          >
             {t("action.copy_base_url")}
           </button>
           <span className="text-actions-sep">·</span>
-          <button className="linky" onClick={() => api.copyToken()}>
+          <button
+            className="linky"
+            onClick={() => api.copyToken().then(() => notify("ok", t("toast.copied")))}
+          >
             {t("action.copy_token")}
           </button>
         </div>
