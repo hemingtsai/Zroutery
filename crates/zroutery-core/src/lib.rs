@@ -40,6 +40,7 @@ pub mod registry;
 pub mod router;
 pub mod server;
 pub mod stats;
+pub mod stats_ext;
 mod sync;
 pub mod upstream;
 
@@ -79,4 +80,7 @@ pub use registry::{Registry, Resolution};
 pub use router::{Candidate, Router};
 pub use server::{build_app, AppState, ServerHandle};
 pub use stats::{RequestRecord, Stats};
+pub use stats_ext::{
+    Ewma, FailureStats, LatencyStats, PercentileEstimator, ProviderModelStats, StatsStore,
+};
 pub use upstream::{DiscoveredModel, Upstream};
