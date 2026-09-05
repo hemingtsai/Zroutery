@@ -579,7 +579,7 @@ impl GeminiStreamEncoder {
             let parsed_args: Value = if args.is_empty() {
                 json!({})
             } else {
-                serde_json::from_str(&args).unwrap_or_else(|_| json!({"__raw": args}))
+                serde_json::from_str(&args).unwrap_or(Value::String(args))
             };
             out.push(SseFrame {
                 event: None,
@@ -638,7 +638,7 @@ impl StreamEncoder for GeminiStreamEncoder {
                     let parsed_args: Value = if args.is_empty() {
                         json!({})
                     } else {
-                        serde_json::from_str(&args).unwrap_or_else(|_| json!({"__raw": args}))
+                        serde_json::from_str(&args).unwrap_or(Value::String(args))
                     };
                     out.push(SseFrame {
                         event: None,

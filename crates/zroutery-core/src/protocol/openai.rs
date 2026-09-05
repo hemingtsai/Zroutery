@@ -719,7 +719,7 @@ pub fn encode_response(resp: &ChatResponse) -> Value {
                 "index": tool_calls.len(),
                 "id": id,
                 "type": "function",
-                "function": {"name": name, "arguments": input.to_string()},
+                "function": {"name": name, "arguments": arguments_json(input)},
             })),
             _ => {}
         }

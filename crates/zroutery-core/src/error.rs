@@ -169,6 +169,8 @@ impl Error {
             Error::Upstream { provider, status, .. } => {
                 format!("upstream {provider} returned {status}")
             }
+            Error::Internal(_) => "internal error".to_string(),
+            Error::BadUpstreamPayload(_) => "upstream returned malformed data".to_string(),
             _ => self.to_string(),
         }
     }

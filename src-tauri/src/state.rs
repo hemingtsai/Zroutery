@@ -414,6 +414,15 @@ impl Desktop {
         if next.server.auth_token.trim().is_empty() {
             next.server.auth_token = previous.server.auth_token.clone();
         }
+        // Warn when the server is about to become exposed to the network.
+        if !previous.server.is_exposed() && next.server.is_exposed() {
+            tracing::warn!(
+                "server host is changing from {} to {} — the proxy will be \
+                 reachable from the network",
+                previous.server.host,
+                next.server.host,
+            );
+        }
         let issues = next.validate();
         if let Some(err) = issues.iter().find(|i| i.severity == IssueSeverity::Error) {
             return Err(err.message.clone());

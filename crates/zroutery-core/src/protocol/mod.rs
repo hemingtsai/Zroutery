@@ -144,6 +144,10 @@ impl SseDecoder {
 
     /// Feed raw bytes, returning every complete frame that became available.
     pub fn push(&mut self, chunk: &[u8]) -> Vec<SseFrame> {
+        // Lossy UTF-8 decoding is intentional: SSE is a text-based protocol and
+        // a few upstreams emit lone surrogates or raw bytes in error bodies.
+        // Replacing invalid sequences with the Unicode replacement character
+        // keeps the parser alive instead of failing the whole stream.
         self.buffer.push_str(&String::from_utf8_lossy(chunk));
         self.buffer = self.buffer.replace("\r\n", "\n");
         let mut frames = Vec::new();

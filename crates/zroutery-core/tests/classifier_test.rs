@@ -375,7 +375,9 @@ async fn all_answers_without_verdicts_fail_closed() {
     assert_eq!(resp.status(), 502, "no verdict anywhere is an error, not a pass");
     let body: Value = resp.json().await.unwrap();
     let message = body["error"]["message"].as_str().unwrap();
-    assert!(message.contains("<block>"), "{message}");
+    // The wire message is sanitized: upstream payload details stay in the log,
+    // not in the client-facing response.
+    assert_eq!(message, "upstream returned malformed data", "{message}");
 
     h.shutdown().await;
 }

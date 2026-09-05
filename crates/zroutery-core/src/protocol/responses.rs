@@ -131,7 +131,7 @@ fn decode_input_item(item: &Value, req: &mut ChatRequest) -> Result<()> {
                 .and_then(Value::as_str)
                 .unwrap_or("{}");
             let input =
-                serde_json::from_str(arguments).unwrap_or_else(|_| json!({"__raw": arguments}));
+                serde_json::from_str(arguments).unwrap_or(Value::String(arguments.to_string()));
             req.messages.push(Message {
                 role: Role::Assistant,
                 content: vec![ContentBlock::ToolUse {
@@ -246,6 +246,19 @@ fn decode_input_item(item: &Value, req: &mut ChatRequest) -> Result<()> {
 
 // --------------------------------------------------------------- request out
 
+/// Render a tool-use `input` value back into the `arguments` JSON string.
+///
+/// When the original arguments could not be parsed (invalid JSON), the IR stores
+/// them as `Value::String(raw)` rather than wrapping them in a synthetic object.
+/// This helper returns the raw string unchanged in that case, and serialises
+/// Object values as usual.
+fn arguments_json(input: &Value) -> String {
+    match input {
+        Value::String(s) => s.clone(),
+        other => other.to_string(),
+    }
+}
+
 pub fn encode_request(req: &ChatRequest, upstream_model: &str) -> Result<Value> {
     let mut input: Vec<Value> = Vec::new();
     for m in &req.messages {
@@ -270,7 +283,7 @@ pub fn encode_request(req: &ChatRequest, upstream_model: &str) -> Result<Value> 
                     "type": "function_call",
                     "call_id": id,
                     "name": name,
-                    "arguments": tool_input.to_string(),
+                    "arguments": arguments_json(tool_input),
                 })),
                 ContentBlock::ToolResult {
                     tool_use_id,
@@ -423,7 +436,7 @@ pub fn decode_response(body: Value) -> Result<ChatResponse> {
                             .unwrap_or_default()
                             .to_string(),
                         input: serde_json::from_str(arguments)
-                            .unwrap_or_else(|_| json!({"__raw": arguments})),
+                            .unwrap_or(Value::String(arguments.to_string())),
                     });
                 }
                 Some("reasoning") => {
@@ -484,7 +497,7 @@ pub fn encode_response(resp: &ChatResponse) -> Value {
                 "id": format!("fc_{id}"),
                 "call_id": id,
                 "name": name,
-                "arguments": input.to_string(),
+                "arguments": arguments_json(input),
                 "status": "completed",
             })),
             ContentBlock::Thinking { text, signature } => {
@@ -798,6 +811,12 @@ pub struct ResponsesStreamEncoder {
     output_index: u32,
     content_index: u32,
     current_kind: Option<OutputItemKind>,
+    /// True when a `response.content_part.added` has been emitted for the
+    /// current content part without a matching `done`.
+    content_part_open: bool,
+    /// True when the current output item (message or function_call) has not
+    /// yet received its `response.output_item.done`.
+    output_item_open: bool,
     tool_item_ids: HashMap<u32, String>,
 }
 
@@ -811,6 +830,8 @@ impl ResponsesStreamEncoder {
             output_index: 0,
             content_index: 0,
             current_kind: None,
+            content_part_open: false,
+            output_item_open: false,
             tool_item_ids: HashMap::new(),
         }
     }
@@ -820,6 +841,55 @@ impl ResponsesStreamEncoder {
             event: Some(event_type.to_string()),
             data: data.to_string(),
         }
+    }
+
+    /// Close the currently open content part (`response.content_part.done`),
+    /// if any. Returns the frame to emit, or `None` if nothing was open.
+    fn close_content_part(&mut self) -> Option<SseFrame> {
+        if !self.content_part_open {
+            return None;
+        }
+        self.content_part_open = false;
+        let part_type = match self.current_kind {
+            Some(OutputItemKind::Text) => "output_text",
+            Some(OutputItemKind::Thinking) => "reasoning",
+            _ => return None,
+        };
+        Some(self.frame(
+            "response.content_part.done",
+            json!({
+                "type": "response.content_part.done",
+                "output_index": self.output_index,
+                "content_index": self.content_index,
+                "part": {"type": part_type},
+            }),
+        ))
+    }
+
+    /// Close the currently open output item (`response.output_item.done`),
+    /// if any.
+    fn close_output_item(&mut self) -> Option<SseFrame> {
+        if !self.output_item_open {
+            return None;
+        }
+        self.output_item_open = false;
+        let item_id = match self.current_kind {
+            Some(OutputItemKind::Text) => format!("msg_{}", self.output_index),
+            Some(OutputItemKind::Thinking) => format!("rs_{}", self.output_index),
+            _ => return None,
+        };
+        Some(self.frame(
+            "response.output_item.done",
+            json!({
+                "type": "response.output_item.done",
+                "output_index": self.output_index,
+                "item": {
+                    "id": item_id,
+                    "type": "message",
+                    "status": "completed",
+                },
+            }),
+        ))
     }
 }
 
@@ -851,9 +921,30 @@ impl StreamEncoder for ResponsesStreamEncoder {
             }
             StreamEvent::TextDelta { text, .. } => {
                 if self.current_kind != Some(OutputItemKind::Text) {
+                    // Close any open content part and output item from the
+                    // previous kind before switching.
+                    if let Some(f) = self.close_content_part() {
+                        out.push(f);
+                    }
+                    if let Some(f) = self.close_output_item() {
+                        out.push(f);
+                    }
                     self.output_index += 1;
                     self.content_index = 0;
                     self.current_kind = Some(OutputItemKind::Text);
+                    self.output_item_open = true;
+                }
+                if !self.content_part_open {
+                    self.content_part_open = true;
+                    out.push(self.frame(
+                        "response.content_part.added",
+                        json!({
+                            "type": "response.content_part.added",
+                            "output_index": self.output_index,
+                            "content_index": self.content_index,
+                            "part": {"type": "output_text"},
+                        }),
+                    ));
                 }
                 out.push(self.frame(
                     "response.output_text.delta",
@@ -868,9 +959,28 @@ impl StreamEncoder for ResponsesStreamEncoder {
             }
             StreamEvent::ThinkingDelta { text, .. } => {
                 if self.current_kind != Some(OutputItemKind::Thinking) {
+                    if let Some(f) = self.close_content_part() {
+                        out.push(f);
+                    }
+                    if let Some(f) = self.close_output_item() {
+                        out.push(f);
+                    }
                     self.output_index += 1;
                     self.content_index = 0;
                     self.current_kind = Some(OutputItemKind::Thinking);
+                    self.output_item_open = true;
+                }
+                if !self.content_part_open {
+                    self.content_part_open = true;
+                    out.push(self.frame(
+                        "response.content_part.added",
+                        json!({
+                            "type": "response.content_part.added",
+                            "output_index": self.output_index,
+                            "content_index": self.content_index,
+                            "part": {"type": "reasoning"},
+                        }),
+                    ));
                 }
                 out.push(self.frame(
                     "response.reasoning_summary_text.delta",
@@ -886,8 +996,18 @@ impl StreamEncoder for ResponsesStreamEncoder {
             StreamEvent::ToolUseStart {
                 index, id, name, ..
             } => {
+                // Close any open content part and output item before starting
+                // a tool call output item.
+                if let Some(f) = self.close_content_part() {
+                    out.push(f);
+                }
+                if let Some(f) = self.close_output_item() {
+                    out.push(f);
+                }
                 let item_id = format!("fc_{id}");
                 self.tool_item_ids.insert(*index, item_id.clone());
+                self.output_item_open = true;
+                self.current_kind = Some(OutputItemKind::Tool);
                 out.push(self.frame(
                     "response.output_item.added",
                     json!({
@@ -904,7 +1024,6 @@ impl StreamEncoder for ResponsesStreamEncoder {
                     }),
                 ));
                 self.output_index += 1;
-                self.current_kind = Some(OutputItemKind::Tool);
             }
             StreamEvent::ToolUseDelta {
                 partial_json,
@@ -927,7 +1046,24 @@ impl StreamEncoder for ResponsesStreamEncoder {
                     }),
                 ));
             }
+            StreamEvent::BlockStop { .. } => {
+                // A tool call is its own output item; close it when the block
+                // stops.  For text/thinking blocks, `content_part.done` is
+                // emitted when the next kind arrives or at Stop.
+                if self.current_kind == Some(OutputItemKind::Tool) {
+                    self.output_item_open = false;
+                    self.current_kind = None;
+                }
+            }
             StreamEvent::Stop { usage, .. } => {
+                // Close any open content part and output item before the final
+                // response.completed event.
+                if let Some(f) = self.close_content_part() {
+                    out.push(f);
+                }
+                if let Some(f) = self.close_output_item() {
+                    out.push(f);
+                }
                 out.push(self.frame(
                     "response.completed",
                     json!({
@@ -955,7 +1091,14 @@ impl StreamEncoder for ResponsesStreamEncoder {
             return Vec::new();
         }
         self.done = true;
-        vec![self.frame(
+        let mut out = Vec::new();
+        if let Some(f) = self.close_content_part() {
+            out.push(f);
+        }
+        if let Some(f) = self.close_output_item() {
+            out.push(f);
+        }
+        out.push(self.frame(
             "response.completed",
             json!({
                 "type": "response.completed",
@@ -968,7 +1111,8 @@ impl StreamEncoder for ResponsesStreamEncoder {
                     "output": [],
                 }
             }),
-        )]
+        ));
+        out
     }
 
     fn error(&mut self, err: &Error) -> Vec<SseFrame> {
@@ -987,6 +1131,12 @@ impl StreamEncoder for ResponsesStreamEncoder {
         )];
         if !self.done {
             self.done = true;
+            if let Some(f) = self.close_content_part() {
+                out.push(f);
+            }
+            if let Some(f) = self.close_output_item() {
+                out.push(f);
+            }
             out.push(self.frame(
                 "response.completed",
                 json!({

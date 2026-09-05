@@ -752,6 +752,11 @@ impl AppConfig {
     /// Fold configurations written before ids were derived into the current
     /// shape, and tidy the alias lists.
     ///
+    /// Must be called after every deserialization (including from the config
+    /// file) so that legacy fields like `break_after_failures` and `cooldown_secs`
+    /// are migrated into their current equivalents.  [`AppConfig::validate`]
+    /// runs after this and only sees the post-migration state.
+    ///
     /// Returns a note for every id that moved, so the UI can explain itself.
     pub fn normalize(&mut self) -> Vec<String> {
         let mut notes = Vec::new();
@@ -968,6 +973,18 @@ impl AppConfig {
         // dangling reference means a classifier request would fail at routing
         // time, which is better caught at save time.
         if self.classifier.enabled {
+            if !(0.0..=1.0).contains(&self.classifier.detection.minimum_confidence) {
+                issues.push(ConfigIssue {
+                    severity: IssueSeverity::Warning,
+                    code: "classifier.confidence_out_of_range".into(),
+                    message: format!(
+                        "Classifier `minimum_confidence` is {}, which is outside the expected \
+                         range of 0.0 to 1.0; the detector may never fire (or always fire)",
+                        self.classifier.detection.minimum_confidence,
+                    ),
+                    subject: None,
+                });
+            }
             for candidate in &self.classifier.candidates {
                 if candidate.model.trim().is_empty() {
                     issues.push(ConfigIssue {

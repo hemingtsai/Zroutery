@@ -173,28 +173,39 @@ fn stream_encoder_emits_responses_sse() {
         usage: Usage::default(),
     }));
 
-    assert_eq!(frames[0].event.as_deref(), Some("response.created"));
+    // Collect all event types for easier assertion.
+    let event_types: Vec<Option<&str>> = frames.iter().map(|f| f.event.as_deref()).collect();
+
+    // The encoder now emits full lifecycle events:
+    //   created -> content_part.added -> text.delta -> content_part.done ->
+    //   output_item.done -> output_item.added -> func_args.delta ->
+    //   content_part.added -> thinking.delta -> content_part.done ->
+    //   output_item.done -> completed
+    assert_eq!(event_types[0], Some("response.created"));
+    assert_eq!(event_types[1], Some("response.content_part.added"));
+    assert_eq!(event_types[2], Some("response.output_text.delta"));
+    // Closing text before starting tool use.
+    assert_eq!(event_types[3], Some("response.content_part.done"));
+    assert_eq!(event_types[4], Some("response.output_item.done"));
+    assert_eq!(event_types[5], Some("response.output_item.added"));
     assert_eq!(
-        frames[1].event.as_deref(),
-        Some("response.output_text.delta")
-    );
-    assert_eq!(
-        frames[2].event.as_deref(),
-        Some("response.output_item.added")
-    );
-    assert_eq!(
-        frames[3].event.as_deref(),
+        event_types[6],
         Some("response.function_call_arguments.delta")
     );
     assert!(
-        frames[3].data.contains("\"item_id\":\"fc_call_1\""),
+        frames[6].data.contains("\"item_id\":\"fc_call_1\""),
         "delta should reference the function_call item id emitted in output_item.added"
     );
+    // Opening thinking content part.
+    assert_eq!(event_types[7], Some("response.content_part.added"));
     assert_eq!(
-        frames[4].event.as_deref(),
+        event_types[8],
         Some("response.reasoning_summary_text.delta")
     );
-    assert_eq!(frames[5].event.as_deref(), Some("response.completed"));
+    // Closing thinking before response.completed.
+    assert_eq!(event_types[9], Some("response.content_part.done"));
+    assert_eq!(event_types[10], Some("response.output_item.done"));
+    assert_eq!(event_types[11], Some("response.completed"));
 }
 
 #[test]
