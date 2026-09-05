@@ -56,7 +56,7 @@ impl Default for TaskType {
 }
 
 /// Derived profile of a request, fed into policy matchers.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct TaskProfile {
     pub tier: Option<ModelTier>,
     pub required_capabilities: Vec<Capability>,

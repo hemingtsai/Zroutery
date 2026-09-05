@@ -507,11 +507,18 @@ impl Router {
                 } else {
                     self.health_score(&m.exposed_id())
                 };
-                let avg_latency_ms = obs
-                    .latency
-                    .total_ms
-                    .value
-                    .unwrap_or_else(|| self.avg_latency(&m.exposed_id()));
+                let streaming = task.map_or(false, |t| t.streaming);
+                let avg_latency_ms = if streaming {
+                    // For streaming, TTFT is the primary signal; fall back to
+                    // total latency when no TTFT observation exists.
+                    obs.latency.ttft_ms.value
+                        .or(obs.latency.total_ms.value)
+                        .unwrap_or_else(|| self.avg_latency(&m.exposed_id()))
+                } else {
+                    obs.latency.total_ms
+                        .value
+                        .unwrap_or_else(|| self.avg_latency(&m.exposed_id()))
+                };
 
                 let ctx = ScoringContext {
                     health,
@@ -763,18 +770,12 @@ impl Router {
                 None => by_priority(members),
             },
             RoutingStrategy::Priority => {
-                let mut groups: Vec<(i32, Vec<&ModelEntry>)> = Vec::new();
-                for m in members {
-                    match groups.last_mut() {
-                        Some((p, g)) if *p == m.priority => g.push(m),
-                        _ => groups.push((m.priority, vec![m])),
-                    }
-                }
-                groups.sort_by_key(|(p, _)| *p);
-                groups
-                    .into_iter()
-                    .flat_map(|(_, g)| self.weighted_shuffle(&g))
-                    .collect()
+                // Priority sorts by priority number, preserving input order
+                // within same-priority groups. This ensures that upstream
+                // ordering (e.g. from policy scoring) is respected.
+                let mut sorted: Vec<&ModelEntry> = members.to_vec();
+                sorted.sort_by_key(|m| m.priority);
+                sorted
             }
             RoutingStrategy::WeightedRandom => self.weighted_shuffle(members),
             RoutingStrategy::RoundRobin => {
@@ -1845,5 +1846,146 @@ mod tests {
             "p1-fast",
             "plan_with_policy should prefer the faster model via observations"
         );
+    }
+
+    // --------------------------------------------------- 4B feedback loop tests
+
+    #[test]
+    fn observation_adapts_across_requests() {
+        // Setup: two models, same tier
+        let cfg = cfg_with(vec![
+            ModelEntry::for_upstream("p1", "model-a", Some(ModelTier::Standard)),
+            ModelEntry::for_upstream("p2", "model-b", Some(ModelTier::Standard)),
+        ]);
+        let _r = reg(cfg);
+        let router = Router::new();
+
+        // Request 1: model-a is fast (100ms), model-b is slow (2000ms)
+        router.record_outcome("p1-model-a", "p1", 100.0, Some(50.0));
+        router.record_outcome("p2-model-b", "p2", 2000.0, Some(800.0));
+
+        let pref = PolicyPreference {
+            latency_weight: 1.0,
+            health_weight: 0.0,
+            cost_weight: 0.0,
+            priority_weight: 0.0,
+            tier_weight: 0.0,
+            ..Default::default()
+        };
+        let ma = ModelEntry::for_upstream("p1", "model-a", Some(ModelTier::Standard));
+        let mb = ModelEntry::for_upstream("p2", "model-b", Some(ModelTier::Standard));
+        let (sorted1, _) = router.score_and_sort(vec![&ma, &mb], &pref, None);
+        assert_eq!(
+            sorted1[0].exposed_id(),
+            "p1-model-a",
+            "first request: fast model wins"
+        );
+
+        // Now model-a fails twice, model-b succeeds
+        router.record_failure("p1-model-a", "p1");
+        router.record_failure("p1-model-a", "p1");
+        router.record_outcome("p2-model-b", "p2", 200.0, Some(80.0));
+
+        // Request 2: model-b should now rank higher (healthier)
+        let pref_health = PolicyPreference {
+            health_weight: 1.0,
+            latency_weight: 0.0,
+            cost_weight: 0.0,
+            priority_weight: 0.0,
+            tier_weight: 0.0,
+            ..Default::default()
+        };
+        let ma = ModelEntry::for_upstream("p1", "model-a", Some(ModelTier::Standard));
+        let mb = ModelEntry::for_upstream("p2", "model-b", Some(ModelTier::Standard));
+        let (sorted2, _) = router.score_and_sort(vec![&ma, &mb], &pref_health, None);
+        assert_eq!(
+            sorted2[0].exposed_id(),
+            "p2-model-b",
+            "after failures: healthy model wins"
+        );
+    }
+
+    #[test]
+    fn scoring_isolates_same_model_different_providers() {
+        let router = Router::new();
+        // Same model "shared-model" from two providers
+        router.record_outcome("p1-shared-model", "p1", 100.0, Some(50.0));
+        router.record_outcome("p2-shared-model", "p2", 3000.0, Some(800.0));
+
+        let m1 = ModelEntry::for_upstream("p1", "shared-model", Some(ModelTier::Standard));
+        let m2 = ModelEntry::for_upstream("p2", "shared-model", Some(ModelTier::Standard));
+        let members = vec![&m1, &m2];
+        let pref = PolicyPreference {
+            latency_weight: 1.0,
+            health_weight: 0.0,
+            cost_weight: 0.0,
+            priority_weight: 0.0,
+            tier_weight: 0.0,
+            ..Default::default()
+        };
+        let (sorted, _) = router.score_and_sort(members, &pref, None);
+        assert_eq!(
+            sorted[0].provider_id, "p1",
+            "faster provider wins for same model"
+        );
+    }
+
+    #[test]
+    fn streaming_scoring_prefers_ttft() {
+        let router = Router::new();
+        // Model A: fast TTFT (100ms), slow total (5000ms)
+        router.record_outcome("p1-a", "p1", 5000.0, Some(100.0));
+        // Model B: slow TTFT (800ms), fast total (1000ms)
+        router.record_outcome("p2-b", "p2", 1000.0, Some(800.0));
+
+        // For streaming (TTFT matters), A should win
+        let task_streaming = crate::policy::TaskProfile {
+            streaming: true,
+            ..Default::default()
+        };
+        let pref = PolicyPreference {
+            latency_weight: 1.0,
+            health_weight: 0.0,
+            cost_weight: 0.0,
+            priority_weight: 0.0,
+            tier_weight: 0.0,
+            ..Default::default()
+        };
+        let m1 = ModelEntry::for_upstream("p1", "a", Some(ModelTier::Standard));
+        let m2 = ModelEntry::for_upstream("p2", "b", Some(ModelTier::Standard));
+        let (sorted, _) =
+            router.score_and_sort(vec![&m1, &m2], &pref, Some(&task_streaming));
+        assert_eq!(sorted[0].exposed_id(), "p1-a", "streaming prefers fast TTFT");
+
+        // For buffered (total matters), B should win
+        let task_buffered = crate::policy::TaskProfile {
+            streaming: false,
+            ..Default::default()
+        };
+        let (sorted, _) =
+            router.score_and_sort(vec![&m1, &m2], &pref, Some(&task_buffered));
+        assert_eq!(
+            sorted[0].exposed_id(),
+            "p2-b",
+            "buffered prefers fast total"
+        );
+    }
+
+    #[test]
+    fn legacy_scoring_unchanged_without_observations() {
+        // When no observations exist, scoring should behave identically to pre-4B
+        let router = Router::new();
+        let m1 = ModelEntry::for_upstream("p1", "a", Some(ModelTier::Standard));
+        let m2 = ModelEntry::for_upstream("p2", "b", Some(ModelTier::Standard));
+        let members = vec![&m1, &m2];
+        let pref = PolicyPreference::default();
+        let (sorted, breakdowns) = router.score_and_sort(members, &pref, None);
+        // Both have same config -> scores should be equal
+        assert!(
+            (breakdowns[0].2 - breakdowns[1].2).abs() < 0.01,
+            "identical models without observations should have equal scores"
+        );
+        // Order preserved (stable sort)
+        assert_eq!(sorted[0].exposed_id(), "p1-a");
     }
 }
