@@ -213,6 +213,7 @@ impl Registry {
     /// The listing returned by `GET /v1/models`: concrete models first, then any
     /// tier id that currently has at least one usable member.
     pub fn list(&self) -> Vec<ModelInfo> {
+        let style = self.config.routing.naming_style;
         let mut out: Vec<ModelInfo> = Vec::new();
         for (position, m) in self.config.models.iter().enumerate() {
             if !m.enabled {
@@ -259,8 +260,8 @@ impl Registry {
                 caps.files |= m.capabilities.files;
             }
             out.push(ModelInfo {
-                id: tier.virtual_id().to_string(),
-                display_name: format!("{} (auto)", tier.virtual_id()),
+                id: tier.virtual_id_styled(style).to_string(),
+                display_name: format!("{} (auto)", tier.display_name(style)),
                 provider_name: None,
                 tier: Some(tier),
                 virtual_model: true,
