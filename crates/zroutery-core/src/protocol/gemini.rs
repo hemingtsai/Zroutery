@@ -128,6 +128,7 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
             if let Some(decls) = tool.get("functionDeclarations").and_then(Value::as_array) {
                 for decl in decls {
                     let Some(name) = decl.get("name").and_then(Value::as_str) else {
+                        tracing::warn!("skipping tool definition without a `name` field");
                         continue;
                     };
                     req.tools.push(ToolDef {

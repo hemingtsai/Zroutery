@@ -849,6 +849,26 @@ impl AppConfig {
                     subject: Some(p.id.clone()),
                 });
             }
+            let managed_headers = [
+                "content-type",
+                "authorization",
+                "x-api-key",
+                "accept",
+            ];
+            for key in p.extra_headers.keys() {
+                if managed_headers.contains(&key.to_lowercase().as_str()) {
+                    issues.push(ConfigIssue {
+                        severity: IssueSeverity::Warning,
+                        code: "provider.extra_header_override".into(),
+                        message: format!(
+                            "Provider `{}` has `extra_headers` setting `{}`, which Zroutery \
+                             manages itself; the override may cause unexpected behavior",
+                            p.name, key
+                        ),
+                        subject: Some(p.id.clone()),
+                    });
+                }
+            }
         }
 
         for m in &self.models {

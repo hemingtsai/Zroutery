@@ -59,6 +59,7 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
     if let Some(tools) = obj.get("tools").and_then(Value::as_array) {
         for t in tools {
             let Some(name) = t.get("name").and_then(Value::as_str) else {
+                tracing::warn!("skipping tool definition without a `name` field");
                 continue;
             };
             req.tools.push(ToolDef {
@@ -770,6 +771,15 @@ impl StreamParser for ResponsesStreamParser {
 
 // --------------------------------------------------------------- stream out
 
+/// Tracks the kind of output item currently being streamed, so that
+/// `output_index` is incremented on every distinct item boundary.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum OutputItemKind {
+    Text,
+    Thinking,
+    Tool,
+}
+
 pub struct ResponsesStreamEncoder {
     id: String,
     model: String,
@@ -777,6 +787,7 @@ pub struct ResponsesStreamEncoder {
     done: bool,
     output_index: u32,
     content_index: u32,
+    current_kind: Option<OutputItemKind>,
     tool_item_ids: HashMap<u32, String>,
 }
 
@@ -789,6 +800,7 @@ impl ResponsesStreamEncoder {
             done: false,
             output_index: 0,
             content_index: 0,
+            current_kind: None,
             tool_item_ids: HashMap::new(),
         }
     }
@@ -828,6 +840,11 @@ impl StreamEncoder for ResponsesStreamEncoder {
                 ));
             }
             StreamEvent::TextDelta { text, .. } => {
+                if self.current_kind != Some(OutputItemKind::Text) {
+                    self.output_index += 1;
+                    self.content_index = 0;
+                    self.current_kind = Some(OutputItemKind::Text);
+                }
                 out.push(self.frame(
                     "response.output_text.delta",
                     json!({
@@ -840,6 +857,11 @@ impl StreamEncoder for ResponsesStreamEncoder {
                 ));
             }
             StreamEvent::ThinkingDelta { text, .. } => {
+                if self.current_kind != Some(OutputItemKind::Thinking) {
+                    self.output_index += 1;
+                    self.content_index = 0;
+                    self.current_kind = Some(OutputItemKind::Thinking);
+                }
                 out.push(self.frame(
                     "response.reasoning_summary_text.delta",
                     json!({
@@ -872,6 +894,7 @@ impl StreamEncoder for ResponsesStreamEncoder {
                     }),
                 ));
                 self.output_index += 1;
+                self.current_kind = Some(OutputItemKind::Tool);
             }
             StreamEvent::ToolUseDelta {
                 partial_json,

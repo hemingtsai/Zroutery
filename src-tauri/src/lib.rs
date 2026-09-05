@@ -20,6 +20,10 @@ use crate::logs::LogBuffer;
 use crate::secrets::KeychainSecrets;
 use crate::state::Desktop;
 
+/// Sender half of the shutdown signal; dropping it or sending `true` tells the
+/// ledger-flushing loop to exit cleanly.
+struct ShutdownSignal(tokio::sync::watch::Sender<bool>);
+
 pub const KEYCHAIN_SERVICE: &str = platform::APP_ID;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -129,6 +133,9 @@ pub fn run() {
                 });
             }
 
+            let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+            app.manage(ShutdownSignal(shutdown_tx));
+
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 if autostart {
@@ -145,11 +152,19 @@ pub fn run() {
                 // Spend is flushed on a timer as well as at shutdown, so a hard kill
                 // loses seconds of history rather than the whole run.
                 let ledger_keeper = Arc::clone(&desktop);
+                let mut shutdown_rx = shutdown_rx;
                 tauri::async_runtime::spawn(async move {
                     let mut tick = tokio::time::interval(std::time::Duration::from_secs(10));
                     loop {
-                        tick.tick().await;
-                        ledger_keeper.flush_ledger();
+                        tokio::select! {
+                            _ = tick.tick() => {
+                                ledger_keeper.flush_ledger();
+                            }
+                            _ = shutdown_rx.changed() => {
+                                ledger_keeper.flush_ledger();
+                                break;
+                            }
+                        }
                     }
                 });
             });
@@ -192,7 +207,7 @@ pub fn run() {
         }
     };
 
-    app.run(|_app, event| {
+    app.run(|app, event| {
         if let RunEvent::ExitRequested { code, api, .. } = event {
             // `code` is None when the request comes from user interaction, i.e.
             // the last window was closed: stay alive in the menu bar. An explicit
@@ -200,6 +215,8 @@ pub fn run() {
             // to be honoured.
             if should_stay_resident(code) {
                 api.prevent_exit();
+            } else if let Some(signal) = app.try_state::<ShutdownSignal>() {
+                let _ = signal.0.send(true);
             }
         }
     });

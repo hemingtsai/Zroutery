@@ -88,6 +88,7 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
     if let Some(tools) = obj.get("tools").and_then(Value::as_array) {
         for t in tools {
             let Some(name) = t.get("name").and_then(Value::as_str) else {
+                tracing::warn!("skipping tool definition without a `name` field");
                 continue;
             };
             req.tools.push(ToolDef {
