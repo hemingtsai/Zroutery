@@ -124,7 +124,7 @@ fn write_atomically(dir: &Path, name: &str, text: &str) -> Result<PathBuf, Strin
 #[cfg(test)]
 mod tests {
     use super::*;
-    use zroutery_core::config::{ModelClass, ModelEntry, ProviderConfig, ProviderKind};
+    use zroutery_core::config::{ModelTier, ModelEntry, ProviderConfig, ProviderKind};
 
     fn tmpdir() -> PathBuf {
         let dir = std::env::temp_dir().join(format!("zroutery-test-{}", uuid::Uuid::new_v4()));
@@ -155,7 +155,7 @@ mod tests {
         cfg.models.push(ModelEntry::for_upstream(
             "deepseek",
             "deepseek-chat",
-            Some(ModelClass::Sonnet),
+            Some(ModelTier::Standard),
         ));
         save(&dir, &cfg).unwrap();
 

@@ -305,11 +305,11 @@ impl Desktop {
         if routing.strategy != RoutingStrategy::Balanced || !routing.elect_on_start {
             return;
         }
-        for (class, outcome) in &self.hold_election().await.classes {
+        for (tier, outcome) in &self.hold_election().await.tiers {
             tracing::info!(
                 "{} elected for {}{}",
                 outcome.winner().unwrap_or("nothing"),
-                class.virtual_id(),
+                tier.virtual_id(),
                 outcome
                     .note
                     .as_ref()

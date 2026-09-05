@@ -30,7 +30,7 @@ use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 
 use crate::billing::{Cost, Pricing};
 use crate::budget::{self, Ledger, Verdict};
-use crate::config::{AppConfig, ModelClass, ProviderConfig, SecretStore, ServerConfig};
+use crate::config::{AppConfig, ModelTier, ProviderConfig, SecretStore, ServerConfig};
 use crate::election::{self, Election, Measurement};
 use crate::error::{Error, Result};
 use crate::ir::Dialect;
@@ -107,13 +107,13 @@ impl AppState {
     }
 
     /// Record what a finished request cost, against every scope that covers it.
-    pub fn charge(&self, provider_id: &str, class: Option<ModelClass>, cost: &Cost) {
-        crate::sync::write(&self.ledger).charge(Local::now(), provider_id, class, cost);
+    pub fn charge(&self, provider_id: &str, tier: Option<ModelTier>, cost: &Cost) {
+        crate::sync::write(&self.ledger).charge(Local::now(), provider_id, tier, cost);
         self.ledger_dirty.store(true, Ordering::Relaxed);
     }
 
     /// What the budgets say about a request that is about to be routed.
-    pub fn budget_verdict(&self, provider_ids: &[String], class: Option<ModelClass>) -> Verdict {
+    pub fn budget_verdict(&self, provider_ids: &[String], tier: Option<ModelTier>) -> Verdict {
         let config = self.config();
         if config.budgets.is_empty() {
             return Verdict::Allow;
@@ -123,7 +123,7 @@ impl AppState {
             &crate::sync::read(&self.ledger),
             Local::now(),
             provider_ids,
-            class,
+            tier,
         )
     }
 
@@ -180,7 +180,7 @@ impl AppState {
         }
     }
 
-    /// Probe every class member, rank the results, and pin the outcome.
+    /// Probe every tier member, rank the results, and pin the outcome.
     ///
     /// The runner lives here rather than in [`crate::election`] because it needs the
     /// registry, the HTTP client and the secret store, and keeping those out of the
@@ -194,8 +194,8 @@ impl AppState {
         let scoring = registry.config().routing.scoring.clone();
         let mut election = Election::new(scoring.clone());
 
-        for class in ModelClass::ALL {
-            let members = registry.class_members(class);
+        for tier in ModelTier::ALL {
+            let members = registry.tier_members(tier);
             if members.is_empty() {
                 continue;
             }
@@ -237,8 +237,8 @@ impl AppState {
             }
 
             election
-                .classes
-                .insert(class, election::rank(class, &measurements, &scoring));
+                .tiers
+                .insert(tier, election::rank(tier, &measurements, &scoring));
         }
 
         self.router.set_election(election.clone());
@@ -778,7 +778,7 @@ fn model_json(info: &crate::registry::ModelInfo) -> Value {
         "display_name": info.display_name,
         "owned_by": info.provider_name.clone().unwrap_or_else(|| "zroutery".into()),
         "zroutery": {
-            "class": info.class,
+            "tier": info.tier,
             "virtual": info.virtual_model,
             "member_count": info.member_count,
             "provider": info.provider_name,
@@ -967,7 +967,7 @@ mod tests {
         next.models.push(crate::config::ModelEntry::for_upstream(
             "p",
             "m",
-            Some(crate::config::ModelClass::Sonnet),
+            Some(crate::config::ModelTier::Standard),
         ));
         state.set_config(next);
 
@@ -976,7 +976,7 @@ mod tests {
         assert!(state.registry().list().iter().any(|m| m.id == "p-m"));
         assert!(state
             .registry()
-            .resolve("sonnet-class")
-            .is_ok_and(|r| matches!(r, crate::registry::Resolution::Class(_))));
+            .resolve("standard-class")
+            .is_ok_and(|r| matches!(r, crate::registry::Resolution::Tier(_))));
     }
 }

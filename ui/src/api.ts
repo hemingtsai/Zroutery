@@ -4,7 +4,9 @@
  */
 import { invoke } from "@tauri-apps/api/core";
 
-export type ModelClass = "opus" | "sonnet" | "haiku";
+export type ModelTier = "fast" | "standard" | "reasoning" | "frontier";
+/** @deprecated Use ModelTier. */
+export type ModelClass = ModelTier;
 export type ProviderKind = "anthropic" | "openai_compatible";
 export type RoutingStrategy =
   | "priority"
@@ -13,7 +15,9 @@ export type RoutingStrategy =
   | "lowest_latency"
   | "balanced";
 
-export const CLASSES: ModelClass[] = ["opus", "sonnet", "haiku"];
+export const TIERS: ModelTier[] = ["fast", "standard", "reasoning", "frontier"];
+/** @deprecated Use TIERS. */
+export const CLASSES = TIERS;
 
 /** What a provider charges for one model, per million tokens. */
 export interface Pricing {
@@ -122,7 +126,7 @@ export interface Provider {
 export interface ModelEntry {
   provider_id: string;
   upstream_model: string;
-  class: ModelClass | null;
+  tier: ModelTier | null;
   priority: number;
   weight: number;
   enabled: boolean;
@@ -132,7 +136,7 @@ export interface ModelEntry {
   display_name: string | null;
   aliases: string[];
   max_output_tokens: number | null;
-  /** Entered by hand, like the class. Without it a request is logged unpriced. */
+  /** Entered by hand, like the tier. Without it a request is logged unpriced. */
   pricing: Pricing | null;
 }
 
@@ -213,14 +217,14 @@ export interface RoutingConfig {
   max_attempts: number;
   break_after_failures: number;
   cooldown_secs: number;
-  unknown_model_fallback: ModelClass | null;
-  client_aliases: Record<string, ModelClass>;
+  unknown_model_fallback: ModelTier | null;
+  client_aliases: Record<string, ModelTier>;
   match_claude_names: boolean;
   scoring: ScoringConfig;
   elect_on_start: boolean;
 }
 
-/** One model's place in its class, with the numbers that put it there. */
+/** One model's place in its tier, with the numbers that put it there. */
 export interface Ranked {
   model_id: string;
   /** Lower is better. `null` when the model did not answer its probe. */
@@ -231,7 +235,7 @@ export interface Ranked {
 }
 
 export interface ClassElection {
-  class: ModelClass;
+  tier: ModelTier;
   /** Best first. */
   ranked: Ranked[];
   /** Whether price took part in the scoring. */
@@ -243,7 +247,7 @@ export interface ClassElection {
 export interface Election {
   decided_at: string;
   scoring: ScoringConfig;
-  classes: Partial<Record<ModelClass, ClassElection>>;
+  classes: Partial<Record<ModelTier, ClassElection>>;
 }
 
 export interface ServerConfig {
@@ -267,9 +271,9 @@ export type BudgetPeriod = "day" | "month";
 export type BudgetScope =
   | { kind: "global" }
   | { kind: "provider"; id: string }
-  | { kind: "class"; class: ModelClass };
+  | { kind: "tier"; tier: ModelTier };
 
-export type OnExceeded = { action: "reject" } | { action: "degrade"; to: ModelClass };
+export type OnExceeded = { action: "reject" } | { action: "degrade"; to: ModelTier };
 
 export interface Budget {
   id: string;
@@ -428,7 +432,7 @@ export interface CcProvider {
   base_url: string;
   /** Present in the payload, never rendered. */
   api_key: string | null;
-  models: { upstream_model: string; class: ModelClass | null }[];
+  models: { upstream_model: string; tier: ModelTier | null }[];
   is_current: boolean;
 }
 
@@ -438,7 +442,7 @@ export interface CcProviderDraft {
   name: string;
   base_url: string;
   api_key: string | null;
-  models: { upstream_model: string; class: ModelClass | null }[];
+  models: { upstream_model: string; tier: ModelTier | null }[];
   is_current: boolean;
   /** The Zroutery provider id this would get. */
   target_id: string;
@@ -472,7 +476,7 @@ export const api = {
   refreshBalance: (provider_id: string) =>
     invoke<Snapshot>("refresh_balance", { providerId: provider_id }),
   refreshBalances: () => invoke<Snapshot>("refresh_balances"),
-  /** Probes every class member, so it costs one tiny request each. */
+  /** Probes every tier member, so it costs one tiny request each. */
   runElection: () => invoke<Snapshot>("run_election"),
   start: () => invoke<Snapshot>("start_proxy"),
   stop: () => invoke<Snapshot>("stop_proxy"),
@@ -568,8 +572,8 @@ export function scopeLabel(scope: BudgetScope): string {
       return "everything";
     case "provider":
       return `provider ${scope.id}`;
-    case "class":
-      return `${scope.class}-class`;
+    case "tier":
+      return `${scope.tier}-class`;
   }
 }
 
@@ -577,9 +581,9 @@ export function periodLabel(period: BudgetPeriod): string {
   return period === "day" ? "today" : "this month";
 }
 
-/** The virtual model id a class is exposed as. */
-export function virtualId(cls: ModelClass): string {
-  return `${cls}-class`;
+/** The virtual model id a tier is exposed as. */
+export function virtualId(tier: ModelTier): string {
+  return `${tier}-class`;
 }
 
 /** A configured model together with the id the backend exposes it as. */
@@ -598,14 +602,14 @@ export function modelRows(snapshot: Snapshot): ModelRow[] {
   }));
 }
 
-/** Members of a class in the order the router would try them. */
+/** Members of a tier in the order the router would try them. */
 export function classMembers(
   rows: ModelRow[],
   providers: Provider[],
-  cls: ModelClass,
+  tier: ModelTier,
 ): ModelRow[] {
   return rows
-    .filter((r) => r.model.class === cls && r.model.enabled)
+    .filter((r) => r.model.tier === tier && r.model.enabled)
     .filter((r) => providers.find((p) => p.id === r.model.provider_id)?.enabled)
     .sort((a, b) => a.model.priority - b.model.priority || a.id.localeCompare(b.id));
 }

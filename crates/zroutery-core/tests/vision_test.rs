@@ -19,7 +19,7 @@ use axum::routing::post;
 use axum::Json;
 use serde_json::{json, Value};
 use zroutery_core::config::{
-    AppConfig, MemorySecretStore, ModelClass, ModelEntry, ProviderConfig, ProviderKind,
+    AppConfig, MemorySecretStore, ModelTier, ModelEntry, ProviderConfig, ProviderKind,
     VisionConfig,
 };
 use zroutery_core::server::{AppState, ServerHandle};
@@ -151,8 +151,8 @@ fn config_for(mock: SocketAddr, vision: VisionConfig, blind_supports_vision: boo
     cfg.server.auth_token = TOKEN.into();
     cfg.providers = vec![provider];
     cfg.models = vec![
-        ModelEntry::for_upstream("p", "blind-model", Some(ModelClass::Sonnet)),
-        ModelEntry::for_upstream("p", "eyes-model", Some(ModelClass::Haiku)),
+        ModelEntry::for_upstream("p", "blind-model", Some(ModelTier::Standard)),
+        ModelEntry::for_upstream("p", "eyes-model", Some(ModelTier::Fast)),
     ];
     cfg.models[0].supports_vision = blind_supports_vision;
     cfg.models[1].supports_vision = true;

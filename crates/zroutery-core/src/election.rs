@@ -1,7 +1,7 @@
-//! Choosing a class's primary model from latency and price together.
+//! Choosing a tier's primary model from latency and price together.
 //!
 //! Priority ordering asks the user to rank models by hand. That is fine when the
-//! ranking is obvious and tedious when it is not: which of three sonnet-class
+//! ranking is obvious and tedious when it is not: which of three standard-tier
 //! models is the best default depends on what they charge and how fast they
 //! answer today, and neither is knowable from the configuration.
 //!
@@ -16,7 +16,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::billing::{Cost, Pricing};
-use crate::config::ModelClass;
+use crate::config::ModelTier;
 use crate::ir::Usage;
 
 fn default_price_weight() -> f64 {
@@ -154,7 +154,7 @@ impl Measurement {
     }
 }
 
-/// A model's place in its class, with the numbers that put it there.
+/// A model's place in its tier, with the numbers that put it there.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Ranked {
     pub model_id: String,
@@ -166,10 +166,10 @@ pub struct Ranked {
     pub note: Option<String>,
 }
 
-/// The outcome for one class.
+/// The outcome for one tier.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ClassElection {
-    pub class: ModelClass,
+pub struct TierElection {
+    pub tier: ModelTier,
     /// Best first. Models that failed their probe are last and unscored.
     pub ranked: Vec<Ranked>,
     /// Whether price took part in the scoring.
@@ -178,7 +178,7 @@ pub struct ClassElection {
     pub note: Option<String>,
 }
 
-impl ClassElection {
+impl TierElection {
     /// The order the router should try, best first.
     pub fn order(&self) -> Vec<&str> {
         self.ranked.iter().map(|r| r.model_id.as_str()).collect()
@@ -189,12 +189,12 @@ impl ClassElection {
     }
 }
 
-/// Every class's outcome, from one run.
+/// Every tier's outcome, from one run.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Election {
     pub decided_at: DateTime<Utc>,
     pub scoring: ScoringConfig,
-    pub classes: BTreeMap<ModelClass, ClassElection>,
+    pub tiers: BTreeMap<ModelTier, TierElection>,
 }
 
 impl Election {
@@ -202,18 +202,18 @@ impl Election {
         Election {
             decided_at: Utc::now(),
             scoring,
-            classes: BTreeMap::new(),
+            tiers: BTreeMap::new(),
         }
     }
 
-    pub fn order_for(&self, class: ModelClass) -> Option<Vec<&str>> {
-        self.classes.get(&class).map(|c| c.order())
+    pub fn order_for(&self, tier: ModelTier) -> Option<Vec<&str>> {
+        self.tiers.get(&tier).map(|t| t.order())
     }
 }
 
-/// Rank one class's measurements. Pure: same input, same order out.
+/// Rank one tier's measurements. Pure: same input, same order out.
 ///
-/// Each axis is scored as a multiple of the best in the class, so a fiftyfold price
+/// Each axis is scored as a multiple of the best in the tier, so a fiftyfold price
 /// gap outranks a twofold latency gap instead of both flattening into "worse".
 ///
 /// Price only takes part when every model that answered has a price and they all
@@ -221,19 +221,19 @@ impl Election {
 /// 3 USD or to guess what an unpriced model costs. When price is out, the ranking
 /// is latency alone and the reason is recorded rather than hidden.
 pub fn rank(
-    class: ModelClass,
+    tier: ModelTier,
     measurements: &[Measurement],
     scoring: &ScoringConfig,
-) -> ClassElection {
+) -> TierElection {
     let (mut available, unavailable): (Vec<&Measurement>, Vec<&Measurement>) =
         measurements.iter().partition(|m| m.is_available());
 
     if available.is_empty() {
-        return ClassElection {
-            class,
+        return TierElection {
+            tier,
             ranked: unavailable.iter().map(|m| unavailable_entry(m)).collect(),
             priced: false,
-            note: Some("nothing in this class answered the probe".into()),
+            note: Some("nothing in this tier answered the probe".into()),
         };
     }
 
@@ -261,7 +261,7 @@ pub fn rank(
         ))
     };
 
-    // Compare against the best in the class, so the size of a difference survives:
+    // Compare against the best in the tier, so the size of a difference survives:
     // fifty times the price reads as fifty times worse, not merely "worse".
     let best_latency = min_of(available.iter().map(|m| m.latency_ms.unwrap_or(0) as f64));
     let best_price = if priced {
@@ -307,8 +307,8 @@ pub fn rank(
         .collect();
     ranked.extend(unavailable.iter().map(|m| unavailable_entry(m)));
 
-    ClassElection {
-        class,
+    TierElection {
+        tier,
         ranked,
         priced,
         note,
@@ -360,7 +360,7 @@ fn min_of(values: impl Iterator<Item = f64>) -> f64 {
     values.fold(f64::INFINITY, f64::min)
 }
 
-/// `value` measured against the best in its class: 1.0 is the best, 2.0 is twice as
+/// `value` measured against the best in its tier: 1.0 is the best, 2.0 is twice as
 /// bad, and [`WORST_RATIO`] is the ceiling.
 fn ratio(value: f64, best: f64) -> f64 {
     if !value.is_finite() || !best.is_finite() {
@@ -416,7 +416,7 @@ mod tests {
                 .answered(500)
                 .priced("USD", 0.01),
         ];
-        let election = rank(ModelClass::Sonnet, &measurements, &ScoringConfig::default());
+        let election = rank(ModelTier::Standard, &measurements, &ScoringConfig::default());
         assert!(election.priced);
         assert_eq!(election.winner(), Some("fast-cheap"));
         assert_eq!(election.order(), vec!["fast-cheap", "slow-dear"]);
@@ -431,14 +431,14 @@ mod tests {
             Measurement::new("cheap").answered(1000).priced("USD", 0.01),
         ];
 
-        let by_price = rank(ModelClass::Sonnet, &measurements, &scoring(1.0, 0.0));
+        let by_price = rank(ModelTier::Standard, &measurements, &scoring(1.0, 0.0));
         assert_eq!(by_price.winner(), Some("cheap"));
 
-        let by_latency = rank(ModelClass::Sonnet, &measurements, &scoring(0.0, 1.0));
+        let by_latency = rank(ModelTier::Standard, &measurements, &scoring(0.0, 1.0));
         assert_eq!(by_latency.winner(), Some("fast"));
 
         // Evenly weighted, the tenfold price gap outweighs the twofold latency gap.
-        let even = rank(ModelClass::Sonnet, &measurements, &scoring(0.5, 0.5));
+        let even = rank(ModelTier::Standard, &measurements, &scoring(0.5, 0.5));
         assert_eq!(even.winner(), Some("cheap"));
     }
 
@@ -453,7 +453,7 @@ mod tests {
                 .answered(2000)
                 .priced("USD", 0.0100),
         ];
-        let election = rank(ModelClass::Opus, &measurements, &ScoringConfig::default());
+        let election = rank(ModelTier::Reasoning, &measurements, &ScoringConfig::default());
         assert_eq!(election.winner(), Some("much-faster"));
     }
 
@@ -467,18 +467,18 @@ mod tests {
                 .answered(500)
                 .priced("USD", 0.0005),
         ];
-        let election = rank(ModelClass::Sonnet, &measurements, &ScoringConfig::default());
+        let election = rank(ModelTier::Standard, &measurements, &ScoringConfig::default());
         assert_eq!(election.winner(), Some("cheap"));
 
         // Widen the latency gap past the price gap and the answer flips, which is
-        // the property a comparison against the class average could not express.
+        // the property a comparison against the tier average could not express.
         let measurements = vec![
             Measurement::new("dear").answered(100).priced("USD", 0.025),
             Measurement::new("cheap")
                 .answered(20_000)
                 .priced("USD", 0.0005),
         ];
-        let election = rank(ModelClass::Sonnet, &measurements, &ScoringConfig::default());
+        let election = rank(ModelTier::Standard, &measurements, &ScoringConfig::default());
         assert_eq!(election.winner(), Some("dear"));
     }
 
@@ -494,7 +494,7 @@ mod tests {
                 .answered(300)
                 .priced("USD", 1.0),
         ];
-        let election = rank(ModelClass::Sonnet, &measurements, &ScoringConfig::default());
+        let election = rank(ModelTier::Standard, &measurements, &ScoringConfig::default());
         assert!(election
             .ranked
             .iter()
@@ -507,7 +507,7 @@ mod tests {
             Measurement::new("free").answered(900).priced("USD", 0.0),
             Measurement::new("paid").answered(800).priced("USD", 0.05),
         ];
-        let election = rank(ModelClass::Haiku, &measurements, &ScoringConfig::default());
+        let election = rank(ModelTier::Fast, &measurements, &ScoringConfig::default());
         assert!(election.ranked.iter().all(|r| r.score.unwrap().is_finite()));
         assert_eq!(election.winner(), Some("free"));
 
@@ -516,7 +516,7 @@ mod tests {
             Measurement::new("slow").answered(900).priced("USD", 0.0),
             Measurement::new("quick").answered(100).priced("USD", 0.0),
         ];
-        let election = rank(ModelClass::Haiku, &all_free, &ScoringConfig::default());
+        let election = rank(ModelTier::Fast, &all_free, &ScoringConfig::default());
         assert_eq!(election.winner(), Some("quick"));
     }
 
@@ -528,7 +528,7 @@ mod tests {
                 .priced("USD", 0.01),
             Measurement::new("unpriced").answered(300),
         ];
-        let election = rank(ModelClass::Sonnet, &measurements, &scoring(1.0, 0.0));
+        let election = rank(ModelTier::Standard, &measurements, &scoring(1.0, 0.0));
         assert!(!election.priced);
         // Price was asked for and could not be used, so latency decided instead.
         assert_eq!(election.winner(), Some("unpriced"));
@@ -546,7 +546,7 @@ mod tests {
                 .priced("USD", 0.01),
             Measurement::new("in-cny").answered(300).priced("CNY", 0.05),
         ];
-        let election = rank(ModelClass::Sonnet, &measurements, &ScoringConfig::default());
+        let election = rank(ModelTier::Standard, &measurements, &ScoringConfig::default());
         assert!(!election.priced);
         assert_eq!(election.winner(), Some("in-cny"), "latency alone decides");
         let note = election.note.unwrap();
@@ -565,7 +565,7 @@ mod tests {
             Measurement::new("broken").failed("502 from upstream"),
             Measurement::new("works").answered(700).priced("USD", 0.02),
         ];
-        let election = rank(ModelClass::Opus, &measurements, &ScoringConfig::default());
+        let election = rank(ModelTier::Reasoning, &measurements, &ScoringConfig::default());
         assert_eq!(election.order(), vec!["works", "broken"]);
         let last = election.ranked.last().unwrap();
         assert!(last.score.is_none());
@@ -573,18 +573,18 @@ mod tests {
     }
 
     #[test]
-    fn a_class_where_nothing_answers_says_so() {
+    fn a_tier_where_nothing_answers_says_so() {
         let measurements = vec![
             Measurement::new("a").failed("timeout"),
             Measurement::new("b").failed("401"),
         ];
-        let election = rank(ModelClass::Haiku, &measurements, &ScoringConfig::default());
+        let election = rank(ModelTier::Fast, &measurements, &ScoringConfig::default());
         assert!(election.winner().is_some(), "the order is still reported");
         assert!(election.ranked.iter().all(|r| r.score.is_none()));
         assert!(election
             .note
             .unwrap()
-            .contains("nothing in this class answered"));
+            .contains("nothing in this tier answered"));
     }
 
     #[test]
@@ -598,7 +598,7 @@ mod tests {
             .priced("USD", 0.01);
         second.priority = 0;
         let election = rank(
-            ModelClass::Sonnet,
+            ModelTier::Standard,
             &[first.clone(), second.clone()],
             &ScoringConfig::default(),
         );
@@ -609,7 +609,7 @@ mod tests {
         let mut third = second.clone();
         third.priority = 10;
         let election = rank(
-            ModelClass::Sonnet,
+            ModelTier::Standard,
             &[first, third],
             &ScoringConfig::default(),
         );
@@ -619,7 +619,7 @@ mod tests {
     #[test]
     fn one_candidate_is_simply_the_primary() {
         let election = rank(
-            ModelClass::Opus,
+            ModelTier::Reasoning,
             &[Measurement::new("only").answered(1234).priced("USD", 0.3)],
             &ScoringConfig::default(),
         );
@@ -637,8 +637,8 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_class_is_not_an_election() {
-        let election = rank(ModelClass::Opus, &[], &ScoringConfig::default());
+    fn an_empty_tier_is_not_an_election() {
+        let election = rank(ModelTier::Reasoning, &[], &ScoringConfig::default());
         assert!(election.ranked.is_empty());
         assert!(election.winner().is_none());
         assert!(election.note.is_some());
@@ -661,10 +661,10 @@ mod tests {
         let election = Election {
             decided_at: Utc::now(),
             scoring: ScoringConfig::default(),
-            classes: BTreeMap::from([(
-                ModelClass::Sonnet,
+            tiers: BTreeMap::from([(
+                ModelTier::Standard,
                 rank(
-                    ModelClass::Sonnet,
+                    ModelTier::Standard,
                     &[Measurement::new("m").answered(1).priced("USD", 0.1)],
                     &ScoringConfig::default(),
                 ),
@@ -673,7 +673,7 @@ mod tests {
         let json = serde_json::to_string(&election).unwrap();
         let back: Election = serde_json::from_str(&json).unwrap();
         assert_eq!(back, election);
-        assert_eq!(back.order_for(ModelClass::Sonnet).unwrap(), vec!["m"]);
-        assert!(back.order_for(ModelClass::Opus).is_none());
+        assert_eq!(back.order_for(ModelTier::Standard).unwrap(), vec!["m"]);
+        assert!(back.order_for(ModelTier::Reasoning).is_none());
     }
 }

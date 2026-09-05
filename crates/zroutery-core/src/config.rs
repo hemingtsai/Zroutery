@@ -20,43 +20,99 @@ pub use crate::protocol::ProviderQuirks;
 /// never guesses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum ModelClass {
-    /// Most capable / most expensive.
-    Opus,
-    /// Balanced workhorse.
-    Sonnet,
-    /// Cheapest and fastest.
-    Haiku,
+pub enum ModelTier {
+    /// Cheapest and fastest — simple tasks.
+    #[serde(alias = "haiku")]
+    Fast,
+    /// Balanced workhorse — general purpose.
+    #[serde(alias = "sonnet")]
+    Standard,
+    /// Most capable reasoning — complex tasks.
+    #[serde(alias = "opus")]
+    Reasoning,
+    /// Frontier — pushing the boundary of capability.
+    Frontier,
 }
 
-impl ModelClass {
-    pub const ALL: [ModelClass; 3] = [ModelClass::Opus, ModelClass::Sonnet, ModelClass::Haiku];
+impl ModelTier {
+    pub const ALL: [ModelTier; 4] = [
+        ModelTier::Fast,
+        ModelTier::Standard,
+        ModelTier::Reasoning,
+        ModelTier::Frontier,
+    ];
 
-    /// The virtual model id exposed to clients, e.g. `sonnet-class`.
+    /// The virtual model id exposed to clients, e.g. "standard-class".
     pub fn virtual_id(&self) -> &'static str {
         match self {
-            ModelClass::Opus => "opus-class",
-            ModelClass::Sonnet => "sonnet-class",
-            ModelClass::Haiku => "haiku-class",
+            ModelTier::Fast => "fast-class",
+            ModelTier::Standard => "standard-class",
+            ModelTier::Reasoning => "reasoning-class",
+            ModelTier::Frontier => "frontier-class",
         }
     }
 
     pub fn as_str(&self) -> &'static str {
         match self {
-            ModelClass::Opus => "opus",
-            ModelClass::Sonnet => "sonnet",
-            ModelClass::Haiku => "haiku",
+            ModelTier::Fast => "fast",
+            ModelTier::Standard => "standard",
+            ModelTier::Reasoning => "reasoning",
+            ModelTier::Frontier => "frontier",
         }
     }
 
-    pub fn from_virtual_id(id: &str) -> Option<ModelClass> {
+    pub fn from_virtual_id(id: &str) -> Option<ModelTier> {
         match id {
-            "opus-class" => Some(ModelClass::Opus),
-            "sonnet-class" => Some(ModelClass::Sonnet),
-            "haiku-class" => Some(ModelClass::Haiku),
+            "fast-class" => Some(ModelTier::Fast),
+            "standard-class" => Some(ModelTier::Standard),
+            "reasoning-class" => Some(ModelTier::Reasoning),
+            "frontier-class" => Some(ModelTier::Frontier),
+            // Backward compat
+            "haiku-class" => Some(ModelTier::Fast),
+            "sonnet-class" => Some(ModelTier::Standard),
+            "opus-class" => Some(ModelTier::Reasoning),
             _ => None,
         }
     }
+
+    /// Next tier up (for escalation). None if already at the top.
+    pub fn higher(&self) -> Option<ModelTier> {
+        match self {
+            ModelTier::Fast => Some(ModelTier::Standard),
+            ModelTier::Standard => Some(ModelTier::Reasoning),
+            ModelTier::Reasoning => Some(ModelTier::Frontier),
+            ModelTier::Frontier => None,
+        }
+    }
+
+    /// Next tier down (for de-escalation). None if already at the bottom.
+    pub fn lower(&self) -> Option<ModelTier> {
+        match self {
+            ModelTier::Fast => None,
+            ModelTier::Standard => Some(ModelTier::Fast),
+            ModelTier::Reasoning => Some(ModelTier::Standard),
+            ModelTier::Frontier => Some(ModelTier::Reasoning),
+        }
+    }
+}
+
+/// Declared capabilities of a model. Independent of tier.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ModelCapabilities {
+    #[serde(default)]
+    pub vision: bool,
+    #[serde(default)]
+    pub tools: bool,
+    #[serde(default)]
+    pub thinking: bool,
+    #[serde(default)]
+    pub structured_output: bool,
+    #[serde(default)]
+    pub audio: bool,
+    #[serde(default)]
+    pub video: bool,
+    #[serde(default)]
+    pub files: bool,
 }
 
 /// Upstream wire protocol of a provider.
@@ -261,8 +317,11 @@ pub struct ModelEntry {
     /// Tier used by `*-class` virtual models. `None` means the user has not
     /// classified it yet: it stays callable by exact id but never participates
     /// in class routing.
+    #[serde(default, alias = "class")]
+    pub tier: Option<ModelTier>,
+    /// Declared capabilities, independent of tier.
     #[serde(default)]
-    pub class: Option<ModelClass>,
+    pub capabilities: ModelCapabilities,
     /// Lower value wins inside a class.
     #[serde(default)]
     pub priority: i32,
@@ -272,10 +331,13 @@ pub struct ModelEntry {
     #[serde(default = "default_true")]
     pub enabled: bool,
     #[serde(default)]
+    #[deprecated(note = "use capabilities.tools instead")]
     pub supports_tools: bool,
     #[serde(default)]
+    #[deprecated(note = "use capabilities.vision instead")]
     pub supports_vision: bool,
     #[serde(default)]
+    #[deprecated(note = "use capabilities.thinking instead")]
     pub supports_thinking: bool,
     /// Optional display name for `/v1/models`.
     #[serde(default)]
@@ -295,16 +357,18 @@ pub struct ModelEntry {
 impl ModelEntry {
     /// Named rather than `new` so every call site has to state which argument is
     /// the provider now that both are plain strings.
+    #[allow(deprecated)]
     pub fn for_upstream(
         provider_id: impl Into<String>,
         upstream_model: impl Into<String>,
-        class: Option<ModelClass>,
+        tier: Option<ModelTier>,
     ) -> Self {
         ModelEntry {
             provider_id: provider_id.into(),
             upstream_model: upstream_model.into(),
             legacy_id: None,
-            class,
+            tier,
+            capabilities: ModelCapabilities::default(),
             priority: 0,
             weight: default_weight(),
             enabled: true,
@@ -409,16 +473,16 @@ pub struct RoutingConfig {
     /// Legacy field, migrated into `circuit_breaker.timeout_secs`.
     #[serde(default, skip_serializing)]
     pub cooldown_secs: Option<u64>,
-    /// When a client asks for an unknown model id, fall back to this class
+    /// When a client asks for an unknown model id, fall back to this tier
     /// instead of returning 404.
     #[serde(default)]
-    pub unknown_model_fallback: Option<ModelClass>,
-    /// Map arbitrary client model ids onto a class, e.g.
-    /// `claude-sonnet-4-5-20250929 -> sonnet`. Used by Anthropic native clients.
+    pub unknown_model_fallback: Option<ModelTier>,
+    /// Map arbitrary client model ids onto a tier, e.g.
+    /// `claude-sonnet-4-5-20250929 -> standard`. Used by Anthropic native clients.
     #[serde(default)]
-    pub client_aliases: BTreeMap<String, ModelClass>,
-    /// Interpret client model ids containing `opus`/`sonnet`/`haiku` as the
-    /// matching class, so Anthropic-native tools work out of the box. This only
+    pub client_aliases: BTreeMap<String, ModelTier>,
+    /// Interpret client model ids containing legacy class names (`opus`/`sonnet`/`haiku`) as the
+    /// matching tier, so Anthropic-native tools work out of the box. This only
     /// affects how *incoming* ids are read; upstream models are always
     /// classified by hand.
     #[serde(default = "default_true")]
@@ -777,6 +841,17 @@ impl AppConfig {
                 .retain(|a| !a.trim().is_empty() && a != &exposed);
             model.aliases.sort();
             model.aliases.dedup();
+
+            // Migrate old supports_* fields into capabilities when capabilities
+            // is still at its default (all false) and the old fields are set.
+            #[allow(deprecated)]
+            if model.capabilities == ModelCapabilities::default()
+                && (model.supports_tools || model.supports_vision || model.supports_thinking)
+            {
+                model.capabilities.tools = model.supports_tools;
+                model.capabilities.vision = model.supports_vision;
+                model.capabilities.thinking = model.supports_thinking;
+            }
         }
         for budget in &mut self.budgets {
             if budget.id.trim().is_empty() {
@@ -788,7 +863,7 @@ impl AppConfig {
 
     /// Models that the user still has to classify. The GUI nags about these.
     pub fn unclassified_models(&self) -> Vec<&ModelEntry> {
-        self.models.iter().filter(|m| m.class.is_none()).collect()
+        self.models.iter().filter(|m| m.tier.is_none()).collect()
     }
 
     pub fn validate(&self) -> Vec<ConfigIssue> {
@@ -902,7 +977,7 @@ impl AppConfig {
                 });
             }
             for reserved in std::iter::once(&exposed).chain(m.aliases.iter()) {
-                if ModelClass::from_virtual_id(reserved).is_some() {
+                if ModelTier::from_virtual_id(reserved).is_some() {
                     issues.push(ConfigIssue {
                         severity: IssueSeverity::Error,
                         code: "model.reserved_id".into(),
@@ -911,12 +986,12 @@ impl AppConfig {
                     });
                 }
             }
-            if m.class.is_none() {
+            if m.tier.is_none() {
                 issues.push(ConfigIssue {
                     severity: IssueSeverity::Warning,
                     code: "model.unclassified".into(),
                     message: format!(
-                        "Model `{exposed}` has no class yet, so it is excluded from *-class routing"
+                        "Model `{exposed}` has no tier yet, so it is excluded from *-class routing"
                     ),
                     subject: Some(exposed.clone()),
                 });
@@ -947,10 +1022,10 @@ impl AppConfig {
             }
         }
 
-        for class in ModelClass::ALL {
+        for tier in ModelTier::ALL {
             let has = self.models.iter().any(|m| {
                 m.enabled
-                    && m.class == Some(class)
+                    && m.tier == Some(tier)
                     && self
                         .provider(&m.provider_id)
                         .map(|p| p.enabled)
@@ -959,12 +1034,12 @@ impl AppConfig {
             if !has {
                 issues.push(ConfigIssue {
                     severity: IssueSeverity::Warning,
-                    code: "class.empty".into(),
+                    code: "tier.empty".into(),
                     message: format!(
                         "No enabled model is assigned to `{}`, requests to it will fail",
-                        class.virtual_id()
+                        tier.virtual_id()
                     ),
-                    subject: Some(class.virtual_id().to_string()),
+                    subject: Some(tier.virtual_id().to_string()),
                 });
             }
         }
@@ -1137,7 +1212,7 @@ impl AppConfig {
                 let reachable = self
                     .models
                     .iter()
-                    .any(|m| m.enabled && m.class == Some(*to));
+                    .any(|m| m.enabled && m.tier == Some(*to));
                 if !reachable {
                     issues.push(ConfigIssue {
                         severity: IssueSeverity::Warning,
@@ -1205,7 +1280,7 @@ mod tests {
         cfg.models.push(ModelEntry::for_upstream(
             "deepseek",
             "deepseek-chat",
-            Some(ModelClass::Sonnet),
+            Some(ModelTier::Standard),
         ));
         cfg
     }
@@ -1248,7 +1323,7 @@ mod tests {
         cfg.models.push(ModelEntry::for_upstream(
             "openrouter",
             "deepseek-chat",
-            Some(ModelClass::Sonnet),
+            Some(ModelTier::Standard),
         ));
         assert!(cfg
             .validate()
@@ -1272,10 +1347,14 @@ mod tests {
 
     #[test]
     fn virtual_ids_round_trip() {
-        for c in ModelClass::ALL {
-            assert_eq!(ModelClass::from_virtual_id(c.virtual_id()), Some(c));
+        for t in ModelTier::ALL {
+            assert_eq!(ModelTier::from_virtual_id(t.virtual_id()), Some(t));
         }
-        assert_eq!(ModelClass::from_virtual_id("gpt-5.3-sol"), None);
+        assert_eq!(ModelTier::from_virtual_id("gpt-5.3-sol"), None);
+        // Backward compat: old class names resolve to new tiers.
+        assert_eq!(ModelTier::from_virtual_id("haiku-class"), Some(ModelTier::Fast));
+        assert_eq!(ModelTier::from_virtual_id("sonnet-class"), Some(ModelTier::Standard));
+        assert_eq!(ModelTier::from_virtual_id("opus-class"), Some(ModelTier::Reasoning));
     }
 
     #[test]
@@ -1341,7 +1420,7 @@ mod tests {
     }
 
     #[test]
-    fn validate_flags_unclassified_and_empty_classes() {
+    fn validate_flags_unclassified_and_empty_tiers() {
         let mut cfg = sample();
         cfg.models.push(ModelEntry::for_upstream(
             "deepseek",
@@ -1351,20 +1430,20 @@ mod tests {
         let issues = cfg.validate();
         assert!(issues.iter().any(|i| i.code == "model.unclassified"
             && i.subject.as_deref() == Some("deepseek-deepseek-reasoner")));
-        // sonnet is covered, opus and haiku are not
-        assert_eq!(issues.iter().filter(|i| i.code == "class.empty").count(), 2);
+        // standard is covered, reasoning/fast/frontier are not
+        assert_eq!(issues.iter().filter(|i| i.code == "tier.empty").count(), 3);
         assert!(issues.iter().all(|i| i.severity == IssueSeverity::Warning));
     }
 
     #[test]
-    fn validate_flags_a_class_whose_only_members_are_on_disabled_providers() {
+    fn validate_flags_a_tier_whose_only_members_are_on_disabled_providers() {
         let mut cfg = sample();
         cfg.providers[0].enabled = false;
         let issues = cfg.validate();
-        // sonnet is assigned but its provider is disabled, so it is effectively empty.
+        // standard is assigned but its provider is disabled, so it is effectively empty.
         assert!(issues
             .iter()
-            .any(|i| i.code == "class.empty" && i.subject.as_deref() == Some("sonnet-class")));
+            .any(|i| i.code == "tier.empty" && i.subject.as_deref() == Some("standard-class")));
     }
 
     #[test]
@@ -1395,18 +1474,18 @@ mod tests {
     #[test]
     fn validate_rejects_reserved_ids_duplicates_and_orphans() {
         let mut cfg = sample();
-        // An alias must not shadow a virtual class id.
+        // An alias must not shadow a virtual tier id.
         cfg.models[0].aliases.push("sonnet-class".into());
         // The very same provider and model listed twice.
         cfg.models.push(ModelEntry::for_upstream(
             "deepseek",
             "deepseek-chat",
-            Some(ModelClass::Opus),
+            Some(ModelTier::Reasoning),
         ));
         cfg.models.push(ModelEntry::for_upstream(
             "nope",
             "whatever",
-            Some(ModelClass::Haiku),
+            Some(ModelTier::Fast),
         ));
         let issues = cfg.validate();
         assert!(issues.iter().any(|i| i.code == "model.reserved_id"));
@@ -1442,7 +1521,7 @@ mod tests {
         ));
         cfg.models[0].aliases.push("chat".into());
         cfg.models.push(
-            ModelEntry::for_upstream("openrouter", "deepseek-chat", Some(ModelClass::Sonnet))
+            ModelEntry::for_upstream("openrouter", "deepseek-chat", Some(ModelTier::Standard))
                 .with_alias("chat"),
         );
         assert!(cfg
@@ -1605,7 +1684,7 @@ mod tests {
         assert!(cfg.server.require_auth);
         assert!(cfg.models[0].enabled);
         assert_eq!(cfg.models[0].weight, 1);
-        assert_eq!(cfg.models[0].class, None);
+        assert_eq!(cfg.models[0].tier, None);
         assert_eq!(cfg.models[0].exposed_id(), "p-m");
     }
 

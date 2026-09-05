@@ -21,7 +21,7 @@ use chrono::{DateTime, Datelike, Local};
 use serde::{Deserialize, Serialize};
 
 use crate::billing::Cost;
-use crate::config::ModelClass;
+use crate::config::ModelTier;
 
 /// What a budget covers.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -31,8 +31,12 @@ pub enum BudgetScope {
     Global,
     /// One provider, across all of its models.
     Provider { id: String },
-    /// Requests routed to one class, wherever they landed.
-    Class { class: ModelClass },
+    /// Requests routed to one tier, wherever they landed.
+    #[serde(alias = "class")]
+    Tier {
+        #[serde(alias = "class")]
+        tier: ModelTier,
+    },
 }
 
 impl BudgetScope {
@@ -42,7 +46,7 @@ impl BudgetScope {
         match self {
             BudgetScope::Global => "global".into(),
             BudgetScope::Provider { id } => format!("provider:{id}"),
-            BudgetScope::Class { class } => format!("class:{}", class.as_str()),
+            BudgetScope::Tier { tier } => format!("tier:{}", tier.as_str()),
         }
     }
 
@@ -50,7 +54,7 @@ impl BudgetScope {
         match self {
             BudgetScope::Global => "everything".into(),
             BudgetScope::Provider { id } => format!("provider {id}"),
-            BudgetScope::Class { class } => format!("{}-class", class.as_str()),
+            BudgetScope::Tier { tier } => format!("{}-class", tier.as_str()),
         }
     }
 }
@@ -93,9 +97,9 @@ pub enum OnExceeded {
     /// Refuse the request and say why.
     #[default]
     Reject,
-    /// Serve it from a cheaper class instead. The cheaper class's own budget still
+    /// Serve it from a cheaper tier instead. The cheaper tier's own budget still
     /// applies, so this cannot be used to route around a limit.
-    Degrade { to: ModelClass },
+    Degrade { to: ModelTier },
 }
 
 /// One limit.
@@ -145,8 +149,8 @@ impl Budget {
         self
     }
 
-    pub fn degrading_to(mut self, class: ModelClass) -> Self {
-        self.on_exceeded = OnExceeded::Degrade { to: class };
+    pub fn degrading_to(mut self, tier: ModelTier) -> Self {
+        self.on_exceeded = OnExceeded::Degrade { to: tier };
         self
     }
 
@@ -158,11 +162,11 @@ impl Budget {
         if self.limit.amount <= 0.0 || !self.limit.amount.is_finite() {
             out.push("has an impossible limit".into());
         }
-        if let (BudgetScope::Class { class }, OnExceeded::Degrade { to }) =
+        if let (BudgetScope::Tier { tier }, OnExceeded::Degrade { to }) =
             (&self.scope, &self.on_exceeded)
         {
-            if class == to {
-                out.push("degrades to the class it limits, which would loop".into());
+            if tier == to {
+                out.push("degrades to the tier it limits, which would loop".into());
             }
         }
         out
@@ -216,7 +220,7 @@ impl Ledger {
         &mut self,
         at: DateTime<Local>,
         provider_id: &str,
-        class: Option<ModelClass>,
+        tier: Option<ModelTier>,
         cost: &Cost,
     ) {
         let mut scopes = vec![
@@ -225,8 +229,8 @@ impl Ledger {
                 id: provider_id.to_string(),
             },
         ];
-        if let Some(class) = class {
-            scopes.push(BudgetScope::Class { class });
+        if let Some(tier) = tier {
+            scopes.push(BudgetScope::Tier { tier });
         }
         for scope in scopes {
             for period in BudgetPeriod::ALL {
@@ -311,9 +315,9 @@ impl Ledger {
 pub enum Verdict {
     /// Nothing is in the way.
     Allow,
-    /// Serve it from a cheaper class.
+    /// Serve it from a cheaper tier.
     Degrade {
-        to: ModelClass,
+        to: ModelTier,
         /// The budget that caused it, for the log and the response header.
         because: String,
     },
@@ -330,7 +334,7 @@ pub fn check(
     ledger: &Ledger,
     at: DateTime<Local>,
     provider_ids: &[String],
-    class: Option<ModelClass>,
+    tier: Option<ModelTier>,
 ) -> Verdict {
     let mut degrade: Option<Verdict> = None;
 
@@ -338,7 +342,7 @@ pub fn check(
         let covers = match &budget.scope {
             BudgetScope::Global => true,
             BudgetScope::Provider { id } => provider_ids.iter().any(|p| p == id),
-            BudgetScope::Class { class: scoped } => class == Some(*scoped),
+            BudgetScope::Tier { tier: scoped } => tier == Some(*scoped),
         };
         if !covers || ledger.spent(budget, at) < budget.limit.amount {
             continue;
@@ -389,13 +393,13 @@ mod tests {
         ledger.charge(
             at("2026-08-22 10:00:00"),
             "deepseek",
-            Some(ModelClass::Sonnet),
+            Some(ModelTier::Standard),
             &usd(1.5),
         );
         ledger.charge(
             at("2026-08-23 10:00:00"),
             "deepseek",
-            Some(ModelClass::Sonnet),
+            Some(ModelTier::Standard),
             &usd(2.0),
         );
 
@@ -413,8 +417,8 @@ mod tests {
     fn a_scope_only_counts_what_belongs_to_it() {
         let mut ledger = Ledger::new();
         let now = at("2026-08-22 12:00:00");
-        ledger.charge(now, "deepseek", Some(ModelClass::Sonnet), &usd(1.0));
-        ledger.charge(now, "openai", Some(ModelClass::Opus), &usd(4.0));
+        ledger.charge(now, "deepseek", Some(ModelTier::Standard), &usd(1.0));
+        ledger.charge(now, "openai", Some(ModelTier::Reasoning), &usd(4.0));
 
         let of = |scope: BudgetScope| {
             ledger.spent(&Budget::new(scope, BudgetPeriod::Day, "USD", 999.0), now)
@@ -427,14 +431,14 @@ mod tests {
             1.0
         );
         assert_eq!(
-            of(BudgetScope::Class {
-                class: ModelClass::Opus
+            of(BudgetScope::Tier {
+                tier: ModelTier::Reasoning
             }),
             4.0
         );
         assert_eq!(
-            of(BudgetScope::Class {
-                class: ModelClass::Haiku
+            of(BudgetScope::Tier {
+                tier: ModelTier::Fast
             }),
             0.0
         );
@@ -525,7 +529,7 @@ mod tests {
     fn a_budget_only_stops_what_it_covers() {
         let mut ledger = Ledger::new();
         let now = at("2026-08-22 12:00:00");
-        ledger.charge(now, "openai", Some(ModelClass::Opus), &usd(5.0));
+        ledger.charge(now, "openai", Some(ModelTier::Reasoning), &usd(5.0));
         let budgets = vec![Budget::new(
             BudgetScope::Provider {
                 id: "openai".into(),
@@ -542,7 +546,7 @@ mod tests {
                 &ledger,
                 now,
                 &["openai".into()],
-                Some(ModelClass::Opus)
+                Some(ModelTier::Reasoning)
             ),
             Verdict::Reject { .. }
         ));
@@ -553,48 +557,48 @@ mod tests {
                 &ledger,
                 now,
                 &["deepseek".into()],
-                Some(ModelClass::Opus)
+                Some(ModelTier::Reasoning)
             ),
             Verdict::Allow
         );
     }
 
     #[test]
-    fn a_class_budget_can_degrade_instead_of_refusing() {
+    fn a_tier_budget_can_degrade_instead_of_refusing() {
         let mut ledger = Ledger::new();
         let now = at("2026-08-22 12:00:00");
-        ledger.charge(now, "openai", Some(ModelClass::Opus), &usd(20.0));
+        ledger.charge(now, "openai", Some(ModelTier::Reasoning), &usd(20.0));
         let budgets = vec![Budget::new(
-            BudgetScope::Class {
-                class: ModelClass::Opus,
+            BudgetScope::Tier {
+                tier: ModelTier::Reasoning,
             },
             BudgetPeriod::Day,
             "USD",
             10.0,
         )
-        .degrading_to(ModelClass::Sonnet)];
+        .degrading_to(ModelTier::Standard)];
 
         match check(
             &budgets,
             &ledger,
             now,
             &["openai".into()],
-            Some(ModelClass::Opus),
+            Some(ModelTier::Reasoning),
         ) {
             Verdict::Degrade { to, because } => {
-                assert_eq!(to, ModelClass::Sonnet);
-                assert!(because.contains("opus-class"), "{because}");
+                assert_eq!(to, ModelTier::Standard);
+                assert!(because.contains("reasoning-class"), "{because}");
             }
             other => panic!("expected a degrade, got {other:?}"),
         }
-        // Sonnet itself is untouched, so the degraded request goes through.
+        // Standard itself is untouched, so the degraded request goes through.
         assert_eq!(
             check(
                 &budgets,
                 &ledger,
                 now,
                 &["openai".into()],
-                Some(ModelClass::Sonnet)
+                Some(ModelTier::Standard)
             ),
             Verdict::Allow
         );
@@ -604,17 +608,17 @@ mod tests {
     fn a_rejection_outranks_a_degrade() {
         let mut ledger = Ledger::new();
         let now = at("2026-08-22 12:00:00");
-        ledger.charge(now, "openai", Some(ModelClass::Opus), &usd(50.0));
+        ledger.charge(now, "openai", Some(ModelTier::Reasoning), &usd(50.0));
         let budgets = vec![
             Budget::new(
-                BudgetScope::Class {
-                    class: ModelClass::Opus,
+                BudgetScope::Tier {
+                    tier: ModelTier::Reasoning,
                 },
                 BudgetPeriod::Day,
                 "USD",
                 10.0,
             )
-            .degrading_to(ModelClass::Haiku),
+            .degrading_to(ModelTier::Fast),
             daily_global(20.0),
         ];
         // One budget would settle for the cheap tier, the other says stop entirely.
@@ -624,7 +628,7 @@ mod tests {
                 &ledger,
                 now,
                 &["openai".into()],
-                Some(ModelClass::Opus)
+                Some(ModelTier::Reasoning)
             ),
             Verdict::Reject { .. }
         ));
@@ -639,16 +643,16 @@ mod tests {
         zero.limit.currency = "  ".into();
         assert_eq!(zero.problems().len(), 2);
 
-        // Degrading a class to itself would spin.
+        // Degrading a tier to itself would spin.
         let looping = Budget::new(
-            BudgetScope::Class {
-                class: ModelClass::Sonnet,
+            BudgetScope::Tier {
+                tier: ModelTier::Standard,
             },
             BudgetPeriod::Day,
             "USD",
             5.0,
         )
-        .degrading_to(ModelClass::Sonnet);
+        .degrading_to(ModelTier::Standard);
         assert!(looping.problems()[0].contains("would loop"));
     }
 
@@ -683,7 +687,7 @@ mod tests {
     fn the_ledger_round_trips_through_json() {
         let mut ledger = Ledger::new();
         let now = at("2026-08-22 12:00:00");
-        ledger.charge(now, "deepseek", Some(ModelClass::Haiku), &usd(0.25));
+        ledger.charge(now, "deepseek", Some(ModelTier::Fast), &usd(0.25));
         let json = serde_json::to_string(&ledger).unwrap();
         let back: Ledger = serde_json::from_str(&json).unwrap();
         assert_eq!(back, ledger);
@@ -736,7 +740,7 @@ mod tests {
             "CNY",
             200.0,
         )
-        .degrading_to(ModelClass::Haiku);
+        .degrading_to(ModelTier::Fast);
         let json = serde_json::to_string(&budget).unwrap();
         assert!(json.contains("\"kind\":\"provider\""));
         assert!(json.contains("\"action\":\"degrade\""));

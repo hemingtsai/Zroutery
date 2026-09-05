@@ -86,7 +86,7 @@ pub fn description_text(resp: &ChatResponse) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::ModelClass;
+    use crate::config::ModelTier;
 
     fn config_with(vision: Option<&str>) -> AppConfig {
         let mut cfg = AppConfig::default();
@@ -98,7 +98,7 @@ mod tests {
         cfg.models.push(ModelEntry::for_upstream(
             "p",
             "vision-model",
-            Some(ModelClass::Haiku),
+            Some(ModelTier::Fast),
         ));
         cfg.models[0].supports_vision = true;
         cfg.vision.enabled = vision.is_some();

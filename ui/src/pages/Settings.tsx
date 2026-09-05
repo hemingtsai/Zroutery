@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, costText, errorText, modelRows, money, virtualId } from "../api";
 import {
-  CLASSES,
+  TIERS,
   type AppConfig,
   type Budget,
   type BudgetPeriod,
   type BudgetScope,
-  type ModelClass,
+  type ModelTier,
   type Snapshot,
 } from "../api";
 import {
@@ -59,7 +59,7 @@ export default function Settings({
   );
   const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
   const [originError, setOriginError] = useState<string | null>(null);
-  const [aliasDraft, setAliasDraft] = useState({ from: "", to: "sonnet" as ModelClass });
+  const [aliasDraft, setAliasDraft] = useState({ from: "", to: "standard" as ModelTier });
   const [originDraft, setOriginDraft] = useState("");
   const [budgetDraft, setBudgetDraft] = useState({
     scope: "global",
@@ -104,7 +104,7 @@ export default function Settings({
 
   const parseScope = (value: string): BudgetScope => {
     const [kind, rest] = value.split(":");
-    if (kind === "class" && CLASSES.includes(rest as ModelClass)) return { kind: "class", class: rest as ModelClass };
+    if (kind === "tier" && TIERS.includes(rest as ModelTier)) return { kind: "tier", tier: rest as ModelTier };
     if (kind === "provider") return { kind: "provider", id: rest };
     return { kind: "global" };
   };
@@ -402,7 +402,7 @@ export default function Settings({
         <pre className="snippet">
           {`export ANTHROPIC_BASE_URL=${baseUrl}
 export ANTHROPIC_AUTH_TOKEN=<paste the token>
-export ANTHROPIC_MODEL=sonnet-class`}
+export ANTHROPIC_MODEL=standard-class`}
         </pre>
         <p className="field-hint">{t("settings.openai_clients")}</p>
         <pre className="snippet">
@@ -502,7 +502,7 @@ ${t("settings.snippet_comment")}`}
                       )}
                     </td>
                     <td>
-                      <Select<ModelClass | "reject">
+                      <Select<ModelTier | "reject">
                         ariaLabel={t("budget.when")}
                         value={b.on_exceeded.action === "degrade" ? b.on_exceeded.to : "reject"}
                         onChange={(next) =>
@@ -515,8 +515,8 @@ ${t("settings.snippet_comment")}`}
                         }
                         options={[
                           { value: "reject", label: t("budget.reject") },
-                          ...CLASSES.map((c) => ({
-                            value: c as ModelClass,
+                          ...TIERS.map((c) => ({
+                            value: c as ModelTier,
                             label: t("budget.degrade", { id: virtualId(c) }),
                           })),
                         ]}
@@ -559,7 +559,7 @@ ${t("settings.snippet_comment")}`}
               onChange={(scope) => setBudgetDraft({ ...budgetDraft, scope })}
               options={[
                 { value: "global", label: t("scope.global") },
-                ...CLASSES.map((c) => ({ value: `class:${c}`, label: virtualId(c) })),
+                ...TIERS.map((c) => ({ value: `tier:${c}`, label: virtualId(c) })),
                 ...config.providers.map((p) => ({
                   value: `provider:${p.id}`,
                   label: t("scope.provider", { id: p.name }),
@@ -635,11 +635,11 @@ ${t("settings.snippet_comment")}`}
             />
           </Field>
           <Field label={t("settings.f_class")}>
-            <Select<ModelClass>
+            <Select<ModelTier>
               ariaLabel={t("settings.f_class")}
               value={aliasDraft.to}
               onChange={(to) => setAliasDraft({ ...aliasDraft, to })}
-              options={CLASSES.map((c) => ({ value: c, label: virtualId(c) }))}
+              options={TIERS.map((c) => ({ value: c, label: virtualId(c) }))}
             />
           </Field>
           <div className="field-actions">
@@ -714,7 +714,7 @@ function budgetScopeText(
       return t("scope.global");
     case "provider":
       return t("scope.provider", { id: scope.id });
-    case "class":
-      return virtualId(scope.class);
+    case "tier":
+      return virtualId(scope.tier);
   }
 }

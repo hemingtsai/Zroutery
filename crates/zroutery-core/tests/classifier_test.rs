@@ -21,7 +21,7 @@ use axum::routing::post;
 use axum::Json;
 use serde_json::{json, Value};
 use zroutery_core::config::{
-    AppConfig, ClassifierCandidate, ClassifierConfig, MemorySecretStore, ModelClass, ModelEntry,
+    AppConfig, ClassifierCandidate, ClassifierConfig, MemorySecretStore, ModelTier, ModelEntry,
     ProviderConfig, ProviderKind,
 };
 use zroutery_core::server::{AppState, ServerHandle};
@@ -169,7 +169,7 @@ fn config_for(mock: SocketAddr, candidates: &[&str]) -> AppConfig {
     cfg.models = vec![ModelEntry::for_upstream(
         "zai",
         "main-model",
-        Some(ModelClass::Sonnet),
+        Some(ModelTier::Standard),
     )];
 
     let mut classifier_candidates = Vec::new();

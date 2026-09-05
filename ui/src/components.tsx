@@ -691,7 +691,7 @@ export function Badge({
   tone = "neutral",
 }: {
   children: ReactNode;
-  tone?: "neutral" | "ok" | "warn" | "danger" | "opus" | "sonnet" | "haiku";
+  tone?: "neutral" | "ok" | "warn" | "danger" | "fast" | "standard" | "reasoning" | "frontier";
 }) {
   return <span className={`badge badge-${tone}`}>{children}</span>;
 }

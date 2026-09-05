@@ -1,4 +1,4 @@
-//! Maps a client supplied model id onto either one concrete model or a class of
+//! Maps a client supplied model id onto either one concrete model or a tier of
 //! models, and produces the `/v1/models` listing.
 
 use std::collections::HashMap;
@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-use crate::config::{AppConfig, ModelClass, ModelEntry, ProviderConfig};
+use crate::config::{AppConfig, ModelTier, ModelEntry, ProviderConfig};
 use crate::error::{Error, Result};
 
 /// Outcome of resolving a client model id.
@@ -14,8 +14,8 @@ use crate::error::{Error, Result};
 pub enum Resolution {
     /// The client named an exact model (or one of its aliases).
     Direct(String),
-    /// The client named a virtual `*-class` id, or an alias that maps to a class.
-    Class(ModelClass),
+    /// The client named a virtual `*-class` id, or an alias that maps to a tier.
+    Tier(ModelTier),
 }
 
 /// Precomputed lookup tables over one configuration.
@@ -29,8 +29,8 @@ struct Index {
     ids: Vec<String>,
     /// Exposed id and every alias -> position in `config.models`.
     by_name: HashMap<String, usize>,
-    /// Usable members of each class, ordered the way the router will try them.
-    by_class: HashMap<ModelClass, Vec<usize>>,
+    /// Usable members of each tier, ordered the way the router will try them.
+    by_tier: HashMap<ModelTier, Vec<usize>>,
 }
 
 impl Index {
@@ -45,13 +45,13 @@ impl Index {
             }
         }
 
-        let mut by_class: HashMap<ModelClass, Vec<usize>> = HashMap::new();
-        for class in ModelClass::ALL {
+        let mut by_tier: HashMap<ModelTier, Vec<usize>> = HashMap::new();
+        for tier in ModelTier::ALL {
             let mut members: Vec<usize> = config
                 .models
                 .iter()
                 .enumerate()
-                .filter(|(_, m)| m.enabled && m.class == Some(class))
+                .filter(|(_, m)| m.enabled && m.tier == Some(tier))
                 .filter(|(_, m)| {
                     config
                         .provider(&m.provider_id)
@@ -67,14 +67,14 @@ impl Index {
                     .then_with(|| ids[*a].cmp(&ids[*b]))
             });
             if !members.is_empty() {
-                by_class.insert(class, members);
+                by_tier.insert(tier, members);
             }
         }
 
         Index {
             ids,
             by_name,
-            by_class,
+            by_tier,
         }
     }
 }
@@ -94,9 +94,9 @@ pub struct Registry {
 pub struct ModelInfo {
     pub id: String,
     pub display_name: String,
-    /// `None` for virtual class ids.
+    /// `None` for virtual tier ids.
     pub provider_name: Option<String>,
-    pub class: Option<ModelClass>,
+    pub tier: Option<ModelTier>,
     pub virtual_model: bool,
     /// For virtual ids: how many enabled models back it.
     pub member_count: usize,
@@ -130,7 +130,7 @@ impl Registry {
     ///
     /// Order: exact model id or alias (one hash lookup), `*-class` virtual id,
     /// configured client alias, Claude-style name heuristic (opt-in),
-    /// unknown-model fallback class.
+    /// unknown-model fallback tier.
     ///
     /// Client-side window modifiers such as the `[1m]` in
     /// `claude-opus-4-8[1m]` are not part of any model's name, so when the
@@ -164,19 +164,19 @@ impl Registry {
                 return Ok(Resolution::Direct(self.id_at(position).to_string()));
             }
         }
-        if let Some(class) = ModelClass::from_virtual_id(asked) {
-            return Ok(Resolution::Class(class));
+        if let Some(tier) = ModelTier::from_virtual_id(asked) {
+            return Ok(Resolution::Tier(tier));
         }
-        if let Some(class) = self.config.routing.client_aliases.get(asked) {
-            return Ok(Resolution::Class(*class));
+        if let Some(tier) = self.config.routing.client_aliases.get(asked) {
+            return Ok(Resolution::Tier(*tier));
         }
         if self.config.routing.match_claude_names {
-            if let Some(class) = class_from_name(asked) {
-                return Ok(Resolution::Class(class));
+            if let Some(tier) = tier_from_name(asked) {
+                return Ok(Resolution::Tier(tier));
             }
         }
-        if let Some(class) = self.config.routing.unknown_model_fallback {
-            return Ok(Resolution::Class(class));
+        if let Some(tier) = self.config.routing.unknown_model_fallback {
+            return Ok(Resolution::Tier(tier));
         }
         // A disabled-but-known id gets a clearer error than a typo.
         Err(Error::UnknownModel(match known {
@@ -185,11 +185,11 @@ impl Registry {
         }))
     }
 
-    /// All usable models of a class, in the order the router will try them.
-    pub fn class_members(&self, class: ModelClass) -> Vec<&ModelEntry> {
+    /// All usable models of a tier, in the order the router will try them.
+    pub fn tier_members(&self, tier: ModelTier) -> Vec<&ModelEntry> {
         self.index
-            .by_class
-            .get(&class)
+            .by_tier
+            .get(&tier)
             .map(|members| members.iter().map(|i| &self.config.models[*i]).collect())
             .unwrap_or_default()
     }
@@ -213,7 +213,7 @@ impl Registry {
     }
 
     /// The listing returned by `GET /v1/models`: concrete models first, then any
-    /// class id that currently has at least one usable member.
+    /// tier id that currently has at least one usable member.
     pub fn list(&self) -> Vec<ModelInfo> {
         let mut out: Vec<ModelInfo> = Vec::new();
         for (position, m) in self.config.models.iter().enumerate() {
@@ -231,7 +231,7 @@ impl Registry {
                     .clone()
                     .unwrap_or_else(|| m.upstream_model.clone()),
                 provider_name: provider.map(|p| p.name.clone()),
-                class: m.class,
+                tier: m.tier,
                 virtual_model: false,
                 member_count: 0,
                 aliases: m.aliases.clone(),
@@ -242,9 +242,9 @@ impl Registry {
         }
         out.sort_by(|a, b| a.id.cmp(&b.id));
 
-        for class in ModelClass::ALL {
-            // One pass over the precomputed member list per class.
-            let Some(members) = self.index.by_class.get(&class) else {
+        for tier in ModelTier::ALL {
+            // One pass over the precomputed member list per tier.
+            let Some(members) = self.index.by_tier.get(&tier) else {
                 continue;
             };
             let mut capabilities = (true, true, true);
@@ -254,10 +254,10 @@ impl Registry {
                 capabilities.2 &= m.supports_thinking;
             }
             out.push(ModelInfo {
-                id: class.virtual_id().to_string(),
-                display_name: format!("{} (auto)", class.virtual_id()),
+                id: tier.virtual_id().to_string(),
+                display_name: format!("{} (auto)", tier.virtual_id()),
                 provider_name: None,
-                class: Some(class),
+                tier: Some(tier),
                 virtual_model: true,
                 member_count: members.len(),
                 aliases: Vec::new(),
@@ -271,14 +271,16 @@ impl Registry {
 }
 
 /// Recognise Anthropic-style model names sent by clients such as Claude Code.
-fn class_from_name(name: &str) -> Option<ModelClass> {
+fn tier_from_name(name: &str) -> Option<ModelTier> {
     let n = name.to_ascii_lowercase();
     if n.contains("opus") {
-        Some(ModelClass::Opus)
+        Some(ModelTier::Reasoning)
     } else if n.contains("sonnet") {
-        Some(ModelClass::Sonnet)
+        Some(ModelTier::Standard)
     } else if n.contains("haiku") {
-        Some(ModelClass::Haiku)
+        Some(ModelTier::Fast)
+    } else if n.contains("frontier") {
+        Some(ModelTier::Frontier)
     } else {
         None
     }
@@ -294,7 +296,7 @@ mod tests {
     }
 
     /// The scenario from the product brief: DeepSeek (flash + pro) and OpenAI
-    /// (gpt-5.3-sol), with classes assigned by hand.
+    /// (gpt-5.3-sol), with tiers assigned by hand.
     fn brief_config() -> AppConfig {
         let mut cfg = AppConfig::default();
         cfg.providers.push(ProviderConfig::new(
@@ -310,17 +312,17 @@ mod tests {
         cfg.models.push(ModelEntry::for_upstream(
             "deepseek",
             "deepseek-v4-flash",
-            Some(ModelClass::Haiku),
+            Some(ModelTier::Fast),
         ));
         cfg.models.push(ModelEntry::for_upstream(
             "deepseek",
             "deepseek-v4-pro",
-            Some(ModelClass::Sonnet),
+            Some(ModelTier::Standard),
         ));
         cfg.models.push(ModelEntry::for_upstream(
             "openai",
             "gpt-5.3-sol",
-            Some(ModelClass::Opus),
+            Some(ModelTier::Reasoning),
         ));
         cfg
     }
@@ -335,9 +337,9 @@ mod tests {
                 "deepseek-deepseek-v4-flash",
                 "deepseek-deepseek-v4-pro",
                 "openai-gpt-5.3-sol",
-                "opus-class",
-                "sonnet-class",
-                "haiku-class",
+                "fast-class",
+                "standard-class",
+                "reasoning-class",
             ]
         );
         // The short upstream name is what the listing shows as a label.
@@ -362,7 +364,7 @@ mod tests {
         cfg.models.push(ModelEntry::for_upstream(
             "openrouter",
             "deepseek-v4-pro",
-            Some(ModelClass::Sonnet),
+            Some(ModelTier::Standard),
         ));
         let r = registry(cfg);
 
@@ -377,9 +379,9 @@ mod tests {
             r.entry("openrouter-deepseek-v4-pro").unwrap().provider_id,
             "openrouter"
         );
-        // Both are members of the class and can fail over to each other.
+        // Both are members of the tier and can fail over to each other.
         assert_eq!(
-            r.class_members(ModelClass::Sonnet)
+            r.tier_members(ModelTier::Standard)
                 .iter()
                 .map(|m| m.exposed_id())
                 .collect::<Vec<_>>(),
@@ -388,7 +390,7 @@ mod tests {
     }
 
     #[test]
-    fn unclassified_model_is_callable_but_not_in_a_class() {
+    fn unclassified_model_is_callable_but_not_in_a_tier() {
         let mut cfg = brief_config();
         cfg.models
             .push(ModelEntry::for_upstream("openai", "mystery-1", None));
@@ -397,24 +399,24 @@ mod tests {
             r.resolve("openai-mystery-1").unwrap(),
             Resolution::Direct("openai-mystery-1".into())
         );
-        for class in ModelClass::ALL {
+        for tier in ModelTier::ALL {
             assert!(r
-                .class_members(class)
+                .tier_members(tier)
                 .iter()
                 .all(|m| m.upstream_model != "mystery-1"));
         }
         assert!(r
             .list()
             .iter()
-            .any(|m| m.id == "openai-mystery-1" && m.class.is_none()));
+            .any(|m| m.id == "openai-mystery-1" && m.tier.is_none()));
     }
 
     #[test]
-    fn resolves_class_ids_and_direct_ids() {
+    fn resolves_tier_ids_and_direct_ids() {
         let r = registry(brief_config());
         assert_eq!(
-            r.resolve("sonnet-class").unwrap(),
-            Resolution::Class(ModelClass::Sonnet)
+            r.resolve("standard-class").unwrap(),
+            Resolution::Tier(ModelTier::Standard)
         );
         assert_eq!(
             r.resolve("openai-gpt-5.3-sol").unwrap(),
@@ -423,7 +425,7 @@ mod tests {
         // The bare upstream name is not an id any more.
         assert!(r.resolve("gpt-5.3-sol").is_err());
         assert_eq!(
-            r.class_members(ModelClass::Opus)
+            r.tier_members(ModelTier::Reasoning)
                 .iter()
                 .map(|m| m.exposed_id())
                 .collect::<Vec<_>>(),
@@ -432,15 +434,15 @@ mod tests {
     }
 
     #[test]
-    fn claude_style_names_map_to_classes() {
+    fn claude_style_names_map_to_tiers() {
         let r = registry(brief_config());
         assert_eq!(
             r.resolve("claude-sonnet-4-5-20250929").unwrap(),
-            Resolution::Class(ModelClass::Sonnet)
+            Resolution::Tier(ModelTier::Standard)
         );
         assert_eq!(
             r.resolve("claude-3-5-haiku-latest").unwrap(),
-            Resolution::Class(ModelClass::Haiku)
+            Resolution::Tier(ModelTier::Fast)
         );
 
         let mut cfg = brief_config();
@@ -455,11 +457,11 @@ mod tests {
         // Route Claude's opus name to the cheap tier on purpose.
         cfg.routing
             .client_aliases
-            .insert("claude-opus-4-1".into(), ModelClass::Haiku);
+            .insert("claude-opus-4-1".into(), ModelTier::Fast);
         let r = registry(cfg);
         assert_eq!(
             r.resolve("claude-opus-4-1").unwrap(),
-            Resolution::Class(ModelClass::Haiku)
+            Resolution::Tier(ModelTier::Fast)
         );
     }
 
@@ -482,13 +484,13 @@ mod tests {
 
         let mut cfg = brief_config();
         cfg.routing = RoutingConfig {
-            unknown_model_fallback: Some(ModelClass::Sonnet),
+            unknown_model_fallback: Some(ModelTier::Standard),
             ..RoutingConfig::default()
         };
         let r = registry(cfg);
         assert_eq!(
             r.resolve("does-not-exist").unwrap(),
-            Resolution::Class(ModelClass::Sonnet)
+            Resolution::Tier(ModelTier::Standard)
         );
     }
 
@@ -497,21 +499,21 @@ mod tests {
         let mut cfg = brief_config();
         cfg.providers[0].enabled = false;
         let r = registry(cfg);
-        assert!(r.class_members(ModelClass::Sonnet).is_empty());
-        assert!(!r.list().iter().any(|m| m.id == "sonnet-class"));
+        assert!(r.tier_members(ModelTier::Standard).is_empty());
+        assert!(!r.list().iter().any(|m| m.id == "standard-class"));
         assert!(!r.list().iter().any(|m| m.id == "deepseek-deepseek-v4-pro"));
     }
 
     #[test]
-    fn priority_orders_class_members() {
+    fn priority_orders_tier_members() {
         let mut cfg = brief_config();
         cfg.models.push(
-            ModelEntry::for_upstream("openai", "backup-sonnet", Some(ModelClass::Sonnet))
+            ModelEntry::for_upstream("openai", "backup-sonnet", Some(ModelTier::Standard))
                 .with_priority(-5),
         );
         let r = registry(cfg);
         assert_eq!(
-            r.class_members(ModelClass::Sonnet)
+            r.tier_members(ModelTier::Standard)
                 .iter()
                 .map(|m| m.exposed_id())
                 .collect::<Vec<_>>(),
@@ -532,10 +534,10 @@ mod tests {
             let err = r.resolve(name).unwrap_err();
             assert!(err.to_string().contains("disabled"), "{name}: {err}");
         }
-        // It stays findable for diagnostics, but is out of every class.
+        // It stays findable for diagnostics, but is out of every tier.
         assert!(r.entry("pro").is_ok());
-        assert!(r.class_members(ModelClass::Sonnet).is_empty());
-        assert!(!r.list().iter().any(|m| m.id == "sonnet-class"));
+        assert!(r.tier_members(ModelTier::Standard).is_empty());
+        assert!(!r.list().iter().any(|m| m.id == "standard-class"));
     }
 
     #[test]
@@ -550,7 +552,7 @@ mod tests {
             r.resolve("openai-gpt-5.3-sol[1m]").unwrap(),
             Resolution::Direct("openai-gpt-5.3-sol".into())
         );
-        // Same for an alias, and for the fallback class.
+        // Same for an alias, and for the fallback tier.
         let mut cfg = brief_config();
         cfg.routing.match_claude_names = false;
         cfg.models[2].aliases.push("fast-opus".into());
