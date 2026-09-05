@@ -14,7 +14,10 @@ use crate::config::{ClassifierConfig, ModelTier, ModelEntry, ProviderConfig, Rou
 use crate::election::Election;
 use crate::error::{Error, Result};
 use crate::ir::Capability;
-use crate::policy::{PolicyFallback, PolicyPreference, PolicyRequirements, ScoringContext, TaskProfile, score_candidate};
+use crate::policy::{
+    CandidateDecision, DecisionReason, PolicyFallback, PolicyPreference, PolicyRequirements,
+    RouteDecision, ScoringContext, TaskProfile, TaskProfileSummary, score_candidate,
+};
 use crate::registry::{Registry, Resolution};
 
 /// Round robin cursor key for the classifier pool, which is not a tier.
@@ -160,7 +163,7 @@ impl Router {
         preference: &PolicyPreference,
         fallback: &PolicyFallback,
         task: Option<&TaskProfile>,
-    ) -> Result<Vec<Candidate>> {
+    ) -> Result<(Vec<Candidate>, RouteDecision)> {
         // Collect the raw candidate pool from the registry.
         let members: Vec<&ModelEntry> = match resolution {
             Resolution::Direct(id) => {
@@ -189,6 +192,35 @@ impl Router {
             Resolution::Tier(tier) => Some(*tier),
             Resolution::Direct(_) => None,
         };
+
+        // Collect eligibility results for every candidate (cheap: just strings and bools).
+        let mut decisions: Vec<CandidateDecision> = Vec::with_capacity(members.len());
+        for m in &members {
+            let circuit_open = self.is_circuit_open(&m.exposed_id());
+            let check = requirements.check(
+                &m.exposed_id(),
+                &m.provider_id,
+                m.tier,
+                &m.capabilities,
+                circuit_open,
+            );
+            decisions.push(CandidateDecision {
+                model_id: m.exposed_id(),
+                provider_id: m.provider_id.clone(),
+                tier: m.tier.map(|t| t.as_str().to_string()),
+                eligible: check.eligible,
+                rejection: if check.eligible {
+                    None
+                } else {
+                    Some(check.reasons.iter().map(|r| r.to_string()).collect::<Vec<_>>().join(", "))
+                },
+                score: None,
+                final_score: None,
+            });
+        }
+
+        // Track fallback chain (tier IDs tried before the final selection).
+        let mut fallback_chain: Vec<String> = Vec::new();
 
         let effective = if filtered.is_empty() {
             // No candidate passed eligibility — apply fallback.
@@ -246,10 +278,27 @@ impl Router {
             filtered
         };
 
+        // Record fallback chain entries.
+        if let Some(tier) = effective_tier {
+            if let Resolution::Tier(orig) = resolution {
+                if tier != *orig {
+                    fallback_chain.push(orig.virtual_id().to_string());
+                }
+            }
+        }
+
         // Score and sort by policy preferences before delegating to
         // plan_candidates for health gating, failover and attempt capping.
-        let scored = self.score_and_sort(effective, preference, task);
+        let (scored, score_breakdowns) = self.score_and_sort(effective, preference, task);
         let effective: Vec<&ModelEntry> = scored;
+
+        // Annotate eligible decisions with their score breakdowns.
+        for (model_id, breakdown, total_score) in &score_breakdowns {
+            if let Some(d) = decisions.iter_mut().find(|d| &d.model_id == model_id) {
+                d.score = Some(breakdown.clone());
+                d.final_score = Some(*total_score);
+            }
+        }
 
         // Delegate to the standard routing machinery for health, ordering and
         // failover — but pass the already-filtered (or fallback) member list
@@ -265,7 +314,7 @@ impl Router {
                 Resolution::Tier(tier) => (tier.virtual_id().to_string(), Some(*tier)),
             },
         };
-        self.plan_candidates(
+        let candidates = self.plan_candidates(
             registry,
             effective,
             pool_name.as_str(),
@@ -277,7 +326,57 @@ impl Router {
             required_capabilities,
             false, // capability filtering already applied above
             false,
-        )
+        )?;
+
+        // Mark the selected candidate.
+        if let Some(first) = candidates.first() {
+            if let Some(d) = decisions.iter_mut().find(|d| d.model_id == first.exposed_id) {
+                d.eligible = true;
+                d.rejection = None;
+            }
+        }
+
+        // Determine the reason.
+        let reason = if let Resolution::Direct(_) = resolution {
+            DecisionReason::Direct
+        } else if !fallback_chain.is_empty() {
+            match fallback {
+                PolicyFallback::Escalate { .. } => DecisionReason::Escalated {
+                    from_tier: fallback_chain[0].clone(),
+                },
+                PolicyFallback::Degrade { .. } => DecisionReason::Degraded {
+                    from_tier: fallback_chain[0].clone(),
+                },
+                _ => DecisionReason::PolicySelected,
+            }
+        } else {
+            DecisionReason::PolicySelected
+        };
+
+        let decision = RouteDecision {
+            decision_id: format!("dec-{}", uuid::Uuid::new_v4().simple()),
+            timestamp: chrono::Utc::now().timestamp(),
+            task: task
+                .map(|t| TaskProfileSummary::from(t))
+                .unwrap_or_else(|| TaskProfileSummary {
+                    complexity: String::new(),
+                    task_type: String::new(),
+                    context_tokens: 0,
+                    estimated_output_tokens: 0,
+                    streaming: false,
+                    has_tools: false,
+                    has_vision: false,
+                    required_capabilities: Vec::new(),
+                }),
+            policy_id: String::new(), // filled by caller
+            client_id: None,          // filled by caller
+            candidates: decisions,
+            selected: candidates.first().map(|c| c.exposed_id.clone()),
+            fallback_chain,
+            reason,
+        };
+
+        Ok((candidates, decision))
     }
 
     /// Filter members through policy requirements eligibility check.
@@ -370,14 +469,15 @@ impl Router {
         Err(Error::NoCandidate(name))
     }
 
-    /// Score candidates by policy preferences and return them sorted (best first).
+    /// Score candidates by policy preferences and return them sorted (best first),
+    /// along with the per-candidate score breakdown for decision tracing.
     fn score_and_sort<'a>(
         &self,
         members: Vec<&'a ModelEntry>,
         preference: &PolicyPreference,
         task: Option<&TaskProfile>,
-    ) -> Vec<&'a ModelEntry> {
-        let mut scored: Vec<(&ModelEntry, f64)> = members
+    ) -> (Vec<&'a ModelEntry>, Vec<(String, crate::policy::ScoreBreakdown, f64)>) {
+        let mut scored: Vec<(&ModelEntry, f64, crate::policy::ScoreBreakdown)> = members
             .iter()
             .map(|m| {
                 let ctx = ScoringContext {
@@ -390,11 +490,16 @@ impl Router {
                     task,
                 };
                 let s = score_candidate(preference, &ctx);
-                (*m, s.total_score)
+                (*m, s.total_score, s.breakdown)
             })
             .collect();
         scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        scored.into_iter().map(|(m, _)| m).collect()
+        let breakdowns = scored
+            .iter()
+            .map(|(m, score, bd)| (m.exposed_id(), bd.clone(), *score))
+            .collect();
+        let sorted = scored.into_iter().map(|(m, _, _)| m).collect();
+        (sorted, breakdowns)
     }
 
     /// Build the ordered attempts for an Auto Mode classifier request.

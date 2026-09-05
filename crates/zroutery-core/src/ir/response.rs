@@ -12,6 +12,7 @@ use serde_json::Value;
 use tokio::sync::watch;
 
 use crate::ir::Usage;
+use crate::policy::RouteDecision;
 
 /// Lifecycle status of a stored response.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -43,6 +44,9 @@ pub struct StoredResponse {
     /// Set when a previous_response_id was used.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub previous_response_id: Option<String>,
+    /// Routing decision trace (for diagnostics).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub routing_decision: Option<RouteDecision>,
 }
 
 impl StoredResponse {
@@ -54,6 +58,7 @@ impl StoredResponse {
         output: Vec<Value>,
         usage: Usage,
         previous_response_id: Option<String>,
+        routing_decision: Option<RouteDecision>,
     ) -> Self {
         StoredResponse {
             id,
@@ -65,6 +70,7 @@ impl StoredResponse {
             usage: Some(usage),
             error: None,
             previous_response_id,
+            routing_decision,
         }
     }
 
@@ -80,6 +86,7 @@ impl StoredResponse {
             usage: None,
             error: Some(error),
             previous_response_id: None,
+            routing_decision: None,
         }
     }
 }
@@ -183,6 +190,7 @@ impl ResponseStore {
             usage: None,
             error: None,
             previous_response_id: None,
+            routing_decision: None,
         };
         self.put(resp);
     }
@@ -223,6 +231,7 @@ mod tests {
             vec![json!({"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]})],
             vec![json!({"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "hello"}]})],
             Usage { input_tokens: 5, output_tokens: 3, ..Usage::default() },
+            None,
             None,
         )
     }

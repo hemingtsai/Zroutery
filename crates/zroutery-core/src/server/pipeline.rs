@@ -23,7 +23,7 @@ use crate::budget::Verdict;
 use crate::config::ModelTier;
 use crate::error::{Error, Result};
 use crate::ir::{ChatRequest, Dialect, StoredResponse, StreamEvent, Usage};
-use crate::policy::{self, ClientContext, RoutingPolicy};
+use crate::policy::{self, ClientContext, RouteDecision, RoutingPolicy};
 use crate::protocol::{self, openai, SseFrame, StreamEncoder};
 use crate::query::RequestKind;
 use crate::rectifier::{self, Rectifier};
@@ -97,43 +97,77 @@ pub(super) async fn handle_chat(
     let policy_config = &config.routing.policies;
     let matched_policy = resolve_policy(policy_config, &client_ctx, &task_profile);
 
-    let plan = match kind {
-        RequestKind::Main => registry
-            .resolve(&req.model)
-            .and_then(|resolution| apply_budgets(&state, &registry, resolution))
-            .and_then(|resolution| {
-                // Resolution::Direct skips policy: the client named an exact
-                // model, so policy filtering would be surprising.
-                // Resolution::Tier uses policy-aware routing when a policy is
-                // resolved (via client profile, matchers, or default).
-                match &resolution {
-                    Resolution::Direct(_) => {
-                        state.router.plan(&registry, &resolution, &req.required_capabilities)
-                    }
-                    Resolution::Tier(_) => {
-                        match &matched_policy {
-                            Some(policy) => {
-                                tracing::debug!(
-                                    policy_id = %policy.id,
-                                    "using policy-aware routing"
-                                );
-                                state.router.plan_with_policy(
-                                    &registry,
-                                    &resolution,
-                                    &req.required_capabilities,
-                                    &policy.requirements,
-                                    &policy.preference,
-                                    &policy.fallback,
-                                    Some(&task_profile),
-                                )
-                            }
-                            None => {
-                                state.router.plan(&registry, &resolution, &req.required_capabilities)
+    let (plan, routing_decision) = match kind {
+        RequestKind::Main => {
+            // Fallback Contract:
+            //
+            // 1. POLICY FALLBACK (before any request is sent):
+            //    - Escalation/degradation happens at the candidate selection level
+            //    - No upstream request has been made yet
+            //    - Safe to try any eligible candidate
+            //
+            // 2. TRANSPORT RETRY (after request sent, before streaming output):
+            //    - Connection failure or timeout before first token
+            //    - Can retry same candidate or failover to next
+            //    - Rectifier cascade applies here
+            //
+            // 3. NO FALLBACK (after streaming output has been sent to client):
+            //    - Once tokens have been sent to the client
+            //    - Once tool calls have been executed
+            //    - Once terminal events have been sent
+            //    - The response cannot be transparently retried
+            let result = registry
+                .resolve(&req.model)
+                .and_then(|resolution| apply_budgets(&state, &registry, resolution))
+                .and_then(|resolution| {
+                    // Resolution::Direct skips policy: the client named an exact
+                    // model, so policy filtering would be surprising.
+                    // Resolution::Tier uses policy-aware routing when a policy is
+                    // resolved (via client profile, matchers, or default).
+                    match &resolution {
+                        Resolution::Direct(_) => {
+                            state.router.plan(&registry, &resolution, &req.required_capabilities)
+                                .map(|plan| (plan, None))
+                        }
+                        Resolution::Tier(_) => {
+                            match &matched_policy {
+                                Some(policy) => {
+                                    tracing::debug!(
+                                        policy_id = %policy.id,
+                                        "using policy-aware routing"
+                                    );
+                                    state.router.plan_with_policy(
+                                        &registry,
+                                        &resolution,
+                                        &req.required_capabilities,
+                                        &policy.requirements,
+                                        &policy.preference,
+                                        &policy.fallback,
+                                        Some(&task_profile),
+                                    ).map(|(plan, mut decision)| {
+                                        decision.policy_id = policy.id.clone();
+                                        (plan, Some(decision))
+                                    })
+                                }
+                                None => {
+                                    state.router.plan(&registry, &resolution, &req.required_capabilities)
+                                        .map(|plan| (plan, None))
+                                }
                             }
                         }
                     }
+                });
+            match result {
+                Ok((plan, decision)) => (plan, decision),
+                Err(e) => {
+                    let mut rec = RecordBuilder::new(dialect, &req.model, req.stream);
+                    rec.kind(kind);
+                    rec.fail(e.status().as_u16(), e.to_string());
+                    state.stats.record(rec.finish(0));
+                    return error_response(dialect, &e);
                 }
-            }),
+            }
+        }
         // The classifier pool is resolved directly: the model the client named
         // (e.g. `claude-opus-4-8[1m]`) is irrelevant to *which model judges*,
         // and may not even exist in the registry. Budgets are main-path
@@ -141,24 +175,36 @@ pub(super) async fn handle_chat(
         // but are never degraded or rejected by a class budget.
         RequestKind::Side(_) => {
             let classifier = config.classifier.clone();
-            state.router.plan_classifier(&registry, &classifier)
-        }
-    };
-    let plan = match plan {
-        Ok(p) => p,
-        Err(e) => {
-            let mut rec = RecordBuilder::new(dialect, &req.model, req.stream);
-            rec.kind(kind);
-            rec.fail(e.status().as_u16(), e.to_string());
-            state.stats.record(rec.finish(0));
-            return error_response(dialect, &e);
+            match state.router.plan_classifier(&registry, &classifier) {
+                Ok(plan) => (plan, None),
+                Err(e) => {
+                    let mut rec = RecordBuilder::new(dialect, &req.model, req.stream);
+                    rec.kind(kind);
+                    rec.fail(e.status().as_u16(), e.to_string());
+                    state.stats.record(rec.finish(0));
+                    return error_response(dialect, &e);
+                }
+            }
         }
     };
 
+    // Log a summary of the routing decision for diagnostics.
+    if let Some(ref decision) = routing_decision {
+        tracing::debug!(
+            decision_id = %decision.decision_id,
+            policy_id = %decision.policy_id,
+            selected = ?decision.selected,
+            candidates = decision.candidates.len(),
+            fallback_chain = ?decision.fallback_chain,
+            reason = ?decision.reason,
+            "routing decision recorded"
+        );
+    }
+
     if req.stream {
-        stream_chat(state, dialect, req, plan, kind, include_usage).await
+        stream_chat(state, dialect, req, plan, kind, include_usage, routing_decision).await
     } else {
-        buffered_chat(state, dialect, req, plan, kind, input_items, previous_response_id).await
+        buffered_chat(state, dialect, req, plan, kind, input_items, previous_response_id, routing_decision).await
     }
 }
 
@@ -601,6 +647,7 @@ async fn buffered_chat(
     kind: RequestKind,
     input_items: Vec<Value>,
     previous_response_id: Option<String>,
+    routing_decision: Option<RouteDecision>,
 ) -> Response {
     let started = Instant::now();
     let mut rec = RecordBuilder::new(dialect, &req.model, false);
@@ -718,6 +765,9 @@ async fn buffered_chat(
                     // from the provider it actually reached.
                     state.charge(&candidate.provider.id, candidate.entry.tier, cost);
                 }
+                if let Some(ref decision) = routing_decision {
+                    rec.routing_decision(decision.clone());
+                }
                 state
                     .stats
                     .record(rec.finish(started.elapsed().as_millis() as u64));
@@ -737,6 +787,7 @@ async fn buffered_chat(
                         output,
                         resp.usage.clone(),
                         previous_response_id.clone(),
+                        routing_decision,
                     );
                     state.response_store.put(stored);
                 }
@@ -782,6 +833,9 @@ async fn buffered_chat(
                         if let Some(cost) = &cost {
                             state.charge(&candidate.provider.id, candidate.entry.tier, cost);
                         }
+                        if let Some(ref decision) = routing_decision {
+                            rec.routing_decision(decision.clone());
+                        }
                         state
                             .stats
                             .record(rec.finish(started.elapsed().as_millis() as u64));
@@ -800,6 +854,7 @@ async fn buffered_chat(
                                 output,
                                 resp.usage.clone(),
                                 previous_response_id.clone(),
+                                routing_decision,
                             );
                             state.response_store.put(stored);
                         }
@@ -858,6 +913,7 @@ async fn stream_chat(
     plan: Vec<Candidate>,
     kind: RequestKind,
     include_usage: bool,
+    routing_decision: Option<RouteDecision>,
 ) -> Response {
     let started = Instant::now();
     let mut rec = RecordBuilder::new(dialect, &req.model, true);
@@ -937,6 +993,9 @@ async fn stream_chat(
                     attempt_start.elapsed().as_millis() as u64,
                     &routing,
                 );
+                if let Some(ref decision) = routing_decision {
+                    rec.routing_decision(decision.clone());
+                }
                 let (response_id, cancel_rx) = if dialect == Dialect::OpenAIResponses {
                     let id = format!("resp-{}", uuid::Uuid::new_v4().simple());
                     let rx = state.response_store.register_in_flight(id.clone());
@@ -983,6 +1042,9 @@ async fn stream_chat(
                     Ok(Some(events)) => {
                         // The repaired stream is not a fresh half-open probe.
                         state.router.release_half_open_permit(candidate.model_id());
+                        if let Some(ref decision) = routing_decision {
+                            rec.routing_decision(decision.clone());
+                        }
                         let (response_id, cancel_rx) = if dialect == Dialect::OpenAIResponses {
                             let id = format!("resp-{}", uuid::Uuid::new_v4().simple());
                             let rx = state.response_store.register_in_flight(id.clone());

@@ -16,9 +16,10 @@ use zroutery_core::config::{AppConfig, ModelCapabilities, ModelEntry, ModelTier,
 use zroutery_core::error::Error;
 use zroutery_core::ir::{Capability, ChatRequest, ContentBlock, Dialect, MediaSource, ToolDef};
 use zroutery_core::policy::{
-    self, ClientContext, ClientMatcher, ClientProfile, Complexity, MatchContext, PolicyConfig,
-    PolicyFallback, PolicyMatcher, PolicyPreference, PolicyRequirements, RejectionReason,
-    RoutingPolicy, ScoringContext, TaskProfile, TaskType, resolve_client, score_candidate,
+    self, ClientContext, ClientMatcher, ClientProfile, Complexity, DecisionReason, MatchContext,
+    PolicyConfig, PolicyFallback, PolicyMatcher, PolicyPreference, PolicyRequirements,
+    RejectionReason, RoutingPolicy, ScoringContext, TaskProfile, TaskType, resolve_client,
+    score_candidate,
 };
 use zroutery_core::registry::{Registry, Resolution};
 use zroutery_core::router::Router;
@@ -1294,7 +1295,7 @@ fn e2e_selects_best_candidate_by_scoring() {
     };
     let fallback = PolicyFallback::Reject;
 
-    let candidates = router
+    let (candidates, _decision) = router
         .plan_with_policy(
             &reg,
             &Resolution::Tier(ModelTier::Reasoning),
@@ -1388,7 +1389,7 @@ fn e2e_escalates_tier_on_fallback() {
         max_steps: 1,
     };
 
-    let candidates = router
+    let (candidates, _decision) = router
         .plan_with_policy(
             &reg,
             &Resolution::Tier(ModelTier::Standard),
@@ -1427,7 +1428,7 @@ fn e2e_forbidden_provider_never_selected() {
     };
     let fallback = PolicyFallback::Reject;
 
-    let candidates = router
+    let (candidates, _decision) = router
         .plan_with_policy(
             &reg,
             &Resolution::Tier(ModelTier::Standard),
@@ -1469,7 +1470,7 @@ fn e2e_tier_bounds_enforced() {
     let fallback = PolicyFallback::Reject;
 
     // Standard model is within [Standard, Reasoning] → eligible.
-    let candidates = router
+    let (candidates, _decision) = router
         .plan_with_policy(
             &reg,
             &Resolution::Tier(ModelTier::Standard),
@@ -1484,7 +1485,7 @@ fn e2e_tier_bounds_enforced() {
     assert_eq!(candidates[0].exposed_id, "p1-std-m");
 
     // Reasoning model is within [Standard, Reasoning] → eligible.
-    let candidates = router
+    let (candidates, _decision) = router
         .plan_with_policy(
             &reg,
             &Resolution::Tier(ModelTier::Reasoning),
@@ -1556,7 +1557,7 @@ fn escalation_finds_higher_tier() {
         max_steps: 1,
     };
 
-    let candidates = router
+    let (candidates, _decision) = router
         .plan_with_policy(
             &reg,
             &Resolution::Tier(ModelTier::Standard),
@@ -1605,7 +1606,7 @@ fn degradation_finds_lower_tier() {
         max_steps: 1,
     };
 
-    let candidates = router
+    let (candidates, _decision) = router
         .plan_with_policy(
             &reg,
             &Resolution::Tier(ModelTier::Frontier),
@@ -1622,4 +1623,635 @@ fn degradation_finds_lower_tier() {
         candidates[0].exposed_id, "p1-reas-m",
         "degradation should land on the Reasoning model"
     );
+}
+
+// ========================================================================
+// 10. Policy Regression Matrix
+// ========================================================================
+
+/// Coding task with tools requirement selects a reasoning-capable model.
+///
+/// The policy requires Tools capability with min_tier=Reasoning. A Standard
+/// model with tools is below min_tier and must be rejected; only the Reasoning
+/// model is eligible.
+#[test]
+fn matrix_coding_task_selects_reasoning_with_tools() {
+    let cfg = e2e_cfg_with(vec![
+        ModelEntry::for_upstream("p1", "std-tools", Some(ModelTier::Standard))
+            .with_priority(0),
+        ModelEntry::for_upstream("p1", "reas-tools", Some(ModelTier::Reasoning))
+            .with_priority(10),
+    ]);
+    let reg = e2e_reg(cfg);
+    let router = Router::new();
+
+    let requirements = PolicyRequirements {
+        required_capabilities: vec![Capability::Tools],
+        min_tier: Some(ModelTier::Reasoning),
+        ..Default::default()
+    };
+    let preference = PolicyPreference::default();
+    let fallback = PolicyFallback::Reject;
+
+    let (candidates, _decision) = router
+        .plan_with_policy(
+            &reg,
+            &Resolution::Tier(ModelTier::Reasoning),
+            &[],
+            &requirements,
+            &preference,
+            &fallback,
+            None,
+        )
+        .unwrap();
+
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].exposed_id, "p1-reas-tools");
+}
+
+/// Vision task rejects non-vision models.
+///
+/// Policy requires Vision capability with strict mode. Two Standard-tier
+/// models: one with vision, one without. Only the vision model survives.
+#[test]
+fn matrix_vision_task_rejects_non_vision() {
+    let mut no_vision = ModelEntry::for_upstream("p1", "text-only", Some(ModelTier::Standard));
+    no_vision.capabilities = ModelCapabilities::default(); // all false
+    let mut has_vision = ModelEntry::for_upstream("p1", "has-vision", Some(ModelTier::Standard));
+    has_vision.capabilities.vision = true;
+    let cfg = e2e_cfg_with(vec![has_vision, no_vision]);
+    let reg = e2e_reg(cfg);
+    let router = Router::new();
+
+    let requirements = PolicyRequirements {
+        required_capabilities: vec![Capability::Vision],
+        strict_capabilities: true,
+        ..Default::default()
+    };
+    let fallback = PolicyFallback::Reject;
+
+    let (candidates, decision) = router
+        .plan_with_policy(
+            &reg,
+            &Resolution::Tier(ModelTier::Standard),
+            &[],
+            &requirements,
+            &PolicyPreference::default(),
+            &fallback,
+            None,
+        )
+        .unwrap();
+
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].exposed_id, "p1-has-vision");
+    // The text-only model should appear as rejected in the decision trace.
+    let rejected = decision
+        .candidates
+        .iter()
+        .find(|c| c.model_id == "p1-text-only");
+    assert!(rejected.is_some());
+    assert!(!rejected.unwrap().eligible);
+    assert!(rejected.unwrap().rejection.is_some());
+}
+
+/// Long context task rejects low-context (Fast-tier) models.
+///
+/// Policy sets min_tier=Reasoning to reject Fast-tier models. A Fast-tier
+/// model produces NoCandidate when it is the only option.
+#[test]
+fn matrix_long_context_rejects_small_window() {
+    let cfg = e2e_cfg_with(vec![ModelEntry::for_upstream(
+        "p1",
+        "fast-m",
+        Some(ModelTier::Fast),
+    )]);
+    let reg = e2e_reg(cfg);
+    let router = Router::new();
+
+    let requirements = PolicyRequirements {
+        min_tier: Some(ModelTier::Reasoning),
+        ..Default::default()
+    };
+    let fallback = PolicyFallback::Reject;
+
+    let err = router
+        .plan_with_policy(
+            &reg,
+            &Resolution::Tier(ModelTier::Fast),
+            &[],
+            &requirements,
+            &PolicyPreference::default(),
+            &fallback,
+            None,
+        )
+        .unwrap_err();
+
+    assert!(
+        matches!(err, Error::NoCandidate(_)),
+        "Fast model below min_tier=Reasoning should produce NoCandidate, got: {err:?}"
+    );
+}
+
+/// Simple chat can use the Fast tier.
+///
+/// A Fast-tier model with no special capabilities is eligible when there are
+/// no capability or tier requirements.
+#[test]
+fn matrix_simple_chat_uses_fast_tier() {
+    let cfg = e2e_cfg_with(vec![
+        ModelEntry::for_upstream("p1", "fast-chat", Some(ModelTier::Fast)).with_priority(0),
+        ModelEntry::for_upstream("p1", "std-chat", Some(ModelTier::Standard)).with_priority(0),
+    ]);
+    let reg = e2e_reg(cfg);
+    let router = Router::new();
+
+    let requirements = PolicyRequirements::default();
+    let preference = PolicyPreference {
+        preferred_tier: Some(ModelTier::Fast),
+        tier_weight: 1.0,
+        health_weight: 0.0,
+        latency_weight: 0.0,
+        cost_weight: 0.0,
+        priority_weight: 0.0,
+    };
+    let fallback = PolicyFallback::Reject;
+
+    let (candidates, _decision) = router
+        .plan_with_policy(
+            &reg,
+            &Resolution::Tier(ModelTier::Fast),
+            &[],
+            &requirements,
+            &preference,
+            &fallback,
+            None,
+        )
+        .unwrap();
+
+    assert!(!candidates.is_empty());
+    assert_eq!(candidates[0].exposed_id, "p1-fast-chat");
+}
+
+/// Tool use always requires the Tools capability.
+///
+/// Policy requires Tools capability with strict mode. A model without tools
+/// is rejected even if it is in the preferred tier.
+#[test]
+fn matrix_tool_use_requires_tools_capability() {
+    let mut no_tools = ModelEntry::for_upstream("p1", "no-tools", Some(ModelTier::Standard));
+    no_tools.capabilities = ModelCapabilities::default(); // all false
+    let cfg = e2e_cfg_with(vec![no_tools]);
+    let reg = e2e_reg(cfg);
+    let router = Router::new();
+
+    let requirements = PolicyRequirements {
+        required_capabilities: vec![Capability::Tools],
+        strict_capabilities: true,
+        ..Default::default()
+    };
+    let fallback = PolicyFallback::Reject;
+
+    let err = router
+        .plan_with_policy(
+            &reg,
+            &Resolution::Tier(ModelTier::Standard),
+            &[],
+            &requirements,
+            &PolicyPreference::default(),
+            &fallback,
+            None,
+        )
+        .unwrap_err();
+
+    assert!(
+        matches!(err, Error::NoCandidate(_)),
+        "model without tools should be rejected, got: {err:?}"
+    );
+}
+
+// ========================================================================
+// 11. Eligibility vs Scoring Separation
+// ========================================================================
+
+/// Ineligible candidates appear in the decision trace with no score, not
+/// with a negative score. Eligability filtering removes them from the
+/// candidate list rather than giving them bad scores.
+#[test]
+fn ineligible_candidate_has_no_score() {
+    let mut no_caps = ModelEntry::for_upstream("p1", "no-caps", Some(ModelTier::Standard));
+    no_caps.capabilities = ModelCapabilities::default();
+    let cfg = e2e_cfg_with(vec![
+        ModelEntry::for_upstream("p1", "good", Some(ModelTier::Standard)),
+        no_caps,
+    ]);
+    let reg = e2e_reg(cfg);
+    let router = Router::new();
+
+    let requirements = PolicyRequirements {
+        required_capabilities: vec![Capability::Tools],
+        strict_capabilities: true,
+        ..Default::default()
+    };
+    let fallback = PolicyFallback::Reject;
+
+    let (candidates, decision) = router
+        .plan_with_policy(
+            &reg,
+            &Resolution::Tier(ModelTier::Standard),
+            &[],
+            &requirements,
+            &PolicyPreference::default(),
+            &fallback,
+            None,
+        )
+        .unwrap();
+
+    // Only the model with tools should be in the candidate list.
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].exposed_id, "p1-good");
+
+    // The ineligible model should appear in the decision trace with no score.
+    let rejected_decision = decision
+        .candidates
+        .iter()
+        .find(|c| c.model_id == "p1-no-caps");
+    assert!(rejected_decision.is_some(), "ineligible candidate must appear in decision trace");
+    let rejected = rejected_decision.unwrap();
+    assert!(!rejected.eligible);
+    assert!(rejected.score.is_none(), "ineligible candidate must have no score");
+    assert!(rejected.final_score.is_none(), "ineligible candidate must have no final_score");
+    assert!(rejected.rejection.is_some(), "ineligible candidate must have a rejection reason");
+}
+
+/// When all candidates are eligible, all get scores in the decision trace.
+#[test]
+fn all_eligible_candidates_get_scores() {
+    let cfg = e2e_cfg_with(vec![
+        ModelEntry::for_upstream("p1", "m1", Some(ModelTier::Standard)).with_priority(0),
+        ModelEntry::for_upstream("p1", "m2", Some(ModelTier::Standard)).with_priority(5),
+        ModelEntry::for_upstream("p1", "m3", Some(ModelTier::Standard)).with_priority(10),
+    ]);
+    let reg = e2e_reg(cfg);
+    let router = Router::new();
+
+    let requirements = PolicyRequirements::default(); // no constraints
+    let fallback = PolicyFallback::Reject;
+
+    let (_candidates, decision) = router
+        .plan_with_policy(
+            &reg,
+            &Resolution::Tier(ModelTier::Standard),
+            &[],
+            &requirements,
+            &PolicyPreference::default(),
+            &fallback,
+            None,
+        )
+        .unwrap();
+
+    // All three candidates should have scores.
+    assert_eq!(decision.candidates.len(), 3);
+    for cd in &decision.candidates {
+        assert!(cd.eligible, "all candidates should be eligible");
+        assert!(cd.score.is_some(), "eligible candidate must have a score breakdown");
+        assert!(cd.final_score.is_some(), "eligible candidate must have a final_score");
+        assert!(cd.rejection.is_none(), "eligible candidate must have no rejection");
+    }
+}
+
+// ========================================================================
+// 12. Decision Trace Tests
+// ========================================================================
+
+/// Decision trace records rejection reasons for ineligible candidates.
+#[test]
+fn decision_trace_records_rejections() {
+    let mut no_caps = ModelEntry::for_upstream("p1", "reject-me", Some(ModelTier::Standard));
+    no_caps.capabilities = ModelCapabilities::default(); // all false
+    let cfg = e2e_cfg_with(vec![
+        ModelEntry::for_upstream("p1", "good", Some(ModelTier::Standard)),
+        no_caps,
+    ]);
+    let reg = e2e_reg(cfg);
+    let router = Router::new();
+
+    // Require Tools (good model has it from for_upstream; reject-me does not).
+    let requirements = PolicyRequirements {
+        required_capabilities: vec![Capability::Tools],
+        strict_capabilities: true,
+        ..Default::default()
+    };
+    let fallback = PolicyFallback::Reject;
+
+    let (_candidates, decision) = router
+        .plan_with_policy(
+            &reg,
+            &Resolution::Tier(ModelTier::Standard),
+            &[],
+            &requirements,
+            &PolicyPreference::default(),
+            &fallback,
+            None,
+        )
+        .unwrap();
+
+    let rejected = decision
+        .candidates
+        .iter()
+        .find(|c| c.model_id == "p1-reject-me");
+    assert!(rejected.is_some());
+    let rejected = rejected.unwrap();
+    assert!(!rejected.eligible);
+    // The rejection string should contain the missing capability reason.
+    let rejection = rejected.rejection.as_ref().unwrap();
+    assert!(
+        rejection.contains("missing_capability"),
+        "rejection should mention missing_capability, got: {rejection}"
+    );
+}
+
+/// Decision trace records score breakdown for eligible candidates.
+#[test]
+fn decision_trace_records_score_breakdown() {
+    let cfg = e2e_cfg_with(vec![ModelEntry::for_upstream(
+        "p1",
+        "scored",
+        Some(ModelTier::Standard),
+    )]);
+    let reg = e2e_reg(cfg);
+    let router = Router::new();
+
+    let requirements = PolicyRequirements::default();
+    let fallback = PolicyFallback::Reject;
+
+    let (_candidates, decision) = router
+        .plan_with_policy(
+            &reg,
+            &Resolution::Tier(ModelTier::Standard),
+            &[],
+            &requirements,
+            &PolicyPreference::default(),
+            &fallback,
+            None,
+        )
+        .unwrap();
+
+    let scored = decision.candidates.first().unwrap();
+    assert!(scored.eligible);
+    assert!(scored.score.is_some(), "eligible candidate must have score breakdown");
+    let breakdown = scored.score.as_ref().unwrap();
+    // All dimension scores should be in [0.0, 1.0].
+    assert!(breakdown.health >= 0.0 && breakdown.health <= 1.0);
+    assert!(breakdown.latency >= 0.0 && breakdown.latency <= 1.0);
+    assert!(breakdown.cost >= 0.0 && breakdown.cost <= 1.0);
+    assert!(breakdown.priority >= 0.0 && breakdown.priority <= 1.0);
+    assert!(breakdown.tier >= 0.0 && breakdown.tier <= 1.0);
+    // Final score should be in [0.0, 1.0].
+    let final_score = scored.final_score.unwrap();
+    assert!(
+        final_score >= 0.0 && final_score <= 1.0,
+        "final_score out of range: {final_score}"
+    );
+}
+
+/// Decision trace records the fallback chain when escalation occurs.
+#[test]
+fn decision_trace_records_fallback_chain() {
+    let cfg = e2e_cfg_with(vec![
+        ModelEntry::for_upstream("p1", "std-m", Some(ModelTier::Standard)).with_priority(0),
+        ModelEntry::for_upstream("p1", "reas-m", Some(ModelTier::Reasoning)).with_priority(0),
+    ]);
+    let routing = cfg.routing.clone();
+    let reg = e2e_reg(cfg);
+    let router = Router::new();
+
+    // Trip the circuit breaker on the Standard model.
+    let timeout_err = Error::Timeout(5);
+    for _ in 0..routing.circuit_breaker.failure_threshold {
+        router.report_failure("p1-std-m", &timeout_err, &routing);
+    }
+    assert!(!router.allow_request("p1-std-m"));
+
+    let requirements = PolicyRequirements::default();
+    let preference = PolicyPreference::default();
+    let fallback = PolicyFallback::Escalate {
+        enabled: true,
+        max_steps: 1,
+    };
+
+    let (candidates, decision) = router
+        .plan_with_policy(
+            &reg,
+            &Resolution::Tier(ModelTier::Standard),
+            &[],
+            &requirements,
+            &preference,
+            &fallback,
+            None,
+        )
+        .unwrap();
+
+    assert!(!candidates.is_empty());
+    assert_eq!(candidates[0].exposed_id, "p1-reas-m");
+    // Fallback chain should record the original tier.
+    assert!(
+        !decision.fallback_chain.is_empty(),
+        "fallback chain must record the escalation"
+    );
+    assert!(
+        decision.fallback_chain.contains(&"standard-class".to_string()),
+        "fallback chain should mention the original tier"
+    );
+    // Reason should indicate escalation.
+    assert!(
+        matches!(decision.reason, DecisionReason::Escalated { .. }),
+        "reason should be Escalated, got: {:?}",
+        decision.reason
+    );
+}
+
+// ========================================================================
+// 13. Fallback Contract Tests
+// ========================================================================
+
+/// Escalation goes to a higher tier.
+#[test]
+fn fallback_escalation_goes_higher() {
+    let cfg = e2e_cfg_with(vec![
+        ModelEntry::for_upstream("p1", "std-m", Some(ModelTier::Standard)).with_priority(0),
+        ModelEntry::for_upstream("p1", "reas-m", Some(ModelTier::Reasoning)).with_priority(0),
+    ]);
+    let routing = cfg.routing.clone();
+    let reg = e2e_reg(cfg);
+    let router = Router::new();
+
+    // Make the Standard model ineligible via circuit breaker.
+    let timeout_err = Error::Timeout(5);
+    for _ in 0..routing.circuit_breaker.failure_threshold {
+        router.report_failure("p1-std-m", &timeout_err, &routing);
+    }
+
+    let requirements = PolicyRequirements::default();
+    let preference = PolicyPreference::default();
+    let fallback = PolicyFallback::Escalate {
+        enabled: true,
+        max_steps: 1,
+    };
+
+    let (candidates, decision) = router
+        .plan_with_policy(
+            &reg,
+            &Resolution::Tier(ModelTier::Standard),
+            &[],
+            &requirements,
+            &preference,
+            &fallback,
+            None,
+        )
+        .unwrap();
+
+    assert!(!candidates.is_empty(), "escalation should find a candidate");
+    assert_eq!(candidates[0].exposed_id, "p1-reas-m");
+    assert!(matches!(decision.reason, DecisionReason::Escalated { .. }));
+}
+
+/// Degradation goes to a lower tier.
+#[test]
+fn fallback_degradation_goes_lower() {
+    let cfg = e2e_cfg_with(vec![
+        ModelEntry::for_upstream("p1", "front-m", Some(ModelTier::Frontier)).with_priority(0),
+        ModelEntry::for_upstream("p1", "reas-m", Some(ModelTier::Reasoning)).with_priority(0),
+    ]);
+    let routing = cfg.routing.clone();
+    let reg = e2e_reg(cfg);
+    let router = Router::new();
+
+    // Make the Frontier model ineligible.
+    let timeout_err = Error::Timeout(5);
+    for _ in 0..routing.circuit_breaker.failure_threshold {
+        router.report_failure("p1-front-m", &timeout_err, &routing);
+    }
+
+    let requirements = PolicyRequirements::default();
+    let preference = PolicyPreference::default();
+    let fallback = PolicyFallback::Degrade {
+        enabled: true,
+        max_steps: 1,
+    };
+
+    let (candidates, decision) = router
+        .plan_with_policy(
+            &reg,
+            &Resolution::Tier(ModelTier::Frontier),
+            &[],
+            &requirements,
+            &preference,
+            &fallback,
+            None,
+        )
+        .unwrap();
+
+    assert!(!candidates.is_empty(), "degradation should find a candidate");
+    assert_eq!(candidates[0].exposed_id, "p1-reas-m");
+    assert!(matches!(decision.reason, DecisionReason::Degraded { .. }));
+}
+
+/// Reject fallback returns an error when no candidates are eligible.
+#[test]
+fn fallback_reject_returns_error() {
+    let mut no_caps = ModelEntry::for_upstream("p1", "no-caps", Some(ModelTier::Standard));
+    no_caps.capabilities = ModelCapabilities::default();
+    let cfg = e2e_cfg_with(vec![no_caps]);
+    let reg = e2e_reg(cfg);
+    let router = Router::new();
+
+    let requirements = PolicyRequirements {
+        required_capabilities: vec![Capability::Tools],
+        strict_capabilities: true,
+        ..Default::default()
+    };
+    let fallback = PolicyFallback::Reject;
+
+    let err = router
+        .plan_with_policy(
+            &reg,
+            &Resolution::Tier(ModelTier::Standard),
+            &[],
+            &requirements,
+            &PolicyPreference::default(),
+            &fallback,
+            None,
+        )
+        .unwrap_err();
+
+    assert!(
+        matches!(err, Error::NoCandidate(_)),
+        "Reject fallback should produce NoCandidate, got: {err:?}"
+    );
+}
+
+/// Max escalation steps is respected: escalation stops after max_steps even
+/// if higher tiers have eligible candidates.
+#[test]
+fn fallback_respects_max_steps() {
+    let cfg = e2e_cfg_with(vec![
+        ModelEntry::for_upstream("p1", "std-m", Some(ModelTier::Standard)).with_priority(0),
+        ModelEntry::for_upstream("p1", "reas-m", Some(ModelTier::Reasoning)).with_priority(0),
+        ModelEntry::for_upstream("p1", "front-m", Some(ModelTier::Frontier)).with_priority(0),
+    ]);
+    let routing = cfg.routing.clone();
+    let reg = e2e_reg(cfg);
+    let router = Router::new();
+
+    // Make Standard and Reasoning ineligible.
+    let timeout_err = Error::Timeout(5);
+    for _ in 0..routing.circuit_breaker.failure_threshold {
+        router.report_failure("p1-std-m", &timeout_err, &routing);
+        router.report_failure("p1-reas-m", &timeout_err, &routing);
+    }
+
+    let requirements = PolicyRequirements::default();
+    let preference = PolicyPreference::default();
+
+    // max_steps=1: can only escalate one step (Standard -> Reasoning).
+    // Reasoning is also open, so this should fail.
+    let fallback_1 = PolicyFallback::Escalate {
+        enabled: true,
+        max_steps: 1,
+    };
+    let err = router
+        .plan_with_policy(
+            &reg,
+            &Resolution::Tier(ModelTier::Standard),
+            &[],
+            &requirements,
+            &preference,
+            &fallback_1,
+            None,
+        )
+        .unwrap_err();
+    assert!(
+        matches!(err, Error::NoCandidate(_)),
+        "max_steps=1 should not reach Frontier, got: {err:?}"
+    );
+
+    // max_steps=2: can escalate two steps (Standard -> Reasoning -> Frontier).
+    // Frontier is healthy, so this should succeed.
+    let fallback_2 = PolicyFallback::Escalate {
+        enabled: true,
+        max_steps: 2,
+    };
+    let (candidates, _decision) = router
+        .plan_with_policy(
+            &reg,
+            &Resolution::Tier(ModelTier::Standard),
+            &[],
+            &requirements,
+            &preference,
+            &fallback_2,
+            None,
+        )
+        .unwrap();
+    assert!(!candidates.is_empty(), "max_steps=2 should reach Frontier");
+    assert_eq!(candidates[0].exposed_id, "p1-front-m");
 }
