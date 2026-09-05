@@ -25,6 +25,7 @@ const ToastContext = createContext<(kind: "ok" | "error", text: string) => void>
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
   const nextId = useRef(0);
+  const { t } = useI18n();
 
   const notify = useCallback((kind: "ok" | "error", text: string) => {
     const id = nextId.current++;
@@ -48,7 +49,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
             key={toast.id}
             className={`toast toast-${toast.kind}`}
             onClick={() => dismiss(toast)}
-            title="Dismiss"
+            aria-label={t("common.dismiss")}
           >
             {toast.text}
           </button>

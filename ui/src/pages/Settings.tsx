@@ -429,7 +429,7 @@ ${t("settings.snippet_comment")}`}
                     {origin}
                     <button
                       className="chip-remove"
-                      aria-label={`Remove ${origin}`}
+                      aria-label={t("settings.remove_origin", { origin })}
                       onClick={() =>
                         patchServer({
                           cors_origins: config.server.cors_origins.filter((o) => o !== origin),

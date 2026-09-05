@@ -209,7 +209,9 @@ function TimelineRow({
         )}
         <span className="timeline-model">{record.resolved_model ?? record.requested_model}</span>
         {record.provider_name && <span className="timeline-provider">{record.provider_name}</span>}
-        {record.attempts > 1 && <span className="timeline-provider">{record.attempts} tries</span>}
+        {record.attempts > 1 && (
+          <span className="timeline-provider">{t("activity.tries", { n: record.attempts })}</span>
+        )}
       </span>
       <span className="timeline-meta">
         <span>{ms(record.latency_ms)}</span>

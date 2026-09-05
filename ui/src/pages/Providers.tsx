@@ -63,7 +63,7 @@ export default function Providers({
   busy: boolean;
 }) {
   const { config, keys, balances } = snapshot;
-  const { t } = useI18n();
+  const { t, plural } = useI18n();
   const notify = useToast();
   const [openId, setOpenId] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
@@ -183,6 +183,9 @@ export default function Providers({
   };
 
   const open = config.providers.find((p) => p.id === openId) ?? null;
+  const openModelCount = open
+    ? config.models.filter((m) => m.provider_id === open.id).length
+    : 0;
 
   return (
     <>
@@ -216,7 +219,7 @@ export default function Providers({
                 key={p.id}
                 className={`list-row ${openId === p.id ? "selected" : ""}`}
                 onClick={() => setOpenId(p.id)}
-                aria-label={`Open ${p.name}`}
+                aria-label={t("providers.open_row", { name: p.name })}
               >
                 <StatusDot tone={status} />
                 <div className="row-main">
@@ -334,7 +337,7 @@ export default function Providers({
           onRemove={() =>
             setConfirm({
               title: t("confirm.remove_provider"),
-              body: t("confirm.remove_provider_body"),
+              body: plural(openModelCount, "confirm.remove_provider_body"),
               confirmLabel: t("providers.remove"),
               danger: true,
               onConfirm: () => void removeProvider(open.id),
@@ -361,7 +364,7 @@ function CcSwitchRow({
       <td>
         <input
           type="checkbox"
-          aria-label={`Import ${draft.name}`}
+          aria-label={t("cc.import_row", { name: draft.name })}
           checked={checked}
           disabled={draft.already_imported}
           onChange={(e) => onSelect(draft.source_id, e.currentTarget.checked)}

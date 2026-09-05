@@ -168,7 +168,7 @@ export default function Models({
                 key={r.id}
                 className={`list-row ${openId === r.id ? "selected" : ""}`}
                 onClick={() => setOpenId(r.id)}
-                aria-label={`Open ${r.id}`}
+                aria-label={t("models.open_row", { id: r.id })}
               >
                 <StatusDot tone={status} />
                 <div className="row-main">

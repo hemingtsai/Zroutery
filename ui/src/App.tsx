@@ -182,7 +182,7 @@ function Shell() {
 
   return (
     <div className="shell">
-      <nav className="sidebar" aria-label="Main">
+      <nav className="sidebar" aria-label={t("nav.main_aria")}>
         <div className="sidebar-brand">
           Zroutery<span className="mono">v{snapshot.version}</span>
         </div>
@@ -278,15 +278,37 @@ function Shell() {
                 </span>
               }
             >
-              <MenuItem active={themePref === "system"} onClick={() => setThemePref("system")}>
-                {t("theme.system")}
-              </MenuItem>
-              <MenuItem active={themePref === "light"} onClick={() => setThemePref("light")}>
-                {t("theme.light")}
-              </MenuItem>
-              <MenuItem active={themePref === "dark"} onClick={() => setThemePref("dark")}>
-                {t("theme.dark")}
-              </MenuItem>
+              {(close) => (
+                <>
+                  <MenuItem
+                    active={themePref === "system"}
+                    onClick={() => {
+                      setThemePref("system");
+                      close();
+                    }}
+                  >
+                    {t("theme.system")}
+                  </MenuItem>
+                  <MenuItem
+                    active={themePref === "light"}
+                    onClick={() => {
+                      setThemePref("light");
+                      close();
+                    }}
+                  >
+                    {t("theme.light")}
+                  </MenuItem>
+                  <MenuItem
+                    active={themePref === "dark"}
+                    onClick={() => {
+                      setThemePref("dark");
+                      close();
+                    }}
+                  >
+                    {t("theme.dark")}
+                  </MenuItem>
+                </>
+              )}
             </Popover>
           </div>
         </header>

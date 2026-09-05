@@ -70,24 +70,33 @@ const en = {
   "action.hide": "Hide",
   "action.quit": "Quit",
   "action.quit_title": "Stop the gateway and quit",
-  "toast.copied": "Copied to the clipboard.",
+  "toast.copied": "Copied.",
   "toast.queued_discarded":
-    "Edits made while the failed save was in flight were discarded.",
+    "The save failed, so edits queued behind it were dropped.",
 
   // ---------------------------------------------------------------- confirm
   "confirm.remove_provider": "Remove provider",
   "confirm.remove_provider_body":
-    "This deletes the provider and every model that belongs to it, and clears its stored key. This cannot be undone.",
+    "Its {n} model and stored key are removed with it. | Its {n} models and stored key are removed with it.",
   "confirm.remove_model": "Remove model",
-  "confirm.remove_model_body":
-    "Clients calling this model by id will get errors. This cannot be undone.",
+  "confirm.remove_model_body": "Clients calling it by id will get errors.",
   "confirm.remove_budget": "Delete budget",
   "confirm.reset_stats": "Reset counters",
   "confirm.reset_stats_body":
-    "Request history, per-model health and spend estimates are cleared.",
+    "Request history, model health and spend estimates are cleared.",
   "confirm.regenerate_token": "Regenerate token",
   "confirm.regenerate_token_body":
-    "Every client configured with the current token stops working until you update it.",
+    "Existing clients stop working until you give them the new token.",
+  "error.title": "The dashboard hit a bug",
+  "error.unaffected": "The proxy is unaffected and keeps running in the menu bar.",
+  "common.try_again": "Try again",
+  "common.reload": "Reload",
+  "nav.main_aria": "Main",
+  "activity.tries": "{n} tries",
+  "providers.open_row": "Open {name}",
+  "models.open_row": "Open {id}",
+  "cc.import_row": "Import {name}",
+  "settings.remove_origin": "Remove {origin}",
 
   // ------------------------------------------------------------ overview
   "overview.gateway": "gateway",
@@ -490,20 +499,30 @@ const zh: Dict = {
   "action.hide": "隐藏",
   "action.quit": "退出",
   "action.quit_title": "停止网关并退出",
-  "toast.copied": "已复制到剪贴板。",
-  "toast.queued_discarded": "失败的保存期间所做的编辑已被丢弃。",
+  "toast.copied": "已复制。",
+  "toast.queued_discarded": "保存失败,排队中的修改已丢弃。",
 
   // ---------------------------------------------------------------- confirm
   "confirm.remove_provider": "移除提供商",
   "confirm.remove_provider_body":
-    "将删除该提供商及其全部模型,并清除已存的密钥。此操作不可撤销。",
+    "该提供商下的 {n} 个模型与已存密钥会一并删除。| 该提供商下的 {n} 个模型与已存密钥会一并删除。",
   "confirm.remove_model": "移除模型",
-  "confirm.remove_model_body": "以该 id 调用的客户端将收到错误。此操作不可撤销。",
+  "confirm.remove_model_body": "客户端按 id 调用它时会报错。",
   "confirm.remove_budget": "删除预算",
   "confirm.reset_stats": "重置计数",
-  "confirm.reset_stats_body": "请求历史、模型健康状态与花费估算都会被清除。",
+  "confirm.reset_stats_body": "请求历史、模型健康与花费估算会被清零。",
   "confirm.regenerate_token": "重新生成令牌",
-  "confirm.regenerate_token_body": "所有使用当前令牌的客户端在你更新前都无法继续工作。",
+  "confirm.regenerate_token_body": "现有客户端会全部失效,直到换用新令牌。",
+  "error.title": "界面出现了问题",
+  "error.unaffected": "网关不受影响,仍在菜单栏正常运行。",
+  "common.try_again": "重试",
+  "common.reload": "重新加载",
+  "nav.main_aria": "主导航",
+  "activity.tries": "尝试 {n} 次",
+  "providers.open_row": "打开 {name}",
+  "models.open_row": "打开 {id}",
+  "cc.import_row": "导入 {name}",
+  "settings.remove_origin": "移除 {origin}",
 
   // ------------------------------------------------------------ overview
   "overview.gateway": "网关",
