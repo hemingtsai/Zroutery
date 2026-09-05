@@ -157,6 +157,7 @@ fn decode_input_item(item: &Value, req: &mut ChatRequest) -> Result<()> {
                         .and_then(Value::as_str)
                         .unwrap_or_default()
                         .to_string(),
+                    name: String::new(),
                     content: vec![ToolResultPart::Text {
                         text: item
                             .get("output")

@@ -70,6 +70,7 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
                     .to_string();
                 let block = ContentBlock::ToolResult {
                     tool_use_id,
+                    name: String::new(),
                     content: vec![ToolResultPart::Text {
                         text: flatten_content(m.get("content")).unwrap_or_default(),
                     }],

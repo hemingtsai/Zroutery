@@ -253,6 +253,7 @@ fn decode_block(b: &Value) -> Result<Option<ContentBlock>> {
             };
             ContentBlock::ToolResult {
                 tool_use_id,
+                name: String::new(),
                 content,
                 is_error: b.get("is_error").and_then(Value::as_bool).unwrap_or(false),
             }
@@ -431,6 +432,7 @@ pub(crate) fn encode_block(b: &ContentBlock) -> Value {
             tool_use_id,
             content,
             is_error,
+            ..
         } => {
             let parts: Vec<Value> = content
                 .iter()
