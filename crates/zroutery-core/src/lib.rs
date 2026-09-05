@@ -30,6 +30,7 @@ pub mod election;
 pub mod error;
 pub mod ir;
 pub mod media;
+pub mod policy;
 pub mod protocol;
 pub mod query;
 pub mod rectifier;
@@ -61,6 +62,11 @@ pub use ir::{
     StreamEvent, SystemPart, ToolChoice, Usage,
 };
 pub use ir::response::{ResponseStatus, ResponseStore, StoredResponse};
+pub use policy::{
+    ClientContext, ClientMatcher, ClientProfile, EligibilityCheck, PolicyConfig, PolicyFallback,
+    PolicyMatcher, PolicyPreference, PolicyRequirements, RejectionReason, RoutingPolicy,
+    resolve_client,
+};
 pub use query::{RequestKind, SideQueryKind};
 pub use registry::{Registry, Resolution};
 pub use router::{Candidate, Router};
