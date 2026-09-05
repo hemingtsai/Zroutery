@@ -13,6 +13,7 @@ use crate::circuit_breaker::{CircuitBreaker, CircuitBreakerConfig, CircuitState}
 use crate::config::{ClassifierConfig, ModelTier, ModelEntry, ProviderConfig, RoutingConfig, RoutingStrategy};
 use crate::election::Election;
 use crate::error::{Error, Result};
+use crate::ir::Capability;
 use crate::registry::{Registry, Resolution};
 
 /// Round robin cursor key for the classifier pool, which is not a tier.
@@ -115,7 +116,7 @@ impl Router {
         &self,
         registry: &Registry,
         resolution: &Resolution,
-        required_capabilities: &[String],
+        required_capabilities: &[Capability],
     ) -> Result<Vec<Candidate>> {
         let routing = &registry.config().routing;
         match resolution {
@@ -210,7 +211,7 @@ impl Router {
         registry: &Registry,
         tier: ModelTier,
         routing: &RoutingConfig,
-        required_capabilities: &[String],
+        required_capabilities: &[Capability],
         capability_filter: bool,
     ) -> Result<Vec<Candidate>> {
         let members = registry.tier_members(tier);
@@ -254,7 +255,7 @@ impl Router {
         failover: bool,
         max_attempts: u32,
         pool_name: String,
-        required_capabilities: &[String],
+        required_capabilities: &[Capability],
         capability_filter: bool,
     ) -> Result<Vec<Candidate>> {
         // Capability filtering: exclude models whose declared capabilities
@@ -574,20 +575,18 @@ fn by_priority<'a>(members: &[&'a ModelEntry]) -> Vec<&'a ModelEntry> {
 
 /// Check if a model's capabilities satisfy the request's requirements.
 ///
-/// Every listed capability must be present on the model. Unknown capabilities
-/// are passed through — a typo in the request should not silently exclude every
-/// model.
-fn satisfies_capabilities(model: &ModelEntry, required: &[String]) -> bool {
+/// Every listed capability must be present on the model. With a typed enum,
+/// there are no unknown capabilities — every variant is known.
+fn satisfies_capabilities(model: &ModelEntry, required: &[Capability]) -> bool {
     for cap in required {
-        let ok = match cap.as_str() {
-            "vision" => model.capabilities.vision,
-            "tools" => model.capabilities.tools,
-            "thinking" => model.capabilities.thinking,
-            "structured_output" => model.capabilities.structured_output,
-            "audio" => model.capabilities.audio,
-            "video" => model.capabilities.video,
-            "files" => model.capabilities.files,
-            _ => true, // Unknown capability — don't filter.
+        let ok = match cap {
+            Capability::Vision => model.capabilities.vision,
+            Capability::Tools => model.capabilities.tools,
+            Capability::Thinking => model.capabilities.thinking,
+            Capability::StructuredOutput => model.capabilities.structured_output,
+            Capability::Audio => model.capabilities.audio,
+            Capability::Video => model.capabilities.video,
+            Capability::Files => model.capabilities.files,
         };
         if !ok {
             return false;

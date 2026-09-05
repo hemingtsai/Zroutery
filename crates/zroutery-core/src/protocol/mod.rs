@@ -39,6 +39,20 @@ pub fn apply_content_policy(
     }
 }
 
+/// Normalize an audio MIME type to the format string OpenAI expects.
+///
+/// `audio/mpeg` and `audio/mp3` both become `"mp3"`, `audio/x-wav` becomes
+/// `"wav"`, and anything else is passed through after stripping the `audio/`
+/// prefix. A bare string without a prefix defaults to `"wav"`.
+pub(crate) fn normalize_audio_format(media_type: &str) -> &str {
+    match media_type.strip_prefix("audio/") {
+        Some("mpeg") | Some("mp3") => "mp3",
+        Some("wav") | Some("x-wav") => "wav",
+        Some(other) => other,
+        None => "wav",
+    }
+}
+
 /// Human-readable label for a content block, used in placeholder text and
 /// error messages.
 fn content_label(block: &ContentBlock) -> String {

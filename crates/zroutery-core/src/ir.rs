@@ -9,6 +9,19 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+/// A capability a model may support and a request may require.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Capability {
+    Vision,
+    Audio,
+    Video,
+    Files,
+    Tools,
+    Thinking,
+    StructuredOutput,
+}
+
 /// Which wire dialect a payload belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -319,7 +332,7 @@ pub struct ChatRequest {
     /// Capabilities the target model must have to handle this request.
     /// Populated by the protocol decoder based on the content types present.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub required_capabilities: Vec<String>,
+    pub required_capabilities: Vec<Capability>,
 }
 
 impl ChatRequest {
@@ -394,47 +407,52 @@ impl ChatRequest {
     }
 
     /// Compute which capabilities this request requires based on its content.
-    pub fn compute_required_capabilities(&self) -> Vec<String> {
+    pub fn compute_required_capabilities(&self) -> Vec<Capability> {
         let mut caps = Vec::new();
         for msg in &self.messages {
             for block in &msg.content {
                 match block {
                     ContentBlock::Image { .. } => {
-                        if !caps.contains(&"vision".into()) {
-                            caps.push("vision".into());
+                        if !caps.contains(&Capability::Vision) {
+                            caps.push(Capability::Vision);
                         }
                     }
                     ContentBlock::Audio { .. } => {
-                        if !caps.contains(&"audio".into()) {
-                            caps.push("audio".into());
+                        if !caps.contains(&Capability::Audio) {
+                            caps.push(Capability::Audio);
                         }
                     }
                     ContentBlock::Video { .. } => {
-                        if !caps.contains(&"video".into()) {
-                            caps.push("video".into());
+                        if !caps.contains(&Capability::Video) {
+                            caps.push(Capability::Video);
                         }
                     }
                     ContentBlock::File { .. } => {
-                        if !caps.contains(&"files".into()) {
-                            caps.push("files".into());
+                        if !caps.contains(&Capability::Files) {
+                            caps.push(Capability::Files);
                         }
                     }
                     ContentBlock::ToolUse { .. } | ContentBlock::ToolResult { .. } => {
-                        if !caps.contains(&"tools".into()) {
-                            caps.push("tools".into());
+                        if !caps.contains(&Capability::Tools) {
+                            caps.push(Capability::Tools);
                         }
                     }
                     ContentBlock::Thinking { .. } | ContentBlock::RedactedThinking { .. } => {
-                        if !caps.contains(&"thinking".into()) {
-                            caps.push("thinking".into());
+                        if !caps.contains(&Capability::Thinking) {
+                            caps.push(Capability::Thinking);
                         }
                     }
                     _ => {}
                 }
             }
         }
-        if !self.tools.is_empty() && !caps.contains(&"tools".into()) {
-            caps.push("tools".into());
+        if !self.tools.is_empty() && !caps.contains(&Capability::Tools) {
+            caps.push(Capability::Tools);
+        }
+        if self.thinking.as_ref().is_some_and(|t| t.enabled) {
+            if !caps.contains(&Capability::Thinking) {
+                caps.push(Capability::Thinking);
+            }
         }
         caps
     }
@@ -681,8 +699,8 @@ mod tests {
             }],
         });
         let caps = req.compute_required_capabilities();
-        assert!(caps.contains(&"vision".into()));
-        assert!(!caps.contains(&"audio".into()));
+        assert!(caps.contains(&Capability::Vision));
+        assert!(!caps.contains(&Capability::Audio));
     }
 
     #[test]
@@ -713,10 +731,10 @@ mod tests {
             ],
         });
         let caps = req.compute_required_capabilities();
-        assert!(caps.contains(&"audio".into()));
-        assert!(caps.contains(&"video".into()));
-        assert!(caps.contains(&"files".into()));
-        assert!(!caps.contains(&"vision".into()));
+        assert!(caps.contains(&Capability::Audio));
+        assert!(caps.contains(&Capability::Video));
+        assert!(caps.contains(&Capability::Files));
+        assert!(!caps.contains(&Capability::Vision));
     }
 
     #[test]
@@ -730,7 +748,7 @@ mod tests {
             cache_control: None,
         });
         let caps = req.compute_required_capabilities();
-        assert!(caps.contains(&"tools".into()));
+        assert!(caps.contains(&Capability::Tools));
     }
 
     #[test]
@@ -744,7 +762,19 @@ mod tests {
             }],
         });
         let caps = req.compute_required_capabilities();
-        assert!(caps.contains(&"thinking".into()));
+        assert!(caps.contains(&Capability::Thinking));
+    }
+
+    #[test]
+    fn compute_required_capabilities_thinking_config() {
+        let mut req = ChatRequest::new("m", Dialect::Anthropic);
+        req.messages.push(Message::user_text("hello"));
+        req.thinking = Some(ThinkingConfig {
+            enabled: true,
+            budget_tokens: Some(1024),
+        });
+        let caps = req.compute_required_capabilities();
+        assert!(caps.contains(&Capability::Thinking));
     }
 
     #[test]
@@ -824,9 +854,12 @@ mod tests {
     #[test]
     fn required_capabilities_serde_round_trip() {
         let mut req = ChatRequest::new("m", Dialect::Anthropic);
-        req.required_capabilities = vec!["vision".into(), "tools".into()];
+        req.required_capabilities = vec![Capability::Vision, Capability::Tools];
         let json = serde_json::to_string(&req).unwrap();
         let deserialized: ChatRequest = serde_json::from_str(&json).unwrap();
-        assert_eq!(deserialized.required_capabilities, vec!["vision", "tools"]);
+        assert_eq!(
+            deserialized.required_capabilities,
+            vec![Capability::Vision, Capability::Tools]
+        );
     }
 }

@@ -321,7 +321,7 @@ pub fn encode_request(req: &ChatRequest, upstream_model: &str) -> Result<Value> 
                     }
                 }
                 ContentBlock::Audio { source, media_type } => {
-                    let format = media_type.strip_prefix("audio/").unwrap_or("wav");
+                    let format = super::normalize_audio_format(media_type);
                     match source {
                         MediaSource::Base64 { data, .. } => {
                             parts.push(json!({
