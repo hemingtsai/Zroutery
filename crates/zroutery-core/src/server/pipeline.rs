@@ -695,6 +695,9 @@ async fn buffered_chat(
                 state
                     .router
                     .report_failure(candidate.model_id(), &e, &routing);
+                state
+                    .router
+                    .record_failure(candidate.model_id(), &candidate.provider.id);
                 last_error = e;
                 continue;
             }
@@ -739,6 +742,9 @@ async fn buffered_chat(
                             state
                                 .router
                                 .report_failure(candidate.model_id(), &e, &routing);
+                            state
+                                .router
+                                .record_failure(candidate.model_id(), &candidate.provider.id);
                             tracing::warn!(
                                 kind = kind.as_str(),
                                 candidate_model = candidate.model_id(),
@@ -754,6 +760,12 @@ async fn buffered_chat(
                     candidate.model_id(),
                     attempt_start.elapsed().as_millis() as u64,
                     &routing,
+                );
+                state.router.record_outcome(
+                    candidate.model_id(),
+                    &candidate.provider.id,
+                    attempt_start.elapsed().as_millis() as f64,
+                    None,
                 );
                 rec.usage(resp.usage)
                     .priced_with(candidate.entry.pricing.as_ref());
@@ -870,6 +882,9 @@ async fn buffered_chat(
                         state
                             .router
                             .report_failure(candidate.model_id(), &e, &routing);
+                        state
+                            .router
+                            .record_failure(candidate.model_id(), &candidate.provider.id);
                         tracing::warn!(
                             model = candidate.model_id(),
                             provider = candidate.provider.name.as_str(),
@@ -885,6 +900,9 @@ async fn buffered_chat(
                         state
                             .router
                             .report_failure(candidate.model_id(), &rectified_err, &routing);
+                        state
+                            .router
+                            .record_failure(candidate.model_id(), &candidate.provider.id);
                         tracing::warn!(
                             model = candidate.model_id(),
                             provider = candidate.provider.name.as_str(),
@@ -958,6 +976,9 @@ async fn stream_chat(
                 state
                     .router
                     .report_failure(candidate.model_id(), &e, &routing);
+                state
+                    .router
+                    .record_failure(candidate.model_id(), &candidate.provider.id);
                 last_error = e;
                 continue;
             }
@@ -994,6 +1015,14 @@ async fn stream_chat(
                     candidate.model_id(),
                     attempt_start.elapsed().as_millis() as u64,
                     &routing,
+                );
+                // For streaming, handshake time approximates TTFT.
+                let handshake_ms = attempt_start.elapsed().as_millis() as f64;
+                state.router.record_outcome(
+                    candidate.model_id(),
+                    &candidate.provider.id,
+                    handshake_ms,
+                    Some(handshake_ms),
                 );
                 if let Some(ref decision) = routing_decision {
                     rec.routing_decision(decision.clone());
@@ -1088,6 +1117,9 @@ async fn stream_chat(
                         state
                             .router
                             .report_failure(candidate.model_id(), &e, &routing);
+                        state
+                            .router
+                            .record_failure(candidate.model_id(), &candidate.provider.id);
                         tracing::warn!(
                             model = candidate.model_id(),
                             "upstream stream handshake failed: {e}"
@@ -1102,6 +1134,9 @@ async fn stream_chat(
                         state
                             .router
                             .report_failure(candidate.model_id(), &rectified_err, &routing);
+                        state
+                            .router
+                            .record_failure(candidate.model_id(), &candidate.provider.id);
                         tracing::warn!(
                             model = candidate.model_id(),
                             "rectifier stream retry failed: {rectified_err}"
@@ -1297,6 +1332,9 @@ impl SseState {
                 self.state
                     .router
                     .report_failure(&self.model_id, e, &self.routing);
+                self.state
+                    .router
+                    .record_failure(&self.model_id, &self.provider_id);
             }
             self.state
                 .stats

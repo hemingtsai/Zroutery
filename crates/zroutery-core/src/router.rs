@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::circuit_breaker::{CircuitBreaker, CircuitBreakerConfig, CircuitState};
 use crate::config::{ClassifierConfig, ModelTier, ModelEntry, ProviderConfig, RoutingConfig, RoutingStrategy};
+use crate::observation::ObservationStore;
 use crate::election::Election;
 use crate::error::{Error, Result};
 use crate::ir::Capability;
@@ -99,6 +100,10 @@ pub struct Router {
     /// decided instead of re-deciding per request, which is the whole point: a
     /// route that changes under load cannot be reasoned about.
     election: Mutex<Option<Election>>,
+    /// Runtime observations (latency, health, cost) keyed by provider+model.
+    /// Used by the policy scorer as the primary signal, falling back to legacy
+    /// circuit-breaker state when no observation exists.
+    observations: ObservationStore,
 }
 
 impl Default for Router {
@@ -113,6 +118,7 @@ impl Router {
             health: Mutex::new(HashMap::new()),
             rr: Mutex::new(HashMap::new()),
             election: Mutex::new(None),
+            observations: ObservationStore::new(),
         }
     }
 
@@ -480,6 +486,11 @@ impl Router {
 
     /// Score candidates by policy preferences and return them sorted (best first),
     /// along with the per-candidate score breakdown for decision tracing.
+    ///
+    /// When a runtime observation exists for a candidate (from the
+    /// [`ObservationStore`]), its health score and latency are used instead of
+    /// the legacy circuit-breaker EWMA. Candidates that have never been observed
+    /// fall back to the legacy path.
     fn score_and_sort<'a>(
         &self,
         members: Vec<&'a ModelEntry>,
@@ -489,9 +500,22 @@ impl Router {
         let mut scored: Vec<(&ModelEntry, f64, crate::policy::ScoreBreakdown)> = members
             .iter()
             .map(|m| {
+                // Try runtime observation first; fall back to legacy health.
+                let obs = self.observations.get(&m.exposed_id(), &m.provider_id);
+                let health = if obs.health.state != crate::observation::HealthState::Unknown {
+                    obs.health.score()
+                } else {
+                    self.health_score(&m.exposed_id())
+                };
+                let avg_latency_ms = obs
+                    .latency
+                    .total_ms
+                    .value
+                    .unwrap_or_else(|| self.avg_latency(&m.exposed_id()));
+
                 let ctx = ScoringContext {
-                    health: self.health_score(&m.exposed_id()),
-                    avg_latency_ms: self.avg_latency(&m.exposed_id()),
+                    health,
+                    avg_latency_ms,
                     input_per_mtok: m.pricing.as_ref().map(|p| p.input_per_mtok),
                     output_per_mtok: m.pricing.as_ref().map(|p| p.output_per_mtok),
                     priority: m.priority,
@@ -928,6 +952,31 @@ impl Router {
         if let Some(h) = health.get(model_id) {
             h.breaker.release_half_open_permit();
         }
+    }
+
+    /// Record a successful request outcome in the observation store.
+    ///
+    /// Updates both latency and health signals for the given model/provider pair.
+    /// The pipeline calls this alongside [`report_success`] so that the policy
+    /// scorer can use runtime observations instead of legacy EWMA values.
+    pub fn record_outcome(
+        &self,
+        model_id: &str,
+        provider_id: &str,
+        latency_ms: f64,
+        ttft_ms: Option<f64>,
+    ) {
+        self.observations
+            .record_success(model_id, provider_id, latency_ms, ttft_ms);
+    }
+
+    /// Record a failed request outcome in the observation store.
+    ///
+    /// Updates the health signal for the given model/provider pair. The pipeline
+    /// calls this alongside [`report_failure`] so that the policy scorer can use
+    /// runtime observations instead of legacy circuit-breaker state.
+    pub fn record_failure(&self, model_id: &str, provider_id: &str) {
+        self.observations.record_failure(model_id, provider_id);
     }
 
     /// Clear circuit breaker state for one model (GUI "retry now").
@@ -1620,5 +1669,181 @@ mod tests {
             .unwrap();
         // Both candidates survive: the filter is off.
         assert_eq!(plan.len(), 2);
+    }
+
+    // ------------------------------------------------ observation-aware scoring
+
+    #[test]
+    fn observation_fast_latency_scores_higher() {
+        let router = Router::new();
+        // model-a: fast (100ms), model-b: slow (3000ms)
+        router.record_outcome("p1-a", "p1", 100.0, Some(50.0));
+        router.record_outcome("p2-b", "p2", 3000.0, Some(800.0));
+
+        let m1 = ModelEntry::for_upstream("p1", "a", Some(ModelTier::Standard));
+        let m2 = ModelEntry::for_upstream("p2", "b", Some(ModelTier::Standard));
+        let members = vec![&m1, &m2];
+        let pref = PolicyPreference {
+            latency_weight: 1.0,
+            health_weight: 0.0,
+            cost_weight: 0.0,
+            priority_weight: 0.0,
+            tier_weight: 0.0,
+            ..Default::default()
+        };
+
+        let (sorted, _) = router.score_and_sort(members, &pref, None);
+        assert_eq!(sorted[0].exposed_id(), "p1-a", "fast model should rank first");
+    }
+
+    #[test]
+    fn observation_healthy_beats_degraded() {
+        let router = Router::new();
+        // model-a: healthy (1 success)
+        router.record_outcome("p1-a", "p1", 200.0, None);
+        // model-b: 2 consecutive failures = Degraded
+        router.record_failure("p2-b", "p2");
+        router.record_failure("p2-b", "p2");
+
+        let m1 = ModelEntry::for_upstream("p1", "a", Some(ModelTier::Standard));
+        let m2 = ModelEntry::for_upstream("p2", "b", Some(ModelTier::Standard));
+        let members = vec![&m1, &m2];
+        let pref = PolicyPreference {
+            health_weight: 1.0,
+            latency_weight: 0.0,
+            cost_weight: 0.0,
+            priority_weight: 0.0,
+            tier_weight: 0.0,
+            ..Default::default()
+        };
+
+        let (sorted, breakdowns) = router.score_and_sort(members, &pref, None);
+        assert_eq!(sorted[0].exposed_id(), "p1-a", "healthy should rank above degraded");
+
+        // Verify the health scores are actually different.
+        let bd_a = breakdowns.iter().find(|(id, _, _)| id == "p1-a").unwrap();
+        let bd_b = breakdowns.iter().find(|(id, _, _)| id == "p2-b").unwrap();
+        assert!(bd_a.1.health > bd_b.1.health, "healthy ({}) > degraded ({})", bd_a.1.health, bd_b.1.health);
+    }
+
+    #[test]
+    fn observation_unknown_falls_back_to_legacy() {
+        let cfg = cfg_with(vec![
+            ModelEntry::for_upstream("p1", "a", Some(ModelTier::Standard)),
+            ModelEntry::for_upstream("p2", "b", Some(ModelTier::Standard)),
+        ]);
+        let routing = cfg.routing.clone();
+        let router = Router::new();
+
+        // Legacy health: model-a has some history, model-b has none.
+        router.report_success("p1-a", 200, &routing);
+        // No observations recorded — scoring should use legacy health_score.
+
+        let m1 = ModelEntry::for_upstream("p1", "a", Some(ModelTier::Standard));
+        let m2 = ModelEntry::for_upstream("p2", "b", Some(ModelTier::Standard));
+        let members = vec![&m1, &m2];
+        let pref = PolicyPreference {
+            health_weight: 1.0,
+            latency_weight: 0.0,
+            cost_weight: 0.0,
+            priority_weight: 0.0,
+            tier_weight: 0.0,
+            ..Default::default()
+        };
+
+        let (sorted, breakdowns) = router.score_and_sort(members, &pref, None);
+        // Both have unknown observations: p1-a has legacy success (ratio=1.0),
+        // p2-b has no legacy data (optimistic=1.0). Scores should be equal.
+        assert_eq!(sorted.len(), 2);
+        let bd_a = breakdowns.iter().find(|(id, _, _)| id == "p1-a").unwrap();
+        let bd_b = breakdowns.iter().find(|(id, _, _)| id == "p2-b").unwrap();
+        assert!(
+            (bd_a.1.health - bd_b.1.health).abs() < 0.001,
+            "both should use legacy health; got {} vs {}",
+            bd_a.1.health, bd_b.1.health,
+        );
+    }
+
+    #[test]
+    fn observation_overrides_legacy_circuit_open() {
+        let cfg = cfg_with(vec![ModelEntry::for_upstream(
+            "p1",
+            "a",
+            Some(ModelTier::Standard),
+        )]);
+        let routing = cfg.routing.clone();
+        let router = Router::new();
+
+        // Trip the circuit breaker via legacy health.
+        for _ in 0..routing.circuit_breaker.failure_threshold {
+            router.report_failure("p1-a", &Error::Timeout(1), &routing);
+        }
+        assert_eq!(router.health_score("p1-a"), 0.0, "legacy: circuit open");
+
+        // Record a fresh observation success.
+        router.record_outcome("p1-a", "p1", 100.0, Some(50.0));
+
+        let m = ModelEntry::for_upstream("p1", "a", Some(ModelTier::Standard));
+        let members = vec![&m];
+        let pref = PolicyPreference {
+            health_weight: 1.0,
+            latency_weight: 0.0,
+            cost_weight: 0.0,
+            priority_weight: 0.0,
+            tier_weight: 0.0,
+            ..Default::default()
+        };
+
+        let (_, breakdowns) = router.score_and_sort(members, &pref, None);
+        // Observation health is Healthy with success_rate=1.0, so score=1.0.
+        // Legacy would give 0.0 (circuit open). Observation should win.
+        assert!(
+            breakdowns[0].1.health > 0.5,
+            "observation health should override legacy; got {}",
+            breakdowns[0].1.health,
+        );
+    }
+
+    #[test]
+    fn observation_recording_flows_through_to_plan_with_policy() {
+        let mut cfg = cfg_with(vec![
+            ModelEntry::for_upstream("p1", "fast", Some(ModelTier::Standard)).with_priority(0),
+            ModelEntry::for_upstream("p2", "slow", Some(ModelTier::Standard)).with_priority(0),
+        ]);
+        cfg.routing.strategy = crate::config::RoutingStrategy::Priority;
+        let r = reg(cfg);
+        let router = Router::new();
+
+        // Record observations: p1-fast is fast, p2-slow is slow.
+        router.record_outcome("p1-fast", "p1", 100.0, Some(50.0));
+        router.record_outcome("p2-slow", "p2", 3000.0, Some(800.0));
+
+        let pref = PolicyPreference {
+            latency_weight: 1.0,
+            health_weight: 0.0,
+            cost_weight: 0.0,
+            priority_weight: 0.0,
+            tier_weight: 0.0,
+            ..Default::default()
+        };
+        let requirements = PolicyRequirements::default();
+
+        let (candidates, _decision) = router
+            .plan_with_policy(
+                &r,
+                &Resolution::Tier(ModelTier::Standard),
+                &[],
+                &requirements,
+                &pref,
+                &PolicyFallback::default(),
+                None,
+            )
+            .unwrap();
+
+        assert_eq!(
+            candidates[0].model_id(),
+            "p1-fast",
+            "plan_with_policy should prefer the faster model via observations"
+        );
     }
 }
