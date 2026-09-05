@@ -18,7 +18,7 @@ use serde_json::Value;
 use super::{error_response, AppState};
 use crate::billing::{Cost, Pricing};
 use crate::budget::Verdict;
-use crate::config::ModelClass;
+use crate::config::ModelTier;
 use crate::error::{Error, Result};
 use crate::ir::{ChatRequest, Dialect, StreamEvent, Usage};
 use crate::protocol::{self, openai, SseFrame, StreamEncoder};
@@ -103,7 +103,7 @@ pub(super) async fn handle_chat(
 /// the cost is only known once a request has finished. The one that crosses the line
 /// completes and the next is stopped, which bounds the overshoot at one request.
 ///
-/// A degrade is followed at most once per class: the cheaper class's own budget still
+/// A degrade is followed at most once per tier: the cheaper tier's own budget still
 /// applies, so this cannot be used to route around a limit, and a cycle of degrades
 /// ends in a refusal rather than a loop.
 fn apply_budgets(
@@ -112,22 +112,22 @@ fn apply_budgets(
     resolution: Resolution,
 ) -> Result<Resolution> {
     let mut resolution = resolution;
-    let mut visited: Vec<ModelClass> = Vec::new();
+    let mut visited: Vec<ModelTier> = Vec::new();
 
     loop {
-        // The class the request will be billed under. Direct ids participate
-        // too: charging uses the target model's class, so a class budget must
-        // also gate requests that reach the class by exact id, or the limit
+        // The tier the request will be billed under. Direct ids participate
+        // too: charging uses the target model's tier, so a tier budget must
+        // also gate requests that reach the tier by exact id, or the limit
         // could be spent around while still being charged.
-        let class = match &resolution {
-            Resolution::Class(class) => Some(*class),
-            Resolution::Direct(id) => registry.entry(id).ok().and_then(|m| m.class),
+        let tier = match &resolution {
+            Resolution::Tier(tier) => Some(*tier),
+            Resolution::Direct(id) => registry.entry(id).ok().and_then(|m| m.tier),
         };
         // Every provider the request could land on, because a provider's budget has
         // to stop a request that might reach it.
         let provider_ids: Vec<String> = match &resolution {
-            Resolution::Class(class) => registry
-                .class_members(*class)
+            Resolution::Tier(tier) => registry
+                .tier_members(*tier)
                 .iter()
                 .map(|m| m.provider_id.clone())
                 .collect(),
@@ -137,21 +137,21 @@ fn apply_budgets(
                 .unwrap_or_default(),
         };
 
-        match state.budget_verdict(&provider_ids, class) {
+        match state.budget_verdict(&provider_ids, tier) {
             Verdict::Allow => return Ok(resolution),
             Verdict::Reject { because } => return Err(Error::OverBudget(because)),
             Verdict::Degrade { to, because } => {
-                if let Some(current) = class {
+                if let Some(current) = tier {
                     visited.push(current);
                 }
                 if visited.contains(&to) {
                     // Following this would come back here, so refusing is the end.
                     return Err(Error::OverBudget(format!(
-                        "{because}, and the class it degrades to is over its own limit"
+                        "{because}, and the tier it degrades to is over its own limit"
                     )));
                 }
                 tracing::info!("degrading to {}: {because}", to.virtual_id());
-                resolution = Resolution::Class(to);
+                resolution = Resolution::Tier(to);
             }
         }
     }
@@ -649,7 +649,7 @@ async fn buffered_chat(
                 if let Some(cost) = &cost {
                     // Booked against the model that answered, so a failover spends
                     // from the provider it actually reached.
-                    state.charge(&candidate.provider.id, candidate.entry.class, cost);
+                    state.charge(&candidate.provider.id, candidate.entry.tier, cost);
                 }
                 state
                     .stats
@@ -696,7 +696,7 @@ async fn buffered_chat(
                             .as_ref()
                             .map(|p| p.cost_of(&resp.usage));
                         if let Some(cost) = &cost {
-                            state.charge(&candidate.provider.id, candidate.entry.class, cost);
+                            state.charge(&candidate.provider.id, candidate.entry.tier, cost);
                         }
                         state
                             .stats
@@ -849,7 +849,7 @@ async fn stream_chat(
                         routing: routing.clone(),
                         pricing: candidate.entry.pricing.clone(),
                         provider_id: candidate.provider.id.clone(),
-                        class: candidate.entry.class,
+                        tier: candidate.entry.tier,
                         kind,
                     },
                 ));
@@ -886,7 +886,7 @@ async fn stream_chat(
                                 routing: routing.clone(),
                                 pricing: candidate.entry.pricing.clone(),
                                 provider_id: candidate.provider.id.clone(),
-                                class: candidate.entry.class,
+                                tier: candidate.entry.tier,
                                 kind,
                             },
                         ));
@@ -981,7 +981,7 @@ struct SseState {
     pricing: Option<Pricing>,
     /// Who to bill, once the stream reports what it used.
     provider_id: String,
-    class: Option<ModelClass>,
+    tier: Option<ModelTier>,
     /// Set for classifier streams, which accumulate their text so the verdict
     /// can be checked once the stream ends. Main streams never pay for this.
     classifier_text: Option<String>,
@@ -1012,7 +1012,7 @@ impl SseState {
             // A stream only reports its usage at the end, so this is the first
             // moment its cost can be charged.
             if let Some(cost) = self.pricing.as_ref().map(|p| p.cost_of(&self.usage)) {
-                self.state.charge(&self.provider_id, self.class, &cost);
+                self.state.charge(&self.provider_id, self.tier, &cost);
             }
             if let Some(e) = error {
                 rec.fail(e.status().as_u16(), e.to_string());
@@ -1046,7 +1046,7 @@ struct StreamContext {
     routing: crate::config::RoutingConfig,
     pricing: Option<Pricing>,
     provider_id: String,
-    class: Option<ModelClass>,
+    tier: Option<ModelTier>,
     kind: RequestKind,
 }
 
@@ -1072,7 +1072,7 @@ fn sse_body(
         usage: Usage::default(),
         pricing: context.pricing,
         provider_id: context.provider_id,
-        class: context.class,
+        tier: context.tier,
         classifier_text,
         finished: false,
     };

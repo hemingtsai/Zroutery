@@ -14,7 +14,7 @@ use serde_json::{json, Value};
 use zroutery_core::billing::{BalanceConfig, BalancePreset, BalanceProbe, Pricing};
 use zroutery_core::budget::{Budget, BudgetPeriod, BudgetScope};
 use zroutery_core::config::{
-    AppConfig, MemorySecretStore, ModelClass, ModelEntry, ProviderConfig, ProviderKind,
+    AppConfig, MemorySecretStore, ModelTier, ModelEntry, ProviderConfig, ProviderKind,
     RoutingStrategy,
 };
 use zroutery_core::server::{AppState, ServerHandle};
@@ -321,9 +321,9 @@ fn config_for(mock: SocketAddr) -> AppConfig {
 
     cfg.providers = vec![deepseek, openai, anthropic];
     cfg.models = vec![
-        ModelEntry::for_upstream("deepseek", "deepseek-v4-flash", Some(ModelClass::Haiku)),
-        ModelEntry::for_upstream("deepseek", "deepseek-v4-pro", Some(ModelClass::Sonnet)),
-        ModelEntry::for_upstream("openai", "gpt-5.3-sol", Some(ModelClass::Opus)),
+        ModelEntry::for_upstream("deepseek", "deepseek-v4-flash", Some(ModelTier::Fast)),
+        ModelEntry::for_upstream("deepseek", "deepseek-v4-pro", Some(ModelTier::Standard)),
+        ModelEntry::for_upstream("openai", "gpt-5.3-sol", Some(ModelTier::Reasoning)),
         ModelEntry::for_upstream("anthropic", "claude-native", None),
     ];
     cfg
@@ -609,7 +609,7 @@ async fn failover_moves_to_the_next_model_in_the_class() {
     cfg.models[1].upstream_model = "broken-model".into();
     cfg.models[1].priority = 0;
     cfg.models.push(
-        ModelEntry::for_upstream("openai", "gpt-sonnet", Some(ModelClass::Sonnet))
+        ModelEntry::for_upstream("openai", "gpt-sonnet", Some(ModelTier::Standard))
             .with_priority(10),
     );
     let h = Harness::start(cfg, mock).await;
@@ -656,7 +656,7 @@ async fn client_errors_are_not_retried() {
     let mut cfg = config_for(addr);
     cfg.models[1].upstream_model = "refuse-model".into();
     cfg.models.push(
-        ModelEntry::for_upstream("openai", "gpt-sonnet", Some(ModelClass::Sonnet))
+        ModelEntry::for_upstream("openai", "gpt-sonnet", Some(ModelTier::Standard))
             .with_priority(10),
     );
     let h = Harness::start(cfg, mock).await;
@@ -684,7 +684,7 @@ async fn circuit_breaker_skips_a_failing_model() {
     let mut cfg = config_for(addr);
     cfg.models[1].upstream_model = "broken-model".into();
     cfg.models.push(
-        ModelEntry::for_upstream("openai", "gpt-sonnet", Some(ModelClass::Sonnet))
+        ModelEntry::for_upstream("openai", "gpt-sonnet", Some(ModelTier::Standard))
             .with_priority(10),
     );
     cfg.routing.circuit_breaker.failure_threshold = 1;
@@ -795,14 +795,14 @@ async fn a_class_budget_degrades_instead_of_refusing() {
     let mut cfg = config_for(addr);
     cfg.models[2].pricing = Some(Pricing::new("USD", 1000.0, 1000.0));
     cfg.budgets = vec![Budget::new(
-        BudgetScope::Class {
-            class: ModelClass::Opus,
+        BudgetScope::Tier {
+            tier: ModelTier::Reasoning,
         },
         BudgetPeriod::Day,
         "USD",
         0.01,
     )
-    .degrading_to(ModelClass::Haiku)];
+    .degrading_to(ModelTier::Fast)];
     let h = Harness::start(cfg, mock).await;
 
     // The first opus request goes to opus and spends past the limit.
@@ -838,14 +838,14 @@ async fn a_class_budget_also_gates_direct_id_requests() {
     let mut cfg = config_for(addr);
     cfg.models[2].pricing = Some(Pricing::new("USD", 1000.0, 1000.0));
     cfg.budgets = vec![Budget::new(
-        BudgetScope::Class {
-            class: ModelClass::Opus,
+        BudgetScope::Tier {
+            tier: ModelTier::Reasoning,
         },
         BudgetPeriod::Day,
         "USD",
         0.01,
     )
-    .degrading_to(ModelClass::Haiku)];
+    .degrading_to(ModelTier::Fast)];
     let h = Harness::start(cfg, mock).await;
 
     // The direct call spends past the opus budget…
@@ -933,7 +933,7 @@ async fn an_election_pins_the_cheap_fast_model_as_primary() {
     // same speed, so price is what has to decide.
     cfg.models[1].pricing = Some(Pricing::new("USD", 0.2, 0.8));
     cfg.models.push(
-        ModelEntry::for_upstream("openai", "gpt-sonnet", Some(ModelClass::Sonnet))
+        ModelEntry::for_upstream("openai", "gpt-sonnet", Some(ModelTier::Standard))
             // Priority puts this one first; the election is expected to overrule it.
             .with_priority(-100),
     );
@@ -952,7 +952,7 @@ async fn an_election_pins_the_cheap_fast_model_as_primary() {
     assert_eq!(resp.headers()["x-zroutery-model"], "openai-gpt-sonnet");
 
     let election = h.state.hold_election().await;
-    let sonnet = election.classes.get(&ModelClass::Sonnet).unwrap();
+    let sonnet = election.tiers.get(&ModelTier::Standard).unwrap();
     assert!(sonnet.priced, "both members are priced in one currency");
     assert_eq!(sonnet.winner(), Some("deepseek-deepseek-v4-pro"));
     assert!(sonnet.ranked[0].latency_ms.is_some());
@@ -987,11 +987,11 @@ async fn an_election_ranks_a_broken_model_last_and_says_why() {
     cfg.routing.strategy = RoutingStrategy::Balanced;
     // A second opus member that always fails; the election has to notice.
     cfg.models[3].upstream_model = "broken-model".into();
-    cfg.models[3].class = Some(ModelClass::Opus);
+    cfg.models[3].tier = Some(ModelTier::Reasoning);
     let h = Harness::start(cfg, mock).await;
 
     let election = h.state.hold_election().await;
-    let opus = election.classes.get(&ModelClass::Opus).unwrap();
+    let opus = election.tiers.get(&ModelTier::Reasoning).unwrap();
     assert_eq!(opus.winner(), Some("openai-gpt-5.3-sol"));
     let last = opus.ranked.last().unwrap();
     assert_eq!(last.model_id, "anthropic-broken-model");
@@ -1018,14 +1018,14 @@ async fn a_model_added_after_an_election_is_used_but_not_promoted() {
 
     let election = h.state.hold_election().await;
     assert_eq!(
-        election.classes.get(&ModelClass::Sonnet).unwrap().winner(),
+        election.tiers.get(&ModelTier::Standard).unwrap().winner(),
         Some("deepseek-deepseek-v4-pro")
     );
 
     // Add a member whose priority would otherwise put it first.
     let mut next = (*h.state.config()).clone();
     next.models.push(
-        ModelEntry::for_upstream("openai", "gpt-sonnet", Some(ModelClass::Sonnet))
+        ModelEntry::for_upstream("openai", "gpt-sonnet", Some(ModelTier::Standard))
             .with_priority(-100),
     );
     h.state.set_config(next);
@@ -1046,7 +1046,7 @@ async fn a_model_added_after_an_election_is_used_but_not_promoted() {
     assert!(h
         .state
         .registry()
-        .class_members(ModelClass::Sonnet)
+        .tier_members(ModelTier::Standard)
         .iter()
         .any(|m| m.upstream_model == "gpt-sonnet"));
 
@@ -1356,16 +1356,16 @@ async fn model_listing_exposes_real_and_virtual_models() {
     assert!(ids.contains(&"deepseek-deepseek-v4-pro"));
     assert!(ids.contains(&"openai-gpt-5.3-sol"));
     assert!(ids.contains(&"anthropic-claude-native"));
-    assert!(ids.contains(&"opus-class"));
-    assert!(ids.contains(&"sonnet-class"));
-    assert!(ids.contains(&"haiku-class"));
+    assert!(ids.contains(&"reasoning-class"));
+    assert!(ids.contains(&"standard-class"));
+    assert!(ids.contains(&"fast-class"));
 
     // Both dialects find what they expect on each entry.
     let entry = body["data"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|m| m["id"] == "sonnet-class")
+        .find(|m| m["id"] == "standard-class")
         .unwrap();
     assert_eq!(entry["object"], "model");
     assert_eq!(entry["type"], "model");
@@ -1381,7 +1381,7 @@ async fn model_listing_exposes_real_and_virtual_models() {
         .iter()
         .find(|m| m["id"] == "anthropic-claude-native")
         .unwrap();
-    assert_eq!(entry["zroutery"]["class"], Value::Null);
+    assert_eq!(entry["zroutery"]["tier"], Value::Null);
     assert_eq!(entry["owned_by"], "Anthropic");
 
     let single: Value = h
@@ -1393,7 +1393,7 @@ async fn model_listing_exposes_real_and_virtual_models() {
         .await
         .unwrap();
     assert_eq!(single["id"], "openai-gpt-5.3-sol");
-    assert_eq!(single["zroutery"]["class"], "opus");
+    assert_eq!(single["zroutery"]["tier"], "reasoning");
 
     assert_eq!(h.get("/v1/models/nope").send().await.unwrap().status(), 404);
 
@@ -1405,7 +1405,7 @@ async fn unknown_and_unclassified_routing_errors() {
     let (addr, mock) = start_mock().await;
     let mut cfg = config_for(addr);
     // Remove every opus member so the class is empty.
-    cfg.models.retain(|m| m.class != Some(ModelClass::Opus));
+    cfg.models.retain(|m| m.tier != Some(ModelTier::Reasoning));
     let h = Harness::start(cfg, mock).await;
 
     let resp = h
@@ -1709,7 +1709,7 @@ async fn config_can_be_swapped_while_running() {
     cfg.models.push(ModelEntry::for_upstream(
         "openai",
         "gpt-sonnet",
-        Some(ModelClass::Sonnet),
+        Some(ModelTier::Standard),
     ));
     h.state.set_config(cfg);
 
@@ -1745,7 +1745,7 @@ async fn the_same_model_from_two_providers_stays_addressable() {
     cfg.models.push(ModelEntry::for_upstream(
         "openai",
         "deepseek-v4-pro",
-        Some(ModelClass::Sonnet),
+        Some(ModelTier::Standard),
     ));
     let h = Harness::start(cfg, mock).await;
 
@@ -1854,8 +1854,8 @@ async fn rate_limit_triggers_failover() {
     let mut cfg = config_for(addr);
     // Make the primary model rate-limited, fallback model normal.
     cfg.models = vec![
-        ModelEntry::for_upstream("deepseek", "limited-v4", Some(ModelClass::Sonnet)),
-        ModelEntry::for_upstream("deepseek", "deepseek-v4-pro", Some(ModelClass::Sonnet)),
+        ModelEntry::for_upstream("deepseek", "limited-v4", Some(ModelTier::Standard)),
+        ModelEntry::for_upstream("deepseek", "deepseek-v4-pro", Some(ModelTier::Standard)),
     ];
     let h = Harness::start(cfg, mock).await;
 
@@ -1893,7 +1893,7 @@ async fn transport_error_returns_502() {
     cfg.models = vec![ModelEntry::for_upstream(
         "dead",
         "dead-model",
-        Some(ModelClass::Sonnet),
+        Some(ModelTier::Standard),
     )];
 
     let _mock = Mock::default();

@@ -390,7 +390,7 @@ function CcSwitchRow({
         {draft.models.length === 0
           ? "—"
           : draft.models
-              .map((m) => (m.class ? `${m.upstream_model} (${m.class})` : m.upstream_model))
+              .map((m) => (m.tier ? `${m.upstream_model} (${m.tier})` : m.upstream_model))
               .join(", ")}
       </td>
     </tr>
@@ -482,7 +482,7 @@ function ProviderDrawer({
       next.models.push({
         provider_id: provider.id,
         upstream_model: model.id,
-        class: null,
+        tier: null,
         priority: 0,
         weight: 1,
         enabled: true,

@@ -22,7 +22,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use zroutery_core::config::{ModelClass, ModelEntry, ProviderConfig, ProviderKind};
+use zroutery_core::config::{ModelTier, ModelEntry, ProviderConfig, ProviderKind};
 use zroutery_core::query::strip_client_model_modifier;
 
 /// Where CC Switch keeps its provider data, in the order we look.
@@ -93,7 +93,7 @@ pub struct CcProvider {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CcModel {
     pub upstream_model: String,
-    pub class: Option<ModelClass>,
+    pub tier: Option<ModelTier>,
 }
 
 /// What the import preview shows for one CC Switch provider: the draft plus
@@ -295,10 +295,10 @@ fn collect_models(env: &Value) -> Vec<CcModel> {
         // actually requests.
         models.push(CcModel {
             upstream_model: sonnet.clone().unwrap(),
-            class: Some(ModelClass::Sonnet),
+            tier: Some(ModelTier::Standard),
         });
     } else {
-        for (model, class) in [(opus, ModelClass::Opus), (sonnet, ModelClass::Sonnet), (haiku, ModelClass::Haiku)]
+        for (model, tier) in [(opus, ModelTier::Reasoning), (sonnet, ModelTier::Standard), (haiku, ModelTier::Fast)]
         {
             if let Some(upstream_model) = model {
                 if !models
@@ -307,7 +307,7 @@ fn collect_models(env: &Value) -> Vec<CcModel> {
                 {
                     models.push(CcModel {
                         upstream_model,
-                        class: Some(class),
+                        tier: Some(tier),
                     });
                 }
             }
@@ -324,7 +324,7 @@ fn collect_models(env: &Value) -> Vec<CcModel> {
             {
                 models.push(CcModel {
                     upstream_model,
-                    class: None,
+                    tier: None,
                 });
             }
         }
@@ -387,7 +387,7 @@ pub fn to_zroutery(
         .models
         .iter()
         .map(|m| {
-            let mut entry = ModelEntry::for_upstream(&provider.id, &m.upstream_model, m.class);
+            let mut entry = ModelEntry::for_upstream(&provider.id, &m.upstream_model, m.tier);
             entry.priority = priority;
             entry
         })
@@ -422,11 +422,11 @@ mod tests {
             p.models
                 .iter()
                 .find(|m| m.upstream_model == name)
-                .and_then(|m| m.class)
+                .and_then(|m| m.tier)
         };
-        assert_eq!(find("big-model"), Some(ModelClass::Opus));
-        assert_eq!(find("mid-model"), Some(ModelClass::Sonnet));
-        assert_eq!(find("small-model"), Some(ModelClass::Haiku));
+        assert_eq!(find("big-model"), Some(ModelTier::Reasoning));
+        assert_eq!(find("mid-model"), Some(ModelTier::Standard));
+        assert_eq!(find("small-model"), Some(ModelTier::Fast));
         // ANTHROPIC_MODEL matched an existing entry, so no duplicate.
         assert_eq!(p.models.len(), 3);
     }
@@ -444,7 +444,7 @@ mod tests {
         assert_eq!(p.models.len(), 1);
         assert_eq!(p.models[0].upstream_model, "glm-5.3");
         // The class a conversation asks for, so sonnet-class works on day one.
-        assert_eq!(p.models[0].class, Some(ModelClass::Sonnet));
+        assert_eq!(p.models[0].tier, Some(ModelTier::Standard));
     }
 
     #[test]
@@ -457,7 +457,7 @@ mod tests {
         let p = provider_from_env("id".into(), "Relay".into(), &env, false).unwrap();
         assert_eq!(p.models.len(), 2);
         assert!(p.models.iter().any(|m| m.upstream_model == "glm-5.3-air"
-            && m.class.is_none()));
+            && m.tier.is_none()));
     }
 
     #[test]
@@ -484,7 +484,7 @@ mod tests {
             api_key: Some("k".into()),
             models: vec![CcModel {
                 upstream_model: "step-3.7-flash".into(),
-                class: Some(ModelClass::Sonnet),
+                tier: Some(ModelTier::Standard),
             }],
             is_current: true,
         };
@@ -500,7 +500,7 @@ mod tests {
         assert_eq!(provider.timeout_secs, 3600);
         assert_eq!(models.len(), 1);
         assert_eq!(models[0].upstream_model, "step-3.7-flash");
-        assert_eq!(models[0].class, Some(ModelClass::Sonnet));
+        assert_eq!(models[0].tier, Some(ModelTier::Standard));
         assert_eq!(models[0].exposed_id(), "stepfun-step-3.7-flash");
     }
 
@@ -553,7 +553,7 @@ mod tests {
                     .map(|m| format!(
                         "{}{}",
                         m.upstream_model,
-                        m.class
+                        m.tier
                             .map(|c| format!("({})", c.as_str()))
                             .unwrap_or_default()
                     ))

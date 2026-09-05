@@ -10,12 +10,12 @@ use rand::Rng;
 use serde::{Deserialize, Serialize};
 
 use crate::circuit_breaker::{CircuitBreaker, CircuitBreakerConfig, CircuitState};
-use crate::config::{ClassifierConfig, ModelClass, ModelEntry, ProviderConfig, RoutingConfig, RoutingStrategy};
+use crate::config::{ClassifierConfig, ModelTier, ModelEntry, ProviderConfig, RoutingConfig, RoutingStrategy};
 use crate::election::Election;
 use crate::error::{Error, Result};
 use crate::registry::{Registry, Resolution};
 
-/// Round robin cursor key for the classifier pool, which is not a class.
+/// Round robin cursor key for the classifier pool, which is not a tier.
 const CLASSIFIER_POOL: &str = "classifier";
 
 /// One attempt: which model, on which provider.
@@ -85,9 +85,9 @@ impl HealthState {
 #[derive(Debug)]
 pub struct Router {
     health: Mutex<HashMap<String, HealthState>>,
-    /// Round robin cursors, keyed by pool name (a class's virtual id, or the
-    /// classifier pool) rather than by `ModelClass`: routing pools exist that
-    /// are not a class.
+    /// Round robin cursors, keyed by pool name (a tier's virtual id, or the
+    /// classifier pool) rather than by `ModelTier`: routing pools exist that
+    /// are not a tier.
     rr: Mutex<HashMap<String, usize>>,
     /// The last election, when one has been held. `Balanced` follows the order it
     /// decided instead of re-deciding per request, which is the whole point: a
@@ -122,7 +122,7 @@ impl Router {
                 }
                 Ok(vec![Candidate::new(entry, provider, false)])
             }
-            Resolution::Class(class) => self.plan_class(registry, *class, routing),
+            Resolution::Tier(tier) => self.plan_tier(registry, *tier, routing),
         }
     }
 
@@ -167,7 +167,7 @@ impl Router {
                 continue;
             }
             // The pool's own priority orders the candidate here, not the
-            // model's class priority: a model can be last in its class and
+            // model's tier priority: a model can be last in its tier and
             // first in the classifier pool.
             let mut entry = entry.clone();
             entry.priority = candidate.priority;
@@ -181,7 +181,7 @@ impl Router {
             registry,
             refs,
             CLASSIFIER_POOL,
-            // Elections are held per class; the classifier pool has no class,
+            // Elections are held per tier; the classifier pool has no tier,
             // so Balanced degrades to priority order inside `order`.
             None,
             config.strategy,
@@ -191,39 +191,39 @@ impl Router {
         )
     }
 
-    fn plan_class(
+    fn plan_tier(
         &self,
         registry: &Registry,
-        class: ModelClass,
+        tier: ModelTier,
         routing: &RoutingConfig,
     ) -> Result<Vec<Candidate>> {
-        let members = registry.class_members(class);
+        let members = registry.tier_members(tier);
         if members.is_empty() {
-            return Err(Error::NoCandidate(class.virtual_id().to_string()));
+            return Err(Error::NoCandidate(tier.virtual_id().to_string()));
         }
         self.plan_candidates(
             registry,
             members,
-            class.virtual_id(),
-            Some(class),
+            tier.virtual_id(),
+            Some(tier),
             routing.strategy,
             routing.failover,
             routing.max_attempts,
-            class.virtual_id().to_string(),
+            tier.virtual_id().to_string(),
         )
     }
 
     /// Turn a pool of models into an ordered list of attempts, applying health,
     /// circuit breakers, the strategy's ordering, failover and the attempt cap.
     ///
-    /// Every routing pool — a class today, the Auto Mode classifier pool next —
+    /// Every routing pool — a tier today, the Auto Mode classifier pool next —
     /// shares this one implementation, so a candidate means the same thing
     /// wherever it came from: health filtering, degraded marking and failover
     /// cannot drift between pools.
     ///
-    /// `counter_key` names the pool for the round robin cursor. `election_class`
-    /// is `Some` only for class pools: `Balanced` follows the last election's
-    /// order, and elections only exist per class, so a pool without one orders
+    /// `counter_key` names the pool for the round robin cursor. `election_tier`
+    /// is `Some` only for tier pools: `Balanced` follows the last election's
+    /// order, and elections only exist per tier, so a pool without one orders
     /// by priority instead.
     #[allow(clippy::too_many_arguments)]
     fn plan_candidates(
@@ -231,7 +231,7 @@ impl Router {
         registry: &Registry,
         members: Vec<&ModelEntry>,
         counter_key: &str,
-        election_class: Option<ModelClass>,
+        election_tier: Option<ModelTier>,
         strategy: RoutingStrategy,
         failover: bool,
         max_attempts: u32,
@@ -257,7 +257,7 @@ impl Router {
             (closed, half_open)
         };
 
-        let mut ordered = self.order(&closed, counter_key, election_class, strategy);
+        let mut ordered = self.order(&closed, counter_key, election_tier, strategy);
         let mut degraded_ids: Vec<String> = Vec::new();
         if ordered.is_empty() {
             // No closed candidate: fall back to half-open probes, marked degraded.
@@ -293,17 +293,17 @@ impl Router {
         &self,
         members: &[&'a ModelEntry],
         counter_key: &str,
-        election_class: Option<ModelClass>,
+        election_tier: Option<ModelTier>,
         strategy: RoutingStrategy,
     ) -> Vec<&'a ModelEntry> {
         if members.len() <= 1 {
             return members.to_vec();
         }
         match strategy {
-            // Elections are held per class; a pool that has none (the classifier
+            // Elections are held per tier; a pool that has none (the classifier
             // pool) falls back to priority, which is what the user configured.
-            RoutingStrategy::Balanced => match election_class {
-                Some(class) => self.elected_order(members, class),
+            RoutingStrategy::Balanced => match election_tier {
+                Some(tier) => self.elected_order(members, tier),
                 None => by_priority(members),
             },
             RoutingStrategy::Priority => {
@@ -361,10 +361,10 @@ impl Router {
     fn elected_order<'a>(
         &self,
         members: &[&'a ModelEntry],
-        class: ModelClass,
+        tier: ModelTier,
     ) -> Vec<&'a ModelEntry> {
         let guard = crate::sync::lock(&self.election);
-        let Some(order) = guard.as_ref().and_then(|e| e.order_for(class)) else {
+        let Some(order) = guard.as_ref().and_then(|e| e.order_for(tier)) else {
             return by_priority(members);
         };
 
@@ -517,7 +517,7 @@ impl Router {
 }
 
 /// Priority order with a stable tiebreak, shared by the `Priority` strategy and
-/// by `Balanced` when no election has been held (or the pool has no class).
+/// by `Balanced` when no election has been held (or the pool has no tier).
 fn by_priority<'a>(members: &[&'a ModelEntry]) -> Vec<&'a ModelEntry> {
     let mut sorted = members.to_vec();
     sorted.sort_by(|a, b| {
@@ -557,8 +557,8 @@ mod tests {
     #[test]
     fn direct_request_does_not_failover() {
         let r = reg(cfg_with(vec![
-            ModelEntry::for_upstream("p1", "a", Some(ModelClass::Sonnet)),
-            ModelEntry::for_upstream("p2", "b", Some(ModelClass::Sonnet)),
+            ModelEntry::for_upstream("p1", "a", Some(ModelTier::Standard)),
+            ModelEntry::for_upstream("p2", "b", Some(ModelTier::Standard)),
         ]));
         let router = Router::new();
         let plan = router.plan(&r, &Resolution::Direct("p1-a".into())).unwrap();
@@ -566,17 +566,17 @@ mod tests {
     }
 
     #[test]
-    fn class_plan_follows_priority_and_respects_max_attempts() {
+    fn tier_plan_follows_priority_and_respects_max_attempts() {
         let mut cfg = cfg_with(vec![
-            ModelEntry::for_upstream("p1", "first", Some(ModelClass::Opus)).with_priority(0),
-            ModelEntry::for_upstream("p2", "second", Some(ModelClass::Opus)).with_priority(10),
-            ModelEntry::for_upstream("p1", "third", Some(ModelClass::Opus)).with_priority(20),
+            ModelEntry::for_upstream("p1", "first", Some(ModelTier::Reasoning)).with_priority(0),
+            ModelEntry::for_upstream("p2", "second", Some(ModelTier::Reasoning)).with_priority(10),
+            ModelEntry::for_upstream("p1", "third", Some(ModelTier::Reasoning)).with_priority(20),
         ]);
         cfg.routing.max_attempts = 2;
         let r = reg(cfg);
         let router = Router::new();
         let plan = router
-            .plan(&r, &Resolution::Class(ModelClass::Opus))
+            .plan(&r, &Resolution::Tier(ModelTier::Reasoning))
             .unwrap();
         assert_eq!(ids(&plan), vec!["p1-first", "p2-second"]);
     }
@@ -584,22 +584,22 @@ mod tests {
     #[test]
     fn failover_disabled_yields_single_attempt() {
         let mut cfg = cfg_with(vec![
-            ModelEntry::for_upstream("p1", "a", Some(ModelClass::Haiku)),
-            ModelEntry::for_upstream("p2", "b", Some(ModelClass::Haiku)),
+            ModelEntry::for_upstream("p1", "a", Some(ModelTier::Fast)),
+            ModelEntry::for_upstream("p2", "b", Some(ModelTier::Fast)),
         ]);
         cfg.routing.failover = false;
         let r = reg(cfg);
         let plan = Router::new()
-            .plan(&r, &Resolution::Class(ModelClass::Haiku))
+            .plan(&r, &Resolution::Tier(ModelTier::Fast))
             .unwrap();
         assert_eq!(plan.len(), 1);
     }
 
     #[test]
-    fn empty_class_is_an_error() {
+    fn empty_tier_is_an_error() {
         let r = reg(cfg_with(vec![ModelEntry::for_upstream("p1", "a", None)]));
         let err = Router::new()
-            .plan(&r, &Resolution::Class(ModelClass::Sonnet))
+            .plan(&r, &Resolution::Tier(ModelTier::Standard))
             .unwrap_err();
         assert!(matches!(err, Error::NoCandidate(_)));
     }
@@ -607,8 +607,8 @@ mod tests {
     #[test]
     fn circuit_breaker_demotes_then_recovers() {
         let mut cfg = cfg_with(vec![
-            ModelEntry::for_upstream("p1", "bad", Some(ModelClass::Sonnet)).with_priority(0),
-            ModelEntry::for_upstream("p2", "good", Some(ModelClass::Sonnet)).with_priority(5),
+            ModelEntry::for_upstream("p1", "bad", Some(ModelTier::Standard)).with_priority(0),
+            ModelEntry::for_upstream("p2", "good", Some(ModelTier::Standard)).with_priority(5),
         ]);
         cfg.routing.circuit_breaker.timeout_secs = 0;
         let routing = cfg.routing.clone();
@@ -617,7 +617,7 @@ mod tests {
 
         assert_eq!(
             ids(&router
-                .plan(&r, &Resolution::Class(ModelClass::Sonnet))
+                .plan(&r, &Resolution::Tier(ModelTier::Standard))
                 .unwrap())[0],
             "p1-bad"
         );
@@ -628,7 +628,7 @@ mod tests {
         }
         assert!(router.is_cooling("p1-bad"));
         let plan = router
-            .plan(&r, &Resolution::Class(ModelClass::Sonnet))
+            .plan(&r, &Resolution::Tier(ModelTier::Standard))
             .unwrap();
         assert_eq!(ids(&plan), vec!["p2-good", "p1-bad"]);
         assert!(!plan[0].degraded && plan[1].degraded);
@@ -646,7 +646,7 @@ mod tests {
         assert_eq!(router.health_snapshot()[0].state, CircuitState::Closed);
         assert_eq!(
             ids(&router
-                .plan(&r, &Resolution::Class(ModelClass::Sonnet))
+                .plan(&r, &Resolution::Tier(ModelTier::Standard))
                 .unwrap())[0],
             "p1-bad"
         );
@@ -657,7 +657,7 @@ mod tests {
         let mut cfg = cfg_with(vec![ModelEntry::for_upstream(
             "p1",
             "flaky",
-            Some(ModelClass::Opus),
+            Some(ModelTier::Reasoning),
         )]);
         cfg.routing.circuit_breaker.timeout_secs = 0;
         let routing = cfg.routing.clone();
@@ -694,7 +694,7 @@ mod tests {
         let cfg = cfg_with(vec![ModelEntry::for_upstream(
             "p1",
             "kept",
-            Some(ModelClass::Opus),
+            Some(ModelTier::Reasoning),
         )]);
         let routing = cfg.routing.clone();
         let router = Router::new();
@@ -715,7 +715,7 @@ mod tests {
         let mut cfg = cfg_with(vec![ModelEntry::for_upstream(
             "p1",
             "only",
-            Some(ModelClass::Opus),
+            Some(ModelTier::Reasoning),
         )]);
         cfg.routing.circuit_breaker.timeout_secs = 0;
         let routing = cfg.routing.clone();
@@ -725,7 +725,7 @@ mod tests {
             router.report_failure("p1-only", &Error::Timeout(1), &routing);
         }
         let plan = router
-            .plan(&r, &Resolution::Class(ModelClass::Opus))
+            .plan(&r, &Resolution::Tier(ModelTier::Reasoning))
             .unwrap();
         assert_eq!(ids(&plan), vec!["p1-only"]);
         assert!(plan[0].degraded);
@@ -736,7 +736,7 @@ mod tests {
         let cfg = cfg_with(vec![ModelEntry::for_upstream(
             "p1",
             "a",
-            Some(ModelClass::Opus),
+            Some(ModelTier::Reasoning),
         )]);
         let routing = cfg.routing.clone();
         let router = Router::new();
@@ -752,7 +752,7 @@ mod tests {
         let cfg = cfg_with(vec![ModelEntry::for_upstream(
             "p1",
             "a",
-            Some(ModelClass::Opus),
+            Some(ModelTier::Reasoning),
         )]);
         let routing = cfg.routing.clone();
         let router = Router::new();
@@ -772,7 +772,7 @@ mod tests {
         let mut cfg = cfg_with(vec![ModelEntry::for_upstream(
             "p1",
             "a",
-            Some(ModelClass::Opus),
+            Some(ModelTier::Reasoning),
         )]);
         cfg.routing.circuit_breaker.failure_threshold = 1;
         let routing = cfg.routing.clone();
@@ -791,18 +791,18 @@ mod tests {
     #[test]
     fn round_robin_rotates() {
         let mut cfg = cfg_with(vec![
-            ModelEntry::for_upstream("p1", "a", Some(ModelClass::Haiku)),
-            ModelEntry::for_upstream("p2", "b", Some(ModelClass::Haiku)),
+            ModelEntry::for_upstream("p1", "a", Some(ModelTier::Fast)),
+            ModelEntry::for_upstream("p2", "b", Some(ModelTier::Fast)),
         ]);
         cfg.routing.strategy = RoutingStrategy::RoundRobin;
         let r = reg(cfg);
         let router = Router::new();
         let first = ids(&router
-            .plan(&r, &Resolution::Class(ModelClass::Haiku))
+            .plan(&r, &Resolution::Tier(ModelTier::Fast))
             .unwrap())[0]
             .to_string();
         let second = ids(&router
-            .plan(&r, &Resolution::Class(ModelClass::Haiku))
+            .plan(&r, &Resolution::Tier(ModelTier::Fast))
             .unwrap())[0]
             .to_string();
         assert_ne!(first, second);
@@ -811,8 +811,8 @@ mod tests {
     #[test]
     fn lowest_latency_prefers_the_fast_model() {
         let mut cfg = cfg_with(vec![
-            ModelEntry::for_upstream("p1", "slow", Some(ModelClass::Sonnet)),
-            ModelEntry::for_upstream("p2", "fast", Some(ModelClass::Sonnet)),
+            ModelEntry::for_upstream("p1", "slow", Some(ModelTier::Standard)),
+            ModelEntry::for_upstream("p2", "fast", Some(ModelTier::Standard)),
         ]);
         cfg.routing.strategy = RoutingStrategy::LowestLatency;
         let routing = cfg.routing.clone();
@@ -822,7 +822,7 @@ mod tests {
         router.report_success("p2-fast", 300, &routing);
         assert_eq!(
             ids(&router
-                .plan(&r, &Resolution::Class(ModelClass::Sonnet))
+                .plan(&r, &Resolution::Tier(ModelTier::Standard))
                 .unwrap())[0],
             "p2-fast"
         );
@@ -831,8 +831,8 @@ mod tests {
     #[test]
     fn weighted_random_covers_all_and_favours_weight() {
         let mut cfg = cfg_with(vec![
-            ModelEntry::for_upstream("p1", "heavy", Some(ModelClass::Opus)),
-            ModelEntry::for_upstream("p2", "light", Some(ModelClass::Opus)),
+            ModelEntry::for_upstream("p1", "heavy", Some(ModelTier::Reasoning)),
+            ModelEntry::for_upstream("p2", "light", Some(ModelTier::Reasoning)),
         ]);
         cfg.models[0].weight = 9;
         cfg.models[1].weight = 1;
@@ -842,7 +842,7 @@ mod tests {
         let mut heavy_first = 0;
         for _ in 0..400 {
             let plan = router
-                .plan(&r, &Resolution::Class(ModelClass::Opus))
+                .plan(&r, &Resolution::Tier(ModelTier::Reasoning))
                 .unwrap();
             assert_eq!(
                 plan.len(),
@@ -876,13 +876,13 @@ mod tests {
     }
 
     #[test]
-    fn classifier_pool_follows_candidate_priority_not_class_priority() {
-        // glm is the *last* member of its class but the *first* classifier
+    fn classifier_pool_follows_candidate_priority_not_tier_priority() {
+        // glm is the *last* member of its tier but the *first* classifier
         // candidate; the two orderings are independent.
         let r = reg(classifier_cfg_with(
             vec![
-                ModelEntry::for_upstream("p1", "glm", Some(ModelClass::Haiku)).with_priority(50),
-                ModelEntry::for_upstream("p2", "deepseek", Some(ModelClass::Sonnet))
+                ModelEntry::for_upstream("p1", "glm", Some(ModelTier::Fast)).with_priority(50),
+                ModelEntry::for_upstream("p2", "deepseek", Some(ModelTier::Standard))
                     .with_priority(0),
             ],
             &[("p2-deepseek", 20), ("p1-glm", 10)],
@@ -893,7 +893,7 @@ mod tests {
 
     #[test]
     fn classifier_candidates_may_point_at_unclassified_models() {
-        // A model with no class is still a perfectly good classifier.
+        // A model with no tier is still a perfectly good classifier.
         let r = reg(classifier_cfg_with(
             vec![ModelEntry::for_upstream("p1", "glm", None)],
             &[("p1-glm", 10)],
@@ -974,8 +974,8 @@ mod tests {
         // too: the circuit breaker is keyed by model, not by pool.
         let cfg = classifier_cfg_with(
             vec![
-                ModelEntry::for_upstream("p1", "glm", Some(ModelClass::Sonnet)).with_priority(0),
-                ModelEntry::for_upstream("p2", "main", Some(ModelClass::Sonnet)).with_priority(5),
+                ModelEntry::for_upstream("p1", "glm", Some(ModelTier::Standard)).with_priority(0),
+                ModelEntry::for_upstream("p2", "main", Some(ModelTier::Standard)).with_priority(5),
             ],
             &[("p1-glm", 10)],
         );
@@ -992,16 +992,16 @@ mod tests {
             .plan_classifier(&r, &r.config().classifier)
             .is_err());
 
-        // ...and the main class plan demotes glm for main requests as well.
+        // ...and the main tier plan demotes glm for main requests as well.
         let plan = router
-            .plan(&r, &Resolution::Class(ModelClass::Sonnet))
+            .plan(&r, &Resolution::Tier(ModelTier::Standard))
             .unwrap();
         assert_eq!(ids(&plan)[0], "p2-main");
     }
 
     #[test]
     fn classifier_balanced_strategy_falls_back_to_priority() {
-        // Elections are per class; the classifier pool has none, so Balanced
+        // Elections are per tier; the classifier pool has none, so Balanced
         // must not silently produce an unsorted plan.
         let mut cfg = classifier_cfg_with(
             vec![
@@ -1017,11 +1017,11 @@ mod tests {
     }
 
     #[test]
-    fn classifier_round_robin_rotates_independently_of_classes() {
+    fn classifier_round_robin_rotates_independently_of_tiers() {
         let mut cfg = classifier_cfg_with(
             vec![
-                ModelEntry::for_upstream("p1", "a", Some(ModelClass::Sonnet)),
-                ModelEntry::for_upstream("p2", "b", Some(ModelClass::Sonnet)),
+                ModelEntry::for_upstream("p1", "a", Some(ModelTier::Standard)),
+                ModelEntry::for_upstream("p2", "b", Some(ModelTier::Standard)),
             ],
             &[("p1-a", 10), ("p2-b", 10)],
         );

@@ -1,13 +1,13 @@
 import { useState } from "react";
 import {
-  CLASSES,
+  TIERS,
   emptyPricing,
   modelRows,
   previewId,
   priceText,
   virtualId,
   type AppConfig,
-  type ModelClass,
+  type ModelTier,
   type ModelEntry,
   type ModelRow,
   type Pricing,
@@ -57,7 +57,7 @@ export default function Models({
   const [nameError, setNameError] = useState<string | null>(null);
   const [draft, setDraft] = useState({ provider_id: config.providers[0]?.id ?? "", upstream_model: "" });
 
-  const unclassified = rows.filter((r) => r.model.class === null);
+  const unclassified = rows.filter((r) => r.model.tier === null);
   const cooling = new Set(
     health.filter((h) => h.cooldown_remaining_secs > 0).map((h) => h.model_id),
   );
@@ -109,7 +109,7 @@ export default function Models({
       next.models.push({
         provider_id: providerId,
         upstream_model: upstream,
-        class: null,
+        tier: null,
         priority: 0,
         weight: 1,
         enabled: true,
@@ -176,7 +176,7 @@ export default function Models({
                   <span className="row-sub">
                     {provider?.name ?? t("models.missing_provider")}
                     {provider?.enabled === false && ` ${t("providers.provider_off")}`}
-                    {r.model.class ? ` · ${r.model.class}` : ` · ${t("models.no_class")}`}
+                    {r.model.tier ? ` · ${r.model.tier}` : ` · ${t("models.no_class")}`}
                   </span>
                 </div>
                 <span className="col-num">
@@ -273,14 +273,14 @@ function ModelDrawer({
           [t("models.upstream"), <span className="mono">{m.upstream_model}</span>],
           [
             t("models.class"),
-            <Select<ModelClass | "none">
+            <Select<ModelTier | "none">
               ariaLabel={t("models.class")}
-              value={m.class ?? "none"}
+              value={m.tier ?? "none"}
               disabled={busy}
-              onChange={(next) => onUpdate({ class: next === "none" ? null : next })}
+              onChange={(next) => onUpdate({ tier: next === "none" ? null : next })}
               options={[
                 { value: "none", label: "—" },
-                ...CLASSES.map((c) => ({ value: c, label: virtualId(c) })),
+                ...TIERS.map((c) => ({ value: c, label: virtualId(c) })),
               ]}
             />,
           ],

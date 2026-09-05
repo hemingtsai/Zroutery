@@ -50,10 +50,11 @@ pub use classifier::{
 };
 pub use config::{
     AppConfig, ClassifierCandidate, ClassifierConfig, ConfigIssue, IssueSeverity,
-    MemorySecretStore, ModelClass, ModelEntry, ProviderConfig, ProviderKind, RectifierConfig,
-    RoutingConfig, RoutingStrategy, SecretStore, ServerConfig, VisionConfig, WindowBehavior,
+    MemorySecretStore, ModelCapabilities, ModelEntry, ModelTier, ProviderConfig, ProviderKind,
+    RectifierConfig, RoutingConfig, RoutingStrategy, SecretStore, ServerConfig, VisionConfig,
+    WindowBehavior,
 };
-pub use election::{ClassElection, Election, Measurement, Ranked, ScoringConfig};
+pub use election::{TierElection, Election, Measurement, Ranked, ScoringConfig};
 pub use error::{Error, Result};
 pub use ir::{
     ChatRequest, ChatResponse, ContentBlock, Dialect, Message, Role, StopReason, StreamEvent,

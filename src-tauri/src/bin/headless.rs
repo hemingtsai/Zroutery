@@ -47,15 +47,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Arc::new(KeychainSecrets::with_env_fallback(APP_ID)),
     ));
 
-    // `--elect` is the same idea for routing: probe every class member, print the
+    // `--elect` is the same idea for routing: probe every tier member, print the
     // order it decided, and exit. Handy from a shell, and what the smoke test drives.
     if std::env::args().any(|a| a == "--elect") {
         let election = desktop.hold_election().await;
-        if election.classes.is_empty() {
-            println!("no class has an enabled model to measure");
+        if election.tiers.is_empty() {
+            println!("no tier has an enabled model to measure");
         }
-        for (class, outcome) in &election.classes {
-            println!("{}:", class.virtual_id());
+        for (tier, outcome) in &election.tiers {
+            println!("{}:", tier.virtual_id());
             for ranked in &outcome.ranked {
                 println!(
                     "  {:<34} {}",

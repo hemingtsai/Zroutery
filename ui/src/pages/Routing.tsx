@@ -1,13 +1,13 @@
 import { useState } from "react";
 import {
-  CLASSES,
+  TIERS,
   classMembers,
   modelRows,
   virtualId,
   type AppConfig,
   type ClassifierCandidate,
   type Election,
-  type ModelClass,
+  type ModelTier,
   type ModelRow,
   type RoutingStrategy,
   type Snapshot,
@@ -60,8 +60,8 @@ export default function Routing({
     health.filter((h) => h.cooldown_remaining_secs > 0).map((h) => h.model_id),
   );
 
-  const classRoutes = (["opus", "sonnet", "haiku"] as const)
-    .map((cls) => ({ cls, members: classMembers(rows, config.providers, cls) }));
+  const classRoutes = TIERS
+    .map((tier) => ({ cls: tier, members: classMembers(rows, config.providers, tier) }));
 
   const classifierCandidates = config.classifier.enabled
     ? config.classifier.candidates
@@ -202,10 +202,11 @@ export default function Routing({
   );
 }
 
-const CLASS_HINT_KEY: Record<ModelClass, "class.hint.opus" | "class.hint.sonnet" | "class.hint.haiku"> = {
-  opus: "class.hint.opus",
-  sonnet: "class.hint.sonnet",
-  haiku: "class.hint.haiku",
+const CLASS_HINT_KEY: Record<ModelTier, "tier.hint.fast" | "tier.hint.standard" | "tier.hint.reasoning" | "tier.hint.frontier"> = {
+  fast: "tier.hint.fast",
+  standard: "tier.hint.standard",
+  reasoning: "tier.hint.reasoning",
+  frontier: "tier.hint.frontier",
 };
 
 /**
@@ -264,7 +265,7 @@ function DefaultDrawer({
           onCommit={(max_attempts) => patch({ max_attempts: max_attempts ?? 3 })}
         />
         <Field label={t("field.unknown_ids")}>
-          <Select<ModelClass | "unset">
+          <Select<ModelTier | "unset">
             ariaLabel={t("field.unknown_ids")}
             value={routing.unknown_model_fallback ?? "unset"}
             onChange={(next) =>
@@ -272,8 +273,8 @@ function DefaultDrawer({
             }
             options={[
               { value: "unset", label: t("routing.unknown_404") },
-              ...CLASSES.map((c) => ({
-                value: c as ModelClass,
+              ...TIERS.map((c) => ({
+                value: c as ModelTier,
                 label: t("routing.unknown_serve", { id: virtualId(c) }),
               })),
             ]}
@@ -318,22 +319,22 @@ function DefaultDrawer({
   );
 }
 
-/** What the last election decided, per class, with the numbers behind it. */
+/** What the last election decided, per tier, with the numbers behind it. */
 function ElectionResult({ election }: { election: Election | null }) {
   const { t } = useI18n();
   if (!election) {
     return <p className="empty">{t("routing.no_election")}</p>;
   }
-  const classes = CLASSES.map((cls) => election.classes[cls]).filter(
+  const classes = TIERS.map((tier) => election.classes[tier]).filter(
     (c): c is NonNullable<typeof c> => c !== undefined,
   );
   if (classes.length === 0) return <p className="empty">{t("routing.no_election_classes")}</p>;
   return (
     <>
       {classes.map((outcome) => (
-        <div key={outcome.class}>
+        <div key={outcome.tier}>
           <div className="row gap" style={{ marginBottom: 4 }}>
-            <span className="mono">{virtualId(outcome.class)}</span>
+            <span className="mono">{virtualId(outcome.tier)}</span>
             {outcome.note && <span className="muted">{outcome.note}</span>}
           </div>
           <table className="table">

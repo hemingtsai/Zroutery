@@ -1,4 +1,4 @@
-import { api, classMembers, modelRows, type Snapshot } from "../api";
+import { api, classMembers, modelRows, TIERS, type Snapshot } from "../api";
 import { StatusDot, useToast } from "../components";
 import { useI18n } from "../i18n";
 
@@ -28,8 +28,8 @@ export default function Overview({
     (r) => r.model.enabled && providers.some((p) => p.id === r.model.provider_id && p.enabled),
   );
 
-  const classRoutes = (["opus", "sonnet", "haiku"] as const)
-    .map((cls) => ({ cls, members: classMembers(rows, config.providers, cls) }))
+  const classRoutes = TIERS
+    .map((tier) => ({ cls: tier, members: classMembers(rows, config.providers, tier) }))
     .filter((r) => r.members.length > 0);
 
   const reviewCandidates = config.classifier.enabled

@@ -166,7 +166,7 @@ function Shell() {
   );
 
   const unclassified = useMemo(
-    () => snapshot?.config.models.filter((m) => m.class === null) ?? [],
+    () => snapshot?.config.models.filter((m) => m.tier === null) ?? [],
     [snapshot],
   );
 
