@@ -6,11 +6,12 @@
 
 use serde_json::{json, Map, Value};
 
+use super::apply_content_policy;
 use super::{SseFrame, StreamEncoder, StreamParser};
 use crate::error::{Error, Result};
 use crate::ir::{
-    ChatRequest, ChatResponse, ContentBlock, Dialect, MediaSource, Message, Role, StopReason,
-    StreamEvent, SystemPart, ToolChoice, ToolDef, ToolResultPart, Usage,
+    classify_media, ChatRequest, ChatResponse, ContentBlock, Dialect, MediaSource, Message, Role,
+    StopReason, StreamEvent, SystemPart, ToolChoice, ToolDef, ToolResultPart, Usage,
 };
 
 // ---------------------------------------------------------------- request in
@@ -82,20 +83,23 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
                             is_error: false,
                         });
                     } else if let Some(data) = part.get("inlineData") {
-                        blocks.push(ContentBlock::Image {
-                            source: MediaSource::Base64 {
-                                media_type: data
-                                    .get("mimeType")
-                                    .and_then(Value::as_str)
-                                    .unwrap_or("application/octet-stream")
-                                    .to_string(),
-                                data: data
-                                    .get("data")
-                                    .and_then(Value::as_str)
-                                    .unwrap_or_default()
-                                    .to_string(),
+                        let mime = data
+                            .get("mimeType")
+                            .and_then(Value::as_str)
+                            .unwrap_or("application/octet-stream");
+                        let payload = data
+                            .get("data")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string();
+                        blocks.push(classify_media(
+                            mime,
+                            MediaSource::Base64 {
+                                media_type: mime.to_string(),
+                                data: payload,
                             },
-                        });
+                            None,
+                        ));
                     }
                 }
             }
@@ -189,9 +193,26 @@ pub fn encode_request(req: &ChatRequest, upstream_model: &str) -> Result<Value> 
                     MediaSource::Base64 { media_type, data } => parts.push(json!({
                         "inlineData": {"mimeType": media_type, "data": data}
                     })),
-                    MediaSource::Url { url } => parts.push(json!({"text": format!(
-                        "[Image URL: {url} -- URL images not supported by Gemini API, use base64 encoding instead]"
-                    )})),
+                    MediaSource::Url { .. } => {
+                        match apply_content_policy(req.unsupported_content_policy, b)? {
+                            Some(replacement) => {
+                                if let Some(text) = replacement.as_text() {
+                                    parts.push(json!({"text": text}));
+                                }
+                            }
+                            None => {} // Drop
+                        }
+                    }
+                    MediaSource::Reference { .. } => {
+                        match apply_content_policy(req.unsupported_content_policy, b)? {
+                            Some(replacement) => {
+                                if let Some(text) = replacement.as_text() {
+                                    parts.push(json!({"text": text}));
+                                }
+                            }
+                            None => {} // Drop
+                        }
+                    }
                 },
                 ContentBlock::ToolUse { id, name, input } => parts.push(json!({
                     "functionCall": {"id": id, "name": name, "args": input}
@@ -215,8 +236,79 @@ pub fn encode_request(req: &ChatRequest, upstream_model: &str) -> Result<Value> 
                     }));
                 }
                 ContentBlock::Thinking { .. }
-                | ContentBlock::RedactedThinking { .. }
-                | ContentBlock::Document { .. } => {}
+                | ContentBlock::RedactedThinking { .. } => {}
+                // Gemini supports inlineData for any MIME type.
+                ContentBlock::Document { source } => match source {
+                    MediaSource::Base64 {
+                        media_type,
+                        data,
+                    } => parts.push(json!({
+                        "inlineData": {"mimeType": media_type, "data": data}
+                    })),
+                    MediaSource::Url { .. } => {
+                        match apply_content_policy(req.unsupported_content_policy, b)? {
+                            Some(replacement) => {
+                                if let Some(t) = replacement.as_text() {
+                                    parts.push(json!({"text": t}));
+                                }
+                            }
+                            None => {} // Drop
+                        }
+                    }
+                    MediaSource::Reference { .. } => {
+                        match apply_content_policy(req.unsupported_content_policy, b)? {
+                            Some(replacement) => {
+                                if let Some(t) = replacement.as_text() {
+                                    parts.push(json!({"text": t}));
+                                }
+                            }
+                            None => {} // Drop
+                        }
+                    }
+                },
+                ContentBlock::File {
+                    source, media_type, ..
+                }
+                | ContentBlock::Audio {
+                    source, media_type, ..
+                }
+                | ContentBlock::Video {
+                    source, media_type, ..
+                } => match source {
+                    MediaSource::Base64 { data, .. } => parts.push(json!({
+                        "inlineData": {"mimeType": media_type, "data": data}
+                    })),
+                    MediaSource::Url { .. } => {
+                        match apply_content_policy(req.unsupported_content_policy, b)? {
+                            Some(replacement) => {
+                                if let Some(t) = replacement.as_text() {
+                                    parts.push(json!({"text": t}));
+                                }
+                            }
+                            None => {} // Drop
+                        }
+                    }
+                    MediaSource::Reference { .. } => {
+                        match apply_content_policy(req.unsupported_content_policy, b)? {
+                            Some(replacement) => {
+                                if let Some(t) = replacement.as_text() {
+                                    parts.push(json!({"text": t}));
+                                }
+                            }
+                            None => {} // Drop
+                        }
+                    }
+                },
+                // Citation and Annotation have no Gemini equivalent.
+                ContentBlock::Citation { .. } | ContentBlock::Annotation { .. } => {
+                    if let Some(replacement) =
+                        apply_content_policy(req.unsupported_content_policy, b)?
+                    {
+                        if let Some(t) = replacement.as_text() {
+                            parts.push(json!({"text": t}));
+                        }
+                    }
+                }
             }
         }
         contents.push(json!({"role": role, "parts": parts}));
@@ -359,6 +451,7 @@ pub fn decode_response(body: Value) -> Result<ChatResponse> {
         stop_reason,
         stop_sequence: None,
         usage,
+        passthrough: Map::new(),
     })
 }
 

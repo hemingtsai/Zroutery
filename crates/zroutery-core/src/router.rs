@@ -13,6 +13,7 @@ use crate::circuit_breaker::{CircuitBreaker, CircuitBreakerConfig, CircuitState}
 use crate::config::{ClassifierConfig, ModelTier, ModelEntry, ProviderConfig, RoutingConfig, RoutingStrategy};
 use crate::election::Election;
 use crate::error::{Error, Result};
+use crate::ir::Capability;
 use crate::registry::{Registry, Resolution};
 
 /// Round robin cursor key for the classifier pool, which is not a tier.
@@ -111,7 +112,12 @@ impl Router {
     }
 
     /// Build the ordered list of attempts for a resolved model id.
-    pub fn plan(&self, registry: &Registry, resolution: &Resolution) -> Result<Vec<Candidate>> {
+    pub fn plan(
+        &self,
+        registry: &Registry,
+        resolution: &Resolution,
+        required_capabilities: &[Capability],
+    ) -> Result<Vec<Candidate>> {
         let routing = &registry.config().routing;
         match resolution {
             Resolution::Direct(id) => {
@@ -122,7 +128,13 @@ impl Router {
                 }
                 Ok(vec![Candidate::new(entry, provider, false)])
             }
-            Resolution::Tier(tier) => self.plan_tier(registry, *tier, routing),
+            Resolution::Tier(tier) => self.plan_tier(
+                registry,
+                *tier,
+                routing,
+                required_capabilities,
+                routing.capability_filter,
+            ),
         }
     }
 
@@ -188,6 +200,10 @@ impl Router {
             config.failover,
             config.max_attempts,
             "classifier".to_string(),
+            // Classifier requests don't carry capability requirements.
+            &[],
+            false,
+            false,
         )
     }
 
@@ -196,6 +212,8 @@ impl Router {
         registry: &Registry,
         tier: ModelTier,
         routing: &RoutingConfig,
+        required_capabilities: &[Capability],
+        capability_filter: bool,
     ) -> Result<Vec<Candidate>> {
         let members = registry.tier_members(tier);
         if members.is_empty() {
@@ -210,6 +228,9 @@ impl Router {
             routing.failover,
             routing.max_attempts,
             tier.virtual_id().to_string(),
+            required_capabilities,
+            capability_filter,
+            routing.strict_capability_filter,
         )
     }
 
@@ -236,7 +257,45 @@ impl Router {
         failover: bool,
         max_attempts: u32,
         pool_name: String,
+        required_capabilities: &[Capability],
+        capability_filter: bool,
+        strict: bool,
     ) -> Result<Vec<Candidate>> {
+        // Capability filtering: exclude models whose declared capabilities
+        // don't satisfy the request's requirements.  When `strict` is false,
+        // fall back to the unfiltered list so the request is not rejected just
+        // because no model declares every capability.  When `strict` is true,
+        // return an error so that requests with unsatisfiable capability
+        // requirements fail fast instead of being routed to a model that
+        // cannot handle them.
+        let members = if capability_filter && !required_capabilities.is_empty() {
+            let filtered: Vec<&ModelEntry> = members
+                .iter()
+                .copied()
+                .filter(|m| satisfies_capabilities(m, required_capabilities))
+                .collect();
+            if filtered.is_empty() {
+                if strict {
+                    tracing::warn!(
+                        required = ?required_capabilities,
+                        pool = %pool_name,
+                        "no candidate satisfies required capabilities; strict mode rejects"
+                    );
+                    return Err(Error::NoCandidate(pool_name));
+                }
+                tracing::warn!(
+                    required = ?required_capabilities,
+                    pool = %pool_name,
+                    "no candidate satisfies required capabilities; falling back to unfiltered list"
+                );
+                members
+            } else {
+                filtered
+            }
+        } else {
+            members
+        };
+
         let (closed, half_open): (Vec<&ModelEntry>, Vec<&ModelEntry>) = {
             let health = crate::sync::lock(&self.health);
             let mut closed = Vec::new();
@@ -528,6 +587,14 @@ fn by_priority<'a>(members: &[&'a ModelEntry]) -> Vec<&'a ModelEntry> {
     sorted
 }
 
+/// Check if a model's capabilities satisfy the request's requirements.
+///
+/// Every listed capability must be present on the model. With a typed enum,
+/// there are no unknown capabilities — every variant is known.
+fn satisfies_capabilities(model: &ModelEntry, required: &[Capability]) -> bool {
+    required.iter().all(|cap| model.capabilities.supports(*cap))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -561,7 +628,7 @@ mod tests {
             ModelEntry::for_upstream("p2", "b", Some(ModelTier::Standard)),
         ]));
         let router = Router::new();
-        let plan = router.plan(&r, &Resolution::Direct("p1-a".into())).unwrap();
+        let plan = router.plan(&r, &Resolution::Direct("p1-a".into()), &[]).unwrap();
         assert_eq!(ids(&plan), vec!["p1-a"]);
     }
 
@@ -576,7 +643,7 @@ mod tests {
         let r = reg(cfg);
         let router = Router::new();
         let plan = router
-            .plan(&r, &Resolution::Tier(ModelTier::Reasoning))
+            .plan(&r, &Resolution::Tier(ModelTier::Reasoning), &[])
             .unwrap();
         assert_eq!(ids(&plan), vec!["p1-first", "p2-second"]);
     }
@@ -590,7 +657,7 @@ mod tests {
         cfg.routing.failover = false;
         let r = reg(cfg);
         let plan = Router::new()
-            .plan(&r, &Resolution::Tier(ModelTier::Fast))
+            .plan(&r, &Resolution::Tier(ModelTier::Fast), &[])
             .unwrap();
         assert_eq!(plan.len(), 1);
     }
@@ -599,7 +666,7 @@ mod tests {
     fn empty_tier_is_an_error() {
         let r = reg(cfg_with(vec![ModelEntry::for_upstream("p1", "a", None)]));
         let err = Router::new()
-            .plan(&r, &Resolution::Tier(ModelTier::Standard))
+            .plan(&r, &Resolution::Tier(ModelTier::Standard), &[])
             .unwrap_err();
         assert!(matches!(err, Error::NoCandidate(_)));
     }
@@ -617,7 +684,7 @@ mod tests {
 
         assert_eq!(
             ids(&router
-                .plan(&r, &Resolution::Tier(ModelTier::Standard))
+                .plan(&r, &Resolution::Tier(ModelTier::Standard), &[])
                 .unwrap())[0],
             "p1-bad"
         );
@@ -628,7 +695,7 @@ mod tests {
         }
         assert!(router.is_cooling("p1-bad"));
         let plan = router
-            .plan(&r, &Resolution::Tier(ModelTier::Standard))
+            .plan(&r, &Resolution::Tier(ModelTier::Standard), &[])
             .unwrap();
         assert_eq!(ids(&plan), vec!["p2-good", "p1-bad"]);
         assert!(!plan[0].degraded && plan[1].degraded);
@@ -646,7 +713,7 @@ mod tests {
         assert_eq!(router.health_snapshot()[0].state, CircuitState::Closed);
         assert_eq!(
             ids(&router
-                .plan(&r, &Resolution::Tier(ModelTier::Standard))
+                .plan(&r, &Resolution::Tier(ModelTier::Standard), &[])
                 .unwrap())[0],
             "p1-bad"
         );
@@ -725,7 +792,7 @@ mod tests {
             router.report_failure("p1-only", &Error::Timeout(1), &routing);
         }
         let plan = router
-            .plan(&r, &Resolution::Tier(ModelTier::Reasoning))
+            .plan(&r, &Resolution::Tier(ModelTier::Reasoning), &[])
             .unwrap();
         assert_eq!(ids(&plan), vec!["p1-only"]);
         assert!(plan[0].degraded);
@@ -798,11 +865,11 @@ mod tests {
         let r = reg(cfg);
         let router = Router::new();
         let first = ids(&router
-            .plan(&r, &Resolution::Tier(ModelTier::Fast))
+            .plan(&r, &Resolution::Tier(ModelTier::Fast), &[])
             .unwrap())[0]
             .to_string();
         let second = ids(&router
-            .plan(&r, &Resolution::Tier(ModelTier::Fast))
+            .plan(&r, &Resolution::Tier(ModelTier::Fast), &[])
             .unwrap())[0]
             .to_string();
         assert_ne!(first, second);
@@ -822,7 +889,7 @@ mod tests {
         router.report_success("p2-fast", 300, &routing);
         assert_eq!(
             ids(&router
-                .plan(&r, &Resolution::Tier(ModelTier::Standard))
+                .plan(&r, &Resolution::Tier(ModelTier::Standard), &[])
                 .unwrap())[0],
             "p2-fast"
         );
@@ -842,7 +909,7 @@ mod tests {
         let mut heavy_first = 0;
         for _ in 0..400 {
             let plan = router
-                .plan(&r, &Resolution::Tier(ModelTier::Reasoning))
+                .plan(&r, &Resolution::Tier(ModelTier::Reasoning), &[])
                 .unwrap();
             assert_eq!(
                 plan.len(),
@@ -994,7 +1061,7 @@ mod tests {
 
         // ...and the main tier plan demotes glm for main requests as well.
         let plan = router
-            .plan(&r, &Resolution::Tier(ModelTier::Standard))
+            .plan(&r, &Resolution::Tier(ModelTier::Standard), &[])
             .unwrap();
         assert_eq!(ids(&plan)[0], "p2-main");
     }
@@ -1033,5 +1100,108 @@ mod tests {
         let second = ids(&router.plan_classifier(&r, &r.config().classifier).unwrap())[0]
             .to_string();
         assert_ne!(first, second);
+    }
+
+    // ---------------------------------------- capability filter (strict/soft)
+
+    #[test]
+    fn soft_fallback_keeps_unfiltered_candidates_when_none_match() {
+        // Both models lack vision; the request requires vision.
+        // With strict=false (default), the soft fallback kicks in and both
+        // are kept.
+        let cfg = cfg_with(vec![
+            ModelEntry::for_upstream("p1", "text-only", Some(ModelTier::Standard))
+                .with_priority(0),
+            ModelEntry::for_upstream("p2", "also-text", Some(ModelTier::Standard))
+                .with_priority(1),
+        ]);
+        let r = reg(cfg);
+        let router = Router::new();
+        let plan = router
+            .plan(&r, &Resolution::Tier(ModelTier::Standard), &[Capability::Vision])
+            .unwrap();
+        assert_eq!(ids(&plan), vec!["p1-text-only", "p2-also-text"]);
+    }
+
+    #[test]
+    fn strict_mode_rejects_when_no_candidate_satisfies_capability() {
+        let mut cfg = cfg_with(vec![
+            ModelEntry::for_upstream("p1", "text-only", Some(ModelTier::Standard)),
+            ModelEntry::for_upstream("p2", "also-text", Some(ModelTier::Standard)),
+        ]);
+        cfg.routing.strict_capability_filter = true;
+        let r = reg(cfg);
+        let router = Router::new();
+        let err = router
+            .plan(&r, &Resolution::Tier(ModelTier::Standard), &[Capability::Vision])
+            .unwrap_err();
+        assert!(matches!(err, Error::NoCandidate(_)));
+    }
+
+    #[test]
+    fn capability_filter_prefers_matching_candidates() {
+        // p1 has vision, p2 does not. A request requiring vision should
+        // prefer p1, regardless of strict mode.
+        let mut cfg = cfg_with(vec![
+            ModelEntry::for_upstream("p1", "vision", Some(ModelTier::Standard)).with_priority(10),
+            ModelEntry::for_upstream("p2", "no-vision", Some(ModelTier::Standard)).with_priority(0),
+        ]);
+        cfg.models[0].capabilities.vision = true;
+        cfg.routing.strict_capability_filter = true;
+        let r = reg(cfg);
+        let router = Router::new();
+        let plan = router
+            .plan(&r, &Resolution::Tier(ModelTier::Standard), &[Capability::Vision])
+            .unwrap();
+        assert_eq!(ids(&plan), vec!["p1-vision"]);
+    }
+
+    #[test]
+    fn strict_mode_accepts_when_at_least_one_candidate_matches() {
+        let mut cfg = cfg_with(vec![
+            ModelEntry::for_upstream("p1", "vision", Some(ModelTier::Standard)).with_priority(0),
+            ModelEntry::for_upstream("p2", "no-vision", Some(ModelTier::Standard)).with_priority(5),
+        ]);
+        cfg.models[0].capabilities.vision = true;
+        cfg.routing.strict_capability_filter = true;
+        let r = reg(cfg);
+        let router = Router::new();
+        let plan = router
+            .plan(&r, &Resolution::Tier(ModelTier::Standard), &[Capability::Vision])
+            .unwrap();
+        // Only the vision-capable model should be returned.
+        assert_eq!(ids(&plan), vec!["p1-vision"]);
+    }
+
+    #[test]
+    fn strict_mode_ignores_when_no_capabilities_required() {
+        let mut cfg = cfg_with(vec![
+            ModelEntry::for_upstream("p1", "a", Some(ModelTier::Standard)),
+            ModelEntry::for_upstream("p2", "b", Some(ModelTier::Standard)),
+        ]);
+        cfg.routing.strict_capability_filter = true;
+        let r = reg(cfg);
+        let router = Router::new();
+        let plan = router
+            .plan(&r, &Resolution::Tier(ModelTier::Standard), &[])
+            .unwrap();
+        assert_eq!(plan.len(), 2);
+    }
+
+    #[test]
+    fn capability_filter_disabled_ignores_requirements() {
+        let mut cfg = cfg_with(vec![
+            ModelEntry::for_upstream("p1", "a", Some(ModelTier::Standard)),
+            ModelEntry::for_upstream("p2", "b", Some(ModelTier::Standard)),
+        ]);
+        // capability_filter defaults to true, but let's explicitly disable it.
+        cfg.routing.capability_filter = false;
+        let r = reg(cfg);
+        let router = Router::new();
+        let plan = router
+            .plan(&r, &Resolution::Tier(ModelTier::Standard), &[Capability::Vision])
+            .unwrap();
+        // Both candidates survive: the filter is off.
+        assert_eq!(plan.len(), 2);
     }
 }

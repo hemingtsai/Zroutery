@@ -7,12 +7,14 @@
 
 use serde_json::{json, Map, Value};
 
+use super::apply_content_policy;
 use super::reasoning_bridge;
 use super::ProviderQuirks;
 use crate::error::{Error, Result};
 use crate::ir::{
     ChatRequest, ChatResponse, ContentBlock, Dialect, MediaSource, Message, Role, StopReason,
-    StreamEvent, SystemPart, ThinkingConfig, ToolChoice, ToolDef, ToolResultPart, Usage,
+    StreamEvent, SystemPart, ThinkingConfig, ToolChoice, ToolDef, ToolResultPart,
+    UnsupportedContentPolicy, Usage,
 };
 
 use super::{SseFrame, StreamEncoder, StreamParser};
@@ -306,9 +308,101 @@ fn decode_user_content(v: Option<&Value>) -> Result<Vec<ContentBlock>> {
                             });
                         }
                     }
-                    Some("input_audio") | Some("file") => {
-                        // Not representable in the Anthropic dialect; drop it
-                        // rather than failing the request.
+                    Some("input_audio") => {
+                        if let Some(audio) = p.get("input_audio") {
+                            let format = audio
+                                .get("format")
+                                .and_then(Value::as_str)
+                                .unwrap_or("wav");
+                            let data = audio
+                                .get("data")
+                                .and_then(Value::as_str)
+                                .unwrap_or_default();
+                            out.push(ContentBlock::Audio {
+                                source: MediaSource::Base64 {
+                                    media_type: format!("audio/{format}"),
+                                    data: data.to_string(),
+                                },
+                                media_type: format!("audio/{format}"),
+                            });
+                        }
+                    }
+                    Some("file") => {
+                        // Support both legacy {file: {data, url, media_type}} and
+                        // Responses-style {file_data, file_url, file_id, filename, media_type}
+                        let (source, media_type, name) = if let Some(file_obj) = p.get("file") {
+                            // Legacy nested format
+                            let data = file_obj.get("data").and_then(Value::as_str);
+                            let url = file_obj.get("url").and_then(Value::as_str);
+                            let mt = file_obj
+                                .get("media_type")
+                                .or_else(|| file_obj.get("mime_type"))
+                                .and_then(Value::as_str)
+                                .unwrap_or("application/octet-stream")
+                                .to_string();
+                            let n = file_obj
+                                .get("filename")
+                                .or_else(|| file_obj.get("name"))
+                                .and_then(Value::as_str)
+                                .map(String::from);
+                            let src = if let Some(d) = data {
+                                MediaSource::Base64 {
+                                    media_type: mt.clone(),
+                                    data: d.to_string(),
+                                }
+                            } else if let Some(u) = url {
+                                MediaSource::Url {
+                                    url: u.to_string(),
+                                }
+                            } else {
+                                continue; // No data or url
+                            };
+                            (src, mt, n)
+                        } else {
+                            // Responses-style flat format
+                            let mt = p
+                                .get("media_type")
+                                .and_then(Value::as_str)
+                                .unwrap_or("application/octet-stream")
+                                .to_string();
+                            let n = p
+                                .get("filename")
+                                .and_then(Value::as_str)
+                                .map(String::from);
+                            if let Some(d) = p.get("file_data").and_then(Value::as_str) {
+                                (
+                                    MediaSource::Base64 {
+                                        media_type: mt.clone(),
+                                        data: d.to_string(),
+                                    },
+                                    mt,
+                                    n,
+                                )
+                            } else if let Some(u) = p.get("file_url").and_then(Value::as_str) {
+                                (
+                                    MediaSource::Url {
+                                        url: u.to_string(),
+                                    },
+                                    mt,
+                                    n,
+                                )
+                            } else if let Some(id) = p.get("file_id").and_then(Value::as_str) {
+                                (
+                                    MediaSource::Reference {
+                                        id: id.to_string(),
+                                    },
+                                    mt,
+                                    n,
+                                )
+                            } else {
+                                continue;
+                            }
+                        };
+                        out.push(ContentBlock::File {
+                            source,
+                            media_type,
+                            name,
+                        });
                     }
                     _ => {}
                 }
@@ -376,7 +470,7 @@ pub fn encode_request_with(
         }));
     }
     for m in &req.messages {
-        encode_message_into(m, &mut messages, req.source_dialect == Dialect::OpenAI);
+        encode_message_into(m, &mut messages, req.source_dialect == Dialect::OpenAI, req.unsupported_content_policy)?;
     }
     body.insert("messages".into(), Value::Array(messages));
 
@@ -466,7 +560,12 @@ pub fn encode_request_with(
 
 /// Anthropic keeps tool results inside user messages; OpenAI needs separate
 /// `role: "tool"` messages, and they must come before any plain user text.
-fn encode_message_into(m: &Message, out: &mut Vec<Value>, echo_reasoning: bool) {
+fn encode_message_into(
+    m: &Message,
+    out: &mut Vec<Value>,
+    echo_reasoning: bool,
+    policy: UnsupportedContentPolicy,
+) -> Result<()> {
     match m.role {
         Role::Assistant => {
             let mut text = String::new();
@@ -496,6 +595,19 @@ fn encode_message_into(m: &Message, out: &mut Vec<Value>, echo_reasoning: bool) 
                     ContentBlock::RedactedThinking { .. } if echo_reasoning => {
                         if let Some(item) = reasoning_bridge::encode_thinking_block(b) {
                             reasoning_items.push(item);
+                        }
+                    }
+                    // Audio is not representable in assistant messages.
+                    ContentBlock::Audio { .. }
+                    | ContentBlock::Document { .. }
+                    | ContentBlock::File { .. }
+                    | ContentBlock::Video { .. }
+                    | ContentBlock::Citation { .. }
+                    | ContentBlock::Annotation { .. } => {
+                        if let Some(replacement) = apply_content_policy(policy, b)? {
+                            if let Some(t) = replacement.as_text() {
+                                text.push_str(t);
+                            }
                         }
                     }
                     _ => {}
@@ -549,6 +661,37 @@ fn encode_message_into(m: &Message, out: &mut Vec<Value>, echo_reasoning: bool) 
                         "type": "image_url",
                         "image_url": {"url": source.to_data_url()},
                     })),
+                    ContentBlock::Audio { source, media_type } => {
+                        let format = super::normalize_audio_format(media_type);
+                        match source {
+                            MediaSource::Base64 { data, .. } => {
+                                parts.push(json!({
+                                    "type": "input_audio",
+                                    "input_audio": {"data": data, "format": format},
+                                }));
+                            }
+                            MediaSource::Url { .. } | MediaSource::Reference { .. } => {
+                                // URL audio cannot be represented as input_audio;
+                                // apply the policy.
+                                if let Some(replacement) = apply_content_policy(policy, b)? {
+                                    if let Some(t) = replacement.as_text() {
+                                        parts.push(json!({"type": "text", "text": t}));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    ContentBlock::Document { .. }
+                    | ContentBlock::File { .. }
+                    | ContentBlock::Video { .. }
+                    | ContentBlock::Citation { .. }
+                    | ContentBlock::Annotation { .. } => {
+                        if let Some(replacement) = apply_content_policy(policy, b)? {
+                            if let Some(t) = replacement.as_text() {
+                                parts.push(json!({"type": "text", "text": t}));
+                            }
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -568,6 +711,7 @@ fn encode_message_into(m: &Message, out: &mut Vec<Value>, echo_reasoning: bool) 
             }
         }
     }
+    Ok(())
 }
 
 // -------------------------------------------------------------------- responses
@@ -704,6 +848,7 @@ pub fn decode_response(body: Value) -> Result<ChatResponse> {
             .unwrap_or(StopReason::Unknown),
         stop_sequence: None,
         usage: decode_usage(body.get("usage")),
+        passthrough: Map::new(),
     })
 }
 

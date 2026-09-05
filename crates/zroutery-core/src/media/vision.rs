@@ -138,6 +138,7 @@ mod tests {
             stop_reason: crate::ir::StopReason::EndTurn,
             stop_sequence: None,
             usage: Default::default(),
+            passthrough: serde_json::Map::new(),
         };
         resp.content.push(ContentBlock::text("  a picture of a cat.  "));
         assert_eq!(description_text(&resp), "a picture of a cat.");

@@ -59,6 +59,7 @@ fn response_round_trips_through_ir() {
             output_tokens: 2,
             ..Usage::default()
         },
+        passthrough: serde_json::Map::new(),
     };
     let wire = encode_response(&resp);
     let decoded = decode_response(wire).unwrap();

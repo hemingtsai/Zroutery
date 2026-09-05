@@ -13,7 +13,7 @@ use crate::budget::Budget;
 use crate::circuit_breaker::CircuitBreakerConfig;
 use crate::classifier::DetectionConfig;
 use crate::election::ScoringConfig;
-use crate::ir::Dialect;
+use crate::ir::{CapabilityState, Dialect};
 pub use crate::protocol::ProviderQuirks;
 
 /// Capability tier a model belongs to. Assigned manually by the user; Zroutery
@@ -174,6 +174,47 @@ pub struct ModelCapabilities {
     pub video: bool,
     #[serde(default)]
     pub files: bool,
+}
+
+impl ModelCapabilities {
+    /// Whether this model supports the given capability.
+    pub fn supports(&self, cap: crate::ir::Capability) -> bool {
+        match cap {
+            crate::ir::Capability::Vision => self.vision,
+            crate::ir::Capability::Tools => self.tools,
+            crate::ir::Capability::Thinking => self.thinking,
+            crate::ir::Capability::StructuredOutput => self.structured_output,
+            crate::ir::Capability::Audio => self.audio,
+            crate::ir::Capability::Video => self.video,
+            crate::ir::Capability::Files => self.files,
+        }
+    }
+
+    /// Tri-state capability check.
+    ///
+    /// With the current boolean fields this returns [`CapabilityState::Supported`]
+    /// when the field is `true` and [`CapabilityState::Unknown`] when it is `false`.
+    /// [`CapabilityState::Unsupported`] is not produced by the boolean config
+    /// surface — it exists for future use when models can explicitly declare
+    /// non-support.
+    pub fn capability_state(&self, cap: crate::ir::Capability) -> CapabilityState {
+        if self.supports(cap) {
+            CapabilityState::Supported
+        } else {
+            CapabilityState::Unknown
+        }
+    }
+
+    /// True if all capabilities are false (default/unset).
+    pub fn is_empty(&self) -> bool {
+        !self.vision
+            && !self.tools
+            && !self.thinking
+            && !self.structured_output
+            && !self.audio
+            && !self.video
+            && !self.files
+    }
 }
 
 /// Upstream wire protocol of a provider.
@@ -564,6 +605,20 @@ pub struct RoutingConfig {
     /// How tiers and virtual model ids are presented to clients.
     #[serde(default)]
     pub naming_style: NamingStyle,
+    /// Filter candidates by capability match before routing.
+    /// When enabled and the request carries `required_capabilities`,
+    /// candidates whose capabilities don't satisfy the requirements are
+    /// excluded. If no candidate passes, the unfiltered list is used as a
+    /// soft fallback so the request is not rejected just because no model
+    /// declares every capability.
+    #[serde(default = "default_true")]
+    pub capability_filter: bool,
+    /// When `true`, requests whose `required_capabilities` no candidate
+    /// satisfies are rejected with an error instead of falling back to the
+    /// unfiltered candidate list.  Only meaningful when `capability_filter`
+    /// is also `true`.
+    #[serde(default)]
+    pub strict_capability_filter: bool,
 }
 
 impl RoutingConfig {
@@ -599,6 +654,8 @@ impl Default for RoutingConfig {
             scoring: ScoringConfig::default(),
             elect_on_start: true,
             naming_style: NamingStyle::default(),
+            capability_filter: true,
+            strict_capability_filter: false,
         }
     }
 }
@@ -1829,5 +1886,67 @@ mod tests {
         let mut p5 = ProviderConfig::new("p5", "P5", ProviderKind::OpenAICompatible);
         p5.base_url = "https://api.openai.com/v1".to_string();
         assert_eq!(p5.models_url(), "https://api.openai.com/v1/models");
+    }
+
+    #[test]
+    fn capability_state_true_is_supported() {
+        let caps = ModelCapabilities {
+            vision: true,
+            ..ModelCapabilities::default()
+        };
+        assert_eq!(
+            caps.capability_state(crate::ir::Capability::Vision),
+            CapabilityState::Supported,
+        );
+    }
+
+    #[test]
+    fn capability_state_false_is_unknown() {
+        let caps = ModelCapabilities::default();
+        assert_eq!(
+            caps.capability_state(crate::ir::Capability::Vision),
+            CapabilityState::Unknown,
+        );
+        assert_eq!(
+            caps.capability_state(crate::ir::Capability::Tools),
+            CapabilityState::Unknown,
+        );
+    }
+
+    #[test]
+    fn capability_state_serde_round_trip() {
+        for state in [
+            CapabilityState::Supported,
+            CapabilityState::Unsupported,
+            CapabilityState::Unknown,
+        ] {
+            let json = serde_json::to_string(&state).unwrap();
+            let back: CapabilityState = serde_json::from_str(&json).unwrap();
+            assert_eq!(state, back);
+        }
+    }
+
+    #[test]
+    fn strict_capability_filter_defaults_to_false() {
+        let cfg = RoutingConfig::default();
+        assert!(!cfg.strict_capability_filter);
+    }
+
+    #[test]
+    fn strict_capability_filter_serde_round_trip() {
+        let cfg = RoutingConfig {
+            strict_capability_filter: true,
+            ..RoutingConfig::default()
+        };
+        let json = serde_json::to_string(&cfg).unwrap();
+        assert!(json.contains("\"strict_capability_filter\":true"));
+        let back: RoutingConfig = serde_json::from_str(&json).unwrap();
+        assert!(back.strict_capability_filter);
+    }
+
+    #[test]
+    fn strict_capability_filter_absent_in_json_defaults_false() {
+        let cfg: RoutingConfig = serde_json::from_str("{}").unwrap();
+        assert!(!cfg.strict_capability_filter);
     }
 }

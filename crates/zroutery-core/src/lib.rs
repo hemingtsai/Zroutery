@@ -57,9 +57,10 @@ pub use config::{
 pub use election::{TierElection, Election, Measurement, Ranked, ScoringConfig};
 pub use error::{Error, Result};
 pub use ir::{
-    ChatRequest, ChatResponse, ContentBlock, Dialect, Message, Role, StopReason, StreamEvent,
-    SystemPart, ToolChoice, Usage,
+    Capability, ChatRequest, ChatResponse, ContentBlock, Dialect, Message, Role, StopReason,
+    StreamEvent, SystemPart, ToolChoice, Usage,
 };
+pub use ir::response::{ResponseStatus, ResponseStore, StoredResponse};
 pub use query::{RequestKind, SideQueryKind};
 pub use registry::{Registry, Resolution};
 pub use router::{Candidate, Router};

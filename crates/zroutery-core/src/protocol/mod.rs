@@ -11,9 +11,68 @@ pub mod reasoning_bridge;
 pub mod responses;
 
 use crate::error::{Error, Result};
-use crate::ir::{ChatRequest, ChatResponse, Dialect, StreamEvent};
+use crate::ir::{ChatRequest, ChatResponse, ContentBlock, Dialect, StreamEvent, UnsupportedContentPolicy};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+/// Apply the unsupported content policy to a content block that the target
+/// protocol cannot represent.
+///
+/// Returns `Ok(Some(replacement))` for `Placeholder`, `Ok(None)` for `Drop`
+/// and `Transform`, or `Err` for `Reject`.
+pub fn apply_content_policy(
+    policy: UnsupportedContentPolicy,
+    block: &ContentBlock,
+) -> Result<Option<ContentBlock>> {
+    match policy {
+        UnsupportedContentPolicy::Reject => {
+            let label = content_label(block);
+            Err(Error::invalid(format!(
+                "unsupported content type `{label}` for the target provider"
+            )))
+        }
+        UnsupportedContentPolicy::Placeholder => {
+            let label = content_label(block);
+            Ok(Some(ContentBlock::text(format!("[Unsupported: {label}]"))))
+        }
+        UnsupportedContentPolicy::Transform | UnsupportedContentPolicy::Drop => Ok(None),
+    }
+}
+
+/// Normalize an audio MIME type to the format string OpenAI expects.
+///
+/// `audio/mpeg` and `audio/mp3` both become `"mp3"`, `audio/x-wav` becomes
+/// `"wav"`, and anything else is passed through after stripping the `audio/`
+/// prefix. A bare string without a prefix defaults to `"wav"`.
+pub(crate) fn normalize_audio_format(media_type: &str) -> &str {
+    match media_type.strip_prefix("audio/") {
+        Some("mpeg") | Some("mp3") => "mp3",
+        Some("wav") | Some("x-wav") => "wav",
+        Some(other) => other,
+        None => "wav",
+    }
+}
+
+/// Human-readable label for a content block, used in placeholder text and
+/// error messages.
+fn content_label(block: &ContentBlock) -> String {
+    match block {
+        ContentBlock::Document { .. } => "document".into(),
+        ContentBlock::File {
+            name, media_type, ..
+        } => format!("file ({})", name.as_deref().unwrap_or(media_type)),
+        ContentBlock::Audio { media_type, .. } => format!("audio ({media_type})"),
+        ContentBlock::Video { media_type, .. } => format!("video ({media_type})"),
+        ContentBlock::Citation { text, .. } => {
+            let preview = if text.len() > 50 { &text[..50] } else { text };
+            format!("citation: {preview}")
+        }
+        ContentBlock::Annotation {
+            annotation_type, ..
+        } => format!("annotation ({annotation_type})"),
+        _ => "unsupported content".into(),
+    }
+}
 
 /// Returns `true`; the default for the quirks that are on unless disabled.
 fn yes() -> bool {
