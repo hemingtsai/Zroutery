@@ -487,9 +487,7 @@ impl Router {
     }
 
     pub fn is_cooling(&self, model_id: &str) -> bool {
-        self.health
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+        crate::sync::lock(&self.health)
             .get(model_id)
             .map(|h| h.breaker.state() == CircuitState::Open)
             .unwrap_or(false)

@@ -114,3 +114,23 @@ fn openai_encoder_emits_bridged_reasoning_items_for_history() {
     assert!(reasoning.is_array());
     assert_eq!(reasoning[0]["type"], "reasoning");
 }
+
+#[test]
+fn large_thinking_text_round_trips() {
+    // Create a 100KB thinking text
+    let large_text = "x".repeat(100_000);
+    let block = ContentBlock::Thinking {
+        text: large_text.clone(),
+        signature: Some("sig-large".to_string()),
+    };
+    let item = encode_thinking_block(&block).expect("large thinking should encode");
+    let decoded = decode_reasoning_item(&item).expect("valid bridge should decode");
+    assert_eq!(decoded, block);
+    // Verify no data loss
+    if let ContentBlock::Thinking { text, .. } = decoded {
+        assert_eq!(text.len(), 100_000);
+        assert_eq!(text, large_text);
+    } else {
+        panic!("expected Thinking block");
+    }
+}

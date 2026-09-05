@@ -185,6 +185,57 @@ fn rectifier_retry_success_does_not_touch_circuit_breaker_health() {
 }
 
 #[test]
+fn thinking_budget_at_exact_minimum_boundary() {
+    // budget_tokens = 2048 which halves to exactly 1024 (the minimum).
+    // This should still apply the rectification since 1024 != 2048.
+    let r = ThinkingBudgetRectifier;
+    let mut body = json!({"thinking": {"type": "enabled", "budget_tokens": 2048}});
+    let result = r.rectify(&mut body);
+    assert!(result.applied, "halving 2048 to 1024 should apply");
+    assert_eq!(body["thinking"]["budget_tokens"], 1024);
+
+    // But 1024 itself should NOT apply (already at minimum).
+    let mut at_min = json!({"thinking": {"type": "enabled", "budget_tokens": 1024}});
+    let result = r.rectify(&mut at_min);
+    assert!(!result.applied, "1024 is already the minimum");
+    assert_eq!(at_min["thinking"]["budget_tokens"], 1024);
+}
+
+#[test]
+fn rectifiers_apply_in_config_order() {
+    // Build the full rectifier set from config.
+    let config = zroutery_core::config::RectifierConfig::default();
+    let rectifiers = zroutery_core::rectifier::from_config(&config);
+    assert_eq!(rectifiers.len(), 3, "all three rectifiers should be enabled by default");
+
+    // The expected order is: thinking_signature, media_fallback, thinking_budget.
+    assert_eq!(rectifiers[0].name(), "thinking_signature");
+    assert_eq!(rectifiers[1].name(), "media_fallback");
+    assert_eq!(rectifiers[2].name(), "thinking_budget");
+
+    // Construct an error message that matches both thinking_signature and
+    // thinking_budget.  "thinking budget cannot be modified" contains
+    // "thinking"+"cannot be modified" (signature rectifier) and
+    // "budget"+"thinking" (budget rectifier).
+    let error = upstream("thinking budget cannot be modified", 400);
+    let body = json!({"messages": []});
+
+    assert!(
+        rectifiers[0].should_apply(&error, &body),
+        "thinking_signature should match"
+    );
+    assert!(
+        rectifiers[2].should_apply(&error, &body),
+        "thinking_budget should also match"
+    );
+    // media_fallback should NOT match (no image/vision keywords).
+    assert!(
+        !rectifiers[1].should_apply(&error, &body),
+        "media_fallback should not match"
+    );
+}
+
+#[test]
 fn rectifier_retry_failure_becomes_the_failure_that_is_reported() {
     let router = Router::new();
     let routing = zroutery_core::RoutingConfig::default();

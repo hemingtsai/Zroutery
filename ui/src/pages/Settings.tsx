@@ -100,7 +100,7 @@ export default function Settings({
 
   const parseScope = (value: string): BudgetScope => {
     const [kind, rest] = value.split(":");
-    if (kind === "class") return { kind: "class", class: rest as ModelClass };
+    if (kind === "class" && CLASSES.includes(rest as ModelClass)) return { kind: "class", class: rest as ModelClass };
     if (kind === "provider") return { kind: "provider", id: rest };
     return { kind: "global" };
   };

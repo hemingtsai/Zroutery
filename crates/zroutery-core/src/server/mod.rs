@@ -607,7 +607,17 @@ async fn auth_layer(
         _ => false,
     };
     if !ok {
-        return error_response(Dialect::Anthropic, &Error::Unauthorized);
+        let path = request.uri().path();
+        let dialect = if path.contains("messages") || path.contains("count_tokens") {
+            Dialect::Anthropic
+        } else if path.contains("responses") {
+            Dialect::OpenAIResponses
+        } else if path.contains("generateContent") {
+            Dialect::Gemini
+        } else {
+            Dialect::OpenAI
+        };
+        return error_response(dialect, &Error::Unauthorized);
     }
     next.run(request).await
 }

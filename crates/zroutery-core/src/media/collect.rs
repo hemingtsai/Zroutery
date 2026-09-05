@@ -18,6 +18,13 @@ pub enum ImageSlot {
 }
 
 /// Every image slot in the request, in traversal order.
+///
+/// Returns owned `MediaSource` values (cloned from the request).  A
+/// drain-based API that takes ownership of the images and leaves
+/// placeholders would avoid the clone cost, but it would require the
+/// caller to reconstruct the request afterwards.  For the current
+/// desktop-proxy use case the clone is negligible compared to the
+/// upstream round-trip.
 pub fn collect(req: &ChatRequest) -> Vec<(ImageSlot, MediaSource)> {
     let mut found = Vec::new();
     for (message_index, message) in req.messages.iter().enumerate() {

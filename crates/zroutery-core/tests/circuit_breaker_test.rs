@@ -152,3 +152,51 @@ fn reset_returns_to_closed_and_clears_metrics() {
     assert_eq!(b.failed_requests(), 0);
     assert!(b.allow_request());
 }
+
+#[test]
+fn closed_opens_at_exact_error_rate_threshold() {
+    // With error_rate_threshold=0.5 and min_requests=10,
+    // exactly 5/10 failures should open the breaker.
+    let b = CircuitBreaker::new(CircuitBreakerConfig {
+        failure_threshold: 100,
+        success_threshold: 2,
+        timeout_secs: 0,
+        error_rate_threshold: 0.5,
+        min_requests: 10,
+    });
+    for _ in 0..5 {
+        assert!(b.allow_request());
+        b.record_failure();
+    }
+    for _ in 0..4 {
+        assert!(b.allow_request());
+        b.record_success();
+    }
+    assert_eq!(b.state(), CircuitState::Closed);
+    // 10th request: 5/10 = exactly 0.5, which should trigger (>= threshold).
+    assert!(b.allow_request());
+    b.record_failure();
+    assert_eq!(b.state(), CircuitState::Open);
+}
+
+#[test]
+fn record_failure_on_open_is_noop() {
+    let b = breaker(1);
+    b.allow_request();
+    b.record_failure();
+    assert_eq!(b.state(), CircuitState::Open);
+    let failures_before = b.consecutive_failures();
+    b.record_failure(); // should be no-op on consecutive_failures
+    assert_eq!(b.consecutive_failures(), failures_before);
+    assert_eq!(b.state(), CircuitState::Open);
+}
+
+#[test]
+fn record_success_on_open_is_noop() {
+    let b = breaker(1);
+    b.allow_request();
+    b.record_failure();
+    assert_eq!(b.state(), CircuitState::Open);
+    b.record_success(); // should be no-op
+    assert_eq!(b.state(), CircuitState::Open);
+}

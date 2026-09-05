@@ -78,6 +78,14 @@ async fn mock_openai_chat(State(mock): State<Mock>, Json(body): Json<Value>) -> 
             .into_response();
     }
 
+    if model.starts_with("fail-eyes") {
+        return (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": {"message": "vision model exploded"}})),
+        )
+            .into_response();
+    }
+
     let content = if model.starts_with("eyes") {
         "A chart with a rising line, titled \"Revenue\"."
     } else {
@@ -318,5 +326,62 @@ async fn vision_off_sends_the_image_as_is() {
         serde_json::to_string(&first["messages"][0]).unwrap()
     );
 
+    h.shutdown().await;
+}
+
+fn base64_image_request() -> Value {
+    json!({
+        "model": "sonnet-class",
+        "max_tokens": 128,
+        "messages": [{
+            "role": "user",
+            "content": [
+                {"type": "image", "source": {
+                    "type": "base64",
+                    "media_type": "image/png",
+                    "data": "iVBORw0KGgo="}},
+                {"type": "text", "text": "what is this"}
+            ]
+        }]
+    })
+}
+
+#[tokio::test]
+async fn vision_model_failure_uses_placeholder() {
+    let (addr, mock) = start_mock().await;
+    let vision = VisionConfig {
+        enabled: true,
+        model: Some("p-fail-eyes-model".into()),
+        ..VisionConfig::default()
+    };
+    // blind target -> preflight vision -> vision model fails -> placeholder used
+    let h = Harness::start(config_for(addr, vision, false), mock).await;
+    let resp = h.post(image_request()).await;
+    assert_eq!(resp.status(), 200);
+    let bodies = h.mock.bodies();
+    // Should have: vision attempt (500), then blind-model with placeholder
+    let message = serde_json::to_string(&bodies.last().unwrap()).unwrap();
+    assert!(message.contains("[Unsupported Image]"), "placeholder: {message}");
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn base64_image_gets_described_in_preflight() {
+    let (addr, mock) = start_mock().await;
+    let vision = VisionConfig {
+        enabled: true,
+        model: Some("p-eyes-model".into()),
+        ..VisionConfig::default()
+    };
+    let h = Harness::start(config_for(addr, vision, false), mock).await;
+    let resp = h.post(base64_image_request()).await;
+    assert_eq!(resp.status(), 200);
+    let bodies = h.mock.bodies();
+    // eyes-model got the description request, blind-model got text
+    assert_eq!(bodies.len(), 2, "describe + answer");
+    assert_eq!(bodies[0]["model"], "eyes-model");
+    assert_eq!(bodies[1]["model"], "blind-model");
+    let blind_prompt = bodies[1]["messages"][0]["content"].as_str().unwrap();
+    assert!(blind_prompt.contains("[Image description:"), "got: {blind_prompt}");
     h.shutdown().await;
 }

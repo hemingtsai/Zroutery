@@ -2,6 +2,12 @@
 //!
 //! Nothing is written to disk: the log is a bounded ring buffer, so prompts and
 //! completions never outlive the process.
+//!
+//! All mutable state lives behind a single `Mutex`.  For the current
+//! desktop-proxy use case (one user, moderate request rate) this is
+//! unlikely to be a bottleneck.  If contention ever matters, the
+//! per-model and per-kind maps could be sharded behind `RwLock`s or
+//! moved to a lock-free structure.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::Mutex;

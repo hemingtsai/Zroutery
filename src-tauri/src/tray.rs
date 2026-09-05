@@ -26,7 +26,6 @@ struct Labels {
     copy_url: &'static str,
     copy_token: &'static str,
     quit: &'static str,
-    stop: &'static str,
 }
 
 fn labels() -> Labels {
@@ -38,7 +37,6 @@ fn labels() -> Labels {
             copy_url: "复制 Base URL",
             copy_token: "复制令牌",
             quit: "退出 Zroutery",
-            stop: "停止网关",
         }
     } else {
         Labels {
@@ -48,7 +46,6 @@ fn labels() -> Labels {
             copy_url: "Copy base URL",
             copy_token: "Copy API token",
             quit: "Quit Zroutery",
-            stop: "Stop gateway",
         }
     }
 }

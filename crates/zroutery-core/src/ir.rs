@@ -134,6 +134,17 @@ impl MediaSource {
         if let Some(rest) = url.strip_prefix("data:") {
             if let Some((meta, data)) = rest.split_once(",") {
                 let media_type = meta.trim_end_matches(";base64").to_string();
+                // Reject data: URLs with control characters in the media type:
+                // newlines and null bytes can be used to smuggle content past
+                // naive parsers and have no valid use in a MIME type.
+                if media_type.contains('\n')
+                    || media_type.contains('\r')
+                    || media_type.contains('\0')
+                {
+                    return MediaSource::Url {
+                        url: url.to_string(),
+                    };
+                }
                 if meta.ends_with(";base64") {
                     return MediaSource::Base64 {
                         media_type: if media_type.is_empty() {

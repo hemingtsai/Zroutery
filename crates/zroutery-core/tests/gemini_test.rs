@@ -139,3 +139,39 @@ fn stream_encoder_emits_text_and_completion() {
     assert!(frames[0].data.contains("\"text\":\"hi\""));
     assert!(frames[1].data.contains("\"finishReason\":\"STOP\""));
 }
+
+#[test]
+fn request_decode_missing_model_returns_error() {
+    let body = json!({
+        "contents": [{"role": "user", "parts": [{"text": "hello"}]}]
+    });
+    let result = decode_request(body);
+    assert!(result.is_err());
+}
+
+#[test]
+fn stream_parser_handles_malformed_data_gracefully() {
+    let mut parser = GeminiStreamParser::new("gemini-2.0-flash");
+    // Empty candidates array
+    let result = parser.push(&zroutery_core::protocol::SseFrame {
+        event: None,
+        data: "{\"candidates\":[]}".to_string(),
+    });
+    // Should not panic
+    assert!(result.is_ok());
+
+    // Missing candidates key
+    let result = parser.push(&zroutery_core::protocol::SseFrame {
+        event: None,
+        data: "{\"usageMetadata\":{}}".to_string(),
+    });
+    assert!(result.is_ok());
+
+    // Invalid JSON
+    let result = parser.push(&zroutery_core::protocol::SseFrame {
+        event: None,
+        data: "not json".to_string(),
+    });
+    // Should return error, not panic
+    assert!(result.is_err());
+}

@@ -13,6 +13,14 @@ use crate::error::Error;
 pub struct ThinkingSignatureRectifier;
 
 impl Rectifier for ThinkingSignatureRectifier {
+    /// The keyword matching below is intentionally broad: it catches every
+    /// known provider phrasing for a bad thinking signature, but it could
+    /// false-positive on a model error that merely *mentions* the words
+    /// "signature" and "thinking" without being about this problem.  A
+    /// future improvement would be to check `body.source_dialect` (or the
+    /// provider kind) and restrict the patterns to the dialects that
+    /// actually support thinking blocks, so a generic OpenAI upstream
+    /// error message never triggers the rectifier.
     fn should_apply(&self, error: &Error, _body: &Value) -> bool {
         let msg = error_text(error);
         contains_all(&msg, &["invalid", "signature", "thinking", "block"])
