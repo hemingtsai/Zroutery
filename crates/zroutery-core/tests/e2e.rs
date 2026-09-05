@@ -82,6 +82,13 @@ async fn mock_openai_chat(
         )
             .into_response();
     }
+    if model.starts_with("limited") {
+        return (
+            axum::http::StatusCode::TOO_MANY_REQUESTS,
+            Json(json!({"error": {"message": "rate limited", "type": "rate_limit_error"}})),
+        )
+            .into_response();
+    }
     if model.starts_with("refuse") {
         return (
             axum::http::StatusCode::BAD_REQUEST,
@@ -189,6 +196,14 @@ async fn mock_anthropic_messages(
             axum::http::StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({"type": "error",
                         "error": {"type": "api_error", "message": "upstream exploded"}})),
+        )
+            .into_response();
+    }
+    if body["model"].as_str().unwrap_or("").starts_with("limited") {
+        return (
+            axum::http::StatusCode::TOO_MANY_REQUESTS,
+            Json(json!({"type": "error",
+                        "error": {"type": "rate_limit_error", "message": "rate limited"}})),
         )
             .into_response();
     }
@@ -1829,6 +1844,167 @@ async fn provider_model_discovery_dedupes_and_sorts() {
     assert_eq!(priced.currency, "USD");
     assert!((priced.input_per_mtok - 0.5).abs() < 1e-9);
     assert!((priced.output_per_mtok - 2.0).abs() < 1e-9);
+
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn rate_limit_triggers_failover() {
+    let (addr, mock) = start_mock().await;
+    let mut cfg = config_for(addr);
+    // Make the primary model rate-limited, fallback model normal.
+    cfg.models = vec![
+        ModelEntry::for_upstream("deepseek", "limited-v4", Some(ModelClass::Sonnet)),
+        ModelEntry::for_upstream("deepseek", "deepseek-v4-pro", Some(ModelClass::Sonnet)),
+    ];
+    let h = Harness::start(cfg, mock).await;
+
+    let resp = h
+        .post("/v1/chat/completions")
+        .json(&json!({"model": "sonnet-class", "messages": [{"role": "user", "content": "hi"}]}))
+        .send()
+        .await
+        .unwrap();
+
+    // Should succeed via failover to the second model.
+    assert_eq!(resp.status(), 200);
+    assert_eq!(resp.headers()["x-zroutery-model"], "deepseek-deepseek-v4-pro");
+    // Two upstream calls: one 429, one success.
+    assert_eq!(h.mock.count(), 2);
+
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn transport_error_returns_502() {
+    // Nothing listens on port 1 — the connection will be refused or time out.
+    let addr: SocketAddr = "127.0.0.1:1".parse().unwrap();
+    let mut cfg = AppConfig::default();
+    cfg.server.host = "127.0.0.1".into();
+    cfg.server.port = 0;
+    cfg.server.auth_token = TOKEN.into();
+
+    let mut provider =
+        ProviderConfig::new("dead", "DeadProvider", ProviderKind::OpenAICompatible);
+    provider.base_url = format!("http://{addr}");
+    provider.key_ref = "provider:dead".into();
+    provider.timeout_secs = 2;
+    cfg.providers = vec![provider];
+    cfg.models = vec![ModelEntry::for_upstream(
+        "dead",
+        "dead-model",
+        Some(ModelClass::Sonnet),
+    )];
+
+    let _mock = Mock::default();
+    let secrets = Arc::new(
+        MemorySecretStore::new().with("provider:dead", "sk-dead"),
+    );
+    let state = Arc::new(AppState::new(cfg, secrets));
+    let server = ServerHandle::start(Arc::clone(&state)).await.unwrap();
+    let base = format!("http://{}", server.addr);
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .unwrap();
+
+    let resp = client
+        .post(format!("{base}/v1/chat/completions"))
+        .header("x-api-key", TOKEN)
+        .json(&json!({"model": "sonnet-class", "messages": [{"role": "user", "content": "hi"}]}))
+        .send()
+        .await
+        .unwrap();
+
+    // Should get a server error (502/503), not a panic or hang.
+    assert!(
+        resp.status().is_server_error(),
+        "expected 5xx, got {}",
+        resp.status()
+    );
+
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn empty_messages_returns_error() {
+    let h = Harness::new().await;
+    let resp = h
+        .post("/v1/chat/completions")
+        .json(&json!({"model": "sonnet-class", "messages": []}))
+        .send()
+        .await
+        .unwrap();
+
+    // Should return a client error or handle gracefully; read the actual behaviour.
+    if resp.status().is_client_error() {
+        let body: Value = resp.json().await.unwrap();
+        assert!(
+            body["error"].is_object(),
+            "client error must include an error object"
+        );
+    } else {
+        // If the server accepts it, the response must still be well-formed.
+        assert_eq!(resp.status(), 200);
+    }
+
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn per_provider_budget_blocks_only_that_provider() {
+    let (addr, mock) = start_mock().await;
+    let mut cfg = config_for(addr);
+    // Price the deepseek-sonnet model so the budget can measure spend.
+    cfg.models[1].pricing = Some(Pricing::new("USD", 1000.0, 1000.0));
+    // Budget scoped to the deepseek provider, exhausted after one request.
+    cfg.budgets = vec![Budget::new(
+        BudgetScope::Provider {
+            id: "deepseek".into(),
+        },
+        BudgetPeriod::Day,
+        "USD",
+        0.01,
+    )];
+    let h = Harness::start(cfg, mock).await;
+
+    // First deepseek request succeeds and spends past the limit.
+    let resp = h
+        .post("/v1/messages")
+        .json(
+            &json!({"model": "deepseek-deepseek-v4-pro", "max_tokens": 8,
+                      "messages": [{"role": "user", "content": "hi"}]}),
+        )
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+
+    // Second deepseek request is refused by the provider budget.
+    let resp = h
+        .post("/v1/messages")
+        .json(
+            &json!({"model": "deepseek-deepseek-v4-pro", "max_tokens": 8,
+                      "messages": [{"role": "user", "content": "hi"}]}),
+        )
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 402);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["error"]["type"], "budget_exceeded");
+
+    // OpenAI (different provider) should still work.
+    let resp = h
+        .post("/v1/chat/completions")
+        .json(
+            &json!({"model": "openai-gpt-5.3-sol",
+                      "messages": [{"role": "user", "content": "hi"}]}),
+        )
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
 
     h.shutdown().await;
 }

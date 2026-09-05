@@ -270,3 +270,15 @@ fn responses_response_round_trips_through_ir() {
     assert!(matches!(decoded.content[1], ContentBlock::ToolUse { .. }));
     assert_eq!(decoded.usage.input_tokens, 2);
 }
+
+#[test]
+fn request_decode_empty_input_array() {
+    let body = json!({
+        "model": "gpt-4",
+        "input": []
+    });
+    let result = decode_request(body);
+    // Should succeed with empty messages
+    assert!(result.is_ok());
+    assert!(result.unwrap().messages.is_empty());
+}

@@ -75,6 +75,30 @@ async fn mock_openai_chat(
         )
             .into_response();
     }
+    if model.starts_with("toolcall") {
+        // Return tool_calls instead of text content — no verdict to parse.
+        return Json(json!({
+            "id": "chatcmpl-mock",
+            "object": "chat.completion",
+ "created": 1,
+            "model": model,
+            "choices": [{"index": 0, "message": {
+                "role": "assistant",
+                "content": null,
+                "tool_calls": [{
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": "{\"city\": \"SH\"}"
+                    }
+                }]
+            },
+            "finish_reason": "tool_calls"}],
+            "usage": {"prompt_tokens": 11, "completion_tokens": 7}
+        }))
+        .into_response();
+    }
 
     let content = if model.starts_with("garbage") {
         // HTTP 200, model said something — just not a verdict. This is the
@@ -429,6 +453,27 @@ async fn routing_disabled_means_business_as_usual() {
     assert_eq!(resp.status(), 200);
     assert_eq!(resp.headers()["x-zroutery-model"], "zai-main-model");
     assert!(resp.headers().get("x-zroutery-classifier").is_none());
+
+    h.shutdown().await;
+}
+
+/// When a classifier candidate returns tool_calls instead of text content,
+/// the classifier should fail-closed (no verdict text = unparseable = fail over).
+#[tokio::test]
+async fn tool_calls_in_response_fail_closed() {
+    let (addr, mock) = start_mock().await;
+    let h = Harness::start(config_for(addr, &["toolcall-glm", "backup-glm"]), mock).await;
+
+    let resp = h.post(classifier_body()).await;
+    // The first candidate returned tool_calls (no verdict text), so it should
+    // fail over to the backup candidate which returns a proper verdict.
+    assert_eq!(resp.status(), 200);
+    assert_eq!(resp.headers()["x-zroutery-model"], "zai-backup-glm");
+
+    let bodies = h.mock.bodies();
+    assert_eq!(bodies.len(), 2, "tool_calls response must be retried");
+    assert_eq!(bodies[0]["model"], "toolcall-glm");
+    assert_eq!(bodies[1]["model"], "backup-glm");
 
     h.shutdown().await;
 }
