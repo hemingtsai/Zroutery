@@ -71,6 +71,7 @@ mod tests {
             role: crate::ir::Role::User,
             content: vec![ContentBlock::ToolResult {
                 tool_use_id: "tu".into(),
+                name: String::new(),
                 content: vec![
                     ToolResultPart::Text { text: "shot:".into() },
                     ToolResultPart::Image {

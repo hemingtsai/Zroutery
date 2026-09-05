@@ -199,7 +199,45 @@ fn encode_mode_for(kind: RequestKind) -> crate::upstream::EncodeMode {
 /// Images that cannot be described get the placeholder, never a silent drop:
 /// a text model that receives nothing where an image was has no way to know
 /// it is missing something.
+///
+/// The entire operation is bounded by a 30-second timeout to prevent
+/// unbounded latency when the vision model is slow. On timeout, any
+/// remaining images are replaced with the placeholder.
 async fn apply_vision_fallback(
+    state: &AppState,
+    req: &mut ChatRequest,
+    reason: &str,
+) {
+    let timeout = std::time::Duration::from_secs(30);
+    if tokio::time::timeout(timeout, apply_vision_fallback_inner(state, req, reason))
+        .await
+        .is_err()
+    {
+        // On timeout, apply placeholders to any images the inner loop
+        // did not reach yet so the request can still proceed.
+        let config = state.config();
+        let remaining = crate::media::collect::collect(req);
+        for (slot, _) in &remaining {
+            crate::media::transform::replace(
+                req,
+                slot,
+                &crate::media::transform::Replacement::Placeholder(
+                    config.vision.placeholder.clone(),
+                ),
+            );
+        }
+        tracing::warn!(
+            reason,
+            images = remaining.len(),
+            "vision fallback timed out after {}s; remaining images replaced with placeholder",
+            timeout.as_secs()
+        );
+    }
+}
+
+/// Inner implementation of the vision fallback, extracted so it can be
+/// wrapped in an aggregate timeout.
+async fn apply_vision_fallback_inner(
     state: &AppState,
     req: &mut ChatRequest,
     reason: &str,
@@ -392,15 +430,49 @@ async fn try_rectify_stream(
     state: &AppState,
     candidate: &Candidate,
     key: Option<&str>,
-    body: &Value,
+    req: &mut ChatRequest,
     error: &Error,
 ) -> std::result::Result<Option<crate::upstream::EventStream>, Error> {
+    // The reactive vision path: only when the upstream said "no images" and
+    // the request still carries them.
+    if state.config().vision.enabled
+        && MediaFallbackRectifier.should_apply(error, &serde_json::Value::Null)
+        && !crate::media::collect::collect(req).is_empty()
+    {
+        apply_vision_fallback(state, req, "upstream rejected media").await;
+        let key_owned = key.map(str::to_string);
+        if let Some(body) = reencode(candidate, req) {
+            match state
+                .upstream
+                .stream(
+                    &candidate.provider,
+                    key_owned.as_deref(),
+                    &body,
+                    &candidate.entry.upstream_model,
+                )
+                .await
+            {
+                Ok(events) => return Ok(Some(events)),
+                Err(e) => tracing::warn!(
+                    model = candidate.model_id(),
+                    "vision-repaired stream retry also failed: {e}"
+                ),
+            }
+        }
+    }
+
     let rectifiers = rectifier::from_config(&state.config().routing.rectifier);
     if rectifiers.is_empty() {
         return Ok(None);
     }
 
-    let mut current_body = body.clone();
+    // Rectifiers operate on the encoded body; re-encode the (possibly
+    // vision-repaired) request for them.
+    let base_body = match reencode(candidate, req) {
+        Some(body) => body,
+        None => return Ok(None),
+    };
+    let mut current_body = base_body.clone();
     let mut last_error: Option<Error> = None;
     let mut current_error: &Error = error;
 
@@ -707,6 +779,20 @@ async fn stream_chat(
         }
         let attempt_start = Instant::now();
 
+        // Preflight: a target known not to see gets the images described
+        // before the first byte leaves, so the attempt is not wasted on a
+        // rejection we could predict. Unknown capability is deliberately
+        // left alone — the upstream decides, and the rectifier reacts.
+        // And with vision fallback off entirely, nothing happens here: off
+        // means the request goes out as it came, promise kept.
+        let mut req = req.clone();
+        if state.config().vision.enabled && !candidate.entry.supports_vision {
+            let needs_vision = crate::media::collect::collect(&req);
+            if !needs_vision.is_empty() {
+                apply_vision_fallback(&state, &mut req, "preflight").await;
+            }
+        }
+
         let (key, body) = match prepare(&state, candidate, &req, mode) {
             Ok(v) => v,
             Err(e) => {
@@ -783,7 +869,7 @@ async fn stream_chat(
             Err(e) => {
                 // Rectifier cascade for handshake failures. A successful repaired
                 // stream is served to the client without reporting health.
-                match try_rectify_stream(&state, candidate, key.as_deref(), &body, &e).await {
+                match try_rectify_stream(&state, candidate, key.as_deref(), &mut req, &e).await {
                     Ok(Some(events)) => {
                         // The repaired stream is not a fresh half-open probe.
                         state.router.release_half_open_permit(candidate.model_id());

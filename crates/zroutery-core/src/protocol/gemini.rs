@@ -22,7 +22,7 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
     let model = obj
         .get("model")
         .and_then(Value::as_str)
-        .unwrap_or_default()
+        .ok_or_else(|| Error::invalid("model is required"))?
         .to_string();
     let mut req = ChatRequest::new(model, Dialect::Gemini);
 
@@ -68,6 +68,11 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
                         blocks.push(ContentBlock::ToolResult {
                             tool_use_id: response
                                 .get("id")
+                                .and_then(Value::as_str)
+                                .unwrap_or_default()
+                                .to_string(),
+                            name: response
+                                .get("name")
                                 .and_then(Value::as_str)
                                 .unwrap_or_default()
                                 .to_string(),
@@ -183,13 +188,16 @@ pub fn encode_request(req: &ChatRequest, upstream_model: &str) -> Result<Value> 
                     MediaSource::Base64 { media_type, data } => parts.push(json!({
                         "inlineData": {"mimeType": media_type, "data": data}
                     })),
-                    MediaSource::Url { url } => parts.push(json!({"text": url})),
+                    MediaSource::Url { url } => parts.push(json!({"text": format!(
+                        "[Image URL: {url} -- URL images not supported by Gemini API, use base64 encoding instead]"
+                    )})),
                 },
                 ContentBlock::ToolUse { id, name, input } => parts.push(json!({
                     "functionCall": {"id": id, "name": name, "args": input}
                 })),
                 ContentBlock::ToolResult {
                     tool_use_id,
+                    name,
                     content,
                     ..
                 } => {
@@ -202,7 +210,7 @@ pub fn encode_request(req: &ChatRequest, upstream_model: &str) -> Result<Value> 
                         .collect::<Vec<_>>()
                         .join("\n");
                     parts.push(json!({
-                        "functionResponse": {"id": tool_use_id, "name": "", "response": {"text": text}}
+                        "functionResponse": {"id": tool_use_id, "name": name, "response": {"text": text}}
                     }));
                 }
                 ContentBlock::Thinking { .. }
@@ -388,6 +396,7 @@ pub struct GeminiStreamParser {
     stopped: bool,
     next_index: u32,
     text_index: Option<u32>,
+    open_blocks: Vec<u32>,
     usage: Usage,
 }
 
@@ -399,6 +408,7 @@ impl GeminiStreamParser {
             stopped: false,
             next_index: 0,
             text_index: None,
+            open_blocks: Vec::new(),
             usage: Usage::default(),
         }
     }
@@ -457,6 +467,7 @@ impl StreamParser for GeminiStreamParser {
                                 let i = self.next_index;
                                 self.next_index += 1;
                                 self.text_index = Some(i);
+                                self.open_blocks.push(i);
                                 i
                             }
                         };
@@ -465,9 +476,13 @@ impl StreamParser for GeminiStreamParser {
                             text: text.to_string(),
                         });
                     } else if let Some(call) = part.get("functionCall") {
+                        // Close the open text block if any.
+                        if let Some(text_idx) = self.text_index.take() {
+                            self.open_blocks.retain(|i| *i != text_idx);
+                            out.push(StreamEvent::BlockStop { index: text_idx });
+                        }
                         let index = self.next_index;
                         self.next_index += 1;
-                        self.text_index = None;
                         out.push(StreamEvent::ToolUseStart {
                             index,
                             id: call
@@ -487,6 +502,8 @@ impl StreamParser for GeminiStreamParser {
                                 partial_json: args.to_string(),
                             });
                         }
+                        // Gemini sends functionCall as a complete block, so close it.
+                        out.push(StreamEvent::BlockStop { index });
                     }
                 }
             }
@@ -509,11 +526,21 @@ impl StreamParser for GeminiStreamParser {
     fn finish(&mut self) -> Vec<StreamEvent> {
         if self.started && !self.stopped {
             self.stopped = true;
-            vec![StreamEvent::Stop {
+            let mut out = Vec::new();
+            // Emit BlockStop for any remaining open blocks.
+            if let Some(text_idx) = self.text_index.take() {
+                self.open_blocks.retain(|i| *i != text_idx);
+                out.push(StreamEvent::BlockStop { index: text_idx });
+            }
+            for index in std::mem::take(&mut self.open_blocks) {
+                out.push(StreamEvent::BlockStop { index });
+            }
+            out.push(StreamEvent::Stop {
                 stop_reason: StopReason::EndTurn,
                 stop_sequence: None,
                 usage: self.usage,
-            }]
+            });
+            out
         } else {
             Vec::new()
         }
@@ -525,6 +552,8 @@ impl StreamParser for GeminiStreamParser {
 pub struct GeminiStreamEncoder {
     model: String,
     done: bool,
+    /// Buffered tool calls awaiting completion: (index, id, name, accumulated args).
+    tool_buffers: Vec<(u32, String, String, String)>,
 }
 
 impl GeminiStreamEncoder {
@@ -532,7 +561,30 @@ impl GeminiStreamEncoder {
         Self {
             model: model.to_string(),
             done: false,
+            tool_buffers: Vec::new(),
         }
+    }
+
+    /// Flush all buffered tool calls as complete functionCall frames.
+    fn flush_tools(&mut self) -> Vec<SseFrame> {
+        let mut out = Vec::new();
+        for (_, id, name, args) in self.tool_buffers.drain(..) {
+            let parsed_args: Value = if args.is_empty() {
+                json!({})
+            } else {
+                serde_json::from_str(&args).unwrap_or_else(|_| json!({"__raw": args}))
+            };
+            out.push(SseFrame {
+                event: None,
+                data: json!({
+                    "candidates": [{"content": {"role": "model", "parts": [{
+                        "functionCall": {"id": id, "name": name, "args": parsed_args}
+                    }]}}]
+                })
+                .to_string(),
+            });
+        }
+        out
     }
 }
 
@@ -543,49 +595,67 @@ impl StreamEncoder for GeminiStreamEncoder {
                 self.model = model.clone();
                 Vec::new()
             }
-            StreamEvent::TextDelta { text, .. } => vec![SseFrame {
-                event: None,
-                data: json!({
-                    "candidates": [{"content": {"role": "model", "parts": [{"text": text}]}}]
-                })
-                .to_string(),
-            }],
-            StreamEvent::ToolUseStart { id, name, .. } => vec![SseFrame {
-                event: None,
-                data: json!({
-                    "candidates": [{"content": {"role": "model", "parts": [{
-                        "functionCall": {"id": id, "name": name, "args": {}}
-                    }]}}]
-                })
-                .to_string(),
-            }],
+            StreamEvent::TextDelta { text, .. } => {
+                // Flush any buffered tool calls before emitting text.
+                let mut out = self.flush_tools();
+                out.push(SseFrame {
+                    event: None,
+                    data: json!({
+                        "candidates": [{"content": {"role": "model", "parts": [{"text": text}]}}]
+                    })
+                    .to_string(),
+                });
+                out
+            }
+            StreamEvent::ToolUseStart { index, id, name, .. } => {
+                // Flush any previously buffered tool calls.
+                let out = self.flush_tools();
+                self.tool_buffers.push((*index, id.clone(), name.clone(), String::new()));
+                out
+            }
             StreamEvent::ToolUseDelta {
                 partial_json,
                 index,
                 ..
             } => {
-                let parsed = serde_json::from_str::<Value>(partial_json)
-                    .unwrap_or_else(|_| json!({"__raw": partial_json}));
-                vec![SseFrame {
-                    event: None,
-                    data: json!({
-                        "candidates": [{"content": {"role": "model", "parts": [{
-                            "functionCall": {"id": format!("call_{index}"), "name": "", "args": parsed}
-                        }]}}]
-                    })
-                    .to_string(),
-                }]
+                if let Some(buf) = self.tool_buffers.iter_mut().find(|(i, _, _, _)| *i == *index) {
+                    buf.3.push_str(partial_json);
+                }
+                Vec::new()
+            }
+            StreamEvent::BlockStop { index, .. } => {
+                // Flush the tool buffer for this index if it exists.
+                let mut out = Vec::new();
+                if let Some(pos) = self.tool_buffers.iter().position(|(i, _, _, _)| *i == *index) {
+                    let (_, id, name, args) = self.tool_buffers.remove(pos);
+                    let parsed_args: Value = if args.is_empty() {
+                        json!({})
+                    } else {
+                        serde_json::from_str(&args).unwrap_or_else(|_| json!({"__raw": args}))
+                    };
+                    out.push(SseFrame {
+                        event: None,
+                        data: json!({
+                            "candidates": [{"content": {"role": "model", "parts": [{
+                                "functionCall": {"id": id, "name": name, "args": parsed_args}
+                            }]}}]
+                        })
+                        .to_string(),
+                    });
+                }
+                out
             }
             StreamEvent::Stop {
                 stop_reason, usage, ..
             } => {
+                let mut out = self.flush_tools();
                 self.done = true;
                 let finish_reason = match stop_reason {
                     StopReason::MaxTokens => "MAX_TOKENS",
                     StopReason::Refusal => "SAFETY",
                     _ => "STOP",
                 };
-                vec![SseFrame {
+                out.push(SseFrame {
                     event: None,
                     data: json!({
                         "candidates": [{
@@ -600,7 +670,8 @@ impl StreamEncoder for GeminiStreamEncoder {
                         }
                     })
                     .to_string(),
-                }]
+                });
+                out
             }
             _ => Vec::new(),
         }
@@ -611,13 +682,15 @@ impl StreamEncoder for GeminiStreamEncoder {
             return Vec::new();
         }
         self.done = true;
-        vec![SseFrame {
+        let mut out = self.flush_tools();
+        out.push(SseFrame {
             event: None,
             data: json!({
                 "candidates": [{"content": {"role": "model", "parts": []}, "finishReason": "STOP"}]
             })
             .to_string(),
-        }]
+        });
+        out
     }
 
     fn error(&mut self, err: &Error) -> Vec<SseFrame> {

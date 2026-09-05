@@ -70,6 +70,7 @@ pub enum ContentBlock {
     },
     ToolResult {
         tool_use_id: String,
+        name: String,
         content: Vec<ToolResultPart>,
         is_error: bool,
     },
@@ -302,7 +303,7 @@ impl ChatRequest {
                 + t.input_schema.to_string().chars().count();
         }
         // ~3.4 chars per token averaged over mixed CJK/latin text, plus overhead.
-        ((chars as f32 / 3.4).ceil() as u32) + 8 * self.messages.len() as u32
+        ((chars as f64 / 3.4).ceil() as u32) + 8 * self.messages.len() as u32
     }
 }
 
@@ -329,7 +330,7 @@ pub struct Usage {
 
 impl Usage {
     pub fn total(&self) -> u32 {
-        self.input_tokens + self.output_tokens
+        self.input_tokens.saturating_add(self.output_tokens)
     }
 }
 

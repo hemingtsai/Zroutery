@@ -90,6 +90,7 @@ mod tests {
             role: Role::User,
             content: vec![ContentBlock::ToolResult {
                 tool_use_id: "tu".into(),
+                name: String::new(),
                 content: vec![ToolResultPart::Image {
                     source: MediaSource::from_url("https://example.com/s.png"),
                 }],
