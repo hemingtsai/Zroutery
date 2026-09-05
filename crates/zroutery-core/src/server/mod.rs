@@ -782,9 +782,10 @@ fn model_json(info: &crate::registry::ModelInfo) -> Value {
             "virtual": info.virtual_model,
             "member_count": info.member_count,
             "provider": info.provider_name,
-            "supports_tools": info.supports_tools,
-            "supports_vision": info.supports_vision,
-            "supports_thinking": info.supports_thinking,
+            "supports_tools": info.capabilities.tools,
+            "supports_vision": info.capabilities.vision,
+            "supports_thinking": info.capabilities.thinking,
+            "capabilities": info.capabilities,
         }
     })
 }

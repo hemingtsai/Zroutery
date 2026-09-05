@@ -37,7 +37,7 @@ pub fn resolve(config: &AppConfig) -> Option<VisionTarget> {
         return None;
     }
     let entry = config.model(model_id)?;
-    if !entry.enabled || !entry.supports_vision {
+    if !entry.enabled || !entry.capabilities.vision {
         return None;
     }
     let provider = config.provider(&entry.provider_id)?;
@@ -100,7 +100,7 @@ mod tests {
             "vision-model",
             Some(ModelTier::Fast),
         ));
-        cfg.models[0].supports_vision = true;
+        cfg.models[0].capabilities.vision = true;
         cfg.vision.enabled = vision.is_some();
         cfg.vision.model = vision.map(str::to_string);
         cfg
@@ -120,7 +120,7 @@ mod tests {
 
         // A model that cannot see is not a vision fallback.
         let mut blind = with.clone();
-        blind.models[0].supports_vision = false;
+        blind.models[0].capabilities.vision = false;
         assert!(resolve(&blind).is_none());
 
         // A dangling reference resolves to nothing, not an error.

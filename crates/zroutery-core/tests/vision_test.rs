@@ -154,8 +154,8 @@ fn config_for(mock: SocketAddr, vision: VisionConfig, blind_supports_vision: boo
         ModelEntry::for_upstream("p", "blind-model", Some(ModelTier::Standard)),
         ModelEntry::for_upstream("p", "eyes-model", Some(ModelTier::Fast)),
     ];
-    cfg.models[0].supports_vision = blind_supports_vision;
-    cfg.models[1].supports_vision = true;
+    cfg.models[0].capabilities.vision = blind_supports_vision;
+    cfg.models[1].capabilities.vision = true;
     cfg.vision = vision;
     cfg
 }

@@ -7,6 +7,7 @@ import {
   type BudgetPeriod,
   type BudgetScope,
   type ModelTier,
+  type NamingStyle,
   type Snapshot,
 } from "../api";
 import {
@@ -54,7 +55,7 @@ export default function Settings({
   const visionCapable = modelRows(snapshot).filter(
     (r) =>
       r.model.enabled &&
-      r.model.supports_vision &&
+      r.model.capabilities.vision &&
       config.providers.find((p) => p.id === r.model.provider_id)?.enabled,
   );
   const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
@@ -98,6 +99,14 @@ export default function Settings({
     void save((cfg) => {
       const next = structuredClone(cfg);
       Object.assign(next.routing.scoring, patch);
+      return next;
+    });
+  };
+
+  const patchRouting = (patch: Partial<AppConfig["routing"]>) => {
+    void save((cfg) => {
+      const next = structuredClone(cfg);
+      Object.assign(next.routing, patch);
       return next;
     });
   };
@@ -487,7 +496,7 @@ ${t("settings.snippet_comment")}`}
               {snapshot.budgets.map((status) => {
                 const b = status.budget;
                 const over = status.used >= 1;
-                const scope = budgetScopeText(t, b.scope);
+                const scope = budgetScopeText(t, b.scope, config.routing.naming_style);
                 return (
                   <tr key={b.id} className={over ? "row-warn" : ""}>
                     <td>{scope}</td>
@@ -517,7 +526,7 @@ ${t("settings.snippet_comment")}`}
                           { value: "reject", label: t("budget.reject") },
                           ...TIERS.map((c) => ({
                             value: c as ModelTier,
-                            label: t("budget.degrade", { id: virtualId(c) }),
+                            label: t("budget.degrade", { id: virtualId(c, config.routing.naming_style) }),
                           })),
                         ]}
                       />
@@ -559,7 +568,7 @@ ${t("settings.snippet_comment")}`}
               onChange={(scope) => setBudgetDraft({ ...budgetDraft, scope })}
               options={[
                 { value: "global", label: t("scope.global") },
-                ...TIERS.map((c) => ({ value: `tier:${c}`, label: virtualId(c) })),
+                ...TIERS.map((c) => ({ value: `tier:${c}`, label: virtualId(c, config.routing.naming_style) })),
                 ...config.providers.map((p) => ({
                   value: `provider:${p.id}`,
                   label: t("scope.provider", { id: p.name }),
@@ -614,7 +623,7 @@ ${t("settings.snippet_comment")}`}
                   <td>
                     <code>{from}</code>
                   </td>
-                  <td>{virtualId(to)}</td>
+                  <td>{virtualId(to, config.routing.naming_style)}</td>
                   <td>
                     <Button kind="ghost" onClick={() => removeAlias(from)}>
                       {t("common.remove")}
@@ -639,7 +648,7 @@ ${t("settings.snippet_comment")}`}
               ariaLabel={t("settings.f_class")}
               value={aliasDraft.to}
               onChange={(to) => setAliasDraft({ ...aliasDraft, to })}
-              options={TIERS.map((c) => ({ value: c, label: virtualId(c) }))}
+              options={TIERS.map((c) => ({ value: c, label: virtualId(c, config.routing.naming_style) }))}
             />
           </Field>
           <div className="field-actions">
@@ -647,6 +656,24 @@ ${t("settings.snippet_comment")}`}
               {t("settings.add_alias")}
             </Button>
           </div>
+        </div>
+
+        <h3 style={{ margin: "10px 0 0", fontSize: 11, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+          {t("settings.naming_style")}
+        </h3>
+        <div className="controls">
+          <Field label={t("settings.naming_style")}>
+            <Segment<NamingStyle>
+              ariaLabel={t("settings.naming_style")}
+              value={config.routing.naming_style}
+              onChange={(naming_style) => patchRouting({ naming_style })}
+              options={[
+                { value: "internal", label: t("settings.naming_internal") },
+                { value: "anthropic", label: t("settings.naming_anthropic") },
+                { value: "openai", label: t("settings.naming_openai") },
+              ]}
+            />
+          </Field>
         </div>
 
         <h3 style={{ margin: "10px 0 0", fontSize: 11, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
@@ -708,6 +735,7 @@ ${t("settings.snippet_comment")}`}
 function budgetScopeText(
   t: ReturnType<typeof useI18n>["t"],
   scope: BudgetScope,
+  style: NamingStyle = "internal",
 ): string {
   switch (scope.kind) {
     case "global":
@@ -715,6 +743,6 @@ function budgetScopeText(
     case "provider":
       return t("scope.provider", { id: scope.id });
     case "tier":
-      return virtualId(scope.tier);
+      return virtualId(scope.tier, style);
   }
 }

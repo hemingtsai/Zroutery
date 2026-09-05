@@ -6,7 +6,7 @@
 //! * The cost of a request is only known once it has finished, so a budget is a
 //!   line-crossing detector, not a pre-authorisation. The request that crosses the
 //!   line completes; the next one is stopped. Overshoot is bounded by one request
-//!   per class, and pretending otherwise would need a token estimate the providers
+//!   per tier, and pretending otherwise would need a token estimate the providers
 //!   do not agree on.
 //! * A guardrail that forgets is not a guardrail, so the ledger is persisted. The
 //!   request log is deliberately in memory only, which makes it the wrong place to

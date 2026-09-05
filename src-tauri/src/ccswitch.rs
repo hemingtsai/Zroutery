@@ -405,7 +405,7 @@ mod tests {
     }
 
     #[test]
-    fn tier_defaults_become_class_members() {
+    fn tier_defaults_become_tier_members() {
         let env = env_block(json!({
             "ANTHROPIC_BASE_URL": "https://relay.example/v1",
             "ANTHROPIC_AUTH_TOKEN": "sk-x",

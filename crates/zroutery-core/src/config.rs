@@ -63,14 +63,26 @@ impl ModelTier {
 
     pub fn from_virtual_id(id: &str) -> Option<ModelTier> {
         match id {
-            "fast-class" => Some(ModelTier::Fast),
-            "standard-class" => Some(ModelTier::Standard),
-            "reasoning-class" => Some(ModelTier::Reasoning),
-            "frontier-class" => Some(ModelTier::Frontier),
-            // Backward compat
-            "haiku-class" => Some(ModelTier::Fast),
-            "sonnet-class" => Some(ModelTier::Standard),
-            "opus-class" => Some(ModelTier::Reasoning),
+            // Internal
+            "fast-class" | "standard-class" | "reasoning-class" | "frontier-class" |
+            // Anthropic
+            "haiku-class" | "sonnet-class" | "opus-class" | "fable-class" |
+            // OpenAI
+            "luna-class" | "terra-class" | "sol-class" | "astra-class" => {
+                // Parse by prefix to determine the tier.
+                let lower = id.strip_suffix("-class").unwrap_or(id);
+                if matches!(lower, "fast" | "haiku" | "luna") {
+                    Some(ModelTier::Fast)
+                } else if matches!(lower, "standard" | "sonnet" | "terra") {
+                    Some(ModelTier::Standard)
+                } else if matches!(lower, "reasoning" | "opus" | "sol") {
+                    Some(ModelTier::Reasoning)
+                } else if matches!(lower, "frontier" | "fable" | "astra") {
+                    Some(ModelTier::Frontier)
+                } else {
+                    None
+                }
+            }
             _ => None,
         }
     }
@@ -94,6 +106,55 @@ impl ModelTier {
             ModelTier::Frontier => Some(ModelTier::Reasoning),
         }
     }
+
+    /// Display name for the given naming style.
+    pub fn display_name(&self, style: NamingStyle) -> &'static str {
+        match (self, style) {
+            (ModelTier::Fast, NamingStyle::Internal) => "Fast",
+            (ModelTier::Fast, NamingStyle::Anthropic) => "Haiku",
+            (ModelTier::Fast, NamingStyle::OpenAI) => "Luna",
+            (ModelTier::Standard, NamingStyle::Internal) => "Standard",
+            (ModelTier::Standard, NamingStyle::Anthropic) => "Sonnet",
+            (ModelTier::Standard, NamingStyle::OpenAI) => "Terra",
+            (ModelTier::Reasoning, NamingStyle::Internal) => "Reasoning",
+            (ModelTier::Reasoning, NamingStyle::Anthropic) => "Opus",
+            (ModelTier::Reasoning, NamingStyle::OpenAI) => "Sol",
+            (ModelTier::Frontier, NamingStyle::Internal) => "Frontier",
+            (ModelTier::Frontier, NamingStyle::Anthropic) => "Fable",
+            (ModelTier::Frontier, NamingStyle::OpenAI) => "Astra",
+        }
+    }
+
+    /// Virtual model id for the given naming style, e.g. "haiku-class".
+    pub fn virtual_id_styled(&self, style: NamingStyle) -> &'static str {
+        match (self, style) {
+            (ModelTier::Fast, NamingStyle::Internal) => "fast-class",
+            (ModelTier::Fast, NamingStyle::Anthropic) => "haiku-class",
+            (ModelTier::Fast, NamingStyle::OpenAI) => "luna-class",
+            (ModelTier::Standard, NamingStyle::Internal) => "standard-class",
+            (ModelTier::Standard, NamingStyle::Anthropic) => "sonnet-class",
+            (ModelTier::Standard, NamingStyle::OpenAI) => "terra-class",
+            (ModelTier::Reasoning, NamingStyle::Internal) => "reasoning-class",
+            (ModelTier::Reasoning, NamingStyle::Anthropic) => "opus-class",
+            (ModelTier::Reasoning, NamingStyle::OpenAI) => "sol-class",
+            (ModelTier::Frontier, NamingStyle::Internal) => "frontier-class",
+            (ModelTier::Frontier, NamingStyle::Anthropic) => "fable-class",
+            (ModelTier::Frontier, NamingStyle::OpenAI) => "astra-class",
+        }
+    }
+}
+
+/// How tiers and virtual model ids are presented to clients.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum NamingStyle {
+    /// Internal names: fast, standard, reasoning, frontier.
+    #[default]
+    Internal,
+    /// Anthropic-style: Haiku, Sonnet, Opus, Fable.
+    Anthropic,
+    /// OpenAI-style: Luna, Terra, Sol, Astra.
+    OpenAI,
 }
 
 /// Declared capabilities of a model. Independent of tier.
@@ -315,14 +376,14 @@ pub struct ModelEntry {
     #[serde(default, rename = "id", skip_serializing)]
     legacy_id: Option<String>,
     /// Tier used by `*-class` virtual models. `None` means the user has not
-    /// classified it yet: it stays callable by exact id but never participates
-    /// in class routing.
+    /// assigned a tier yet: it stays callable by exact id but never participates
+    /// in tier routing.
     #[serde(default, alias = "class")]
     pub tier: Option<ModelTier>,
     /// Declared capabilities, independent of tier.
     #[serde(default)]
     pub capabilities: ModelCapabilities,
-    /// Lower value wins inside a class.
+    /// Lower value wins within a tier.
     #[serde(default)]
     pub priority: i32,
     /// Weight for random tie breaking among equal priorities.
@@ -330,13 +391,16 @@ pub struct ModelEntry {
     pub weight: u32,
     #[serde(default = "default_true")]
     pub enabled: bool,
-    #[serde(default)]
+    /// Legacy field — use `capabilities.tools` at runtime. Kept for serde compat.
+    #[serde(default, skip_serializing)]
     #[deprecated(note = "use capabilities.tools instead")]
     pub supports_tools: bool,
-    #[serde(default)]
+    /// Legacy field — use `capabilities.vision` at runtime. Kept for serde compat.
+    #[serde(default, skip_serializing)]
     #[deprecated(note = "use capabilities.vision instead")]
     pub supports_vision: bool,
-    #[serde(default)]
+    /// Legacy field — use `capabilities.thinking` at runtime. Kept for serde compat.
+    #[serde(default, skip_serializing)]
     #[deprecated(note = "use capabilities.thinking instead")]
     pub supports_thinking: bool,
     /// Optional display name for `/v1/models`.
@@ -348,7 +412,7 @@ pub struct ModelEntry {
     /// Hard cap on `max_tokens` sent upstream.
     #[serde(default)]
     pub max_output_tokens: Option<u32>,
-    /// What the provider charges for this model. Entered by hand, like the class;
+    /// What the provider charges for this model. Entered by hand, like the tier;
     /// without it a request is logged with no cost rather than a guessed one.
     #[serde(default)]
     pub pricing: Option<Pricing>,
@@ -368,7 +432,10 @@ impl ModelEntry {
             upstream_model: upstream_model.into(),
             legacy_id: None,
             tier,
-            capabilities: ModelCapabilities::default(),
+            capabilities: ModelCapabilities {
+                tools: true,
+                ..ModelCapabilities::default()
+            },
             priority: 0,
             weight: default_weight(),
             enabled: true,
@@ -408,7 +475,7 @@ impl ModelEntry {
     }
 }
 
-/// How a class picks among its candidate models.
+/// How a tier picks among its candidate models.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RoutingStrategy {
@@ -454,7 +521,7 @@ impl Default for RectifierConfig {
 pub struct RoutingConfig {
     #[serde(default)]
     pub strategy: RoutingStrategy,
-    /// Try the next candidate in the class when a request fails.
+    /// Try the next candidate in the tier when a request fails.
     #[serde(default = "default_true")]
     pub failover: bool,
     /// Max upstream attempts for a single client request.
@@ -494,6 +561,9 @@ pub struct RoutingConfig {
     /// rather than whenever it was last run. Costs one tiny request per model.
     #[serde(default = "default_true")]
     pub elect_on_start: bool,
+    /// How tiers and virtual model ids are presented to clients.
+    #[serde(default)]
+    pub naming_style: NamingStyle,
 }
 
 impl RoutingConfig {
@@ -528,6 +598,7 @@ impl Default for RoutingConfig {
             match_claude_names: true,
             scoring: ScoringConfig::default(),
             elect_on_start: true,
+            naming_style: NamingStyle::default(),
         }
     }
 }
@@ -542,7 +613,7 @@ impl Default for RoutingConfig {
 pub struct ClassifierCandidate {
     /// Exposed id (or alias) of the model to use, e.g. `zai-glm-5.3`.
     pub model: String,
-    /// Lower wins, exactly like a class member's priority.
+    /// Lower wins, exactly like a tier member's priority.
     #[serde(default)]
     pub priority: i32,
     #[serde(default = "default_true")]
@@ -851,6 +922,13 @@ impl AppConfig {
                 model.capabilities.tools = model.supports_tools;
                 model.capabilities.vision = model.supports_vision;
                 model.capabilities.thinking = model.supports_thinking;
+            }
+            // Clear deprecated fields so they don't persist in new configs.
+            #[allow(deprecated)]
+            {
+                model.supports_tools = false;
+                model.supports_vision = false;
+                model.supports_thinking = false;
             }
         }
         for budget in &mut self.budgets {
@@ -1351,10 +1429,16 @@ mod tests {
             assert_eq!(ModelTier::from_virtual_id(t.virtual_id()), Some(t));
         }
         assert_eq!(ModelTier::from_virtual_id("gpt-5.3-sol"), None);
-        // Backward compat: old class names resolve to new tiers.
+        // Anthropic aliases
         assert_eq!(ModelTier::from_virtual_id("haiku-class"), Some(ModelTier::Fast));
         assert_eq!(ModelTier::from_virtual_id("sonnet-class"), Some(ModelTier::Standard));
         assert_eq!(ModelTier::from_virtual_id("opus-class"), Some(ModelTier::Reasoning));
+        assert_eq!(ModelTier::from_virtual_id("fable-class"), Some(ModelTier::Frontier));
+        // OpenAI aliases
+        assert_eq!(ModelTier::from_virtual_id("luna-class"), Some(ModelTier::Fast));
+        assert_eq!(ModelTier::from_virtual_id("terra-class"), Some(ModelTier::Standard));
+        assert_eq!(ModelTier::from_virtual_id("sol-class"), Some(ModelTier::Reasoning));
+        assert_eq!(ModelTier::from_virtual_id("astra-class"), Some(ModelTier::Frontier));
     }
 
     #[test]
@@ -1540,12 +1624,16 @@ mod tests {
 
     #[test]
     fn config_json_round_trip() {
-        let cfg = sample();
+        let mut cfg = sample();
+        cfg.normalize();
         let json = serde_json::to_string(&cfg).unwrap();
         // Identity is persisted, the derived id is not.
         assert!(json.contains("\"upstream_model\":\"deepseek-chat\""));
         assert!(!json.contains("\"id\":\"deepseek-deepseek-chat\""));
-        let back: AppConfig = serde_json::from_str(&json).unwrap();
+        // Legacy supports_* fields should not appear in serialized output.
+        assert!(!json.contains("\"supports_tools\""));
+        let mut back: AppConfig = serde_json::from_str(&json).unwrap();
+        back.normalize();
         assert_eq!(cfg, back);
     }
 
@@ -1605,11 +1693,13 @@ mod tests {
 
     #[test]
     fn classifier_config_round_trips_and_stays_off_by_default() {
-        let cfg = sample();
+        let mut cfg = sample();
+        cfg.normalize();
         assert!(!cfg.classifier.enabled);
         assert!(cfg.classifier.candidates.is_empty());
         let json = serde_json::to_string(&cfg).unwrap();
-        let back: AppConfig = serde_json::from_str(&json).unwrap();
+        let mut back: AppConfig = serde_json::from_str(&json).unwrap();
+        back.normalize();
         assert_eq!(cfg, back);
 
         // And a config that predates classifier routing loads without it.

@@ -8,6 +8,7 @@ export type ModelTier = "fast" | "standard" | "reasoning" | "frontier";
 /** @deprecated Use ModelTier. */
 export type ModelClass = ModelTier;
 export type ProviderKind = "anthropic" | "openai_compatible";
+export type NamingStyle = "internal" | "anthropic" | "openai";
 export type RoutingStrategy =
   | "priority"
   | "weighted_random"
@@ -118,6 +119,16 @@ export interface Provider {
   balance: BalanceConfig;
 }
 
+export interface ModelCapabilities {
+  vision: boolean;
+  tools: boolean;
+  thinking: boolean;
+  structured_output: boolean;
+  audio: boolean;
+  video: boolean;
+  files: boolean;
+}
+
 /**
  * A model is identified by its provider plus the upstream name. The id clients
  * use is derived from that pair by the backend and arrives in
@@ -130,9 +141,7 @@ export interface ModelEntry {
   priority: number;
   weight: number;
   enabled: boolean;
-  supports_tools: boolean;
-  supports_vision: boolean;
-  supports_thinking: boolean;
+  capabilities: ModelCapabilities;
   display_name: string | null;
   aliases: string[];
   max_output_tokens: number | null;
@@ -222,6 +231,7 @@ export interface RoutingConfig {
   match_claude_names: boolean;
   scoring: ScoringConfig;
   elect_on_start: boolean;
+  naming_style: NamingStyle;
 }
 
 /** One model's place in its tier, with the numbers that put it there. */
@@ -234,7 +244,7 @@ export interface Ranked {
   note: string | null;
 }
 
-export interface ClassElection {
+export interface TierElection {
   tier: ModelTier;
   /** Best first. */
   ranked: Ranked[];
@@ -243,11 +253,13 @@ export interface ClassElection {
   /** Why price was left out, when it was. */
   note: string | null;
 }
+/** @deprecated Use TierElection. */
+export type ClassElection = TierElection;
 
 export interface Election {
   decided_at: string;
   scoring: ScoringConfig;
-  classes: Partial<Record<ModelTier, ClassElection>>;
+  tiers: Partial<Record<ModelTier, TierElection>>;
 }
 
 export interface ServerConfig {
@@ -566,14 +578,14 @@ export function defaultProbe(): BalanceProbe {
   };
 }
 
-export function scopeLabel(scope: BudgetScope): string {
+export function scopeLabel(scope: BudgetScope, style: NamingStyle = "internal"): string {
   switch (scope.kind) {
     case "global":
       return "everything";
     case "provider":
       return `provider ${scope.id}`;
     case "tier":
-      return `${scope.tier}-class`;
+      return virtualId(scope.tier, style);
   }
 }
 
@@ -582,8 +594,13 @@ export function periodLabel(period: BudgetPeriod): string {
 }
 
 /** The virtual model id a tier is exposed as. */
-export function virtualId(tier: ModelTier): string {
-  return `${tier}-class`;
+export function virtualId(tier: ModelTier, style: NamingStyle = "internal"): string {
+  const map: Record<NamingStyle, Record<ModelTier, string>> = {
+    internal: { fast: "fast-class", standard: "standard-class", reasoning: "reasoning-class", frontier: "frontier-class" },
+    anthropic: { fast: "haiku-class", standard: "sonnet-class", reasoning: "opus-class", frontier: "fable-class" },
+    openai: { fast: "luna-class", standard: "terra-class", reasoning: "sol-class", frontier: "astra-class" },
+  };
+  return map[style][tier];
 }
 
 /** A configured model together with the id the backend exposes it as. */
@@ -603,7 +620,7 @@ export function modelRows(snapshot: Snapshot): ModelRow[] {
 }
 
 /** Members of a tier in the order the router would try them. */
-export function classMembers(
+export function tierMembers(
   rows: ModelRow[],
   providers: Provider[],
   tier: ModelTier,
@@ -613,6 +630,8 @@ export function classMembers(
     .filter((r) => providers.find((p) => p.id === r.model.provider_id)?.enabled)
     .sort((a, b) => a.model.priority - b.model.priority || a.id.localeCompare(b.id));
 }
+/** @deprecated Use tierMembers. */
+export const classMembers = tierMembers;
 
 /**
  * Preview of the id a model will get. Display only: the backend derives the real

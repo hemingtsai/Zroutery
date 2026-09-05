@@ -14,3 +14,6 @@ src-tauri/gen
 
 # Local overrides
 .env
+
+# IDE
+.zcode/
