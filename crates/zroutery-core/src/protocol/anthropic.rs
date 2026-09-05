@@ -6,9 +6,11 @@ use serde_json::{json, Map, Value};
 use crate::error::{Error, Result};
 use crate::ir::{
     ChatRequest, ChatResponse, ContentBlock, Dialect, MediaSource, Message, Role, StopReason,
-    StreamEvent, SystemPart, ThinkingConfig, ToolChoice, ToolDef, ToolResultPart, Usage,
+    StreamEvent, SystemPart, ThinkingConfig, ToolChoice, ToolDef, ToolResultPart,
+    UnsupportedContentPolicy, Usage,
 };
 
+use super::apply_content_policy;
 use super::{SseFrame, StreamEncoder, StreamParser};
 
 /// Anthropic requires `max_tokens`; used when the client omits it.
@@ -322,8 +324,12 @@ pub fn encode_request(req: &ChatRequest, upstream_model: &str) -> Result<Value> 
         );
     }
 
-    let messages: Vec<Value> = req.messages.iter().map(encode_message).collect();
-    body.insert("messages".into(), Value::Array(messages));
+    let messages: Result<Vec<Value>> = req
+        .messages
+        .iter()
+        .map(|m| encode_message(m, req.unsupported_content_policy))
+        .collect();
+    body.insert("messages".into(), Value::Array(messages?));
 
     if let Some(t) = req.temperature {
         body.insert("temperature".into(), json!(t));
@@ -395,15 +401,31 @@ pub fn encode_request(req: &ChatRequest, upstream_model: &str) -> Result<Value> 
     Ok(Value::Object(body))
 }
 
-fn encode_message(m: &Message) -> Value {
+fn encode_message(m: &Message, policy: UnsupportedContentPolicy) -> Result<Value> {
     let role = match m.role {
         Role::User => "user",
         Role::Assistant => "assistant",
     };
-    json!({
+    let mut content = Vec::new();
+    for b in &m.content {
+        match b {
+            // Types not natively supported by Anthropic: apply the policy.
+            ContentBlock::File { .. }
+            | ContentBlock::Audio { .. }
+            | ContentBlock::Video { .. }
+            | ContentBlock::Citation { .. }
+            | ContentBlock::Annotation { .. } => {
+                if let Some(replacement) = apply_content_policy(policy, b)? {
+                    content.push(encode_block(&replacement));
+                }
+            }
+            _ => content.push(encode_block(b)),
+        }
+    }
+    Ok(json!({
         "role": role,
-        "content": Value::Array(m.content.iter().map(encode_block).collect()),
-    })
+        "content": Value::Array(content),
+    }))
 }
 
 pub(crate) fn encode_block(b: &ContentBlock) -> Value {
@@ -454,6 +476,8 @@ pub(crate) fn encode_block(b: &ContentBlock) -> Value {
                 "is_error": is_error,
             })
         }
+        // New IR variants not yet mapped to Anthropic wire format.
+        _ => json!(null),
     }
 }
 

@@ -111,7 +111,12 @@ impl Router {
     }
 
     /// Build the ordered list of attempts for a resolved model id.
-    pub fn plan(&self, registry: &Registry, resolution: &Resolution) -> Result<Vec<Candidate>> {
+    pub fn plan(
+        &self,
+        registry: &Registry,
+        resolution: &Resolution,
+        required_capabilities: &[String],
+    ) -> Result<Vec<Candidate>> {
         let routing = &registry.config().routing;
         match resolution {
             Resolution::Direct(id) => {
@@ -122,7 +127,13 @@ impl Router {
                 }
                 Ok(vec![Candidate::new(entry, provider, false)])
             }
-            Resolution::Tier(tier) => self.plan_tier(registry, *tier, routing),
+            Resolution::Tier(tier) => self.plan_tier(
+                registry,
+                *tier,
+                routing,
+                required_capabilities,
+                routing.capability_filter,
+            ),
         }
     }
 
@@ -188,6 +199,9 @@ impl Router {
             config.failover,
             config.max_attempts,
             "classifier".to_string(),
+            // Classifier requests don't carry capability requirements.
+            &[],
+            false,
         )
     }
 
@@ -196,6 +210,8 @@ impl Router {
         registry: &Registry,
         tier: ModelTier,
         routing: &RoutingConfig,
+        required_capabilities: &[String],
+        capability_filter: bool,
     ) -> Result<Vec<Candidate>> {
         let members = registry.tier_members(tier);
         if members.is_empty() {
@@ -210,6 +226,8 @@ impl Router {
             routing.failover,
             routing.max_attempts,
             tier.virtual_id().to_string(),
+            required_capabilities,
+            capability_filter,
         )
     }
 
@@ -236,7 +254,33 @@ impl Router {
         failover: bool,
         max_attempts: u32,
         pool_name: String,
+        required_capabilities: &[String],
+        capability_filter: bool,
     ) -> Result<Vec<Candidate>> {
+        // Capability filtering: exclude models whose declared capabilities
+        // don't satisfy the request's requirements. Soft fallback — if no
+        // candidate survives, keep the original list so the request is not
+        // rejected for a missing capability declaration alone.
+        let members = if capability_filter && !required_capabilities.is_empty() {
+            let filtered: Vec<&ModelEntry> = members
+                .iter()
+                .copied()
+                .filter(|m| satisfies_capabilities(m, required_capabilities))
+                .collect();
+            if filtered.is_empty() {
+                tracing::warn!(
+                    required = ?required_capabilities,
+                    pool = %pool_name,
+                    "no candidate satisfies required capabilities; falling back to unfiltered list"
+                );
+                members
+            } else {
+                filtered
+            }
+        } else {
+            members
+        };
+
         let (closed, half_open): (Vec<&ModelEntry>, Vec<&ModelEntry>) = {
             let health = crate::sync::lock(&self.health);
             let mut closed = Vec::new();
@@ -528,6 +572,30 @@ fn by_priority<'a>(members: &[&'a ModelEntry]) -> Vec<&'a ModelEntry> {
     sorted
 }
 
+/// Check if a model's capabilities satisfy the request's requirements.
+///
+/// Every listed capability must be present on the model. Unknown capabilities
+/// are passed through — a typo in the request should not silently exclude every
+/// model.
+fn satisfies_capabilities(model: &ModelEntry, required: &[String]) -> bool {
+    for cap in required {
+        let ok = match cap.as_str() {
+            "vision" => model.capabilities.vision,
+            "tools" => model.capabilities.tools,
+            "thinking" => model.capabilities.thinking,
+            "structured_output" => model.capabilities.structured_output,
+            "audio" => model.capabilities.audio,
+            "video" => model.capabilities.video,
+            "files" => model.capabilities.files,
+            _ => true, // Unknown capability — don't filter.
+        };
+        if !ok {
+            return false;
+        }
+    }
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -561,7 +629,7 @@ mod tests {
             ModelEntry::for_upstream("p2", "b", Some(ModelTier::Standard)),
         ]));
         let router = Router::new();
-        let plan = router.plan(&r, &Resolution::Direct("p1-a".into())).unwrap();
+        let plan = router.plan(&r, &Resolution::Direct("p1-a".into()), &[]).unwrap();
         assert_eq!(ids(&plan), vec!["p1-a"]);
     }
 
@@ -576,7 +644,7 @@ mod tests {
         let r = reg(cfg);
         let router = Router::new();
         let plan = router
-            .plan(&r, &Resolution::Tier(ModelTier::Reasoning))
+            .plan(&r, &Resolution::Tier(ModelTier::Reasoning), &[])
             .unwrap();
         assert_eq!(ids(&plan), vec!["p1-first", "p2-second"]);
     }
@@ -590,7 +658,7 @@ mod tests {
         cfg.routing.failover = false;
         let r = reg(cfg);
         let plan = Router::new()
-            .plan(&r, &Resolution::Tier(ModelTier::Fast))
+            .plan(&r, &Resolution::Tier(ModelTier::Fast), &[])
             .unwrap();
         assert_eq!(plan.len(), 1);
     }
@@ -599,7 +667,7 @@ mod tests {
     fn empty_tier_is_an_error() {
         let r = reg(cfg_with(vec![ModelEntry::for_upstream("p1", "a", None)]));
         let err = Router::new()
-            .plan(&r, &Resolution::Tier(ModelTier::Standard))
+            .plan(&r, &Resolution::Tier(ModelTier::Standard), &[])
             .unwrap_err();
         assert!(matches!(err, Error::NoCandidate(_)));
     }
@@ -617,7 +685,7 @@ mod tests {
 
         assert_eq!(
             ids(&router
-                .plan(&r, &Resolution::Tier(ModelTier::Standard))
+                .plan(&r, &Resolution::Tier(ModelTier::Standard), &[])
                 .unwrap())[0],
             "p1-bad"
         );
@@ -628,7 +696,7 @@ mod tests {
         }
         assert!(router.is_cooling("p1-bad"));
         let plan = router
-            .plan(&r, &Resolution::Tier(ModelTier::Standard))
+            .plan(&r, &Resolution::Tier(ModelTier::Standard), &[])
             .unwrap();
         assert_eq!(ids(&plan), vec!["p2-good", "p1-bad"]);
         assert!(!plan[0].degraded && plan[1].degraded);
@@ -646,7 +714,7 @@ mod tests {
         assert_eq!(router.health_snapshot()[0].state, CircuitState::Closed);
         assert_eq!(
             ids(&router
-                .plan(&r, &Resolution::Tier(ModelTier::Standard))
+                .plan(&r, &Resolution::Tier(ModelTier::Standard), &[])
                 .unwrap())[0],
             "p1-bad"
         );
@@ -725,7 +793,7 @@ mod tests {
             router.report_failure("p1-only", &Error::Timeout(1), &routing);
         }
         let plan = router
-            .plan(&r, &Resolution::Tier(ModelTier::Reasoning))
+            .plan(&r, &Resolution::Tier(ModelTier::Reasoning), &[])
             .unwrap();
         assert_eq!(ids(&plan), vec!["p1-only"]);
         assert!(plan[0].degraded);
@@ -798,11 +866,11 @@ mod tests {
         let r = reg(cfg);
         let router = Router::new();
         let first = ids(&router
-            .plan(&r, &Resolution::Tier(ModelTier::Fast))
+            .plan(&r, &Resolution::Tier(ModelTier::Fast), &[])
             .unwrap())[0]
             .to_string();
         let second = ids(&router
-            .plan(&r, &Resolution::Tier(ModelTier::Fast))
+            .plan(&r, &Resolution::Tier(ModelTier::Fast), &[])
             .unwrap())[0]
             .to_string();
         assert_ne!(first, second);
@@ -822,7 +890,7 @@ mod tests {
         router.report_success("p2-fast", 300, &routing);
         assert_eq!(
             ids(&router
-                .plan(&r, &Resolution::Tier(ModelTier::Standard))
+                .plan(&r, &Resolution::Tier(ModelTier::Standard), &[])
                 .unwrap())[0],
             "p2-fast"
         );
@@ -842,7 +910,7 @@ mod tests {
         let mut heavy_first = 0;
         for _ in 0..400 {
             let plan = router
-                .plan(&r, &Resolution::Tier(ModelTier::Reasoning))
+                .plan(&r, &Resolution::Tier(ModelTier::Reasoning), &[])
                 .unwrap();
             assert_eq!(
                 plan.len(),
@@ -994,7 +1062,7 @@ mod tests {
 
         // ...and the main tier plan demotes glm for main requests as well.
         let plan = router
-            .plan(&r, &Resolution::Tier(ModelTier::Standard))
+            .plan(&r, &Resolution::Tier(ModelTier::Standard), &[])
             .unwrap();
         assert_eq!(ids(&plan)[0], "p2-main");
     }

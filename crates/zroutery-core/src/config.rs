@@ -564,6 +564,14 @@ pub struct RoutingConfig {
     /// How tiers and virtual model ids are presented to clients.
     #[serde(default)]
     pub naming_style: NamingStyle,
+    /// Filter candidates by capability match before routing.
+    /// When enabled and the request carries `required_capabilities`,
+    /// candidates whose capabilities don't satisfy the requirements are
+    /// excluded. If no candidate passes, the unfiltered list is used as a
+    /// soft fallback so the request is not rejected just because no model
+    /// declares every capability.
+    #[serde(default = "default_true")]
+    pub capability_filter: bool,
 }
 
 impl RoutingConfig {
@@ -599,6 +607,7 @@ impl Default for RoutingConfig {
             scoring: ScoringConfig::default(),
             elect_on_start: true,
             naming_style: NamingStyle::default(),
+            capability_filter: true,
         }
     }
 }

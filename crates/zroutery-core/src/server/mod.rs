@@ -738,7 +738,7 @@ async fn count_tokens(State(state): State<Arc<AppState>>, body: JsonBody) -> Res
 fn first_candidate_pricing(state: &AppState, requested: &str) -> Option<(String, Option<Pricing>)> {
     let registry = state.registry();
     let resolution = registry.resolve(requested).ok()?;
-    let plan = state.router().plan(&registry, &resolution).ok()?;
+    let plan = state.router().plan(&registry, &resolution, &[]).ok()?;
     let candidate = plan.into_iter().next()?;
     Some((candidate.exposed_id, candidate.entry.pricing))
 }

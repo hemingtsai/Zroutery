@@ -36,10 +36,11 @@ pub(super) async fn handle_chat(
 ) -> Response {
     let include_usage = dialect == Dialect::OpenAI && openai::wants_stream_usage(&body);
 
-    let req = match protocol::decode_request(dialect, body.clone()) {
+    let mut req = match protocol::decode_request(dialect, body.clone()) {
         Ok(r) => r,
         Err(e) => return error_response(dialect, &e),
     };
+    req.required_capabilities = req.compute_required_capabilities();
 
     let registry = state.registry();
     let config = registry.config();
@@ -68,7 +69,9 @@ pub(super) async fn handle_chat(
         RequestKind::Main => registry
             .resolve(&req.model)
             .and_then(|resolution| apply_budgets(&state, &registry, resolution))
-            .and_then(|resolution| state.router.plan(&registry, &resolution)),
+            .and_then(|resolution| {
+                state.router.plan(&registry, &resolution, &req.required_capabilities)
+            }),
         // The classifier pool is resolved directly: the model the client named
         // (e.g. `claude-opus-4-8[1m]`) is irrelevant to *which model judges*,
         // and may not even exist in the registry. Budgets are main-path

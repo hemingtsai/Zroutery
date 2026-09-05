@@ -9,6 +9,7 @@ use std::collections::HashMap;
 
 use serde_json::{json, Map, Value};
 
+use super::apply_content_policy;
 use super::reasoning_bridge;
 use super::{SseFrame, StreamEncoder, StreamParser};
 use crate::error::{Error, Result};
@@ -319,7 +320,40 @@ pub fn encode_request(req: &ChatRequest, upstream_model: &str) -> Result<Value> 
                         separate_items.push(item);
                     }
                 }
-                ContentBlock::Document { .. } => {}
+                ContentBlock::Audio { source, media_type } => {
+                    let format = media_type.strip_prefix("audio/").unwrap_or("wav");
+                    match source {
+                        MediaSource::Base64 { data, .. } => {
+                            parts.push(json!({
+                                "type": "input_audio",
+                                "input_audio": {"data": data, "format": format},
+                            }));
+                        }
+                        MediaSource::Url { .. } => {
+                            // URL audio cannot be encoded inline; apply the policy.
+                            if let Some(replacement) =
+                                apply_content_policy(req.unsupported_content_policy, b)?
+                            {
+                                if let Some(t) = replacement.as_text() {
+                                    parts.push(json!({"type": "input_text", "text": t}));
+                                }
+                            }
+                        }
+                    }
+                }
+                ContentBlock::Document { .. }
+                | ContentBlock::File { .. }
+                | ContentBlock::Video { .. }
+                | ContentBlock::Citation { .. }
+                | ContentBlock::Annotation { .. } => {
+                    if let Some(replacement) =
+                        apply_content_policy(req.unsupported_content_policy, b)?
+                    {
+                        if let Some(t) = replacement.as_text() {
+                            parts.push(json!({"type": "input_text", "text": t}));
+                        }
+                    }
+                }
             }
         }
 

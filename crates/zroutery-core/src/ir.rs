@@ -74,6 +74,51 @@ pub enum ContentBlock {
         content: Vec<ToolResultPart>,
         is_error: bool,
     },
+    /// Generic file attachment (PDF, CSV, etc).
+    File {
+        source: MediaSource,
+        /// MIME type, e.g. "application/pdf".
+        media_type: String,
+        /// Optional filename.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+    },
+    /// Audio content.
+    Audio {
+        source: MediaSource,
+        /// MIME type, e.g. "audio/mp3".
+        media_type: String,
+    },
+    /// Video content.
+    Video {
+        source: MediaSource,
+        /// MIME type, e.g. "video/mp4".
+        media_type: String,
+    },
+    /// A citation from a source document.
+    Citation {
+        /// The cited text.
+        text: String,
+        /// Source reference (URL, document id, etc).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source: Option<String>,
+        /// Title of the cited source.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+    },
+    /// An annotation on content (e.g. footnotes, references).
+    Annotation {
+        /// Annotation type (e.g. "footnote", "reference", "highlight").
+        annotation_type: String,
+        /// The annotation text/value.
+        text: String,
+        /// Start offset in the parent content.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        start: Option<u32>,
+        /// End offset in the parent content.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        end: Option<u32>,
+    },
 }
 
 impl ContentBlock {
@@ -230,6 +275,21 @@ pub struct ThinkingConfig {
     pub budget_tokens: Option<u32>,
 }
 
+/// What to do with content types the target provider cannot represent.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UnsupportedContentPolicy {
+    /// Return an error to the client (safest default).
+    Reject,
+    /// Try to convert (e.g. URL image → base64 download).
+    Transform,
+    /// Replace with a placeholder text.
+    Placeholder,
+    /// Silently remove.
+    #[default]
+    Drop,
+}
+
 /// A protocol independent chat request.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ChatRequest {
@@ -253,6 +313,13 @@ pub struct ChatRequest {
     pub passthrough: Map<String, Value>,
     /// The dialect the request arrived in, so the response can be encoded back.
     pub source_dialect: Dialect,
+    /// Policy for content types the target provider cannot handle.
+    #[serde(default)]
+    pub unsupported_content_policy: UnsupportedContentPolicy,
+    /// Capabilities the target model must have to handle this request.
+    /// Populated by the protocol decoder based on the content types present.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub required_capabilities: Vec<String>,
 }
 
 impl ChatRequest {
@@ -273,6 +340,8 @@ impl ChatRequest {
             metadata_user: None,
             passthrough: Map::new(),
             source_dialect: dialect,
+            unsupported_content_policy: UnsupportedContentPolicy::Reject,
+            required_capabilities: Vec::new(),
         }
     }
 
@@ -302,6 +371,13 @@ impl ChatRequest {
                             ToolResultPart::Image { .. } => 4000,
                         })
                         .sum(),
+                    ContentBlock::File { name, .. } => {
+                        name.as_ref().map(|n| n.chars().count()).unwrap_or(0) + 4000
+                    }
+                    ContentBlock::Audio { .. } => 4000,
+                    ContentBlock::Video { .. } => 4000,
+                    ContentBlock::Citation { text, .. } => text.chars().count(),
+                    ContentBlock::Annotation { text, .. } => text.chars().count(),
                 };
             }
         }
@@ -315,6 +391,52 @@ impl ChatRequest {
         }
         // ~3.4 chars per token averaged over mixed CJK/latin text, plus overhead.
         ((chars as f64 / 3.4).ceil() as u32) + 8 * self.messages.len() as u32
+    }
+
+    /// Compute which capabilities this request requires based on its content.
+    pub fn compute_required_capabilities(&self) -> Vec<String> {
+        let mut caps = Vec::new();
+        for msg in &self.messages {
+            for block in &msg.content {
+                match block {
+                    ContentBlock::Image { .. } => {
+                        if !caps.contains(&"vision".into()) {
+                            caps.push("vision".into());
+                        }
+                    }
+                    ContentBlock::Audio { .. } => {
+                        if !caps.contains(&"audio".into()) {
+                            caps.push("audio".into());
+                        }
+                    }
+                    ContentBlock::Video { .. } => {
+                        if !caps.contains(&"video".into()) {
+                            caps.push("video".into());
+                        }
+                    }
+                    ContentBlock::File { .. } => {
+                        if !caps.contains(&"files".into()) {
+                            caps.push("files".into());
+                        }
+                    }
+                    ContentBlock::ToolUse { .. } | ContentBlock::ToolResult { .. } => {
+                        if !caps.contains(&"tools".into()) {
+                            caps.push("tools".into());
+                        }
+                    }
+                    ContentBlock::Thinking { .. } | ContentBlock::RedactedThinking { .. } => {
+                        if !caps.contains(&"thinking".into()) {
+                            caps.push("thinking".into());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if !self.tools.is_empty() && !caps.contains(&"tools".into()) {
+            caps.push("tools".into());
+        }
+        caps
     }
 }
 
@@ -445,5 +567,266 @@ mod tests {
         b.messages
             .push(Message::assistant_text("a much longer reply than before"));
         assert!(b.estimate_tokens() > a.estimate_tokens());
+    }
+
+    #[test]
+    fn content_block_file_round_trip() {
+        let block = ContentBlock::File {
+            source: MediaSource::Url {
+                url: "https://example.com/doc.pdf".into(),
+            },
+            media_type: "application/pdf".into(),
+            name: Some("report.pdf".into()),
+        };
+        let json = serde_json::to_string(&block).unwrap();
+        let deserialized: ContentBlock = serde_json::from_str(&json).unwrap();
+        assert_eq!(block, deserialized);
+    }
+
+    #[test]
+    fn content_block_audio_round_trip() {
+        let block = ContentBlock::Audio {
+            source: MediaSource::Base64 {
+                media_type: "audio/mp3".into(),
+                data: "AAAA".into(),
+            },
+            media_type: "audio/mp3".into(),
+        };
+        let json = serde_json::to_string(&block).unwrap();
+        let deserialized: ContentBlock = serde_json::from_str(&json).unwrap();
+        assert_eq!(block, deserialized);
+    }
+
+    #[test]
+    fn content_block_video_round_trip() {
+        let block = ContentBlock::Video {
+            source: MediaSource::Url {
+                url: "https://example.com/clip.mp4".into(),
+            },
+            media_type: "video/mp4".into(),
+        };
+        let json = serde_json::to_string(&block).unwrap();
+        let deserialized: ContentBlock = serde_json::from_str(&json).unwrap();
+        assert_eq!(block, deserialized);
+    }
+
+    #[test]
+    fn content_block_citation_round_trip() {
+        let block = ContentBlock::Citation {
+            text: "The quick brown fox".into(),
+            source: Some("https://example.com".into()),
+            title: Some("Example".into()),
+        };
+        let json = serde_json::to_string(&block).unwrap();
+        let deserialized: ContentBlock = serde_json::from_str(&json).unwrap();
+        assert_eq!(block, deserialized);
+    }
+
+    #[test]
+    fn content_block_citation_optional_fields() {
+        let json = r#"{"Citation":{"text":"minimal"}}"#;
+        let block: ContentBlock = serde_json::from_str(json).unwrap();
+        match block {
+            ContentBlock::Citation { text, source, title } => {
+                assert_eq!(text, "minimal");
+                assert!(source.is_none());
+                assert!(title.is_none());
+            }
+            _ => panic!("expected Citation"),
+        }
+    }
+
+    #[test]
+    fn content_block_annotation_round_trip() {
+        let block = ContentBlock::Annotation {
+            annotation_type: "footnote".into(),
+            text: "See reference [1]".into(),
+            start: Some(10),
+            end: Some(20),
+        };
+        let json = serde_json::to_string(&block).unwrap();
+        let deserialized: ContentBlock = serde_json::from_str(&json).unwrap();
+        assert_eq!(block, deserialized);
+    }
+
+    #[test]
+    fn content_block_annotation_optional_offsets() {
+        let json = r#"{"Annotation":{"annotation_type":"highlight","text":"important"}}"#;
+        let block: ContentBlock = serde_json::from_str(json).unwrap();
+        match block {
+            ContentBlock::Annotation {
+                annotation_type,
+                text,
+                start,
+                end,
+            } => {
+                assert_eq!(annotation_type, "highlight");
+                assert_eq!(text, "important");
+                assert!(start.is_none());
+                assert!(end.is_none());
+            }
+            _ => panic!("expected Annotation"),
+        }
+    }
+
+    #[test]
+    fn compute_required_capabilities_vision() {
+        let mut req = ChatRequest::new("m", Dialect::Anthropic);
+        req.messages.push(Message {
+            role: Role::User,
+            content: vec![ContentBlock::Image {
+                source: MediaSource::Url {
+                    url: "https://example.com/img.png".into(),
+                },
+            }],
+        });
+        let caps = req.compute_required_capabilities();
+        assert!(caps.contains(&"vision".into()));
+        assert!(!caps.contains(&"audio".into()));
+    }
+
+    #[test]
+    fn compute_required_capabilities_audio_video_files() {
+        let mut req = ChatRequest::new("m", Dialect::OpenAI);
+        req.messages.push(Message {
+            role: Role::User,
+            content: vec![
+                ContentBlock::Audio {
+                    source: MediaSource::Url {
+                        url: "https://example.com/audio.mp3".into(),
+                    },
+                    media_type: "audio/mp3".into(),
+                },
+                ContentBlock::Video {
+                    source: MediaSource::Url {
+                        url: "https://example.com/video.mp4".into(),
+                    },
+                    media_type: "video/mp4".into(),
+                },
+                ContentBlock::File {
+                    source: MediaSource::Url {
+                        url: "https://example.com/doc.pdf".into(),
+                    },
+                    media_type: "application/pdf".into(),
+                    name: None,
+                },
+            ],
+        });
+        let caps = req.compute_required_capabilities();
+        assert!(caps.contains(&"audio".into()));
+        assert!(caps.contains(&"video".into()));
+        assert!(caps.contains(&"files".into()));
+        assert!(!caps.contains(&"vision".into()));
+    }
+
+    #[test]
+    fn compute_required_capabilities_tools() {
+        let mut req = ChatRequest::new("m", Dialect::Anthropic);
+        req.messages.push(Message::user_text("hello"));
+        req.tools.push(ToolDef {
+            name: "search".into(),
+            description: None,
+            input_schema: serde_json::json!({}),
+            cache_control: None,
+        });
+        let caps = req.compute_required_capabilities();
+        assert!(caps.contains(&"tools".into()));
+    }
+
+    #[test]
+    fn compute_required_capabilities_thinking() {
+        let mut req = ChatRequest::new("m", Dialect::Anthropic);
+        req.messages.push(Message {
+            role: Role::Assistant,
+            content: vec![ContentBlock::Thinking {
+                text: "reasoning...".into(),
+                signature: None,
+            }],
+        });
+        let caps = req.compute_required_capabilities();
+        assert!(caps.contains(&"thinking".into()));
+    }
+
+    #[test]
+    fn unsupported_content_policy_defaults_to_reject() {
+        let req = ChatRequest::new("m", Dialect::Anthropic);
+        assert_eq!(
+            req.unsupported_content_policy,
+            UnsupportedContentPolicy::Reject
+        );
+    }
+
+    #[test]
+    fn unsupported_content_policy_serde_round_trip() {
+        let policies = [
+            UnsupportedContentPolicy::Reject,
+            UnsupportedContentPolicy::Transform,
+            UnsupportedContentPolicy::Placeholder,
+            UnsupportedContentPolicy::Drop,
+        ];
+        for policy in &policies {
+            let json = serde_json::to_string(policy).unwrap();
+            let deserialized: UnsupportedContentPolicy = serde_json::from_str(&json).unwrap();
+            assert_eq!(*policy, deserialized);
+        }
+    }
+
+    #[test]
+    fn estimate_tokens_handles_new_variants() {
+        let mut req = ChatRequest::new("m", Dialect::Anthropic);
+        req.messages.push(Message {
+            role: Role::User,
+            content: vec![
+                ContentBlock::File {
+                    source: MediaSource::Url {
+                        url: "https://example.com/doc.pdf".into(),
+                    },
+                    media_type: "application/pdf".into(),
+                    name: Some("report.pdf".into()),
+                },
+                ContentBlock::Audio {
+                    source: MediaSource::Url {
+                        url: "https://example.com/audio.mp3".into(),
+                    },
+                    media_type: "audio/mp3".into(),
+                },
+                ContentBlock::Video {
+                    source: MediaSource::Url {
+                        url: "https://example.com/video.mp4".into(),
+                    },
+                    media_type: "video/mp4".into(),
+                },
+                ContentBlock::Citation {
+                    text: "A cited passage".into(),
+                    source: None,
+                    title: None,
+                },
+                ContentBlock::Annotation {
+                    annotation_type: "footnote".into(),
+                    text: "A footnote".into(),
+                    start: None,
+                    end: None,
+                },
+            ],
+        });
+        let tokens = req.estimate_tokens();
+        // Just verify it doesn't panic and returns a reasonable value.
+        assert!(tokens > 0);
+    }
+
+    #[test]
+    fn required_capabilities_serde_default_empty() {
+        let json = r#"{"model":"m","system":[],"messages":[],"stop_sequences":[],"stream":false,"tools":[],"passthrough":{},"source_dialect":"anthropic"}"#;
+        let req: ChatRequest = serde_json::from_str(json).unwrap();
+        assert!(req.required_capabilities.is_empty());
+    }
+
+    #[test]
+    fn required_capabilities_serde_round_trip() {
+        let mut req = ChatRequest::new("m", Dialect::Anthropic);
+        req.required_capabilities = vec!["vision".into(), "tools".into()];
+        let json = serde_json::to_string(&req).unwrap();
+        let deserialized: ChatRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.required_capabilities, vec!["vision", "tools"]);
     }
 }
