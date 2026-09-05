@@ -57,6 +57,7 @@ pub(crate) fn normalize_audio_format(media_type: &str) -> &str {
 /// error messages.
 fn content_label(block: &ContentBlock) -> String {
     match block {
+        ContentBlock::Document { .. } => "document".into(),
         ContentBlock::File {
             name, media_type, ..
         } => format!("file ({})", name.as_deref().unwrap_or(media_type)),

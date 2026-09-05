@@ -525,6 +525,7 @@ fn encode_message_into(
                     }
                     // Audio is not representable in assistant messages.
                     ContentBlock::Audio { .. }
+                    | ContentBlock::Document { .. }
                     | ContentBlock::File { .. }
                     | ContentBlock::Video { .. }
                     | ContentBlock::Citation { .. }
@@ -606,7 +607,8 @@ fn encode_message_into(
                             }
                         }
                     }
-                    ContentBlock::File { .. }
+                    ContentBlock::Document { .. }
+                    | ContentBlock::File { .. }
                     | ContentBlock::Video { .. }
                     | ContentBlock::Citation { .. }
                     | ContentBlock::Annotation { .. } => {

@@ -10,8 +10,8 @@ use super::apply_content_policy;
 use super::{SseFrame, StreamEncoder, StreamParser};
 use crate::error::{Error, Result};
 use crate::ir::{
-    ChatRequest, ChatResponse, ContentBlock, Dialect, MediaSource, Message, Role, StopReason,
-    StreamEvent, SystemPart, ToolChoice, ToolDef, ToolResultPart, Usage,
+    classify_media, ChatRequest, ChatResponse, ContentBlock, Dialect, MediaSource, Message, Role,
+    StopReason, StreamEvent, SystemPart, ToolChoice, ToolDef, ToolResultPart, Usage,
 };
 
 // ---------------------------------------------------------------- request in
@@ -83,20 +83,23 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
                             is_error: false,
                         });
                     } else if let Some(data) = part.get("inlineData") {
-                        blocks.push(ContentBlock::Image {
-                            source: MediaSource::Base64 {
-                                media_type: data
-                                    .get("mimeType")
-                                    .and_then(Value::as_str)
-                                    .unwrap_or("application/octet-stream")
-                                    .to_string(),
-                                data: data
-                                    .get("data")
-                                    .and_then(Value::as_str)
-                                    .unwrap_or_default()
-                                    .to_string(),
+                        let mime = data
+                            .get("mimeType")
+                            .and_then(Value::as_str)
+                            .unwrap_or("application/octet-stream");
+                        let payload = data
+                            .get("data")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string();
+                        blocks.push(classify_media(
+                            mime,
+                            MediaSource::Base64 {
+                                media_type: mime.to_string(),
+                                data: payload,
                             },
-                        });
+                            None,
+                        ));
                     }
                 }
             }
@@ -216,9 +219,19 @@ pub fn encode_request(req: &ChatRequest, upstream_model: &str) -> Result<Value> 
                     }));
                 }
                 ContentBlock::Thinking { .. }
-                | ContentBlock::RedactedThinking { .. }
-                | ContentBlock::Document { .. } => {}
+                | ContentBlock::RedactedThinking { .. } => {}
                 // Gemini supports inlineData for any MIME type.
+                ContentBlock::Document { source } => match source {
+                    MediaSource::Base64 {
+                        media_type,
+                        data,
+                    } => parts.push(json!({
+                        "inlineData": {"mimeType": media_type, "data": data}
+                    })),
+                    MediaSource::Url { url } => parts.push(json!({"text": format!(
+                        "[Document URL: {url} -- URL media not supported by Gemini API, use base64 encoding instead]"
+                    )})),
+                },
                 ContentBlock::File {
                     source, media_type, ..
                 }

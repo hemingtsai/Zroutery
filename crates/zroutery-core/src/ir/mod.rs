@@ -26,6 +26,26 @@ pub enum Capability {
     StructuredOutput,
 }
 
+/// Whether a model supports, explicitly doesn't support, or hasn't declared a
+/// capability.
+///
+/// Boolean fields in [`ModelCapabilities`](crate::config::ModelCapabilities)
+/// map `true` to [`Supported`](CapabilityState::Supported) and `false` to
+/// [`Unknown`](CapabilityState::Unknown) — the model has not declared the
+/// capability.  [`Unsupported`](CapabilityState::Unsupported) is reserved for
+/// models that have been tested and explicitly rejected the capability; it is
+/// not produced by the current boolean config surface.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CapabilityState {
+    /// Model declares support for this capability.
+    Supported,
+    /// Model explicitly does not support this capability.
+    Unsupported,
+    /// Model has not declared this capability (unknown).
+    Unknown,
+}
+
 /// Which wire dialect a payload belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -223,6 +243,61 @@ impl MediaSource {
             url: url.to_string(),
         }
     }
+}
+
+/// Classify a MIME type into the appropriate [`ContentBlock`] variant.
+///
+/// Dispatches by top-level category for `image/*`, `audio/*`, and `video/*`.
+/// Known document MIME types (text/*, PDF, Office XML, etc.) map to
+/// [`ContentBlock::Document`].  Everything else becomes [`ContentBlock::File`].
+pub fn classify_media(
+    media_type: &str,
+    source: MediaSource,
+    name: Option<String>,
+) -> ContentBlock {
+    let lower = media_type.to_ascii_lowercase();
+    let category = lower.split('/').next().unwrap_or("");
+    match category {
+        "image" => ContentBlock::Image { source },
+        "audio" => ContentBlock::Audio {
+            source,
+            media_type: media_type.to_string(),
+        },
+        "video" => ContentBlock::Video {
+            source,
+            media_type: media_type.to_string(),
+        },
+        _ => {
+            if is_document_mime(&lower) {
+                ContentBlock::Document { source }
+            } else {
+                ContentBlock::File {
+                    source,
+                    media_type: media_type.to_string(),
+                    name,
+                }
+            }
+        }
+    }
+}
+
+/// Returns `true` when `mime` (already lowercased) represents a semantic
+/// document whose content is readable text — PDF, Markdown, HTML, source
+/// code, plain text, or a known Office XML format.
+fn is_document_mime(mime: &str) -> bool {
+    if mime.starts_with("text/") {
+        return true;
+    }
+    matches!(
+        mime,
+        "application/pdf"
+            | "application/json"
+            | "application/xml"
+            | "application/xhtml+xml"
+            | "application/rtf"
+            | "application/msword"
+    ) || mime.starts_with("application/vnd.openxmlformats")
+        || mime.starts_with("application/vnd.ms-")
 }
 
 /// One block of the system prompt.
@@ -868,5 +943,170 @@ mod tests {
             deserialized.required_capabilities,
             vec![Capability::Vision, Capability::Tools]
         );
+    }
+
+    // -- classify_media tests ------------------------------------------------
+
+    fn dummy_source() -> MediaSource {
+        MediaSource::Base64 {
+            media_type: "application/octet-stream".into(),
+            data: "AAAA".into(),
+        }
+    }
+
+    #[test]
+    fn classify_media_png_is_image() {
+        let block = classify_media("image/png", dummy_source(), None);
+        assert!(matches!(block, ContentBlock::Image { .. }));
+    }
+
+    #[test]
+    fn classify_media_jpeg_is_image() {
+        let block = classify_media("image/jpeg", dummy_source(), None);
+        assert!(matches!(block, ContentBlock::Image { .. }));
+    }
+
+    #[test]
+    fn classify_media_mpeg_is_audio() {
+        let block = classify_media("audio/mpeg", dummy_source(), None);
+        assert!(matches!(block, ContentBlock::Audio { .. }));
+    }
+
+    #[test]
+    fn classify_media_mp4_is_video() {
+        let block = classify_media("video/mp4", dummy_source(), None);
+        assert!(matches!(block, ContentBlock::Video { .. }));
+    }
+
+    #[test]
+    fn classify_media_pdf_is_document() {
+        let block = classify_media("application/pdf", dummy_source(), None);
+        assert!(matches!(block, ContentBlock::Document { .. }));
+    }
+
+    #[test]
+    fn classify_media_plain_text_is_document() {
+        let block = classify_media("text/plain", dummy_source(), None);
+        assert!(matches!(block, ContentBlock::Document { .. }));
+    }
+
+    #[test]
+    fn classify_media_markdown_is_document() {
+        let block = classify_media("text/markdown", dummy_source(), None);
+        assert!(matches!(block, ContentBlock::Document { .. }));
+    }
+
+    #[test]
+    fn classify_media_json_is_document() {
+        let block = classify_media("application/json", dummy_source(), None);
+        assert!(matches!(block, ContentBlock::Document { .. }));
+    }
+
+    #[test]
+    fn classify_media_xml_is_document() {
+        let block = classify_media("application/xml", dummy_source(), None);
+        assert!(matches!(block, ContentBlock::Document { .. }));
+    }
+
+    #[test]
+    fn classify_media_docx_is_document() {
+        let block = classify_media(
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            dummy_source(),
+            None,
+        );
+        assert!(matches!(block, ContentBlock::Document { .. }));
+    }
+
+    #[test]
+    fn classify_media_xlsx_is_document() {
+        let block = classify_media(
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            dummy_source(),
+            None,
+        );
+        assert!(matches!(block, ContentBlock::Document { .. }));
+    }
+
+    #[test]
+    fn classify_media_ms_word_is_document() {
+        let block = classify_media("application/msword", dummy_source(), None);
+        assert!(matches!(block, ContentBlock::Document { .. }));
+    }
+
+    #[test]
+    fn classify_media_rtf_is_document() {
+        let block = classify_media("application/rtf", dummy_source(), None);
+        assert!(matches!(block, ContentBlock::Document { .. }));
+    }
+
+    #[test]
+    fn classify_media_html_is_document() {
+        let block = classify_media("application/xhtml+xml", dummy_source(), None);
+        assert!(matches!(block, ContentBlock::Document { .. }));
+    }
+
+    #[test]
+    fn classify_media_zip_is_file() {
+        let block = classify_media("application/zip", dummy_source(), None);
+        assert!(matches!(block, ContentBlock::File { .. }));
+    }
+
+    #[test]
+    fn classify_media_octet_stream_is_file() {
+        let block = classify_media("application/octet-stream", dummy_source(), None);
+        assert!(matches!(block, ContentBlock::File { .. }));
+    }
+
+    #[test]
+    fn classify_media_gzip_is_file() {
+        let block = classify_media("application/gzip", dummy_source(), None);
+        assert!(matches!(block, ContentBlock::File { .. }));
+    }
+
+    #[test]
+    fn classify_media_preserves_name() {
+        let block = classify_media("application/zip", dummy_source(), Some("data.zip".into()));
+        match block {
+            ContentBlock::File { name, .. } => assert_eq!(name.as_deref(), Some("data.zip")),
+            _ => panic!("expected File"),
+        }
+    }
+
+    #[test]
+    fn classify_media_uppercase_mime() {
+        let block = classify_media("Application/PDF", dummy_source(), None);
+        assert!(matches!(block, ContentBlock::Document { .. }));
+    }
+
+    // -- CapabilityState tests ------------------------------------------------
+
+    #[test]
+    fn capability_state_serde_values() {
+        assert_eq!(
+            serde_json::to_string(&CapabilityState::Supported).unwrap(),
+            "\"supported\""
+        );
+        assert_eq!(
+            serde_json::to_string(&CapabilityState::Unsupported).unwrap(),
+            "\"unsupported\""
+        );
+        assert_eq!(
+            serde_json::to_string(&CapabilityState::Unknown).unwrap(),
+            "\"unknown\""
+        );
+    }
+
+    #[test]
+    fn capability_state_round_trip() {
+        for state in [
+            CapabilityState::Supported,
+            CapabilityState::Unsupported,
+            CapabilityState::Unknown,
+        ] {
+            let json = serde_json::to_string(&state).unwrap();
+            let back: CapabilityState = serde_json::from_str(&json).unwrap();
+            assert_eq!(state, back);
+        }
     }
 }

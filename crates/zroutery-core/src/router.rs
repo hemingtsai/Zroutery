@@ -203,6 +203,7 @@ impl Router {
             // Classifier requests don't carry capability requirements.
             &[],
             false,
+            false,
         )
     }
 
@@ -229,6 +230,7 @@ impl Router {
             tier.virtual_id().to_string(),
             required_capabilities,
             capability_filter,
+            routing.strict_capability_filter,
         )
     }
 
@@ -257,11 +259,15 @@ impl Router {
         pool_name: String,
         required_capabilities: &[Capability],
         capability_filter: bool,
+        strict: bool,
     ) -> Result<Vec<Candidate>> {
         // Capability filtering: exclude models whose declared capabilities
-        // don't satisfy the request's requirements. Soft fallback — if no
-        // candidate survives, keep the original list so the request is not
-        // rejected for a missing capability declaration alone.
+        // don't satisfy the request's requirements.  When `strict` is false,
+        // fall back to the unfiltered list so the request is not rejected just
+        // because no model declares every capability.  When `strict` is true,
+        // return an error so that requests with unsatisfiable capability
+        // requirements fail fast instead of being routed to a model that
+        // cannot handle them.
         let members = if capability_filter && !required_capabilities.is_empty() {
             let filtered: Vec<&ModelEntry> = members
                 .iter()
@@ -269,6 +275,14 @@ impl Router {
                 .filter(|m| satisfies_capabilities(m, required_capabilities))
                 .collect();
             if filtered.is_empty() {
+                if strict {
+                    tracing::warn!(
+                        required = ?required_capabilities,
+                        pool = %pool_name,
+                        "no candidate satisfies required capabilities; strict mode rejects"
+                    );
+                    return Err(Error::NoCandidate(pool_name));
+                }
                 tracing::warn!(
                     required = ?required_capabilities,
                     pool = %pool_name,
@@ -1086,5 +1100,108 @@ mod tests {
         let second = ids(&router.plan_classifier(&r, &r.config().classifier).unwrap())[0]
             .to_string();
         assert_ne!(first, second);
+    }
+
+    // ---------------------------------------- capability filter (strict/soft)
+
+    #[test]
+    fn soft_fallback_keeps_unfiltered_candidates_when_none_match() {
+        // Both models lack vision; the request requires vision.
+        // With strict=false (default), the soft fallback kicks in and both
+        // are kept.
+        let cfg = cfg_with(vec![
+            ModelEntry::for_upstream("p1", "text-only", Some(ModelTier::Standard))
+                .with_priority(0),
+            ModelEntry::for_upstream("p2", "also-text", Some(ModelTier::Standard))
+                .with_priority(1),
+        ]);
+        let r = reg(cfg);
+        let router = Router::new();
+        let plan = router
+            .plan(&r, &Resolution::Tier(ModelTier::Standard), &[Capability::Vision])
+            .unwrap();
+        assert_eq!(ids(&plan), vec!["p1-text-only", "p2-also-text"]);
+    }
+
+    #[test]
+    fn strict_mode_rejects_when_no_candidate_satisfies_capability() {
+        let mut cfg = cfg_with(vec![
+            ModelEntry::for_upstream("p1", "text-only", Some(ModelTier::Standard)),
+            ModelEntry::for_upstream("p2", "also-text", Some(ModelTier::Standard)),
+        ]);
+        cfg.routing.strict_capability_filter = true;
+        let r = reg(cfg);
+        let router = Router::new();
+        let err = router
+            .plan(&r, &Resolution::Tier(ModelTier::Standard), &[Capability::Vision])
+            .unwrap_err();
+        assert!(matches!(err, Error::NoCandidate(_)));
+    }
+
+    #[test]
+    fn capability_filter_prefers_matching_candidates() {
+        // p1 has vision, p2 does not. A request requiring vision should
+        // prefer p1, regardless of strict mode.
+        let mut cfg = cfg_with(vec![
+            ModelEntry::for_upstream("p1", "vision", Some(ModelTier::Standard)).with_priority(10),
+            ModelEntry::for_upstream("p2", "no-vision", Some(ModelTier::Standard)).with_priority(0),
+        ]);
+        cfg.models[0].capabilities.vision = true;
+        cfg.routing.strict_capability_filter = true;
+        let r = reg(cfg);
+        let router = Router::new();
+        let plan = router
+            .plan(&r, &Resolution::Tier(ModelTier::Standard), &[Capability::Vision])
+            .unwrap();
+        assert_eq!(ids(&plan), vec!["p1-vision"]);
+    }
+
+    #[test]
+    fn strict_mode_accepts_when_at_least_one_candidate_matches() {
+        let mut cfg = cfg_with(vec![
+            ModelEntry::for_upstream("p1", "vision", Some(ModelTier::Standard)).with_priority(0),
+            ModelEntry::for_upstream("p2", "no-vision", Some(ModelTier::Standard)).with_priority(5),
+        ]);
+        cfg.models[0].capabilities.vision = true;
+        cfg.routing.strict_capability_filter = true;
+        let r = reg(cfg);
+        let router = Router::new();
+        let plan = router
+            .plan(&r, &Resolution::Tier(ModelTier::Standard), &[Capability::Vision])
+            .unwrap();
+        // Only the vision-capable model should be returned.
+        assert_eq!(ids(&plan), vec!["p1-vision"]);
+    }
+
+    #[test]
+    fn strict_mode_ignores_when_no_capabilities_required() {
+        let mut cfg = cfg_with(vec![
+            ModelEntry::for_upstream("p1", "a", Some(ModelTier::Standard)),
+            ModelEntry::for_upstream("p2", "b", Some(ModelTier::Standard)),
+        ]);
+        cfg.routing.strict_capability_filter = true;
+        let r = reg(cfg);
+        let router = Router::new();
+        let plan = router
+            .plan(&r, &Resolution::Tier(ModelTier::Standard), &[])
+            .unwrap();
+        assert_eq!(plan.len(), 2);
+    }
+
+    #[test]
+    fn capability_filter_disabled_ignores_requirements() {
+        let mut cfg = cfg_with(vec![
+            ModelEntry::for_upstream("p1", "a", Some(ModelTier::Standard)),
+            ModelEntry::for_upstream("p2", "b", Some(ModelTier::Standard)),
+        ]);
+        // capability_filter defaults to true, but let's explicitly disable it.
+        cfg.routing.capability_filter = false;
+        let r = reg(cfg);
+        let router = Router::new();
+        let plan = router
+            .plan(&r, &Resolution::Tier(ModelTier::Standard), &[Capability::Vision])
+            .unwrap();
+        // Both candidates survive: the filter is off.
+        assert_eq!(plan.len(), 2);
     }
 }
