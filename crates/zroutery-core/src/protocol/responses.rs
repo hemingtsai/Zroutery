@@ -1135,22 +1135,26 @@ pub struct ResponsesStreamEncoder {
     model: String,
     created_at: i64,
     done: bool,
-    output_index: u32,
+    /// Next output_index to assign. Starts at 0.
+    next_output_index: u32,
+    /// The output_index of the currently open output item.
+    current_output_index: u32,
     content_index: u32,
     current_kind: Option<OutputItemKind>,
-    /// True when a `response.content_part.added` has been emitted for the
-    /// current content part without a matching `done`.
     content_part_open: bool,
-    /// True when the current output item (message or function_call) has not
-    /// yet received its `response.output_item.done`.
     output_item_open: bool,
-    tool_item_ids: HashMap<u32, String>,
-    /// Accumulated output items for the terminal response.completed event.
+    /// Item id for the currently open output item.
+    current_item_id: String,
+    /// Accumulated output items for response.completed.
     output_items: Vec<Value>,
-    /// Text accumulator for the current message being built.
+    /// Text accumulator.
     current_text: String,
-    /// Tool call accumulator: (item_id, call_id, name, arguments).
-    current_tool_call: Option<(String, String, String, String)>,
+    /// Thinking accumulator.
+    current_thinking: String,
+    /// Tool call accumulators indexed by block index → (item_id, call_id, name, args).
+    tool_calls: HashMap<u32, (String, String, String, String)>,
+    /// Maps block index → output_index for tool calls.
+    tool_output_indices: HashMap<u32, u32>,
 }
 
 impl ResponsesStreamEncoder {
@@ -1160,15 +1164,18 @@ impl ResponsesStreamEncoder {
             model: model.to_string(),
             created_at: chrono::Utc::now().timestamp(),
             done: false,
-            output_index: 0,
+            next_output_index: 0,
+            current_output_index: 0,
             content_index: 0,
             current_kind: None,
             content_part_open: false,
             output_item_open: false,
-            tool_item_ids: HashMap::new(),
+            current_item_id: String::new(),
             output_items: Vec::new(),
             current_text: String::new(),
-            current_tool_call: None,
+            current_thinking: String::new(),
+            tool_calls: HashMap::new(),
+            tool_output_indices: HashMap::new(),
         }
     }
 
@@ -1179,8 +1186,13 @@ impl ResponsesStreamEncoder {
         }
     }
 
-    /// Close the currently open content part (`response.content_part.done`),
-    /// if any. Returns the frame to emit, or `None` if nothing was open.
+    /// Allocate the next output_index.
+    fn alloc_output_index(&mut self) -> u32 {
+        let i = self.next_output_index;
+        self.next_output_index += 1;
+        i
+    }
+
     fn close_content_part(&mut self) -> Option<SseFrame> {
         if !self.content_part_open {
             return None;
@@ -1195,69 +1207,82 @@ impl ResponsesStreamEncoder {
             "response.content_part.done",
             json!({
                 "type": "response.content_part.done",
-                "output_index": self.output_index,
+                "output_index": self.current_output_index,
                 "content_index": self.content_index,
                 "part": {"type": part_type},
             }),
         ))
     }
 
-    /// Close the currently open output item (`response.output_item.done`),
-    /// if any. Also finalizes the accumulated output item for response.completed.
+    /// Finalize the current output item into output_items for response.completed.
+    fn finalize_output_item(&mut self) {
+        match self.current_kind {
+            Some(OutputItemKind::Text) => {
+                if !self.current_text.is_empty() {
+                    self.output_items.push(json!({
+                        "id": self.current_item_id,
+                        "type": "message",
+                        "role": "assistant",
+                        "status": "completed",
+                        "content": [{"type": "output_text", "text": self.current_text, "annotations": []}],
+                    }));
+                    self.current_text.clear();
+                }
+            }
+            Some(OutputItemKind::Thinking) => {
+                if !self.current_thinking.is_empty() {
+                    self.output_items.push(json!({
+                        "id": self.current_item_id,
+                        "type": "reasoning",
+                        "summary": [{"type": "summary_text", "text": self.current_thinking}],
+                    }));
+                    self.current_thinking.clear();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Close the current output item: emit output_item.done with the full item,
+    /// finalize into output_items.
     fn close_output_item(&mut self) -> Option<SseFrame> {
         if !self.output_item_open {
             return None;
         }
         self.finalize_output_item();
         self.output_item_open = false;
-        let item_id = match self.current_kind {
-            Some(OutputItemKind::Text) => format!("msg_{}", self.output_index),
-            Some(OutputItemKind::Thinking) => format!("rs_{}", self.output_index),
-            _ => return None,
+        // Build the done item from the last finalized output_items entry.
+        let done_item = self.output_items.last().cloned().unwrap_or(json!({
+            "id": self.current_item_id,
+            "type": "message",
+            "status": "completed",
+        }));
+        let event_type = match self.current_kind {
+            Some(OutputItemKind::Text) | Some(OutputItemKind::Thinking) => "response.output_item.done",
+            _ => "response.output_item.done",
         };
-        Some(self.frame(
-            "response.output_item.done",
+        let frame = self.frame(
+            event_type,
             json!({
                 "type": "response.output_item.done",
-                "output_index": self.output_index,
-                "item": {
-                    "id": item_id,
-                    "type": "message",
-                    "status": "completed",
-                },
+                "output_index": self.current_output_index,
+                "item": done_item,
             }),
-        ))
+        );
+        self.current_kind = None;
+        Some(frame)
     }
 
-    /// Finalize the current output item and push it to `output_items` for
-    /// inclusion in the terminal `response.completed` event.
-    fn finalize_output_item(&mut self) {
-        match self.current_kind {
-            Some(OutputItemKind::Text) => {
-                if !self.current_text.is_empty() {
-                    self.output_items.push(json!({
-                        "type": "message",
-                        "role": "assistant",
-                        "status": "completed",
-                        "content": [{"type": "output_text", "text": self.current_text}],
-                    }));
-                    self.current_text.clear();
-                }
-            }
-            Some(OutputItemKind::Tool) => {
-                if let Some((item_id, call_id, name, args)) = self.current_tool_call.take() {
-                    self.output_items.push(json!({
-                        "type": "function_call",
-                        "id": item_id,
-                        "call_id": call_id,
-                        "name": name,
-                        "arguments": args,
-                        "status": "completed",
-                    }));
-                }
-            }
-            _ => {}
-        }
+    /// Emit response.output_item.added for a new item.
+    fn emit_output_item_added(&mut self, item: Value) -> SseFrame {
+        self.frame(
+            "response.output_item.added",
+            json!({
+                "type": "response.output_item.added",
+                "output_index": self.current_output_index,
+                "item": item,
+            }),
+        )
     }
 }
 
@@ -1266,195 +1291,175 @@ impl StreamEncoder for ResponsesStreamEncoder {
         let mut out = Vec::new();
         match event {
             StreamEvent::Start { id, model, .. } => {
-                if !id.is_empty() {
-                    self.id = id.clone();
-                }
-                if !model.is_empty() {
-                    self.model = model.clone();
-                }
-                out.push(self.frame(
-                    "response.created",
-                    json!({
-                        "type": "response.created",
-                        "response": {
-                            "id": self.id,
-                            "object": "response",
-                            "created_at": self.created_at,
-                            "status": "in_progress",
-                            "model": self.model,
-                            "output": [],
-                        }
-                    }),
-                ));
+                if !id.is_empty() { self.id = id.clone(); }
+                if !model.is_empty() { self.model = model.clone(); }
+                out.push(self.frame("response.created", json!({
+                    "type": "response.created",
+                    "response": {
+                        "id": self.id,
+                        "object": "response",
+                        "created_at": self.created_at,
+                        "status": "in_progress",
+                        "model": self.model,
+                        "output": [],
+                    }
+                })));
             }
             StreamEvent::TextDelta { text, .. } => {
+                // Switch to Text kind if needed.
                 if self.current_kind != Some(OutputItemKind::Text) {
-                    // Close any open content part and output item from the
-                    // previous kind before switching.
-                    if let Some(f) = self.close_content_part() {
-                        out.push(f);
-                    }
-                    if let Some(f) = self.close_output_item() {
-                        out.push(f);
-                    }
-                    self.output_index += 1;
+                    if let Some(f) = self.close_content_part() { out.push(f); }
+                    if let Some(f) = self.close_output_item() { out.push(f); }
+                    self.current_output_index = self.alloc_output_index();
                     self.content_index = 0;
                     self.current_kind = Some(OutputItemKind::Text);
                     self.output_item_open = true;
                     self.current_text.clear();
+                    self.current_item_id = format!("msg_{}", self.current_output_index);
+                    // Emit output_item.added
+                    out.push(self.emit_output_item_added(json!({
+                        "id": self.current_item_id,
+                        "type": "message",
+                        "role": "assistant",
+                        "status": "in_progress",
+                        "content": [],
+                    })));
                 }
+                // Emit content_part.added if needed.
                 if !self.content_part_open {
                     self.content_part_open = true;
-                    out.push(self.frame(
-                        "response.content_part.added",
-                        json!({
-                            "type": "response.content_part.added",
-                            "output_index": self.output_index,
-                            "content_index": self.content_index,
-                            "part": {"type": "output_text"},
-                        }),
-                    ));
-                }
-                out.push(self.frame(
-                    "response.output_text.delta",
-                    json!({
-                        "type": "response.output_text.delta",
-                        "item_id": format!("msg_{}", self.output_index),
-                        "output_index": self.output_index,
+                    out.push(self.frame("response.content_part.added", json!({
+                        "type": "response.content_part.added",
+                        "output_index": self.current_output_index,
                         "content_index": self.content_index,
-                        "delta": text,
-                    }),
-                ));
+                        "part": {"type": "output_text"},
+                    })));
+                }
+                out.push(self.frame("response.output_text.delta", json!({
+                    "type": "response.output_text.delta",
+                    "item_id": self.current_item_id,
+                    "output_index": self.current_output_index,
+                    "content_index": self.content_index,
+                    "delta": text,
+                })));
                 self.current_text.push_str(text);
             }
             StreamEvent::ThinkingDelta { text, .. } => {
                 if self.current_kind != Some(OutputItemKind::Thinking) {
-                    if let Some(f) = self.close_content_part() {
-                        out.push(f);
-                    }
-                    if let Some(f) = self.close_output_item() {
-                        out.push(f);
-                    }
-                    self.output_index += 1;
+                    if let Some(f) = self.close_content_part() { out.push(f); }
+                    if let Some(f) = self.close_output_item() { out.push(f); }
+                    self.current_output_index = self.alloc_output_index();
                     self.content_index = 0;
                     self.current_kind = Some(OutputItemKind::Thinking);
                     self.output_item_open = true;
+                    self.current_thinking.clear();
+                    self.current_item_id = format!("rs_{}", self.current_output_index);
+                    out.push(self.emit_output_item_added(json!({
+                        "id": self.current_item_id,
+                        "type": "reasoning",
+                        "summary": [],
+                    })));
                 }
                 if !self.content_part_open {
                     self.content_part_open = true;
-                    out.push(self.frame(
-                        "response.content_part.added",
-                        json!({
-                            "type": "response.content_part.added",
-                            "output_index": self.output_index,
-                            "content_index": self.content_index,
-                            "part": {"type": "reasoning"},
-                        }),
-                    ));
-                }
-                out.push(self.frame(
-                    "response.reasoning_summary_text.delta",
-                    json!({
-                        "type": "response.reasoning_summary_text.delta",
-                        "item_id": format!("rs_{}", self.output_index),
-                        "output_index": self.output_index,
+                    out.push(self.frame("response.content_part.added", json!({
+                        "type": "response.content_part.added",
+                        "output_index": self.current_output_index,
                         "content_index": self.content_index,
-                        "delta": text,
-                    }),
-                ));
+                        "part": {"type": "reasoning"},
+                    })));
+                }
+                out.push(self.frame("response.reasoning_summary_text.delta", json!({
+                    "type": "response.reasoning_summary_text.delta",
+                    "item_id": self.current_item_id,
+                    "output_index": self.current_output_index,
+                    "content_index": self.content_index,
+                    "delta": text,
+                })));
+                self.current_thinking.push_str(text);
             }
-            StreamEvent::ToolUseStart {
-                index, id, name, ..
-            } => {
-                // Close any open content part and output item before starting
-                // a tool call output item.
-                if let Some(f) = self.close_content_part() {
-                    out.push(f);
-                }
-                if let Some(f) = self.close_output_item() {
-                    out.push(f);
-                }
+            StreamEvent::ToolUseStart { index, id, name, .. } => {
+                if let Some(f) = self.close_content_part() { out.push(f); }
+                if let Some(f) = self.close_output_item() { out.push(f); }
+                let oi = self.alloc_output_index();
+                self.tool_output_indices.insert(*index, oi);
                 let item_id = format!("fc_{id}");
-                self.tool_item_ids.insert(*index, item_id.clone());
-                self.current_tool_call = Some((item_id.clone(), id.clone(), name.clone(), String::new()));
+                self.tool_calls.insert(*index, (item_id.clone(), id.clone(), name.clone(), String::new()));
+                self.current_output_index = oi;
                 self.output_item_open = true;
                 self.current_kind = Some(OutputItemKind::Tool);
-                out.push(self.frame(
-                    "response.output_item.added",
-                    json!({
-                        "type": "response.output_item.added",
-                        "output_index": self.output_index,
-                        "item": {
-                            "id": item_id,
-                            "type": "function_call",
-                            "call_id": id,
-                            "name": name,
-                            "arguments": "",
-                            "status": "in_progress",
-                        }
-                    }),
-                ));
-                self.output_index += 1;
+                self.current_item_id = item_id.clone();
+                out.push(self.emit_output_item_added(json!({
+                    "id": item_id,
+                    "type": "function_call",
+                    "call_id": id,
+                    "name": name,
+                    "arguments": "",
+                    "status": "in_progress",
+                })));
             }
-            StreamEvent::ToolUseDelta {
-                partial_json,
-                index,
-                ..
-            } => {
-                let item_id = self
-                    .tool_item_ids
-                    .get(index)
-                    .cloned()
+            StreamEvent::ToolUseDelta { partial_json, index, .. } => {
+                let item_id = self.tool_calls.get(index)
+                    .map(|(id, _, _, _)| id.clone())
                     .unwrap_or_else(|| format!("fc_{index}"));
-                out.push(self.frame(
-                    "response.function_call_arguments.delta",
-                    json!({
-                        "type": "response.function_call_arguments.delta",
-                        "item_id": item_id,
-                        "output_index": self.output_index.saturating_sub(1),
-                        "content_index": 0,
-                        "delta": partial_json,
-                    }),
-                ));
-                if let Some((_, _, _, ref mut args)) = self.current_tool_call {
+                let oi = self.tool_output_indices.get(index).copied().unwrap_or(0);
+                out.push(self.frame("response.function_call_arguments.delta", json!({
+                    "type": "response.function_call_arguments.delta",
+                    "item_id": item_id,
+                    "output_index": oi,
+                    "content_index": 0,
+                    "delta": partial_json,
+                })));
+                if let Some((_, _, _, ref mut args)) = self.tool_calls.get_mut(index) {
                     args.push_str(partial_json);
                 }
             }
-            StreamEvent::BlockStop { .. } => {
-                // A tool call is its own output item; close it when the block
-                // stops.  For text/thinking blocks, `content_part.done` is
-                // emitted when the next kind arrives or at Stop.
-                if self.current_kind == Some(OutputItemKind::Tool) {
-                    self.finalize_output_item();
+            StreamEvent::BlockStop { index } => {
+                // If this is a tool call block, emit arguments.done + output_item.done.
+                if let Some((item_id, call_id, name, args)) = self.tool_calls.remove(index) {
+                    let oi = self.tool_output_indices.remove(index).unwrap_or(0);
+                    out.push(self.frame("response.function_call_arguments.done", json!({
+                        "type": "response.function_call_arguments.done",
+                        "item_id": item_id,
+                        "output_index": oi,
+                        "content_index": 0,
+                        "arguments": args,
+                    })));
+                    let parsed_args: Value = if args.is_empty() { json!({}) }
+                        else { serde_json::from_str(&args).unwrap_or_else(|_| json!({"__raw": args})) };
+                    self.output_items.push(json!({
+                        "type": "function_call",
+                        "id": item_id,
+                        "call_id": call_id,
+                        "name": name,
+                        "arguments": parsed_args,
+                        "status": "completed",
+                    }));
+                    out.push(self.frame("response.output_item.done", json!({
+                        "type": "response.output_item.done",
+                        "output_index": oi,
+                        "item": self.output_items.last().unwrap(),
+                    })));
                     self.output_item_open = false;
                     self.current_kind = None;
                 }
             }
             StreamEvent::Stop { usage, .. } => {
-                // Close any open content part and output item before the final
-                // response.completed event.
-                if let Some(f) = self.close_content_part() {
-                    out.push(f);
-                }
-                if let Some(f) = self.close_output_item() {
-                    out.push(f);
-                }
+                if let Some(f) = self.close_content_part() { out.push(f); }
+                if let Some(f) = self.close_output_item() { out.push(f); }
                 let output = Value::Array(std::mem::take(&mut self.output_items));
-                out.push(self.frame(
-                    "response.completed",
-                    json!({
-                        "type": "response.completed",
-                        "response": {
-                            "id": self.id,
-                            "object": "response",
-                            "created_at": self.created_at,
-                            "status": "completed",
-                            "model": self.model,
-                            "output": output,
-                            "usage": encode_usage(usage),
-                        }
-                    }),
-                ));
+                out.push(self.frame("response.completed", json!({
+                    "type": "response.completed",
+                    "response": {
+                        "id": self.id,
+                        "object": "response",
+                        "created_at": self.created_at,
+                        "status": "completed",
+                        "model": self.model,
+                        "output": output,
+                        "usage": encode_usage(usage),
+                    }
+                })));
                 self.done = true;
             }
             _ => {}
@@ -1463,71 +1468,52 @@ impl StreamEncoder for ResponsesStreamEncoder {
     }
 
     fn finish(&mut self) -> Vec<SseFrame> {
-        if self.done {
-            return Vec::new();
-        }
+        if self.done { return Vec::new(); }
         self.done = true;
         let mut out = Vec::new();
-        if let Some(f) = self.close_content_part() {
-            out.push(f);
-        }
-        if let Some(f) = self.close_output_item() {
-            out.push(f);
-        }
+        if let Some(f) = self.close_content_part() { out.push(f); }
+        if let Some(f) = self.close_output_item() { out.push(f); }
         let output = Value::Array(std::mem::take(&mut self.output_items));
-        out.push(self.frame(
-            "response.completed",
-            json!({
-                "type": "response.completed",
-                "response": {
-                    "id": self.id,
-                    "object": "response",
-                    "created_at": self.created_at,
-                    "status": "completed",
-                    "model": self.model,
-                    "output": output,
-                }
-            }),
-        ));
+        out.push(self.frame("response.completed", json!({
+            "type": "response.completed",
+            "response": {
+                "id": self.id,
+                "object": "response",
+                "created_at": self.created_at,
+                "status": "completed",
+                "model": self.model,
+                "output": output,
+            }
+        })));
         out
     }
 
     fn error(&mut self, err: &Error) -> Vec<SseFrame> {
-        let mut out = vec![self.frame(
-            "response.failed",
-            json!({
-                "type": "response.failed",
+        let mut out = vec![self.frame("response.failed", json!({
+            "type": "response.failed",
+            "response": {
+                "id": self.id,
+                "object": "response",
+                "status": "failed",
+                "model": self.model,
+                "error": err.to_wire(Dialect::OpenAIResponses),
+            }
+        }))];
+        if !self.done {
+            self.done = true;
+            if let Some(f) = self.close_content_part() { out.push(f); }
+            if let Some(f) = self.close_output_item() { out.push(f); }
+            let output = Value::Array(std::mem::take(&mut self.output_items));
+            out.push(self.frame("response.completed", json!({
+                "type": "response.completed",
                 "response": {
                     "id": self.id,
                     "object": "response",
                     "status": "failed",
                     "model": self.model,
-                    "error": err.to_wire(Dialect::OpenAIResponses),
+                    "output": output,
                 }
-            }),
-        )];
-        if !self.done {
-            self.done = true;
-            if let Some(f) = self.close_content_part() {
-                out.push(f);
-            }
-            if let Some(f) = self.close_output_item() {
-                out.push(f);
-            }
-            let output = Value::Array(std::mem::take(&mut self.output_items));
-            out.push(self.frame(
-                "response.completed",
-                json!({
-                    "type": "response.completed",
-                    "response": {
-                        "id": self.id,
-                        "object": "response",
-                        "status": "failed",
-                        "model": self.model,
-                        "output": output,
-                    }
-                }),
-            ));
+            })));
         }
         out
     }
