@@ -426,8 +426,6 @@ impl Desktop {
         }
         // The close button reads the rules synchronously, so the window layer
         // is told directly rather than discovering the change later.
-        // The close button reads the rules synchronously, so the window layer
-        // is told directly rather than discovering the change later.
         *lock(&self.window_rules) = WindowRules {
             keep_in_tray: next.window.keep_in_tray,
         };
@@ -442,9 +440,10 @@ impl Desktop {
 /// Recovers a poisoned lock instead of taking the app down with it; the worst
 /// case is a stale balance or warning.
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    mutex
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+    mutex.lock().unwrap_or_else(|poisoned| {
+        tracing::warn!("recovered from poisoned mutex");
+        poisoned.into_inner()
+    })
 }
 
 /// Only these settings require tearing the listener down.

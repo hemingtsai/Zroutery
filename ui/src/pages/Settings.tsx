@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { api, costText, modelRows, money, virtualId } from "../api";
+import { useCallback, useEffect, useState } from "react";
+import { api, costText, errorText, modelRows, money, virtualId } from "../api";
 import {
   CLASSES,
   type AppConfig,
@@ -180,19 +180,19 @@ export default function Settings({
     });
   };
 
-  const loadLogs = async () => {
+  const loadLogs = useCallback(async () => {
     try {
       setLogs(await api.logs());
     } catch {
       setLogs([]);
     }
-  };
+  }, []);
 
   useEffect(() => {
     if (logs === null) return;
     const timer = setInterval(loadLogs, 1500);
     return () => clearInterval(timer);
-  }, [logs !== null]);
+  }, [logs !== null, loadLogs]);
 
   const baseUrl = server.base_url ?? `http://${config.server.host}:${config.server.port}`;
 
@@ -369,7 +369,13 @@ export default function Settings({
           ) : (
             <Button
               kind="ghost"
-              onClick={async () => setRevealed(await api.revealToken())}
+              onClick={async () => {
+                try {
+                  setRevealed(await api.revealToken());
+                } catch (e) {
+                  setNotice(errorText(e));
+                }
+              }}
               title={t("settings.reveal_title")}
             >
               {t("settings.reveal")}

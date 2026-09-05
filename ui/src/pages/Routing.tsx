@@ -15,8 +15,8 @@ import {
 import { api } from "../api";
 import {
   Badge,
-  Banner,
   Button,
+  CompactNumber,
   Drawer,
   Field,
   KeyValue,
@@ -137,7 +137,7 @@ export default function Routing({
           <div className="flow">
             <div className="flow-row">
               <div className="flow-kind">
-                <span className="flow-kind-name">Side query</span>
+                <span className="flow-kind-name">{t("routing.side_query")}</span>
                 <span className="flow-kind-hint">
                   {config.classifier.enabled
                     ? t("route.review_hint_on")
@@ -227,7 +227,6 @@ function DefaultDrawer({
 }) {
   const routing = snapshot.config.routing;
   const { t } = useI18n();
-  const notice = useState<string | null>(null)[0];
 
   const patch = (mutate: Partial<AppConfig["routing"]>) => {
     void onSave((cfg) => {
@@ -239,8 +238,6 @@ function DefaultDrawer({
 
   return (
     <Drawer title={t("routing.default_drawer")} onClose={onClose}>
-      {notice && <Banner tone="warn">{notice}</Banner>}
-
       <div className="controls">
         <Field label={t("field.strategy")}>
           <Select<RoutingStrategy>
@@ -377,7 +374,6 @@ function AutoModeDrawer({
   const classifier = snapshot.config.classifier;
   const { t } = useI18n();
   const rows = modelRows(snapshot);
-  const notice = useState<string | null>(null)[0];
 
   const patch = (mutate: Partial<AppConfig["classifier"]>) => {
     void onSave((cfg) => {
@@ -436,9 +432,7 @@ function AutoModeDrawer({
   const available = rows.filter((r) => !classifier.candidates.some((c) => c.model === r.id));
 
   return (
-    <Drawer title="Auto review" onClose={onClose}>
-      {notice && <Banner tone="warn">{notice}</Banner>}
-
+    <Drawer title={t("route.auto_review")} onClose={onClose}>
       <Toggle
         label={t("routing.route_review")}
         hint={t("routing.route_review_hint")}
@@ -497,13 +491,13 @@ function AutoModeDrawer({
                       )}
                     </td>
                     <td>
-                      <input
-                        type="number"
-                        className="tiny"
-                        aria-label={`Priority for ${c.model}`}
+                      <CompactNumber
+                        ariaLabel={`Priority for ${c.model}`}
                         value={c.priority}
-                        onChange={(e) =>
-                          patchCandidate(c.model, { priority: Number(e.currentTarget.value) || 0 })
+                        min={0}
+                        integer
+                        onCommit={(v) =>
+                          patchCandidate(c.model, { priority: v ?? 0 })
                         }
                       />
                     </td>

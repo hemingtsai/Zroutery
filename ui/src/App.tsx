@@ -263,6 +263,7 @@ function Shell() {
                 mode", and the three-way choice includes following the OS. */}
             <Popover
               title={t("appearance.title")}
+              ariaLabel={t("appearance.title")}
               trigger={
                 <span aria-hidden className="glyph">
                   {"◐"}

@@ -90,7 +90,7 @@ export default function Models({
       return;
     }
     if (config.models.some((m) => m.provider_id === providerId && m.upstream_model === upstream)) {
-      setNotice(`That provider already offers “${upstream}”.`);
+      setNotice(t("models.duplicate", { model: upstream }));
       return;
     }
     void save((cfg) => {

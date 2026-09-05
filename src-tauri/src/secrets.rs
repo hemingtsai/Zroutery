@@ -54,11 +54,16 @@ impl KeychainSecrets {
     }
 
     /// `provider:deepseek` -> `ZROUTERY_KEY_PROVIDER_DEEPSEEK`
+    ///
+    /// Hyphens are kept as-is (valid in env var names on most platforms);
+    /// only truly invalid characters like `.`, `:`, and spaces are mapped to `_`.
+    /// This avoids collisions where `provider:a.b` and `provider:a-b` would
+    /// otherwise produce the same env var name.
     pub fn env_name(key_ref: &str) -> String {
         let sanitized: String = key_ref
             .chars()
             .map(|c| {
-                if c.is_ascii_alphanumeric() {
+                if c.is_ascii_alphanumeric() || c == '-' {
                     c.to_ascii_uppercase()
                 } else {
                     '_'
@@ -76,7 +81,10 @@ impl KeychainSecrets {
             Ok(secret) => Some(secret),
             Err(err) => {
                 // Not found is the normal case; anything else is worth a line.
-                if !err.contains("No matching entry") && !err.contains("not found") {
+                // keyring returns lowercase messages that vary across backends,
+                // so we match on common substrings rather than a typed enum.
+                let lower = err.to_lowercase();
+                if !lower.contains("not found") && !lower.contains("no matching") {
                     tracing::debug!("keychain read for {key_ref} failed: {err}");
                 }
                 self.fallback.as_ref().and_then(|f| f(key_ref))
@@ -145,9 +153,15 @@ mod tests {
             KeychainSecrets::env_name("provider:deepseek"),
             "ZROUTERY_KEY_PROVIDER_DEEPSEEK"
         );
+        // Hyphens are kept; dots, colons, and spaces become underscores.
         assert_eq!(
             KeychainSecrets::env_name("provider:my-thing.1"),
-            "ZROUTERY_KEY_PROVIDER_MY_THING_1"
+            "ZROUTERY_KEY_PROVIDER_MY-THING_1"
+        );
+        // Two previously-colliding names now map differently.
+        assert_ne!(
+            KeychainSecrets::env_name("provider:a.b"),
+            KeychainSecrets::env_name("provider:a-b"),
         );
     }
 
