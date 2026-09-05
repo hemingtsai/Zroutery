@@ -245,13 +245,21 @@ impl RuntimeObservation {
 }
 
 // ---------------------------------------------------------------------------
-// ObservationStore — per-model observations
+// ObservationStore — per-provider-model observations
 // ---------------------------------------------------------------------------
 
-/// Stores runtime observations for all models.
+/// Composite key for observation isolation.
+/// Same model from different providers gets separate observations.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct ProviderModelKey {
+    provider_id: String,
+    model_id: String,
+}
+
+/// Stores runtime observations keyed by (provider_id, model_id).
 #[derive(Debug)]
 pub struct ObservationStore {
-    observations: Mutex<HashMap<String, RuntimeObservation>>,
+    observations: Mutex<HashMap<ProviderModelKey, RuntimeObservation>>,
 }
 
 impl ObservationStore {
@@ -259,14 +267,35 @@ impl ObservationStore {
         Self { observations: Mutex::new(HashMap::new()) }
     }
 
-    /// Get or create observation for a model.
-    pub fn get(&self, model_id: &str) -> RuntimeObservation {
+    fn key(model_id: &str, provider_id: &str) -> ProviderModelKey {
+        ProviderModelKey {
+            provider_id: provider_id.to_string(),
+            model_id: model_id.to_string(),
+        }
+    }
+
+    /// Get observation for a specific provider+model pair.
+    pub fn get(&self, model_id: &str, provider_id: &str) -> RuntimeObservation {
         crate::sync::lock(&self.observations)
-            .get(model_id)
+            .get(&Self::key(model_id, provider_id))
             .cloned()
             .unwrap_or_else(|| RuntimeObservation {
                 model_id: model_id.to_string(),
+                provider_id: provider_id.to_string(),
                 ..Default::default()
+            })
+    }
+
+    /// Get the best observation for a model across all providers.
+    /// Returns the observation with the highest health score.
+    pub fn get_best(&self, model_id: &str) -> Option<RuntimeObservation> {
+        crate::sync::lock(&self.observations)
+            .iter()
+            .filter(|(k, _)| k.model_id == model_id)
+            .map(|(_, v)| v.clone())
+            .max_by(|a, b| {
+                a.health.score().partial_cmp(&b.health.score())
+                    .unwrap_or(std::cmp::Ordering::Equal)
             })
     }
 
@@ -279,12 +308,11 @@ impl ObservationStore {
         ttft_ms: Option<f64>,
     ) {
         let mut map = crate::sync::lock(&self.observations);
-        let obs = map.entry(model_id.to_string()).or_insert_with(|| {
-            RuntimeObservation {
-                model_id: model_id.to_string(),
-                provider_id: provider_id.to_string(),
-                ..Default::default()
-            }
+        let key = Self::key(model_id, provider_id);
+        let obs = map.entry(key).or_insert_with(|| RuntimeObservation {
+            model_id: model_id.to_string(),
+            provider_id: provider_id.to_string(),
+            ..Default::default()
         });
         obs.record_success(latency_ms, ttft_ms);
     }
@@ -292,12 +320,11 @@ impl ObservationStore {
     /// Record a failed request.
     pub fn record_failure(&self, model_id: &str, provider_id: &str) {
         let mut map = crate::sync::lock(&self.observations);
-        let obs = map.entry(model_id.to_string()).or_insert_with(|| {
-            RuntimeObservation {
-                model_id: model_id.to_string(),
-                provider_id: provider_id.to_string(),
-                ..Default::default()
-            }
+        let key = Self::key(model_id, provider_id);
+        let obs = map.entry(key).or_insert_with(|| RuntimeObservation {
+            model_id: model_id.to_string(),
+            provider_id: provider_id.to_string(),
+            ..Default::default()
         });
         obs.record_failure();
     }
@@ -533,7 +560,7 @@ mod tests {
     #[test]
     fn store_get_returns_default_for_unknown() {
         let store = ObservationStore::new();
-        let obs = store.get("unknown-model");
+        let obs = store.get("unknown-model", "unknown-provider");
         assert_eq!(obs.model_id, "unknown-model");
         assert_eq!(obs.health.state, HealthState::Unknown);
     }
@@ -542,7 +569,7 @@ mod tests {
     fn store_record_success() {
         let store = ObservationStore::new();
         store.record_success("m1", "p1", 400.0, Some(80.0));
-        let obs = store.get("m1");
+        let obs = store.get("m1", "p1");
         assert_eq!(obs.health.state, HealthState::Healthy);
         assert!(obs.latency.total_ms.is_known());
     }
@@ -551,7 +578,7 @@ mod tests {
     fn store_record_failure() {
         let store = ObservationStore::new();
         store.record_failure("m1", "p1");
-        let obs = store.get("m1");
+        let obs = store.get("m1", "p1");
         assert_eq!(obs.health.consecutive_failures, 1);
         assert_eq!(obs.health.total_failures, 1);
     }
@@ -561,7 +588,7 @@ mod tests {
         let store = ObservationStore::new();
         store.record_success("m1", "p1", 300.0, None);
         store.record_success("m1", "p1", 200.0, None);
-        let obs = store.get("m1");
+        let obs = store.get("m1", "p1");
         assert_eq!(obs.health.total_requests, 2);
         assert!((obs.health.success_rate.value.unwrap() - 1.0).abs() < f64::EPSILON);
     }
@@ -624,17 +651,18 @@ mod tests {
     fn observation_store_isolates_providers() {
         let store = ObservationStore::new();
 
-        // Same model from different providers — current API uses model_id as key,
-        // so the second call overwrites the first observation.
+        // Same model from different providers — now properly isolated.
         store.record_success("model-x", "provider-a", 100.0, Some(50.0));
         store.record_success("model-x", "provider-b", 900.0, Some(400.0));
 
-        // The LAST write wins because the store keys on model_id alone.
-        // To properly isolate, the store would need (model_id, provider_id) as key.
-        // This test documents that limitation.
-        let obs = store.get("model-x");
-        assert_eq!(obs.latency.total_ms.value, Some(900.0));
-        assert_eq!(obs.health.total_requests, 2);
+        let a = store.get("model-x", "provider-a");
+        let b = store.get("model-x", "provider-b");
+
+        // Each provider has its own observation.
+        assert_eq!(a.latency.total_ms.value, Some(100.0));
+        assert_eq!(b.latency.total_ms.value, Some(900.0));
+        assert_eq!(a.health.total_requests, 1);
+        assert_eq!(b.health.total_requests, 1);
     }
 
     #[test]
@@ -644,8 +672,8 @@ mod tests {
         store.record_success("model-a", "p1", 100.0, None);
         store.record_failure("model-b", "p1");
 
-        let a = store.get("model-a");
-        let b = store.get("model-b");
+        let a = store.get("model-a", "p1");
+        let b = store.get("model-b", "p1");
 
         assert_eq!(a.health.state, HealthState::Healthy);
         assert_eq!(b.health.state, HealthState::Healthy); // 1 failure = still Healthy
