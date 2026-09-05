@@ -28,6 +28,7 @@ pub mod classifier;
 pub mod config;
 pub mod election;
 pub mod error;
+pub mod failure;
 pub mod ir;
 pub mod media;
 pub mod observation;
@@ -58,6 +59,7 @@ pub use config::{
 };
 pub use election::{TierElection, Election, Measurement, Ranked, ScoringConfig};
 pub use error::{Error, Result};
+pub use failure::{ClassifiedFailure, FailureClass, FailureImpact};
 pub use ir::{
     Capability, ChatRequest, ChatResponse, ContentBlock, Dialect, Message, Role, StopReason,
     StreamEvent, SystemPart, ToolChoice, Usage,

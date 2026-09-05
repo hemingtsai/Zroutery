@@ -328,6 +328,21 @@ impl ObservationStore {
         });
         obs.record_failure();
     }
+
+    /// Record a classified failure. Only affects health/observation if
+    /// the failure class says it should.
+    pub fn record_classified_failure(
+        &self,
+        model_id: &str,
+        provider_id: &str,
+        failure: &crate::failure::ClassifiedFailure,
+    ) {
+        if failure.impact.affects_observation {
+            self.record_failure(model_id, provider_id);
+        }
+        // If it doesn't affect observation, we still log it but don't
+        // penalize the model's health.
+    }
 }
 
 impl Default for ObservationStore {
