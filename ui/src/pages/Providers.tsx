@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   api,
   BALANCE_PRESETS,
@@ -72,6 +72,8 @@ export default function Providers({
   const [ccPreview, setCcPreview] = useState<CcSwitchPreview | null>(null);
   const [ccLoading, setCcLoading] = useState(false);
   const [ccSelected, setCcSelected] = useState<Record<string, boolean>>({});
+  const isMounted = useRef(true);
+  useEffect(() => () => { isMounted.current = false; }, []);
 
   const update = (id: string, patch: Partial<Provider>) => {
     void save((cfg) => {
@@ -138,6 +140,7 @@ export default function Providers({
     });
     if (!ok) return;
     await run(() => api.clearKey(id));
+    if (!isMounted.current) return;
     setOpenId(null);
     if (models.length) {
       setNotice(t("providers.removed_models_notice", { n: models.length }));
@@ -170,7 +173,7 @@ export default function Providers({
       .map(([id]) => id);
     if (ids.length === 0) return;
     const ok = await run(() => api.ccswitchImport(ids));
-    if (!ok) return;
+    if (!ok || !isMounted.current) return;
     setNotice(
       t("cc.imported_notice", { n: ids.length }),
     );
@@ -391,8 +394,9 @@ function CcSwitchRow({
 
 /** Balance state as one quiet chip: what is left, or that the check failed. */
 function BalanceChip({ status }: { status: BalanceStatus | undefined }) {
+  const { t } = useI18n();
   if (!status) return <span className="muted">—</span>;
-  if (status.error) return <span className="muted">check failed</span>;
+  if (status.error) return <span className="muted">{t("providers.balance_failed")}</span>;
   if (status.balance) {
     const amount = status.balance.remaining ?? status.balance.total;
     return (

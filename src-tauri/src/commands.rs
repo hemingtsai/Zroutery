@@ -148,9 +148,9 @@ pub async fn clear_provider_key(
     };
     let secrets = Arc::clone(&desktop.secrets);
     // Delete from keychain; a missing entry is not an error.
-    let _ = tauri::async_runtime::spawn_blocking(move || secrets.delete(&key_ref))
+    tauri::async_runtime::spawn_blocking(move || secrets.delete(&key_ref))
         .await
-        .map_err(|e| e.to_string());
+        .map_err(|e| e.to_string())??;
     Ok(refreshed(&app, &desktop).await)
 }
 
@@ -188,7 +188,14 @@ pub async fn fetch_provider_models(
         .await
         .map_err(|e| e.to_string())?;
     let bypass_proxy = desktop.core.config().server.bypass_proxy;
-    Upstream::new(bypass_proxy)
+    let connect_timeout_secs = desktop
+        .core
+        .config()
+        .providers
+        .first()
+        .map(|p| p.connect_timeout_secs)
+        .unwrap_or(15);
+    Upstream::new(bypass_proxy, connect_timeout_secs)
         .list_models(&provider, key.as_deref())
         .await
         .map_err(|e| e.to_string())
@@ -327,7 +334,9 @@ pub async fn ccswitch_import(
     ids: Vec<String>,
 ) -> Cmd<Snapshot> {
     let drafts = {
-        let providers = ccswitch::read_providers()?;
+        let providers = tauri::async_runtime::spawn_blocking(ccswitch::read_providers)
+            .await
+            .map_err(|e| e.to_string())??;
         providers
             .into_iter()
             .filter(|p| ids.contains(&p.source_id))

@@ -54,11 +54,16 @@ impl KeychainSecrets {
     }
 
     /// `provider:deepseek` -> `ZROUTERY_KEY_PROVIDER_DEEPSEEK`
+    ///
+    /// Hyphens are kept as-is (valid in env var names on most platforms);
+    /// only truly invalid characters like `.`, `:`, and spaces are mapped to `_`.
+    /// This avoids collisions where `provider:a.b` and `provider:a-b` would
+    /// otherwise produce the same env var name.
     pub fn env_name(key_ref: &str) -> String {
         let sanitized: String = key_ref
             .chars()
             .map(|c| {
-                if c.is_ascii_alphanumeric() {
+                if c.is_ascii_alphanumeric() || c == '-' {
                     c.to_ascii_uppercase()
                 } else {
                     '_'
@@ -145,9 +150,15 @@ mod tests {
             KeychainSecrets::env_name("provider:deepseek"),
             "ZROUTERY_KEY_PROVIDER_DEEPSEEK"
         );
+        // Hyphens are kept; dots, colons, and spaces become underscores.
         assert_eq!(
             KeychainSecrets::env_name("provider:my-thing.1"),
-            "ZROUTERY_KEY_PROVIDER_MY_THING_1"
+            "ZROUTERY_KEY_PROVIDER_MY-THING_1"
+        );
+        // Two previously-colliding names now map differently.
+        assert_ne!(
+            KeychainSecrets::env_name("provider:a.b"),
+            KeychainSecrets::env_name("provider:a-b"),
         );
     }
 

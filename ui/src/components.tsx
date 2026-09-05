@@ -1,5 +1,5 @@
 /** Small presentational building blocks shared by the panels. */
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import * as RadixSelect from "@radix-ui/react-select";
 
 /**
@@ -111,14 +111,17 @@ export function Segment<T extends string>({
 export function Popover({
   trigger,
   title,
+  ariaLabel,
   children,
 }: {
   trigger: ReactNode;
   title?: ReactNode;
+  ariaLabel?: string;
   children: ReactNode | ((close: () => void) => ReactNode);
 }) {
   const [open, setOpen] = useState(false);
   const anchor = useRef<HTMLDivElement>(null);
+  const titleId = useId();
 
   useEffect(() => {
     if (!open) return;
@@ -141,13 +144,14 @@ export function Popover({
       <button
         className="bar-action"
         aria-expanded={open}
+        aria-label={ariaLabel}
         onClick={() => setOpen(!open)}
       >
         {trigger}
       </button>
       {open && (
-        <div className="popover" role="menu">
-          {title && <div className="menu-title">{title}</div>}
+        <div className="popover" role="menu" aria-labelledby={title ? titleId : undefined}>
+          {title && <div className="menu-title" id={titleId}>{title}</div>}
           {typeof children === "function" ? children(() => setOpen(false)) : children}
         </div>
       )}
@@ -269,7 +273,7 @@ export function Drawer({
       <aside className="drawer" role="dialog" aria-modal>
         <header className="drawer-head">
           <div className="drawer-title">{title}</div>
-          <button className="linky" onClick={onClose} title="Close (Esc)">
+          <button className="linky" onClick={onClose} title="Close (Esc)" aria-label="Close">
             ×
           </button>
         </header>
