@@ -25,6 +25,8 @@ const en = {
   // ------------------------------------------------------------ shared
   "common.dismiss": "Dismiss",
   "common.ok": "OK",
+  "common.cancel": "Cancel",
+  "common.confirm": "Confirm",
   "common.loading": "Loading…",
   "common.remove": "Remove",
   "common.delete": "Delete",
@@ -68,6 +70,33 @@ const en = {
   "action.hide": "Hide",
   "action.quit": "Quit",
   "action.quit_title": "Stop the gateway and quit",
+  "toast.copied": "Copied.",
+  "toast.queued_discarded":
+    "The save failed, so edits queued behind it were dropped.",
+
+  // ---------------------------------------------------------------- confirm
+  "confirm.remove_provider": "Remove provider",
+  "confirm.remove_provider_body":
+    "Its {n} model and stored key are removed with it. | Its {n} models and stored key are removed with it.",
+  "confirm.remove_model": "Remove model",
+  "confirm.remove_model_body": "Clients calling it by id will get errors.",
+  "confirm.remove_budget": "Delete budget",
+  "confirm.reset_stats": "Reset counters",
+  "confirm.reset_stats_body":
+    "Request history, model health and spend estimates are cleared.",
+  "confirm.regenerate_token": "Regenerate token",
+  "confirm.regenerate_token_body":
+    "Existing clients stop working until you give them the new token.",
+  "error.title": "The dashboard hit a bug",
+  "error.unaffected": "The proxy is unaffected and keeps running in the menu bar.",
+  "common.try_again": "Try again",
+  "common.reload": "Reload",
+  "nav.main_aria": "Main",
+  "activity.tries": "{n} tries",
+  "providers.open_row": "Open {name}",
+  "models.open_row": "Open {id}",
+  "cc.import_row": "Import {name}",
+  "settings.remove_origin": "Remove {origin}",
 
   // ------------------------------------------------------------ overview
   "overview.gateway": "gateway",
@@ -190,6 +219,7 @@ const en = {
   "providers.models_section": "Models",
   "providers.models_hint": "Fetch the provider's catalogue, then add what you want to expose.",
   "providers.fetch": "Fetch catalogue",
+  "providers.discovering": "Fetching…",
   "providers.empty_catalogue": "{name} returned an empty model list.",
   "providers.configuration": "Configuration",
   "field.timeout": "Timeout (s)",
@@ -206,6 +236,7 @@ const en = {
   "providers.balance_hint": "Some providers publish the credit that is left.",
   "field.probe": "Probe",
   "providers.check_now": "Check now",
+  "providers.checking": "Checking…",
   "providers.compatibility": "Compatibility",
   "providers.compatibility_hint":
     "For providers that deviate from the dialect; leave everything off unless a request fails.",
@@ -423,6 +454,8 @@ const zh: Dict = {
   // ------------------------------------------------------------ shared
   "common.dismiss": "知道了",
   "common.ok": "确定",
+  "common.cancel": "取消",
+  "common.confirm": "确认",
   "common.loading": "加载中…",
   "common.remove": "移除",
   "common.delete": "删除",
@@ -466,6 +499,30 @@ const zh: Dict = {
   "action.hide": "隐藏",
   "action.quit": "退出",
   "action.quit_title": "停止网关并退出",
+  "toast.copied": "已复制。",
+  "toast.queued_discarded": "保存失败,排队中的修改已丢弃。",
+
+  // ---------------------------------------------------------------- confirm
+  "confirm.remove_provider": "移除提供商",
+  "confirm.remove_provider_body":
+    "该提供商下的 {n} 个模型与已存密钥会一并删除。| 该提供商下的 {n} 个模型与已存密钥会一并删除。",
+  "confirm.remove_model": "移除模型",
+  "confirm.remove_model_body": "客户端按 id 调用它时会报错。",
+  "confirm.remove_budget": "删除预算",
+  "confirm.reset_stats": "重置计数",
+  "confirm.reset_stats_body": "请求历史、模型健康与花费估算会被清零。",
+  "confirm.regenerate_token": "重新生成令牌",
+  "confirm.regenerate_token_body": "现有客户端会全部失效,直到换用新令牌。",
+  "error.title": "界面出现了问题",
+  "error.unaffected": "网关不受影响,仍在菜单栏正常运行。",
+  "common.try_again": "重试",
+  "common.reload": "重新加载",
+  "nav.main_aria": "主导航",
+  "activity.tries": "尝试 {n} 次",
+  "providers.open_row": "打开 {name}",
+  "models.open_row": "打开 {id}",
+  "cc.import_row": "导入 {name}",
+  "settings.remove_origin": "移除 {origin}",
 
   // ------------------------------------------------------------ overview
   "overview.gateway": "网关",
@@ -585,6 +642,7 @@ const zh: Dict = {
   "providers.models_section": "模型",
   "providers.models_hint": "抓取提供商目录,再添加要暴露的模型。",
   "providers.fetch": "抓取目录",
+  "providers.discovering": "抓取中…",
   "providers.empty_catalogue": "{name} 返回了空模型列表。",
   "providers.configuration": "配置",
   "field.timeout": "超时 (秒)",
@@ -601,6 +659,7 @@ const zh: Dict = {
   "providers.balance_hint": "部分提供商公布剩余额度。",
   "field.probe": "探针",
   "providers.check_now": "立即查询",
+  "providers.checking": "查询中…",
   "providers.compatibility": "兼容性",
   "providers.compatibility_hint": "用于偏离标准协议的提供商;除非请求失败,否则保持全部关闭。",
   "quirk.max_completion_tokens": "使用 max_completion_tokens",
