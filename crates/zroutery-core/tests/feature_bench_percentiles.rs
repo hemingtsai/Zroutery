@@ -1,3 +1,5 @@
+#![cfg(feature = "ml")]
+
 use std::time::Instant;
 use zroutery_core::config::{ModelCapabilities, ModelTier};
 use zroutery_core::ml::features::{extract_features, FeatureContext};

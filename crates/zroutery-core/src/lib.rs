@@ -34,6 +34,7 @@ pub mod feedback;
 pub mod ir;
 pub mod media;
 pub mod migration;
+#[cfg(feature = "ml")]
 pub mod ml;
 pub mod observation;
 pub mod outcome;
@@ -101,6 +102,7 @@ pub use stats_ext::{
 pub use migration::{
     MigrationAction, MigrationPlan, MigrationResult, MigrationState, MigrationStep, MigrationStore,
 };
+#[cfg(feature = "ml")]
 pub use ml::{
     DatasetStore, DatasetTrainingSample, SampleBuilder, Targets, validate_sample,
     extract_features, FeatureContext, RoutingFeatures, FEATURE_DIMENSION, FEATURE_SCHEMA_VERSION,

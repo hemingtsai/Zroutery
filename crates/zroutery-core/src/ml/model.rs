@@ -251,6 +251,10 @@ impl RoutingModel for SuccessModel {
     }
 
     fn update(&mut self, features: &RoutingFeatures, target: f64) {
+        if !target.is_finite() {
+            return; // silently skip NaN/Inf targets
+        }
+        let target = target.clamp(0.0, 1.0);
         self.samples += 1;
         let p = self.raw_predict(&features.values);
         let error = target - p; // target is 0.0 or 1.0
@@ -299,6 +303,13 @@ impl RoutingModel for SuccessModel {
             return Err("checksum mismatch".into());
         }
         let n = (state.parameters.len() - 1) / 2;
+        if n != super::features::FEATURE_DIMENSION {
+            return Err(format!(
+                "expected {} weights, got {}",
+                super::features::FEATURE_DIMENSION,
+                n
+            ));
+        }
         let bias = state.parameters[0];
         let weights = state.parameters[1..=n].to_vec();
         let grad_sq = state.parameters[n + 1..].to_vec();
@@ -366,6 +377,12 @@ impl RoutingModel for LatencyModel {
     }
 
     fn update(&mut self, features: &RoutingFeatures, target: f64) {
+        if !target.is_finite() {
+            return; // silently skip NaN/Inf targets
+        }
+        if target < 0.0 {
+            return; // reject negative targets
+        }
         self.samples += 1;
         let mut predicted = self.bias;
         for (w, f) in self.weights.iter().zip(features.values.iter()) {
@@ -405,6 +422,14 @@ impl RoutingModel for LatencyModel {
         }
         if !state.verify_checksum() {
             return Err("checksum mismatch".into());
+        }
+        let n = state.parameters.len() - 2; // bias + residual_ewma + weights
+        if n != super::features::FEATURE_DIMENSION {
+            return Err(format!(
+                "expected {} weights, got {}",
+                super::features::FEATURE_DIMENSION,
+                n
+            ));
         }
         let bias = state.parameters[0];
         let residual_ewma = state.parameters[1];
@@ -472,6 +497,12 @@ impl RoutingModel for TtftModel {
     }
 
     fn update(&mut self, features: &RoutingFeatures, target: f64) {
+        if !target.is_finite() {
+            return; // silently skip NaN/Inf targets
+        }
+        if target < 0.0 {
+            return; // reject negative targets
+        }
         self.samples += 1;
         let mut predicted = self.bias;
         for (w, f) in self.weights.iter().zip(features.values.iter()) {
@@ -511,6 +542,14 @@ impl RoutingModel for TtftModel {
         }
         if !state.verify_checksum() {
             return Err("checksum mismatch".into());
+        }
+        let n = state.parameters.len() - 2; // bias + residual_ewma + weights
+        if n != super::features::FEATURE_DIMENSION {
+            return Err(format!(
+                "expected {} weights, got {}",
+                super::features::FEATURE_DIMENSION,
+                n
+            ));
         }
         let bias = state.parameters[0];
         let residual_ewma = state.parameters[1];
@@ -578,6 +617,12 @@ impl RoutingModel for CostModel {
     }
 
     fn update(&mut self, features: &RoutingFeatures, target: f64) {
+        if !target.is_finite() {
+            return; // silently skip NaN/Inf targets
+        }
+        if target < 0.0 {
+            return; // reject negative targets
+        }
         self.samples += 1;
         let mut predicted = self.bias;
         for (w, f) in self.weights.iter().zip(features.values.iter()) {
@@ -617,6 +662,14 @@ impl RoutingModel for CostModel {
         }
         if !state.verify_checksum() {
             return Err("checksum mismatch".into());
+        }
+        let n = state.parameters.len() - 2; // bias + residual_ewma + weights
+        if n != super::features::FEATURE_DIMENSION {
+            return Err(format!(
+                "expected {} weights, got {}",
+                super::features::FEATURE_DIMENSION,
+                n
+            ));
         }
         let bias = state.parameters[0];
         let residual_ewma = state.parameters[1];
@@ -1783,6 +1836,210 @@ mod tests {
             "cost",
             "cost_linear",
             |i| 0.01 + i as f64 * 0.001,
+        );
+    }
+
+    // -- Fix 5: Training benchmark for all 4 models --
+
+    #[test]
+    fn training_benchmark_all_models_100k() {
+        let models: Vec<Box<dyn RoutingModel>> = vec![
+            Box::new(SuccessModel::new(FEATURE_DIMENSION)),
+            Box::new(LatencyModel::new(FEATURE_DIMENSION)),
+            Box::new(TtftModel::new(FEATURE_DIMENSION)),
+            Box::new(CostModel::new(FEATURE_DIMENSION)),
+        ];
+        let features = RoutingFeatures::default();
+        for mut model in models {
+            let start = std::time::Instant::now();
+            for i in 0..100_000 {
+                model.update(&features, if i % 2 == 0 { 1.0 } else { 0.0 });
+            }
+            let elapsed = start.elapsed();
+            assert!(
+                elapsed.as_secs() < 30,
+                "{}: 100k took {}s",
+                model.name(),
+                elapsed.as_secs()
+            );
+            let state = model.save();
+            let size = serde_json::to_vec(&state).unwrap().len();
+            assert!(
+                size < 2 * 1024 * 1024,
+                "{}: state is {} bytes",
+                model.name(),
+                size
+            );
+        }
+    }
+
+    // -- Fix 6: P95/P99 prediction benchmark --
+
+    #[test]
+    fn prediction_p95_p99_benchmark() {
+        let mut model = SuccessModel::new(FEATURE_DIMENSION);
+        let features = RoutingFeatures::default();
+        for i in 0..1000 {
+            model.update(&features, (i % 2) as f64);
+        }
+
+        let mut times = Vec::new();
+        for _ in 0..10_000 {
+            let start = std::time::Instant::now();
+            let _ = model.predict(&features);
+            times.push(start.elapsed().as_micros() as f64);
+        }
+        times.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let p95 = times[(times.len() as f64 * 0.95) as usize];
+        let p99 = times[(times.len() as f64 * 0.99) as usize];
+        assert!(p95 < 1000.0, "P95 = {}us", p95); // < 1ms
+        assert!(p99 < 3000.0, "P99 = {}us", p99); // < 3ms
+    }
+
+    // -- Fix 7: Target validation tests --
+
+    #[test]
+    fn update_rejects_nan_target() {
+        let mut model = SuccessModel::new(FEATURE_DIMENSION);
+        let features = RoutingFeatures::default();
+        let before = model.predict(&features).value;
+        model.update(&features, f64::NAN);
+        let after = model.predict(&features).value;
+        assert!(
+            (before - after).abs() < 1e-10,
+            "NaN target should be rejected"
+        );
+    }
+
+    #[test]
+    fn update_rejects_inf_target() {
+        let mut model = SuccessModel::new(FEATURE_DIMENSION);
+        let features = RoutingFeatures::default();
+        let before = model.predict(&features).value;
+        model.update(&features, f64::INFINITY);
+        let after = model.predict(&features).value;
+        assert!(
+            (before - after).abs() < 1e-10,
+            "Inf target should be rejected"
+        );
+    }
+
+    #[test]
+    fn update_rejects_neg_inf_target() {
+        let mut model = SuccessModel::new(FEATURE_DIMENSION);
+        let features = RoutingFeatures::default();
+        let before = model.predict(&features).value;
+        model.update(&features, f64::NEG_INFINITY);
+        let after = model.predict(&features).value;
+        assert!(
+            (before - after).abs() < 1e-10,
+            "-Inf target should be rejected"
+        );
+    }
+
+    #[test]
+    fn success_model_clamps_target_to_0_1() {
+        let mut model = SuccessModel::new(FEATURE_DIMENSION);
+        let mut features = RoutingFeatures::default();
+        for v in features.values.iter_mut() {
+            *v = 0.5;
+        }
+        // Train with target=1.0 to push weights up
+        for _ in 0..100 {
+            model.update(&features, 1.0);
+        }
+        let pred_high = model.predict(&features).value;
+
+        // Reset and train with target=2.0 (should be clamped to 1.0, same as above)
+        model.reset();
+        for _ in 0..100 {
+            model.update(&features, 2.0);
+        }
+        let pred_clamped = model.predict(&features).value;
+
+        assert!(
+            (pred_high - pred_clamped).abs() < 1e-10,
+            "target=2.0 should be clamped to 1.0: high={}, clamped={}",
+            pred_high,
+            pred_clamped
+        );
+    }
+
+    #[test]
+    fn latency_model_rejects_nan_target() {
+        let mut model = LatencyModel::new(FEATURE_DIMENSION);
+        let features = RoutingFeatures::default();
+        let before = model.predict(&features).value;
+        model.update(&features, f64::NAN);
+        let after = model.predict(&features).value;
+        assert!(
+            (before - after).abs() < 1e-10,
+            "LatencyModel: NaN target should be rejected"
+        );
+    }
+
+    #[test]
+    fn latency_model_rejects_negative_target() {
+        let mut model = LatencyModel::new(FEATURE_DIMENSION);
+        let features = RoutingFeatures::default();
+        let before = model.predict(&features).value;
+        model.update(&features, -100.0);
+        let after = model.predict(&features).value;
+        assert!(
+            (before - after).abs() < 1e-10,
+            "LatencyModel: negative target should be rejected"
+        );
+    }
+
+    #[test]
+    fn ttft_model_rejects_nan_target() {
+        let mut model = TtftModel::new(FEATURE_DIMENSION);
+        let features = RoutingFeatures::default();
+        let before = model.predict(&features).value;
+        model.update(&features, f64::NAN);
+        let after = model.predict(&features).value;
+        assert!(
+            (before - after).abs() < 1e-10,
+            "TtftModel: NaN target should be rejected"
+        );
+    }
+
+    #[test]
+    fn ttft_model_rejects_negative_target() {
+        let mut model = TtftModel::new(FEATURE_DIMENSION);
+        let features = RoutingFeatures::default();
+        let before = model.predict(&features).value;
+        model.update(&features, -50.0);
+        let after = model.predict(&features).value;
+        assert!(
+            (before - after).abs() < 1e-10,
+            "TtftModel: negative target should be rejected"
+        );
+    }
+
+    #[test]
+    fn cost_model_rejects_nan_target() {
+        let mut model = CostModel::new(FEATURE_DIMENSION);
+        let features = RoutingFeatures::default();
+        let before = model.predict(&features).value;
+        model.update(&features, f64::NAN);
+        let after = model.predict(&features).value;
+        assert!(
+            (before - after).abs() < 1e-10,
+            "CostModel: NaN target should be rejected"
+        );
+    }
+
+    #[test]
+    fn cost_model_rejects_negative_target() {
+        let mut model = CostModel::new(FEATURE_DIMENSION);
+        let features = RoutingFeatures::default();
+        let before = model.predict(&features).value;
+        model.update(&features, -0.01);
+        let after = model.predict(&features).value;
+        assert!(
+            (before - after).abs() < 1e-10,
+            "CostModel: negative target should be rejected"
         );
     }
 }

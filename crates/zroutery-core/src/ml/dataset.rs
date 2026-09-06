@@ -143,12 +143,32 @@ impl DatasetStore {
     }
 
     /// Push a sample, evicting the oldest if at capacity.
-    pub fn push(&self, sample: TrainingSample) {
+    ///
+    /// Validates the sample before inserting. Returns an error if the sample
+    /// has invalid targets (NaN, Inf, or negative latency/ttft/cost).
+    pub fn push(&self, sample: TrainingSample) -> Result<(), String> {
+        validate_sample(&sample)?;
+        if let Some(latency) = sample.targets.latency_ms {
+            if !latency.is_finite() || latency < 0.0 {
+                return Err(format!("invalid latency_ms: {}", latency));
+            }
+        }
+        if let Some(ttft) = sample.targets.ttft_ms {
+            if !ttft.is_finite() || ttft < 0.0 {
+                return Err(format!("invalid ttft_ms: {}", ttft));
+            }
+        }
+        if let Some(cost) = sample.targets.cost {
+            if !cost.is_finite() || cost < 0.0 {
+                return Err(format!("invalid cost: {}", cost));
+            }
+        }
         let mut samples = crate::sync::lock(&self.samples);
         if samples.len() >= self.max_samples {
             samples.pop_front();
         }
         samples.push_back(sample);
+        Ok(())
     }
 
     /// Number of samples currently stored (regardless of age).
@@ -425,7 +445,7 @@ mod tests {
 
         let outcome = success_outcome();
         let sample = SampleBuilder::build(&outcome, sample_features(), DataOrigin::Native);
-        store.push(sample);
+        store.push(sample).unwrap();
 
         assert_eq!(store.len(), 1);
         assert!(!store.is_empty());
@@ -440,7 +460,7 @@ mod tests {
 
         for _ in 0..5 {
             let sample = SampleBuilder::build(&outcome, sample_features(), DataOrigin::Native);
-            store.push(sample);
+            store.push(sample).unwrap();
         }
 
         assert_eq!(store.len(), 3, "should evict oldest to stay at capacity");
@@ -457,13 +477,13 @@ mod tests {
         // Push with a timestamp far in the past
         outcome.timestamp = chrono::Utc::now().timestamp() - 60;
         let old_sample = SampleBuilder::build(&outcome, sample_features(), DataOrigin::Native);
-        store.push(old_sample);
+        store.push(old_sample).unwrap();
 
         // Push with current timestamp
         let fresh_outcome = success_outcome();
         let fresh_sample =
             SampleBuilder::build(&fresh_outcome, sample_features(), DataOrigin::Native);
-        store.push(fresh_sample);
+        store.push(fresh_sample).unwrap();
 
         assert_eq!(store.len(), 2, "both stored");
         let slice = store.training_slice();
@@ -662,11 +682,13 @@ mod tests {
         let store = DatasetStore::new(100, 3600);
         let outcome = success_outcome();
         for _ in 0..10 {
-            store.push(SampleBuilder::build(
-                &outcome,
-                sample_features(),
-                DataOrigin::Native,
-            ));
+            store
+                .push(SampleBuilder::build(
+                    &outcome,
+                    sample_features(),
+                    DataOrigin::Native,
+                ))
+                .unwrap();
         }
         assert_eq!(store.len(), 10);
         store.clear();
