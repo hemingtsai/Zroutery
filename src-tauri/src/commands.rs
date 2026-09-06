@@ -330,12 +330,20 @@ pub async fn ccswitch_preview(
 /// preview draft), so the selection survives re-ordering in CC Switch.
 /// API keys go straight into the credential store; the config file keeps
 /// only key refs, exactly like a hand-entered provider.
+///
+/// Each draft is validated before conversion; invalid entries are skipped
+/// with a warning logged. The import batch is also validated after
+/// conversion to catch duplicates and other cross-entry issues.
 #[tauri::command]
 pub async fn ccswitch_import(
     app: AppHandle,
     desktop: State<'_, Arc<Desktop>>,
     ids: Vec<String>,
 ) -> Cmd<Snapshot> {
+    let source = ccswitch::cc_switch_dir()
+        .map(|d| d.display().to_string())
+        .unwrap_or_else(|| "unknown".into());
+
     let drafts = {
         let providers = tauri::async_runtime::spawn_blocking(ccswitch::read_providers)
             .await
@@ -348,11 +356,20 @@ pub async fn ccswitch_import(
 
     let mut config = (*desktop.core.config()).clone();
     let mut imported_keys: Vec<(String, String)> = Vec::new();
+    let mut batch: Vec<(zroutery_core::config::ProviderConfig, Vec<zroutery_core::config::ModelEntry>)> = Vec::new();
+    let mut warnings: Vec<String> = Vec::new();
 
     // The current CC Switch provider becomes the class primary; the rest keep
     // CC Switch's order behind it.
     let mut priority = 0;
     for draft in &drafts {
+        // Validate before conversion; skip bad entries.
+        if let Err(e) = ccswitch::validate_draft(draft) {
+            tracing::warn!("skipping CC Switch provider `{}`: {e}", draft.name);
+            warnings.push(format!("skipped `{}`: {e}", draft.name));
+            continue;
+        }
+
         let taken = |id: &str| config.provider(id).is_some();
         let provider_id = ccswitch::unique_provider_id(&draft.name, &taken);
         let (provider, models) = ccswitch::to_zroutery(
@@ -364,9 +381,24 @@ pub async fn ccswitch_import(
         if let Some(key) = draft.api_key.clone() {
             imported_keys.push((provider.key_ref.clone(), key));
         }
+        batch.push((provider.clone(), models.clone()));
         config.providers.push(provider);
         config.models.extend(models);
         priority += 10;
+    }
+
+    // Validate the batch for cross-entry issues (duplicates, etc.).
+    let (batch_warnings, batch_errors) = ccswitch::validate_import_batch(&batch);
+    warnings.extend(batch_warnings);
+
+    if !batch_errors.is_empty() {
+        // Errors in the batch are fatal — do not commit.
+        let msg = format!(
+            "CC Switch import aborted: {}",
+            batch_errors.join("; ")
+        );
+        tracing::error!("{msg}");
+        return Err(msg);
     }
 
     // Store the keys first: an import whose providers reference keys that do
@@ -382,5 +414,27 @@ pub async fn ccswitch_import(
     .map_err(|e| e.to_string())??;
 
     desktop.apply_config(config).await?;
-    Ok(refreshed(&app, &desktop).await)
+
+    // Build and log the import report.
+    let report = ccswitch::build_report(&source, &batch, warnings, vec![]);
+    tracing::info!(
+        "CC Switch import: {} providers, {} models from {} ({} warnings)",
+        report.providers_imported,
+        report.models_imported,
+        report.source,
+        report.warnings.len(),
+    );
+    for w in &report.warnings {
+        tracing::warn!("CC Switch import warning: {w}");
+    }
+
+    let mut snapshot = refreshed(&app, &desktop).await;
+    if !report.warnings.is_empty() {
+        snapshot.warning = Some(format!(
+            "CC Switch import: {} providers imported with {} warning(s). See logs for details.",
+            report.providers_imported,
+            report.warnings.len(),
+        ));
+    }
+    Ok(snapshot)
 }
