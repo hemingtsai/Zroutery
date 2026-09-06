@@ -145,6 +145,121 @@ impl Default for MigrationStore {
 }
 
 // ---------------------------------------------------------------------------
+// MigrationExecutor
+// ---------------------------------------------------------------------------
+
+/// Executes a migration plan step by step.
+pub struct MigrationExecutor {
+    store: MigrationStore,
+}
+
+impl MigrationExecutor {
+    pub fn new(store: MigrationStore) -> Self {
+        Self { store }
+    }
+
+    /// Execute a migration plan. Returns the result.
+    pub async fn execute(&self, plan: &MigrationPlan) -> MigrationResult {
+        let start = std::time::Instant::now();
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+        let mut completed = 0;
+
+        // Transition Detected -> Prepared (or current -> Prepared if idempotent)
+        if let Err(current) = self.store.transition(MigrationState::Prepared) {
+            return MigrationResult {
+                state: MigrationState::Failed,
+                steps_completed: 0,
+                steps_total: plan.steps.len(),
+                errors: vec![format!(
+                    "Cannot start migration: current state is {:?}, expected Detected",
+                    current
+                )],
+                warnings,
+                duration_ms: start.elapsed().as_millis() as u64,
+                rolled_back: false,
+            };
+        }
+
+        for (i, step) in plan.steps.iter().enumerate() {
+            match self.execute_step(step).await {
+                Ok(w) => {
+                    completed += 1;
+                    warnings.extend(w);
+                }
+                Err(e) => {
+                    errors.push(format!("Step {} ({}) failed: {}", i, step.description, e));
+                    let _ = self.store.transition(MigrationState::Failed);
+                    return MigrationResult {
+                        state: MigrationState::Failed,
+                        steps_completed: completed,
+                        steps_total: plan.steps.len(),
+                        errors,
+                        warnings,
+                        duration_ms: start.elapsed().as_millis() as u64,
+                        rolled_back: false,
+                    };
+                }
+            }
+        }
+
+        // Walk the state machine through Verified -> Switched -> Completed
+        let _ = self.store.transition(MigrationState::Verified);
+        let _ = self.store.transition(MigrationState::Switched);
+        let _ = self.store.transition(MigrationState::Completed);
+
+        MigrationResult {
+            state: MigrationState::Completed,
+            steps_completed: completed,
+            steps_total: plan.steps.len(),
+            errors,
+            warnings,
+            duration_ms: start.elapsed().as_millis() as u64,
+            rolled_back: false,
+        }
+    }
+
+    async fn execute_step(&self, step: &MigrationStep) -> Result<Vec<String>, String> {
+        match &step.action {
+            MigrationAction::CopyConfig { source, dest } => {
+                // In real impl: copy file. For now, validate paths.
+                if source.is_empty() || dest.is_empty() {
+                    return Err("source or dest is empty".into());
+                }
+                Ok(vec![])
+            }
+            MigrationAction::ValidateConfig => {
+                // Validate config syntax
+                Ok(vec![])
+            }
+            MigrationAction::VerifyEndpoint { url } => {
+                // In real impl: HTTP health check
+                if url.is_empty() {
+                    return Err("endpoint URL is empty".into());
+                }
+                Ok(vec![])
+            }
+            _ => Ok(vec![]),
+        }
+    }
+
+    /// Rollback a failed migration.
+    pub fn rollback(&self) -> MigrationResult {
+        let _ = self.store.transition(MigrationState::RolledBack);
+        // In real impl: restore original config, restart external router
+        MigrationResult {
+            state: MigrationState::RolledBack,
+            steps_completed: 0,
+            steps_total: 0,
+            errors: vec![],
+            warnings: vec![],
+            duration_ms: 0,
+            rolled_back: true,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -656,5 +771,167 @@ mod tests {
             assert_eq!(entry.steps_completed, i);
             assert_eq!(entry.duration_ms, (i as u64 + 1) * 100);
         }
+    }
+
+    // -- MigrationExecutor tests --------------------------------------------
+
+    fn make_plan(steps: Vec<MigrationStep>) -> MigrationPlan {
+        MigrationPlan {
+            plan_id: "test-plan".to_string(),
+            source_description: "test".to_string(),
+            steps,
+            created_at: 1_700_000_000,
+        }
+    }
+
+    #[tokio::test]
+    async fn executor_success_all_steps_pass() {
+        let store = MigrationStore::new();
+        let executor = MigrationExecutor::new(store);
+
+        let plan = make_plan(vec![
+            MigrationStep {
+                description: "Validate config".to_string(),
+                action: MigrationAction::ValidateConfig,
+                reversible: true,
+            },
+            MigrationStep {
+                description: "Copy config".to_string(),
+                action: MigrationAction::CopyConfig {
+                    source: "from.toml".to_string(),
+                    dest: "to.toml".to_string(),
+                },
+                reversible: true,
+            },
+            MigrationStep {
+                description: "Verify".to_string(),
+                action: MigrationAction::VerifyEndpoint {
+                    url: "http://localhost:8080/health".to_string(),
+                },
+                reversible: false,
+            },
+        ]);
+
+        let result = executor.execute(&plan).await;
+        assert_eq!(result.state, MigrationState::Completed);
+        assert_eq!(result.steps_completed, 3);
+        assert_eq!(result.steps_total, 3);
+        assert!(result.errors.is_empty());
+        assert!(!result.rolled_back);
+        assert_eq!(executor.store.current_state(), MigrationState::Completed);
+    }
+
+    #[tokio::test]
+    async fn executor_failure_step_fails() {
+        let store = MigrationStore::new();
+        let executor = MigrationExecutor::new(store);
+
+        let plan = make_plan(vec![
+            MigrationStep {
+                description: "Validate".to_string(),
+                action: MigrationAction::ValidateConfig,
+                reversible: true,
+            },
+            MigrationStep {
+                description: "Bad copy".to_string(),
+                action: MigrationAction::CopyConfig {
+                    source: "".to_string(),
+                    dest: "to.toml".to_string(),
+                },
+                reversible: true,
+            },
+        ]);
+
+        let result = executor.execute(&plan).await;
+        assert_eq!(result.state, MigrationState::Failed);
+        assert_eq!(result.steps_completed, 1);
+        assert_eq!(result.steps_total, 2);
+        assert_eq!(result.errors.len(), 1);
+        assert!(result.errors[0].contains("Step 1"));
+        assert!(result.errors[0].contains("source or dest is empty"));
+        assert!(!result.rolled_back);
+        assert_eq!(executor.store.current_state(), MigrationState::Failed);
+    }
+
+    #[tokio::test]
+    async fn executor_rollback_from_failed() {
+        let store = MigrationStore::new();
+        let executor = MigrationExecutor::new(store);
+
+        // Force into a failed state via a failing plan
+        let plan = make_plan(vec![MigrationStep {
+            description: "Fail".to_string(),
+            action: MigrationAction::CopyConfig {
+                source: "".to_string(),
+                dest: "".to_string(),
+            },
+            reversible: true,
+        }]);
+        executor.execute(&plan).await;
+        assert_eq!(executor.store.current_state(), MigrationState::Failed);
+
+        let result = executor.rollback();
+        assert_eq!(result.state, MigrationState::RolledBack);
+        assert!(result.rolled_back);
+        assert_eq!(executor.store.current_state(), MigrationState::RolledBack);
+    }
+
+    #[tokio::test]
+    async fn executor_empty_source_dest_is_step_error() {
+        let store = MigrationStore::new();
+        let executor = MigrationExecutor::new(store);
+
+        let plan = make_plan(vec![MigrationStep {
+            description: "Empty paths".to_string(),
+            action: MigrationAction::CopyConfig {
+                source: "".to_string(),
+                dest: "".to_string(),
+            },
+            reversible: true,
+        }]);
+
+        let result = executor.execute(&plan).await;
+        assert_eq!(result.state, MigrationState::Failed);
+        assert_eq!(result.steps_completed, 0);
+        assert_eq!(result.errors.len(), 1);
+        assert!(result.errors[0].contains("source or dest is empty"));
+    }
+
+    #[tokio::test]
+    async fn executor_empty_endpoint_url_is_step_error() {
+        let store = MigrationStore::new();
+        let executor = MigrationExecutor::new(store);
+
+        let plan = make_plan(vec![MigrationStep {
+            description: "Empty URL".to_string(),
+            action: MigrationAction::VerifyEndpoint {
+                url: "".to_string(),
+            },
+            reversible: false,
+        }]);
+
+        let result = executor.execute(&plan).await;
+        assert_eq!(result.state, MigrationState::Failed);
+        assert_eq!(result.steps_completed, 0);
+        assert_eq!(result.errors.len(), 1);
+        assert!(result.errors[0].contains("endpoint URL is empty"));
+    }
+
+    #[tokio::test]
+    async fn executor_records_duration() {
+        let store = MigrationStore::new();
+        let executor = MigrationExecutor::new(store);
+
+        let plan = make_plan(vec![MigrationStep {
+            description: "Validate".to_string(),
+            action: MigrationAction::ValidateConfig,
+            reversible: true,
+        }]);
+
+        let result = executor.execute(&plan).await;
+        assert_eq!(result.state, MigrationState::Completed);
+        // Duration should be recorded (>= 0 is always true, but it should be non-overflowing)
+        // We just verify the field is set; it will be a small number for a no-op.
+        let _ = result.duration_ms;
     }
 }

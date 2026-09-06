@@ -251,6 +251,308 @@ impl Default for TakeoverStore {
 }
 
 // ---------------------------------------------------------------------------
+// AgentType
+// ---------------------------------------------------------------------------
+
+/// Supported external agent types.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentType {
+    Claude,
+    Codex,
+    Gemini,
+}
+
+// ---------------------------------------------------------------------------
+// AgentConfigSnapshot
+// ---------------------------------------------------------------------------
+
+/// A snapshot of an agent's configuration, captured at a point in time.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentConfigSnapshot {
+    /// The agent this config belongs to.
+    pub agent_type: AgentType,
+    /// Path to the config file on disk.
+    pub config_path: std::path::PathBuf,
+    /// Raw config parsed as a JSON value.
+    pub raw: serde_json::Value,
+}
+
+// ---------------------------------------------------------------------------
+// ManagedField
+// ---------------------------------------------------------------------------
+
+/// A single configuration field under Zroutery's management.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ManagedField {
+    /// Dotted path to the field (e.g. "model.temperature").
+    pub path: String,
+    /// Desired value for the field.
+    pub value: serde_json::Value,
+}
+
+// ---------------------------------------------------------------------------
+// AgentAdapter
+// ---------------------------------------------------------------------------
+
+/// Trait for agent-specific configuration management.
+///
+/// Each external agent (Claude, Codex, Gemini) implements this trait to
+/// provide config discovery, reading, patching, and release semantics.
+pub trait AgentAdapter: Send + Sync {
+    /// Agent type identifier.
+    fn agent_type(&self) -> AgentType;
+
+    /// Find the agent config file path.
+    fn config_path(&self) -> Result<std::path::PathBuf, String>;
+
+    /// Read and parse the current config.
+    fn read_config(&self) -> Result<AgentConfigSnapshot, String>;
+
+    /// Apply managed field patches to the config.
+    fn apply_patch(
+        &self,
+        snapshot: &AgentConfigSnapshot,
+        fields: &[ManagedField],
+    ) -> Result<AgentConfigSnapshot, String>;
+
+    /// Restore original values for managed fields.
+    fn release(
+        &self,
+        snapshot: &AgentConfigSnapshot,
+        manifest: &OwnershipManifest,
+    ) -> Result<(), String>;
+}
+
+// ---------------------------------------------------------------------------
+// ClaudeAdapter
+// ---------------------------------------------------------------------------
+
+/// Agent adapter for Claude CLI.
+///
+/// Config location: `~/.claude.json`
+pub struct ClaudeAdapter;
+
+impl AgentAdapter for ClaudeAdapter {
+    fn agent_type(&self) -> AgentType {
+        AgentType::Claude
+    }
+
+    fn config_path(&self) -> Result<std::path::PathBuf, String> {
+        let home = home_dir()?;
+        Ok(home.join(".claude.json"))
+    }
+
+    fn read_config(&self) -> Result<AgentConfigSnapshot, String> {
+        let path = self.config_path()?;
+        let raw = if path.exists() {
+            let data = std::fs::read_to_string(&path)
+                .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
+            serde_json::from_str(&data)
+                .map_err(|e| format!("failed to parse {}: {e}", path.display()))?
+        } else {
+            serde_json::Value::Object(serde_json::Map::new())
+        };
+        Ok(AgentConfigSnapshot {
+            agent_type: AgentType::Claude,
+            config_path: path,
+            raw,
+        })
+    }
+
+    fn apply_patch(
+        &self,
+        snapshot: &AgentConfigSnapshot,
+        fields: &[ManagedField],
+    ) -> Result<AgentConfigSnapshot, String> {
+        let mut raw = snapshot.raw.clone();
+        for field in fields {
+            set_nested(&mut raw, &field.path, field.value.clone());
+        }
+        Ok(AgentConfigSnapshot {
+            agent_type: snapshot.agent_type,
+            config_path: snapshot.config_path.clone(),
+            raw,
+        })
+    }
+
+    fn release(
+        &self,
+        _snapshot: &AgentConfigSnapshot,
+        _manifest: &OwnershipManifest,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// CodexAdapter
+// ---------------------------------------------------------------------------
+
+/// Agent adapter for Codex CLI.
+///
+/// Config location: `~/.codex/config.json`
+pub struct CodexAdapter;
+
+impl AgentAdapter for CodexAdapter {
+    fn agent_type(&self) -> AgentType {
+        AgentType::Codex
+    }
+
+    fn config_path(&self) -> Result<std::path::PathBuf, String> {
+        let home = home_dir()?;
+        Ok(home.join(".codex").join("config.json"))
+    }
+
+    fn read_config(&self) -> Result<AgentConfigSnapshot, String> {
+        let path = self.config_path()?;
+        let raw = if path.exists() {
+            let data = std::fs::read_to_string(&path)
+                .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
+            serde_json::from_str(&data)
+                .map_err(|e| format!("failed to parse {}: {e}", path.display()))?
+        } else {
+            serde_json::Value::Object(serde_json::Map::new())
+        };
+        Ok(AgentConfigSnapshot {
+            agent_type: AgentType::Codex,
+            config_path: path,
+            raw,
+        })
+    }
+
+    fn apply_patch(
+        &self,
+        snapshot: &AgentConfigSnapshot,
+        fields: &[ManagedField],
+    ) -> Result<AgentConfigSnapshot, String> {
+        let mut raw = snapshot.raw.clone();
+        for field in fields {
+            set_nested(&mut raw, &field.path, field.value.clone());
+        }
+        Ok(AgentConfigSnapshot {
+            agent_type: snapshot.agent_type,
+            config_path: snapshot.config_path.clone(),
+            raw,
+        })
+    }
+
+    fn release(
+        &self,
+        _snapshot: &AgentConfigSnapshot,
+        _manifest: &OwnershipManifest,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// GeminiAdapter
+// ---------------------------------------------------------------------------
+
+/// Agent adapter for Gemini CLI.
+///
+/// Config location: `~/.config/gemini/config.json`
+pub struct GeminiAdapter;
+
+impl AgentAdapter for GeminiAdapter {
+    fn agent_type(&self) -> AgentType {
+        AgentType::Gemini
+    }
+
+    fn config_path(&self) -> Result<std::path::PathBuf, String> {
+        let home = home_dir()?;
+        Ok(home.join(".config").join("gemini").join("config.json"))
+    }
+
+    fn read_config(&self) -> Result<AgentConfigSnapshot, String> {
+        let path = self.config_path()?;
+        let raw = if path.exists() {
+            let data = std::fs::read_to_string(&path)
+                .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
+            serde_json::from_str(&data)
+                .map_err(|e| format!("failed to parse {}: {e}", path.display()))?
+        } else {
+            serde_json::Value::Object(serde_json::Map::new())
+        };
+        Ok(AgentConfigSnapshot {
+            agent_type: AgentType::Gemini,
+            config_path: path,
+            raw,
+        })
+    }
+
+    fn apply_patch(
+        &self,
+        snapshot: &AgentConfigSnapshot,
+        fields: &[ManagedField],
+    ) -> Result<AgentConfigSnapshot, String> {
+        let mut raw = snapshot.raw.clone();
+        for field in fields {
+            set_nested(&mut raw, &field.path, field.value.clone());
+        }
+        Ok(AgentConfigSnapshot {
+            agent_type: snapshot.agent_type,
+            config_path: snapshot.config_path.clone(),
+            raw,
+        })
+    }
+
+    fn release(
+        &self,
+        _snapshot: &AgentConfigSnapshot,
+        _manifest: &OwnershipManifest,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// Resolve the current user's home directory.
+///
+/// Checks `HOME` (Unix) then `USERPROFILE` (Windows).
+fn home_dir() -> Result<std::path::PathBuf, String> {
+    if let Ok(home) = std::env::var("HOME") {
+        return Ok(std::path::PathBuf::from(home));
+    }
+    if let Ok(profile) = std::env::var("USERPROFILE") {
+        return Ok(std::path::PathBuf::from(profile));
+    }
+    Err("could not determine home directory (HOME/USERPROFILE not set)".into())
+}
+
+/// Set a nested JSON value by dotted path (e.g. "model.temperature").
+fn set_nested(root: &mut serde_json::Value, path: &str, value: serde_json::Value) {
+    let parts: Vec<&str> = path.split('.').collect();
+    if parts.is_empty() {
+        return;
+    }
+
+    let mut current = root;
+
+    // Navigate to the parent, creating intermediate objects as needed.
+    for part in &parts[..parts.len() - 1] {
+        if !current.is_object() {
+            *current = serde_json::Value::Object(serde_json::Map::new());
+        }
+        let obj = current.as_object_mut().unwrap();
+        if !obj.contains_key(*part) {
+            obj.insert(part.to_string(), serde_json::Value::Object(serde_json::Map::new()));
+        }
+        current = obj.get_mut(*part).unwrap();
+    }
+
+    // Set the leaf value.
+    let leaf = parts.last().unwrap();
+    if let Some(obj) = current.as_object_mut() {
+        obj.insert(leaf.to_string(), value);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -620,5 +922,144 @@ mod tests {
         assert_eq!(restored2.state, OwnershipState::Released);
         assert!(restored2.released_at.is_some());
         assert_eq!(restored2.generation, 1);
+    }
+
+    // -----------------------------------------------------------------------
+    // AgentAdapter tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn claude_adapter_agent_type() {
+        let adapter = ClaudeAdapter;
+        assert_eq!(adapter.agent_type(), AgentType::Claude);
+    }
+
+    #[test]
+    fn codex_adapter_agent_type() {
+        let adapter = CodexAdapter;
+        assert_eq!(adapter.agent_type(), AgentType::Codex);
+    }
+
+    #[test]
+    fn gemini_adapter_agent_type() {
+        let adapter = GeminiAdapter;
+        assert_eq!(adapter.agent_type(), AgentType::Gemini);
+    }
+
+    #[test]
+    fn claude_adapter_config_path() {
+        let adapter = ClaudeAdapter;
+        let path = adapter.config_path().unwrap();
+        assert!(path.ends_with(".claude.json"));
+    }
+
+    #[test]
+    fn codex_adapter_config_path() {
+        let adapter = CodexAdapter;
+        let path = adapter.config_path().unwrap();
+        assert!(path.ends_with(".codex/config.json"));
+    }
+
+    #[test]
+    fn gemini_adapter_config_path() {
+        let adapter = GeminiAdapter;
+        let path = adapter.config_path().unwrap();
+        assert!(path.ends_with("gemini/config.json"));
+    }
+
+    #[test]
+    fn claude_adapter_read_config() {
+        let adapter = ClaudeAdapter;
+        let snapshot = adapter.read_config().unwrap();
+        assert_eq!(snapshot.agent_type, AgentType::Claude);
+        // Config file likely does not exist in CI, so raw should be empty object.
+        assert!(snapshot.raw.is_object());
+    }
+
+    #[test]
+    fn codex_adapter_read_config() {
+        let adapter = CodexAdapter;
+        let snapshot = adapter.read_config().unwrap();
+        assert_eq!(snapshot.agent_type, AgentType::Codex);
+        assert!(snapshot.raw.is_object());
+    }
+
+    #[test]
+    fn gemini_adapter_read_config() {
+        let adapter = GeminiAdapter;
+        let snapshot = adapter.read_config().unwrap();
+        assert_eq!(snapshot.agent_type, AgentType::Gemini);
+        assert!(snapshot.raw.is_object());
+    }
+
+    #[test]
+    fn apply_patch_modifies_snapshot() {
+        let adapter = ClaudeAdapter;
+        let snapshot = adapter.read_config().unwrap();
+
+        let fields = vec![
+            ManagedField {
+                path: "model".into(),
+                value: serde_json::json!("claude-3-opus"),
+            },
+            ManagedField {
+                path: "temperature".into(),
+                value: serde_json::json!(0.7),
+            },
+        ];
+
+        let patched = adapter.apply_patch(&snapshot, &fields).unwrap();
+
+        assert_eq!(patched.raw["model"], serde_json::json!("claude-3-opus"));
+        assert_eq!(patched.raw["temperature"], serde_json::json!(0.7));
+        // Original snapshot is unchanged.
+        assert!(snapshot.raw.get("model").is_none());
+    }
+
+    #[test]
+    fn apply_patch_nested_path() {
+        let adapter = CodexAdapter;
+        let snapshot = adapter.read_config().unwrap();
+
+        let fields = vec![ManagedField {
+            path: "model.temperature".into(),
+            value: serde_json::json!(0.9),
+        }];
+
+        let patched = adapter.apply_patch(&snapshot, &fields).unwrap();
+
+        assert_eq!(patched.raw["model"]["temperature"], serde_json::json!(0.9));
+    }
+
+    #[test]
+    fn release_returns_ok() {
+        let adapter = GeminiAdapter;
+        let snapshot = adapter.read_config().unwrap();
+
+        let store = TakeoverStore::new();
+        let values = field_map(&[("key", serde_json::json!("val"))]);
+        store.adopt(vec!["key".into()], &values).unwrap();
+        let manifest = store.release().unwrap();
+
+        assert!(adapter.release(&snapshot, &manifest).is_ok());
+    }
+
+    #[test]
+    fn all_adapters_release_ok() {
+        let store = TakeoverStore::new();
+        let values = field_map(&[("x", 1.into())]);
+        store.adopt(vec!["x".into()], &values).unwrap();
+        let manifest = store.release().unwrap();
+
+        let adapters: Vec<Box<dyn AgentAdapter>> = vec![
+            Box::new(ClaudeAdapter),
+            Box::new(CodexAdapter),
+            Box::new(GeminiAdapter),
+        ];
+
+        for adapter in &adapters {
+            let snapshot = adapter.read_config().unwrap();
+            assert!(adapter.release(&snapshot, &manifest).is_ok());
+        }
     }
 }

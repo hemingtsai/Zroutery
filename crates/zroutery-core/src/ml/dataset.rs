@@ -123,6 +123,61 @@ impl TrainingSample {
 }
 
 // ---------------------------------------------------------------------------
+// samples_from_outcome — attempt-level attribution
+// ---------------------------------------------------------------------------
+
+/// Generate training samples from a complete [`Outcome`], one per attempt.
+///
+/// Failed attempts get their own feature snapshot + outcome.
+/// The final successful attempt gets the request-level utility.
+///
+/// This solves the attribution problem: when a request fails on candidate A
+/// and succeeds on candidate B (fallback), each attempt gets its own sample
+/// with the correct provider/model identity and success flag.
+pub fn samples_from_outcome(
+    outcome: &Outcome,
+    feature_snapshots: &[RoutingFeatures],
+    origin: DataOrigin,
+) -> Vec<TrainingSample> {
+    let mut samples = Vec::new();
+    for (i, attempt) in outcome.attempts.iter().enumerate() {
+        let features = feature_snapshots
+            .get(i)
+            .cloned()
+            .unwrap_or_else(RoutingFeatures::default);
+        let targets = Targets {
+            success: attempt.success,
+            latency_ms: if attempt.success {
+                Some(attempt.latency_ms)
+            } else {
+                None
+            },
+            ttft_ms: attempt.ttft_ms,
+            cost: None, // per-attempt cost not available
+            failure_class: attempt.failure_class.map(|fc| format!("{:?}", fc)),
+            fallback_count: 0, // per-attempt, not per-request
+        };
+        samples.push(TrainingSample {
+            sample_id: format!("samp-{}-{}", outcome.outcome_id, i),
+            schema_version: FEATURE_SCHEMA_VERSION,
+            timestamp: outcome.timestamp,
+            features,
+            targets,
+            provider_id: attempt.candidate_provider.clone(),
+            model_id: attempt.candidate_model.clone(),
+            origin: origin.clone(),
+            outcome_id: outcome.outcome_id.clone(),
+            feedback: Vec::new(),
+        });
+    }
+    // Also create a request-level sample for the final outcome.
+    if let Some(last_features) = feature_snapshots.last() {
+        samples.push(SampleBuilder::build(outcome, last_features.clone(), origin));
+    }
+    samples
+}
+
+// ---------------------------------------------------------------------------
 // DatasetStore — bounded storage for training samples
 // ---------------------------------------------------------------------------
 
@@ -727,5 +782,220 @@ mod tests {
         let outcome = success_outcome();
         let targets = Targets::from_outcome(&outcome);
         assert!(targets.failure_class.is_none());
+    }
+
+    // -- samples_from_outcome: attempt-level attribution --
+
+    #[test]
+    fn samples_from_outcome_single_attempt() {
+        let outcome = success_outcome();
+        let features = sample_features();
+        let samples = samples_from_outcome(&outcome, &[features.clone()], DataOrigin::Native);
+
+        // 1 attempt sample + 1 request-level sample
+        assert_eq!(samples.len(), 2, "single attempt: 1 attempt + 1 request sample");
+
+        // Attempt sample
+        let attempt_sample = &samples[0];
+        assert!(attempt_sample.sample_id.starts_with("samp-"));
+        assert!(attempt_sample.sample_id.contains(&outcome.outcome_id));
+        assert!(attempt_sample.sample_id.ends_with("-0"));
+        assert_eq!(attempt_sample.provider_id, "openai");
+        assert_eq!(attempt_sample.model_id, "gpt-4");
+        assert!(attempt_sample.targets.success);
+        assert_eq!(attempt_sample.targets.latency_ms, Some(350.0));
+        assert_eq!(attempt_sample.targets.ttft_ms, Some(105.0));
+        assert_eq!(attempt_sample.targets.fallback_count, 0);
+        assert!(attempt_sample.targets.failure_class.is_none());
+
+        // Request-level sample (from SampleBuilder::build)
+        let request_sample = &samples[1];
+        assert_eq!(request_sample.provider_id, "openai");
+        assert_eq!(request_sample.model_id, "gpt-4");
+        assert!(request_sample.targets.success);
+    }
+
+    #[test]
+    fn samples_from_outcome_two_attempts_fallback() {
+        let outcome = fallback_outcome();
+        let features_a = {
+            let mut f = RoutingFeatures::default();
+            f.values[0] = 1.0; // streaming
+            f
+        };
+        let features_b = {
+            let mut f = RoutingFeatures::default();
+            f.values[0] = 0.5;
+            f
+        };
+        let samples = samples_from_outcome(
+            &outcome,
+            &[features_a.clone(), features_b.clone()],
+            DataOrigin::Native,
+        );
+
+        // 2 attempt samples + 1 request-level sample
+        assert_eq!(samples.len(), 3, "two attempts: 2 attempt + 1 request sample");
+
+        // First attempt (failed)
+        let first = &samples[0];
+        assert_eq!(first.provider_id, "openai");
+        assert_eq!(first.model_id, "gpt-4");
+        assert!(!first.targets.success, "first attempt should be failure");
+        assert!(first.targets.latency_ms.is_none(), "failed attempt should have no latency");
+        assert_eq!(
+            first.targets.failure_class.as_deref(),
+            Some("ProviderUnavailable")
+        );
+        assert_eq!(first.features.values[0], 1.0, "first attempt uses its own snapshot");
+
+        // Second attempt (succeeded)
+        let second = &samples[1];
+        assert_eq!(second.provider_id, "anthropic");
+        assert_eq!(second.model_id, "claude-3");
+        assert!(second.targets.success, "second attempt should be success");
+        assert_eq!(second.targets.latency_ms, Some(400.0));
+        assert!(second.targets.failure_class.is_none());
+        assert_eq!(second.features.values[0], 0.5, "second attempt uses its own snapshot");
+
+        // Request-level sample
+        let request = &samples[2];
+        assert_eq!(request.provider_id, "anthropic");
+        assert_eq!(request.model_id, "claude-3");
+        assert!(request.targets.success);
+        assert_eq!(request.targets.fallback_count, 1);
+    }
+
+    #[test]
+    fn samples_from_outcome_three_attempts() {
+        let outcome = Outcome::builder("req_three")
+            .initial("gpt-4", "openai")
+            .final_candidate("gemini-pro", "google")
+            .dialect("openai")
+            .attempt(make_attempt(
+                "gpt-4",
+                "openai",
+                false,
+                100.0,
+                Some(FailureClass::RateLimit),
+            ))
+            .attempt(make_attempt(
+                "claude-3",
+                "anthropic",
+                false,
+                150.0,
+                Some(FailureClass::Timeout),
+            ))
+            .attempt(make_attempt(
+                "gemini-pro",
+                "google",
+                true,
+                200.0,
+                None,
+            ))
+            .total_latency_ms(450.0)
+            .ttft_ms(60.0)
+            .build();
+
+        let f1 = {
+            let mut f = RoutingFeatures::default();
+            f.values[0] = 1.0;
+            f
+        };
+        let f2 = {
+            let mut f = RoutingFeatures::default();
+            f.values[0] = 0.8;
+            f
+        };
+        let f3 = {
+            let mut f = RoutingFeatures::default();
+            f.values[0] = 0.6;
+            f
+        };
+        let samples = samples_from_outcome(
+            &outcome,
+            &[f1.clone(), f2.clone(), f3.clone()],
+            DataOrigin::Native,
+        );
+
+        // 3 attempt samples + 1 request-level sample
+        assert_eq!(samples.len(), 4, "three attempts: 3 attempt + 1 request sample");
+
+        // First attempt (failed)
+        assert_eq!(samples[0].provider_id, "openai");
+        assert!(!samples[0].targets.success);
+        assert_eq!(samples[0].targets.failure_class.as_deref(), Some("RateLimit"));
+        assert_eq!(samples[0].features.values[0], 1.0);
+
+        // Second attempt (failed)
+        assert_eq!(samples[1].provider_id, "anthropic");
+        assert!(!samples[1].targets.success);
+        assert_eq!(samples[1].targets.failure_class.as_deref(), Some("Timeout"));
+        assert_eq!(samples[1].features.values[0], 0.8);
+
+        // Third attempt (succeeded)
+        assert_eq!(samples[2].provider_id, "google");
+        assert!(samples[2].targets.success);
+        assert!(samples[2].targets.failure_class.is_none());
+        assert_eq!(samples[2].features.values[0], 0.6);
+
+        // Request-level sample
+        assert_eq!(samples[3].provider_id, "google");
+        assert!(samples[3].targets.success);
+    }
+
+    #[test]
+    fn samples_from_outcome_uses_default_features_when_missing() {
+        let outcome = success_outcome();
+        // Provide empty feature_snapshots — should fall back to default
+        let samples = samples_from_outcome(&outcome, &[], DataOrigin::Native);
+
+        // 1 attempt sample (with default features) + 1 request-level sample
+        // But wait — no feature_snapshots means the request-level sample is
+        // also skipped (feature_snapshots.last() is None).
+        assert_eq!(samples.len(), 1, "no snapshots: only attempt sample, no request sample");
+
+        let attempt = &samples[0];
+        assert_eq!(attempt.provider_id, "openai");
+        // Default features: all UNKNOWN
+        assert_eq!(attempt.features.values[0], UNKNOWN);
+    }
+
+    #[test]
+    fn samples_from_outcome_attempt_provider_model_identity() {
+        // Each attempt should use its own candidate, not the final candidate
+        let outcome = fallback_outcome();
+        let features = vec![RoutingFeatures::default(); 2];
+        let samples = samples_from_outcome(&outcome, &features, DataOrigin::Native);
+
+        // First attempt: openai/gpt-4 (not the final anthropic/claude-3)
+        assert_eq!(samples[0].provider_id, "openai");
+        assert_eq!(samples[0].model_id, "gpt-4");
+
+        // Second attempt: anthropic/claude-3
+        assert_eq!(samples[1].provider_id, "anthropic");
+        assert_eq!(samples[1].model_id, "claude-3");
+    }
+
+    #[test]
+    fn samples_from_outcome_preserves_origin() {
+        let outcome = success_outcome();
+        let features = vec![sample_features()];
+        let samples = samples_from_outcome(&outcome, &features, DataOrigin::Imported);
+
+        for sample in &samples {
+            assert_eq!(sample.origin, DataOrigin::Imported);
+        }
+    }
+
+    #[test]
+    fn samples_from_outcome_preserves_outcome_id() {
+        let outcome = fallback_outcome();
+        let features = vec![RoutingFeatures::default(); 2];
+        let samples = samples_from_outcome(&outcome, &features, DataOrigin::Native);
+
+        for sample in &samples {
+            assert_eq!(sample.outcome_id, outcome.outcome_id);
+        }
     }
 }
