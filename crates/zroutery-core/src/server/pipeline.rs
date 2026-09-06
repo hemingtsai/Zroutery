@@ -695,9 +695,19 @@ async fn buffered_chat(
                 state
                     .router
                     .report_failure(candidate.model_id(), &e, &routing);
-                state
-                    .router
-                    .record_failure(candidate.model_id(), &candidate.provider.id);
+                let class = crate::failure::ClassifiedFailure::from_status(
+                    e.status().as_u16(),
+                    e.to_string(),
+                )
+                .class;
+                state.router.record_classified_outcome(
+                    candidate.model_id(),
+                    &candidate.provider.id,
+                    0.0,
+                    None,
+                    false,
+                    Some(class),
+                );
                 last_error = e;
                 continue;
             }
@@ -742,9 +752,19 @@ async fn buffered_chat(
                             state
                                 .router
                                 .report_failure(candidate.model_id(), &e, &routing);
-                            state
-                                .router
-                                .record_failure(candidate.model_id(), &candidate.provider.id);
+                            let class = crate::failure::ClassifiedFailure::from_status(
+                                e.status().as_u16(),
+                                e.to_string(),
+                            )
+                            .class;
+                            state.router.record_classified_outcome(
+                                candidate.model_id(),
+                                &candidate.provider.id,
+                                0.0,
+                                None,
+                                false,
+                                Some(class),
+                            );
                             tracing::warn!(
                                 kind = kind.as_str(),
                                 candidate_model = candidate.model_id(),
@@ -761,10 +781,12 @@ async fn buffered_chat(
                     attempt_start.elapsed().as_millis() as u64,
                     &routing,
                 );
-                state.router.record_outcome(
+                state.router.record_classified_outcome(
                     candidate.model_id(),
                     &candidate.provider.id,
                     attempt_start.elapsed().as_millis() as f64,
+                    None,
+                    true,
                     None,
                 );
                 rec.usage(resp.usage)
@@ -882,9 +904,19 @@ async fn buffered_chat(
                         state
                             .router
                             .report_failure(candidate.model_id(), &e, &routing);
-                        state
-                            .router
-                            .record_failure(candidate.model_id(), &candidate.provider.id);
+                        let class = crate::failure::ClassifiedFailure::from_status(
+                            e.status().as_u16(),
+                            e.to_string(),
+                        )
+                        .class;
+                        state.router.record_classified_outcome(
+                            candidate.model_id(),
+                            &candidate.provider.id,
+                            0.0,
+                            None,
+                            false,
+                            Some(class),
+                        );
                         tracing::warn!(
                             model = candidate.model_id(),
                             provider = candidate.provider.name.as_str(),
@@ -900,9 +932,19 @@ async fn buffered_chat(
                         state
                             .router
                             .report_failure(candidate.model_id(), &rectified_err, &routing);
-                        state
-                            .router
-                            .record_failure(candidate.model_id(), &candidate.provider.id);
+                        let class = crate::failure::ClassifiedFailure::from_status(
+                            rectified_err.status().as_u16(),
+                            rectified_err.to_string(),
+                        )
+                        .class;
+                        state.router.record_classified_outcome(
+                            candidate.model_id(),
+                            &candidate.provider.id,
+                            0.0,
+                            None,
+                            false,
+                            Some(class),
+                        );
                         tracing::warn!(
                             model = candidate.model_id(),
                             provider = candidate.provider.name.as_str(),
@@ -976,9 +1018,19 @@ async fn stream_chat(
                 state
                     .router
                     .report_failure(candidate.model_id(), &e, &routing);
-                state
-                    .router
-                    .record_failure(candidate.model_id(), &candidate.provider.id);
+                let class = crate::failure::ClassifiedFailure::from_status(
+                    e.status().as_u16(),
+                    e.to_string(),
+                )
+                .class;
+                state.router.record_classified_outcome(
+                    candidate.model_id(),
+                    &candidate.provider.id,
+                    0.0,
+                    None,
+                    false,
+                    Some(class),
+                );
                 last_error = e;
                 continue;
             }
@@ -1018,11 +1070,13 @@ async fn stream_chat(
                 );
                 // For streaming, handshake time approximates TTFT.
                 let handshake_ms = attempt_start.elapsed().as_millis() as f64;
-                state.router.record_outcome(
+                state.router.record_classified_outcome(
                     candidate.model_id(),
                     &candidate.provider.id,
                     handshake_ms,
                     Some(handshake_ms),
+                    true,
+                    None,
                 );
                 if let Some(ref decision) = routing_decision {
                     rec.routing_decision(decision.clone());
@@ -1117,9 +1171,19 @@ async fn stream_chat(
                         state
                             .router
                             .report_failure(candidate.model_id(), &e, &routing);
-                        state
-                            .router
-                            .record_failure(candidate.model_id(), &candidate.provider.id);
+                        let class = crate::failure::ClassifiedFailure::from_status(
+                            e.status().as_u16(),
+                            e.to_string(),
+                        )
+                        .class;
+                        state.router.record_classified_outcome(
+                            candidate.model_id(),
+                            &candidate.provider.id,
+                            0.0,
+                            None,
+                            false,
+                            Some(class),
+                        );
                         tracing::warn!(
                             model = candidate.model_id(),
                             "upstream stream handshake failed: {e}"
@@ -1134,9 +1198,19 @@ async fn stream_chat(
                         state
                             .router
                             .report_failure(candidate.model_id(), &rectified_err, &routing);
-                        state
-                            .router
-                            .record_failure(candidate.model_id(), &candidate.provider.id);
+                        let class = crate::failure::ClassifiedFailure::from_status(
+                            rectified_err.status().as_u16(),
+                            rectified_err.to_string(),
+                        )
+                        .class;
+                        state.router.record_classified_outcome(
+                            candidate.model_id(),
+                            &candidate.provider.id,
+                            0.0,
+                            None,
+                            false,
+                            Some(class),
+                        );
                         tracing::warn!(
                             model = candidate.model_id(),
                             "rectifier stream retry failed: {rectified_err}"
@@ -1332,9 +1406,19 @@ impl SseState {
                 self.state
                     .router
                     .report_failure(&self.model_id, e, &self.routing);
-                self.state
-                    .router
-                    .record_failure(&self.model_id, &self.provider_id);
+                let class = crate::failure::ClassifiedFailure::from_status(
+                    e.status().as_u16(),
+                    e.to_string(),
+                )
+                .class;
+                self.state.router.record_classified_outcome(
+                    &self.model_id,
+                    &self.provider_id,
+                    0.0,
+                    None,
+                    false,
+                    Some(class),
+                );
             }
             self.state
                 .stats

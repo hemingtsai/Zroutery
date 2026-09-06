@@ -21,6 +21,7 @@ use crate::policy::{
     score_candidate, hash_to_u64,
 };
 use crate::registry::{Registry, Resolution};
+use crate::stats_ext::StatsStore;
 
 /// Round robin cursor key for the classifier pool, which is not a tier.
 const CLASSIFIER_POOL: &str = "classifier";
@@ -104,6 +105,9 @@ pub struct Router {
     /// Used by the policy scorer as the primary signal, falling back to legacy
     /// circuit-breaker state when no observation exists.
     observations: ObservationStore,
+    /// Runtime statistics (percentiles, EWMA, failure breakdown) keyed by
+    /// provider+model. Accumulated over the lifetime of the process.
+    pub stats_store: StatsStore,
 }
 
 impl Default for Router {
@@ -119,6 +123,7 @@ impl Router {
             rr: Mutex::new(HashMap::new()),
             election: Mutex::new(None),
             observations: ObservationStore::new(),
+            stats_store: StatsStore::new(),
         }
     }
 
@@ -978,6 +983,35 @@ impl Router {
     /// runtime observations instead of legacy circuit-breaker state.
     pub fn record_failure(&self, model_id: &str, provider_id: &str) {
         self.observations.record_failure(model_id, provider_id);
+    }
+
+    /// Record a classified outcome in both observation and stats stores.
+    ///
+    /// On success, both stores receive latency and TTFT data. On failure, the
+    /// classification determines whether the observation store is updated (client
+    /// errors are skipped), while the stats store always records the failure class.
+    pub fn record_classified_outcome(
+        &self,
+        model_id: &str,
+        provider_id: &str,
+        latency_ms: f64,
+        ttft_ms: Option<f64>,
+        success: bool,
+        failure_class: Option<crate::failure::FailureClass>,
+    ) {
+        if success {
+            self.observations
+                .record_success(model_id, provider_id, latency_ms, ttft_ms);
+            self.stats_store
+                .record_success(model_id, provider_id, latency_ms, ttft_ms);
+        } else if let Some(class) = failure_class {
+            let impact = class.impact();
+            if impact.affects_observation {
+                self.observations.record_failure(model_id, provider_id);
+            }
+            self.stats_store
+                .record_classified_failure(model_id, provider_id, class);
+        }
     }
 
     /// Clear circuit breaker state for one model (GUI "retry now").

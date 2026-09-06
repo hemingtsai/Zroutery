@@ -19,16 +19,21 @@ use crate::failure::FailureClass;
 // PercentileEstimator
 // -----------------------------------------------------------------------
 
-/// Streaming percentile estimator using a sorted ring buffer.
+/// Streaming percentile estimator using a ring buffer.
 ///
+/// Samples are stored in insertion order; sorting happens on query.
 /// Good enough for routing decisions -- not a statistical library.
 #[derive(Debug, Clone)]
 pub struct PercentileEstimator {
-    /// Sorted samples (ring buffer, max capacity).
+    /// Raw samples in insertion order (ring buffer).
     samples: Vec<f64>,
     capacity: usize,
-    /// Total number of observations ever recorded (including evicted ones).
+    /// Write cursor in the ring buffer.
+    write_pos: usize,
+    /// Total number of observations ever recorded.
     total_count: u64,
+    /// Whether the buffer has wrapped around at least once.
+    wrapped: bool,
 }
 
 impl PercentileEstimator {
@@ -36,7 +41,9 @@ impl PercentileEstimator {
         Self {
             samples: Vec::with_capacity(capacity),
             capacity,
+            write_pos: 0,
             total_count: 0,
+            wrapped: false,
         }
     }
 
@@ -44,16 +51,12 @@ impl PercentileEstimator {
     pub fn record(&mut self, value: f64) {
         self.total_count += 1;
         if self.samples.len() < self.capacity {
-            // Insert in sorted order
-            let pos = self.samples.partition_point(|&x| x < value);
-            self.samples.insert(pos, value);
+            self.samples.push(value);
         } else {
-            // Replace oldest (simple: replace a rotating position).
-            // For routing purposes, this is good enough.
-            let pos = (self.total_count as usize) % self.capacity;
-            self.samples[pos] = value;
-            self.samples.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            self.samples[self.write_pos] = value;
+            self.wrapped = true;
         }
+        self.write_pos = (self.write_pos + 1) % self.capacity;
     }
 
     pub fn sample_count(&self) -> u64 {
@@ -68,21 +71,26 @@ impl PercentileEstimator {
         self.samples.is_empty()
     }
 
-    /// Get the p-th percentile (0.0 to 1.0).
+    /// Get the p-th percentile (0.0 to 1.0) using the nearest-rank method.
+    /// No linear interpolation -- the sample at the closest rank index is returned.
+    /// This is a discrete approximation suitable for routing decisions, not
+    /// a statistically rigorous estimator.
     pub fn percentile(&self, p: f64) -> Option<f64> {
         if self.samples.is_empty() {
             return None;
         }
-        let idx = ((self.samples.len() - 1) as f64 * p).round() as usize;
-        self.samples.get(idx).copied()
+        let mut sorted: Vec<f64> = self.samples.clone();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let idx = ((sorted.len() - 1) as f64 * p).round() as usize;
+        sorted.get(idx).copied()
     }
 
     pub fn min(&self) -> Option<f64> {
-        self.samples.first().copied()
+        self.samples.iter().copied().reduce(f64::min)
     }
 
     pub fn max(&self) -> Option<f64> {
-        self.samples.last().copied()
+        self.samples.iter().copied().reduce(f64::max)
     }
 }
 
@@ -100,6 +108,11 @@ pub struct Ewma {
 
 impl Ewma {
     pub fn new(alpha: f64) -> Self {
+        assert!(alpha.is_finite(), "EWMA alpha must be finite, got {alpha}");
+        assert!(
+            (0.0..=1.0).contains(&alpha),
+            "EWMA alpha must be in [0.0, 1.0], got {alpha}"
+        );
         Self {
             value: None,
             alpha,
@@ -397,6 +410,18 @@ mod tests {
         assert_eq!(e.value, None);
     }
 
+    #[test]
+    #[should_panic]
+    fn ewma_rejects_invalid_alpha() {
+        Ewma::new(1.5);
+    }
+
+    #[test]
+    #[should_panic]
+    fn ewma_rejects_nan_alpha() {
+        Ewma::new(f64::NAN);
+    }
+
     // ---- PercentileEstimator ----
 
     #[test]
@@ -454,15 +479,26 @@ mod tests {
     }
 
     #[test]
-    fn percentile_ring_eviction() {
+    fn percentile_ring_eviction_retains_recent() {
         let mut est = PercentileEstimator::new(5);
-        for i in 1..=10 {
+        // Insert 1..=5
+        for i in 1..=5 {
             est.record(i as f64);
         }
-        // Should still hold capacity worth of samples
         assert_eq!(est.len(), 5);
-        // total_count reflects all observations
+        assert_eq!(est.min(), Some(1.0));
+
+        // Insert 6..=10 -- old samples 1..=5 should be evicted
+        for i in 6..=10 {
+            est.record(i as f64);
+        }
+        assert_eq!(est.len(), 5);
         assert_eq!(est.sample_count(), 10);
+        // Now the buffer should contain only 6..=10
+        assert_eq!(est.min(), Some(6.0));
+        assert_eq!(est.max(), Some(10.0));
+        // P50 of [6,7,8,9,10] = 8
+        assert_eq!(est.percentile(0.5), Some(8.0));
     }
 
     // ---- LatencyStats ----
