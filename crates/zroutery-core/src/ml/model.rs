@@ -3,10 +3,10 @@
 //! Provides the [`RoutingModel`] trait that all routing models implement,
 //! along with concrete models:
 //!
-//! - [`SuccessModel`]: binary classifier for request success prediction (FTRL).
-//! - [`LatencyModel`]: online linear regression for total latency.
-//! - [`TtftModel`]: online linear regression for time-to-first-token.
-//! - [`CostModel`]: online linear regression for cost prediction.
+//! - [`SuccessModel`]: binary classifier for request success prediction (AdaGrad).
+//! - [`LatencyModel`]: online linear regression for total latency (SGD + EWMA).
+//! - [`TtftModel`]: online linear regression for time-to-first-token (SGD + EWMA).
+//! - [`CostModel`]: online linear regression for cost prediction (SGD + EWMA).
 
 use serde::{Deserialize, Serialize};
 
@@ -90,17 +90,36 @@ impl ModelState {
         }
     }
 
+    /// FNV-1a checksum of parameter bits for cross-version stability.
     pub fn compute_checksum(params: &[f64]) -> u64 {
-        use std::hash::{Hash, Hasher};
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        let mut hash: u64 = 0xcbf29ce484222325; // FNV offset basis
         for p in params {
-            p.to_bits().hash(&mut hasher);
+            for b in p.to_bits().to_le_bytes() {
+                hash ^= b as u64;
+                hash = hash.wrapping_mul(0x100000001b3); // FNV prime
+            }
         }
-        hasher.finish()
+        hash
     }
 
     pub fn verify_checksum(&self) -> bool {
         Self::compute_checksum(&self.parameters) == self.checksum
+    }
+
+    /// Validate schema version and that all parameters are finite (no NaN/Inf).
+    pub fn validate_basics(&self) -> Result<(), String> {
+        if self.schema_version != 1 {
+            return Err(format!(
+                "unsupported schema version {} (expected 1)",
+                self.schema_version
+            ));
+        }
+        for (i, p) in self.parameters.iter().enumerate() {
+            if !p.is_finite() {
+                return Err(format!("parameter[{i}] is not finite: {p}"));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -136,11 +155,49 @@ pub trait RoutingModel: Send + Sync {
 }
 
 // ---------------------------------------------------------------------------
-// SuccessModel — Logistic regression with FTRL
+// TrainingResult / train_batch — batch training runner
+// ---------------------------------------------------------------------------
+
+/// Result of a batch training run.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrainingResult {
+    /// Name of the model that was trained.
+    pub model_name: String,
+    /// Number of samples in the batch.
+    pub samples_trained: u64,
+    /// Wall-clock duration of the training run in milliseconds.
+    pub duration_ms: u64,
+    /// Serializable model state after training.
+    pub final_state: ModelState,
+}
+
+/// Train a model on a batch of (features, target) samples.
+///
+/// Applies each sample sequentially via [`RoutingModel::update`] and returns
+/// a [`TrainingResult`] with metadata and the post-training state.
+pub fn train_batch(
+    model: &mut dyn RoutingModel,
+    samples: &[(RoutingFeatures, f64)],
+) -> TrainingResult {
+    let start = std::time::Instant::now();
+    for (features, target) in samples {
+        model.update(features, *target);
+    }
+    TrainingResult {
+        model_name: model.name().to_string(),
+        samples_trained: samples.len() as u64,
+        duration_ms: start.elapsed().as_millis() as u64,
+        final_state: model.save(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SuccessModel — Logistic regression with AdaGrad
 // ---------------------------------------------------------------------------
 
 /// Binary classifier for request success prediction.
-/// Uses online logistic regression with FTRL (Follow The Regularized Leader).
+/// Uses online logistic regression with per-feature adaptive learning rate (AdaGrad).
+#[derive(Debug)]
 pub struct SuccessModel {
     /// Feature weights.
     weights: Vec<f64>,
@@ -198,7 +255,7 @@ impl RoutingModel for SuccessModel {
         let p = self.raw_predict(&features.values);
         let error = target - p; // target is 0.0 or 1.0
 
-        // FTRL-style update with per-feature adaptive learning rate
+        // AdaGrad-style update with per-feature adaptive learning rate
         for i in 0..self.weights.len().min(features.values.len()) {
             let g = error * features.values[i] as f64;
             self.grad_sq[i] += g * g;
@@ -215,20 +272,28 @@ impl RoutingModel for SuccessModel {
         let mut params = vec![self.bias];
         params.extend_from_slice(&self.weights);
         params.extend_from_slice(&self.grad_sq);
-        let mut state = ModelState::new("success_logistic_ftrl", params);
+        let mut state = ModelState::new("success_logistic_adagrad", params);
         state.update_count = self.samples;
         state
     }
 
     fn load(state: &ModelState) -> Result<Self, String> {
-        if state.algorithm != "success_logistic_ftrl" {
+        state.validate_basics()?;
+        if state.algorithm != "success_logistic_adagrad" {
             return Err(format!(
-                "expected success_logistic_ftrl, got {}",
+                "expected success_logistic_adagrad, got {}",
                 state.algorithm
             ));
         }
+        // Expected: 1 bias + n weights + n grad_sq = 2n+1 (minimum 3)
         if state.parameters.len() < 3 {
             return Err("too few parameters".into());
+        }
+        if state.parameters.len() % 2 == 0 {
+            return Err(format!(
+                "parameter count must be odd (2n+1), got {}",
+                state.parameters.len()
+            ));
         }
         if !state.verify_checksum() {
             return Err("checksum mismatch".into());
@@ -327,8 +392,16 @@ impl RoutingModel for LatencyModel {
     }
 
     fn load(state: &ModelState) -> Result<Self, String> {
+        state.validate_basics()?;
         if state.algorithm != "latency_linear" {
-            return Err("wrong algorithm".into());
+            return Err(format!(
+                "expected latency_linear, got {}",
+                state.algorithm
+            ));
+        }
+        // Expected: 2 scalars (bias, residual_ewma) + n weights = n+2 (minimum 2)
+        if state.parameters.len() < 2 {
+            return Err("too few parameters".into());
         }
         if !state.verify_checksum() {
             return Err("checksum mismatch".into());
@@ -425,8 +498,16 @@ impl RoutingModel for TtftModel {
     }
 
     fn load(state: &ModelState) -> Result<Self, String> {
+        state.validate_basics()?;
         if state.algorithm != "ttft_linear" {
-            return Err("wrong algorithm".into());
+            return Err(format!(
+                "expected ttft_linear, got {}",
+                state.algorithm
+            ));
+        }
+        // Expected: 2 scalars (bias, residual_ewma) + n weights = n+2 (minimum 2)
+        if state.parameters.len() < 2 {
+            return Err("too few parameters".into());
         }
         if !state.verify_checksum() {
             return Err("checksum mismatch".into());
@@ -523,8 +604,16 @@ impl RoutingModel for CostModel {
     }
 
     fn load(state: &ModelState) -> Result<Self, String> {
+        state.validate_basics()?;
         if state.algorithm != "cost_linear" {
-            return Err("wrong algorithm".into());
+            return Err(format!(
+                "expected cost_linear, got {}",
+                state.algorithm
+            ));
+        }
+        // Expected: 2 scalars (bias, residual_ewma) + n weights = n+2 (minimum 2)
+        if state.parameters.len() < 2 {
+            return Err("too few parameters".into());
         }
         if !state.verify_checksum() {
             return Err("checksum mismatch".into());
@@ -804,7 +893,7 @@ mod tests {
         }
 
         let state = model.save();
-        assert_eq!(state.algorithm, "success_logistic_ftrl");
+        assert_eq!(state.algorithm, "success_logistic_adagrad");
         assert_eq!(state.update_count, 50);
 
         let loaded = SuccessModel::load(&state).unwrap();
@@ -863,7 +952,7 @@ mod tests {
 
     #[test]
     fn load_corrupted_checksum_errors() {
-        let mut state = ModelState::new("success_logistic_ftrl", vec![0.0, 1.0, 2.0]);
+        let mut state = ModelState::new("success_logistic_adagrad", vec![0.0, 1.0, 2.0]);
         state.checksum = 999; // corrupt
         assert!(SuccessModel::load(&state).is_err());
     }
@@ -1091,5 +1180,609 @@ mod tests {
         assert_eq!(LatencyModel::new(4).name(), "latency");
         assert_eq!(TtftModel::new(4).name(), "ttft");
         assert_eq!(CostModel::new(4).name(), "cost");
+    }
+
+    // -- T7C-H02: ModelState hardening tests --
+
+    #[test]
+    fn load_rejects_wrong_schema_version() {
+        let mut state = ModelState::new("success_logistic_adagrad", vec![0.0, 1.0, 2.0]);
+        state.schema_version = 2;
+        let err = SuccessModel::load(&state).err().unwrap();
+        assert!(err.contains("schema version"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn load_rejects_nan_parameters() {
+        let params = vec![0.0, f64::NAN, 2.0];
+        let mut state = ModelState::new("success_logistic_adagrad", params);
+        state.checksum = ModelState::compute_checksum(&state.parameters); // fix checksum for NAN bits
+        let err = SuccessModel::load(&state).err().unwrap();
+        assert!(err.contains("not finite"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn load_rejects_inf_parameters() {
+        let params = vec![0.0, f64::INFINITY, 2.0];
+        let state = ModelState::new("success_logistic_adagrad", params);
+        let err = SuccessModel::load(&state).err().unwrap();
+        assert!(err.contains("not finite"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn load_rejects_wrong_parameter_count_success() {
+        // SuccessModel expects odd count (2n+1), give even
+        let state = ModelState::new("success_logistic_adagrad", vec![0.0, 1.0, 2.0, 3.0]);
+        let err = SuccessModel::load(&state).err().unwrap();
+        assert!(err.contains("odd"), "unexpected error: {err}");
+    }
+
+    // -- T7C-H03: FNV-1a checksum stability test --
+
+    #[test]
+    fn fnv1a_checksum_known_vector() {
+        // Verify our FNV-1a produces a deterministic value for a known input.
+        let params = vec![1.0f64, 2.0, 3.0];
+        let h1 = ModelState::compute_checksum(&params);
+        let h2 = ModelState::compute_checksum(&params);
+        assert_eq!(h1, h2, "checksum must be deterministic");
+        // Different params -> different hash
+        let params2 = vec![1.0, 2.0, 3.1];
+        assert_ne!(h1, ModelState::compute_checksum(&params2));
+        // Single bit difference should change hash
+        let params3 = vec![1.0, 2.0, f64::from_bits(3.0f64.to_bits() ^ 1)];
+        assert_ne!(h1, ModelState::compute_checksum(&params3));
+    }
+
+    // -- T7C-H04: Cold/warm semantics test --
+    // Train a model, save it, create a fresh instance, load the saved state,
+    // and verify that actual learned behavior is preserved (not just serde round-trip).
+
+    #[test]
+    fn cold_warm_success_model_preserves_learned_behavior() {
+        // 1. Create and train a model on a clear pattern
+        let mut model = SuccessModel::new(FEATURE_DIMENSION);
+        let good_features = {
+            let mut f = RoutingFeatures::default();
+            for v in f.values.iter_mut() {
+                *v = 0.8; // high feature values -> success
+            }
+            f
+        };
+        let bad_features = {
+            let mut f = RoutingFeatures::default();
+            for v in f.values.iter_mut() {
+                *v = 0.2; // low feature values -> failure
+            }
+            f
+        };
+
+        // Train: high features -> success, low features -> failure
+        for _ in 0..200 {
+            model.update(&good_features, 1.0);
+            model.update(&bad_features, 0.0);
+        }
+
+        // Record learned predictions from the live model
+        let live_good = model.predict(&good_features).value;
+        let live_bad = model.predict(&bad_features).value;
+        assert!(live_good > 0.6, "model should predict high success for good features, got {live_good}");
+        assert!(live_bad < 0.4, "model should predict low success for bad features, got {live_bad}");
+
+        // 2. Save to ModelState (simulates persistence to disk/database)
+        let state = model.save();
+
+        // 3. Drop the original model entirely
+        drop(model);
+
+        // 4. Create a brand new (cold) model instance
+        let cold_model = SuccessModel::new(FEATURE_DIMENSION);
+        let cold_good = cold_model.predict(&good_features).value;
+        let cold_bad = cold_model.predict(&bad_features).value;
+        // Cold model should NOT have learned the pattern
+        assert!(
+            (cold_good - cold_bad).abs() < 0.1,
+            "cold model predictions should be similar, got good={cold_good}, bad={cold_bad}"
+        );
+
+        // 5. Load from saved state (simulates restart from persisted state)
+        let warm_model = SuccessModel::load(&state).unwrap();
+
+        // 6. Verify warm model reproduces learned behavior exactly
+        let warm_good = warm_model.predict(&good_features).value;
+        let warm_bad = warm_model.predict(&bad_features).value;
+
+        assert!(
+            (warm_good - live_good).abs() < 1e-10,
+            "warm model must match live predictions for good features: warm={warm_good}, live={live_good}"
+        );
+        assert!(
+            (warm_bad - live_bad).abs() < 1e-10,
+            "warm model must match live predictions for bad features: warm={warm_bad}, live={live_bad}"
+        );
+
+        // 7. Verify the pattern is actually preserved (discrimination)
+        assert!(
+            warm_good > warm_bad + 0.2,
+            "warm model should still discriminate: good={warm_good}, bad={warm_bad}"
+        );
+        assert_eq!(warm_model.sample_count(), 400);
+    }
+
+    #[test]
+    fn cold_warm_latency_model_preserves_learned_behavior() {
+        let mut model = LatencyModel::new(FEATURE_DIMENSION);
+        let features = {
+            let mut f = RoutingFeatures::default();
+            for v in f.values.iter_mut() {
+                *v = 0.5;
+            }
+            f
+        };
+
+        // Train toward 200ms latency
+        for _ in 0..100 {
+            model.update(&features, 200.0);
+        }
+
+        let live_pred = model.predict(&features).value;
+        assert!(live_pred < 400.0, "should have learned lower latency, got {live_pred}");
+
+        let state = model.save();
+        drop(model);
+
+        // Cold model starts at 500ms default
+        let cold = LatencyModel::new(FEATURE_DIMENSION);
+        let cold_pred = cold.predict(&features).value;
+        assert!((cold_pred - 500.0).abs() < 1.0, "cold should be ~500ms, got {cold_pred}");
+
+        // Warm model preserves learned behavior
+        let warm = LatencyModel::load(&state).unwrap();
+        let warm_pred = warm.predict(&features).value;
+        assert!(
+            (warm_pred - live_pred).abs() < 1e-10,
+            "warm latency must match live: warm={warm_pred}, live={live_pred}"
+        );
+        assert_eq!(warm.sample_count(), 100);
+    }
+
+    #[test]
+    fn cold_warm_cost_model_preserves_learned_behavior() {
+        let mut model = CostModel::new(FEATURE_DIMENSION);
+        let features = {
+            let mut f = RoutingFeatures::default();
+            for v in f.values.iter_mut() {
+                *v = 0.5;
+            }
+            f
+        };
+
+        for _ in 0..100 {
+            model.update(&features, 0.005);
+        }
+
+        let live_pred = model.predict(&features).value;
+        let state = model.save();
+        drop(model);
+
+        let warm = CostModel::load(&state).unwrap();
+        let warm_pred = warm.predict(&features).value;
+        assert!(
+            (warm_pred - live_pred).abs() < 1e-10,
+            "warm cost must match live: warm={warm_pred}, live={live_pred}"
+        );
+        assert_eq!(warm.sample_count(), 100);
+    }
+
+    #[test]
+    fn cold_warm_ttft_model_preserves_learned_behavior() {
+        let mut model = TtftModel::new(FEATURE_DIMENSION);
+        let features = {
+            let mut f = RoutingFeatures::default();
+            for v in f.values.iter_mut() {
+                *v = 0.5;
+            }
+            f
+        };
+
+        for _ in 0..100 {
+            model.update(&features, 80.0);
+        }
+
+        let live_pred = model.predict(&features).value;
+        let state = model.save();
+        drop(model);
+
+        let warm = TtftModel::load(&state).unwrap();
+        let warm_pred = warm.predict(&features).value;
+        assert!(
+            (warm_pred - live_pred).abs() < 1e-10,
+            "warm ttft must match live: warm={warm_pred}, live={live_pred}"
+        );
+        assert_eq!(warm.sample_count(), 100);
+    }
+
+    // -- T7C-H05: train_batch / TrainingResult tests --
+
+    #[test]
+    fn train_batch_success_model() {
+        let mut model = SuccessModel::new(FEATURE_DIMENSION);
+        let features = {
+            let mut f = RoutingFeatures::default();
+            for v in f.values.iter_mut() {
+                *v = 0.5;
+            }
+            f
+        };
+
+        let samples: Vec<_> = (0..50)
+            .map(|_| (features.clone(), 1.0))
+            .collect();
+
+        let result = train_batch(&mut model, &samples);
+        assert_eq!(result.model_name, "success");
+        assert_eq!(result.samples_trained, 50);
+        assert_eq!(result.final_state.algorithm, "success_logistic_adagrad");
+        assert_eq!(result.final_state.update_count, 50);
+        // Model should still be usable after train_batch
+        assert_eq!(model.sample_count(), 50);
+    }
+
+    #[test]
+    fn train_batch_zero_duration_for_small_batch() {
+        let mut model = LatencyModel::new(FEATURE_DIMENSION);
+        let features = zero_features();
+        let samples: Vec<_> = (0..10)
+            .map(|_| (features.clone(), 200.0))
+            .collect();
+
+        let result = train_batch(&mut model, &samples);
+        // duration_ms may be 0 for very fast batches; just verify the field exists
+        assert_eq!(result.samples_trained, 10);
+        assert_eq!(result.model_name, "latency");
+    }
+
+    #[test]
+    fn train_batch_empty_samples() {
+        let mut model = CostModel::new(FEATURE_DIMENSION);
+        let samples: Vec<(RoutingFeatures, f64)> = Vec::new();
+
+        let result = train_batch(&mut model, &samples);
+        assert_eq!(result.samples_trained, 0);
+        assert_eq!(model.sample_count(), 0);
+    }
+
+    #[test]
+    fn training_result_serde_round_trip() {
+        let mut model = SuccessModel::new(FEATURE_DIMENSION);
+        let features = zero_features();
+        let samples: Vec<_> = (0..5).map(|_| (features.clone(), 1.0)).collect();
+
+        let result = train_batch(&mut model, &samples);
+        let json = serde_json::to_string(&result).unwrap();
+        let restored: TrainingResult = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.model_name, result.model_name);
+        assert_eq!(restored.samples_trained, result.samples_trained);
+        assert_eq!(restored.duration_ms, result.duration_ms);
+        assert_eq!(
+            restored.final_state.algorithm,
+            result.final_state.algorithm
+        );
+    }
+
+    // -- T7C-H06: Learning direction tests --
+    // Each test proves that after training with a known pattern,
+    // predictions move in the expected direction.
+
+    #[test]
+    fn success_model_learning_direction() {
+        // Train with target=1.0 -> prediction should exceed 0.5 after enough samples
+        let mut model = SuccessModel::new(FEATURE_DIMENSION);
+        let features = {
+            let mut f = RoutingFeatures::default();
+            for v in f.values.iter_mut() {
+                *v = 0.5;
+            }
+            f
+        };
+
+        let samples: Vec<_> = (0..200)
+            .map(|_| (features.clone(), 1.0))
+            .collect();
+        train_batch(&mut model, &samples);
+
+        let pred = model.predict(&features);
+        assert!(
+            pred.value > 0.5,
+            "SuccessModel: after 200 target=1.0 samples, prediction should be >0.5, got {}",
+            pred.value
+        );
+    }
+
+    #[test]
+    fn latency_model_learning_direction() {
+        // Train with 100ms -> prediction should be <300ms after 200 samples
+        let mut model = LatencyModel::new(FEATURE_DIMENSION);
+        let features = {
+            let mut f = RoutingFeatures::default();
+            for v in f.values.iter_mut() {
+                *v = 0.5;
+            }
+            f
+        };
+
+        let samples: Vec<_> = (0..200)
+            .map(|_| (features.clone(), 100.0))
+            .collect();
+        train_batch(&mut model, &samples);
+
+        let pred = model.predict(&features);
+        assert!(
+            pred.value < 300.0,
+            "LatencyModel: after 200 samples at 100ms, prediction should be <300ms, got {}",
+            pred.value
+        );
+    }
+
+    #[test]
+    fn ttft_model_learning_direction() {
+        // Train with 50ms -> prediction should be <150ms after 200 samples
+        let mut model = TtftModel::new(FEATURE_DIMENSION);
+        let features = {
+            let mut f = RoutingFeatures::default();
+            for v in f.values.iter_mut() {
+                *v = 0.5;
+            }
+            f
+        };
+
+        let samples: Vec<_> = (0..200)
+            .map(|_| (features.clone(), 50.0))
+            .collect();
+        train_batch(&mut model, &samples);
+
+        let pred = model.predict(&features);
+        assert!(
+            pred.value < 150.0,
+            "TtftModel: after 200 samples at 50ms, prediction should be <150ms, got {}",
+            pred.value
+        );
+    }
+
+    #[test]
+    fn cost_model_learning_direction() {
+        // Train with 0.01 -> prediction should be <0.05 after 200 samples
+        let mut model = CostModel::new(FEATURE_DIMENSION);
+        let features = {
+            let mut f = RoutingFeatures::default();
+            for v in f.values.iter_mut() {
+                *v = 0.5;
+            }
+            f
+        };
+
+        let samples: Vec<_> = (0..200)
+            .map(|_| (features.clone(), 0.01))
+            .collect();
+        train_batch(&mut model, &samples);
+
+        let pred = model.predict(&features);
+        assert!(
+            pred.value < 0.05,
+            "CostModel: after 200 samples at 0.01, prediction should be <0.05, got {}",
+            pred.value
+        );
+    }
+
+    // -- T7C-H07: Training benchmark --
+
+    #[test]
+    fn training_benchmark_100k() {
+        let mut model = SuccessModel::new(FEATURE_DIMENSION);
+        let features = {
+            let mut f = RoutingFeatures::default();
+            for v in f.values.iter_mut() {
+                *v = 0.5;
+            }
+            f
+        };
+
+        let samples: Vec<_> = (0..100_000)
+            .map(|i| (features.clone(), if i % 2 == 0 { 1.0 } else { 0.0 }))
+            .collect();
+
+        let start = std::time::Instant::now();
+        let result = train_batch(&mut model, &samples);
+        let elapsed = start.elapsed();
+
+        assert!(
+            elapsed.as_secs() < 30,
+            "training 100k samples took {}s, expected <30s",
+            elapsed.as_secs()
+        );
+        assert_eq!(result.samples_trained, 100_000);
+        assert_eq!(model.sample_count(), 100_000);
+
+        // Verify model state JSON size < 2MB
+        let json = serde_json::to_string(&result.final_state).expect("state should serialize");
+        assert!(
+            json.len() < 2 * 1024 * 1024,
+            "model state JSON size {} bytes, expected <2MB",
+            json.len()
+        );
+    }
+
+    // -- T7C-H08: Prediction/update benchmark --
+
+    #[test]
+    fn prediction_update_benchmark() {
+        let mut model = SuccessModel::new(FEATURE_DIMENSION);
+        let features = {
+            let mut f = RoutingFeatures::default();
+            for v in f.values.iter_mut() {
+                *v = 0.5;
+            }
+            f
+        };
+
+        // Train with 1000 samples first so predictions are meaningful
+        for _ in 0..1000 {
+            model.update(&features, 1.0);
+        }
+
+        // Benchmark 10,000 predictions
+        let start = std::time::Instant::now();
+        let iterations = 10_000u32;
+        for _ in 0..iterations {
+            let _ = std::hint::black_box(model.predict(&features));
+        }
+        let predict_elapsed = start.elapsed();
+        let per_prediction_ns = predict_elapsed.as_nanos() / iterations as u128;
+        assert!(
+            per_prediction_ns < 1_000_000, // < 1ms = 1,000,000 ns
+            "per-prediction {}ns ({}us), expected <1ms",
+            per_prediction_ns,
+            per_prediction_ns / 1_000
+        );
+
+        // Benchmark 10,000 updates
+        let start = std::time::Instant::now();
+        for _ in 0..iterations {
+            model.update(&features, 1.0);
+        }
+        let update_elapsed = start.elapsed();
+        let per_update_ns = update_elapsed.as_nanos() / iterations as u128;
+        assert!(
+            per_update_ns < 1_000_000, // < 1ms
+            "per-update {}ns ({}us), expected <1ms",
+            per_update_ns,
+            per_update_ns / 1_000
+        );
+    }
+
+    // -- T7C-H09: Model matrix test --
+    // Tests all 4 model types through the full lifecycle: cold predict, update,
+    // save/load round-trip, and reset.
+
+    fn assert_model_lifecycle<M: RoutingModel>(
+        make: impl Fn() -> M,
+        name: &str,
+        expected_algorithm: &str,
+        target_fn: impl Fn(u32) -> f64,
+    ) {
+        let mut model = make();
+        let features = random_like_features(42);
+
+        // 1. Cold predict
+        let cold_pred = model.predict(&features);
+        assert!(
+            cold_pred.value.is_finite(),
+            "{name}: cold prediction value not finite"
+        );
+        assert!(
+            cold_pred.confidence >= 0.0 && cold_pred.confidence <= 1.0,
+            "{name}: cold confidence out of range: {}",
+            cold_pred.confidence
+        );
+        assert_eq!(
+            cold_pred.sample_count, 0,
+            "{name}: cold predict should have 0 samples"
+        );
+        assert_eq!(
+            model.sample_count(),
+            0,
+            "{name}: cold sample_count should be 0"
+        );
+
+        // 2. Update — train 50 samples
+        for i in 0..50u32 {
+            model.update(&features, target_fn(i));
+        }
+        assert_eq!(
+            model.sample_count(),
+            50,
+            "{name}: sample_count should be 50 after training"
+        );
+
+        // Post-update prediction should be finite
+        let warm_pred = model.predict(&features);
+        assert!(
+            warm_pred.value.is_finite(),
+            "{name}: post-update prediction not finite"
+        );
+        assert!(
+            warm_pred.confidence.is_finite(),
+            "{name}: post-update confidence not finite"
+        );
+        assert_eq!(warm_pred.sample_count, 50);
+
+        // 3. Save/load round-trip
+        let state = model.save();
+        assert_eq!(
+            state.algorithm, expected_algorithm,
+            "{name}: save() produced wrong algorithm"
+        );
+        assert_eq!(state.update_count, 50, "{name}: update_count mismatch");
+        assert!(state.verify_checksum(), "{name}: checksum mismatch");
+
+        let pre_load_pred = model.predict(&features);
+        let loaded = M::load(&state).unwrap();
+        assert_eq!(
+            loaded.sample_count(),
+            50,
+            "{name}: loaded sample_count wrong"
+        );
+        let loaded_pred = loaded.predict(&features);
+        assert!(
+            (pre_load_pred.value - loaded_pred.value).abs() < 1e-10,
+            "{name}: predictions differ after save/load: pre={}, loaded={}",
+            pre_load_pred.value,
+            loaded_pred.value
+        );
+
+        // 4. Reset
+        model.reset();
+        assert_eq!(
+            model.sample_count(),
+            0,
+            "{name}: sample_count should be 0 after reset"
+        );
+        let reset_pred = model.predict(&features);
+        assert!(
+            reset_pred.value.is_finite(),
+            "{name}: prediction after reset not finite"
+        );
+        assert_eq!(
+            reset_pred.sample_count, 0,
+            "{name}: prediction sample_count should be 0 after reset"
+        );
+    }
+
+    #[test]
+    fn model_matrix_all_models() {
+        assert_model_lifecycle(
+            || SuccessModel::new(FEATURE_DIMENSION),
+            "success",
+            "success_logistic_adagrad",
+            |i| if i % 2 == 0 { 1.0 } else { 0.0 },
+        );
+        assert_model_lifecycle(
+            || LatencyModel::new(FEATURE_DIMENSION),
+            "latency",
+            "latency_linear",
+            |i| 100.0 + i as f64,
+        );
+        assert_model_lifecycle(
+            || TtftModel::new(FEATURE_DIMENSION),
+            "ttft",
+            "ttft_linear",
+            |i| 50.0 + i as f64,
+        );
+        assert_model_lifecycle(
+            || CostModel::new(FEATURE_DIMENSION),
+            "cost",
+            "cost_linear",
+            |i| 0.01 + i as f64 * 0.001,
+        );
     }
 }
