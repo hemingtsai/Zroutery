@@ -412,6 +412,36 @@ impl MigrationExecutor {
             rolled_back: true,
         }
     }
+
+    /// Check for and recover from an interrupted migration.
+    ///
+    /// If the migration is in a mid-way state (`Prepared`, `Verified`,
+    /// `Switched`) or has already `Failed`, transitions through `Failed` to
+    /// `RolledBack` and returns the rollback result. Returns an error for
+    /// states that are not recoverable (e.g. `Detected`, `Completed`,
+    /// `RolledBack`).
+    pub fn recover(&self) -> Result<MigrationResult, String> {
+        let state = self.store.current_state();
+        match state {
+            MigrationState::Prepared
+            | MigrationState::Verified
+            | MigrationState::Switched => {
+                // Transition through Failed before rolling back.
+                let _ = self.store.transition(MigrationState::Failed);
+                Ok(self.rollback(None))
+            }
+            MigrationState::Failed => Ok(self.rollback(None)),
+            _ => Err(format!("cannot recover from state {:?}", state)),
+        }
+    }
+
+    /// Check if migration is already complete (idempotent).
+    ///
+    /// Returns `true` if the store is in the `Completed` state, indicating
+    /// the migration has already been fully applied and no work is needed.
+    pub fn check_already_migrated(&self) -> bool {
+        self.store.current_state() == MigrationState::Completed
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1414,6 +1444,156 @@ mod tests {
         );
 
         let _ = std::fs::remove_file(&source);
+        let _ = std::fs::remove_file(&dest);
+    }
+
+    // -- Recovery and idempotence tests (I2) ---------------------------------
+
+    #[test]
+    fn recover_from_interrupted_prepared() {
+        let store = MigrationStore::new();
+        store.transition(MigrationState::Prepared).unwrap();
+        assert_eq!(store.current_state(), MigrationState::Prepared);
+
+        let executor = MigrationExecutor::new(store);
+        let result = executor.recover().unwrap();
+
+        assert_eq!(result.state, MigrationState::RolledBack);
+        assert!(result.rolled_back);
+        assert_eq!(executor.store.current_state(), MigrationState::RolledBack);
+    }
+
+    #[test]
+    fn recover_from_interrupted_verified() {
+        let store = MigrationStore::new();
+        store.transition(MigrationState::Prepared).unwrap();
+        store.transition(MigrationState::Verified).unwrap();
+        assert_eq!(store.current_state(), MigrationState::Verified);
+
+        let executor = MigrationExecutor::new(store);
+        let result = executor.recover().unwrap();
+
+        assert_eq!(result.state, MigrationState::RolledBack);
+        assert!(result.rolled_back);
+        assert_eq!(executor.store.current_state(), MigrationState::RolledBack);
+    }
+
+    #[test]
+    fn recover_from_interrupted_switched() {
+        let store = MigrationStore::new();
+        store.transition(MigrationState::Prepared).unwrap();
+        store.transition(MigrationState::Verified).unwrap();
+        store.transition(MigrationState::Switched).unwrap();
+        assert_eq!(store.current_state(), MigrationState::Switched);
+
+        let executor = MigrationExecutor::new(store);
+        let result = executor.recover().unwrap();
+
+        assert_eq!(result.state, MigrationState::RolledBack);
+        assert!(result.rolled_back);
+        assert_eq!(executor.store.current_state(), MigrationState::RolledBack);
+    }
+
+    #[test]
+    fn recover_from_failed() {
+        let store = MigrationStore::new();
+        store.transition(MigrationState::Failed).unwrap();
+
+        let executor = MigrationExecutor::new(store);
+        let result = executor.recover().unwrap();
+
+        assert_eq!(result.state, MigrationState::RolledBack);
+        assert!(result.rolled_back);
+        assert_eq!(executor.store.current_state(), MigrationState::RolledBack);
+    }
+
+    #[test]
+    fn recover_from_detected_errors() {
+        let store = MigrationStore::new();
+        let executor = MigrationExecutor::new(store);
+
+        let err = executor.recover().unwrap_err();
+        assert!(err.contains("cannot recover from state Detected"));
+    }
+
+    #[test]
+    fn recover_from_completed_errors() {
+        let store = MigrationStore::new();
+        store.transition(MigrationState::Prepared).unwrap();
+        store.transition(MigrationState::Verified).unwrap();
+        store.transition(MigrationState::Switched).unwrap();
+        store.transition(MigrationState::Completed).unwrap();
+
+        let executor = MigrationExecutor::new(store);
+        let err = executor.recover().unwrap_err();
+        assert!(err.contains("cannot recover from state Completed"));
+    }
+
+    #[test]
+    fn recover_from_rolled_back_errors() {
+        let store = MigrationStore::new();
+        store.transition(MigrationState::Failed).unwrap();
+        store.transition(MigrationState::RolledBack).unwrap();
+
+        let executor = MigrationExecutor::new(store);
+        let err = executor.recover().unwrap_err();
+        assert!(err.contains("cannot recover from state RolledBack"));
+    }
+
+    #[test]
+    fn check_already_migrated_false_initially() {
+        let store = MigrationStore::new();
+        let executor = MigrationExecutor::new(store);
+        assert!(!executor.check_already_migrated());
+    }
+
+    #[test]
+    fn check_already_migrated_false_midway() {
+        let store = MigrationStore::new();
+        store.transition(MigrationState::Prepared).unwrap();
+        let executor = MigrationExecutor::new(store);
+        assert!(!executor.check_already_migrated());
+    }
+
+    #[test]
+    fn check_already_migrated_true_after_completion() {
+        let store = MigrationStore::new();
+        store.transition(MigrationState::Prepared).unwrap();
+        store.transition(MigrationState::Verified).unwrap();
+        store.transition(MigrationState::Switched).unwrap();
+        store.transition(MigrationState::Completed).unwrap();
+
+        let executor = MigrationExecutor::new(store);
+        assert!(executor.check_already_migrated());
+    }
+
+    #[tokio::test]
+    async fn idempotent_migration_full_lifecycle() {
+        // Execute once -> Completed
+        let tmp = std::env::temp_dir().join("zroutery_idempotent_source.toml");
+        let dest = std::env::temp_dir().join("zroutery_idempotent_dest.toml");
+        std::fs::write(&tmp, "idempotent = true\n").unwrap();
+
+        let store = MigrationStore::new();
+        let executor = MigrationExecutor::new(store);
+
+        let plan = make_plan(vec![MigrationStep {
+            description: "Copy".to_string(),
+            action: MigrationAction::CopyConfig {
+                source: tmp.to_str().unwrap().to_string(),
+                dest: dest.to_str().unwrap().to_string(),
+            },
+            reversible: true,
+        }]);
+
+        let result = executor.execute(&plan).await;
+        assert_eq!(result.state, MigrationState::Completed);
+        assert!(executor.check_already_migrated());
+
+        // Execute again -> already migrated, no-op (caller should check first)
+        assert!(executor.check_already_migrated());
+
+        let _ = std::fs::remove_file(&tmp);
         let _ = std::fs::remove_file(&dest);
     }
 }

@@ -202,6 +202,85 @@ impl ActionGuard {
 }
 
 // ---------------------------------------------------------------------------
+// PredictionBundle / UtilityBreakdown — utility scoring
+// ---------------------------------------------------------------------------
+
+/// Predictions from all 4 models for a single candidate.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PredictionBundle {
+    pub candidate_model: String,
+    pub candidate_provider: String,
+    pub success: crate::ml::model::Prediction,
+    pub latency: crate::ml::model::Prediction,
+    pub ttft: crate::ml::model::Prediction,
+    pub cost: crate::ml::model::Prediction,
+}
+
+/// Utility breakdown from a prediction bundle.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct UtilityBreakdown {
+    pub success: f64,
+    pub latency: f64,
+    pub ttft: f64,
+    pub cost: f64,
+    pub fallback: f64,
+    pub uncertainty: f64,
+    pub switch_cost: f64,
+    pub total: f64,
+}
+
+impl Default for UtilityBreakdown {
+    fn default() -> Self {
+        UtilityBreakdown {
+            success: 0.0,
+            latency: 0.0,
+            ttft: 0.0,
+            cost: 0.0,
+            fallback: 0.0,
+            uncertainty: 0.0,
+            switch_cost: 0.0,
+            total: 0.0,
+        }
+    }
+}
+
+/// Compute utility from a prediction bundle.
+pub fn compute_utility(
+    bundle: &PredictionBundle,
+    policy: &RewardPolicy,
+    is_fallback: bool,
+    switch_count: u32,
+) -> UtilityBreakdown {
+    let success = bundle.success.value * policy.success_weight;
+    let latency = -policy.latency_weight * (bundle.latency.value / 5000.0).min(1.0);
+    let ttft = -policy.latency_weight * 0.5 * (bundle.ttft.value / 2000.0).min(1.0);
+    let cost = -policy.cost_weight * (bundle.cost.value / 1.0).min(1.0);
+    let fallback = if is_fallback {
+        policy.fallback_penalty
+    } else {
+        0.0
+    };
+    let avg_confidence = (bundle.success.confidence
+        + bundle.latency.confidence
+        + bundle.ttft.confidence
+        + bundle.cost.confidence)
+        / 4.0;
+    let uncertainty = -policy.uncertainty_weight * (1.0 - avg_confidence);
+    let switch = policy.switch_cost * switch_count as f64;
+    let total = success + latency + ttft + cost + fallback + uncertainty + switch;
+    UtilityBreakdown {
+        success,
+        latency,
+        ttft,
+        cost,
+        fallback,
+        uncertainty,
+        switch_cost: switch,
+        total,
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -395,5 +474,137 @@ mod tests {
         let restored: RequestReward = serde_json::from_str(&json).unwrap();
         assert!((restored.total - reward.total).abs() < 1e-10);
         assert_eq!(restored.attempt_rewards.len(), 1);
+    }
+
+    // -- PredictionBundle / compute_utility tests --
+
+    fn make_prediction(value: f64, confidence: f64) -> crate::ml::model::Prediction {
+        crate::ml::model::Prediction {
+            value,
+            confidence,
+            sample_count: 100,
+            cold: false,
+        }
+    }
+
+    fn make_bundle(model: &str, success: f64, latency: f64, ttft: f64, cost: f64) -> PredictionBundle {
+        PredictionBundle {
+            candidate_model: model.to_string(),
+            candidate_provider: "test-provider".to_string(),
+            success: make_prediction(success, 0.9),
+            latency: make_prediction(latency, 0.8),
+            ttft: make_prediction(ttft, 0.7),
+            cost: make_prediction(cost, 0.6),
+        }
+    }
+
+    #[test]
+    fn prediction_bundle_construction() {
+        let bundle = make_bundle("gpt-4", 0.95, 300.0, 100.0, 0.02);
+        assert_eq!(bundle.candidate_model, "gpt-4");
+        assert_eq!(bundle.candidate_provider, "test-provider");
+        assert!((bundle.success.value - 0.95).abs() < 1e-10);
+        assert!((bundle.latency.value - 300.0).abs() < 1e-10);
+        assert!((bundle.ttft.value - 100.0).abs() < 1e-10);
+        assert!((bundle.cost.value - 0.02).abs() < 1e-10);
+    }
+
+    #[test]
+    fn prediction_bundle_serde_round_trip() {
+        let bundle = make_bundle("claude-3", 0.85, 200.0, 80.0, 0.01);
+        let json = serde_json::to_string(&bundle).unwrap();
+        let restored: PredictionBundle = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.candidate_model, "claude-3");
+        assert!((restored.success.value - 0.85).abs() < 1e-10);
+    }
+
+    #[test]
+    fn compute_utility_known_values() {
+        let policy = RewardPolicy::default();
+        let bundle = make_bundle("model-a", 0.9, 2500.0, 1000.0, 0.5);
+
+        let utility = compute_utility(&bundle, &policy, false, 0);
+
+        // success = 0.9 * 1.0 = 0.9
+        assert!((utility.success - 0.9).abs() < 1e-10);
+        // latency = -0.3 * (2500/5000).min(1.0) = -0.3 * 0.5 = -0.15
+        assert!((utility.latency - (-0.15)).abs() < 1e-10);
+        // ttft = -0.3 * 0.5 * (1000/2000).min(1.0) = -0.15 * 0.5 = -0.075
+        assert!((utility.ttft - (-0.075)).abs() < 1e-10);
+        // cost = -0.1 * (0.5/1.0).min(1.0) = -0.05
+        assert!((utility.cost - (-0.05)).abs() < 1e-10);
+        // fallback = 0 (not fallback)
+        assert!((utility.fallback).abs() < 1e-10);
+        // avg_confidence = (0.9 + 0.8 + 0.7 + 0.6) / 4 = 0.75
+        // uncertainty = -0.1 * (1 - 0.75) = -0.025
+        assert!((utility.uncertainty - (-0.025)).abs() < 1e-10);
+        // switch_cost = 0 (switch_count=0)
+        assert!((utility.switch_cost).abs() < 1e-10);
+        // total = 0.9 + (-0.15) + (-0.075) + (-0.05) + 0 + (-0.025) + 0 = 0.6
+        assert!((utility.total - 0.6).abs() < 1e-10);
+    }
+
+    #[test]
+    fn compute_utility_with_fallback() {
+        let policy = RewardPolicy::default();
+        let bundle = make_bundle("model-b", 0.8, 1000.0, 500.0, 0.1);
+
+        let utility = compute_utility(&bundle, &policy, true, 0);
+        // fallback_penalty = -0.5
+        assert!((utility.fallback - (-0.5)).abs() < 1e-10);
+    }
+
+    #[test]
+    fn compute_utility_with_switches() {
+        let policy = RewardPolicy::default();
+        let bundle = make_bundle("model-c", 0.8, 1000.0, 500.0, 0.1);
+
+        let utility = compute_utility(&bundle, &policy, false, 3);
+        // switch_cost = -0.2 * 3 = -0.6
+        assert!((utility.switch_cost - (-0.6)).abs() < 1e-10);
+    }
+
+    #[test]
+    fn utility_breakdown_total_equals_sum_of_components() {
+        let policy = RewardPolicy::default();
+        let bundle = make_bundle("model-d", 0.7, 2000.0, 800.0, 0.3);
+
+        let utility = compute_utility(&bundle, &policy, true, 2);
+        let sum = utility.success
+            + utility.latency
+            + utility.ttft
+            + utility.cost
+            + utility.fallback
+            + utility.uncertainty
+            + utility.switch_cost;
+        assert!(
+            (utility.total - sum).abs() < 1e-10,
+            "total ({}) should equal sum of components ({})",
+            utility.total,
+            sum,
+        );
+    }
+
+    #[test]
+    fn utility_breakdown_serde_round_trip() {
+        let policy = RewardPolicy::default();
+        let bundle = make_bundle("model-e", 0.85, 1500.0, 600.0, 0.05);
+        let utility = compute_utility(&bundle, &policy, false, 1);
+        let json = serde_json::to_string(&utility).unwrap();
+        let restored: UtilityBreakdown = serde_json::from_str(&json).unwrap();
+        assert!((restored.total - utility.total).abs() < 1e-10);
+    }
+
+    #[test]
+    fn utility_breakdown_default_is_zero() {
+        let utility = UtilityBreakdown::default();
+        assert!((utility.total).abs() < 1e-10);
+        assert!((utility.success).abs() < 1e-10);
+        assert!((utility.latency).abs() < 1e-10);
+        assert!((utility.ttft).abs() < 1e-10);
+        assert!((utility.cost).abs() < 1e-10);
+        assert!((utility.fallback).abs() < 1e-10);
+        assert!((utility.uncertainty).abs() < 1e-10);
+        assert!((utility.switch_cost).abs() < 1e-10);
     }
 }

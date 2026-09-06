@@ -8,6 +8,30 @@ use super::super::types::*;
 use super::super::provider::*;
 use crate::error::Result;
 
+/// Authentication method for NewAPI.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum NewApiAuth {
+    /// Cookie-based session (existing browser session).
+    Cookie { session_cookie: String },
+    /// API key / password.
+    ApiKey { key: String },
+    /// OAuth2 token.
+    OAuth2 {
+        access_token: String,
+        refresh_token: Option<String>,
+    },
+}
+
+/// An authenticated session with NewAPI.
+#[derive(Debug, Clone)]
+pub struct AuthenticatedSession {
+    pub auth: NewApiAuth,
+    pub user_id: Option<String>,
+    pub authenticated_at: i64,
+    pub expires_at: Option<i64>,
+}
+
 /// NewAPI-specific configuration.
 #[derive(Debug, Clone)]
 pub struct NewApiConfig {
@@ -15,6 +39,19 @@ pub struct NewApiConfig {
     pub api_key: String,
     /// Which operations this NewAPI instance supports.
     pub capabilities: AccountCapabilities,
+}
+
+impl NewApiConfig {
+    /// Validate the configuration.
+    pub fn validate(&self) -> std::result::Result<(), String> {
+        if self.base_url.is_empty() {
+            return Err("base_url is empty".into());
+        }
+        if !self.base_url.starts_with("http") {
+            return Err("base_url must start with http:// or https://".into());
+        }
+        Ok(())
+    }
 }
 
 /// NewAPI account adapter.
@@ -25,6 +62,31 @@ pub struct NewApiAdapter {
 impl NewApiAdapter {
     pub fn new(config: NewApiConfig) -> Self {
         Self { config }
+    }
+
+    /// Authenticate with NewAPI using the provided auth method.
+    pub async fn authenticate(&self, auth: NewApiAuth) -> Result<AuthenticatedSession> {
+        // For now: validate that auth is non-empty
+        match &auth {
+            NewApiAuth::Cookie { session_cookie } if session_cookie.is_empty() => {
+                return Err(crate::Error::invalid("empty session cookie"));
+            }
+            NewApiAuth::ApiKey { key } if key.is_empty() => {
+                return Err(crate::Error::invalid("empty API key"));
+            }
+            NewApiAuth::OAuth2 {
+                access_token, ..
+            } if access_token.is_empty() => {
+                return Err(crate::Error::invalid("empty access token"));
+            }
+            _ => {}
+        }
+        Ok(AuthenticatedSession {
+            auth,
+            user_id: None,
+            authenticated_at: chrono::Utc::now().timestamp(),
+            expires_at: None,
+        })
     }
 }
 
@@ -155,5 +217,134 @@ mod tests {
         let id = AccountId("acct-1".into());
         let err = adapter.fetch_quota(&id).await.unwrap_err();
         assert!(err.to_string().contains("NewAPI quota fetch not yet implemented"));
+    }
+
+    // ── authenticate ──
+
+    #[tokio::test]
+    async fn authenticate_with_cookie_ok() {
+        let adapter = make_adapter();
+        let session = adapter
+            .authenticate(NewApiAuth::Cookie {
+                session_cookie: "valid-session-id".into(),
+            })
+            .await
+            .unwrap();
+        assert!(session.user_id.is_none());
+        assert!(session.expires_at.is_none());
+        assert!(session.authenticated_at > 0);
+    }
+
+    #[tokio::test]
+    async fn authenticate_with_api_key_ok() {
+        let adapter = make_adapter();
+        let session = adapter
+            .authenticate(NewApiAuth::ApiKey {
+                key: "sk-valid-key".into(),
+            })
+            .await
+            .unwrap();
+        assert!(session.user_id.is_none());
+        assert!(session.authenticated_at > 0);
+    }
+
+    #[tokio::test]
+    async fn authenticate_with_oauth2_ok() {
+        let adapter = make_adapter();
+        let session = adapter
+            .authenticate(NewApiAuth::OAuth2 {
+                access_token: "valid-token".into(),
+                refresh_token: Some("refresh-me".into()),
+            })
+            .await
+            .unwrap();
+        assert!(session.user_id.is_none());
+        assert!(session.authenticated_at > 0);
+    }
+
+    #[tokio::test]
+    async fn authenticate_with_empty_cookie_err() {
+        let adapter = make_adapter();
+        let err = adapter
+            .authenticate(NewApiAuth::Cookie {
+                session_cookie: String::new(),
+            })
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("empty session cookie"));
+    }
+
+    #[tokio::test]
+    async fn authenticate_with_empty_key_err() {
+        let adapter = make_adapter();
+        let err = adapter
+            .authenticate(NewApiAuth::ApiKey {
+                key: String::new(),
+            })
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("empty API key"));
+    }
+
+    #[tokio::test]
+    async fn authenticate_with_empty_access_token_err() {
+        let adapter = make_adapter();
+        let err = adapter
+            .authenticate(NewApiAuth::OAuth2 {
+                access_token: String::new(),
+                refresh_token: None,
+            })
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("empty access token"));
+    }
+
+    #[tokio::test]
+    async fn authenticated_session_has_correct_timestamp() {
+        let before = chrono::Utc::now().timestamp();
+        let adapter = make_adapter();
+        let session = adapter
+            .authenticate(NewApiAuth::ApiKey {
+                key: "key".into(),
+            })
+            .await
+            .unwrap();
+        let after = chrono::Utc::now().timestamp();
+        assert!(session.authenticated_at >= before);
+        assert!(session.authenticated_at <= after);
+    }
+
+    // ── NewApiConfig::validate ──
+
+    #[test]
+    fn config_validate_valid() {
+        let config = NewApiConfig {
+            base_url: "https://newapi.example.com".into(),
+            api_key: "key".into(),
+            capabilities: AccountCapabilities::default(),
+        };
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn config_validate_empty_url_err() {
+        let config = NewApiConfig {
+            base_url: String::new(),
+            api_key: "key".into(),
+            capabilities: AccountCapabilities::default(),
+        };
+        let err = config.validate().unwrap_err();
+        assert_eq!(err, "base_url is empty");
+    }
+
+    #[test]
+    fn config_validate_no_scheme_err() {
+        let config = NewApiConfig {
+            base_url: "newapi.example.com".into(),
+            api_key: "key".into(),
+            capabilities: AccountCapabilities::default(),
+        };
+        let err = config.validate().unwrap_err();
+        assert_eq!(err, "base_url must start with http:// or https://");
     }
 }

@@ -433,12 +433,27 @@ impl FrozenHoldout {
         }
     }
 
+    pub fn samples(&self) -> &[TrainingSample] {
+        &self.samples
+    }
+
     pub fn len(&self) -> usize {
         self.samples.len()
     }
 
     pub fn is_empty(&self) -> bool {
         self.samples.is_empty()
+    }
+
+    /// Evaluate a model against the holdout. This is the ONLY way to use holdout data.
+    pub fn evaluate(&self, model: &dyn RoutingModel) -> PredictionMetrics {
+        let predictions: Vec<f64> = self
+            .samples
+            .iter()
+            .map(|s| model.predict(&s.features).value)
+            .collect();
+        let actuals: Vec<bool> = self.samples.iter().map(|s| s.targets.success).collect();
+        PredictionMetrics::compute_classification(&predictions, &actuals)
     }
 }
 
@@ -989,5 +1004,38 @@ mod tests {
         assert!(train.is_empty());
         assert!(val.is_empty());
         assert!(holdout.is_empty());
+    }
+
+    // -- FrozenHoldout evaluate tests --
+
+    #[test]
+    fn frozen_holdout_evaluate_returns_metrics() {
+        let samples = vec![
+            make_sample(true, Some(100.0), Some(0.01), 0),
+            make_sample(false, None, None, 0),
+            make_sample(true, Some(200.0), Some(0.02), 0),
+        ];
+        let holdout = FrozenHoldout::new(samples, "eval test".to_string());
+
+        let model = SuccessModel::new(FEATURE_DIMENSION);
+        let metrics = holdout.evaluate(&model);
+
+        assert_eq!(metrics.sample_count, 3);
+        assert!(metrics.log_loss.is_some());
+        assert!(metrics.brier_score.is_some());
+    }
+
+    #[test]
+    fn frozen_holdout_samples_returns_read_only_slice() {
+        let samples = vec![
+            make_sample(true, Some(100.0), Some(0.01), 0),
+            make_sample(false, None, None, 0),
+        ];
+        let holdout = FrozenHoldout::new(samples, "slice test".to_string());
+
+        let slice = holdout.samples();
+        assert_eq!(slice.len(), 2);
+        assert!(slice[0].targets.success);
+        assert!(!slice[1].targets.success);
     }
 }
