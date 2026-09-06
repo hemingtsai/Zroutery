@@ -29,10 +29,12 @@ pub mod config;
 pub mod election;
 pub mod error;
 pub mod failure;
+pub mod feedback;
 pub mod ir;
 pub mod media;
 pub mod ml;
 pub mod observation;
+pub mod outcome;
 pub mod policy;
 pub mod protocol;
 pub mod query;
@@ -40,6 +42,7 @@ pub mod rectifier;
 pub mod registry;
 pub mod router;
 pub mod server;
+pub mod session;
 pub mod stats;
 pub mod stats_ext;
 mod sync;
@@ -65,6 +68,7 @@ pub use config::{
 pub use election::{TierElection, Election, Measurement, Ranked, ScoringConfig};
 pub use error::{Error, Result};
 pub use failure::{ClassifiedFailure, FailureClass, FailureImpact};
+pub use feedback::{DataOrigin, Feedback, FeedbackSignal, FeedbackSource};
 pub use ir::{
     Capability, ChatRequest, ChatResponse, ContentBlock, Dialect, Message, Role, StopReason,
     StreamEvent, SystemPart, ToolChoice, Usage,
@@ -74,6 +78,7 @@ pub use observation::{
     HealthState, LatencyObservation, ObservationFreshness, ObservationStore, RuntimeObservation,
     Signal,
 };
+pub use outcome::{Attempt, FinalStatus, Outcome, OutcomeBuilder};
 pub use policy::{
     ClientContext, ClientMatcher, ClientProfile, EligibilityCheck, PolicyConfig, PolicyFallback,
     PolicyMatcher, PolicyPreference, PolicyRequirements, RejectionReason, RoutingPolicy,
@@ -82,10 +87,15 @@ pub use policy::{
 pub use query::{RequestKind, SideQueryKind};
 pub use registry::{Registry, Resolution};
 pub use router::{Candidate, Router};
+pub use session::{SessionRoutingMode, SessionState, SessionStore};
 pub use server::{build_app, AppState, ServerHandle};
 pub use stats::{RequestRecord, Stats};
 pub use stats_ext::{
     Ewma, FailureStats, LatencyStats, PercentileEstimator, ProviderModelStats, StatsStore,
+};
+pub use ml::{
+    DatasetStore, DatasetTrainingSample, SampleBuilder, Targets, validate_sample,
+    extract_features, FeatureContext, RoutingFeatures, FEATURE_DIMENSION, FEATURE_SCHEMA_VERSION,
 };
 pub use upstream::{DiscoveredModel, Upstream};
 
