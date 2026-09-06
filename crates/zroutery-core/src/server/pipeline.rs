@@ -641,6 +641,7 @@ async fn try_rectify_stream(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn buffered_chat(
     state: Arc<AppState>,
     dialect: Dialect,
@@ -821,7 +822,7 @@ async fn buffered_chat(
                         resp.model.clone(),
                         input_items.clone(),
                         output,
-                        resp.usage.clone(),
+                        resp.usage,
                         previous_response_id.clone(),
                         routing_decision,
                     );
@@ -888,7 +889,7 @@ async fn buffered_chat(
                                 resp.model.clone(),
                                 input_items.clone(),
                                 output,
-                                resp.usage.clone(),
+                                resp.usage,
                                 previous_response_id.clone(),
                                 routing_decision,
                             );

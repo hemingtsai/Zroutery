@@ -521,10 +521,10 @@ impl ChatRequest {
                             caps.push(Capability::Tools);
                         }
                     }
-                    ContentBlock::Thinking { .. } | ContentBlock::RedactedThinking { .. } => {
-                        if !caps.contains(&Capability::Thinking) {
-                            caps.push(Capability::Thinking);
-                        }
+                    ContentBlock::Thinking { .. } | ContentBlock::RedactedThinking { .. }
+                        if !caps.contains(&Capability::Thinking) =>
+                    {
+                        caps.push(Capability::Thinking);
                     }
                     _ => {}
                 }
@@ -533,10 +533,10 @@ impl ChatRequest {
         if !self.tools.is_empty() && !caps.contains(&Capability::Tools) {
             caps.push(Capability::Tools);
         }
-        if self.thinking.as_ref().is_some_and(|t| t.enabled) {
-            if !caps.contains(&Capability::Thinking) {
-                caps.push(Capability::Thinking);
-            }
+        if self.thinking.as_ref().is_some_and(|t| t.enabled)
+            && !caps.contains(&Capability::Thinking)
+        {
+            caps.push(Capability::Thinking);
         }
         caps
     }

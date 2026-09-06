@@ -194,23 +194,17 @@ pub fn encode_request(req: &ChatRequest, upstream_model: &str) -> Result<Value> 
                         "inlineData": {"mimeType": media_type, "data": data}
                     })),
                     MediaSource::Url { .. } => {
-                        match apply_content_policy(req.unsupported_content_policy, b)? {
-                            Some(replacement) => {
-                                if let Some(text) = replacement.as_text() {
-                                    parts.push(json!({"text": text}));
-                                }
+                        if let Some(replacement) = apply_content_policy(req.unsupported_content_policy, b)? {
+                            if let Some(text) = replacement.as_text() {
+                                parts.push(json!({"text": text}));
                             }
-                            None => {} // Drop
                         }
                     }
                     MediaSource::Reference { .. } => {
-                        match apply_content_policy(req.unsupported_content_policy, b)? {
-                            Some(replacement) => {
-                                if let Some(text) = replacement.as_text() {
-                                    parts.push(json!({"text": text}));
-                                }
+                        if let Some(replacement) = apply_content_policy(req.unsupported_content_policy, b)? {
+                            if let Some(text) = replacement.as_text() {
+                                parts.push(json!({"text": text}));
                             }
-                            None => {} // Drop
                         }
                     }
                 },
@@ -246,23 +240,17 @@ pub fn encode_request(req: &ChatRequest, upstream_model: &str) -> Result<Value> 
                         "inlineData": {"mimeType": media_type, "data": data}
                     })),
                     MediaSource::Url { .. } => {
-                        match apply_content_policy(req.unsupported_content_policy, b)? {
-                            Some(replacement) => {
-                                if let Some(t) = replacement.as_text() {
-                                    parts.push(json!({"text": t}));
-                                }
+                        if let Some(replacement) = apply_content_policy(req.unsupported_content_policy, b)? {
+                            if let Some(t) = replacement.as_text() {
+                                parts.push(json!({"text": t}));
                             }
-                            None => {} // Drop
                         }
                     }
                     MediaSource::Reference { .. } => {
-                        match apply_content_policy(req.unsupported_content_policy, b)? {
-                            Some(replacement) => {
-                                if let Some(t) = replacement.as_text() {
-                                    parts.push(json!({"text": t}));
-                                }
+                        if let Some(replacement) = apply_content_policy(req.unsupported_content_policy, b)? {
+                            if let Some(t) = replacement.as_text() {
+                                parts.push(json!({"text": t}));
                             }
-                            None => {} // Drop
                         }
                     }
                 },
@@ -279,23 +267,17 @@ pub fn encode_request(req: &ChatRequest, upstream_model: &str) -> Result<Value> 
                         "inlineData": {"mimeType": media_type, "data": data}
                     })),
                     MediaSource::Url { .. } => {
-                        match apply_content_policy(req.unsupported_content_policy, b)? {
-                            Some(replacement) => {
-                                if let Some(t) = replacement.as_text() {
-                                    parts.push(json!({"text": t}));
-                                }
+                        if let Some(replacement) = apply_content_policy(req.unsupported_content_policy, b)? {
+                            if let Some(t) = replacement.as_text() {
+                                parts.push(json!({"text": t}));
                             }
-                            None => {} // Drop
                         }
                     }
                     MediaSource::Reference { .. } => {
-                        match apply_content_policy(req.unsupported_content_policy, b)? {
-                            Some(replacement) => {
-                                if let Some(t) = replacement.as_text() {
-                                    parts.push(json!({"text": t}));
-                                }
+                        if let Some(replacement) = apply_content_policy(req.unsupported_content_policy, b)? {
+                            if let Some(t) = replacement.as_text() {
+                                parts.push(json!({"text": t}));
                             }
-                            None => {} // Drop
                         }
                     }
                 },

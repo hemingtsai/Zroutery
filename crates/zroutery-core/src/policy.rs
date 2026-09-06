@@ -22,37 +22,27 @@ use crate::ir::{Capability, CapabilityState, ChatRequest};
 // ----------------------------------------------------------- Profile
 
 /// Task complexity level, derived from request characteristics.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum Complexity {
     Simple,
+    #[default]
     Standard,
     Complex,
     Frontier,
 }
 
-impl Default for Complexity {
-    fn default() -> Self {
-        Complexity::Standard
-    }
-}
-
 /// The kind of task the request represents.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskType {
+    #[default]
     Chat,
     Code,
     Vision,
     Analysis,
     Creative,
     ToolUse,
-}
-
-impl Default for TaskType {
-    fn default() -> Self {
-        TaskType::Chat
-    }
 }
 
 /// Derived profile of a request, fed into policy matchers.
@@ -333,20 +323,20 @@ impl PolicyMatcher {
     fn matches(&self, ctx: &MatchContext) -> bool {
         match self {
             PolicyMatcher::Client { value } => {
-                ctx.client_id.map_or(false, |id| id == value)
+                ctx.client_id.is_some_and(|id| id == value)
             }
             PolicyMatcher::Application { value } => {
-                ctx.application.map_or(false, |app| app == value)
+                ctx.application.is_some_and(|app| app == value)
             }
             PolicyMatcher::ModelPrefix { value } => ctx.model.starts_with(value),
             PolicyMatcher::Streaming { value } => ctx.streaming == *value,
             PolicyMatcher::HasTools { value } => ctx.has_tools == *value,
             PolicyMatcher::HasVision { value } => ctx.has_vision == *value,
             PolicyMatcher::MinComplexity { value } => {
-                ctx.task.map_or(false, |t| t.complexity >= *value)
+                ctx.task.is_some_and(|t| t.complexity >= *value)
             }
             PolicyMatcher::TaskType { value } => {
-                ctx.task.map_or(false, |t| t.task_type == *value)
+                ctx.task.is_some_and(|t| t.task_type == *value)
             }
         }
     }
@@ -725,16 +715,16 @@ impl ClientMatcher {
         match self {
             ClientMatcher::UserAgent { value } => ctx
                 .user_agent
-                .map_or(false, |ua| ua.to_lowercase().contains(&value.to_lowercase())),
+                .is_some_and(|ua| ua.to_lowercase().contains(&value.to_lowercase())),
             ClientMatcher::ApiKeyPrefix { value } => ctx
                 .api_key_prefix
-                .map_or(false, |key| key.starts_with(value)),
+                .is_some_and(|key| key.starts_with(value)),
             ClientMatcher::Header { name, value } => ctx.headers.iter().any(|(n, v)| {
                 n.eq_ignore_ascii_case(name) && v == value
             }),
             ClientMatcher::ModelPrefix { value } => ctx.model.starts_with(value),
             ClientMatcher::ClientId { value } => {
-                ctx.client_id.map_or(false, |id| id == value)
+                ctx.client_id.is_some_and(|id| id == value)
             }
         }
     }

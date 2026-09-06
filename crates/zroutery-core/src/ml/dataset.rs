@@ -165,7 +165,7 @@ pub fn samples_from_outcome(
             targets,
             provider_id: attempt.candidate_provider.clone(),
             model_id: attempt.candidate_model.clone(),
-            origin: origin.clone(),
+            origin,
             outcome_id: outcome.outcome_id.clone(),
             feedback: Vec::new(),
         });

@@ -166,6 +166,7 @@ impl Router {
     /// - [`PolicyFallback::Escalate`] — try higher tiers up to `max_steps`.
     /// - [`PolicyFallback::Degrade`] — try lower tiers up to `max_steps`.
     /// - [`PolicyFallback::IgnoreRequirements`] — use all members without filtering.
+    #[allow(clippy::too_many_arguments)]
     pub fn plan_with_policy(
         &self,
         registry: &Registry,
@@ -376,7 +377,7 @@ impl Router {
             decision_id: format!("dec-{}", uuid::Uuid::new_v4().simple()),
             timestamp: chrono::Utc::now().timestamp(),
             task: task
-                .map(|t| TaskProfileSummary::from(t))
+                .map(TaskProfileSummary::from)
                 .unwrap_or_else(|| TaskProfileSummary {
                     complexity: String::new(),
                     task_type: String::new(),
@@ -512,7 +513,7 @@ impl Router {
                 } else {
                     self.health_score(&m.exposed_id())
                 };
-                let streaming = task.map_or(false, |t| t.streaming);
+                let streaming = task.is_some_and(|t| t.streaming);
                 let avg_latency_ms = if streaming {
                     // For streaming, TTFT is the primary signal; fall back to
                     // total latency when no TTFT observation exists.

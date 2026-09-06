@@ -1236,15 +1236,13 @@ impl ResponsesStreamEncoder {
                     self.current_text.clear();
                 }
             }
-            Some(OutputItemKind::Thinking) => {
-                if !self.current_thinking.is_empty() {
+            Some(OutputItemKind::Thinking) if !self.current_thinking.is_empty() => {
                     self.output_items.insert(self.current_output_index, json!({
                         "id": self.current_item_id,
                         "type": "reasoning",
                         "summary": [{"type": "summary_text", "text": self.current_thinking}],
                     }));
                     self.current_thinking.clear();
-                }
             }
             _ => {}
         }

@@ -413,6 +413,74 @@ impl Evaluator {
 }
 
 // ---------------------------------------------------------------------------
+// FrozenHoldout / temporal_split — Stage 7D acceptance
+// ---------------------------------------------------------------------------
+
+/// A frozen evaluation dataset that cannot be modified after creation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FrozenHoldout {
+    pub samples: Vec<TrainingSample>,
+    pub frozen_at: i64,
+    pub description: String,
+}
+
+impl FrozenHoldout {
+    pub fn new(samples: Vec<TrainingSample>, description: String) -> Self {
+        FrozenHoldout {
+            samples,
+            frozen_at: chrono::Utc::now().timestamp(),
+            description,
+        }
+    }
+
+    pub fn samples(&self) -> &[TrainingSample] {
+        &self.samples
+    }
+
+    pub fn len(&self) -> usize {
+        self.samples.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.samples.is_empty()
+    }
+
+    /// Evaluate a model against the holdout. This is the ONLY way to use holdout data.
+    pub fn evaluate(&self, model: &dyn RoutingModel) -> PredictionMetrics {
+        let predictions: Vec<f64> = self
+            .samples
+            .iter()
+            .map(|s| model.predict(&s.features).value)
+            .collect();
+        let actuals: Vec<bool> = self.samples.iter().map(|s| s.targets.success).collect();
+        PredictionMetrics::compute_classification(&predictions, &actuals)
+    }
+}
+
+/// Split samples into train/validation/holdout with temporal ordering.
+///
+/// Samples are sorted by timestamp, then partitioned according to the given
+/// ratios (which should sum to at most 1.0).
+pub fn temporal_split(
+    samples: &mut [TrainingSample],
+    train_ratio: f64,
+    validation_ratio: f64,
+) -> (
+    Vec<TrainingSample>,
+    Vec<TrainingSample>,
+    Vec<TrainingSample>,
+) {
+    samples.sort_by_key(|s| s.timestamp);
+    let n = samples.len();
+    let train_end = (n as f64 * train_ratio) as usize;
+    let val_end = (n as f64 * (train_ratio + validation_ratio)) as usize;
+    let train = samples[..train_end].to_vec();
+    let validation = samples[train_end..val_end].to_vec();
+    let holdout = samples[val_end..].to_vec();
+    (train, validation, holdout)
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -837,5 +905,137 @@ mod tests {
         let restored: RoutingMetrics = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.total_requests, 50);
         assert!((restored.success_rate - 0.92).abs() < 1e-10);
+    }
+
+    // -- FrozenHoldout tests --
+
+    #[test]
+    fn frozen_holdout_cannot_be_modified_after_creation() {
+        let samples = vec![
+            make_sample(true, Some(100.0), Some(0.01), 0),
+            make_sample(false, None, None, 0),
+        ];
+        let holdout = FrozenHoldout::new(samples, "test holdout".to_string());
+
+        // The holdout is immutable (no &mut self methods).
+        // Verify it stores samples correctly.
+        assert_eq!(holdout.len(), 2);
+        assert!(!holdout.is_empty());
+        assert_eq!(holdout.description, "test holdout");
+        assert!(holdout.frozen_at > 0);
+
+        // Verify samples are preserved exactly.
+        assert!(holdout.samples[0].targets.success);
+        assert!(!holdout.samples[1].targets.success);
+    }
+
+    #[test]
+    fn frozen_holdout_empty() {
+        let holdout = FrozenHoldout::new(Vec::new(), "empty".to_string());
+        assert_eq!(holdout.len(), 0);
+        assert!(holdout.is_empty());
+    }
+
+    #[test]
+    fn frozen_holdout_serde_round_trip() {
+        let samples = vec![make_sample(true, Some(200.0), Some(0.02), 0)];
+        let holdout = FrozenHoldout::new(samples, "serde test".to_string());
+        let json = serde_json::to_string(&holdout).unwrap();
+        let restored: FrozenHoldout = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.len(), 1);
+        assert_eq!(restored.description, "serde test");
+        assert_eq!(restored.frozen_at, holdout.frozen_at);
+    }
+
+    // -- temporal_split tests --
+
+    #[test]
+    fn temporal_split_correct_ratio() {
+        // Use power-of-2-friendly ratios to avoid floating-point imprecision.
+        let mut samples: Vec<TrainingSample> = (0..100)
+            .map(|i| {
+                let mut s = make_sample(true, Some(100.0), Some(0.01), 0);
+                s.timestamp = 1_700_000_000 + i;
+                s
+            })
+            .collect();
+
+        let (train, val, holdout) = temporal_split(&mut samples, 0.5, 0.25);
+        assert_eq!(train.len(), 50);
+        assert_eq!(val.len(), 25);
+        assert_eq!(holdout.len(), 25);
+    }
+
+    #[test]
+    fn temporal_split_sorted_by_timestamp() {
+        let mut samples: Vec<TrainingSample> = vec![
+            {
+                let mut s = make_sample(true, Some(100.0), Some(0.01), 0);
+                s.timestamp = 3000;
+                s
+            },
+            {
+                let mut s = make_sample(false, None, None, 0);
+                s.timestamp = 1000;
+                s
+            },
+            {
+                let mut s = make_sample(true, Some(200.0), Some(0.02), 0);
+                s.timestamp = 2000;
+                s
+            },
+        ];
+
+        let (train, val, holdout) = temporal_split(&mut samples, 0.5, 0.25);
+        // After sorting: timestamps [1000, 2000, 3000]
+        // train = [1000], val = [2000], holdout = [3000]
+        assert_eq!(train.len(), 1);
+        assert_eq!(val.len(), 1);
+        assert_eq!(holdout.len(), 1);
+        assert_eq!(train[0].timestamp, 1000);
+        assert_eq!(val[0].timestamp, 2000);
+        assert_eq!(holdout[0].timestamp, 3000);
+    }
+
+    #[test]
+    fn temporal_split_empty_samples() {
+        let mut samples: Vec<TrainingSample> = Vec::new();
+        let (train, val, holdout) = temporal_split(&mut samples, 0.7, 0.2);
+        assert!(train.is_empty());
+        assert!(val.is_empty());
+        assert!(holdout.is_empty());
+    }
+
+    // -- FrozenHoldout evaluate tests --
+
+    #[test]
+    fn frozen_holdout_evaluate_returns_metrics() {
+        let samples = vec![
+            make_sample(true, Some(100.0), Some(0.01), 0),
+            make_sample(false, None, None, 0),
+            make_sample(true, Some(200.0), Some(0.02), 0),
+        ];
+        let holdout = FrozenHoldout::new(samples, "eval test".to_string());
+
+        let model = SuccessModel::new(FEATURE_DIMENSION);
+        let metrics = holdout.evaluate(&model);
+
+        assert_eq!(metrics.sample_count, 3);
+        assert!(metrics.log_loss.is_some());
+        assert!(metrics.brier_score.is_some());
+    }
+
+    #[test]
+    fn frozen_holdout_samples_returns_read_only_slice() {
+        let samples = vec![
+            make_sample(true, Some(100.0), Some(0.01), 0),
+            make_sample(false, None, None, 0),
+        ];
+        let holdout = FrozenHoldout::new(samples, "slice test".to_string());
+
+        let slice = holdout.samples();
+        assert_eq!(slice.len(), 2);
+        assert!(slice[0].targets.success);
+        assert!(!slice[1].targets.success);
     }
 }

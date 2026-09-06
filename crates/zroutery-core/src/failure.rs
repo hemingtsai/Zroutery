@@ -131,7 +131,7 @@ impl FailureClass {
             401 | 403 => FailureClass::Authentication,
             408 => FailureClass::Timeout,
             429 => FailureClass::RateLimit,
-            502 | 503 | 504 => FailureClass::ProviderUnavailable,
+            502..=504 => FailureClass::ProviderUnavailable,
             500 => FailureClass::Unknown, // could be anything
             _ if status >= 400 => FailureClass::Protocol,
             _ => FailureClass::Unknown,
