@@ -104,9 +104,11 @@ pub use migration::{
 };
 #[cfg(feature = "ml")]
 pub use ml::{
+    Action, ActionGuard, AttemptReward, RequestReward, RewardComputer, RewardPolicy,
     DatasetStore, DatasetTrainingSample, SampleBuilder, Targets, validate_sample,
     extract_features, FeatureContext, RoutingFeatures, FEATURE_DIMENSION, FEATURE_SCHEMA_VERSION,
-    ComparisonReport, Evaluator, PredictionMetrics, Recommendation, RoutingDeltas, RoutingMetrics,
+    ComparisonReport, Evaluator, FrozenHoldout, PredictionMetrics, Recommendation, RoutingDeltas,
+    RoutingMetrics, temporal_split,
 };
 pub use upstream::{DiscoveredModel, Upstream};
 

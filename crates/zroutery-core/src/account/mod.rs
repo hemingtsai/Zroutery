@@ -7,6 +7,7 @@
 pub mod types;
 pub mod store;
 pub mod provider;
+pub mod adapters;
 pub use types::*;
 pub use store::AccountStore;
 pub use provider::{AccountOpResult, AccountProvider};
