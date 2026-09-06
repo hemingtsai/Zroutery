@@ -21,6 +21,7 @@
 //! * [`upstream`] talks HTTP to providers.
 //! * [`server`] exposes the axum app used by the desktop shell.
 
+pub mod agent_takeover;
 pub mod billing;
 pub mod budget;
 pub mod circuit_breaker;
@@ -32,6 +33,8 @@ pub mod failure;
 pub mod feedback;
 pub mod ir;
 pub mod media;
+pub mod migration;
+#[cfg(feature = "ml")]
 pub mod ml;
 pub mod observation;
 pub mod outcome;
@@ -51,6 +54,9 @@ pub mod upstream;
 #[cfg(feature = "account")]
 pub mod account;
 
+pub use agent_takeover::{
+    ExternalModification, OwnershipManifest, OwnershipState, TakeoverStore,
+};
 pub use billing::{
     Balance, BalanceConfig, BalancePreset, BalanceProbe, BaseDepth, Cost, CostTotals, Pricing,
 };
@@ -93,6 +99,10 @@ pub use stats::{RequestRecord, Stats};
 pub use stats_ext::{
     Ewma, FailureStats, LatencyStats, PercentileEstimator, ProviderModelStats, StatsStore,
 };
+pub use migration::{
+    MigrationAction, MigrationPlan, MigrationResult, MigrationState, MigrationStep, MigrationStore,
+};
+#[cfg(feature = "ml")]
 pub use ml::{
     DatasetStore, DatasetTrainingSample, SampleBuilder, Targets, validate_sample,
     extract_features, FeatureContext, RoutingFeatures, FEATURE_DIMENSION, FEATURE_SCHEMA_VERSION,

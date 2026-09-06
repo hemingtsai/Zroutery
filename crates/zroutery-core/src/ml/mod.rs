@@ -6,10 +6,14 @@
 
 pub mod dataset;
 pub mod features;
+pub mod model;
 pub use dataset::{
     DatasetStore, SampleBuilder, Targets, TrainingSample as DatasetTrainingSample, validate_sample,
 };
 pub use features::{
     extract_features, FeatureContext, RoutingFeatures, FEATURE_DIMENSION, FEATURE_SCHEMA_VERSION,
     UNKNOWN,
+};
+pub use model::{
+    CostModel, LatencyModel, ModelState, Prediction, RoutingModel, SuccessModel, TtftModel,
 };
