@@ -1,3 +1,5 @@
+#![cfg(feature = "ml")]
+
 //! Stage 7D — Evaluation framework verification tests.
 //!
 //! Tests cover:
