@@ -44,6 +44,9 @@ pub mod stats_ext;
 mod sync;
 pub mod upstream;
 
+#[cfg(feature = "account")]
+pub mod account;
+
 pub use billing::{
     Balance, BalanceConfig, BalancePreset, BalanceProbe, BaseDepth, Cost, CostTotals, Pricing,
 };
@@ -84,3 +87,6 @@ pub use stats_ext::{
     Ewma, FailureStats, LatencyStats, PercentileEstimator, ProviderModelStats, StatsStore,
 };
 pub use upstream::{DiscoveredModel, Upstream};
+
+#[cfg(feature = "account")]
+pub use account::{AccountId, AccountRuntime, AccountStatus, AccountStore};
