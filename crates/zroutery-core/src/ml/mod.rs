@@ -9,6 +9,7 @@ pub mod dataset;
 pub mod evaluation;
 pub mod features;
 pub mod model;
+pub mod model_identity;
 pub mod reward;
 pub use coordinator::{Coordinator, CoordinatorConfig, RoutingAction, RoutingDecision};
 pub use dataset::{
@@ -24,6 +25,10 @@ pub use features::{
 };
 pub use model::{
     CostModel, LatencyModel, ModelState, Prediction, RoutingModel, SuccessModel, TtftModel,
+};
+pub use model_identity::{
+    CommitId, CommitInfo, LearningEvent, ModelCheckpoint, ModelCommit, ModelEnsemble, ModelId,
+    ModelRef, ModelStore, ReplayEngine, ReplayError,
 };
 pub use reward::{
     Action, ActionGuard, AttemptReward, PredictionBundle, RequestReward, RewardComputer,
