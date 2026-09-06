@@ -297,22 +297,7 @@ impl Upstream {
         let json = self
             .get_json(provider, api_key, &provider.models_url(), 30)
             .await?;
-        let mut models: Vec<DiscoveredModel> = json
-            .get("data")
-            .and_then(Value::as_array)
-            .map(|items| {
-                items
-                    .iter()
-                    .filter_map(|m| {
-                        let id = m.get("id").and_then(Value::as_str)?;
-                        Some(DiscoveredModel {
-                            id: id.to_string(),
-                            pricing: pricing_from_catalogue(m),
-                        })
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+        let mut models = extract_model_list(&json, &provider.name);
         models.sort_by(|a, b| a.id.cmp(&b.id));
         models.dedup_by(|a, b| a.id == b.id);
         Ok(models)
@@ -424,6 +409,105 @@ fn pricing_from_catalogue(entry: &Value) -> Option<Pricing> {
         cache_read_per_mtok: per_mtok("input_cache_read"),
         cache_write_per_mtok: per_mtok("input_cache_write"),
     })
+}
+
+/// Extract model entries from a provider's catalogue response.
+///
+/// The OpenAI standard places models in a `"data"` array, with each entry
+/// carrying an `"id"` field. Some providers use `"models"` instead of `"data"`,
+/// and/or `"model"` / `"model_id"` / `"name"` instead of `"id"`. When the
+/// standard layout fails, the function tries these fallbacks and logs a
+/// diagnostic so an empty result does not go unnoticed.
+fn extract_model_list(json: &Value, provider_name: &str) -> Vec<DiscoveredModel> {
+    // Try standard OpenAI format first: `{"data": [{"id": "..."}]}`.
+    if let Some(items) = json.get("data").and_then(Value::as_array) {
+        let models: Vec<DiscoveredModel> = items
+            .iter()
+            .filter_map(|m| {
+                let id = model_id_from_entry(m)?;
+                Some(DiscoveredModel {
+                    id,
+                    pricing: pricing_from_catalogue(m),
+                })
+            })
+            .collect();
+        if !models.is_empty() {
+            return models;
+        }
+    }
+
+    // Fallback: some providers (including MiMo) use `"models"` instead of `"data"`.
+    for key in &["models", "items", "entries"] {
+        if let Some(items) = json.get(*key).and_then(Value::as_array) {
+            let models: Vec<DiscoveredModel> = items
+                .iter()
+                .filter_map(|m| {
+                    let id = model_id_from_entry(m)?;
+                    Some(DiscoveredModel {
+                        id,
+                        pricing: pricing_from_catalogue(m),
+                    })
+                })
+                .collect();
+            if !models.is_empty() {
+                tracing::debug!(
+                    provider = provider_name,
+                    key,
+                    count = models.len(),
+                    "model list uses non-standard array key"
+                );
+                return models;
+            }
+        }
+    }
+
+    // Fallback: bare top-level array.
+    if let Some(items) = json.as_array() {
+        let models: Vec<DiscoveredModel> = items
+            .iter()
+            .filter_map(|m| {
+                let id = model_id_from_entry(m)?;
+                Some(DiscoveredModel {
+                    id,
+                    pricing: pricing_from_catalogue(m),
+                })
+            })
+            .collect();
+        if !models.is_empty() {
+            tracing::debug!(
+                provider = provider_name,
+                count = models.len(),
+                "model list is a bare array"
+            );
+            return models;
+        }
+    }
+
+    // Nothing matched.
+    if json.is_object() {
+        tracing::warn!(
+            provider = provider_name,
+            top_keys = ?json.as_object().map(|o| o.keys().collect::<Vec<_>>()),
+            "model catalogue response has no recognizable model array; \
+             discovery returned 0 models"
+        );
+    }
+    Vec::new()
+}
+
+/// Extract a model id string from one catalogue entry.
+///
+/// Tries `"id"`, `"model"`, `"model_id"`, and `"name"`, in order.
+fn model_id_from_entry(entry: &Value) -> Option<String> {
+    for key in &["id", "model", "model_id", "name"] {
+        if let Some(id) = entry.get(*key).and_then(Value::as_str) {
+            let trimmed = id.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+            }
+        }
+    }
+    None
 }
 
 struct StreamState {
@@ -948,5 +1032,155 @@ mod tests {
         ] {
             assert!(pricing_from_catalogue(&entry).is_none(), "{entry}");
         }
+    }
+
+    // -- model discovery normalization tests --
+
+    #[test]
+    fn standard_openai_model_list() {
+        let json = serde_json::json!({
+            "object": "list",
+            "data": [
+                {"id": "gpt-4", "object": "model"},
+                {"id": "gpt-3.5-turbo", "object": "model"}
+            ]
+        });
+        let models = extract_model_list(&json, "test");
+        assert_eq!(models.len(), 2);
+        // extract_model_list preserves input order; sorting happens in list_models.
+        assert_eq!(models[0].id, "gpt-4");
+        assert_eq!(models[1].id, "gpt-3.5-turbo");
+    }
+
+    #[test]
+    fn mimo_style_models_key() {
+        // MiMo and some other providers use "models" instead of "data".
+        let json = serde_json::json!({
+            "models": [
+                {"id": "MiMo-7B-RL"},
+                {"id": "MiMo-7B-SFT"}
+            ]
+        });
+        let models = extract_model_list(&json, "Xiaomi MiMo");
+        assert_eq!(models.len(), 2);
+        assert_eq!(models[0].id, "MiMo-7B-RL");
+        assert_eq!(models[1].id, "MiMo-7B-SFT");
+    }
+
+    #[test]
+    fn mimo_style_model_id_field() {
+        // Some providers use "model" or "model_id" instead of "id".
+        let json = serde_json::json!({
+            "data": [
+                {"model": "MiMo-7B-RL"},
+                {"model_id": "MiMo-7B-SFT"},
+                {"name": "MiMo-7B-Chat"}
+            ]
+        });
+        let models = extract_model_list(&json, "test");
+        assert_eq!(models.len(), 3);
+        assert!(models.iter().any(|m| m.id == "MiMo-7B-RL"));
+        assert!(models.iter().any(|m| m.id == "MiMo-7B-SFT"));
+        assert!(models.iter().any(|m| m.id == "MiMo-7B-Chat"));
+    }
+
+    #[test]
+    fn bare_array_model_list() {
+        let json = serde_json::json!([
+            {"id": "model-a"},
+            {"id": "model-b"}
+        ]);
+        let models = extract_model_list(&json, "test");
+        assert_eq!(models.len(), 2);
+        assert_eq!(models[0].id, "model-a");
+        assert_eq!(models[1].id, "model-b");
+    }
+
+    #[test]
+    fn empty_data_array_returns_empty() {
+        let json = serde_json::json!({"data": []});
+        let models = extract_model_list(&json, "test");
+        assert!(models.is_empty());
+    }
+
+    #[test]
+    fn unrecognized_format_returns_empty_with_diagnostic() {
+        // A response that has no recognizable model list at all.
+        let json = serde_json::json!({"error": "not found"});
+        let models = extract_model_list(&json, "test");
+        assert!(models.is_empty());
+    }
+
+    #[test]
+    fn model_id_whitespace_is_trimmed() {
+        let json = serde_json::json!({
+            "data": [
+                {"id": "  model-a  "},
+                {"id": "model-b"}
+            ]
+        });
+        let models = extract_model_list(&json, "test");
+        assert_eq!(models.len(), 2);
+        assert_eq!(models[0].id, "model-a");
+        assert_eq!(models[1].id, "model-b");
+    }
+
+    #[test]
+    fn entries_without_any_id_field_are_skipped() {
+        let json = serde_json::json!({
+            "data": [
+                {"id": "model-a"},
+                {"object": "model"},
+                {"id": "model-b"}
+            ]
+        });
+        let models = extract_model_list(&json, "test");
+        assert_eq!(models.len(), 2);
+        assert_eq!(models[0].id, "model-a");
+        assert_eq!(models[1].id, "model-b");
+    }
+
+    #[test]
+    fn empty_id_strings_are_skipped() {
+        let json = serde_json::json!({
+            "data": [
+                {"id": ""},
+                {"id": "  "},
+                {"id": "model-a"}
+            ]
+        });
+        let models = extract_model_list(&json, "test");
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].id, "model-a");
+    }
+
+    #[test]
+    fn standard_format_preserves_pricing() {
+        let json = serde_json::json!({
+            "data": [{
+                "id": "m-priced",
+                "pricing": {"prompt": "0.0000005", "completion": "0.000002"}
+            }]
+        });
+        let models = extract_model_list(&json, "test");
+        assert_eq!(models.len(), 1);
+        let pricing = models[0].pricing.as_ref().unwrap();
+        assert_eq!(pricing.currency, "USD");
+        assert!((pricing.input_per_mtok - 0.5).abs() < 1e-9);
+        assert!((pricing.output_per_mtok - 2.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn non_standard_key_preserves_pricing() {
+        let json = serde_json::json!({
+            "models": [{
+                "id": "m-priced",
+                "pricing": {"prompt": "0.0000005", "completion": "0.000002"}
+            }]
+        });
+        let models = extract_model_list(&json, "test");
+        assert_eq!(models.len(), 1);
+        let pricing = models[0].pricing.as_ref().unwrap();
+        assert_eq!(pricing.currency, "USD");
     }
 }
