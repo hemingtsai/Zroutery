@@ -20,21 +20,16 @@ use serde::{Deserialize, Serialize};
 // ---------------------------------------------------------------------------
 
 /// How a session's routing behaves.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionRoutingMode {
     /// New request: full policy evaluation, no affinity.
+    #[default]
     Free,
     /// Active session: prefer the same candidate unless failure forces change.
     Sticky,
     /// Long context: pin to candidate, only change on hard failure.
     Pinned,
-}
-
-impl Default for SessionRoutingMode {
-    fn default() -> Self {
-        Self::Free
-    }
 }
 
 // ---------------------------------------------------------------------------

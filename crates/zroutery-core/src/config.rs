@@ -481,7 +481,7 @@ impl ModelEntry {
             priority: 0,
             weight: default_weight(),
             enabled: true,
-            supports_tools: true,
+            supports_tools: false,
             supports_vision: false,
             supports_thinking: false,
             display_name: None,

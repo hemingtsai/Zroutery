@@ -55,7 +55,7 @@ impl<T> Signal<T> {
 // ---------------------------------------------------------------------------
 
 /// How fresh a runtime observation is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum ObservationFreshness {
     /// Observed within the last 30 seconds.
     Fresh,
@@ -64,13 +64,8 @@ pub enum ObservationFreshness {
     /// Observed within the last 30 minutes.
     Stale,
     /// Older than 30 minutes or never observed.
+    #[default]
     Unknown,
-}
-
-impl Default for ObservationFreshness {
-    fn default() -> Self {
-        Self::Unknown
-    }
 }
 
 impl ObservationFreshness {
@@ -138,7 +133,7 @@ impl LatencyObservation {
 // ---------------------------------------------------------------------------
 
 /// Health state of a model/provider.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum HealthState {
     /// Recent successes, no issues.
     Healthy,
@@ -147,13 +142,8 @@ pub enum HealthState {
     /// Circuit breaker open, not accepting requests.
     Unavailable,
     /// No observations yet.
+    #[default]
     Unknown,
-}
-
-impl Default for HealthState {
-    fn default() -> Self {
-        Self::Unknown
-    }
 }
 
 /// Health metrics for a model/provider.
