@@ -81,8 +81,10 @@ pub struct CcProvider {
     pub source_id: String,
     pub name: String,
     pub base_url: String,
-    /// The auth token, present in the preview only so it can be stored on
-    /// import; the dashboard must not render it.
+    /// The auth token, deliberately skipped during serialization so it is
+    /// never sent to the frontend. The dashboard must not render it; the
+    /// import stores it in the OS credential store directly.
+    #[serde(skip_serializing)]
     pub api_key: Option<String>,
     /// The tier defaults, `[1M]`/`[1m]` modifiers already stripped.
     pub models: Vec<CcModel>,
@@ -395,6 +397,141 @@ pub fn to_zroutery(
     (provider, models)
 }
 
+/// The result of a CC Switch import, summarising what happened.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ImportReport {
+    /// Where the providers were read from (e.g. `~/.cc-switch/cc-switch.db`).
+    pub source: String,
+    /// How many providers made it into the config.
+    pub providers_imported: usize,
+    /// How many model entries were created across all providers.
+    pub models_imported: usize,
+    /// Non-fatal observations (e.g. a model has no tier assigned).
+    pub warnings: Vec<String>,
+    /// Fatal problems that prevented an entry from being imported.
+    pub errors: Vec<String>,
+}
+
+/// Validate a draft before conversion.
+///
+/// Returns `Ok(())` if the draft is clean, or a descriptive error string when
+/// it would produce an unusable provider or model entry. These checks run
+/// before [`to_zroutery`], so the caller can skip bad entries and still import
+/// the good ones.
+pub fn validate_draft(draft: &CcProvider) -> Result<(), String> {
+    if draft.base_url.trim().is_empty() {
+        return Err(format!(
+            "provider `{}` has no base url",
+            draft.name,
+        ));
+    }
+    // A provider with no models is not necessarily invalid (the user might
+    // add models later), but it is unusual enough to warn about rather than
+    // silently import.
+    if draft.models.is_empty() {
+        return Err(format!(
+            "provider `{}` has no model entries",
+            draft.name,
+        ));
+    }
+    for m in &draft.models {
+        if m.upstream_model.trim().is_empty() {
+            return Err(format!(
+                "provider `{}` has a model entry with no upstream model name",
+                draft.name,
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Run post-import validation on the config slice the import would add.
+///
+/// Checks for issues that [`validate_draft`] cannot catch in isolation, such
+/// as duplicate provider ids and model id collisions within the import batch.
+/// Returns a list of warnings and errors; errors mean the corresponding entry
+/// should not be committed.
+pub fn validate_import_batch(
+    providers: &[(ProviderConfig, Vec<ModelEntry>)],
+) -> (Vec<String>, Vec<String>) {
+    let mut warnings = Vec::new();
+    let mut errors = Vec::new();
+
+    let mut seen_provider_ids = std::collections::BTreeMap::<String, usize>::new();
+    let mut seen_model_ids = std::collections::BTreeMap::<String, usize>::new();
+
+    for (provider, models) in providers {
+        *seen_provider_ids
+            .entry(provider.id.clone())
+            .or_insert(0) += 1;
+
+        if provider.base_url.trim().is_empty() {
+            errors.push(format!(
+                "provider `{}` has an empty base url",
+                provider.id,
+            ));
+        }
+
+        for m in models {
+            let exposed = m.exposed_id();
+            *seen_model_ids
+                .entry(exposed.clone())
+                .or_insert(0) += 1;
+
+            if m.upstream_model.trim().is_empty() {
+                errors.push(format!(
+                    "model on provider `{}` has no upstream name",
+                    provider.id,
+                ));
+            }
+            if m.tier.is_none() {
+                warnings.push(format!(
+                    "model `{exposed}` has no tier assigned; it will not participate in *-class routing",
+                ));
+            }
+        }
+    }
+
+    for (id, count) in &seen_provider_ids {
+        if *count > 1 {
+            errors.push(format!(
+                "provider id `{id}` appears {count} times in the import batch",
+            ));
+        }
+    }
+    for (id, count) in &seen_model_ids {
+        if *count > 1 {
+            errors.push(format!(
+                "model id `{id}` appears {count} times in the import batch",
+            ));
+        }
+    }
+
+    (warnings, errors)
+}
+
+/// Produce a report for a completed import.
+///
+/// This is a convenience constructor: pass the source path, the converted
+/// pairs, and any additional warnings the caller collected (e.g. from
+/// [`validate_import_batch`]).
+pub fn build_report(
+    source: &str,
+    imported: &[(ProviderConfig, Vec<ModelEntry>)],
+    extra_warnings: Vec<String>,
+    extra_errors: Vec<String>,
+) -> ImportReport {
+    let providers_imported = imported.len();
+    let models_imported: usize = imported.iter().map(|(_, m)| m.len()).sum();
+    ImportReport {
+        source: source.to_string(),
+        providers_imported,
+        models_imported,
+        warnings: extra_warnings,
+        errors: extra_errors,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -560,6 +697,253 @@ mod tests {
                     .collect::<Vec<_>>()
                     .join(", ")
             );
+        }
+    }
+
+    #[test]
+    fn api_key_is_not_serialized_in_draft() {
+        let draft = CcProvider {
+            source_id: "s1".into(),
+            name: "Relay".into(),
+            base_url: "https://relay.example/v1".into(),
+            api_key: Some("sk-secret-token-12345".into()),
+            models: vec![CcModel {
+                upstream_model: "m1".into(),
+                tier: Some(ModelTier::Standard),
+            }],
+            is_current: false,
+        };
+        let json = serde_json::to_string(&draft).unwrap();
+        assert!(
+            !json.contains("sk-secret-token-12345"),
+            "api_key leaked into serialized CcProvider: {json}"
+        );
+        assert!(
+            !json.contains("api_key"),
+            "api_key field present in serialized CcProvider: {json}"
+        );
+    }
+
+    #[test]
+    fn api_key_is_not_serialized_in_draft_preview() {
+        let provider = CcProvider {
+            source_id: "s1".into(),
+            name: "Relay".into(),
+            base_url: "https://relay.example/v1".into(),
+            api_key: Some("sk-top-secret".into()),
+            models: vec![CcModel {
+                upstream_model: "m1".into(),
+                tier: Some(ModelTier::Standard),
+            }],
+            is_current: false,
+        };
+        let preview = CcProviderDraft {
+            provider,
+            target_id: "relay".into(),
+            already_imported: false,
+        };
+        let json = serde_json::to_string(&preview).unwrap();
+        assert!(
+            !json.contains("sk-top-secret"),
+            "api_key leaked through CcProviderDraft: {json}"
+        );
+    }
+
+    #[test]
+    fn validate_draft_rejects_empty_base_url() {
+        let draft = CcProvider {
+            source_id: "s1".into(),
+            name: "Empty".into(),
+            base_url: "".into(),
+            api_key: None,
+            models: vec![CcModel {
+                upstream_model: "m1".into(),
+                tier: Some(ModelTier::Standard),
+            }],
+            is_current: false,
+        };
+        let err = validate_draft(&draft).unwrap_err();
+        assert!(err.contains("no base url"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn validate_draft_rejects_no_models() {
+        let draft = CcProvider {
+            source_id: "s1".into(),
+            name: "Empty".into(),
+            base_url: "https://example.com/v1".into(),
+            api_key: None,
+            models: vec![],
+            is_current: false,
+        };
+        let err = validate_draft(&draft).unwrap_err();
+        assert!(err.contains("no model entries"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn validate_draft_rejects_empty_upstream_model() {
+        let draft = CcProvider {
+            source_id: "s1".into(),
+            name: "Bad".into(),
+            base_url: "https://example.com/v1".into(),
+            api_key: None,
+            models: vec![CcModel {
+                upstream_model: "  ".into(),
+                tier: Some(ModelTier::Standard),
+            }],
+            is_current: false,
+        };
+        let err = validate_draft(&draft).unwrap_err();
+        assert!(err.contains("no upstream model name"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn validate_draft_accepts_good_input() {
+        let draft = CcProvider {
+            source_id: "s1".into(),
+            name: "Good".into(),
+            base_url: "https://example.com/v1".into(),
+            api_key: Some("sk-x".into()),
+            models: vec![CcModel {
+                upstream_model: "m1".into(),
+                tier: Some(ModelTier::Standard),
+            }],
+            is_current: false,
+        };
+        assert!(validate_draft(&draft).is_ok());
+    }
+
+    #[test]
+    fn import_batch_validation_catches_duplicate_providers() {
+        let provider = ProviderConfig::new("same-id", "A", ProviderKind::Anthropic);
+        let models = vec![ModelEntry::for_upstream("same-id", "m1", Some(ModelTier::Standard))];
+        let batch = vec![
+            (provider.clone(), models.clone()),
+            (provider, models),
+        ];
+        let (warnings, errors) = validate_import_batch(&batch);
+        assert!(
+            errors.iter().any(|e| e.contains("same-id") && e.contains("2 times")),
+            "expected duplicate provider error, got: {errors:?}"
+        );
+        let _ = warnings;
+    }
+
+    #[test]
+    fn import_batch_validation_catches_duplicate_model_ids() {
+        let p1 = ProviderConfig::new("p1", "A", ProviderKind::Anthropic);
+        let p2 = ProviderConfig::new("p2", "B", ProviderKind::Anthropic);
+        let m1 = ModelEntry::for_upstream("p1", "m1", Some(ModelTier::Standard));
+        let m2 = ModelEntry::for_upstream("p1", "m1", Some(ModelTier::Fast));
+        let batch = vec![
+            (p1.clone(), vec![m1]),
+            (p2, vec![m2]),
+        ];
+        let (_warnings, errors) = validate_import_batch(&batch);
+        assert!(
+            errors.iter().any(|e| e.contains("p1-m1") && e.contains("2 times")),
+            "expected duplicate model error, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn import_batch_validation_warns_on_unclassified_models() {
+        let provider = ProviderConfig::new("p1", "A", ProviderKind::Anthropic);
+        let model = ModelEntry::for_upstream("p1", "m1", None);
+        let batch = vec![(provider, vec![model])];
+        let (warnings, _errors) = validate_import_batch(&batch);
+        assert!(
+            warnings.iter().any(|w| w.contains("no tier")),
+            "expected unclassified warning, got: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn import_report_counts_correctly() {
+        let p1 = ProviderConfig::new("p1", "A", ProviderKind::Anthropic);
+        let p2 = ProviderConfig::new("p2", "B", ProviderKind::Anthropic);
+        let models1 = vec![
+            ModelEntry::for_upstream("p1", "m1", Some(ModelTier::Standard)),
+            ModelEntry::for_upstream("p1", "m2", Some(ModelTier::Fast)),
+        ];
+        let models2 = vec![
+            ModelEntry::for_upstream("p2", "m3", Some(ModelTier::Reasoning)),
+        ];
+        let imported = vec![
+            (p1, models1),
+            (p2, models2),
+        ];
+        let report = build_report("cc-switch.db", &imported, vec![], vec![]);
+        assert_eq!(report.source, "cc-switch.db");
+        assert_eq!(report.providers_imported, 2);
+        assert_eq!(report.models_imported, 3);
+        assert!(report.warnings.is_empty());
+        assert!(report.errors.is_empty());
+    }
+
+    #[test]
+    fn secrets_are_never_in_provider_config() {
+        let draft = CcProvider {
+            source_id: "s1".into(),
+            name: "Secret Relay".into(),
+            base_url: "https://relay.example/v1".into(),
+            api_key: Some("sk-super-secret-key".into()),
+            models: vec![CcModel {
+                upstream_model: "m1".into(),
+                tier: Some(ModelTier::Standard),
+            }],
+            is_current: false,
+        };
+        let (provider, _models) = to_zroutery(&draft, "relay".into(), 0, None);
+        assert_ne!(provider.key_ref, "sk-super-secret-key");
+        assert!(
+            provider.key_ref.contains("relay"),
+            "key_ref should reference the provider id, not the secret: {}",
+            provider.key_ref,
+        );
+    }
+
+    #[test]
+    fn import_of_ten_produces_no_config_drift() {
+        let drafts: Vec<CcProvider> = (0..10)
+            .map(|i| CcProvider {
+                source_id: format!("src-{i}"),
+                name: format!("Provider {i}"),
+                base_url: format!("https://relay-{i}.example/v1"),
+                api_key: Some(format!("sk-{i}")),
+                models: vec![CcModel {
+                    upstream_model: format!("model-{i}"),
+                    tier: Some(ModelTier::Standard),
+                }],
+                is_current: i == 0,
+            })
+            .collect();
+
+        let run_import = || -> Vec<(ProviderConfig, Vec<ModelEntry>)> {
+            let mut taken_ids = std::collections::BTreeSet::new();
+            drafts
+                .iter()
+                .map(|d| {
+                    let id = unique_provider_id(&d.name, &|id| taken_ids.contains(id));
+                    taken_ids.insert(id.clone());
+                    to_zroutery(d, id, if d.is_current { 0 } else { 10 }, None)
+                })
+                .collect()
+        };
+
+        let first = run_import();
+        for run in 1..10 {
+            let subsequent = run_import();
+            assert_eq!(first.len(), subsequent.len(), "run {run} length mismatch");
+            for (a, b) in first.iter().zip(subsequent.iter()) {
+                assert_eq!(a.0.id, b.0.id, "run {run}: provider id mismatch");
+                assert_eq!(a.0.base_url, b.0.base_url, "run {run}: base_url mismatch");
+                assert_eq!(a.1.len(), b.1.len(), "run {run}: model count mismatch");
+                for (ma, mb) in a.1.iter().zip(b.1.iter()) {
+                    assert_eq!(ma.exposed_id(), mb.exposed_id(), "run {run}: model id mismatch");
+                    assert_eq!(ma.tier, mb.tier, "run {run}: tier mismatch");
+                }
+            }
         }
     }
 }
