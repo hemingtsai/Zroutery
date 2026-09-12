@@ -31,6 +31,7 @@ fn thinking_signature_matches_all_seven_error_patterns() {
         "signature extra inputs are not permitted",
         "thinking cannot be modified",
         "redacted_thinking cannot be modified",
+        "the content[].thinking in the thinking mode must be passed back to the api",
     ];
     for msg in cases {
         assert!(

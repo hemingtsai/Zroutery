@@ -33,6 +33,7 @@ impl Rectifier for ThinkingSignatureRectifier {
             || contains_all(&msg, &["signature", "extra inputs are not permitted"])
             || ((msg.contains("thinking") || msg.contains("redacted_thinking"))
                 && msg.contains("cannot be modified"))
+            || contains_all(&msg, &["content[].thinking", "thinking mode", "must be passed back to the api"])
     }
 
     fn rectify(&self, body: &mut Value) -> RectifyResult {
