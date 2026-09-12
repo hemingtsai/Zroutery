@@ -931,8 +931,10 @@ mod tests {
             (ObservationFreshness::Stale, 0.5),
             (ObservationFreshness::Unknown, 0.25),
         ] {
-            let mut obs = crate::observation::RuntimeObservation::default();
-            obs.freshness = fresh;
+            let obs = crate::observation::RuntimeObservation {
+                freshness: fresh,
+                ..Default::default()
+            };
 
             let ctx = FeatureContext {
                 task: None,

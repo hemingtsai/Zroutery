@@ -1070,7 +1070,7 @@ fn cross_protocol_openai_tools_to_anthropic() {
     // Tool result should be in a user message.
     let user_msg = messages
         .iter()
-        .find(|m| m["role"] == "user" && m["content"].as_array().map_or(false, |a| a.iter().any(|b| b["type"] == "tool_result")))
+        .find(|m| m["role"] == "user" && m["content"].as_array().is_some_and(|a| a.iter().any(|b| b["type"] == "tool_result")))
         .expect("should have user message with tool_result");
     let tool_result = user_msg["content"]
         .as_array()

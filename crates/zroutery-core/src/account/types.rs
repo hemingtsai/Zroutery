@@ -18,7 +18,7 @@ impl std::fmt::Display for AccountId {
 }
 
 /// Account lifecycle status.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AccountStatus {
     Active,
@@ -26,11 +26,8 @@ pub enum AccountStatus {
     QuotaExhausted,
     RateLimited,
     AuthenticationExpired,
+    #[default]
     Unknown,
-}
-
-impl Default for AccountStatus {
-    fn default() -> Self { Self::Unknown }
 }
 
 /// What operations an account provider supports.

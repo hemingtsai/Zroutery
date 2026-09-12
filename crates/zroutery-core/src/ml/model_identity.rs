@@ -691,8 +691,8 @@ mod tests {
 
     fn test_sample(success: bool, seed: usize) -> DatasetTrainingSample {
         let mut feats = [0.0f32; 32];
-        for i in 0..32 {
-            feats[i] = ((seed * 7 + i * 13) % 100) as f32 / 100.0;
+        for (i, item) in feats.iter_mut().enumerate() {
+            *item = ((seed * 7 + i * 13) % 100) as f32 / 100.0;
         }
         DatasetTrainingSample {
             sample_id: format!("s-{}", seed),

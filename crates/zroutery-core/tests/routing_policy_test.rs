@@ -649,7 +649,6 @@ fn scoring_prefers_preferred_tier() {
         cost_weight: 0.0,
         priority_weight: 0.0,
         tier_weight: 1.0,
-        ..Default::default()
     };
     let exact = make_scoring_ctx(1.0, 100.0, Some(1.0), 0, Some(ModelTier::Standard));
     let close = make_scoring_ctx(1.0, 100.0, Some(1.0), 0, Some(ModelTier::Reasoning));
@@ -2014,7 +2013,7 @@ fn decision_trace_records_score_breakdown() {
     // Final score should be in [0.0, 1.0].
     let final_score = scored.final_score.unwrap();
     assert!(
-        final_score >= 0.0 && final_score <= 1.0,
+        (0.0..=1.0).contains(&final_score),
         "final_score out of range: {final_score}"
     );
 }

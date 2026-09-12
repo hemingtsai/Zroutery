@@ -700,7 +700,7 @@ mod tests {
         let metrics = PredictionMetrics::compute_classification(&predictions, &actuals);
         let ll = metrics.log_loss.unwrap();
         assert!(
-            (ll - 0.6931471805599453).abs() < 1e-10,
+            (ll - std::f64::consts::LN_2).abs() < 1e-10,
             "log loss for p=0.5, y=1 should be ln(2), got {ll}"
         );
 
