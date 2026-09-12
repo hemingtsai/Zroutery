@@ -6,6 +6,7 @@
 
 pub mod coordinator;
 pub mod dataset;
+pub mod decision_engine;
 pub mod evaluation;
 pub mod features;
 pub mod model;
@@ -15,6 +16,7 @@ pub use coordinator::{Coordinator, CoordinatorConfig, RoutingAction, RoutingDeci
 pub use dataset::{
     DatasetStore, SampleBuilder, Targets, TrainingSample as DatasetTrainingSample, validate_sample,
 };
+pub use decision_engine::{DecisionEngine, EngineCandidate, EngineInput, EngineOutput};
 pub use evaluation::{
     ComparisonReport, Evaluator, FrozenHoldout, PredictionMetrics, Recommendation, RoutingDeltas,
     RoutingMetrics, temporal_split,
@@ -34,3 +36,4 @@ pub use reward::{
     Action, ActionGuard, AttemptReward, PredictionBundle, RequestReward, RewardComputer,
     RewardPolicy, UtilityBreakdown, compute_utility,
 };
+// shadow-restore-marker
