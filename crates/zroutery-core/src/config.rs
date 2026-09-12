@@ -521,7 +521,9 @@ impl ModelEntry {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RoutingStrategy {
-    /// Strict priority order; weight breaks ties randomly.
+    /// Strict priority order (lower priority number first). The sort is
+    /// stable, so candidates with equal priority preserve the upstream
+    /// (registry/policy) order instead of being reshuffled.
     #[default]
     Priority,
     /// Weighted random across all healthy candidates.

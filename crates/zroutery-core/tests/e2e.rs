@@ -1854,8 +1854,10 @@ async fn rate_limit_triggers_failover() {
     let mut cfg = config_for(addr);
     // Make the primary model rate-limited, fallback model normal.
     cfg.models = vec![
-        ModelEntry::for_upstream("deepseek", "limited-v4", Some(ModelTier::Standard)),
-        ModelEntry::for_upstream("deepseek", "deepseek-v4-pro", Some(ModelTier::Standard)),
+        ModelEntry::for_upstream("deepseek", "limited-v4", Some(ModelTier::Standard))
+            .with_priority(0),
+        ModelEntry::for_upstream("deepseek", "deepseek-v4-pro", Some(ModelTier::Standard))
+            .with_priority(10),
     ];
     let h = Harness::start(cfg, mock).await;
 
@@ -1870,6 +1872,8 @@ async fn rate_limit_triggers_failover() {
     assert_eq!(resp.status(), 200);
     assert_eq!(resp.headers()["x-zroutery-model"], "deepseek-deepseek-v4-pro");
     // Two upstream calls: one 429, one success.
+    assert_eq!(h.mock.bodies()[0]["model"], "limited-v4");
+    assert_eq!(h.mock.bodies()[1]["model"], "deepseek-v4-pro");
     assert_eq!(h.mock.count(), 2);
 
     h.shutdown().await;
