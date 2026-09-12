@@ -905,11 +905,11 @@ async fn buffered_chat(
                         state
                             .router
                             .report_failure(candidate.model_id(), &e, &routing);
-                        let class = crate::failure::ClassifiedFailure::from_status(
+                        let err_msg = e.to_string();
+                        let class = crate::failure::FailureClass::from_status_with_body(
                             e.status().as_u16(),
-                            e.to_string(),
-                        )
-                        .class;
+                            &err_msg,
+                        );
                         state.router.record_classified_outcome(
                             candidate.model_id(),
                             &candidate.provider.id,
@@ -933,11 +933,11 @@ async fn buffered_chat(
                         state
                             .router
                             .report_failure(candidate.model_id(), &rectified_err, &routing);
-                        let class = crate::failure::ClassifiedFailure::from_status(
+                        let err_msg = rectified_err.to_string();
+                        let class = crate::failure::FailureClass::from_status_with_body(
                             rectified_err.status().as_u16(),
-                            rectified_err.to_string(),
-                        )
-                        .class;
+                            &err_msg,
+                        );
                         state.router.record_classified_outcome(
                             candidate.model_id(),
                             &candidate.provider.id,
@@ -1172,11 +1172,11 @@ async fn stream_chat(
                         state
                             .router
                             .report_failure(candidate.model_id(), &e, &routing);
-                        let class = crate::failure::ClassifiedFailure::from_status(
+                        let err_msg = e.to_string();
+                        let class = crate::failure::FailureClass::from_status_with_body(
                             e.status().as_u16(),
-                            e.to_string(),
-                        )
-                        .class;
+                            &err_msg,
+                        );
                         state.router.record_classified_outcome(
                             candidate.model_id(),
                             &candidate.provider.id,
@@ -1199,11 +1199,11 @@ async fn stream_chat(
                         state
                             .router
                             .report_failure(candidate.model_id(), &rectified_err, &routing);
-                        let class = crate::failure::ClassifiedFailure::from_status(
+                        let err_msg = rectified_err.to_string();
+                        let class = crate::failure::FailureClass::from_status_with_body(
                             rectified_err.status().as_u16(),
-                            rectified_err.to_string(),
-                        )
-                        .class;
+                            &err_msg,
+                        );
                         state.router.record_classified_outcome(
                             candidate.model_id(),
                             &candidate.provider.id,
@@ -1407,11 +1407,11 @@ impl SseState {
                 self.state
                     .router
                     .report_failure(&self.model_id, e, &self.routing);
-                let class = crate::failure::ClassifiedFailure::from_status(
+                let err_msg = e.to_string();
+                let class = crate::failure::FailureClass::from_status_with_body(
                     e.status().as_u16(),
-                    e.to_string(),
-                )
-                .class;
+                    &err_msg,
+                );
                 self.state.router.record_classified_outcome(
                     &self.model_id,
                     &self.provider_id,

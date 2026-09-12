@@ -138,6 +138,17 @@ impl FailureClass {
         }
     }
 
+    /// Classify an HTTP status code with body context.
+    ///
+    /// Some relays return 500 for what is really an invalid request.
+    /// The body typically contains `"invalid_request_error"` to signal this.
+    pub fn from_status_with_body(status: u16, body: &str) -> Self {
+        if status == 500 && body.to_lowercase().contains("invalid_request_error") {
+            return FailureClass::InvalidRequest;
+        }
+        Self::from_status(status)
+    }
+
     /// Classify from an error string (for non-HTTP failures).
     pub fn from_error_message(msg: &str) -> Self {
         let lower = msg.to_lowercase();

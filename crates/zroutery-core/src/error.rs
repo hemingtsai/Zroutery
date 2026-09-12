@@ -135,7 +135,14 @@ impl Error {
             Error::Transport { .. } | Error::Timeout(_) | Error::BadUpstreamPayload(_) => true,
             // The next candidate may belong to a provider whose key does exist.
             Error::MissingApiKey(_) => true,
-            Error::Upstream { status, .. } => {
+            Error::Upstream { status, body, .. } => {
+                // Some relays return 500 for what is really an invalid
+                // request (body contains "invalid_request_error").  Retrying
+                // or failing over would just burn quota on the same bad
+                // request.
+                if *status == 500 && body.to_lowercase().contains("invalid_request_error") {
+                    return false;
+                }
                 matches!(*status, 405 | 408 | 409 | 425 | 429 | 500..=599)
             }
             _ => false,
@@ -235,6 +242,14 @@ mod tests {
             provider: "p".into(),
             status: 400,
             body: String::new()
+        }
+        .is_retryable());
+        // 500 with "invalid_request_error" in the body is a mis-classified
+        // client error — must not retry or fail over.
+        assert!(!Error::Upstream {
+            provider: "p".into(),
+            status: 500,
+            body: r#"{"error":{"message":"Upstream rejected the request as invalid","type":"invalid_request_error"}}"#.into()
         }
         .is_retryable());
         assert!(!Error::invalid("bad").is_retryable());
