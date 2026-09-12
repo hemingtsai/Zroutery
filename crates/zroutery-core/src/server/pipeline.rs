@@ -28,6 +28,8 @@ use crate::protocol::{self, openai, SseFrame, StreamEncoder};
 use crate::query::RequestKind;
 use crate::rectifier::{self, Rectifier};
 use crate::rectifier::media_fallback::MediaFallbackRectifier;
+#[cfg(feature = "ml")]
+use crate::ml::ShadowInput;
 use crate::registry::{Registry, Resolution};
 use crate::router::Candidate;
 use crate::stats::RecordBuilder;
@@ -203,10 +205,63 @@ pub(super) async fn handle_chat(
         );
     }
 
-    if req.stream {
-        stream_chat(state, dialect, req, plan, kind, include_usage, routing_decision).await
+    // shadow-block-begin
+    // Shadow evaluation (Stage 7E-1): snapshot what the ML stack *would have
+    // done*, strictly from the decision production already made. The snapshot
+    // is taken here — after routing, before any attempt — so the ranking state
+    // is untouched when shadow sees it. Direct-resolution and classifier
+    // requests carry no routing decision and are therefore out of scope by
+    // construction.
+    //
+    // Structural guarantee: the snapshot builder lives in the ml::shadow
+    // module behind a signature that accepts only read-only store handles
+    // plus the plan and decision production already computed — no AppState,
+    // no Router — so no ranking path is reachable from shadow evaluation.
+    // The compiler enforces this; the shadow tests tripwire the source.
+    #[cfg(feature = "ml")]
+    let shadow_input = if state.shadow().enabled() {
+        routing_decision.as_ref().map(|decision| {
+            ShadowInput::from_policy_plan(
+                state.router().observations(),
+                &state.router().stats_store,
+                &plan,
+                decision,
+                &task_profile,
+                req.messages.len(),
+            )
+        })
     } else {
-        buffered_chat(state, dialect, req, plan, kind, input_items, previous_response_id, routing_decision).await
+        None
+    };
+    // shadow-block-end
+
+    if req.stream {
+        stream_chat(
+            state,
+            dialect,
+            req,
+            plan,
+            kind,
+            include_usage,
+            routing_decision,
+            #[cfg(feature = "ml")]
+            shadow_input,
+        )
+        .await
+    } else {
+        buffered_chat(
+            state,
+            dialect,
+            req,
+            plan,
+            kind,
+            input_items,
+            previous_response_id,
+            routing_decision,
+            #[cfg(feature = "ml")]
+            shadow_input,
+        )
+        .await
     }
 }
 
@@ -651,10 +706,22 @@ async fn buffered_chat(
     input_items: Vec<Value>,
     previous_response_id: Option<String>,
     routing_decision: Option<RouteDecision>,
+    #[cfg(feature = "ml")] shadow_input: Option<ShadowInput>,
 ) -> Response {
     let started = Instant::now();
     let mut rec = RecordBuilder::new(dialect, &req.model, false);
     rec.kind(kind);
+    // shadow-block-begin
+    // Shadow evaluation runs before the attempt loop, over the snapshot taken
+    // while ranking state was untouched. It is record-only: the engine
+    // contains its own faults (catch_unwind + fault counter) and the store is
+    // the record — the verdict is deliberately discarded here and never feeds
+    // back into this request.
+    #[cfg(feature = "ml")]
+    if let Some(input) = &shadow_input {
+        let _ = state.shadow().evaluate(rec.id(), input);
+    }
+    // shadow-block-end
     let routing = state.config().routing.clone();
     let mode = encode_mode_for(kind);
     let mut last_error = Error::NoCandidate(req.model.clone());
@@ -969,6 +1036,7 @@ async fn buffered_chat(
     error_response(dialect, &last_error)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn stream_chat(
     state: Arc<AppState>,
     dialect: Dialect,
@@ -977,10 +1045,19 @@ async fn stream_chat(
     kind: RequestKind,
     include_usage: bool,
     routing_decision: Option<RouteDecision>,
+    #[cfg(feature = "ml")] shadow_input: Option<ShadowInput>,
 ) -> Response {
     let started = Instant::now();
     let mut rec = RecordBuilder::new(dialect, &req.model, true);
     rec.kind(kind);
+    // shadow-block-begin
+    // Same record-only shadow hook as the buffered path: before the attempt
+    // loop, over the pre-attempt snapshot, verdict discarded.
+    #[cfg(feature = "ml")]
+    if let Some(input) = &shadow_input {
+        let _ = state.shadow().evaluate(rec.id(), input);
+    }
+    // shadow-block-end
     let routing = state.config().routing.clone();
     let mode = encode_mode_for(kind);
     let mut last_error = Error::NoCandidate(req.model.clone());

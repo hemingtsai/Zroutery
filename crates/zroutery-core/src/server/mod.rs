@@ -60,6 +60,11 @@ pub struct AppState {
     /// Set when the ledger has moved since it was last written out, so the desktop
     /// layer can flush on a timer instead of writing a file per request.
     ledger_dirty: AtomicBool,
+    /// Shadow decision engine (Stage 7E-1): records what the ML routing stack
+    /// would have done for policy-routed main traffic. Record-only by
+    /// construction — nothing in the request pipeline reads its verdicts.
+    #[cfg(feature = "ml")]
+    shadow: crate::ml::ShadowEngine,
     pub response_store: ResponseStore,
 }
 
@@ -72,6 +77,9 @@ impl AppState {
             .first()
             .map(|p| p.connect_timeout_secs)
             .unwrap_or(15);
+        // Read before `config` moves into the registry.
+        #[cfg(feature = "ml")]
+        let shadow_enabled = config.shadow.enabled;
         AppState {
             registry: RwLock::new(Arc::new(Registry::new(Arc::new(config)))),
             router: Arc::new(Router::new()),
@@ -80,6 +88,14 @@ impl AppState {
             secrets,
             ledger: RwLock::new(Ledger::new()),
             ledger_dirty: AtomicBool::new(false),
+            #[cfg(feature = "ml")]
+            shadow: crate::ml::ShadowEngine::new(
+                crate::ml::DecisionEngine::new(
+                    crate::ml::CoordinatorConfig::default(),
+                    crate::ml::RewardPolicy::default(),
+                ),
+                shadow_enabled,
+            ),
             response_store: ResponseStore::default(),
         }
     }
@@ -139,6 +155,12 @@ impl AppState {
 
     pub fn upstream(&self) -> &Upstream {
         &self.upstream
+    }
+
+    /// The shadow decision engine (record-only; never influences routing).
+    #[cfg(feature = "ml")]
+    pub fn shadow(&self) -> &crate::ml::ShadowEngine {
+        &self.shadow
     }
 
     /// Rebuild the upstream HTTP client (e.g. when bypass_proxy changes).

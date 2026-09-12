@@ -855,6 +855,14 @@ impl Router {
         crate::sync::lock(&self.election).clone()
     }
 
+    /// Runtime observations, keyed by provider+model. Read-only access for the
+    /// shadow evaluation snapshot, which needs the same signals the policy
+    /// scorer saw without consulting the router's ranking paths.
+    #[cfg(feature = "ml")]
+    pub fn observations(&self) -> &ObservationStore {
+        &self.observations
+    }
+
     /// Order a group randomly, with probability proportional to weight.
     fn weighted_shuffle<'a>(&self, members: &[&'a ModelEntry]) -> Vec<&'a ModelEntry> {
         let mut pool: Vec<&ModelEntry> = members.to_vec();
