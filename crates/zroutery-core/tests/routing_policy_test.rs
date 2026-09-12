@@ -262,8 +262,13 @@ fn policy_tier_matcher() {
     let check = reqs.check("m", "p", Some(ModelTier::Fast), &caps, false);
     assert!(!check.eligible);
     let check = reqs.check("m", "p", None, &caps, false);
-    // None tier: min_tier/max_tier checks use if-let, so None passes.
-    assert!(check.eligible);
+    // None tier with tier bounds set cannot be checked against them:
+    // rejected with RejectionReason::UnknownTier.
+    assert!(!check.eligible);
+    assert!(check
+        .reasons
+        .iter()
+        .any(|r| matches!(r, RejectionReason::UnknownTier)));
 }
 
 #[test]
