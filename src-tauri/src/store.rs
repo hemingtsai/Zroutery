@@ -103,11 +103,20 @@ pub fn save(dir: &Path, cfg: &AppConfig) -> Result<PathBuf, String> {
 fn write_atomically(dir: &Path, name: &str, text: &str) -> Result<PathBuf, String> {
     use std::io::Write;
 
+    let existed = dir.is_dir();
     std::fs::create_dir_all(dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+    // The directory holds the local auth token, so make it owner-only on unix.
+    // Only tighten a directory we had to create: an explicit ZROUTERY_CONFIG_DIR
+    // lives where the user already chose the permissions.
+    #[cfg(unix)]
+    if !existed {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+    }
     let path = dir.join(name);
     let tmp = dir.join(format!("{name}.tmp"));
     let mut file =
-        std::fs::File::create(&tmp).map_err(|e| format!("cannot write {}: {e}", tmp.display()))?;
+        create_private(&tmp).map_err(|e| format!("cannot write {}: {e}", tmp.display()))?;
     file.write_all(text.as_bytes())
         .map_err(|e| format!("cannot write {}: {e}", tmp.display()))?;
     file.sync_all()
@@ -119,6 +128,23 @@ fn write_atomically(dir: &Path, name: &str, text: &str) -> Result<PathBuf, Strin
         let _ = d.sync_all();
     }
     Ok(path)
+}
+
+/// Create `path` so that only its owner can read it.
+///
+/// The configuration document carries the local access token, so a
+/// world-readable file would let any other user on the machine spend the
+/// proxy credit. The mode is set at creation time so the file is never even
+/// briefly world-readable; other platforms rely on their own default ACLs.
+fn create_private(path: &Path) -> std::io::Result<std::fs::File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options.open(path)
 }
 
 #[cfg(test)]
