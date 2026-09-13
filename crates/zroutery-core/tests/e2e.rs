@@ -355,7 +355,14 @@ impl Harness {
             base,
             server: Some(server),
             state,
-            client: reqwest::Client::new(),
+            // Do not keep idle connections: a rejected oversized body makes
+            // the server close the connection, and a pooled connection that the
+            // server has already closed would otherwise surface as a spurious
+            // broken pipe on the next request.
+            client: reqwest::Client::builder()
+                .pool_max_idle_per_host(0)
+                .build()
+                .unwrap(),
             mock,
         }
     }
@@ -1273,8 +1280,15 @@ async fn oversized_request_bodies_are_rejected_before_reaching_a_provider() {
                       "messages": [{"role": "user", "content": huge}]}))
         .send()
         .await
-        .unwrap();
-    assert_eq!(resp.status(), 413);
+        .ok();
+    // A connection reset while the body is still uploading is a rejection
+    // too: the server stops reading and closes without draining the rest of
+    // the oversized body, so the client may see the reset instead of the 413.
+    // Either way nothing reached a provider, which the next line asserts.
+    assert!(
+        resp.map_or(true, |r| r.status() == 413),
+        "an oversized body must be rejected",
+    );
     assert_eq!(h.mock.count(), 0, "nothing was forwarded upstream");
 
     // A normal request on the same server still works.
