@@ -48,6 +48,14 @@
     "Microsoft YaHei", serif;
   --font-mono: "IBM Plex Mono", "SF Mono", "Cascadia Mono", Consolas, monospace;
 
+  /* Type scale — clear hierarchy by size and weight
+     20px  display    — big statistics
+     18px  h1         — page title, sidebar brand
+     15px  h2         — row titles, nav items, drawer title
+     14px  body       — content, inputs, buttons, badges, tables
+     12px  caption    — labels, metadata, hints, timestamps
+     11px  micro      — version numbers, annotations */
+
   /* No shadows on page; only floating layers */
   --shadow-layer: 0 8px 24px rgba(0, 0, 0, 0.08);
 
@@ -136,15 +144,15 @@ body {
 
 .sidebar-brand {
   padding: 2px 10px 16px;
-  font-size: 16px;
-  font-weight: 500;
+  font-size: 18px;
+  font-weight: 600;
   letter-spacing: -0.01em;
 }
 
 .sidebar-brand .mono {
   font-size: 11px;
   color: var(--muted);
-  font-weight: 500;
+  font-weight: 400;
   margin-left: 6px;
 }
 
@@ -156,6 +164,7 @@ body {
   background: none;
   font: inherit;
   font-size: 15px;
+  font-weight: 500;
   color: var(--text-2);
   cursor: pointer;
   text-align: left;
@@ -175,9 +184,9 @@ body {
 .nav-count {
   margin-left: auto;
   font-size: 11px;
-  font-family: var(--font-sans);
+  font-family: var(--font-mono);
   color: var(--muted);
-  font-weight: 500;
+  font-weight: 400;
 }
 
 .sidebar-spacer {
@@ -197,6 +206,7 @@ body {
 .sidebar-foot .linky {
   color: var(--muted);
   line-height: 1.5;
+  font-size: 12px;
 }
 
 .sidebar-foot .linky:hover {
@@ -224,9 +234,11 @@ body {
 }
 
 .mainbar .page-title {
-  font-size: 14px;
+  font-size: 12px;
   font-weight: 500;
   color: var(--text-2);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
 }
 
 .mainbar-right {
@@ -281,9 +293,9 @@ body {
 
 .page-head .lede {
   margin: 0;
-  color: var(--text-2);
-  font-size: 16px;
-  font-weight: 500;
+  color: var(--text);
+  font-size: 18px;
+  font-weight: 600;
 }
 
 /* Hanging punctuation: the status dot hangs outside the text's left edge, so
@@ -304,7 +316,7 @@ body {
   margin-left: 14px;
   color: var(--muted);
   font-weight: 400;
-  font-size: 13px;
+  font-size: 12px;
 }
 
 /* Quiet text actions: plain words with a mid-dot, no link colour. */
@@ -339,15 +351,15 @@ body {
 }
 
 .section-title {
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 500;
-  color: var(--text-2);
+  color: var(--muted);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.08em;
 }
 
 .section-hint {
-  font-size: 13px;
+  font-size: 12px;
   color: var(--muted);
   margin: 0;
 }
@@ -409,7 +421,7 @@ body {
 }
 
 .list-row .row-title {
-  font-weight: 400;
+  font-weight: 500;
   font-size: 15px;
   display: flex;
   align-items: center;
@@ -417,7 +429,7 @@ body {
 }
 
 .list-row .row-sub {
-  font-size: 14px;
+  font-size: 12px;
   color: var(--muted);
   display: flex;
   align-items: center;
@@ -432,8 +444,8 @@ body {
   flex: none;
   min-width: 88px;
   text-align: right;
-  font-family: var(--font-sans);
-  font-size: 13px;
+  font-family: var(--font-mono);
+  font-size: 12px;
   color: var(--muted);
 }
 
@@ -462,7 +474,7 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 13px;
+  font-size: 12px;
   color: var(--text-2);
 }
 
@@ -525,8 +537,8 @@ body {
 }
 
 .drawer-head .drawer-title {
-  font-size: 14px;
-  font-weight: 500;
+  font-size: 15px;
+  font-weight: 600;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -569,6 +581,7 @@ body {
 .kv-key {
   color: var(--muted);
   flex: none;
+  font-size: 12px;
 }
 
 .kv-val {
@@ -617,13 +630,13 @@ body {
 .field-label {
   height: var(--label-h);
   line-height: var(--label-h);
-  font-size: 13px;
-  color: var(--text-secondary, var(--muted));
+  font-size: 12px;
+  color: var(--muted);
   font-weight: 500;
 }
 
 .field-hint {
-  font-size: 12px;
+  font-size: 11px;
   line-height: 16px;
   color: var(--muted);
   font-style: normal;
@@ -642,7 +655,7 @@ input,
   box-sizing: border-box;
   height: var(--control-h);
   font: inherit;
-  font-size: 15px;
+  font-size: 14px;
   line-height: normal;
   border-radius: 0;
   border: 1px solid var(--border-primary, var(--line));
@@ -761,7 +774,7 @@ input::placeholder {
   border-radius: 0;
   background: var(--surface);
   font: inherit;
-  font-size: 15px;
+  font-size: 14px;
   color: var(--text);
   cursor: pointer;
 }
@@ -906,7 +919,6 @@ input::placeholder {
   padding: 0;
   color: var(--muted);
   cursor: pointer;
-  transition: color var(--t-fast) var(--ease);
 }
 
 .linky:hover {
@@ -1041,7 +1053,6 @@ input::placeholder {
   font-size: 12px;
   color: var(--text-2);
   cursor: pointer;
-  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
 }
 
 .bar-action:hover {
@@ -1050,7 +1061,7 @@ input::placeholder {
 }
 
 .bar-action .glyph {
-  font-size: 13px;
+  font-size: 12px;
   line-height: 1;
 }
 
@@ -1193,12 +1204,12 @@ input::placeholder {
 }
 
 .flow-kind .flow-kind-name {
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 500;
 }
 
 .flow-kind .flow-kind-hint {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--muted);
 }
 
@@ -1234,20 +1245,20 @@ input::placeholder {
   align-items: baseline;
   gap: 8px;
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: 12px;
   color: var(--text);
 }
 
 .flow-target .flow-provider {
   font-family: var(--font-sans);
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 400;
   color: var(--muted);
 }
 
 .flow-target .flow-meta {
   font-family: var(--font-sans);
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 400;
   color: var(--muted);
   margin-left: 8px;
@@ -1302,7 +1313,7 @@ input::placeholder {
 }
 
 .timeline-kind {
-  font-size: 13px;
+  font-size: 12px;
   color: var(--text-2);
 }
 
@@ -1316,12 +1327,12 @@ input::placeholder {
 
 .timeline-main-cell .timeline-model {
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .timeline-main-cell .timeline-provider {
   color: var(--muted);
-  font-size: 13px;
+  font-size: 12px;
 }
 
 /* Durations and status codes in the timeline margin: statistics, so the UI
@@ -1330,7 +1341,7 @@ input::placeholder {
   display: flex;
   align-items: center;
   gap: 12px;
-  font-size: 13px;
+  font-size: 12px;
   color: var(--muted);
   font-family: var(--font-sans);
   flex: none;
@@ -1361,11 +1372,11 @@ input::placeholder {
 .empty {
   color: var(--muted);
   margin: 4px 0;
-  font-size: 14px;
+  font-size: 12px;
 }
 
 .empty.small {
-  font-size: 13px;
+  font-size: 11px;
 }
 
 /* The quiet empty state: a line, a hint, one action. No illustration. */
@@ -1379,13 +1390,13 @@ input::placeholder {
 
 .empty-state p {
   margin: 0;
-  font-size: 16px;
-  font-weight: 500;
+  font-size: 18px;
+  font-weight: 600;
 }
 
 .empty-state .muted {
   font-weight: 400;
-  font-size: 14px;
+  font-size: 12px;
 }
 
 .empty-state .btn {
@@ -1404,7 +1415,7 @@ input::placeholder {
   box-sizing: border-box;
   height: 24px;
   font: inherit;
-  font-size: 13px;
+  font-size: 12px;
   padding: 0 10px;
   border-radius: 0;
   border: 1px solid var(--border-primary, var(--line));
@@ -1425,7 +1436,7 @@ input::placeholder {
   cursor: pointer;
   padding: 0 0 0 6px;
   font: inherit;
-  font-size: 13px;
+  font-size: 12px;
   line-height: 1;
 }
 
@@ -1467,7 +1478,7 @@ input::placeholder {
 }
 
 .stats span {
-  font-size: 13px;
+  font-size: 12px;
   color: var(--muted);
 }
 
@@ -1505,13 +1516,13 @@ input::placeholder {
 
 .card h2 {
   margin: 0;
-  font-size: 13px;
-  font-weight: 500;
+  font-size: 15px;
+  font-weight: 600;
 }
 
 .card h3 {
   margin: 8px 0 0;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--muted);
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -1645,7 +1656,7 @@ input::placeholder {
 
 .confirm-title {
   margin: 0;
-  font-size: 16px;
+  font-size: 18px;
   font-weight: 600;
 }
 
