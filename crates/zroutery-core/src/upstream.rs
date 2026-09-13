@@ -45,6 +45,11 @@ fn build_http_client(bypass_proxy: bool, connect_timeout_secs: u64) -> reqwest::
         .connect_timeout(Duration::from_secs(connect_timeout_secs))
         .pool_idle_timeout(Duration::from_secs(90))
         .http1_only()
+        // Never follow a redirect. reqwest strips Authorization across hosts
+        // but not custom headers, and the Anthropic key rides in x-api-key, so
+        // a 3xx would hand the key to whatever host it names; a downgrade to
+        // plain http would also put it on the wire in the clear.
+        .redirect(reqwest::redirect::Policy::none())
         .user_agent(USER_AGENT);
     if bypass_proxy || std::env::var("ZROUTERY_NO_PROXY").is_ok() {
         builder = builder.no_proxy();
