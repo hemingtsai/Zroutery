@@ -1,0 +1,38 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# The commit-message convention has its own workflow; this one is about the
+# code: lint and test the GUI-free core on Linux, and make sure the desktop
+# shell still compiles on the platform it ships for.
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  core:
+    name: clippy and tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Clippy
+        run: cargo clippy -p zroutery-core --all-features -- -D warnings
+      - name: Tests
+        run: cargo test -p zroutery-core --all-features
+
+  desktop:
+    name: desktop shell compiles
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Check workspace
+        run: cargo check --workspace
