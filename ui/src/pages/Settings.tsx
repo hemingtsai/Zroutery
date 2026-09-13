@@ -359,9 +359,11 @@ export default function Settings({
           />
         </div>
 
-        <div className="row gap wrap">
-          <span className="field-label">{t("settings.local_token")}</span>
-          <code className="mono">{revealed ?? server.token_hint}</code>
+        <div className="kv-row">
+          <span className="kv-key">{t("settings.local_token")}</span>
+          <span className="kv-val mono">{revealed ?? server.token_hint}</span>
+        </div>
+        <div className="controls">
           {revealed ? (
             <Button kind="ghost" onClick={() => setRevealed(null)}>
               {t("action.hide")}
@@ -407,13 +409,13 @@ export default function Settings({
       </Section>
 
       <Section title={t("settings.point_client")}>
-        <p className="field-hint">{t("settings.anthropic_clients")}</p>
+        <p className="section-hint">{t("settings.anthropic_clients")}</p>
         <pre className="snippet">
           {`export ANTHROPIC_BASE_URL=${baseUrl}
 export ANTHROPIC_AUTH_TOKEN=<paste the token>
 export ANTHROPIC_MODEL=standard-class`}
         </pre>
-        <p className="field-hint">{t("settings.openai_clients")}</p>
+        <p className="section-hint">{t("settings.openai_clients")}</p>
         <pre className="snippet">
           {`export OPENAI_BASE_URL=${baseUrl}/v1
 export OPENAI_API_KEY=<paste the token>
@@ -611,7 +613,7 @@ ${t("settings.snippet_comment")}`}
       </Section>
 
       <Section title={t("settings.advanced")} hint={t("settings.advanced_hint")}>
-        <h3 style={{ margin: "6px 0 0", fontSize: 11, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+        <h3 className="section-sub">
           {t("settings.aliases")}
         </h3>
         <p className="field-hint">{t("settings.aliases_hint")}</p>
@@ -658,7 +660,7 @@ ${t("settings.snippet_comment")}`}
           </div>
         </div>
 
-        <h3 style={{ margin: "10px 0 0", fontSize: 11, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+        <h3 className="section-sub">
           {t("settings.naming_style")}
         </h3>
         <div className="controls">
@@ -676,7 +678,7 @@ ${t("settings.snippet_comment")}`}
           </Field>
         </div>
 
-        <h3 style={{ margin: "10px 0 0", fontSize: 11, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+        <h3 className="section-sub">
           {t("settings.election")}
         </h3>
         <p className="field-hint">{t("settings.election_hint")}</p>
@@ -711,7 +713,7 @@ ${t("settings.snippet_comment")}`}
           />
         </div>
 
-        <h3 style={{ margin: "10px 0 0", fontSize: 11, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+        <h3 className="section-sub">
           {t("settings.log")}
         </h3>
         {logs === null ? (

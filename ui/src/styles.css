@@ -341,6 +341,13 @@ body {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  padding-bottom: 24px;
+  border-bottom: 1px solid var(--border-primary, var(--line));
+}
+
+.section:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
 }
 
 .section-head {
@@ -362,6 +369,18 @@ body {
   font-size: 12px;
   color: var(--muted);
   margin: 0;
+}
+
+/* Sub-section heading inside a section — for grouping within Advanced etc. */
+.section-sub {
+  margin: 16px 0 0;
+  padding-top: 12px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  border-top: 1px solid var(--border-secondary, var(--line));
 }
 
 .rule {
@@ -613,7 +632,7 @@ body {
 .grid-two {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-  gap: 6px 18px;
+  gap: 6px 24px;
 }
 
 .field {
