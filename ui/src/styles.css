@@ -340,14 +340,7 @@ body {
 .section {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding-bottom: 24px;
-  border-bottom: 1px solid var(--border-primary, var(--line));
-}
-
-.section:last-child {
-  border-bottom: none;
-  padding-bottom: 0;
+  gap: 16px;
 }
 
 .section-head {
@@ -358,11 +351,9 @@ body {
 }
 
 .section-title {
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--muted);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
 }
 
 .section-hint {
@@ -373,7 +364,7 @@ body {
 
 /* Sub-section heading inside a section — for grouping within Advanced etc. */
 .section-sub {
-  margin: 16px 0 0;
+  margin: 20px 0 0;
   padding-top: 12px;
   font-size: 12px;
   font-weight: 500;
@@ -627,6 +618,23 @@ body {
   flex-wrap: wrap;
   align-items: flex-start;
   gap: 8px 14px;
+}
+
+/* Settings page: every field on its own row, full width. */
+.settings-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.settings-stack .field {
+  min-width: 0;
+  flex: 1 1 100%;
+}
+
+.settings-stack .toggle {
+  min-width: 0;
+  flex: 1 1 100%;
 }
 
 .grid-two {

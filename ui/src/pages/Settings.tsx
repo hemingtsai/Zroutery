@@ -214,7 +214,7 @@ export default function Settings({
       <PageHead lede={t("settings.lede")} />
 
       <Section title={t("appearance.title")}>
-        <div className="controls">
+        <div className="settings-stack">
           <Field label={t("settings.language")}>
             <Segment
               ariaLabel={t("settings.language")}
@@ -242,7 +242,7 @@ export default function Settings({
       </Section>
 
       <Section title={t("settings.window")}>
-        <div className="grid-two">
+        <div className="settings-stack">
           <Toggle
             label={t("win.launch_on_login")}
             hint={t("win.launch_on_login_hint")}
@@ -272,7 +272,7 @@ export default function Settings({
         />
         {config.vision.enabled && (
           <>
-            <div className="controls">
+            <div className="settings-stack">
               <Field label={t("vision.model")} hint={t("vision.model_hint")}>
                 <Select
                   ariaLabel={t("vision.model")}
@@ -305,7 +305,7 @@ export default function Settings({
         title={t("settings.gateway")}
         hint={t("settings.gateway_hint", { url: baseUrl, path: snapshot.config_path })}
       >
-        <div className="controls">
+        <div className="settings-stack">
           <TextField
             label={t("field.host")}
             hint={t("field.host_hint")}
@@ -338,8 +338,6 @@ export default function Settings({
             value={config.server.log_limit}
             onCommit={(v) => patchServer({ log_limit: v ?? 500 })}
           />
-        </div>
-        <div className="grid-two">
           <Toggle
             label={t("settings.require_auth")}
             hint={t("settings.require_auth_hint")}
@@ -453,7 +451,7 @@ ${t("settings.snippet_comment")}`}
                 ))}
               </div>
             )}
-            <div className="controls">
+            <div className="settings-stack">
               <Field
                 label={t("field.allowed_origin")}
                 hint={originError ?? t("field.allowed_origin_hint")}
@@ -562,7 +560,7 @@ ${t("settings.snippet_comment")}`}
             </tbody>
           </table>
         )}
-        <div className="controls">
+        <div className="settings-stack">
           <Field label={t("budget.covers")}>
             <Select
               ariaLabel={t("budget.covers")}
@@ -636,7 +634,7 @@ ${t("settings.snippet_comment")}`}
             </tbody>
           </table>
         )}
-        <div className="controls">
+        <div className="settings-stack">
           <Field label={t("settings.f_model_id")}>
             <input
               value={aliasDraft.from}
@@ -663,7 +661,7 @@ ${t("settings.snippet_comment")}`}
         <h3 className="section-sub">
           {t("settings.naming_style")}
         </h3>
-        <div className="controls">
+        <div className="settings-stack">
           <Field label={t("settings.naming_style")}>
             <Segment<NamingStyle>
               ariaLabel={t("settings.naming_style")}
@@ -682,7 +680,7 @@ ${t("settings.snippet_comment")}`}
           {t("settings.election")}
         </h3>
         <p className="field-hint">{t("settings.election_hint")}</p>
-        <div className="controls">
+        <div className="settings-stack">
           <NumberField
             label={t("settings.price_weight")}
             hint={t("settings.price_weight_hint")}
