@@ -328,7 +328,7 @@ zroutery-headless --elect        # 跑一次选举，打印每个 class 的排�
 ## 项目结构
 
 ```
-crates/zroutery-core/     协议转换、模型注册表、路由、计费、预算、HTTP 服务（无 GUI 依赖，180 个测试）
+crates/zroutery-core/     协议转换、模型注册表、路由、计费、预算、HTTP 服务（无 GUI 依赖，1166 个测试）
   src/ir.rs               统一中间表示：2 个 decoder + 2 个 encoder，避免 N×M
   src/protocol/           anthropic.rs / openai.rs，含两个方向的 SSE 状态机
   src/billing.rs          价格计算（按币种分开）、余额 probe 与五个内置预设

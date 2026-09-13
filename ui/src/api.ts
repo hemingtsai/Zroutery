@@ -442,8 +442,6 @@ export interface CcProvider {
   source_id: string;
   name: string;
   base_url: string;
-  /** Present in the payload, never rendered. */
-  api_key: string | null;
   models: { upstream_model: string; tier: ModelTier | null }[];
   is_current: boolean;
 }
@@ -453,7 +451,6 @@ export interface CcProviderDraft {
   source_id: string;
   name: string;
   base_url: string;
-  api_key: string | null;
   models: { upstream_model: string; tier: ModelTier | null }[];
   is_current: boolean;
   /** The Zroutery provider id this would get. */
