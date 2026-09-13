@@ -753,10 +753,43 @@ impl AgentAdapter for GeminiAdapter {
 // Helpers
 // ---------------------------------------------------------------------------
 
+// Per-test override for the agent config root.
+//
+// The adapters below resolve their config path against the user home, and
+// the tests used to exercise apply_patch/release against the real
+// ~/.claude.json, ~/.codex/config.json and ~/.config/gemini/config.json.
+// That clobbered the developer own agent configuration and raced other
+// tests reading the same files, so under cfg(test) a test can point the
+// adapters at a private temp directory instead. The override is
+// thread-local, matching how the test harness runs tests in parallel.
+#[cfg(test)]
+thread_local! {
+    static TEST_AGENT_HOME: std::cell::RefCell<Option<tempfile::TempDir>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Give the current test thread its own agent config root.
+#[cfg(test)]
+fn isolate_agent_home() {
+    TEST_AGENT_HOME.with(|slot| {
+        *slot.borrow_mut() = Some(tempfile::TempDir::new().expect("temp agent home"));
+    });
+}
+
+/// The agent config root for this test thread, if one was installed.
+#[cfg(test)]
+fn isolated_agent_home() -> Option<std::path::PathBuf> {
+    TEST_AGENT_HOME.with(|slot| slot.borrow().as_ref().map(|dir| dir.path().to_path_buf()))
+}
+
 /// Resolve the current user's home directory.
 ///
 /// Checks `HOME` (Unix) then `USERPROFILE` (Windows).
 fn home_dir() -> Result<std::path::PathBuf, String> {
+    #[cfg(test)]
+    if let Some(root) = isolated_agent_home() {
+        return Ok(root);
+    }
     if let Ok(home) = std::env::var("HOME") {
         return Ok(std::path::PathBuf::from(home));
     }
@@ -1192,24 +1225,28 @@ mod tests {
 
     #[test]
     fn claude_adapter_agent_type() {
+        super::isolate_agent_home();
         let adapter = ClaudeAdapter;
         assert_eq!(adapter.agent_type(), AgentType::Claude);
     }
 
     #[test]
     fn codex_adapter_agent_type() {
+        super::isolate_agent_home();
         let adapter = CodexAdapter;
         assert_eq!(adapter.agent_type(), AgentType::Codex);
     }
 
     #[test]
     fn gemini_adapter_agent_type() {
+        super::isolate_agent_home();
         let adapter = GeminiAdapter;
         assert_eq!(adapter.agent_type(), AgentType::Gemini);
     }
 
     #[test]
     fn claude_adapter_config_path() {
+        super::isolate_agent_home();
         let adapter = ClaudeAdapter;
         let path = adapter.config_path().unwrap();
         assert!(path.ends_with(".claude.json"));
@@ -1217,6 +1254,7 @@ mod tests {
 
     #[test]
     fn codex_adapter_config_path() {
+        super::isolate_agent_home();
         let adapter = CodexAdapter;
         let path = adapter.config_path().unwrap();
         assert!(path.ends_with(".codex/config.json"));
@@ -1224,6 +1262,7 @@ mod tests {
 
     #[test]
     fn gemini_adapter_config_path() {
+        super::isolate_agent_home();
         let adapter = GeminiAdapter;
         let path = adapter.config_path().unwrap();
         assert!(path.ends_with("gemini/config.json"));
@@ -1231,6 +1270,7 @@ mod tests {
 
     #[test]
     fn claude_adapter_read_config() {
+        super::isolate_agent_home();
         let adapter = ClaudeAdapter;
         let snapshot = adapter.read_config().unwrap();
         assert_eq!(snapshot.agent_type, AgentType::Claude);
@@ -1240,6 +1280,7 @@ mod tests {
 
     #[test]
     fn codex_adapter_read_config() {
+        super::isolate_agent_home();
         let adapter = CodexAdapter;
         let snapshot = adapter.read_config().unwrap();
         assert_eq!(snapshot.agent_type, AgentType::Codex);
@@ -1248,6 +1289,7 @@ mod tests {
 
     #[test]
     fn gemini_adapter_read_config() {
+        super::isolate_agent_home();
         let adapter = GeminiAdapter;
         let snapshot = adapter.read_config().unwrap();
         assert_eq!(snapshot.agent_type, AgentType::Gemini);
@@ -1256,6 +1298,7 @@ mod tests {
 
     #[test]
     fn apply_patch_modifies_snapshot() {
+        super::isolate_agent_home();
         let adapter = ClaudeAdapter;
         let snapshot = adapter.read_config().unwrap();
 
@@ -1283,6 +1326,7 @@ mod tests {
 
     #[test]
     fn apply_patch_nested_path() {
+        super::isolate_agent_home();
         let adapter = CodexAdapter;
         let snapshot = adapter.read_config().unwrap();
 
@@ -1298,6 +1342,7 @@ mod tests {
 
     #[test]
     fn release_returns_ok() {
+        super::isolate_agent_home();
         let adapter = GeminiAdapter;
         let snapshot = adapter.read_config().unwrap();
 
@@ -1311,6 +1356,7 @@ mod tests {
 
     #[test]
     fn all_adapters_release_ok() {
+        super::isolate_agent_home();
         let store = TakeoverStore::new();
         let values = field_map(&[("x", 1.into())]);
         store.adopt(vec!["x".into()], &values).unwrap();
@@ -1802,6 +1848,7 @@ mod tests {
     #[test]
     fn read_config_hash_empty_when_file_missing() {
         // When the config file doesn't exist, hash should be empty.
+        super::isolate_agent_home();
         let adapter = ClaudeAdapter;
         let snapshot = adapter.read_config().unwrap();
         // Config file likely doesn't exist in CI.
@@ -1927,6 +1974,7 @@ mod tests {
 
     #[test]
     fn different_adapters_have_different_config_paths() {
+        super::isolate_agent_home();
         let claude = ClaudeAdapter;
         let codex = CodexAdapter;
         let gemini = GeminiAdapter;
