@@ -686,6 +686,101 @@ export function CompactNumber({
   );
 }
 
+/** Bare input that commits on blur or Enter, reverts on Escape. No label — use with setting-row. */
+export function CommitInput({
+  value,
+  onCommit,
+  placeholder,
+  type = "text",
+}: {
+  value: string;
+  onCommit: (value: string) => void;
+  placeholder?: string;
+  type?: "text" | "password";
+}) {
+  const [draft, setDraft] = useState(value);
+  useEffect(() => setDraft(value), [value]);
+
+  const commit = () => {
+    if (draft !== value) onCommit(draft);
+  };
+
+  return (
+    <input
+      type={type}
+      value={draft}
+      placeholder={placeholder}
+      onChange={(e) => setDraft(e.currentTarget.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          commit();
+          e.currentTarget.blur();
+        } else if (e.key === "Escape") {
+          setDraft(value);
+        }
+      }}
+    />
+  );
+}
+
+/** Same as CommitInput but for numbers. */
+export function CommitNumber({
+  value,
+  onCommit,
+  min,
+  max,
+  integer,
+}: {
+  value: number | null;
+  onCommit: (value: number | null) => void;
+  min?: number;
+  max?: number;
+  integer?: boolean;
+}) {
+  const text = value === null ? "" : String(value);
+  const [draft, setDraft] = useState(text);
+  useEffect(() => setDraft(text), [text]);
+
+  const commit = () => {
+    if (draft.trim() === "") {
+      if (value !== null) onCommit(null);
+      return;
+    }
+    const parsed = Number(draft);
+    if (!Number.isFinite(parsed)) {
+      setDraft(text);
+      return;
+    }
+    let next = integer ? Math.round(parsed) : parsed;
+    if (min !== undefined) next = Math.max(min, next);
+    if (max !== undefined) next = Math.min(max, next);
+    if (next !== value) onCommit(next);
+    setDraft(String(next));
+  };
+
+  return (
+    <input
+      type="number"
+      className="tiny"
+      min={min}
+      max={max}
+      step={integer ? 1 : "any"}
+      value={draft}
+      onChange={(e) => setDraft(e.currentTarget.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          commit();
+          e.currentTarget.blur();
+        } else if (e.key === "Escape") {
+          setDraft(text);
+        }
+      }}
+    />
+  );
+}
+
 export function Badge({
   children,
   tone = "neutral",

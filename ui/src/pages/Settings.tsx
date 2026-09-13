@@ -13,13 +13,13 @@ import {
 import {
   Badge,
   Button,
+  CommitInput,
+  CommitNumber,
   ConfirmDialog,
-  NumberField,
   PageHead,
   Section,
   Segment,
   Select,
-  TextField,
   useToast,
   type ConfirmRequest,
 } from "../components";
@@ -328,9 +328,7 @@ export default function Settings({
                 <span className="setting-desc">{t("vision.placeholder_hint")}</span>
               </div>
               <div className="setting-right">
-                <TextField
-                  label={t("vision.placeholder")}
-                  hint={t("vision.placeholder_hint")}
+                <CommitInput
                   value={config.vision.placeholder}
                   onCommit={(placeholder) =>
                     placeholder.trim() && patchVision({ placeholder })
@@ -355,9 +353,7 @@ export default function Settings({
             <span className="setting-desc">{t("field.host_hint")}</span>
           </div>
           <div className="setting-right">
-            <TextField
-              label={t("field.host")}
-              hint={t("field.host_hint")}
+            <CommitInput
               value={config.server.host}
               onCommit={(host) => patchServer({ host })}
             />
@@ -368,8 +364,7 @@ export default function Settings({
             <span className="setting-title">{t("field.port")}</span>
           </div>
           <div className="setting-right">
-            <NumberField
-              label={t("field.port")}
+            <CommitNumber
               min={1}
               max={65535}
               integer
@@ -384,9 +379,7 @@ export default function Settings({
             <span className="setting-desc">{t("field.body_limit_hint")}</span>
           </div>
           <div className="setting-right">
-            <NumberField
-              label={t("field.body_limit")}
-              hint={t("field.body_limit_hint")}
+            <CommitNumber
               min={1}
               max={512}
               integer
@@ -401,9 +394,7 @@ export default function Settings({
             <span className="setting-desc">{t("field.log_limit_hint")}</span>
           </div>
           <div className="setting-right">
-            <NumberField
-              label={t("field.log_limit")}
-              hint={t("field.log_limit_hint")}
+            <CommitNumber
               min={10}
               max={5000}
               integer
@@ -701,9 +692,7 @@ ${t("settings.snippet_comment")}`}
             <span className="setting-desc">{t("budget.currency_hint")}</span>
           </div>
           <div className="setting-right">
-            <NumberField
-              label={t("budget.limit")}
-              hint={t("budget.currency_hint")}
+            <CommitNumber
               min={0}
               value={budgetDraft.amount}
               onCommit={(amount) => setBudgetDraft({ ...budgetDraft, amount: amount ?? 0 })}
@@ -823,9 +812,7 @@ ${t("settings.snippet_comment")}`}
             <span className="setting-desc">{t("settings.price_weight_hint")}</span>
           </div>
           <div className="setting-right">
-            <NumberField
-              label={t("settings.price_weight")}
-              hint={t("settings.price_weight_hint")}
+            <CommitNumber
               min={0}
               value={config.routing.scoring.price_weight}
               onCommit={(v) => patchScoring({ price_weight: v ?? 0 })}
@@ -837,8 +824,7 @@ ${t("settings.snippet_comment")}`}
             <span className="setting-title">{t("settings.latency_weight")}</span>
           </div>
           <div className="setting-right">
-            <NumberField
-              label={t("settings.latency_weight")}
+            <CommitNumber
               min={0}
               value={config.routing.scoring.latency_weight}
               onCommit={(v) => patchScoring({ latency_weight: v ?? 0 })}
@@ -851,9 +837,7 @@ ${t("settings.snippet_comment")}`}
             <span className="setting-desc">{t("settings.ref_input_hint")}</span>
           </div>
           <div className="setting-right">
-            <NumberField
-              label={t("settings.ref_input")}
-              hint={t("settings.ref_input_hint")}
+            <CommitNumber
               min={0}
               integer
               value={config.routing.scoring.reference_input_tokens}
@@ -866,8 +850,7 @@ ${t("settings.snippet_comment")}`}
             <span className="setting-title">{t("settings.ref_output")}</span>
           </div>
           <div className="setting-right">
-            <NumberField
-              label={t("settings.ref_output")}
+            <CommitNumber
               min={0}
               integer
               value={config.routing.scoring.reference_output_tokens}
