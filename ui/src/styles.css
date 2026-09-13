@@ -45,11 +45,9 @@
   --danger-bg: #f5e9e7;
   --ok-bg: #eaf2ec;
 
-  /* Brand type: IBM Plex for Latin, one platform-native font for CJK.
-     The html element carries a platform-* class that narrows the stack to
-     exactly the fallback this OS should use. */
-  --font-sans: "IBM Plex Sans", "PingFang SC", "Microsoft YaHei UI",
-    "Microsoft YaHei", sans-serif;
+  /* Serif type: Noto Serif SC Variable for a literary/editorial feel. */
+  --font-sans: "Noto Serif SC Variable", "Noto Serif SC", "PingFang SC",
+    "Microsoft YaHei", serif;
   --font-mono: "IBM Plex Mono", "SF Mono", "Cascadia Mono", Consolas, monospace;
 
   /* Floating layers — menus and popovers — are the only places a shadow is
@@ -69,16 +67,6 @@
 
   font-family: var(--font-sans);
   font-size: 13px;
-}
-
-/* Per-platform CJK: each OS sees only its own fallback. */
-html.platform-macos {
-  --font-sans: "IBM Plex Sans", "PingFang SC", -apple-system, sans-serif;
-}
-
-html.platform-windows {
-  --font-sans: "IBM Plex Sans", "Microsoft YaHei UI", "Microsoft YaHei",
-    "Segoe UI Variable", sans-serif;
 }
 
 /* Dark: the same language, inverted — no glow, no contrast stunts. */
