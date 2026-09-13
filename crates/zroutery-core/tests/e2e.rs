@@ -1866,9 +1866,11 @@ async fn provider_model_discovery_dedupes_and_sorts() {
 async fn rate_limit_triggers_failover() {
     let (addr, mock) = start_mock().await;
     let mut cfg = config_for(addr);
-    // Make the primary model rate-limited, fallback model normal.
+    // Priority is explicit: equal priorities order by exposed id, which would
+    // put the healthy model first and skip the 429 path this test covers.
     cfg.models = vec![
-        ModelEntry::for_upstream("deepseek", "limited-v4", Some(ModelTier::Standard)),
+        ModelEntry::for_upstream("deepseek", "limited-v4", Some(ModelTier::Standard))
+            .with_priority(-1),
         ModelEntry::for_upstream("deepseek", "deepseek-v4-pro", Some(ModelTier::Standard)),
     ];
     let h = Harness::start(cfg, mock).await;
