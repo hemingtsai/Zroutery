@@ -1298,6 +1298,21 @@ impl AppConfig {
                 subject: None,
             });
         }
+        // Surface the dangerous combination explicitly: either warning alone is
+        // recoverable, but no auth plus reachability (the network, or any website
+        // when CORS is wide open) hands the proxy spending power to anything that
+        // can reach the port.
+        if !self.server.require_auth
+            && (self.server.is_exposed() || self.server.cors_is_wide_open())
+        {
+            issues.push(ConfigIssue {
+                severity: IssueSeverity::Warning,
+                code: "server.no_auth_reachable".into(),
+                message: "Authentication is off while the proxy is reachable from the network or from any website via CORS; anything that can reach the port can spend your API credit".into(),
+                subject: None,
+            });
+        }
+
         if self.server.cors_is_wide_open() {
             issues.push(ConfigIssue {
                 severity: IssueSeverity::Warning,
@@ -1615,6 +1630,34 @@ mod tests {
             .validate()
             .iter()
             .any(|i| i.code == "server.empty_token"));
+    }
+
+    #[test]
+    fn validate_flags_no_auth_on_a_reachable_proxy() {
+        let mut exposed = AppConfig::default();
+        exposed.server.require_auth = false;
+        exposed.server.host = "0.0.0.0".into();
+        assert!(exposed
+            .validate()
+            .iter()
+            .any(|i| i.code == "server.no_auth_reachable"));
+
+        // Loopback with auth off is still only a local risk: no combined warning.
+        let mut local = AppConfig::default();
+        local.server.require_auth = false;
+        assert!(!local
+            .validate()
+            .iter()
+            .any(|i| i.code == "server.no_auth_reachable"));
+
+        // Wide-open CORS is the other way to become reachable.
+        let mut cors = AppConfig::default();
+        cors.server.require_auth = false;
+        cors.server.allow_cors = true;
+        assert!(cors
+            .validate()
+            .iter()
+            .any(|i| i.code == "server.no_auth_reachable"));
     }
 
     #[test]
