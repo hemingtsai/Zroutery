@@ -14,28 +14,26 @@
 :root {
   color-scheme: light;
 
-  /* Neutral surfaces — warm grey, never pure white */
-  --bg: #f5f5f3;
-  --surface: #fafaf9;
-  --surface-muted: #eeeeec;
-  --hover: #f4f4f2;
-  --selected: #ececea;
+  /* Strict monochrome — black and white with gray steps */
+  --bg: #ffffff;
+  --surface: #ffffff;
+  --surface-muted: #f5f5f5;
+  --hover: #f5f5f5;
+  --selected: #ebebeb;
 
   /* Lines */
-  --line: #dcdcd8;
-  --line-strong: #c8c8c3;
+  --line: #000000;
+  --line-strong: #d4d4d4;
 
   /* Type */
-  --text: #1a1a18;
-  --text-2: #686864;
-  --muted: #969691;
+  --text: #000000;
+  --text-2: #555555;
+  --muted: #999999;
 
-  /* Primary action: charcoal, not a brand colour */
-  --primary: #20201e;
-  --primary-hover: #30302d;
-  --on-primary: #fafaf9;
-
-  /* No brand colour. Emphasis is weight and grey value, not hue. */
+  /* Primary action: black */
+  --primary: #000000;
+  --primary-hover: #333333;
+  --on-primary: #ffffff;
 
   /* Status — as small dots and quiet text */
   --ok: #27834a;
@@ -50,11 +48,10 @@
     "Microsoft YaHei", serif;
   --font-mono: "IBM Plex Mono", "SF Mono", "Cascadia Mono", Consolas, monospace;
 
-  /* Floating layers — menus and popovers — are the only places a shadow is
-     allowed. The page itself is flat: borders and grey steps do the work. */
-  --shadow-layer: 0 8px 24px rgba(23, 23, 24, 0.08);
+  /* No shadows on page; only floating layers */
+  --shadow-layer: 0 8px 24px rgba(0, 0, 0, 0.08);
 
-  --radius: 4px;
+  --radius: 0;
 
   --control-h: 30px;
   --label-h: 14px;
@@ -66,26 +63,26 @@
   --t-drawer: 180ms;
 
   font-family: var(--font-sans);
-  font-size: 13px;
+  font-size: 14px;
 }
 
-/* Dark: the same language, inverted — no glow, no contrast stunts. */
+/* Dark: strict monochrome inverted. */
 [data-theme="dark"] {
   color-scheme: dark;
   --shadow-layer: 0 8px 24px rgba(0, 0, 0, 0.4);
-  --bg: #161615;
-  --surface: #1c1c1b;
-  --surface-muted: #242423;
-  --hover: #232322;
-  --selected: #2b2b29;
-  --line: #30302e;
-  --line-strong: #3d3d3a;
-  --text: #e8e8e4;
-  --text-2: #a8a8a2;
-  --muted: #74746f;
-  --primary: #d8d8d4;
-  --primary-hover: #e4e4e0;
-  --on-primary: #1a1a18;
+  --bg: #111111;
+  --surface: #111111;
+  --surface-muted: #1a1a1a;
+  --hover: #1a1a1a;
+  --selected: #242424;
+  --line: #333333;
+  --line-strong: #2a2a2a;
+  --text: #e0e0e0;
+  --text-2: #888888;
+  --muted: #555555;
+  --primary: #ffffff;
+  --primary-hover: #cccccc;
+  --on-primary: #000000;
 
   --ok: #57b377;
   --warn: #d19a3d;
