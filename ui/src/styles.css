@@ -673,6 +673,7 @@ body {
   flex: none;
   display: flex;
   align-items: center;
+  justify-content: flex-end;
 }
 
 .grid-two {
