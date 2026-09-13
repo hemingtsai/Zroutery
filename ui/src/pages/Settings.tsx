@@ -14,14 +14,12 @@ import {
   Badge,
   Button,
   ConfirmDialog,
-  Field,
   NumberField,
   PageHead,
   Section,
   Segment,
   Select,
   TextField,
-  Toggle,
   useToast,
   type ConfirmRequest,
 } from "../components";
@@ -214,8 +212,11 @@ export default function Settings({
       <PageHead lede={t("settings.lede")} />
 
       <Section title={t("appearance.title")}>
-        <div className="settings-stack">
-          <Field label={t("settings.language")}>
+        <div className="setting-row">
+          <div className="setting-left">
+            <span className="setting-title">{t("settings.language")}</span>
+          </div>
+          <div className="setting-right">
             <Segment
               ariaLabel={t("settings.language")}
               value={lang}
@@ -225,8 +226,13 @@ export default function Settings({
                 { value: "en", label: t("lang.en") },
               ]}
             />
-          </Field>
-          <Field label={t("settings.theme")}>
+          </div>
+        </div>
+        <div className="setting-row">
+          <div className="setting-left">
+            <span className="setting-title">{t("settings.theme")}</span>
+          </div>
+          <div className="setting-right">
             <Select<"system" | "light" | "dark">
               ariaLabel={t("settings.theme")}
               value={themePref}
@@ -237,43 +243,73 @@ export default function Settings({
                 { value: "dark", label: t("theme.dark") },
               ]}
             />
-          </Field>
+          </div>
         </div>
       </Section>
 
       <Section title={t("settings.window")}>
-        <div className="settings-stack">
-          <Toggle
-            label={t("win.launch_on_login")}
-            hint={t("win.launch_on_login_hint")}
-            checked={config.window.launch_on_login}
-            onChange={(launch_on_login) => patchWindow({ launch_on_login })}
-          />
-          <Toggle
-            label={t("win.silent_start")}
-            hint={t("win.silent_start_hint")}
-            checked={config.window.silent_start}
-            onChange={(silent_start) => patchWindow({ silent_start })}
-          />
-          <Toggle
-            label={t("win.keep_in_tray")}
-            hint={t("win.keep_in_tray_hint")}
-            checked={config.window.keep_in_tray}
-            onChange={(keep_in_tray) => patchWindow({ keep_in_tray })}
-          />
+        <div className="setting-row">
+          <div className="setting-left">
+            <span className="setting-title">{t("win.launch_on_login")}</span>
+            <span className="setting-desc">{t("win.launch_on_login_hint")}</span>
+          </div>
+          <div className="setting-right">
+            <input
+              type="checkbox"
+              checked={config.window.launch_on_login}
+              onChange={(e) => patchWindow({ launch_on_login: e.currentTarget.checked })}
+            />
+          </div>
+        </div>
+        <div className="setting-row">
+          <div className="setting-left">
+            <span className="setting-title">{t("win.silent_start")}</span>
+            <span className="setting-desc">{t("win.silent_start_hint")}</span>
+          </div>
+          <div className="setting-right">
+            <input
+              type="checkbox"
+              checked={config.window.silent_start}
+              onChange={(e) => patchWindow({ silent_start: e.currentTarget.checked })}
+            />
+          </div>
+        </div>
+        <div className="setting-row">
+          <div className="setting-left">
+            <span className="setting-title">{t("win.keep_in_tray")}</span>
+            <span className="setting-desc">{t("win.keep_in_tray_hint")}</span>
+          </div>
+          <div className="setting-right">
+            <input
+              type="checkbox"
+              checked={config.window.keep_in_tray}
+              onChange={(e) => patchWindow({ keep_in_tray: e.currentTarget.checked })}
+            />
+          </div>
         </div>
       </Section>
 
       <Section title={t("vision.title")} hint={t("vision.hint")}>
-        <Toggle
-          label={t("vision.enable")}
-          checked={config.vision.enabled}
-          onChange={(enabled) => patchVision({ enabled })}
-        />
+        <div className="setting-row">
+          <div className="setting-left">
+            <span className="setting-title">{t("vision.enable")}</span>
+          </div>
+          <div className="setting-right">
+            <input
+              type="checkbox"
+              checked={config.vision.enabled}
+              onChange={(e) => patchVision({ enabled: e.currentTarget.checked })}
+            />
+          </div>
+        </div>
         {config.vision.enabled && (
           <>
-            <div className="settings-stack">
-              <Field label={t("vision.model")} hint={t("vision.model_hint")}>
+            <div className="setting-row">
+              <div className="setting-left">
+                <span className="setting-title">{t("vision.model")}</span>
+                <span className="setting-desc">{t("vision.model_hint")}</span>
+              </div>
+              <div className="setting-right">
                 <Select
                   ariaLabel={t("vision.model")}
                   value={config.vision.model}
@@ -284,15 +320,23 @@ export default function Settings({
                     label: r.id,
                   }))}
                 />
-              </Field>
-              <TextField
-                label={t("vision.placeholder")}
-                hint={t("vision.placeholder_hint")}
-                value={config.vision.placeholder}
-                onCommit={(placeholder) =>
-                  placeholder.trim() && patchVision({ placeholder })
-                }
-              />
+              </div>
+            </div>
+            <div className="setting-row">
+              <div className="setting-left">
+                <span className="setting-title">{t("vision.placeholder")}</span>
+                <span className="setting-desc">{t("vision.placeholder_hint")}</span>
+              </div>
+              <div className="setting-right">
+                <TextField
+                  label={t("vision.placeholder")}
+                  hint={t("vision.placeholder_hint")}
+                  value={config.vision.placeholder}
+                  onCommit={(placeholder) =>
+                    placeholder.trim() && patchVision({ placeholder })
+                  }
+                />
+              </div>
             </div>
             {visionCapable.length === 0 && (
               <p className="field-hint">{t("vision.model_required")}</p>
@@ -305,56 +349,106 @@ export default function Settings({
         title={t("settings.gateway")}
         hint={t("settings.gateway_hint", { url: baseUrl, path: snapshot.config_path })}
       >
-        <div className="settings-stack">
-          <TextField
-            label={t("field.host")}
-            hint={t("field.host_hint")}
-            value={config.server.host}
-            onCommit={(host) => patchServer({ host })}
-          />
-          <NumberField
-            label={t("field.port")}
-            min={1}
-            max={65535}
-            integer
-            value={config.server.port}
-            onCommit={(port) => port && patchServer({ port })}
-          />
-          <NumberField
-            label={t("field.body_limit")}
-            hint={t("field.body_limit_hint")}
-            min={1}
-            max={512}
-            integer
-            value={config.server.max_body_mib}
-            onCommit={(v) => patchServer({ max_body_mib: v ?? 32 })}
-          />
-          <NumberField
-            label={t("field.log_limit")}
-            hint={t("field.log_limit_hint")}
-            min={10}
-            max={5000}
-            integer
-            value={config.server.log_limit}
-            onCommit={(v) => patchServer({ log_limit: v ?? 500 })}
-          />
-          <Toggle
-            label={t("settings.require_auth")}
-            hint={t("settings.require_auth_hint")}
-            checked={config.server.require_auth}
-            onChange={(require_auth) => patchServer({ require_auth })}
-          />
-          <Toggle
-            label={t("settings.autostart")}
-            checked={config.server.autostart}
-            onChange={(autostart) => patchServer({ autostart })}
-          />
-          <Toggle
-            label={t("settings.bypass_proxy")}
-            hint={t("settings.bypass_proxy_hint")}
-            checked={config.server.bypass_proxy}
-            onChange={(bypass_proxy) => patchServer({ bypass_proxy })}
-          />
+        <div className="setting-row">
+          <div className="setting-left">
+            <span className="setting-title">{t("field.host")}</span>
+            <span className="setting-desc">{t("field.host_hint")}</span>
+          </div>
+          <div className="setting-right">
+            <TextField
+              label={t("field.host")}
+              hint={t("field.host_hint")}
+              value={config.server.host}
+              onCommit={(host) => patchServer({ host })}
+            />
+          </div>
+        </div>
+        <div className="setting-row">
+          <div className="setting-left">
+            <span className="setting-title">{t("field.port")}</span>
+          </div>
+          <div className="setting-right">
+            <NumberField
+              label={t("field.port")}
+              min={1}
+              max={65535}
+              integer
+              value={config.server.port}
+              onCommit={(port) => port && patchServer({ port })}
+            />
+          </div>
+        </div>
+        <div className="setting-row">
+          <div className="setting-left">
+            <span className="setting-title">{t("field.body_limit")}</span>
+            <span className="setting-desc">{t("field.body_limit_hint")}</span>
+          </div>
+          <div className="setting-right">
+            <NumberField
+              label={t("field.body_limit")}
+              hint={t("field.body_limit_hint")}
+              min={1}
+              max={512}
+              integer
+              value={config.server.max_body_mib}
+              onCommit={(v) => patchServer({ max_body_mib: v ?? 32 })}
+            />
+          </div>
+        </div>
+        <div className="setting-row">
+          <div className="setting-left">
+            <span className="setting-title">{t("field.log_limit")}</span>
+            <span className="setting-desc">{t("field.log_limit_hint")}</span>
+          </div>
+          <div className="setting-right">
+            <NumberField
+              label={t("field.log_limit")}
+              hint={t("field.log_limit_hint")}
+              min={10}
+              max={5000}
+              integer
+              value={config.server.log_limit}
+              onCommit={(v) => patchServer({ log_limit: v ?? 500 })}
+            />
+          </div>
+        </div>
+        <div className="setting-row">
+          <div className="setting-left">
+            <span className="setting-title">{t("settings.require_auth")}</span>
+            <span className="setting-desc">{t("settings.require_auth_hint")}</span>
+          </div>
+          <div className="setting-right">
+            <input
+              type="checkbox"
+              checked={config.server.require_auth}
+              onChange={(e) => patchServer({ require_auth: e.currentTarget.checked })}
+            />
+          </div>
+        </div>
+        <div className="setting-row">
+          <div className="setting-left">
+            <span className="setting-title">{t("settings.autostart")}</span>
+          </div>
+          <div className="setting-right">
+            <input
+              type="checkbox"
+              checked={config.server.autostart}
+              onChange={(e) => patchServer({ autostart: e.currentTarget.checked })}
+            />
+          </div>
+        </div>
+        <div className="setting-row">
+          <div className="setting-left">
+            <span className="setting-title">{t("settings.bypass_proxy")}</span>
+            <span className="setting-desc">{t("settings.bypass_proxy_hint")}</span>
+          </div>
+          <div className="setting-right">
+            <input
+              type="checkbox"
+              checked={config.server.bypass_proxy}
+              onChange={(e) => patchServer({ bypass_proxy: e.currentTarget.checked })}
+            />
+          </div>
         </div>
 
         <div className="kv-row">
@@ -422,11 +516,18 @@ ${t("settings.snippet_comment")}`}
       </Section>
 
       <Section title={t("settings.cors")} hint={t("settings.cors_hint")}>
-        <Toggle
-          label={t("settings.allow_origins")}
-          checked={config.server.allow_cors}
-          onChange={(allow_cors) => patchServer({ allow_cors })}
-        />
+        <div className="setting-row">
+          <div className="setting-left">
+            <span className="setting-title">{t("settings.allow_origins")}</span>
+          </div>
+          <div className="setting-right">
+            <input
+              type="checkbox"
+              checked={config.server.allow_cors}
+              onChange={(e) => patchServer({ allow_cors: e.currentTarget.checked })}
+            />
+          </div>
+        </div>
         {config.server.allow_cors && (
           <>
             {config.server.cors_origins.length === 0 ? (
@@ -451,12 +552,12 @@ ${t("settings.snippet_comment")}`}
                 ))}
               </div>
             )}
-            <div className="settings-stack">
-              <Field
-                label={t("field.allowed_origin")}
-                hint={originError ?? t("field.allowed_origin_hint")}
-                danger={Boolean(originError)}
-              >
+            <div className="setting-row">
+              <div className="setting-left">
+                <span className="setting-title">{t("field.allowed_origin")}</span>
+                <span className="setting-desc">{originError ?? t("field.allowed_origin_hint")}</span>
+              </div>
+              <div className="setting-right">
                 <input
                   value={originDraft}
                   placeholder="http://localhost:3000"
@@ -467,8 +568,6 @@ ${t("settings.snippet_comment")}`}
                   }}
                   onKeyDown={(e) => e.key === "Enter" && addOrigin()}
                 />
-              </Field>
-              <div className="field-actions">
                 <Button onClick={addOrigin} disabled={busy || !originDraft.trim()}>
                   {t("settings.add_origin")}
                 </Button>
@@ -560,8 +659,11 @@ ${t("settings.snippet_comment")}`}
             </tbody>
           </table>
         )}
-        <div className="settings-stack">
-          <Field label={t("budget.covers")}>
+        <div className="setting-row">
+          <div className="setting-left">
+            <span className="setting-title">{t("budget.covers")}</span>
+          </div>
+          <div className="setting-right">
             <Select
               ariaLabel={t("budget.covers")}
               value={budgetDraft.scope}
@@ -575,8 +677,13 @@ ${t("settings.snippet_comment")}`}
                 })),
               ]}
             />
-          </Field>
-          <Field label={t("budget.window")}>
+          </div>
+        </div>
+        <div className="setting-row">
+          <div className="setting-left">
+            <span className="setting-title">{t("budget.window")}</span>
+          </div>
+          <div className="setting-right">
             <Segment<BudgetPeriod>
               ariaLabel={t("budget.window")}
               value={budgetDraft.period}
@@ -586,23 +693,39 @@ ${t("settings.snippet_comment")}`}
                 { value: "month", label: t("period.month") },
               ]}
             />
-          </Field>
-          <NumberField
-            label={t("budget.limit")}
-            hint={t("budget.currency_hint")}
-            min={0}
-            value={budgetDraft.amount}
-            onCommit={(amount) => setBudgetDraft({ ...budgetDraft, amount: amount ?? 0 })}
-          />
-          <Field label={t("field.currency")}>
+          </div>
+        </div>
+        <div className="setting-row">
+          <div className="setting-left">
+            <span className="setting-title">{t("budget.limit")}</span>
+            <span className="setting-desc">{t("budget.currency_hint")}</span>
+          </div>
+          <div className="setting-right">
+            <NumberField
+              label={t("budget.limit")}
+              hint={t("budget.currency_hint")}
+              min={0}
+              value={budgetDraft.amount}
+              onCommit={(amount) => setBudgetDraft({ ...budgetDraft, amount: amount ?? 0 })}
+            />
+          </div>
+        </div>
+        <div className="setting-row">
+          <div className="setting-left">
+            <span className="setting-title">{t("field.currency")}</span>
+          </div>
+          <div className="setting-right">
             <input
               value={budgetDraft.currency}
               onChange={(e) =>
                 setBudgetDraft({ ...budgetDraft, currency: e.currentTarget.value.toUpperCase() })
               }
             />
-          </Field>
-          <div className="field-actions">
+          </div>
+        </div>
+        <div className="setting-row">
+          <div className="setting-left" />
+          <div className="setting-right">
             <Button onClick={addBudget} disabled={busy || budgetDraft.amount <= 0}>
               {t("budget.add")}
             </Button>
@@ -634,24 +757,35 @@ ${t("settings.snippet_comment")}`}
             </tbody>
           </table>
         )}
-        <div className="settings-stack">
-          <Field label={t("settings.f_model_id")}>
+        <div className="setting-row">
+          <div className="setting-left">
+            <span className="setting-title">{t("settings.f_model_id")}</span>
+          </div>
+          <div className="setting-right">
             <input
               value={aliasDraft.from}
               placeholder="claude-opus-4-1-20250805"
               onChange={(e) => setAliasDraft({ ...aliasDraft, from: e.currentTarget.value })}
               onKeyDown={(e) => e.key === "Enter" && addAlias()}
             />
-          </Field>
-          <Field label={t("settings.f_class")}>
+          </div>
+        </div>
+        <div className="setting-row">
+          <div className="setting-left">
+            <span className="setting-title">{t("settings.f_class")}</span>
+          </div>
+          <div className="setting-right">
             <Select<ModelTier>
               ariaLabel={t("settings.f_class")}
               value={aliasDraft.to}
               onChange={(to) => setAliasDraft({ ...aliasDraft, to })}
               options={TIERS.map((c) => ({ value: c, label: virtualId(c, config.routing.naming_style) }))}
             />
-          </Field>
-          <div className="field-actions">
+          </div>
+        </div>
+        <div className="setting-row">
+          <div className="setting-left" />
+          <div className="setting-right">
             <Button onClick={addAlias} disabled={busy || !aliasDraft.from.trim()}>
               {t("settings.add_alias")}
             </Button>
@@ -661,8 +795,11 @@ ${t("settings.snippet_comment")}`}
         <h3 className="section-sub">
           {t("settings.naming_style")}
         </h3>
-        <div className="settings-stack">
-          <Field label={t("settings.naming_style")}>
+        <div className="setting-row">
+          <div className="setting-left">
+            <span className="setting-title">{t("settings.naming_style")}</span>
+          </div>
+          <div className="setting-right">
             <Segment<NamingStyle>
               ariaLabel={t("settings.naming_style")}
               value={config.routing.naming_style}
@@ -673,42 +810,70 @@ ${t("settings.snippet_comment")}`}
                 { value: "openai", label: t("settings.naming_openai") },
               ]}
             />
-          </Field>
+          </div>
         </div>
 
         <h3 className="section-sub">
           {t("settings.election")}
         </h3>
         <p className="field-hint">{t("settings.election_hint")}</p>
-        <div className="settings-stack">
-          <NumberField
-            label={t("settings.price_weight")}
-            hint={t("settings.price_weight_hint")}
-            min={0}
-            value={config.routing.scoring.price_weight}
-            onCommit={(v) => patchScoring({ price_weight: v ?? 0 })}
-          />
-          <NumberField
-            label={t("settings.latency_weight")}
-            min={0}
-            value={config.routing.scoring.latency_weight}
-            onCommit={(v) => patchScoring({ latency_weight: v ?? 0 })}
-          />
-          <NumberField
-            label={t("settings.ref_input")}
-            hint={t("settings.ref_input_hint")}
-            min={0}
-            integer
-            value={config.routing.scoring.reference_input_tokens}
-            onCommit={(v) => patchScoring({ reference_input_tokens: v ?? 0 })}
-          />
-          <NumberField
-            label={t("settings.ref_output")}
-            min={0}
-            integer
-            value={config.routing.scoring.reference_output_tokens}
-            onCommit={(v) => patchScoring({ reference_output_tokens: v ?? 0 })}
-          />
+        <div className="setting-row">
+          <div className="setting-left">
+            <span className="setting-title">{t("settings.price_weight")}</span>
+            <span className="setting-desc">{t("settings.price_weight_hint")}</span>
+          </div>
+          <div className="setting-right">
+            <NumberField
+              label={t("settings.price_weight")}
+              hint={t("settings.price_weight_hint")}
+              min={0}
+              value={config.routing.scoring.price_weight}
+              onCommit={(v) => patchScoring({ price_weight: v ?? 0 })}
+            />
+          </div>
+        </div>
+        <div className="setting-row">
+          <div className="setting-left">
+            <span className="setting-title">{t("settings.latency_weight")}</span>
+          </div>
+          <div className="setting-right">
+            <NumberField
+              label={t("settings.latency_weight")}
+              min={0}
+              value={config.routing.scoring.latency_weight}
+              onCommit={(v) => patchScoring({ latency_weight: v ?? 0 })}
+            />
+          </div>
+        </div>
+        <div className="setting-row">
+          <div className="setting-left">
+            <span className="setting-title">{t("settings.ref_input")}</span>
+            <span className="setting-desc">{t("settings.ref_input_hint")}</span>
+          </div>
+          <div className="setting-right">
+            <NumberField
+              label={t("settings.ref_input")}
+              hint={t("settings.ref_input_hint")}
+              min={0}
+              integer
+              value={config.routing.scoring.reference_input_tokens}
+              onCommit={(v) => patchScoring({ reference_input_tokens: v ?? 0 })}
+            />
+          </div>
+        </div>
+        <div className="setting-row">
+          <div className="setting-left">
+            <span className="setting-title">{t("settings.ref_output")}</span>
+          </div>
+          <div className="setting-right">
+            <NumberField
+              label={t("settings.ref_output")}
+              min={0}
+              integer
+              value={config.routing.scoring.reference_output_tokens}
+              onCommit={(v) => patchScoring({ reference_output_tokens: v ?? 0 })}
+            />
+          </div>
         </div>
 
         <h3 className="section-sub">

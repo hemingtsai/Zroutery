@@ -624,7 +624,7 @@ body {
 .settings-stack {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 0;
 }
 
 .settings-stack .field {
@@ -635,6 +635,45 @@ body {
 .settings-stack .toggle {
   min-width: 0;
   flex: 1 1 100%;
+}
+
+/* Setting row: left title+description, right control. */
+.setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border-secondary, var(--line));
+}
+
+.setting-row:last-child {
+  border-bottom: none;
+}
+
+.setting-row .setting-left {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.setting-row .setting-title {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.setting-row .setting-desc {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.setting-row .setting-right {
+  flex: none;
+  display: flex;
+  align-items: center;
 }
 
 .grid-two {
@@ -722,13 +761,39 @@ input[type="number"]::-webkit-outer-spin-button {
 }
 
 input[type="checkbox"] {
-  height: 14px;
-  width: 14px;
+  width: 24px;
+  height: 24px;
   padding: 0;
-  appearance: auto;
-  -webkit-appearance: checkbox;
-  accent-color: var(--primary);
+  appearance: none;
+  -webkit-appearance: none;
+  border: 2px solid var(--border-primary, var(--line));
+  border-radius: 0;
+  background: transparent;
+  cursor: pointer;
+  position: relative;
   flex: none;
+}
+
+input[type="checkbox"]:checked {
+  background: var(--primary);
+  border-color: var(--primary);
+}
+
+input[type="checkbox"]:checked::after {
+  content: "";
+  position: absolute;
+  left: 6px;
+  top: 2px;
+  width: 7px;
+  height: 12px;
+  border: solid var(--on-primary);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+input[type="checkbox"]:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 input.tiny {
@@ -747,9 +812,58 @@ input::placeholder {
 .toggle {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 12px;
   min-height: var(--control-h);
   cursor: pointer;
+}
+
+.toggle input[type="checkbox"] {
+  width: 40px;
+  height: 22px;
+  border: 2px solid var(--border-primary, var(--line));
+  border-radius: 0;
+  background: transparent;
+  position: relative;
+  transition: none;
+}
+
+.toggle input[type="checkbox"]::after {
+  content: "";
+  position: absolute;
+  left: 2px;
+  top: 2px;
+  width: 14px;
+  height: 14px;
+  background: var(--text);
+  border: none;
+  transform: none;
+}
+
+.toggle input[type="checkbox"]:checked {
+  background: var(--primary);
+  border-color: var(--primary);
+}
+
+.toggle input[type="checkbox"]:checked::after {
+  left: 20px;
+  background: var(--on-primary);
+}
+
+.toggle-label {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.toggle-text {
+  font-size: 14px;
+  color: var(--text);
+}
+
+.toggle-hint {
+  font-size: 12px;
+  color: var(--muted);
 }
 
 /* ------------------------------------------------------- choice components */

@@ -514,9 +514,9 @@ export function Toggle({
         checked={checked}
         onChange={(e) => onChange(e.currentTarget.checked)}
       />
-      <span>
-        {label}
-        {hint && <em className="field-hint"> {hint}</em>}
+      <span className="toggle-label">
+        <span className="toggle-text">{label}</span>
+        {hint && <span className="toggle-hint">{hint}</span>}
       </span>
     </label>
   );
