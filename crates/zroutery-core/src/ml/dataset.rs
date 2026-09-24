@@ -606,8 +606,10 @@ mod tests {
     #[test]
     fn validate_sample_rejects_wrong_schema_version() {
         let outcome = success_outcome();
-        let mut features = RoutingFeatures::default();
-        features.schema_version = 99;
+        let features = RoutingFeatures {
+            schema_version: 99,
+            ..Default::default()
+        };
         let sample = SampleBuilder::build(&outcome, features, DataOrigin::Native);
         let err = validate_sample(&sample).unwrap_err();
         assert!(err.contains("schema version mismatch"), "got: {}", err);
@@ -790,7 +792,7 @@ mod tests {
     fn samples_from_outcome_single_attempt() {
         let outcome = success_outcome();
         let features = sample_features();
-        let samples = samples_from_outcome(&outcome, &[features.clone()], DataOrigin::Native);
+        let samples = samples_from_outcome(&outcome, std::slice::from_ref(&features), DataOrigin::Native);
 
         // 1 attempt sample + 1 request-level sample
         assert_eq!(samples.len(), 2, "single attempt: 1 attempt + 1 request sample");

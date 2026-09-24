@@ -259,7 +259,7 @@ mod tests {
         assert_eq!(deserialized.account_id, rt.account_id);
         assert_eq!(deserialized.provider_id, rt.provider_id);
         assert_eq!(deserialized.status, rt.status);
-        assert_eq!(deserialized.capabilities.supports_usage, true);
+        assert!(deserialized.capabilities.supports_usage);
         assert!((deserialized.quota.as_ref().unwrap().utilization() - 0.25).abs() < f64::EPSILON);
         assert_eq!(deserialized.usage.as_ref().unwrap().total_requests, 500);
         assert!((deserialized.rate_limit.as_ref().unwrap().pressure() - 0.5).abs() < f64::EPSILON);

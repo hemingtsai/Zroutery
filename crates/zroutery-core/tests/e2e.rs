@@ -207,6 +207,22 @@ async fn mock_anthropic_messages(
         )
             .into_response();
     }
+    // A repairable rejection for the rectifier A/B test: the thinking budget
+    // exceeds the (pretend) provider allowance. The thinking-budget rectifier
+    // halves `budget_tokens` and retries the SAME model, so the halved body
+    // passes — one rejected attempt plus one repaired retry per request.
+    if body["model"].as_str().unwrap_or("").starts_with("budget") {
+        let budget = body["thinking"]["budget_tokens"].as_u64();
+        if budget.is_some_and(|b| b > 1024) {
+            return (
+                axum::http::StatusCode::BAD_REQUEST,
+                Json(json!({"type": "error",
+                            "error": {"type": "invalid_request_error",
+                                      "message": "thinking budget must be at most 1024"}})),
+            )
+                .into_response();
+        }
+    }
 
     let stream = body["stream"].as_bool().unwrap_or(false);
     if !stream {
@@ -1870,8 +1886,9 @@ async fn rate_limit_triggers_failover() {
     // put the healthy model first and skip the 429 path this test covers.
     cfg.models = vec![
         ModelEntry::for_upstream("deepseek", "limited-v4", Some(ModelTier::Standard))
-            .with_priority(-1),
-        ModelEntry::for_upstream("deepseek", "deepseek-v4-pro", Some(ModelTier::Standard)),
+            .with_priority(0),
+        ModelEntry::for_upstream("deepseek", "deepseek-v4-pro", Some(ModelTier::Standard))
+            .with_priority(10),
     ];
     let h = Harness::start(cfg, mock).await;
 
@@ -1886,6 +1903,8 @@ async fn rate_limit_triggers_failover() {
     assert_eq!(resp.status(), 200);
     assert_eq!(resp.headers()["x-zroutery-model"], "deepseek-deepseek-v4-pro");
     // Two upstream calls: one 429, one success.
+    assert_eq!(h.mock.bodies()[0]["model"], "limited-v4");
+    assert_eq!(h.mock.bodies()[1]["model"], "deepseek-v4-pro");
     assert_eq!(h.mock.count(), 2);
 
     h.shutdown().await;
@@ -2023,4 +2042,614 @@ async fn per_provider_budget_blocks_only_that_provider() {
     assert_eq!(resp.status(), 200);
 
     h.shutdown().await;
+}
+
+// ------------------------------------------------------- shadow evaluation (ml)
+//
+// Stage 7E-1: the ML stack records what it *would have done* for policy-routed
+// main traffic. Shadow is record-only by construction, so every test here also
+// proves a negative: that production behaves identically with it on.
+
+/// A policy-routed request (`sonnet-class` resolves through the tier and policy
+/// engine); a direct-resolution request (`anthropic-claude-native` names an
+/// exact model) stays out of scope.
+#[cfg(feature = "ml")]
+async fn post_policy_routed(h: &Harness, stream: bool, round: usize) -> reqwest::Response {
+    h.post("/v1/messages")
+        .json(&json!({
+            "model": "sonnet-class",
+            "max_tokens": 64,
+            "stream": stream,
+            "messages": [{"role": "user", "content": format!("round {round}")}]
+        }))
+        .send()
+        .await
+        .unwrap()
+}
+
+#[cfg(feature = "ml")]
+#[tokio::test]
+async fn shadow_decisions_record_only_for_policy_routed_requests() {
+    use zroutery_core::ml::{ShadowScope, FEATURE_SCHEMA_VERSION};
+
+    let (addr, mock) = start_mock().await;
+    let mut cfg = config_for(addr);
+    cfg.shadow.enabled = true;
+    let h = Harness::start(cfg, mock).await;
+
+    // Policy-routed: the tier virtual id resolves through the policy engine.
+    let resp = post_policy_routed(&h, false, 0).await;
+    assert_eq!(resp.status(), 200);
+
+    let store = h.state.shadow().store();
+    assert_eq!(store.len(), 1, "one shadow decision per policy-routed request");
+    let shadow = &store.decisions()[0];
+
+    // Correlated with the request record: same request id, same decision id.
+    let record = h.state.stats().recent(10).remove(0);
+    assert_eq!(shadow.actual.request_id, record.id);
+    let decision = record
+        .routing_decision
+        .as_ref()
+        .expect("policy-routed request record carries its routing decision");
+    assert_eq!(shadow.actual.decision_id, decision.decision_id);
+
+    // The record itself is well-formed evidence.
+    assert_eq!(shadow.scope, ShadowScope::PolicyRouted);
+    assert!(shadow.shadow_id.starts_with("shadow-"));
+    assert_eq!(shadow.shadow.feature_schema, FEATURE_SCHEMA_VERSION);
+    assert_eq!(shadow.actual.selected, "deepseek-deepseek-v4-pro");
+    // Single-candidate plan: the engine sees the current candidate first, so
+    // its hypothetical verdict keeps production's choice.
+    assert_eq!(shadow.shadow.selected, "deepseek-deepseek-v4-pro");
+    assert!(!shadow.candidates.is_empty());
+    assert_eq!(shadow.candidates[0].candidate_id, "deepseek-deepseek-v4-pro");
+    assert!(shadow.candidates[0].eligible);
+    assert_eq!(h.state.shadow().fault_count(), 0);
+
+    // Direct resolution (exact model id) is out of shadow scope.
+    let resp = h
+        .post("/v1/chat/completions")
+        .json(&json!({
+            "model": "anthropic-claude-native",
+            "messages": [{"role": "user", "content": "hi"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_eq!(store.len(), 1, "direct-resolution requests are not recorded");
+
+    h.shutdown().await;
+}
+
+/// A/B purity: shadow on must not change what reaches providers or how
+/// requests are counted.
+#[cfg(feature = "ml")]
+#[tokio::test]
+async fn shadow_causes_no_provider_requests() {
+    async fn run(shadow: bool) -> (usize, u64, usize) {
+        let (addr, mock) = start_mock().await;
+        let mut cfg = config_for(addr);
+        cfg.shadow.enabled = shadow;
+        let h = Harness::start(cfg, mock).await;
+        for round in 0..3 {
+            let resp = post_policy_routed(&h, false, round).await;
+            assert_eq!(resp.status(), 200);
+        }
+        let upstream_calls = h.mock.count();
+        let requests = h.state.stats().summary().requests;
+        let shadow_records = h.state.shadow().store().len();
+        h.shutdown().await;
+        (upstream_calls, requests, shadow_records)
+    }
+
+    let off = run(false).await;
+    let on = run(true).await;
+    // Identical upstream traffic and request accounting...
+    assert_eq!(off.0, on.0, "upstream call count must not change");
+    assert_eq!(off.1, on.1, "request accounting must not change");
+    // ...while only the ON side actually recorded shadow decisions.
+    assert_eq!(off.2, 0);
+    assert_eq!(on.2, 3);
+}
+
+/// A/B with expected delta: shadow on must not mutate router health, spend,
+/// per-request routing outcomes or the bytes the client receives.
+#[cfg(feature = "ml")]
+#[tokio::test]
+async fn shadow_causes_no_runtime_mutation() {
+    use zroutery_core::budget::Ledger;
+
+    /// A request record with the volatile fields masked: what was asked, which
+    /// model answered on which provider, ok flag, status, attempt count.
+    /// (Ids, timestamps and latencies differ per run by construction.)
+    #[derive(Debug, PartialEq)]
+    struct MaskedRecord {
+        requested_model: String,
+        resolved_model: Option<String>,
+        provider_name: Option<String>,
+        ok: bool,
+        status: u16,
+        attempts: u32,
+    }
+
+    /// Health rows with the timing-derived fields (`avg_latency_ms`,
+    /// `cooldown_remaining_secs`) masked: latency is measured wall clock,
+    /// so identical scripts still differ by scheduling noise. What must
+    /// not diverge is the structural state — breaker state, counters and
+    /// the last error.
+    #[derive(Debug, PartialEq)]
+    struct MaskedHealth {
+        model_id: String,
+        state: zroutery_core::circuit_breaker::CircuitState,
+        consecutive_failures: u32,
+        total_success: u64,
+        total_failure: u64,
+        last_error: Option<String>,
+    }
+
+    struct Outcome {
+        health: Vec<MaskedHealth>,
+        ledger: Ledger,
+        records: Vec<MaskedRecord>,
+        bodies: Vec<Value>,
+    }
+
+    async fn run(shadow: bool) -> Outcome {
+        let (addr, mock) = start_mock().await;
+        let mut cfg = config_for(addr);
+        cfg.shadow.enabled = shadow;
+        // Price the model that answers so the ledger comparison is over real
+        // spends, not two empty ledgers.
+        cfg.models[1].pricing = Some(Pricing::new("USD", 0.5, 2.0));
+        let h = Harness::start(cfg, mock).await;
+
+        let mut bodies = Vec::new();
+        for round in 0..3 {
+            let resp = post_policy_routed(&h, false, round).await;
+            assert_eq!(resp.status(), 200);
+            bodies.push(resp.json::<Value>().await.unwrap());
+        }
+
+        let records = h
+            .state
+            .stats()
+            .recent(10)
+            .into_iter()
+            .map(|r| MaskedRecord {
+                requested_model: r.requested_model,
+                resolved_model: r.resolved_model,
+                provider_name: r.provider_name,
+                ok: r.ok,
+                status: r.status,
+                attempts: r.attempts,
+            })
+            .collect();
+        let health = h
+            .state
+            .router()
+            .health_snapshot()
+            .into_iter()
+            .map(|mh| MaskedHealth {
+                model_id: mh.model_id,
+                state: mh.state,
+                consecutive_failures: mh.consecutive_failures,
+                total_success: mh.total_success,
+                total_failure: mh.total_failure,
+                last_error: mh.last_error,
+            })
+            .collect();
+        let outcome = Outcome {
+            health,
+            ledger: h.state.ledger(),
+            records,
+            bodies,
+        };
+        h.shutdown().await;
+        outcome
+    }
+
+    let off = run(false).await;
+    let on = run(true).await;
+
+    // Router health identical: no shadow-driven failures, recoveries or probes.
+    assert_eq!(off.health, on.health, "health must not diverge");
+    // Identical spend for identical deterministic traffic.
+    assert_eq!(off.ledger, on.ledger, "ledger must not diverge");
+    // Identical per-request routing outcomes.
+    assert_eq!(off.records, on.records, "records must not diverge");
+    // Byte-identical answers to the client.
+    assert_eq!(off.bodies, on.bodies, "response bodies must not diverge");
+    // The SessionStore is not wired into the production pipeline (it has no
+    // reader yet), and the shadow path holds no session handle, so it is
+    // untouched on both sides by construction.
+}
+
+/// Production must be unaffected with shadow on, and a healthy predictor runs
+/// fault-free. (Poisoned-predictor isolation is covered at engine level in
+/// the ml shadow tests; AppState wires the real predictor.)
+#[cfg(feature = "ml")]
+#[tokio::test]
+async fn shadow_survives_predictor_faults() {
+    let (addr, mock) = start_mock().await;
+    let mut cfg = config_for(addr);
+    cfg.shadow.enabled = true;
+    let h = Harness::start(cfg, mock).await;
+
+    // Two buffered and one streaming policy-routed request, so both evaluate
+    // hooks (buffered_chat and stream_chat) run with shadow on.
+    let resp = post_policy_routed(&h, false, 0).await;
+    assert_eq!(resp.status(), 200);
+    let resp = post_policy_routed(&h, false, 1).await;
+    assert_eq!(resp.status(), 200);
+    let resp = post_policy_routed(&h, true, 2).await;
+    assert_eq!(resp.status(), 200);
+    // Drain the stream so its record finalizes.
+    let _ = resp.text().await.unwrap();
+
+    // Every request succeeded and every one was shadow-evaluated, fault-free.
+    assert_eq!(h.state.stats().summary().requests, 3);
+    assert_eq!(h.state.stats().summary().failures, 0);
+    assert_eq!(h.state.shadow().store().len(), 3);
+    assert_eq!(h.state.shadow().fault_count(), 0);
+
+    h.shutdown().await;
+}
+
+#[cfg(feature = "ml")]
+#[tokio::test]
+async fn shadow_disabled_by_default() {
+    let h = Harness::new().await;
+    assert!(!h.state.shadow().enabled());
+
+    // Policy-routed traffic while disabled: nothing recorded, nothing faulted.
+    let resp = post_policy_routed(&h, false, 0).await;
+    assert_eq!(resp.status(), 200);
+    assert_eq!(h.state.shadow().store().len(), 0);
+    assert_eq!(h.state.shadow().fault_count(), 0);
+
+    h.shutdown().await;
+}
+
+/// GATE 7E-1 (model mutation = 0): production traffic never trains the
+/// shadow ensemble. Across a burst of policy-routed requests — buffered and
+/// streaming, so both evaluate hooks run — every recorded decision carries
+/// one and the same model commit, and that commit is the genesis commit the
+/// engine started from. The commit id is derived from the cold-start
+/// ensemble's content hash, so any training during the burst would have
+/// advanced it.
+#[cfg(feature = "ml")]
+#[tokio::test]
+async fn shadow_model_commit_stable_across_traffic() {
+    use zroutery_core::ml::ModelEnsemblePredictor;
+
+    let (addr, mock) = start_mock().await;
+    let mut cfg = config_for(addr);
+    cfg.shadow.enabled = true;
+    let h = Harness::start(cfg, mock).await;
+
+    for round in 0..4 {
+        let stream = round % 2 == 0;
+        let resp = post_policy_routed(&h, stream, round).await;
+        assert_eq!(resp.status(), 200);
+        if stream {
+            // Drain the stream so its record finalizes.
+            let _ = resp.text().await.unwrap();
+        }
+    }
+
+    let decisions = h.state.shadow().store().decisions();
+    assert_eq!(decisions.len(), 4, "one shadow decision per request");
+    assert_eq!(h.state.shadow().fault_count(), 0);
+
+    // One identical commit across the whole burst: nothing trained mid-flight.
+    let observed = decisions[0].shadow.model_commit.clone();
+    assert!(
+        decisions.iter().all(|d| d.shadow.model_commit == observed),
+        "every decision must carry the same model commit"
+    );
+
+    // ...and that commit is genesis: a fresh predictor's deterministic
+    // cold-start commit — the same one AppState wired at startup.
+    let genesis = ModelEnsemblePredictor::genesis().commit();
+    assert_eq!(
+        observed, genesis,
+        "production traffic must not advance the shadow model"
+    );
+
+    h.shutdown().await;
+}
+
+// ------------------------------------------------- fallback / retry A/B (ml)
+//
+// Twin-harness evidence for the two remaining gate items: production
+// fallback = 0 and production retry = 0 under shadow. Each test runs the
+// same script twice (shadow off vs on) against fresh mocks and compares
+// everything downstream of the shadow hook.
+
+/// Masked request record for the A/B comparison (same masking discipline as
+/// `shadow_causes_no_runtime_mutation`: ids, timestamps and latencies are
+/// volatile by construction; everything else must match — including each
+/// record's attempt count).
+#[cfg(feature = "ml")]
+#[derive(Debug, PartialEq)]
+struct AbRecord {
+    requested_model: String,
+    resolved_model: Option<String>,
+    provider_name: Option<String>,
+    ok: bool,
+    status: u16,
+    attempts: u32,
+}
+
+/// Masked health row: the timing-derived fields (`avg_latency_ms`,
+/// `cooldown_remaining_secs`) are dropped; the structural state — breaker
+/// state, counters, last error — must match.
+#[cfg(feature = "ml")]
+#[derive(Debug, PartialEq)]
+struct AbHealth {
+    model_id: String,
+    state: zroutery_core::circuit_breaker::CircuitState,
+    consecutive_failures: u32,
+    total_success: u64,
+    total_failure: u64,
+    last_error: Option<String>,
+}
+
+/// Everything the A/B tests compare across a twin run.
+#[cfg(feature = "ml")]
+struct AbOutcome {
+    /// The full upstream request bodies, in order — identical traffic.
+    upstream_bodies: Vec<Value>,
+    /// The model that answered each client request (`x-zroutery-model`).
+    served_models: Vec<String>,
+    records: Vec<AbRecord>,
+    health: Vec<AbHealth>,
+    ledger: zroutery_core::budget::Ledger,
+    bodies: Vec<Value>,
+    shadow_decisions: usize,
+    shadow_faults: u64,
+}
+
+#[cfg(feature = "ml")]
+impl AbOutcome {
+    fn capture(h: &Harness, served_models: Vec<String>, bodies: Vec<Value>) -> Self {
+        let records = h
+            .state
+            .stats()
+            .recent(10)
+            .into_iter()
+            .map(|r| AbRecord {
+                requested_model: r.requested_model,
+                resolved_model: r.resolved_model,
+                provider_name: r.provider_name,
+                ok: r.ok,
+                status: r.status,
+                attempts: r.attempts,
+            })
+            .collect();
+        let health = h
+            .state
+            .router()
+            .health_snapshot()
+            .into_iter()
+            .map(|mh| AbHealth {
+                model_id: mh.model_id,
+                state: mh.state,
+                consecutive_failures: mh.consecutive_failures,
+                total_success: mh.total_success,
+                total_failure: mh.total_failure,
+                last_error: mh.last_error,
+            })
+            .collect();
+        AbOutcome {
+            upstream_bodies: h.mock.bodies(),
+            served_models,
+            records,
+            health,
+            ledger: h.state.ledger(),
+            bodies,
+            shadow_decisions: h.state.shadow().store().len(),
+            shadow_faults: h.state.shadow().fault_count(),
+        }
+    }
+
+    /// Assert the two twin runs are production-identical.
+    fn assert_identical(off: &AbOutcome, on: &AbOutcome) {
+        assert_eq!(
+            off.upstream_bodies, on.upstream_bodies,
+            "upstream traffic must not change"
+        );
+        assert_eq!(
+            off.served_models, on.served_models,
+            "served models must not change"
+        );
+        assert_eq!(
+            off.records, on.records,
+            "request records (incl. attempt counts) must not change"
+        );
+        assert_eq!(off.health, on.health, "health must not diverge");
+        assert_eq!(off.ledger, on.ledger, "ledger must not diverge");
+        assert_eq!(off.bodies, on.bodies, "response bodies must not diverge");
+    }
+}
+
+/// GATE 7E-1 (fallback = 0): production failover must be identical with
+/// shadow off vs on. Script: two policy-routed requests whose first
+/// candidate always answers 429 (the mock's `limited*` convention, as in
+/// `rate_limit_triggers_failover`), forcing production to fail over to the
+/// second candidate. Compared across the twin runs: the exact upstream
+/// traffic, the served model per request, the masked request records
+/// (including each record's attempt count), the masked router health, the
+/// spend ledger and the bytes the client receives.
+#[cfg(feature = "ml")]
+#[tokio::test]
+async fn shadow_does_not_cause_fallback() {
+    async fn run(shadow: bool) -> AbOutcome {
+        let (addr, mock) = start_mock().await;
+        let mut cfg = config_for(addr);
+        cfg.shadow.enabled = shadow;
+        // Primary always 429s; the fallback model is healthy and priced so
+        // the ledger comparison is over real spend.
+        let mut fallback =
+            ModelEntry::for_upstream("deepseek", "deepseek-v4-pro", Some(ModelTier::Standard))
+                .with_priority(10);
+        fallback.pricing = Some(Pricing::new("USD", 0.5, 2.0));
+        cfg.models = vec![
+            ModelEntry::for_upstream("deepseek", "limited-v4", Some(ModelTier::Standard))
+                .with_priority(0),
+            fallback,
+        ];
+        let h = Harness::start(cfg, mock).await;
+
+        let mut served_models = Vec::new();
+        let mut bodies = Vec::new();
+        for round in 0..2 {
+            let resp = post_policy_routed(&h, false, round).await;
+            assert_eq!(resp.status(), 200, "the failover script must succeed");
+            served_models.push(
+                resp.headers()["x-zroutery-model"]
+                    .to_str()
+                    .unwrap()
+                    .to_string(),
+            );
+            bodies.push(resp.json::<Value>().await.unwrap());
+        }
+
+        let outcome = AbOutcome::capture(&h, served_models, bodies);
+        h.shutdown().await;
+        outcome
+    }
+
+    let off = run(false).await;
+    let on = run(true).await;
+
+    // The script really exercised production fallback: the rate-limited
+    // primary was attempted and at least one request needed a second attempt.
+    assert!(
+        off.upstream_bodies
+            .iter()
+            .any(|b| b["model"] == "limited-v4"),
+        "the rate-limited primary must have been attempted"
+    );
+    assert!(
+        off.records.iter().any(|r| r.attempts >= 2),
+        "the script must trigger a fallback"
+    );
+
+    // Identical traffic, outcomes, health, spend and bytes.
+    AbOutcome::assert_identical(&off, &on);
+
+    // Only the ON side recorded shadow decisions — one per request,
+    // fault-free. Each snapshot is taken before any attempt (is_fallback is
+    // false by construction), so a store record exists for every fallback
+    // request exactly as for every clean one.
+    assert_eq!(off.shadow_decisions, 0);
+    assert_eq!(on.shadow_decisions, 2);
+    assert_eq!(on.shadow_faults, 0);
+}
+
+/// GATE 7E-1 (retry = 0): the production retry path must be identical with
+/// shadow off vs on. Script: a policy-routed request whose first candidate
+/// answers with a REPAIRABLE 400 (thinking budget too large — the mock's
+/// `budget*` convention). The pipeline runs the thinking-budget rectifier,
+/// which halves `budget_tokens` and retries the SAME candidate, so one
+/// client request produces two upstream calls to the same model (the
+/// rejected shape, then the repaired one) and never fails over.
+///
+/// Honest scope note: chat requests have no other same-candidate retry seam
+/// to drive from a test — client errors are not retried, the transport-level
+/// handshake retries happen inside the upstream client, and every other
+/// retry-shaped failure flows through the failover loop the fallback test
+/// already covers. The rectifier path is the one retry the pipeline itself
+/// drives, and both its calls land on the same per-request upstream counter
+/// this test compares.
+#[cfg(feature = "ml")]
+#[tokio::test]
+async fn shadow_does_not_cause_retry() {
+    async fn run(shadow: bool) -> AbOutcome {
+        let (addr, mock) = start_mock().await;
+        let mut cfg = config_for(addr);
+        cfg.shadow.enabled = shadow;
+        // The primary answers 400 until its thinking budget is halved to the
+        // floor (1024); the rectifier does exactly that and retries the SAME
+        // candidate. It advertises the thinking capability the request
+        // requires and is priced so the ledger comparison is over real spend.
+        let mut primary =
+            ModelEntry::for_upstream("anthropic", "budget-v4", Some(ModelTier::Standard))
+                .with_priority(0);
+        primary.capabilities.thinking = true;
+        primary.pricing = Some(Pricing::new("USD", 0.5, 2.0));
+        cfg.models = vec![
+            primary,
+            ModelEntry::for_upstream("deepseek", "deepseek-v4-pro", Some(ModelTier::Standard))
+                .with_priority(10),
+        ];
+        let h = Harness::start(cfg, mock).await;
+
+        let mut served_models = Vec::new();
+        let mut bodies = Vec::new();
+        for round in 0..2 {
+            let resp = h
+                .post("/v1/messages")
+                .json(&json!({
+                    "model": "sonnet-class",
+                    "max_tokens": 64,
+                    "thinking": {"type": "enabled", "budget_tokens": 2048},
+                    "messages": [{"role": "user", "content": format!("round {round}")}]
+                }))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), 200, "the repaired retry must succeed");
+            served_models.push(
+                resp.headers()["x-zroutery-model"]
+                    .to_str()
+                    .unwrap()
+                    .to_string(),
+            );
+            bodies.push(resp.json::<Value>().await.unwrap());
+        }
+
+        let outcome = AbOutcome::capture(&h, served_models, bodies);
+        h.shutdown().await;
+        outcome
+    }
+
+    let off = run(false).await;
+    let on = run(true).await;
+
+    // The script really exercised the same-candidate retry: every request
+    // hit the SAME model twice — the rejected 2048-budget shape, then the
+    // repaired 1024-budget body — and never failed over.
+    for round in 0..2 {
+        let rejected = &off.upstream_bodies[round * 2];
+        let repaired = &off.upstream_bodies[round * 2 + 1];
+        assert_eq!(rejected["model"], "budget-v4");
+        assert_eq!(
+            repaired["model"], "budget-v4",
+            "the retry must stay on the same candidate"
+        );
+        assert_eq!(rejected["thinking"]["budget_tokens"], 2048);
+        assert_eq!(
+            repaired["thinking"]["budget_tokens"], 1024,
+            "the rectifier must have halved the budget"
+        );
+    }
+    assert!(
+        off.records.iter().all(|r| r.attempts == 1),
+        "a repaired retry is not a fresh attempt"
+    );
+
+    // Identical traffic, outcomes, health, spend and bytes.
+    AbOutcome::assert_identical(&off, &on);
+
+    // Only the ON side recorded shadow decisions — one per request,
+    // fault-free, snapshotted before the attempt (and therefore before the
+    // retry) — so the retry path ran with a decision on record and was
+    // untouched by it.
+    assert_eq!(off.shadow_decisions, 0);
+    assert_eq!(on.shadow_decisions, 2);
+    assert_eq!(on.shadow_faults, 0);
 }

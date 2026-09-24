@@ -521,7 +521,9 @@ impl ModelEntry {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RoutingStrategy {
-    /// Strict priority order; weight breaks ties randomly.
+    /// Strict priority order (lower priority number first). The sort is
+    /// stable, so candidates with equal priority preserve the upstream
+    /// (registry/policy) order instead of being reshuffled.
     #[default]
     Priority,
     /// Weighted random across all healthy candidates.
@@ -846,6 +848,45 @@ impl Default for ServerConfig {
     }
 }
 
+/// Shadow decision evaluation (Stage 7E-1): record what the ML routing stack
+/// would have done with policy-routed main traffic, without influencing
+/// production routing. Off by default — the records are diagnostic evidence,
+/// never routing input.
+#[cfg(feature = "ml")]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ShadowConfig {
+    /// Master switch. Off: no snapshots are taken and nothing is recorded.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Maximum shadow decisions held in memory before the oldest is evicted.
+    #[serde(default = "ShadowConfig::default_max_decisions")]
+    pub max_decisions: usize,
+    /// Retention window for shadow decisions, in seconds.
+    #[serde(default = "ShadowConfig::default_max_age_secs")]
+    pub max_age_secs: i64,
+}
+
+#[cfg(feature = "ml")]
+impl ShadowConfig {
+    fn default_max_decisions() -> usize {
+        10_000
+    }
+    fn default_max_age_secs() -> i64 {
+        7 * 24 * 3600
+    }
+}
+
+#[cfg(feature = "ml")]
+impl Default for ShadowConfig {
+    fn default() -> Self {
+        ShadowConfig {
+            enabled: false,
+            max_decisions: Self::default_max_decisions(),
+            max_age_secs: Self::default_max_age_secs(),
+        }
+    }
+}
+
 /// How the desktop app behaves as a resident process: what autostart, the
 /// launch, and the close button do.
 ///
@@ -895,6 +936,11 @@ pub struct AppConfig {
     /// Vision fallback for non-vision models.
     #[serde(default)]
     pub vision: VisionConfig,
+    /// Shadow decision evaluation. Only present in `ml` builds; the default
+    /// (off) keeps request handling byte-identical to a build without it.
+    #[cfg(feature = "ml")]
+    #[serde(default)]
+    pub shadow: ShadowConfig,
     #[serde(default)]
     pub providers: Vec<ProviderConfig>,
     #[serde(default)]

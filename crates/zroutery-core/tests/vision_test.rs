@@ -44,7 +44,7 @@ impl Mock {
 
 /// The mock reacts to the upstream model name:
 /// * `blind*`   -> rejects any request containing an image (400, "does not
-///                 support image input"), answers text-only requests
+///   support image input"), answers text-only requests
 /// * `eyes*`    -> the vision model: describes whatever image it was sent
 /// * anything else -> plain text answer
 async fn mock_openai_chat(State(mock): State<Mock>, Json(body): Json<Value>) -> Response {
@@ -305,9 +305,11 @@ async fn without_a_vision_model_the_placeholder_is_used() {
 #[tokio::test]
 async fn vision_off_sends_the_image_as_is() {
     let (addr, mock) = start_mock().await;
-    let mut off = VisionConfig::default();
-    off.enabled = false;
-    off.model = Some("p-eyes-model".into());
+    let off = VisionConfig {
+        enabled: false,
+        model: Some("p-eyes-model".into()),
+        ..Default::default()
+    };
     let h = Harness::start(config_for(addr, off, false), mock).await;
 
     let resp = h.post(image_request()).await;

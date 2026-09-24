@@ -758,9 +758,11 @@ mod tests {
         assert!((0.0..=1.0).contains(&s), "default buffered score: {s}");
 
         // Very slow
-        let mut obs = LatencyObservation::default();
-        obs.ttft_ms = Signal::new(100000.0);
-        obs.total_ms = Signal::new(100000.0);
+        let obs = LatencyObservation {
+            ttft_ms: Signal::new(100000.0),
+            total_ms: Signal::new(100000.0),
+            ..Default::default()
+        };
         let s = obs.score(true);
         assert!((0.0..=1.0).contains(&s), "slow streaming score: {s}");
         let s = obs.score(false);
@@ -775,8 +777,10 @@ mod tests {
             HealthState::Unavailable,
             HealthState::Unknown,
         ] {
-            let mut obs = HealthObservation::default();
-            obs.state = state;
+            let obs = HealthObservation {
+                state,
+                ..Default::default()
+            };
             let s = obs.score();
             assert!((0.0..=1.0).contains(&s), "score for {state:?}: {s}");
         }
@@ -814,31 +818,41 @@ mod tests {
 
     #[test]
     fn fast_model_scores_higher_than_slow_for_streaming() {
-        let mut fast = LatencyObservation::default();
-        fast.ttft_ms = Signal::new(100.0);
-        let mut slow = LatencyObservation::default();
-        slow.ttft_ms = Signal::new(2000.0);
+        let fast = LatencyObservation {
+            ttft_ms: Signal::new(100.0),
+            ..Default::default()
+        };
+        let slow = LatencyObservation {
+            ttft_ms: Signal::new(2000.0),
+            ..Default::default()
+        };
 
         assert!(fast.score(true) > slow.score(true));
     }
 
     #[test]
     fn healthy_scores_higher_than_degraded() {
-        let mut healthy = HealthObservation::default();
-        healthy.state = HealthState::Healthy;
-        healthy.success_rate = Signal::new(0.99);
-        let mut degraded = HealthObservation::default();
-        degraded.state = HealthState::Degraded;
-        degraded.success_rate = Signal::new(0.7);
+        let healthy = HealthObservation {
+            state: HealthState::Healthy,
+            success_rate: Signal::new(0.99),
+            ..Default::default()
+        };
+        let degraded = HealthObservation {
+            state: HealthState::Degraded,
+            success_rate: Signal::new(0.7),
+            ..Default::default()
+        };
 
         assert!(healthy.score() > degraded.score());
     }
 
     #[test]
     fn unavailable_always_scores_zero() {
-        let mut obs = HealthObservation::default();
-        obs.state = HealthState::Unavailable;
-        obs.success_rate = Signal::new(0.9); // even with high rate
+        let obs = HealthObservation {
+            state: HealthState::Unavailable,
+            success_rate: Signal::new(0.9), // even with high rate
+            ..Default::default()
+        };
         assert_eq!(obs.score(), 0.0);
     }
 
@@ -848,16 +862,20 @@ mod tests {
 
     #[test]
     fn streaming_prioritizes_ttft_over_total() {
-        let mut obs = LatencyObservation::default();
         // Fast TTFT, slow total
-        obs.ttft_ms = Signal::new(100.0);
-        obs.total_ms = Signal::new(10000.0);
+        let obs = LatencyObservation {
+            ttft_ms: Signal::new(100.0),
+            total_ms: Signal::new(10000.0),
+            ..Default::default()
+        };
         let streaming_score = obs.score(true);
 
-        let mut obs2 = LatencyObservation::default();
         // Slow TTFT, fast total
-        obs2.ttft_ms = Signal::new(5000.0);
-        obs2.total_ms = Signal::new(200.0);
+        let obs2 = LatencyObservation {
+            ttft_ms: Signal::new(5000.0),
+            total_ms: Signal::new(200.0),
+            ..Default::default()
+        };
         let streaming_score2 = obs2.score(true);
 
         // For streaming, fast TTFT should win even with slow total
@@ -866,14 +884,18 @@ mod tests {
 
     #[test]
     fn buffered_prioritizes_total_over_ttft() {
-        let mut obs = LatencyObservation::default();
-        obs.ttft_ms = Signal::new(5000.0);
-        obs.total_ms = Signal::new(200.0);
+        let obs = LatencyObservation {
+            ttft_ms: Signal::new(5000.0),
+            total_ms: Signal::new(200.0),
+            ..Default::default()
+        };
         let buffered_score = obs.score(false);
 
-        let mut obs2 = LatencyObservation::default();
-        obs2.ttft_ms = Signal::new(100.0);
-        obs2.total_ms = Signal::new(10000.0);
+        let obs2 = LatencyObservation {
+            ttft_ms: Signal::new(100.0),
+            total_ms: Signal::new(10000.0),
+            ..Default::default()
+        };
         let buffered_score2 = obs2.score(false);
 
         // For buffered, fast total should win

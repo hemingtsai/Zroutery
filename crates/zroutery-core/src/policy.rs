@@ -1381,7 +1381,6 @@ mod tests {
             cost_weight: 0.0,
             priority_weight: 0.0,
             tier_weight: 1.0,
-            ..Default::default()
         };
         let exact = scoring_ctx(1.0, 100.0, Some(1.0), 0, Some(ModelTier::Standard));
         let close = scoring_ctx(1.0, 100.0, Some(1.0), 0, Some(ModelTier::Reasoning));

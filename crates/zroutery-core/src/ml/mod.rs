@@ -6,15 +6,18 @@
 
 pub mod coordinator;
 pub mod dataset;
+pub mod decision_engine;
 pub mod evaluation;
 pub mod features;
 pub mod model;
 pub mod model_identity;
 pub mod reward;
+pub mod shadow;
 pub use coordinator::{Coordinator, CoordinatorConfig, RoutingAction, RoutingDecision};
 pub use dataset::{
     DatasetStore, SampleBuilder, Targets, TrainingSample as DatasetTrainingSample, validate_sample,
 };
+pub use decision_engine::{DecisionEngine, EngineCandidate, EngineInput, EngineOutput};
 pub use evaluation::{
     ComparisonReport, Evaluator, FrozenHoldout, PredictionMetrics, Recommendation, RoutingDeltas,
     RoutingMetrics, temporal_split,
@@ -33,4 +36,9 @@ pub use model_identity::{
 pub use reward::{
     Action, ActionGuard, AttemptReward, PredictionBundle, RequestReward, RewardComputer,
     RewardPolicy, UtilityBreakdown, compute_utility,
+};
+pub use shadow::{
+    EnsemblePredictor, ModelEnsemblePredictor, ProductionDecisionRef, ShadowCandidate,
+    ShadowCandidateInput, ShadowDecision, ShadowEngine, ShadowInput, ShadowScope, ShadowStore,
+    ShadowVerdict,
 };

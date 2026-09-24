@@ -331,9 +331,9 @@ mod tests {
         let computer = RewardComputer::new(RewardPolicy::default());
         let attempt = computer.compute_attempt(true, 100.0, 0.01, false);
 
-        let no_switch = computer.compute_request(&[attempt.clone()], 0, 1.0);
-        let one_switch = computer.compute_request(&[attempt.clone()], 1, 1.0);
-        let two_switches = computer.compute_request(&[attempt.clone()], 2, 1.0);
+        let no_switch = computer.compute_request(std::slice::from_ref(&attempt), 0, 1.0);
+        let one_switch = computer.compute_request(std::slice::from_ref(&attempt), 1, 1.0);
+        let two_switches = computer.compute_request(std::slice::from_ref(&attempt), 2, 1.0);
 
         assert!(
             no_switch.total > one_switch.total,
@@ -361,8 +361,8 @@ mod tests {
         let computer = RewardComputer::new(RewardPolicy::default());
         let attempt = computer.compute_attempt(true, 100.0, 0.01, false);
 
-        let high_conf = computer.compute_request(&[attempt.clone()], 0, 1.0);
-        let low_conf = computer.compute_request(&[attempt.clone()], 0, 0.0);
+        let high_conf = computer.compute_request(std::slice::from_ref(&attempt), 0, 1.0);
+        let low_conf = computer.compute_request(std::slice::from_ref(&attempt), 0, 0.0);
 
         assert!(
             high_conf.total > low_conf.total,

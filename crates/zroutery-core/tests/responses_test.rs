@@ -176,6 +176,7 @@ fn stream_encoder_emits_responses_sse() {
 
     // Collect all event types for easier assertion.
     let event_types: Vec<Option<&str>> = frames.iter().map(|f| f.event.as_deref()).collect();
+    assert_eq!(frames.len(), 18);
 
     // The full lifecycle, in order. Every output item announces itself with
     // output_item.added before any of its content, and a tool item opens
@@ -208,8 +209,8 @@ fn stream_encoder_emits_responses_sse() {
     // The function-call delta must reference the item id announced by the
     // matching output_item.added.
     assert!(
-        frames.iter().any(|f| f.data.contains("fc_call_1")),
-        "a function_call frame should reference the announced item id"
+        frames[5].data.contains("\"item_id\":\"fc_call_1\""),
+        "delta should reference the function_call item id emitted in output_item.added"
     );
 }
 
