@@ -455,9 +455,9 @@ fn eligibility_missing_capability_rejected() {
 }
 
 #[test]
-fn eligibility_unknown_capability_soft_fallback() {
-    // With strict_capabilities = false (default), unknown capabilities
-    // are a soft fallback — the candidate remains eligible.
+fn eligibility_unknown_capability_is_not_a_soft_pass() {
+    // An undeclared provider capability is not support. A documented
+    // remediation is a separate router decision and must be observable.
     let reqs = PolicyRequirements {
         required_capabilities: vec![Capability::Vision],
         strict_capabilities: false,
@@ -468,7 +468,11 @@ fn eligibility_unknown_capability_soft_fallback() {
         ..Default::default()
     };
     let check = reqs.check("m", "p", Some(ModelTier::Standard), &caps, false);
-    assert!(check.eligible, "unknown capability should be soft fallback");
+    assert!(!check.eligible);
+    assert!(check
+        .reasons
+        .iter()
+        .any(|reason| matches!(reason, RejectionReason::UnknownCapability(Capability::Vision))));
 }
 
 #[test]

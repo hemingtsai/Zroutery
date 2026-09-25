@@ -11,20 +11,32 @@ use serde::{Deserialize, Serialize};
 
 use crate::circuit_breaker::{CircuitBreaker, CircuitBreakerConfig, CircuitState};
 use crate::config::{ClassifierConfig, ModelTier, ModelEntry, ProviderConfig, RoutingConfig, RoutingStrategy};
+use crate::failure::ClassifiedFailure;
 use crate::observation::ObservationStore;
 use crate::election::Election;
 use crate::error::{Error, Result};
 use crate::ir::Capability;
 use crate::policy::{
-    CandidateDecision, DecisionReason, PolicyFallback, PolicyPreference, PolicyRequirements,
-    PolicyRevision, RouteDecision, ScoringContext, TaskProfile, TaskProfileSummary,
-    score_candidate, hash_to_u64,
+    canonical_capabilities, capability_label, CandidateDecision, DecisionReason, PolicyFallback,
+    PolicyPreference, PolicyRequirements, PolicyRevision, PlannedIdentity, RouteDecision,
+    ScoringContext, TaskProfile, TaskProfileSummary, score_candidate, hash_to_u64,
 };
 use crate::registry::{Registry, Resolution};
 use crate::stats_ext::StatsStore;
 
 /// Round robin cursor key for the classifier pool, which is not a tier.
 const CLASSIFIER_POOL: &str = "classifier";
+
+/// The router's decision after consulting the canonical failure impact table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FailureDisposition {
+    /// Do not attempt another candidate.
+    Stop,
+    /// Retry the same candidate before considering fallback.
+    Retry,
+    /// Move to a different candidate.
+    Fallback,
+}
 
 /// One attempt: which model, on which provider.
 #[derive(Debug, Clone, PartialEq)]
@@ -51,6 +63,15 @@ impl Candidate {
 
     pub fn model_id(&self) -> &str {
         &self.exposed_id
+    }
+
+    /// The identity selected for this candidate before an attempt begins.
+    pub fn planned_identity(&self) -> PlannedIdentity {
+        PlannedIdentity::new(
+            self.exposed_id.clone(),
+            self.entry.provider_id.clone(),
+            self.entry.tier.map(|tier| tier.as_str().to_string()),
+        )
     }
 }
 
@@ -128,6 +149,10 @@ impl Router {
     }
 
     /// Build the ordered list of attempts for a resolved model id.
+    ///
+    /// Request-derived capabilities are hard inputs on both direct and tier
+    /// resolutions. The legacy capability-filter configuration cannot disable
+    /// this gate.
     pub fn plan(
         &self,
         registry: &Registry,
@@ -142,7 +167,21 @@ impl Router {
                 if !provider.enabled {
                     return Err(Error::UnknownModel(format!("{id} (provider disabled)")));
                 }
-                Ok(vec![Candidate::new(entry, provider, false)])
+                self.plan_candidates(
+                    registry,
+                    vec![entry],
+                    id,
+                    None,
+                    routing.strategy,
+                    false,
+                    1,
+                    id.clone(),
+                    required_capabilities,
+                    // Direct resolution has no policy fallback and must use the
+                    // same hard capability gate as a tier.
+                    true,
+                    true,
+                )
             }
             Resolution::Tier(tier) => self.plan_tier(
                 registry,
@@ -154,18 +193,43 @@ impl Router {
         }
     }
 
+    /// Build a plan and retain the canonical eligibility/planned-identity
+    /// evidence for either a direct model id or a virtual tier.
+    pub fn plan_with_trace(
+        &self,
+        registry: &Registry,
+        resolution: &Resolution,
+        required_capabilities: &[Capability],
+    ) -> Result<(Vec<Candidate>, RouteDecision)> {
+        self.plan_with_policy(
+            registry,
+            resolution,
+            required_capabilities,
+            &PolicyRequirements::default(),
+            &PolicyPreference::default(),
+            &PolicyFallback::Reject,
+            None,
+        )
+    }
+
+    /// Alias with an explicit eligibility-trace name for callers that want to
+    /// make the lifecycle boundary visible at the call site.
+    pub fn plan_with_eligibility_trace(
+        &self,
+        registry: &Registry,
+        resolution: &Resolution,
+        required_capabilities: &[Capability],
+    ) -> Result<(Vec<Candidate>, RouteDecision)> {
+        self.plan_with_trace(registry, resolution, required_capabilities)
+    }
+
     /// Build the ordered list of attempts, applying policy eligibility filtering
     /// and preference-based scoring.
     ///
-    /// Like [`plan`] but candidates are first filtered through
-    /// [`PolicyRequirements::check`], then scored and sorted by
-    /// [`PolicyPreference`] weights. When no candidate passes eligibility,
-    /// the [`PolicyFallback`] determines what happens next:
-    ///
-    /// - [`PolicyFallback::Reject`] — return [`Error::NoCandidate`].
-    /// - [`PolicyFallback::Escalate`] — try higher tiers up to `max_steps`.
-    /// - [`PolicyFallback::Degrade`] — try lower tiers up to `max_steps`.
-    /// - [`PolicyFallback::IgnoreRequirements`] — use all members without filtering.
+    /// Request-derived capabilities are checked in addition to policy
+    /// requirements on every path. A policy fallback may change the tier or
+    /// relax policy-only constraints, but it may not relax a request capability
+    /// or reintroduce a candidate that the hard gate rejected.
     #[allow(clippy::too_many_arguments)]
     pub fn plan_with_policy(
         &self,
@@ -177,7 +241,7 @@ impl Router {
         fallback: &PolicyFallback,
         task: Option<&TaskProfile>,
     ) -> Result<(Vec<Candidate>, RouteDecision)> {
-        // Collect the raw candidate pool from the registry.
+        let request_capabilities = canonical_capabilities(required_capabilities);
         let members: Vec<&ModelEntry> = match resolution {
             Resolution::Direct(id) => {
                 let entry = registry.entry(id)?;
@@ -190,136 +254,149 @@ impl Router {
             Resolution::Tier(tier) => registry.tier_members(*tier),
         };
         if members.is_empty() {
-            let name = match resolution {
-                Resolution::Direct(id) => id.clone(),
-                Resolution::Tier(tier) => tier.virtual_id().to_string(),
-            };
-            return Err(Error::NoCandidate(name));
+            return Err(Error::NoCandidate(resolution_name(resolution)));
         }
 
-        // Apply policy eligibility to each candidate.
-        let filtered: Vec<&ModelEntry> = self.filter_eligible(&members, requirements);
-
-        // Track the actual tier used (may differ from resolution after fallback).
         let mut effective_tier: Option<ModelTier> = match resolution {
             Resolution::Tier(tier) => Some(*tier),
             Resolution::Direct(_) => None,
         };
-
-        // Collect eligibility results for every candidate (cheap: just strings and bools).
-        let mut decisions: Vec<CandidateDecision> = Vec::with_capacity(members.len());
-        for m in &members {
-            let circuit_open = self.is_circuit_open(&m.exposed_id());
-            let check = requirements.check(
-                &m.exposed_id(),
-                &m.provider_id,
-                m.tier,
-                &m.capabilities,
-                circuit_open,
+        let mut decisions = Vec::with_capacity(members.len());
+        for member in &members {
+            self.push_candidate_decision(
+                &mut decisions,
+                member,
+                requirements,
+                &request_capabilities,
             );
-            decisions.push(CandidateDecision {
-                model_id: m.exposed_id(),
-                provider_id: m.provider_id.clone(),
-                tier: m.tier.map(|t| t.as_str().to_string()),
-                eligible: check.eligible,
-                rejection: if check.eligible {
-                    None
-                } else {
-                    Some(check.reasons.iter().map(|r| r.to_string()).collect::<Vec<_>>().join(", "))
-                },
-                score: None,
-                final_score: None,
-            });
         }
 
-        // Track fallback chain (tier IDs tried before the final selection).
+        let filtered = self.filter_eligible(
+            registry,
+            &members,
+            requirements,
+            &request_capabilities,
+        );
         let mut fallback_chain: Vec<String> = Vec::new();
-
         let effective = if filtered.is_empty() {
-            // No candidate passed eligibility — apply fallback.
             match fallback {
                 PolicyFallback::Reject => {
-                    let name = match resolution {
-                        Resolution::Direct(id) => id.clone(),
-                        Resolution::Tier(tier) => tier.virtual_id().to_string(),
-                    };
+                    let name = resolution_name(resolution);
                     tracing::warn!(
                         pool = %name,
-                        "no candidate satisfies policy requirements; fallback=reject"
+                        "no candidate satisfies hard eligibility; fallback=reject"
                     );
                     return Err(Error::NoCandidate(name));
                 }
                 PolicyFallback::Escalate { enabled, max_steps } if *enabled => {
-                    let (candidates, tier) = self.fallback_tier(
-                        registry, requirements, resolution,
-                        *max_steps, true, // escalate = higher tiers
+                    let (candidates, tier, seen) = self.fallback_tier(
+                        registry,
+                        requirements,
+                        resolution,
+                        &request_capabilities,
+                        *max_steps,
+                        true,
                     )?;
                     effective_tier = Some(tier);
+                    self.push_seen_decisions(
+                        &mut decisions,
+                        &seen,
+                        requirements,
+                        &request_capabilities,
+                    );
                     candidates
                 }
                 PolicyFallback::Escalate { .. } => {
-                    // Escalate disabled — reject.
-                    let name = match resolution {
-                        Resolution::Direct(id) => id.clone(),
-                        Resolution::Tier(tier) => tier.virtual_id().to_string(),
-                    };
-                    return Err(Error::NoCandidate(name));
+                    return Err(Error::NoCandidate(resolution_name(resolution)));
                 }
                 PolicyFallback::Degrade { enabled, max_steps } if *enabled => {
-                    let (candidates, tier) = self.fallback_tier(
-                        registry, requirements, resolution,
-                        *max_steps, false, // degrade = lower tiers
+                    let (candidates, tier, seen) = self.fallback_tier(
+                        registry,
+                        requirements,
+                        resolution,
+                        &request_capabilities,
+                        *max_steps,
+                        false,
                     )?;
                     effective_tier = Some(tier);
+                    self.push_seen_decisions(
+                        &mut decisions,
+                        &seen,
+                        requirements,
+                        &request_capabilities,
+                    );
                     candidates
                 }
                 PolicyFallback::Degrade { .. } => {
-                    let name = match resolution {
-                        Resolution::Direct(id) => id.clone(),
-                        Resolution::Tier(tier) => tier.virtual_id().to_string(),
-                    };
-                    return Err(Error::NoCandidate(name));
+                    return Err(Error::NoCandidate(resolution_name(resolution)));
                 }
                 PolicyFallback::IgnoreRequirements => {
-                    tracing::warn!(
-                        "no candidate satisfies policy requirements; ignoring requirements"
+                    // This explicit policy action may bypass non-capability
+                    // policy constraints, but capability requirements and the
+                    // request contract remain hard. It is not a capability
+                    // soft pass.
+                    let capability_only = PolicyRequirements {
+                        required_capabilities: requirements.required_capabilities.clone(),
+                        strict_capabilities: true,
+                        ..Default::default()
+                    };
+                    let candidates = self.filter_eligible(
+                        registry,
+                        &members,
+                        &capability_only,
+                        &request_capabilities,
                     );
-                    members
+                    if candidates.is_empty() {
+                        return Err(Error::NoCandidate(resolution_name(resolution)));
+                    }
+                    for member in &candidates {
+                        let check = capability_only.check_with_request_capabilities(
+                            &member.exposed_id(),
+                            &member.provider_id,
+                            member.tier,
+                            &member.capabilities,
+                            self.is_circuit_open(&member.exposed_id()),
+                            &request_capabilities,
+                        );
+                        if check.eligible {
+                            if let Some(decision) = decisions
+                                .iter_mut()
+                                .find(|decision| decision.model_id == member.exposed_id())
+                            {
+                                decision.eligible = true;
+                                decision.rejection = None;
+                            }
+                        }
+                    }
+                    candidates
                 }
             }
         } else {
             filtered
         };
 
-        // Record fallback chain entries.
-        if let Some(tier) = effective_tier {
-            if let Resolution::Tier(orig) = resolution {
-                if tier != *orig {
-                    fallback_chain.push(orig.virtual_id().to_string());
+        if let (Some(tier), Resolution::Tier(original)) = (effective_tier, resolution) {
+            if tier != *original {
+                fallback_chain.push(original.virtual_id().to_string());
+            }
+        }
+
+        let (scored, score_breakdowns) = self.score_and_sort(effective, preference, task);
+        for (model_id, breakdown, total_score) in &score_breakdowns {
+            if let Some(decision) = decisions
+                .iter_mut()
+                .find(|decision| &decision.model_id == model_id)
+            {
+                // A documented remediation candidate remains visibly rejected
+                // by the hard gate; do not give rejected evidence a score.
+                if decision.eligible {
+                    decision.score = Some(breakdown.clone());
+                    decision.final_score = Some(*total_score);
                 }
             }
         }
 
-        // Score and sort by policy preferences before delegating to
-        // plan_candidates for health gating, failover and attempt capping.
-        let (scored, score_breakdowns) = self.score_and_sort(effective, preference, task);
-        let effective: Vec<&ModelEntry> = scored;
-
-        // Annotate eligible decisions with their score breakdowns.
-        for (model_id, breakdown, total_score) in &score_breakdowns {
-            if let Some(d) = decisions.iter_mut().find(|d| &d.model_id == model_id) {
-                d.score = Some(breakdown.clone());
-                d.final_score = Some(*total_score);
-            }
-        }
-
-        // Delegate to the standard routing machinery for health, ordering and
-        // failover — but pass the already-filtered (or fallback) member list
-        // through the same plan_candidates pipeline so everything else (circuit
-        // breakers, strategy, attempt cap) works identically.
         let routing = &registry.config().routing;
-        // Use the effective tier (which may have changed due to fallback)
-        // for pool_name and election_tier.
         let (pool_name, election_tier) = match effective_tier {
             Some(tier) => (tier.virtual_id().to_string(), Some(tier)),
             None => match resolution {
@@ -327,29 +404,34 @@ impl Router {
                 Resolution::Tier(tier) => (tier.virtual_id().to_string(), Some(*tier)),
             },
         };
-        let candidates = self.plan_candidates(
+        let mut candidates = self.plan_candidates(
             registry,
-            effective,
+            scored,
             pool_name.as_str(),
             election_tier,
             routing.strategy,
             routing.failover,
             routing.max_attempts,
             pool_name.clone(),
-            required_capabilities,
-            false, // capability filtering already applied above
+            &request_capabilities,
+            false,
             false,
         )?;
-
-        // Mark the selected candidate.
-        if let Some(first) = candidates.first() {
-            if let Some(d) = decisions.iter_mut().find(|d| d.model_id == first.exposed_id) {
-                d.eligible = true;
-                d.rejection = None;
+        let mut remediation_capabilities = requirements.required_capabilities.clone();
+        remediation_capabilities.extend_from_slice(&request_capabilities);
+        let remediation_capabilities = canonical_capabilities(&remediation_capabilities);
+        for candidate in &mut candidates {
+            if self.capability_remediation_allowed(
+                registry,
+                &candidate.entry,
+                &remediation_capabilities,
+            ) {
+                // A documented remediation result is not a capability pass;
+                // retain it only with an observable degraded marker.
+                candidate.degraded = true;
             }
         }
 
-        // Determine the reason.
         let reason = if let Resolution::Direct(_) = resolution {
             DecisionReason::Direct
         } else if !fallback_chain.is_empty() {
@@ -367,31 +449,35 @@ impl Router {
         };
 
         let policy_revision = PolicyRevision {
-            policy_id: String::new(), // filled by caller
-            policy_enabled: true,     // filled by caller
-            requirements_hash: hash_to_u64(requirements),
+            policy_id: String::new(),
+            policy_enabled: true,
+            // Include the request-derived vector so a trace cannot be replayed
+            // against a different capability contract under the same policy.
+            requirements_hash: hash_to_u64(&(
+                requirements,
+                request_capabilities.as_slice(),
+            )),
             preference_hash: hash_to_u64(preference),
         };
+
+        let mut task_summary = task
+            .map(TaskProfileSummary::from)
+            .unwrap_or_default();
+        for capability in &request_capabilities {
+            let label = capability_label(*capability).to_string();
+            if !task_summary.required_capabilities.contains(&label) {
+                task_summary.required_capabilities.push(label);
+            }
+        }
 
         let decision = RouteDecision {
             decision_id: format!("dec-{}", uuid::Uuid::new_v4().simple()),
             timestamp: chrono::Utc::now().timestamp(),
-            task: task
-                .map(TaskProfileSummary::from)
-                .unwrap_or_else(|| TaskProfileSummary {
-                    complexity: String::new(),
-                    task_type: String::new(),
-                    context_tokens: 0,
-                    estimated_output_tokens: 0,
-                    streaming: false,
-                    has_tools: false,
-                    has_vision: false,
-                    required_capabilities: Vec::new(),
-                }),
-            policy_id: String::new(), // filled by caller
-            client_id: None,          // filled by caller
+            task: task_summary,
+            policy_id: String::new(),
+            client_id: None,
             candidates: decisions,
-            selected: candidates.first().map(|c| c.exposed_id.clone()),
+            selected: candidates.first().map(|candidate| candidate.exposed_id.clone()),
             fallback_chain,
             reason,
             policy_revision,
@@ -400,7 +486,39 @@ impl Router {
         Ok((candidates, decision))
     }
 
-    /// Filter members through policy requirements eligibility check.
+    fn capability_remediation_allowed(
+        &self,
+        registry: &Registry,
+        member: &ModelEntry,
+        required_capabilities: &[Capability],
+    ) -> bool {
+        if required_capabilities.is_empty() {
+            return false;
+        }
+        let config = registry.config();
+        let vision_remediation = config.vision.enabled
+            || (config.routing.rectifier.enabled && config.routing.rectifier.media_fallback);
+        required_capabilities.iter().all(|capability| {
+            match member.capabilities.capability_state(*capability) {
+                crate::ir::CapabilityState::Supported => true,
+                crate::ir::CapabilityState::Unknown => {
+                    *capability == Capability::Vision && vision_remediation
+                }
+                crate::ir::CapabilityState::Unsupported => false,
+            }
+        })
+    }
+
+    fn request_capability_remediation_allowed(
+        &self,
+        registry: &Registry,
+        member: &ModelEntry,
+        request_capabilities: &[Capability],
+    ) -> bool {
+        self.capability_remediation_allowed(registry, member, request_capabilities)
+    }
+
+    /// Filter members through the combined policy/request eligibility check.
     ///
     /// Uses a read-only health check (`is_circuit_open`) to avoid consuming
     /// half-open permits, which would be a side effect during eligibility
@@ -408,64 +526,143 @@ impl Router {
     /// of send.
     fn filter_eligible<'a>(
         &self,
+        registry: &Registry,
         members: &[&'a ModelEntry],
         requirements: &PolicyRequirements,
+        request_capabilities: &[Capability],
     ) -> Vec<&'a ModelEntry> {
-        members
-            .iter()
-            .copied()
-            .filter(|m| {
-                let circuit_open = self.is_circuit_open(&m.exposed_id());
-                let check = requirements.check(
-                    &m.exposed_id(),
-                    &m.provider_id,
-                    m.tier,
-                    &m.capabilities,
-                    circuit_open,
-                );
-                check.eligible
-            })
-            .collect()
+        let mut hard = Vec::new();
+        let mut remediated = Vec::new();
+        let mut remediation_capabilities = requirements.required_capabilities.clone();
+        remediation_capabilities.extend_from_slice(request_capabilities);
+        let remediation_capabilities = canonical_capabilities(&remediation_capabilities);
+
+        for member in members {
+            let circuit_open = self.is_circuit_open(&member.exposed_id());
+            let check = requirements.check_with_request_capabilities(
+                &member.exposed_id(),
+                &member.provider_id,
+                member.tier,
+                &member.capabilities,
+                circuit_open,
+                request_capabilities,
+            );
+            if check.eligible {
+                hard.push(*member);
+            } else if check.reasons.iter().all(|reason| {
+                matches!(reason, crate::policy::RejectionReason::UnknownCapability(_))
+            }) && self.capability_remediation_allowed(
+                registry,
+                member,
+                &remediation_capabilities,
+            ) {
+                remediated.push(*member);
+            }
+        }
+
+        // Never prefer a degraded remediation candidate while a hard-eligible
+        // candidate exists in the same pool.
+        if hard.is_empty() {
+            remediated
+        } else {
+            hard
+        }
+    }
+
+    fn push_candidate_decision(
+        &self,
+        decisions: &mut Vec<CandidateDecision>,
+        member: &ModelEntry,
+        requirements: &PolicyRequirements,
+        request_capabilities: &[Capability],
+    ) {
+        let circuit_open = self.is_circuit_open(&member.exposed_id());
+        let check = requirements.check_with_request_capabilities(
+            &member.exposed_id(),
+            &member.provider_id,
+            member.tier,
+            &member.capabilities,
+            circuit_open,
+            request_capabilities,
+        );
+        let rejection = (!check.eligible).then(|| {
+            crate::policy::bounded_trace_text(&check.reason_strings().join(", "))
+        });
+        decisions.push(CandidateDecision {
+            model_id: member.exposed_id(),
+            provider_id: member.provider_id.clone(),
+            tier: member.tier.map(|tier| tier.as_str().to_string()),
+            eligible: check.eligible,
+            rejection,
+            score: None,
+            final_score: None,
+        });
+    }
+
+    fn push_seen_decisions(
+        &self,
+        decisions: &mut Vec<CandidateDecision>,
+        seen: &[&ModelEntry],
+        requirements: &PolicyRequirements,
+        request_capabilities: &[Capability],
+    ) {
+        for member in seen {
+            if decisions
+                .iter()
+                .any(|decision| decision.model_id == member.exposed_id())
+            {
+                continue;
+            }
+            self.push_candidate_decision(
+                decisions,
+                member,
+                requirements,
+                request_capabilities,
+            );
+        }
     }
 
     /// Try escalating or degrading through tiers until eligible candidates are found.
     ///
     /// `up` = true means escalate (higher tiers), false means degrade (lower tiers).
-    ///
-    /// Returns the filtered candidates AND the tier they were found in.
+    /// The returned `seen` pool is retained so the caller can publish rejected
+    /// evidence for every tier it inspected, not only the successful tier.
     fn fallback_tier<'a>(
         &'a self,
         registry: &'a Registry,
         requirements: &PolicyRequirements,
         resolution: &Resolution,
+        request_capabilities: &[Capability],
         max_steps: u32,
         up: bool,
-    ) -> Result<(Vec<&'a ModelEntry>, ModelTier)> {
-        // Determine the starting tier.
+    ) -> Result<(Vec<&'a ModelEntry>, ModelTier, Vec<&'a ModelEntry>)> {
         let start_tier = match resolution {
             Resolution::Tier(tier) => *tier,
-            Resolution::Direct(_) => {
-                // Direct resolution: cannot escalate/degrade across tiers.
-                let name = match resolution {
-                    Resolution::Direct(id) => id.clone(),
-                    _ => unreachable!(),
-                };
-                return Err(Error::NoCandidate(name));
-            }
+            Resolution::Direct(id) => return Err(Error::NoCandidate(id.clone())),
         };
 
         let mut current = start_tier;
+        let mut seen: Vec<&ModelEntry> = Vec::new();
         for _ in 0..max_steps {
-            let next = if up { current.higher() } else { current.lower() };
-            match next {
-                Some(tier) => current = tier,
-                None => break, // No more tiers in this direction.
-            }
+            let Some(next) = (if up { current.higher() } else { current.lower() }) else {
+                break;
+            };
+            current = next;
             let members = registry.tier_members(current);
+            for member in &members {
+                if !seen.iter().any(|entry| entry.exposed_id() == member.exposed_id()) {
+                    seen.push(*member);
+                }
+            }
             if members.is_empty() {
                 continue;
             }
-            let filtered = self.filter_eligible(&members, requirements);
+            let filtered = self.filter_eligible(
+                registry,
+                &members,
+                requirements,
+                request_capabilities,
+            );
             if !filtered.is_empty() {
                 tracing::info!(
                     from = %start_tier.virtual_id(),
@@ -473,14 +670,11 @@ impl Router {
                     candidates = filtered.len(),
                     "fallback tier found eligible candidates"
                 );
-                return Ok((filtered, current));
+                return Ok((filtered, current, seen));
             }
         }
 
-        let name = match resolution {
-            Resolution::Direct(id) => id.clone(),
-            Resolution::Tier(tier) => tier.virtual_id().to_string(),
-        };
+        let name = resolution_name(resolution);
         tracing::warn!(
             pool = %name,
             direction = if up { "escalate" } else { "degrade" },
@@ -623,7 +817,7 @@ impl Router {
         tier: ModelTier,
         routing: &RoutingConfig,
         required_capabilities: &[Capability],
-        capability_filter: bool,
+        _capability_filter: bool,
     ) -> Result<Vec<Candidate>> {
         let members = registry.tier_members(tier);
         if members.is_empty() {
@@ -638,9 +832,11 @@ impl Router {
             routing.failover,
             routing.max_attempts,
             tier.virtual_id().to_string(),
-            required_capabilities,
-            capability_filter,
-            routing.strict_capability_filter,
+            &canonical_capabilities(required_capabilities),
+            // Request-derived capabilities are always filtered below. These
+            // legacy flags remain parameters for API/internal compatibility.
+            true,
+            true,
         )
     }
 
@@ -668,40 +864,44 @@ impl Router {
         max_attempts: u32,
         pool_name: String,
         required_capabilities: &[Capability],
-        capability_filter: bool,
-        strict: bool,
+        _capability_filter: bool,
+        _strict: bool,
     ) -> Result<Vec<Candidate>> {
-        // Capability filtering: exclude models whose declared capabilities
-        // don't satisfy the request's requirements.  When `strict` is false,
-        // fall back to the unfiltered list so the request is not rejected just
-        // because no model declares every capability.  When `strict` is true,
-        // return an error so that requests with unsatisfiable capability
-        // requirements fail fast instead of being routed to a model that
-        // cannot handle them.
-        let members = if capability_filter && !required_capabilities.is_empty() {
-            let filtered: Vec<&ModelEntry> = members
+        // Request-derived capabilities are a hard gate. The old configuration
+        // switches are retained in this private signature for compatibility,
+        // but they cannot turn an unknown or unsupported capability into a
+        // pass and cannot reinsert the unfiltered pool.
+        let members = if !required_capabilities.is_empty() {
+            let supported: Vec<&ModelEntry> = members
                 .iter()
                 .copied()
-                .filter(|m| satisfies_capabilities(m, required_capabilities))
+                .filter(|member| satisfies_capabilities(member, required_capabilities))
                 .collect();
-            if filtered.is_empty() {
-                if strict {
+            let filtered = if supported.is_empty() {
+                let remediated: Vec<&ModelEntry> = members
+                    .iter()
+                    .copied()
+                    .filter(|member| {
+                        self.request_capability_remediation_allowed(
+                            registry,
+                            member,
+                            required_capabilities,
+                        )
+                    })
+                    .collect();
+                if remediated.is_empty() {
                     tracing::warn!(
                         required = ?required_capabilities,
                         pool = %pool_name,
-                        "no candidate satisfies required capabilities; strict mode rejects"
+                        "no candidate satisfies hard request capabilities"
                     );
                     return Err(Error::NoCandidate(pool_name));
                 }
-                tracing::warn!(
-                    required = ?required_capabilities,
-                    pool = %pool_name,
-                    "no candidate satisfies required capabilities; falling back to unfiltered list"
-                );
-                members
+                remediated
             } else {
-                filtered
-            }
+                supported
+            };
+            filtered
         } else {
             members
         };
@@ -749,7 +949,12 @@ impl Router {
         let mut out = Vec::new();
         for entry in ordered.into_iter().take(limit) {
             let provider = registry.provider_of(entry)?;
-            let degraded = degraded_ids.contains(&entry.exposed_id());
+            let degraded = degraded_ids.contains(&entry.exposed_id())
+                || self.request_capability_remediation_allowed(
+                    registry,
+                    entry,
+                    required_capabilities,
+                );
             out.push(Candidate::new(entry, provider, degraded));
         }
         if out.is_empty() {
@@ -917,6 +1122,112 @@ impl Router {
             .unwrap_or(0.0)
     }
 
+    /// Whether the canonical failure allows another attempt on the same
+    /// candidate.
+    pub fn should_retry_failure(&self, failure: &ClassifiedFailure) -> bool {
+        failure.retryable()
+    }
+
+    /// Whether the canonical failure allows trying a different candidate.
+    pub fn should_fallback_failure(&self, failure: &ClassifiedFailure) -> bool {
+        failure.fallbackable()
+    }
+
+    /// Convert the canonical impact table into the router's bounded attempt
+    /// disposition. This is an adapter, not a second classifier.
+    pub fn failure_disposition(&self, failure: &ClassifiedFailure) -> FailureDisposition {
+        if failure.retryable() {
+            FailureDisposition::Retry
+        } else if failure.fallbackable() {
+            FailureDisposition::Fallback
+        } else {
+            FailureDisposition::Stop
+        }
+    }
+
+    /// Apply a canonical classified failure to the legacy health/circuit view.
+    ///
+    /// Observation and circuit accounting intentionally use separate impact
+    /// bits. For example, a rate limit degrades observations but must not open
+    /// the circuit; missing keys and local configuration failures do neither.
+    pub fn report_classified_failure(
+        &self,
+        model_id: &str,
+        failure: &ClassifiedFailure,
+        routing: &RoutingConfig,
+    ) {
+        self.update_classified_health(model_id, failure, routing, None);
+    }
+
+    fn update_classified_health(
+        &self,
+        model_id: &str,
+        failure: &ClassifiedFailure,
+        routing: &RoutingConfig,
+        safe_message: Option<String>,
+    ) {
+        if !failure.affects_observation() && !failure.affects_circuit() {
+            return;
+        }
+        let mut health = crate::sync::lock(&self.health);
+        let h = health
+            .entry(model_id.to_string())
+            .or_insert_with(|| HealthState::new(routing.circuit_breaker.clone()));
+        if failure.affects_circuit() {
+            h.breaker.record_failure();
+        }
+        if failure.affects_observation() || failure.affects_circuit() {
+            h.total_failure += 1;
+        }
+        // Store only a fixed classification token for a caller-supplied
+        // ClassifiedFailure. The legacy Error wrapper may provide its already
+        // redacted `safe_message` explicitly below.
+        h.last_error = Some(safe_message.unwrap_or_else(|| classification_trace_label(failure)));
+    }
+
+    /// Apply one canonical classified attempt to both router health views.
+    /// This is the preferred adapter for a caller that has a provider id and
+    /// owns the complete attempt result; it avoids separate classifiers and
+    /// keeps circuit, observation, and stats decisions on one impact table.
+    pub fn record_classified_attempt(
+        &self,
+        model_id: &str,
+        provider_id: &str,
+        failure: &ClassifiedFailure,
+        routing: &RoutingConfig,
+    ) {
+        self.report_classified_failure(model_id, failure, routing);
+        self.record_classified_failure(model_id, provider_id, failure);
+    }
+
+    /// Alias for [`Self::record_classified_attempt`] used by report-oriented
+    /// adapters.
+    pub fn report_classified_attempt(
+        &self,
+        model_id: &str,
+        provider_id: &str,
+        failure: &ClassifiedFailure,
+        routing: &RoutingConfig,
+    ) {
+        self.record_classified_attempt(model_id, provider_id, failure, routing);
+    }
+
+    /// Record a canonical failure in observation/statistics stores without
+    /// touching the legacy circuit breaker. The caller can pair this with
+    /// [`Self::report_classified_failure`] when it owns both health views.
+    pub fn record_classified_failure(
+        &self,
+        model_id: &str,
+        provider_id: &str,
+        failure: &ClassifiedFailure,
+    ) {
+        if failure.affects_observation() {
+            self.observations.record_failure(model_id, provider_id);
+        }
+        self.stats_store
+            .record_classified_failure(model_id, provider_id, failure.class);
+    }
+
     pub fn report_success(&self, model_id: &str, latency_ms: u64, routing: &RoutingConfig) {
         let mut health = crate::sync::lock(&self.health);
         let h = health
@@ -933,18 +1244,15 @@ impl Router {
     }
 
     pub fn report_failure(&self, model_id: &str, error: &Error, routing: &RoutingConfig) {
-        if !error.counts_against_health() {
-            return;
-        }
-        let mut health = crate::sync::lock(&self.health);
-        let h = health
-            .entry(model_id.to_string())
-            .or_insert_with(|| HealthState::new(routing.circuit_breaker.clone()));
-        h.breaker.record_failure();
-        h.total_failure += 1;
-        // The GUI shows this string in the health table; the unredacted body
-        // stays in the log where it belongs.
-        h.last_error = Some(error.safe_message());
+        // Keep the legacy Error-shaped API, but make the canonical classified
+        // result the sole input to every health decision.
+        let failure = error.classified();
+        self.update_classified_health(
+            model_id,
+            &failure,
+            routing,
+            Some(error.safe_message()),
+        );
     }
 
     /// Whether a request may actually be sent to this model.
@@ -1014,13 +1322,30 @@ impl Router {
             self.stats_store
                 .record_success(model_id, provider_id, latency_ms, ttft_ms);
         } else if let Some(class) = failure_class {
-            let impact = class.impact();
-            if impact.affects_observation {
-                self.observations.record_failure(model_id, provider_id);
-            }
-            self.stats_store
-                .record_classified_failure(model_id, provider_id, class);
+            // Compatibility shape for existing pipeline callers. The class is
+            // already canonical; constructing the envelope here avoids a
+            // second status/body classifier while routing the actual impact
+            // through the same adapter as `ClassifiedFailure` callers.
+            let failure = ClassifiedFailure {
+                class,
+                status: None,
+                message: String::new(),
+                impact: class.impact(),
+            };
+            self.record_classified_failure(model_id, provider_id, &failure);
         }
+    }
+
+    /// Canonical-failure variant for callers that already performed structural
+    /// classification. It intentionally shares the same observation/statistics
+    /// path as the legacy class-shaped compatibility method above.
+    pub fn record_classified_failure_outcome(
+        &self,
+        model_id: &str,
+        provider_id: &str,
+        failure: &ClassifiedFailure,
+    ) {
+        self.record_classified_failure(model_id, provider_id, failure);
     }
 
     /// Clear circuit breaker state for one model (GUI "retry now").
@@ -1085,6 +1410,21 @@ impl Router {
     }
 }
 
+fn resolution_name(resolution: &Resolution) -> String {
+    match resolution {
+        Resolution::Direct(id) => id.clone(),
+        Resolution::Tier(tier) => tier.virtual_id().to_string(),
+    }
+}
+
+fn classification_trace_label(failure: &ClassifiedFailure) -> String {
+    let class = format!("{:?}", failure.class).to_lowercase();
+    match failure.status {
+        Some(status) => format!("{class}:{status}"),
+        None => class,
+    }
+}
+
 /// Priority order with a stable tiebreak, shared by the `Priority` strategy and
 /// by `Balanced` when no election has been held (or the pool has no tier).
 fn by_priority<'a>(members: &[&'a ModelEntry]) -> Vec<&'a ModelEntry> {
@@ -1099,10 +1439,13 @@ fn by_priority<'a>(members: &[&'a ModelEntry]) -> Vec<&'a ModelEntry> {
 
 /// Check if a model's capabilities satisfy the request's requirements.
 ///
-/// Every listed capability must be present on the model. With a typed enum,
-/// there are no unknown capabilities — every variant is known.
+/// A boolean capability declaration is tri-state at the policy boundary: true
+/// is `Supported`, while false is `Unknown`, never an implicit pass.
 fn satisfies_capabilities(model: &ModelEntry, required: &[Capability]) -> bool {
-    required.iter().all(|cap| model.capabilities.supports(*cap))
+    required.iter().all(|capability| {
+        model.capabilities.capability_state(*capability)
+            == crate::ir::CapabilityState::Supported
+    })
 }
 
 #[cfg(test)]
@@ -1615,22 +1958,22 @@ mod tests {
     // ---------------------------------------- capability filter (strict/soft)
 
     #[test]
-    fn soft_fallback_keeps_unfiltered_candidates_when_none_match() {
-        // Both models lack vision; the request requires vision.
-        // With strict=false (default), the soft fallback kicks in and both
-        // are kept.
-        let cfg = cfg_with(vec![
+    fn request_capability_filter_is_fail_closed_when_none_match() {
+        // Both models lack vision; a request-derived vision requirement must
+        // not be softened back into the unfiltered pool.
+        let mut cfg = cfg_with(vec![
             ModelEntry::for_upstream("p1", "text-only", Some(ModelTier::Standard))
                 .with_priority(0),
             ModelEntry::for_upstream("p2", "also-text", Some(ModelTier::Standard))
                 .with_priority(1),
         ]);
+        cfg.routing.rectifier.enabled = false;
         let r = reg(cfg);
         let router = Router::new();
-        let plan = router
+        let err = router
             .plan(&r, &Resolution::Tier(ModelTier::Standard), &[Capability::Vision])
-            .unwrap();
-        assert_eq!(ids(&plan), vec!["p1-text-only", "p2-also-text"]);
+            .unwrap_err();
+        assert!(matches!(err, Error::NoCandidate(_)));
     }
 
     #[test]
@@ -1640,6 +1983,7 @@ mod tests {
             ModelEntry::for_upstream("p2", "also-text", Some(ModelTier::Standard)),
         ]);
         cfg.routing.strict_capability_filter = true;
+        cfg.routing.rectifier.enabled = false;
         let r = reg(cfg);
         let router = Router::new();
         let err = router
@@ -1658,6 +2002,7 @@ mod tests {
         ]);
         cfg.models[0].capabilities.vision = true;
         cfg.routing.strict_capability_filter = true;
+        cfg.routing.rectifier.enabled = false;
         let r = reg(cfg);
         let router = Router::new();
         let plan = router
@@ -1674,6 +2019,7 @@ mod tests {
         ]);
         cfg.models[0].capabilities.vision = true;
         cfg.routing.strict_capability_filter = true;
+        cfg.routing.rectifier.enabled = false;
         let r = reg(cfg);
         let router = Router::new();
         let plan = router
@@ -1699,20 +2045,21 @@ mod tests {
     }
 
     #[test]
-    fn capability_filter_disabled_ignores_requirements() {
+    fn request_capability_filter_cannot_be_disabled_by_legacy_config() {
         let mut cfg = cfg_with(vec![
             ModelEntry::for_upstream("p1", "a", Some(ModelTier::Standard)),
             ModelEntry::for_upstream("p2", "b", Some(ModelTier::Standard)),
         ]);
-        // capability_filter defaults to true, but let's explicitly disable it.
+        // The legacy switch remains readable for compatibility, but request
+        // capabilities are a hard Core input and are still enforced.
         cfg.routing.capability_filter = false;
+        cfg.routing.rectifier.enabled = false;
         let r = reg(cfg);
         let router = Router::new();
-        let plan = router
+        let err = router
             .plan(&r, &Resolution::Tier(ModelTier::Standard), &[Capability::Vision])
-            .unwrap();
-        // Both candidates survive: the filter is off.
-        assert_eq!(plan.len(), 2);
+            .unwrap_err();
+        assert!(matches!(err, Error::NoCandidate(_)));
     }
 
     // ------------------------------------------------ observation-aware scoring

@@ -19,6 +19,93 @@ use serde::{Deserialize, Serialize};
 use crate::config::{ModelCapabilities, ModelTier};
 use crate::ir::{Capability, CapabilityState, ChatRequest};
 
+/// Return a stable, duplicate-free capability vector.
+///
+/// Request derivation already emits this order, but policy and router entry
+/// points are public APIs and can be called with hand-built vectors. Keeping
+/// the normalization here makes every eligibility decision deterministic
+/// without introducing a second capability classifier.
+pub fn canonical_capabilities(capabilities: &[Capability]) -> Vec<Capability> {
+    Capability::ALL
+        .into_iter()
+        .filter(|capability| capabilities.contains(capability))
+        .collect()
+}
+
+/// A short, stable label for a capability used in decision evidence.
+pub fn capability_label(capability: Capability) -> &'static str {
+    match capability {
+        Capability::Vision => "vision",
+        Capability::Audio => "audio",
+        Capability::Video => "video",
+        Capability::Files => "files",
+        Capability::Tools => "tools",
+        Capability::Thinking => "thinking",
+        Capability::StructuredOutput => "structured_output",
+    }
+}
+
+/// Bound and normalize a trace fragment supplied by an adapter.
+///
+/// Eligibility evidence must never become a channel for provider response
+/// bodies, request content, or other unbounded diagnostic text. This helper is
+/// intentionally small and deterministic; policy reasons themselves use fixed
+/// labels, while this protects compatibility adapters that pass a short reason
+/// supplied by a caller.
+pub(crate) fn bounded_trace_text(value: &str) -> String {
+    const MAX_TRACE_CHARS: usize = 128;
+    let mut out = String::new();
+    for raw_token in value.split(',') {
+        let token = raw_token.trim();
+        if token.is_empty() {
+            continue;
+        }
+        let safe_token = if is_known_trace_token(token) {
+            token.to_string()
+        } else {
+            "redacted".to_string()
+        };
+        if !out.is_empty() {
+            out.push_str(", ");
+        }
+        if out.len() + safe_token.len() > MAX_TRACE_CHARS {
+            break;
+        }
+        out.push_str(&safe_token);
+    }
+    if out.is_empty() {
+        "redacted".to_string()
+    } else {
+        out
+    }
+}
+
+fn is_known_trace_token(token: &str) -> bool {
+    if matches!(
+        token,
+        "eligible"
+            | "below_min_tier"
+            | "above_max_tier"
+            | "unknown_tier"
+            | "provider_forbidden"
+            | "provider_not_allowed"
+            | "model_forbidden"
+            | "model_not_allowed"
+            | "circuit_open"
+    ) {
+        return true;
+    }
+    ["missing_capability:", "unknown_capability:"]
+        .iter()
+        .any(|prefix| {
+            token.strip_prefix(prefix).is_some_and(|capability| {
+                Capability::ALL
+                    .into_iter()
+                    .any(|known| capability_label(known) == capability)
+            })
+        })
+}
+
 // ----------------------------------------------------------- Profile
 
 /// Task complexity level, derived from request characteristics.
@@ -171,9 +258,9 @@ pub struct PolicyRequirements {
     /// Candidates must support all of these capabilities.
     #[serde(default)]
     pub required_capabilities: Vec<Capability>,
-    /// When `true`, candidates with [`CapabilityState::Unknown`] for a
-    /// required capability are rejected. When `false`, unknown capabilities
-    /// are treated as a soft fallback (the candidate is still eligible).
+    /// Retained as a compatibility/reason-shaping switch. Unknown provider
+    /// capability is never a pass; the strict setting only preserves the
+    /// historical `MissingCapability` reason token for policy-only checks.
     #[serde(default)]
     pub strict_capabilities: bool,
     /// Minimum tier (candidate tier must be >= this).
@@ -345,16 +432,20 @@ impl PolicyMatcher {
 // -------------------------------------------------------- Eligibility
 
 /// Result of checking a candidate against policy requirements.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EligibilityCheck {
     pub eligible: bool,
     pub reasons: Vec<RejectionReason>,
 }
 
 /// Why a candidate was rejected.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum RejectionReason {
+    /// The provider explicitly declared the capability unsupported.
     MissingCapability(Capability),
+    /// The provider has not declared the capability. This is never a pass for
+    /// a request-derived requirement.
+    UnknownCapability(Capability),
     BelowMinTier,
     AboveMaxTier,
     /// Candidate has no tier assigned but policy requires tier bounds.
@@ -366,13 +457,28 @@ pub enum RejectionReason {
     CircuitOpen,
 }
 
+impl EligibilityCheck {
+    /// Return fixed, bounded reason tokens for serialization into a trace.
+    pub fn reason_strings(&self) -> Vec<String> {
+        self.reasons.iter().map(ToString::to_string).collect()
+    }
+
+    /// Whether the check contains an unknown request capability.
+    pub fn has_unknown_capability(&self) -> bool {
+        self.reasons
+            .iter()
+            .any(|reason| matches!(reason, RejectionReason::UnknownCapability(_)))
+    }
+}
+
 impl std::fmt::Display for RejectionReason {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             RejectionReason::MissingCapability(cap) => {
-                // Produce "missing_capability:vision" style strings.
-                let name = format!("{:?}", cap).to_lowercase();
-                write!(f, "missing_capability:{}", name)
+                write!(f, "missing_capability:{}", capability_label(*cap))
+            }
+            RejectionReason::UnknownCapability(cap) => {
+                write!(f, "unknown_capability:{}", capability_label(*cap))
             }
             RejectionReason::BelowMinTier => write!(f, "below_min_tier"),
             RejectionReason::AboveMaxTier => write!(f, "above_max_tier"),
@@ -387,7 +493,12 @@ impl std::fmt::Display for RejectionReason {
 }
 
 impl PolicyRequirements {
-    /// Check whether a candidate satisfies all hard constraints.
+    /// Check whether a candidate satisfies the configured policy constraints.
+    ///
+    /// This compatibility entry point preserves the historical reason shape
+    /// for policy-only checks. Request-derived requirements should use
+    /// [`Self::check_with_request_capabilities`], which also gives unknown
+    /// capabilities their explicit trace reason.
     pub fn check(
         &self,
         model_id: &str,
@@ -396,20 +507,102 @@ impl PolicyRequirements {
         capabilities: &ModelCapabilities,
         circuit_open: bool,
     ) -> EligibilityCheck {
+        self.check_internal(
+            model_id,
+            provider_id,
+            tier,
+            capabilities,
+            circuit_open,
+            &[],
+        )
+    }
+
+    /// Check policy constraints plus hard request-derived capabilities.
+    ///
+    /// `request_capabilities` is never softened by `strict_capabilities` or by
+    /// a policy fallback. Both policy and request vectors are normalized to the
+    /// canonical capability order before reasons are emitted.
+    pub fn check_with_request_capabilities(
+        &self,
+        model_id: &str,
+        provider_id: &str,
+        tier: Option<ModelTier>,
+        capabilities: &ModelCapabilities,
+        circuit_open: bool,
+        request_capabilities: &[Capability],
+    ) -> EligibilityCheck {
+        self.check_internal(
+            model_id,
+            provider_id,
+            tier,
+            capabilities,
+            circuit_open,
+            request_capabilities,
+        )
+    }
+
+    /// Check only the hard request capability contract.
+    pub fn check_request_capabilities(
+        model_id: &str,
+        provider_id: &str,
+        tier: Option<ModelTier>,
+        capabilities: &ModelCapabilities,
+        circuit_open: bool,
+        request_capabilities: &[Capability],
+    ) -> EligibilityCheck {
+        PolicyRequirements::default().check_with_request_capabilities(
+            model_id,
+            provider_id,
+            tier,
+            capabilities,
+            circuit_open,
+            request_capabilities,
+        )
+    }
+
+    fn check_internal(
+        &self,
+        model_id: &str,
+        provider_id: &str,
+        tier: Option<ModelTier>,
+        capabilities: &ModelCapabilities,
+        circuit_open: bool,
+        request_capabilities: &[Capability],
+    ) -> EligibilityCheck {
+        let policy_capabilities = canonical_capabilities(&self.required_capabilities);
+        let request_capabilities = canonical_capabilities(request_capabilities);
         let mut reasons = Vec::new();
 
-        // Capability check using tri-state capability_state()
-        for cap in &self.required_capabilities {
-            match capabilities.capability_state(*cap) {
-                CapabilityState::Supported => {} // eligible
+        // Capability checks use the accepted tri-state provider contract. A
+        // request-derived requirement is always strict; policy-only unknown
+        // capabilities are also fail-closed, with the legacy switch retained
+        // only to preserve the historical reason shape.
+        for capability in Capability::ALL {
+            let required_by_request = request_capabilities.contains(&capability);
+            let required_by_policy = policy_capabilities.contains(&capability);
+            if !required_by_request && !required_by_policy {
+                continue;
+            }
+
+            match capabilities.capability_state(capability) {
+                CapabilityState::Supported => {}
                 CapabilityState::Unsupported => {
-                    reasons.push(RejectionReason::MissingCapability(*cap));
+                    reasons.push(RejectionReason::MissingCapability(capability));
+                }
+                CapabilityState::Unknown if required_by_request => {
+                    reasons.push(RejectionReason::UnknownCapability(capability));
+                }
+                CapabilityState::Unknown if self.strict_capabilities => {
+                    // Preserve the original strict-policy reason shape for
+                    // compatibility with callers of `check`.
+                    reasons.push(RejectionReason::MissingCapability(capability));
                 }
                 CapabilityState::Unknown => {
-                    if self.strict_capabilities {
-                        reasons.push(RejectionReason::MissingCapability(*cap));
-                    }
-                    // When not strict, unknown = soft fallback (eligible)
+                    // A policy-only soft setting cannot turn an unknown
+                    // provider capability into a pass. A caller that has a
+                    // documented remediation must represent it at the router
+                    // boundary and mark the resulting candidate degraded.
+                    reasons.push(RejectionReason::UnknownCapability(capability));
                 }
             }
         }
@@ -436,7 +629,7 @@ impl PolicyRequirements {
             }
         }
 
-        // Provider constraints
+        // Provider constraints.
         if !self.allowed_providers.is_empty()
             && !self.allowed_providers.iter().any(|p| p == provider_id)
         {
@@ -450,7 +643,7 @@ impl PolicyRequirements {
             reasons.push(RejectionReason::ProviderForbidden);
         }
 
-        // Model constraints
+        // Model constraints.
         if !self.allowed_models.is_empty()
             && !self.allowed_models.iter().any(|m| m == model_id)
         {
@@ -464,7 +657,8 @@ impl PolicyRequirements {
             reasons.push(RejectionReason::ModelForbidden);
         }
 
-        // Circuit breaker
+        // Circuit state is a separate, deterministic rejection reason. It is
+        // not a capability fallback and must not be hidden by policy fallback.
         if circuit_open {
             reasons.push(RejectionReason::CircuitOpen);
         }
@@ -781,10 +975,10 @@ impl From<&TaskProfile> for TaskProfileSummary {
             streaming: p.streaming,
             has_tools: p.has_tools,
             has_vision: p.has_vision,
-            required_capabilities: p
-                .required_capabilities
-                .iter()
-                .map(|c| format!("{:?}", c).to_lowercase())
+            required_capabilities: canonical_capabilities(&p.required_capabilities)
+                .into_iter()
+                .map(capability_label)
+                .map(str::to_string)
                 .collect(),
         }
     }
@@ -802,6 +996,46 @@ pub struct CandidateDecision {
     /// Score breakdown (if eligible).
     pub score: Option<ScoreBreakdown>,
     pub final_score: Option<f64>,
+}
+
+impl CandidateDecision {
+    /// A bounded, deterministic reason token for this candidate.
+    ///
+    /// Eligible candidates use the fixed `eligible` token rather than leaving
+    /// evidence implicit; rejected candidates retain their fixed policy
+    /// reasons. No provider response body or request content is ever included.
+    pub fn trace_reason(&self) -> String {
+        self.rejection
+            .as_deref()
+            .map(bounded_trace_text)
+            .unwrap_or_else(|| "eligible".to_string())
+    }
+}
+
+/// The identity selected before any provider attempt is made.
+///
+/// This is deliberately separate from last-attempted and final-served
+/// identities. The latter belong to the later request lifecycle owner and are
+/// not inferred here.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct PlannedIdentity {
+    pub model_id: String,
+    pub provider_id: String,
+    pub tier: Option<String>,
+}
+
+impl PlannedIdentity {
+    pub fn new(
+        model_id: impl Into<String>,
+        provider_id: impl Into<String>,
+        tier: Option<String>,
+    ) -> Self {
+        Self {
+            model_id: model_id.into(),
+            provider_id: provider_id.into(),
+            tier,
+        }
+    }
 }
 
 /// Why a specific model was selected.
@@ -862,7 +1096,8 @@ pub struct RouteDecision {
     pub client_id: Option<String>,
     /// Per-candidate evaluation.
     pub candidates: Vec<CandidateDecision>,
-    /// The selected candidate (model id).
+    /// The selected candidate (model id). This is the initial planned
+    /// selection, before any runtime attempt or fallback.
     pub selected: Option<String>,
     /// Fallback chain: models tried before the final selection.
     pub fallback_chain: Vec<String>,
@@ -870,6 +1105,27 @@ pub struct RouteDecision {
     pub reason: DecisionReason,
     /// Identifies the exact policy/config version used.
     pub policy_revision: PolicyRevision,
+}
+
+impl RouteDecision {
+    /// Return the identity selected during planning, if it is present in the
+    /// candidate evidence. This is not a last-attempted or served identity.
+    pub fn planned_identity(&self) -> Option<PlannedIdentity> {
+        let selected = self.selected.as_deref()?;
+        self.candidates.iter().find(|candidate| {
+            candidate.model_id == selected
+        }).map(|candidate| PlannedIdentity::new(
+            candidate.model_id.clone(),
+            candidate.provider_id.clone(),
+            candidate.tier.clone(),
+        ))
+    }
+
+    /// Explicit alias for callers that need to document the lifecycle
+    /// boundary without changing the legacy `selected` field.
+    pub fn planned_selected(&self) -> Option<&str> {
+        self.selected.as_deref()
+    }
 }
 
 // ------------------------------------------------------------ Tests
@@ -938,9 +1194,10 @@ mod tests {
     }
 
     #[test]
-    fn capability_unknown_is_soft_fallback_when_not_strict() {
-        // With strict_capabilities = false (default), unknown capabilities
-        // are a soft fallback — the candidate remains eligible.
+    fn capability_unknown_is_not_a_policy_pass() {
+        // An undeclared provider capability is not support. Explicit
+        // remediation is represented by the router and marks a candidate
+        // degraded; the policy check itself remains fail-closed.
         let reqs = PolicyRequirements {
             required_capabilities: vec![Capability::Vision],
             strict_capabilities: false,
@@ -951,7 +1208,8 @@ mod tests {
             ..Default::default()
         };
         let check = reqs.check("m", "p", Some(ModelTier::Standard), &caps, false);
-        assert!(check.eligible, "unknown capability should be soft fallback");
+        assert!(!check.eligible);
+        assert!(check.has_unknown_capability());
     }
 
     #[test]
