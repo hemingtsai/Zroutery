@@ -22,13 +22,13 @@
     "No-double-accounting and Core full-gate validation"
   ],
   "blocked_by": [
-    "CORE-P1-MEDIA-REQ",
     "CORE-P1-ELIGIBILITY-TRACE",
     "CORE-P1-OUTCOME-FEEDBACK"
   ],
   "unblock_condition": "Accept all four domain nodes, then integrate only the production lifecycle seam without reopening accepted ML contracts.",
   "evidence": [
-    "E-043"
+    "E-043",
+    "E-051"
   ],
   "source_references": [
     "docs/development/decisions/0004-failure-outcome-authority.md",

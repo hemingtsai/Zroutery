@@ -154,8 +154,12 @@ separate gates.
 | E-046 | review, integration | Parent diff/API review of Agent commit `ac3842e` | FAIL; the public `ClassifiedFailure::from_error(String)` API was replaced by a structural-only generic signature; commit rejected pending compatibility repair | Failure classification logic itself was not rejected |
 | E-047 | local, integration | Follow-up `534fb45` cherry-picked to main as `4048a61`/`97efde6`; `cargo check --workspace`; `cargo test -p zroutery-core --all-features`; `cargo clippy -p zroutery-core --all-targets --all-features -- -D warnings`; `cargo test --workspace --features ml`; `cargo test --workspace --all-features`; `git diff --check` | PASS; 7 authority tests including API compatibility, Core all-feature, workspace ML/all-feature, and clippy gates passed | Runtime adapters in router/pipeline remain deferred to later nodes |
 | E-048 | documentation, integration | Parent JSON/DAG/path/status validation, `git diff --check`, and `python -B scripts/commit_contract_test.py --base c66072f341664f67c1cd1c761e5f5adf1980ce16 --head HEAD` after the failure-authority acceptance state update | PASS; 69 nodes, 107 edges, and all 25 non-merge commits valid | Re-run after every future status/DAG/ADR change |
+| E-049 | review, integration | Parent review of Agent follow-up `9e979e1`; 8 focused failure-authority tests, `cargo test -p zroutery-core --all-features`, Core clippy, workspace check, and allowed-file/diff checks | PASS; generic upstream 402/412 are `ProviderRejected`, while explicit local markers and structural `Error` variants retain local semantics | Runtime adapters remain deferred to later Core P1 nodes |
+| E-050 | local, integration | Parent review of Agent commit `d1a3416`; allowed-file/diff audit, focused media/protocol tests, Core all-feature tests, Core clippy, and workspace check | PASS; capability derivation, fail-closed protocol/media gates, explicit policy outcomes, and conservative virtual registry behavior validated | Router/policy eligibility and route evidence remain deferred to CORE-P1-ELIGIBILITY-TRACE |
+| E-051 | local, integration | Main integration at `74de4d0` after `e048480` and `74de4d0`; `cargo check --workspace`, Core all-feature tests, workspace ML/all-feature tests, workspace all-target/all-feature clippy, `pnpm smoke`, `pnpm test:layout`, `git diff --check`, and commit-contract range validation | PASS; Batch A code and existing runtime/UI gates remained green | Batch B and the sole pipeline integration are not yet accepted |
 
-Batch A is limited to `CORE-P1-MEDIA-REQ` and
-`CORE-P1-FAILURE-AUTHORITY`. `CORE-P1-ELIGIBILITY-TRACE` and
-`CORE-P1-OUTCOME-FEEDBACK` wait for Batch A acceptance;
-`CORE-P1-PIPELINE-LIFECYCLE` is serial and owns the production pipeline seam.
+Batch A is accepted: `CORE-P1-MEDIA-REQ` and
+`CORE-P1-FAILURE-AUTHORITY` are `DONE` on main. `CORE-P1-ELIGIBILITY-TRACE`
+and `CORE-P1-OUTCOME-FEEDBACK` are now `READY` for the next non-overlapping
+Batch B dispatch. `CORE-P1-PIPELINE-LIFECYCLE` remains serial and is the sole
+owner of the production pipeline seam.

@@ -2,8 +2,8 @@
   "schema_version": 1,
   "node_id": "CORE-P1-ELIGIBILITY-TRACE",
   "display_name": "CORE-P1-ELIGIBILITY-TRACE — request eligibility and planned identity",
-  "status": "QUEUED",
-  "implementation_state": "This router/policy domain repair is queued until the capability and failure-authority domain contracts are accepted.",
+  "status": "READY",
+  "implementation_state": "Batch A capability and failure-authority contracts are accepted; this router/policy domain repair is ready for bounded Batch B dispatch.",
   "dependencies": [
     "CORE-P1-MEDIA-REQ",
     "CORE-P1-FAILURE-AUTHORITY"
@@ -19,12 +19,11 @@
     "Router classified-attempt adapter",
     "Routing policy regression tests and clippy"
   ],
-  "blocked_by": [
-    "CORE-P1-MEDIA-REQ"
-  ],
-  "unblock_condition": "Accept Batch A domain contracts, then implement only policy.rs/router.rs and focused eligibility tests.",
+  "blocked_by": [],
+  "unblock_condition": "Dispatch Batch B and implement only policy.rs/router.rs plus focused eligibility tests; final served identity remains the pipeline owner's responsibility.",
   "evidence": [
-    "E-043"
+    "E-043",
+    "E-051"
   ],
   "source_references": [
     "docs/development/decisions/0003-capability-media-fail-closed.md",

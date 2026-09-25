@@ -2,8 +2,8 @@
   "schema_version": 1,
   "node_id": "CORE-P1-MEDIA-REQ",
   "display_name": "CORE-P1-MEDIA-REQ — capability and media fail-closed repair",
-  "status": "RUNNING",
-  "implementation_state": "A bounded Core domain repair is executing in an isolated worktree to make request-derived capabilities exhaustive and unknown content/media fail closed; no result is accepted yet.",
+  "status": "DONE",
+  "implementation_state": "The bounded capability/media fail-closed repair was independently reviewed, validated on main, and accepted; router/policy eligibility and canonical route evidence remain delegated to CORE-P1-ELIGIBILITY-TRACE.",
   "dependencies": [],
   "dependents": [
     "CORE-P1-ELIGIBILITY-TRACE",
@@ -18,9 +18,11 @@
     "Core clippy and diff check"
   ],
   "blocked_by": [],
-  "unblock_condition": "Implement and independently validate ADR-0003 without editing policy, router, pipeline, ML, provider, UI, or Tauri files.",
+  "unblock_condition": "Reopen if capability derivation, media policy, protocol fail-closed behavior, or virtual registry capability aggregation changes; downstream eligibility must consume the accepted contract.",
   "evidence": [
-    "E-043"
+    "E-043",
+    "E-050",
+    "E-051"
   ],
   "source_references": [
     "docs/development/decisions/0003-capability-media-fail-closed.md",
@@ -37,8 +39,8 @@
     "crates/zroutery-core/src/media/transform.rs"
   ],
   "notes": [
-    "Agent session ses_f284ed582ffer99iXqWbaJaauv is running on branch node/core-p1-media-req from c718942.",
-    "This node owns IR/config/registry/protocol/media files only; it must not edit server/pipeline.rs or any ML file.",
-    "Stage 2 remains FAILED until this node and the later Core integration gates are accepted."
+    "Accepted main commit: 74de4d0 (agent commit d1a3416).",
+    "The repair covers canonical/deduplicated Document, File, tool-result image, audio, video, tools, and thinking requirements; fail-closed unknown content; explicit media policy outcomes; and conservative virtual capability aggregation.",
+    "Router/policy eligibility and canonical route/rejection evidence remain deferred to CORE-P1-ELIGIBILITY-TRACE; no Core pipeline, ML, provider, UI, or Tauri files changed."
   ]
 }

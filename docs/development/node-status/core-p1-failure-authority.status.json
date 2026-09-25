@@ -23,7 +23,9 @@
   "evidence": [
     "E-043",
     "E-046",
-    "E-047"
+    "E-047",
+    "E-049",
+    "E-051"
   ],
   "source_references": [
     "docs/development/decisions/0004-failure-outcome-authority.md",
@@ -32,7 +34,7 @@
     "crates/zroutery-core/src/error.rs"
   ],
   "notes": [
-    "Accepted main commits: 4048a61 and 97efde6 (agent commits ac3842e and 534fb45; subjects normalized for the commit contract).",
+    "Accepted main commits: 4048a61, 97efde6, and e048480 (agent commits ac3842e, 534fb45, and 9e979e1; the follow-up adds ProviderRejected for generic 402/412).",
     "The first agent commit was rejected by parent review for replacing the public ClassifiedFailure::from_error(String) API; the follow-up preserves it and adds from_core_error for structural mapping.",
     "Error remains a structural/wire type; runtime decisions must consume the canonical classified result.",
     "This node does not wire the production pipeline or change ML contracts; router/pipeline runtime adapters remain deferred."

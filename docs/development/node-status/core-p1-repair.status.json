@@ -28,17 +28,19 @@
     "Core revalidation and workspace tests"
   ],
   "blocked_by": [
-    "CORE-P1-MEDIA-REQ",
     "CORE-P1-ELIGIBILITY-TRACE",
     "CORE-P1-OUTCOME-FEEDBACK",
     "CORE-P1-PIPELINE-LIFECYCLE"
   ],
-  "unblock_condition": "Accept CORE-P1-MEDIA-REQ and CORE-P1-FAILURE-AUTHORITY, then CORE-P1-ELIGIBILITY-TRACE and CORE-P1-OUTCOME-FEEDBACK, then the sole CORE-P1-PIPELINE-LIFECYCLE integration; rerun aggregate Core gates.",
+  "unblock_condition": "Accept the two Batch B domain nodes, then the sole CORE-P1-PIPELINE-LIFECYCLE integration; rerun aggregate Core gates and only then revalidate Stage 2/3/4/6.",
   "evidence": [
     "E-004",
     "E-005",
     "E-016",
-    "E-043"
+    "E-043",
+    "E-049",
+    "E-050",
+    "E-051"
   ],
   "source_references": [
     "docs/development/decisions/0003-capability-media-fail-closed.md",

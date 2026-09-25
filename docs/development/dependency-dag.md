@@ -60,10 +60,10 @@ failed node. Historical tags are not graph edges.
 | `OBSERVABILITY` | `READY` | none |
 | `CORE-P1-REPAIR` | `QUEUED` | `CORE-P1-MEDIA-REQ`, `CORE-P1-FAILURE-AUTHORITY`, `CORE-P1-ELIGIBILITY-TRACE`, `CORE-P1-OUTCOME-FEEDBACK`, `CORE-P1-PIPELINE-LIFECYCLE` |
 | `BASELINE-GATE` | `DONE` | `TEST-CLIPPY`, `TEST-SMOKE`, `TEST-LAYOUT-BROWSER` |
-| `CORE-P1-MEDIA-REQ` | `RUNNING` | none |
+| `CORE-P1-MEDIA-REQ` | `DONE` | none |
 | `CORE-P1-FAILURE-AUTHORITY` | `DONE` | none |
-| `CORE-P1-ELIGIBILITY-TRACE` | `QUEUED` | `CORE-P1-MEDIA-REQ`, `CORE-P1-FAILURE-AUTHORITY` |
-| `CORE-P1-OUTCOME-FEEDBACK` | `QUEUED` | `CORE-P1-FAILURE-AUTHORITY` |
+| `CORE-P1-ELIGIBILITY-TRACE` | `READY` | `CORE-P1-MEDIA-REQ`, `CORE-P1-FAILURE-AUTHORITY` |
+| `CORE-P1-OUTCOME-FEEDBACK` | `READY` | `CORE-P1-FAILURE-AUTHORITY` |
 | `CORE-P1-PIPELINE-LIFECYCLE` | `QUEUED` | `CORE-P1-MEDIA-REQ`, `CORE-P1-FAILURE-AUTHORITY`, `CORE-P1-ELIGIBILITY-TRACE`, `CORE-P1-OUTCOME-FEEDBACK` |
 | `COMMIT-CONTRACT` | `DONE` | none |
 | `TEST-CHECK` | `DONE` | none |
@@ -125,7 +125,9 @@ The Stage 3, Stage 4, and Stage 6 repair edges are intentionally repeated in
 `7E-1B`, `7E-2B`/`7E-2E`, and `7E-3`: an offline ML gate is not valid if its
 Outcome, cancellation, or candidate identity inputs are untrustworthy. The
 `CORE-P1-PIPELINE-LIFECYCLE` node is the sole owner of `server/pipeline.rs`; no
-parallel worker may edit that file.
+parallel worker may edit that file. Batch A is accepted; the two Batch B
+`READY` nodes may run in parallel because they have disjoint ownership
+(`policy.rs`/`router.rs` versus Outcome/Feedback/dataset conversion).
 
 ## Stage and aggregate edges
 
