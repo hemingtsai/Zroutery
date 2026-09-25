@@ -271,7 +271,7 @@ fn rejected_candidate_cannot_be_promoted_by_a_tampered_verdict() {
     let error = ShadowStore::new(2, 3600)
         .push(decision)
         .expect_err("a rejected/non-planned action must not be stored");
-    assert!(error.contains("invalid candidate") || error.contains("checksum"));
+    assert!(error.contains("must be eligible and valid"));
 }
 
 #[test]

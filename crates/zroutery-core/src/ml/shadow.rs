@@ -1089,6 +1089,9 @@ impl ShadowStore {
         if decision.actual.selected.is_empty() {
             return Err("empty production selected model".to_string());
         }
+        if decision.shadow.selected.is_empty() {
+            return Err("empty shadow selected identity".to_string());
+        }
         if decision.shadow.model_commit.as_str().is_empty() {
             return Err("empty model_commit".to_string());
         }
@@ -1153,16 +1156,6 @@ impl ShadowStore {
                 ));
             }
         }
-        let valid_candidate_ids: HashSet<String> = decision
-            .candidates
-            .iter()
-            .filter(|candidate| candidate.eligible && candidate.valid)
-            .map(|candidate| candidate.candidate_id.clone())
-            .collect();
-        if ranked != valid_candidate_ids {
-            return Err("ranked candidates do not match the valid evidence set".to_string());
-        }
-
         for (input_candidate, candidate) in decision
             .observation
             .input
@@ -1226,23 +1219,61 @@ impl ShadowStore {
             }
         }
 
-        // A rejected candidate may be named as the current planned identity in
-        // a Keep verdict, but it can never be emitted as an executable
-        // counterfactual action.
-        if let Some(selected_candidate) = decision
+        // The selected identity is a semantic part of the record, not merely
+        // a checksum field. Resolve it explicitly before checksum validation so
+        // an unknown identity cannot be hidden behind a checksum mismatch.
+        let selected_candidate = decision
             .candidates
             .iter()
             .find(|candidate| candidate.candidate_id == decision.shadow.selected)
-        {
-            if (!selected_candidate.eligible || !selected_candidate.valid)
-                && (decision.shadow.action != RoutingAction::Keep
-                    || decision.shadow.selected != decision.actual.selected)
-            {
-                return Err(format!(
-                    "shadow selected invalid candidate '{}' as an executable action",
+            .ok_or_else(|| {
+                format!(
+                    "unknown shadow selected identity '{}': candidate evidence is missing",
                     decision.shadow.selected
-                ));
+                )
+            })?;
+
+        match decision.shadow.action {
+            RoutingAction::Keep => {
+                if decision.shadow.selected != decision.actual.selected {
+                    return Err(
+                        "Keep action must select the planned production identity".to_string(),
+                    );
+                }
+                // Keep deliberately permits the planned identity to be invalid;
+                // it is the non-executable terminal state used when no valid
+                // candidate or a session guard applies.
             }
+            RoutingAction::Switch | RoutingAction::Explore => {
+                if !selected_candidate.eligible || !selected_candidate.valid {
+                    return Err(format!(
+                        "{:?} action selected identity '{}' must be eligible and valid",
+                        decision.shadow.action, decision.shadow.selected
+                    ));
+                }
+                if !ranked.contains(&decision.shadow.selected) {
+                    return Err(format!(
+                        "{:?} action selected identity '{}' is not in the ranked valid set",
+                        decision.shadow.action, decision.shadow.selected
+                    ));
+                }
+                if decision.shadow.selected == decision.actual.selected {
+                    return Err(format!(
+                        "{:?} action must select an identity different from the planned selection",
+                        decision.shadow.action
+                    ));
+                }
+            }
+        }
+
+        let valid_candidate_ids: HashSet<String> = decision
+            .candidates
+            .iter()
+            .filter(|candidate| candidate.eligible && candidate.valid)
+            .map(|candidate| candidate.candidate_id.clone())
+            .collect();
+        if ranked != valid_candidate_ids {
+            return Err("ranked candidates do not match the valid evidence set".to_string());
         }
 
         let expected_input_checksum =
@@ -1768,6 +1799,17 @@ mod tests {
         ShadowStore::new(10, 3600).push(decision).unwrap_err()
     }
 
+    fn recompute_decision_checksum(decision: &mut ShadowDecision) {
+        decision.decision_checksum = shadow_decision_checksum(
+            decision.decision_input_checksum,
+            &decision.candidates,
+            &decision.shadow.ranked_candidates,
+            &decision.shadow.selected,
+            decision.shadow.action,
+            &decision.shadow.reason,
+        );
+    }
+
     fn decision_engine() -> DecisionEngine {
         DecisionEngine::new(CoordinatorConfig::default(), RewardPolicy::default())
     }
@@ -1915,6 +1957,81 @@ mod tests {
         let mut decision = valid_decision();
         decision.candidates.clear();
         assert_eq!(store_push_err(decision), "no candidates");
+    }
+
+    #[test]
+    fn store_rejects_unknown_selected_before_checksum() {
+        let mut decision = valid_decision();
+        decision.shadow.selected = "unknown-model".to_string();
+        decision.shadow.action = RoutingAction::Switch;
+        recompute_decision_checksum(&mut decision);
+
+        let error = store_push_err(decision);
+        assert_eq!(
+            error,
+            "unknown shadow selected identity 'unknown-model': candidate evidence is missing"
+        );
+    }
+
+    #[test]
+    fn store_rejects_keep_selected_that_is_not_planned() {
+        let mut decision = valid_decision();
+        decision.shadow.selected = "model-b".to_string();
+        decision.shadow.action = RoutingAction::Keep;
+        recompute_decision_checksum(&mut decision);
+
+        assert_eq!(
+            store_push_err(decision),
+            "Keep action must select the planned production identity"
+        );
+    }
+
+    #[test]
+    fn store_rejects_switch_selected_outside_ranked_valid_set() {
+        let mut decision = valid_decision();
+        decision.shadow.selected = "model-a".to_string();
+        decision.shadow.action = RoutingAction::Switch;
+        decision.shadow.ranked_candidates = vec!["model-b".to_string()];
+        recompute_decision_checksum(&mut decision);
+
+        assert_eq!(
+            store_push_err(decision),
+            "Switch action selected identity 'model-a' is not in the ranked valid set"
+        );
+    }
+
+    #[test]
+    fn store_rejects_explore_selected_invalid_candidate() {
+        let mut input = shadow_input();
+        input.candidates[1].eligible = false;
+        input.candidates[1].rejection_reason = Some("policy rejected".to_string());
+        let mut decision = engine()
+            .evaluate("req-explore-invalid", &input)
+            .expect("baseline decision");
+        decision.shadow.selected = "model-b".to_string();
+        decision.shadow.action = RoutingAction::Explore;
+        recompute_decision_checksum(&mut decision);
+
+        assert_eq!(
+            store_push_err(decision),
+            "Explore action selected identity 'model-b' must be eligible and valid"
+        );
+    }
+
+    #[test]
+    fn store_allows_keep_for_invalid_planned_identity() {
+        let mut input = shadow_input();
+        for candidate in &mut input.candidates {
+            candidate.eligible = false;
+            candidate.rejection_reason = Some("policy rejected".to_string());
+        }
+        let decision = engine()
+            .evaluate("req-keep-invalid", &input)
+            .expect("invalid planned identity is still explicit Keep evidence");
+        assert_eq!(decision.shadow.action, RoutingAction::Keep);
+        assert_eq!(decision.shadow.selected, decision.actual.selected);
+        assert!(decision.candidates.iter().all(|candidate| !candidate.valid));
+        assert!(ShadowStore::new(2, 3600).push(decision).is_ok());
     }
 
     #[test]
