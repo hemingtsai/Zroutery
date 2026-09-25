@@ -29,22 +29,33 @@ TYPES = (
     "chore",
 )
 
-# Module scopes come from the current Node contract.  ``workflow`` is retained
-# as an explicit orchestration/documentation boundary because the Node commit
-# contract itself is a workflow-scoped change; it is not a wildcard.
+# Module scopes are the finite union of the established repository boundaries
+# and the current Node contract modules.  Compatibility scopes are retained so
+# existing commits such as fix(tauri) and feat(provider) remain auditable;
+# ``workflow`` is an explicit orchestration/documentation boundary, not a
+# wildcard.
 MODULE_SCOPES = (
+    # Established repository boundaries.
     "core",
+    "router",
     "protocol",
     "policy",
+    "runtime",
+    "ml",
+    "account",
+    "provider",
+    "integration",
+    "tauri",
+    "workflow",
+    "repo",
+    # Current Node module boundaries.
     "routing",
     "observation",
     "stats",
-    "account",
     "newapi",
     "migration",
     "takeover",
     "server",
-    "ml",
     "decision",
     "shadow",
     "reward",
@@ -54,7 +65,6 @@ MODULE_SCOPES = (
     "ui",
     "docs",
     "tests",
-    "workflow",
 )
 
 # These are the finite, current Node stage identifiers.  Do not replace this
@@ -538,6 +548,18 @@ def _fixture_messages() -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
             "ci(workflow): align commit lint with node evidence",
         ),
         (
+            "tauri compatibility scope",
+            "fix(tauri): harden config permissions",
+        ),
+        (
+            "provider compatibility scope",
+            "feat(provider): add provider health checks",
+        ),
+        (
+            "integration compatibility scope",
+            "test(integration): cover provider failover",
+        ),
+        (
             "node trailers",
             "fix(shadow): prevent duplicate routing planning\n\n"
             "Why: Keep the production plan authoritative.\n"
@@ -565,12 +587,12 @@ def _fixture_messages() -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
             "misc(core): fix the parser",
         ),
         (
-            "stale router scope",
-            "fix(router): prevent duplicate routing planning",
-        ),
-        (
             "unknown stage scope",
             "fix(7e9): prevent duplicate routing planning",
+        ),
+        (
+            "unknown stage-shaped scope",
+            "fix(stage-1): prevent duplicate routing planning",
         ),
         (
             "uppercase summary",
@@ -673,14 +695,15 @@ def _run_fixtures() -> int:
         if errors:
             failures += 1
             print(f"FAIL allowed scope {scope!r}: {'; '.join(errors)}")
-    for scope in ("router", "provider", "integration", "tauri", "repo", "stage-1", "7e2z"):
+    forbidden_scopes = ("7e9", "7e2z", "stage-1", "misc", "unknown")
+    for scope in forbidden_scopes:
         errors = validate_subject(f"ci({scope}): align commit contract")
         if not errors:
             failures += 1
             print(f"FAIL forbidden scope {scope!r}: unexpectedly accepted")
     print(
         f"scope matrix: {len(SCOPES)} allowed, "
-        "7 forbidden examples checked"
+        f"{len(forbidden_scopes)} forbidden examples checked"
     )
     print(f"fixture summary: {len(valid)} valid, {len(invalid)} invalid")
     return 1 if failures else 0

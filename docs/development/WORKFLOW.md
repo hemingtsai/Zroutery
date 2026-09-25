@@ -50,21 +50,29 @@ conventional type.
 
 ### Scope allowlist
 
-Scopes are finite and describe the affected boundary. Module scopes are:
+Scopes are finite and describe the affected boundary. The module allowlist is
+the union of established repository boundaries and the current Node modules:
 
 ```text
 core
+router
 protocol
 policy
+runtime
+ml
+account
+provider
+integration
+tauri
+workflow
+repo
 routing
 observation
 stats
-account
 newapi
 migration
 takeover
 server
-ml
 decision
 shadow
 reward
@@ -74,11 +82,13 @@ model
 ui
 docs
 tests
-workflow
 ```
 
-`workflow` is the explicit orchestration/documentation boundary used by
-Node-contract commits such as `ci(workflow): ...`; it is not a wildcard.
+The established `router`, `runtime`, `provider`, `integration`, `tauri`, and
+`repo` scopes remain valid compatibility boundaries. `workflow` is the
+explicit orchestration/documentation boundary used by Node-contract commits
+such as `ci(workflow): ...`; it is not a wildcard.
+
 The current finite stage scopes are:
 
 ```text
@@ -95,17 +105,17 @@ The current finite stage scopes are:
 7h
 ```
 
-Examples such as `router`, `provider`, `integration`, `tauri`, `repo`,
-`stage-1`, `7e2z`, and `misc` are not valid scopes. Do not replace this
-finite list with a pattern such as `stage-[0-9]+` or an arbitrary identifier;
-an unrecognized boundary must be reviewed before it is added.
+Examples such as `7e9`, `7e2z`, `stage-1`, `misc`, and `unknown` are not
+valid scopes. Do not replace this finite list with a pattern such as
+`stage-[0-9]+` or an arbitrary identifier; an unrecognized boundary must be
+reviewed before it is added.
 
 ### Subject regex
 
 The workflow's structural expression is:
 
 ```text
-^(feat|fix|refactor|test|perf|docs|build|ci|chore)\((core|protocol|policy|routing|observation|stats|account|newapi|migration|takeover|server|ml|decision|shadow|reward|replay|dataset|model|ui|docs|tests|workflow|7e1|7e2a|7e2b|7e2c|7e2d|7e2e|7e2f|7e3|7f|7g|7h)\): [a-z][^\r\n]*$
+^(feat|fix|refactor|test|perf|docs|build|ci|chore)\((core|router|protocol|policy|runtime|ml|account|provider|integration|tauri|workflow|repo|routing|observation|stats|newapi|migration|takeover|server|decision|shadow|reward|replay|dataset|model|ui|docs|tests|7e1|7e2a|7e2b|7e2c|7e2d|7e2e|7e2f|7e3|7f|7g|7h)\): [a-z][^\r\n]*$
 ```
 
 The expression is followed by deterministic checks in
@@ -122,9 +132,10 @@ The expression is followed by deterministic checks in
 
 The old expression was materially different. It rejected valid current
 subjects such as `feat(7e2a): add candidate-masked decision distribution` and
-`fix(routing): prevent duplicate routing planning`, while accepting stale
-`fix(router): ...` and vague `feat(ml): added some new model stuff.`. The new
-fixtures preserve those regression cases.
+`fix(routing): prevent duplicate routing planning`, while accepting vague
+`feat(ml): added some new model stuff.`. The established compatibility scopes
+remain accepted; the new fixtures preserve both the newly authorized scopes
+and the vague-subject regression case.
 
 ## Commit Body
 
@@ -185,8 +196,9 @@ The deterministic validator has no third-party dependencies:
 python scripts/commit_contract_test.py --self-test
 ```
 
-It checks valid module and stage subjects, stale and unknown scopes, vague and
-past-tense subjects, the length limit, transcript/report subjects, and
+It checks valid established and current module scopes, finite stage scopes,
+unknown scopes, vague and past-tense subjects, the length limit,
+transcript/report subjects, and
 accept/reject trailer cases. The pull-request workflow runs that suite first,
 then validates every non-merge commit introduced by the PR:
 
@@ -202,6 +214,9 @@ ordinary Node commits, not Git's merge-message format.
 ```text
 feat(ml): add calibrated decision distribution
 fix(routing): prevent duplicate routing planning
+fix(tauri): harden config permissions
+feat(provider): add provider health checks
+test(integration): cover provider failover
 test(7e1): add deterministic decision replay coverage
 docs(workflow): align commit lint with node evidence
 ci(workflow): align commit lint with node evidence
@@ -211,9 +226,10 @@ ci(workflow): align commit lint with node evidence
 
 ```text
 feat(ml): added some new model stuff.
-chore(repo): misc fixes
-fix(router): prevent duplicate routing planning
+chore(repo): update project
 fix(7e9): prevent duplicate routing planning
+fix(stage-1): prevent duplicate routing planning
+fix(misc): repair fallback logic
 fix(core): Repair fallback logic
 chore(workflow): update project
 test(ml): add test transcript and gate report

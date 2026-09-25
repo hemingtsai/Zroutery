@@ -13,7 +13,7 @@ jobs:
           fetch-depth: 0
 
       # Finite structural expression (implemented by the stdlib validator):
-      # ^(feat|fix|refactor|test|perf|docs|build|ci|chore)\((core|protocol|policy|routing|observation|stats|account|newapi|migration|takeover|server|ml|decision|shadow|reward|replay|dataset|model|ui|docs|tests|workflow|7e1|7e2a|7e2b|7e2c|7e2d|7e2e|7e2f|7e3|7f|7g|7h)\): [a-z][^\r\n]*$
+      # ^(feat|fix|refactor|test|perf|docs|build|ci|chore)\((core|router|protocol|policy|runtime|ml|account|provider|integration|tauri|workflow|repo|routing|observation|stats|newapi|migration|takeover|server|decision|shadow|reward|replay|dataset|model|ui|docs|tests|7e1|7e2a|7e2b|7e2c|7e2d|7e2e|7e2f|7e3|7f|7g|7h)\): [a-z][^\r\n]*$
       # The exact allowlist and post-checks are documented in WORKFLOW.md.
       - name: Run commit-contract fixtures
         run: python3 scripts/commit_contract_test.py --self-test
