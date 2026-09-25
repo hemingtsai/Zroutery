@@ -10,6 +10,7 @@ Usage: python3 scripts/smoke_test.py [path-to-zroutery-headless]
 
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import shutil
@@ -242,12 +243,12 @@ def write_config(path: str, upstream: str):
             {
                 "provider_id": "deepseek",
                 "upstream_model": "deepseek-v4-flash",
-                "class": "haiku",
+                "tier": "fast",
             },
             {
                 "provider_id": "deepseek",
                 "upstream_model": "deepseek-v4-pro",
-                "class": "sonnet",
+                "tier": "standard",
                 "pricing": {
                     "currency": "CNY",
                     "input_per_mtok": 2.0,
@@ -259,19 +260,19 @@ def write_config(path: str, upstream: str):
             {
                 "provider_id": "openai",
                 "upstream_model": "deepseek-v4-pro",
-                "class": "sonnet",
+                "tier": "standard",
                 "priority": 50,
             },
             {
                 "provider_id": "openai",
                 "upstream_model": "gpt-5.3-sol",
-                "class": "opus",
+                "tier": "reasoning",
                 "priority": 0,
             },
             {
                 "provider_id": "openai",
                 "upstream_model": "broken-model",
-                "class": "opus",
+                "tier": "reasoning",
                 "priority": -10,
             },
             {"provider_id": "openai", "upstream_model": "mystery"},
@@ -280,7 +281,7 @@ def write_config(path: str, upstream: str):
                 "id": "legacy-name",
                 "provider_id": "openai",
                 "upstream_model": "gpt-legacy",
-                "class": "haiku",
+                "tier": "fast",
                 "priority": 90,
             },
         ],
@@ -326,7 +327,7 @@ def check_budgets(binary: str, upstream: str, base_env: dict) -> None:
 
         ask = lambda: request(
             f"{base}/v1/messages",
-            {"model": "sonnet-class", "max_tokens": 8,
+            {"model": "standard-class", "max_tokens": 8,
              "messages": [{"role": "user", "content": "hi"}]},
         )
         first, _, _ = ask()
@@ -392,7 +393,7 @@ def main() -> int:
         print("auth")
         status, _, _ = request(
             f"{base}/v1/messages",
-            {"model": "sonnet-class", "max_tokens": 8, "messages": [{"role": "user", "content": "hi"}]},
+            {"model": "standard-class", "max_tokens": 8, "messages": [{"role": "user", "content": "hi"}]},
             token=None,
         )
         check("unauthenticated requests are rejected", status == 401, f"got {status}")
@@ -404,7 +405,7 @@ def main() -> int:
             check(f"{path} answers", status == 200 and body.get("object") == "list", str(body)[:80])
         status, _, body = request(
             f"{base}/chat/completions",
-            {"model": "haiku-class", "messages": [{"role": "user", "content": "hi"}]},
+            {"model": "fast-class", "messages": [{"role": "user", "content": "hi"}]},
         )
         check("/chat/completions answers", status == 200, f"got {status}")
 
@@ -417,7 +418,7 @@ def main() -> int:
         )
         status, _, body = request(
             f"{base}/v1/v1/messages",
-            {"model": "sonnet-class", "max_tokens": 8,
+            {"model": "standard-class", "max_tokens": 8,
              "messages": [{"role": "user", "content": "hi"}]},
         )
         check(
@@ -434,11 +435,22 @@ def main() -> int:
         check("and it reports the model count", body.get("models", 0) > 0, str(body))
 
         print("request size limit")
-        status, _, body = request(
-            f"{base}/v1/messages",
-            {"model": "sonnet-class", "max_tokens": 8,
-             "messages": [{"role": "user", "content": "x" * (2 * 1024 * 1024)}]},
-        )
+        # Claim 2 MiB and send just past the 1 MiB limit: the proxy answers 413
+        # as soon as the streamed body crosses it, and we read that answer
+        # without uploading the rest. Sending the whole 2 MiB raced the early
+        # close — the client sometimes saw a connection reset instead.
+        parts = urllib.parse.urlsplit(base)
+        conn = http.client.HTTPConnection(parts.hostname, parts.port, timeout=20)
+        conn.putrequest("POST", "/v1/messages")
+        conn.putheader("Content-Type", "application/json")
+        conn.putheader("x-api-key", TOKEN)
+        conn.putheader("Content-Length", str(2 * 1024 * 1024))
+        conn.endheaders()
+        conn.send(b"x" * (1024 * 1024 + 4096))
+        resp = conn.getresponse()
+        status = resp.status
+        body = json.loads(resp.read().decode() or "{}")
+        conn.close()
         check("an oversized body is rejected with 413", status == 413, f"got {status}")
         check(
             "and the error explains the limit",
@@ -453,9 +465,9 @@ def main() -> int:
         check(
             "classes and concrete models are listed",
             {
-                "opus-class",
-                "sonnet-class",
-                "haiku-class",
+                "reasoning-class",
+                "standard-class",
+                "fast-class",
                 "deepseek-deepseek-v4-pro",
                 "openai-deepseek-v4-pro",
                 "openai-mystery",
@@ -464,12 +476,25 @@ def main() -> int:
             str(ids),
         )
         unclassified = next(m for m in listing["data"] if m["id"] == "openai-mystery")
-        check("unclassified model has no class", unclassified["zroutery"]["class"] is None)
+        check("unclassified model has no tier", unclassified["zroutery"]["tier"] is None)
+
+        # 0.1.x clients may still ask by the older class names; they resolve to
+        # the same tier even though the listing above does not advertise them.
+        _, legacy_headers, _ = request(
+            f"{base}/v1/messages",
+            {"model": "sonnet-class", "max_tokens": 8,
+             "messages": [{"role": "user", "content": "hi"}]},
+        )
+        check(
+            "a 0.1.x class name still resolves",
+            legacy_headers.get("x-zroutery-model") == "deepseek-deepseek-v4-pro",
+            str(legacy_headers),
+        )
 
         print("anthropic dialect, non streaming")
         status, headers, body = request(
             f"{base}/v1/messages",
-            {"model": "sonnet-class", "max_tokens": 16, "system": "be brief",
+            {"model": "standard-class", "max_tokens": 16, "system": "be brief",
              "messages": [{"role": "user", "content": "hello"}]},
         )
         check("200 from sonnet-class", status == 200, str(body))
@@ -495,7 +520,7 @@ def main() -> int:
         )
         _, _, body = request(
             f"{base}/v1/messages/count_tokens",
-            {"model": "sonnet-class", "messages": [{"role": "user", "content": "hello"}]},
+            {"model": "standard-class", "messages": [{"role": "user", "content": "hello"}]},
         )
         estimate = body.get("zroutery", {}).get("estimated_input_cost")
         check("count_tokens prices the prompt", estimate is not None, str(body))
@@ -513,7 +538,7 @@ def main() -> int:
         print("openai dialect, non streaming")
         status, headers, body = request(
             f"{base}/v1/chat/completions",
-            {"model": "haiku-class", "messages": [{"role": "user", "content": "hello"}]},
+            {"model": "fast-class", "messages": [{"role": "user", "content": "hello"}]},
         )
         check("200 from haiku-class", status == 200, str(body))
         check(
@@ -526,10 +551,10 @@ def main() -> int:
         print("failover inside a class")
         status, headers, body = request(
             f"{base}/v1/messages",
-            {"model": "opus-class", "max_tokens": 16, "messages": [{"role": "user", "content": "hi"}]},
+            {"model": "reasoning-class", "max_tokens": 16, "messages": [{"role": "user", "content": "hi"}]},
         )
         check(
-            "failed over to the healthy opus model",
+            "failed over to the healthy reasoning model",
             headers.get("x-zroutery-model") == "openai-gpt-5.3-sol",
             str(headers),
         )
@@ -542,7 +567,7 @@ def main() -> int:
              "messages": [{"role": "user", "content": "hi"}]},
         )
         check(
-            "claude haiku name maps to haiku-class",
+            "claude haiku name maps to fast-class",
             headers.get("x-zroutery-model") == "deepseek-deepseek-v4-flash",
         )
 
@@ -582,7 +607,7 @@ def main() -> int:
         print("streaming, anthropic dialect over an openai provider")
         _, headers, wire = request(
             f"{base}/v1/messages",
-            {"model": "sonnet-class", "max_tokens": 16, "stream": True,
+            {"model": "standard-class", "max_tokens": 16, "stream": True,
              "messages": [{"role": "user", "content": "hi"}]},
             stream=True,
         )
@@ -598,7 +623,7 @@ def main() -> int:
         print("streaming, openai dialect")
         _, _, wire = request(
             f"{base}/v1/chat/completions",
-            {"model": "sonnet-class", "stream": True, "stream_options": {"include_usage": True},
+            {"model": "standard-class", "stream": True, "stream_options": {"include_usage": True},
              "messages": [{"role": "user", "content": "hi"}]},
             stream=True,
         )
@@ -617,7 +642,7 @@ def main() -> int:
 
         status, _, body = request(
             f"{base}/v1/messages/count_tokens",
-            {"model": "sonnet-class", "messages": [{"role": "user", "content": "some text to count"}]},
+            {"model": "standard-class", "messages": [{"role": "user", "content": "some text to count"}]},
         )
         check("count_tokens answers", status == 200 and body["input_tokens"] > 0, str(body))
 
@@ -627,7 +652,7 @@ def main() -> int:
         )
         out = elected.stdout
         check("every class is measured", out.count("-class:") == 3, out.strip()[:200])
-        # Price weight is 1.0 and only deepseek-v4-pro is priced in the sonnet
+        # Price weight is 1.0 and only deepseek-v4-pro is priced in the standard
         # class, so the unpriced sibling cannot be compared and latency decides.
         check(
             "the winner is reported with its numbers",
