@@ -15,6 +15,11 @@
 //!    (the Coordinator's `partial_cmp().unwrap()` is replaced by
 //!    `f64::total_cmp`).
 //!
+//! The compatibility [`DecisionEngine::decide`] path retains the Coordinator's
+//! input-order semantics. [`DecisionEngine::decide_with_ml_ranking`] is the
+//! explicit counterfactual path: it ranks the same sanitized candidates by ML
+//! utility before invoking `ActionGuard`, while preserving all hard guards.
+//!
 //! The single deliberate divergence from the Coordinator: when no candidate
 //! is valid, the terminal reason is `"no valid candidates"` (the
 //! Coordinator's equivalent arm says `"no candidates available"`). Session
@@ -53,13 +58,15 @@ pub struct EngineCandidate {
     pub eligible: bool,
 }
 
-/// Borrowed input for [`DecisionEngine::decide`].
+/// Borrowed input for [`DecisionEngine::decide`] and
+/// [`DecisionEngine::decide_with_ml_ranking`].
 #[derive(Debug, Clone, Copy)]
 pub struct EngineInput<'a> {
     /// Identity key of the candidate the request currently sits on.
     pub current_candidate: &'a str,
-    /// Candidates to consider, in priority order. The first *valid* candidate
-    /// plays the role the Coordinator gives to `candidates.first()`.
+    /// Candidate evidence in caller-supplied order. The compatibility
+    /// `decide` path treats the first valid entry as the Coordinator's
+    /// `candidates.first()`; the explicit ML path ranks utilities separately.
     pub candidates: &'a [EngineCandidate],
     /// Session routing mode (session constraints outrank utility).
     pub session_mode: SessionRoutingMode,
@@ -91,8 +98,8 @@ pub struct CandidateOutcome {
     pub utility: UtilityBreakdown,
 }
 
-/// Result of [`DecisionEngine::decide`]: the routing decision plus
-/// per-candidate evidence in input order.
+/// Result of a [`DecisionEngine`] decision: the routing decision plus
+/// per-candidate evidence in input order and the explicit guard ranking.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EngineOutput {
     /// The decision, identical to what the Coordinator would produce over the
@@ -100,6 +107,10 @@ pub struct EngineOutput {
     pub decision: RoutingDecision,
     /// One entry per input candidate, in input order.
     pub candidates: Vec<CandidateOutcome>,
+    /// Valid candidate identities in the order used by the decision guard.
+    /// For the compatibility `decide` path this is input order; for
+    /// `decide_with_ml_ranking` it is the deterministic ML utility ranking.
+    pub ranked_candidates: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -125,15 +136,32 @@ impl DecisionEngine {
         }
     }
 
-    /// Make a routing decision over the sanitized candidate set.
+    /// Make a routing decision over the sanitized candidate set using the
+    /// frozen input-order semantics of the Coordinator.
     ///
     /// Never panics: non-finite predictions and utilities are rejected before
     /// any comparison, and the best-candidate selection uses `total_cmp`.
     pub fn decide(&self, input: &EngineInput) -> EngineOutput {
+        self.decide_internal(input, false)
+    }
+
+    /// Make a counterfactual decision with an explicit ML utility ranking.
+    ///
+    /// The input slice is evidence in production order, not an ML ranking. This
+    /// path sanitizes the same candidates, ranks valid candidates by finite
+    /// utility (with candidate identity as a deterministic tie-breaker), and
+    /// gives that ranked best candidate to `ActionGuard`. Session constraints,
+    /// rate limits, eligibility, and the switch threshold remain authoritative.
+    pub fn decide_with_ml_ranking(&self, input: &EngineInput) -> EngineOutput {
+        self.decide_internal(input, true)
+    }
+
+    fn decide_internal(&self, input: &EngineInput, use_ml_ranking: bool) -> EngineOutput {
         // -- Phase 1: sanitize every input candidate ------------------------
         //
-        // `valid` preserves input order; the first valid candidate feeds the
-        // session guard exactly like the Coordinator's `candidates.first()`.
+        // `outcomes` and `valid` preserve input order. The latter is only an
+        // evidence container; the ML path below explicitly ranks it before it
+        // is used by ActionGuard.
         let mut outcomes: Vec<CandidateOutcome> = Vec::with_capacity(input.candidates.len());
         let mut valid: Vec<(&EngineCandidate, UtilityBreakdown)> = Vec::new();
 
@@ -145,21 +173,61 @@ impl DecisionEngine {
             outcomes.push(outcome);
         }
 
-        // -- Phase 2: decide over the valid set -----------------------------
+        // -- Phase 2: establish the explicit guard ranking ------------------
+        let ranked_candidates = if use_ml_ranking {
+            let mut ranked = valid.clone();
+            ranked.sort_by(|a, b| {
+                b.1.total
+                    .total_cmp(&a.1.total)
+                    .then_with(|| a.0.candidate_id.cmp(&b.0.candidate_id))
+            });
+            ranked
+                .iter()
+                .map(|(candidate, _)| candidate.candidate_id.clone())
+                .collect::<Vec<_>>()
+        } else {
+            valid
+                .iter()
+                .map(|(candidate, _)| candidate.candidate_id.clone())
+                .collect::<Vec<_>>()
+        };
+
+        let (predicted_best, confidence) = if use_ml_ranking {
+            ranked_candidates
+                .first()
+                .and_then(|candidate_id| {
+                    valid
+                        .iter()
+                        .find(|(candidate, _)| &candidate.candidate_id == candidate_id)
+                })
+                .map(|(candidate, _)| {
+                    (
+                        candidate.candidate_id.as_str(),
+                        candidate.bundle.success.confidence,
+                    )
+                })
+                .unwrap_or(("", 0.0))
+        } else {
+            valid
+                .first()
+                .map(|(candidate, _)| {
+                    (
+                        candidate.candidate_id.as_str(),
+                        candidate.bundle.success.confidence,
+                    )
+                })
+                .unwrap_or(("", 0.0))
+        };
+
+        // -- Phase 3: decide over the valid set -----------------------------
         // Mirrors Coordinator::decide (session guard -> rate limit -> utility).
 
         // 1. Session constraints first
         let session_action = ActionGuard::decide(
             input.current_candidate,
-            valid
-                .first()
-                .map(|(candidate, _)| candidate.candidate_id.as_str())
-                .unwrap_or(""),
+            predicted_best,
             input.session_mode,
-            valid
-                .first()
-                .map(|(candidate, _)| candidate.bundle.success.confidence)
-                .unwrap_or(0.0),
+            confidence,
         );
         if session_action == Action::Keep {
             return EngineOutput {
@@ -170,6 +238,7 @@ impl DecisionEngine {
                     reason: "session constraint: pinned/sticky".into(),
                 },
                 candidates: outcomes,
+                ranked_candidates,
             };
         }
 
@@ -183,18 +252,26 @@ impl DecisionEngine {
                     reason: "switch rate limit reached".into(),
                 },
                 candidates: outcomes,
+                ranked_candidates,
             };
         }
 
         // 3. Utilities were computed during sanitization.
 
-        // 4. Find best candidate. `total_cmp` is a total order — sanitization
-        //    already guarantees finite totals, so this is defensive — and
-        //    `max_by` resolves ties to the LAST maximal element, matching the
-        //    Coordinator's tie behavior.
-        let best = valid
-            .iter()
-            .max_by(|a, b| a.1.total.total_cmp(&b.1.total));
+        // 4. Find the best candidate. The compatibility path retains the
+        //    Coordinator's last-maximal tie behavior. The ML path uses the
+        //    explicit identity-tie-broken ranking above.
+        let best = if use_ml_ranking {
+            ranked_candidates.first().and_then(|candidate_id| {
+                valid
+                    .iter()
+                    .find(|(candidate, _)| &candidate.candidate_id == candidate_id)
+            })
+        } else {
+            valid
+                .iter()
+                .max_by(|a, b| a.1.total.total_cmp(&b.1.total))
+        };
         let current_utility = valid
             .iter()
             .find(|(candidate, _)| candidate.candidate_id == input.current_candidate);
@@ -241,6 +318,7 @@ impl DecisionEngine {
         EngineOutput {
             decision,
             candidates: outcomes,
+            ranked_candidates,
         }
     }
 
@@ -521,6 +599,26 @@ mod tests {
         assert_eq!(output.decision.action, RoutingAction::Switch);
         assert_eq!(output.decision.selected_candidate, "model-b");
         assert!(output.decision.reason.contains("utility delta"));
+    }
+
+    #[test]
+    fn ml_ranking_is_independent_of_selected_first_input_order() {
+        let engine = default_engine();
+        let candidates = vec![
+            engine_candidate("model-a", bundle("model-a", 0.2, 4_000.0, 1_500.0, 0.9)),
+            engine_candidate("model-b", bundle("model-b", 0.99, 100.0, 40.0, 0.001)),
+        ];
+        let input = EngineInput {
+            current_candidate: "model-a",
+            candidates: &candidates,
+            session_mode: SessionRoutingMode::Free,
+            session_switch_count: 0,
+            is_fallback: false,
+        };
+        let output = engine.decide_with_ml_ranking(&input);
+        assert_eq!(output.ranked_candidates, vec!["model-b", "model-a"]);
+        assert_eq!(output.decision.action, RoutingAction::Switch);
+        assert_eq!(output.decision.selected_candidate, "model-b");
     }
 
     #[test]

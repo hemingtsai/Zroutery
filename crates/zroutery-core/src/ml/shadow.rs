@@ -39,7 +39,7 @@ use super::model_identity::{
 use super::reward::{PredictionBundle, UtilityBreakdown};
 use crate::config::ModelTier;
 use crate::observation::ObservationStore;
-use crate::policy::{RouteDecision, TaskProfile};
+use crate::policy::{PolicyRevision, RouteDecision, TaskProfile, TaskProfileSummary};
 use crate::router::Candidate;
 use crate::session::SessionRoutingMode;
 use crate::stats_ext::StatsStore;
@@ -62,14 +62,81 @@ pub(crate) fn fnv_mix_u64(hash: &mut u64, bytes: &[u8]) {
     }
 }
 
-/// Mix the bit pattern of an `f32` into `hash`.
+/// Mix a stable, quantized representation of an `f32` into `hash`.
+///
+/// Values in the normal ML range are quantized to 1e-12 before hashing. This
+/// removes harmless last-bit differences introduced by serializing a computed
+/// utility and parsing it again, without allocating on the evaluation hot
+/// path. Values outside that range retain their exact bit pattern; the JSON
+/// representation of those finite values is already round-trip exact, and
+/// non-finite values are rejected before a record is stored.
 fn fnv_mix_f32(hash: &mut u64, value: f32) {
-    fnv_mix_u64(hash, &value.to_bits().to_le_bytes());
+    if value == 0.0 {
+        fnv_mix_u64(hash, &0i64.to_le_bytes());
+    } else if value.is_finite() && value.abs() <= 1_000_000.0 {
+        let quantized = (f64::from(value) * 1e12).round() as i64;
+        fnv_mix_u64(hash, &quantized.to_le_bytes());
+    } else {
+        fnv_mix_u64(hash, &value.to_bits().to_le_bytes());
+    }
 }
 
-/// Mix the bit pattern of an `f64` into `hash`.
+/// Mix a stable, quantized representation of an `f64` into `hash` using the
+/// same replay precision as [`fnv_mix_f32`].
 fn fnv_mix_f64(hash: &mut u64, value: f64) {
-    fnv_mix_u64(hash, &value.to_bits().to_le_bytes());
+    if value == 0.0 {
+        fnv_mix_u64(hash, &0i64.to_le_bytes());
+    } else if value.is_finite() && value.abs() <= 1_000_000.0 {
+        let quantized = (value * 1e12).round() as i64;
+        fnv_mix_u64(hash, &quantized.to_le_bytes());
+    } else {
+        fnv_mix_u64(hash, &value.to_bits().to_le_bytes());
+    }
+}
+
+/// Mix a length-delimited string into `hash`.
+///
+/// Length delimiting matters here because the input record contains several
+/// adjacent identity strings. Without it, moving bytes from one identity into
+/// the next could produce the same byte stream.
+fn fnv_mix_string(hash: &mut u64, value: &str) {
+    fnv_mix_u64(hash, &(value.len() as u64).to_le_bytes());
+    fnv_mix_u64(hash, value.as_bytes());
+}
+
+/// Mix an optional string into `hash`, preserving the distinction between an
+/// absent value and an empty value.
+fn fnv_mix_optional_string(hash: &mut u64, value: Option<&str>) {
+    match value {
+        Some(value) => {
+            fnv_mix_u64(hash, &[1]);
+            fnv_mix_string(hash, value);
+        }
+        None => fnv_mix_u64(hash, &[0]),
+    }
+}
+
+/// Mix the policy revision used to produce a production decision.
+fn fnv_mix_policy_revision(hash: &mut u64, revision: &PolicyRevision) {
+    fnv_mix_string(hash, &revision.policy_id);
+    fnv_mix_u64(hash, &[u8::from(revision.policy_enabled)]);
+    fnv_mix_u64(hash, &revision.requirements_hash.to_le_bytes());
+    fnv_mix_u64(hash, &revision.preference_hash.to_le_bytes());
+}
+
+/// Mix the task identity/summary used to produce a production decision.
+fn fnv_mix_task_summary(hash: &mut u64, task: &TaskProfileSummary) {
+    fnv_mix_string(hash, &task.complexity);
+    fnv_mix_string(hash, &task.task_type);
+    fnv_mix_u64(hash, &task.context_tokens.to_le_bytes());
+    fnv_mix_u64(hash, &task.estimated_output_tokens.to_le_bytes());
+    fnv_mix_u64(hash, &[u8::from(task.streaming)]);
+    fnv_mix_u64(hash, &[u8::from(task.has_tools)]);
+    fnv_mix_u64(hash, &[u8::from(task.has_vision)]);
+    fnv_mix_u64(hash, &(task.required_capabilities.len() as u64).to_le_bytes());
+    for capability in &task.required_capabilities {
+        fnv_mix_string(hash, capability);
+    }
 }
 
 /// Discriminant of [`ModelTier`] for checksums: 0 = none, 1..=4 = tiers.
@@ -103,20 +170,30 @@ fn action_discriminant(action: RoutingAction) -> u8 {
 
 /// Identity of the INPUT snapshot a shadow decision was computed from.
 ///
-/// Mixes the model commit, feature schema, production selection, every
-/// candidate (identity, tier, eligibility, feature bits), and the session
-/// context. Volatile fields (timestamp, shadow id, request/decision ids) are
-/// excluded: the same input always yields the same checksum.
+/// Every decision-time field which can affect the prediction or the
+/// counterfactual is included: the model commit, policy/task identity, the
+/// planned production selection, and every candidate's ordered identity,
+/// eligibility/rejection evidence, feature schema, and feature bits. Volatile
+/// correlation fields (timestamp, shadow id, request id, and decision id) are
+/// intentionally excluded: replaying the same decision-time input must produce
+/// the same checksum.
 fn shadow_input_checksum(input: &ShadowInput, model_commit: &CommitId) -> u64 {
     let mut hash = FNV_OFFSET_BASIS;
-    fnv_mix_u64(&mut hash, model_commit.as_str().as_bytes());
+    fnv_mix_string(&mut hash, model_commit.as_str());
+    fnv_mix_string(&mut hash, &input.policy_id);
+    fnv_mix_optional_string(&mut hash, input.client_id.as_deref());
+    fnv_mix_policy_revision(&mut hash, &input.policy_revision);
+    fnv_mix_task_summary(&mut hash, &input.task);
     fnv_mix_u64(&mut hash, &input.feature_schema.to_le_bytes());
-    fnv_mix_u64(&mut hash, input.production_selected.as_bytes());
+    fnv_mix_string(&mut hash, &input.production_selected);
+    fnv_mix_u64(&mut hash, &(input.candidates.len() as u64).to_le_bytes());
     for candidate in &input.candidates {
-        fnv_mix_u64(&mut hash, candidate.candidate_id.as_bytes());
-        fnv_mix_u64(&mut hash, candidate.provider_id.as_bytes());
+        fnv_mix_string(&mut hash, &candidate.candidate_id);
+        fnv_mix_string(&mut hash, &candidate.provider_id);
         fnv_mix_u64(&mut hash, &[tier_discriminant(candidate.tier)]);
         fnv_mix_u64(&mut hash, &[u8::from(candidate.eligible)]);
+        fnv_mix_optional_string(&mut hash, candidate.rejection_reason.as_deref());
+        fnv_mix_u64(&mut hash, &candidate.features.schema_version.to_le_bytes());
         for value in &candidate.features.values {
             fnv_mix_f32(&mut hash, *value);
         }
@@ -127,18 +204,28 @@ fn shadow_input_checksum(input: &ShadowInput, model_commit: &CommitId) -> u64 {
     hash
 }
 
-/// Identity of the resulting decision: the input checksum plus the
-/// per-candidate predictions, utilities, and the verdict itself.
+/// Identity of the resulting decision: the input checksum plus the ordered
+/// candidate evidence, explicit ML ranking, and verdict. The served identity is
+/// intentionally not mixed here: it is not known at decision time in this pure
+/// seam and must not change the replayable counterfactual.
 fn shadow_decision_checksum(
     input_checksum: u64,
     candidates: &[ShadowCandidate],
+    ranked_candidates: &[String],
     selected: &str,
     action: RoutingAction,
     reason: &str,
 ) -> u64 {
     let mut hash = FNV_OFFSET_BASIS;
     fnv_mix_u64(&mut hash, &input_checksum.to_le_bytes());
+    fnv_mix_u64(&mut hash, &(candidates.len() as u64).to_le_bytes());
     for candidate in candidates {
+        fnv_mix_string(&mut hash, &candidate.candidate_id);
+        fnv_mix_string(&mut hash, &candidate.provider_id);
+        fnv_mix_u64(&mut hash, &[tier_discriminant(candidate.tier)]);
+        fnv_mix_u64(&mut hash, &[u8::from(candidate.eligible)]);
+        fnv_mix_u64(&mut hash, &[u8::from(candidate.valid)]);
+        fnv_mix_optional_string(&mut hash, candidate.rejection_reason.as_deref());
         let bundle = &candidate.prediction;
         for prediction in [&bundle.success, &bundle.latency, &bundle.ttft, &bundle.cost] {
             fnv_mix_f64(&mut hash, prediction.value);
@@ -160,9 +247,13 @@ fn shadow_decision_checksum(
             fnv_mix_f64(&mut hash, component);
         }
     }
-    fnv_mix_u64(&mut hash, selected.as_bytes());
+    fnv_mix_u64(&mut hash, &(ranked_candidates.len() as u64).to_le_bytes());
+    for candidate_id in ranked_candidates {
+        fnv_mix_string(&mut hash, candidate_id);
+    }
+    fnv_mix_string(&mut hash, selected);
     fnv_mix_u64(&mut hash, &[action_discriminant(action)]);
-    fnv_mix_u64(&mut hash, reason.as_bytes());
+    fnv_mix_string(&mut hash, reason);
     hash
 }
 
@@ -178,14 +269,34 @@ pub enum ShadowScope {
     PolicyRouted,
 }
 
-/// What production actually did (correlation triple — all non-Option by
-/// design).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// What production planned and, separately, what actually served.
+///
+/// `selected` is the initial `RouteDecision.selected` identity. It is not a
+/// claim about the final response after runtime fallback. The pure shadow seam
+/// has no final outcome input, so `served` is explicitly `None` until the
+/// production integration node supplies that identity.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProductionDecisionRef {
     pub request_id: String,
     pub decision_id: String,
-    /// Model id production picked.
+    /// Initial planned selection, before runtime failover.
     pub selected: String,
+    /// Final served model identity, or `None` when not integrated/known.
+    #[serde(default)]
+    pub served: Option<String>,
+}
+
+impl ProductionDecisionRef {
+    /// Explicit name for the legacy `selected` field.
+    pub fn planned_selected(&self) -> &str {
+        &self.selected
+    }
+
+    /// Whether a final served identity has been supplied by an integration
+    /// boundary. The pure ML seam intentionally returns `false`.
+    pub fn has_served_identity(&self) -> bool {
+        self.served.is_some()
+    }
 }
 
 /// What the ML stack would have done (hypothetical — never a real routing
@@ -197,6 +308,10 @@ pub struct ShadowVerdict {
     pub selected: String,
     pub action: RoutingAction,
     pub reason: String,
+    /// Valid candidates in the explicit ML utility ranking used for the
+    /// counterfactual. This is independent of production plan order.
+    #[serde(default)]
+    pub ranked_candidates: Vec<String>,
 }
 
 /// Per-candidate evidence captured during a shadow evaluation.
@@ -215,8 +330,32 @@ pub struct ShadowCandidate {
     pub utility: UtilityBreakdown,
 }
 
-/// One recorded shadow decision: production's choice, the hypothetical ML
-/// verdict, and the evidence between them.
+/// The immutable, serializable decision-time observation used to produce a
+/// shadow verdict.
+///
+/// Keeping this as a separate object makes the boundary explicit: a decision
+/// record can be round-tripped and replayed without consulting router/session
+/// state. The input contains the complete ordered candidate snapshot and the
+/// policy/task identity; the commit is pinned beside it so the exact model
+/// artifact is part of the observation identity.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShadowObservation {
+    pub input: ShadowInput,
+    pub model_commit: CommitId,
+}
+
+impl Default for ShadowObservation {
+    fn default() -> Self {
+        Self {
+            input: ShadowInput::default(),
+            model_commit: CommitId::new(""),
+        }
+    }
+}
+
+/// One recorded shadow decision: production's planned identity, the explicit
+/// served-identity state, the exact observation, the hypothetical ML verdict,
+/// and the evidence between them.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ShadowDecision {
     /// `shadow-<uuid simple>`.
@@ -224,12 +363,21 @@ pub struct ShadowDecision {
     pub timestamp: i64,
     pub scope: ShadowScope,
     pub actual: ProductionDecisionRef,
+    #[serde(default)]
+    pub observation: ShadowObservation,
     pub shadow: ShadowVerdict,
     pub candidates: Vec<ShadowCandidate>,
     /// Identity of the INPUT snapshot.
     pub decision_input_checksum: u64,
     /// Identity of the resulting decision.
     pub decision_checksum: u64,
+}
+
+impl ShadowDecision {
+    /// Borrow the exact decision-time input retained by this record.
+    pub fn input(&self) -> &ShadowInput {
+        &self.observation.input
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -243,19 +391,56 @@ pub struct ShadowCandidateInput {
     pub provider_id: String,
     pub tier: Option<ModelTier>,
     pub eligible: bool,
+    /// Exact feature vector captured for this candidate. A policy-only
+    /// candidate (present in `RouteDecision` but absent from the executable
+    /// plan) uses the explicit UNKNOWN vector and carries its rejection reason;
+    /// it is never made executable.
     pub features: RoutingFeatures,
+    /// Policy or execution rejection evidence from the production decision.
+    #[serde(default)]
+    pub rejection_reason: Option<String>,
 }
 
 /// Immutable input snapshot — the engine NEVER touches runtime stores.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ShadowInput {
     pub decision_id: String,
+    /// Policy identity and exact revision used by production.
+    #[serde(default)]
+    pub policy_id: String,
+    /// Client-profile identity which selected the policy, when present.
+    #[serde(default)]
+    pub client_id: Option<String>,
+    #[serde(default)]
+    pub policy_revision: PolicyRevision,
+    /// Task identity/summary used by production at decision time.
+    #[serde(default)]
+    pub task: TaskProfileSummary,
+    /// Initial planned selection. This is not the final served identity.
     pub production_selected: String,
     pub feature_schema: u32,
     pub candidates: Vec<ShadowCandidateInput>,
     pub session_mode: SessionRoutingMode,
     pub session_switch_count: u32,
     pub is_fallback: bool,
+}
+
+impl Default for ShadowInput {
+    fn default() -> Self {
+        Self {
+            decision_id: String::new(),
+            policy_id: String::new(),
+            client_id: None,
+            policy_revision: PolicyRevision::default(),
+            task: TaskProfileSummary::default(),
+            production_selected: String::new(),
+            feature_schema: FEATURE_SCHEMA_VERSION,
+            candidates: Vec::new(),
+            session_mode: SessionRoutingMode::Free,
+            session_switch_count: 0,
+            is_fallback: false,
+        }
+    }
 }
 
 impl ShadowInput {
@@ -279,16 +464,31 @@ impl ShadowInput {
         task_profile: &TaskProfile,
         message_count: usize,
     ) -> Self {
-        let candidates: Vec<ShadowCandidateInput> = plan
+        let mut candidates: Vec<ShadowCandidateInput> = plan
             .iter()
             .map(|candidate| {
                 let entry = &candidate.entry;
                 // Production ranks by the exposed id, and the decision trace
-                // keys its per-candidate eligibility on the same id.
-                let eligible = decision
-                    .candidates
-                    .iter()
-                    .any(|c| c.model_id == candidate.exposed_id && c.eligible);
+                // keys its per-candidate eligibility on the same identity.
+                // Keep the route evidence alongside the executable-plan entry;
+                // a policy-rejected candidate must not silently become
+                // executable merely because it was present in the plan.
+                let evidence = decision.candidates.iter().find(|candidate_decision| {
+                    candidate_decision.model_id == candidate.exposed_id
+                        && candidate_decision.provider_id == entry.provider_id
+                });
+                let eligible = evidence.is_some_and(|candidate_decision| candidate_decision.eligible);
+                let rejection_reason = evidence
+                    .and_then(|candidate_decision| candidate_decision.rejection.clone())
+                    .or_else(|| {
+                        if evidence.is_none() {
+                            Some("missing policy evidence".to_string())
+                        } else if !eligible {
+                            Some("policy rejected".to_string())
+                        } else {
+                            None
+                        }
+                    });
                 let observation = observations.get(&candidate.exposed_id, &entry.provider_id);
                 let stats = stats.get(&candidate.exposed_id, &entry.provider_id);
                 let features = extract_features(&FeatureContext {
@@ -308,11 +508,49 @@ impl ShadowInput {
                     tier: entry.tier,
                     eligible,
                     features,
+                    rejection_reason,
                 }
             })
             .collect();
+
+        // `RouteDecision.candidates` is the authoritative policy evidence. It
+        // can contain candidates which policy rejected and which therefore
+        // never made it into the executable plan. Retain those identities and
+        // rejection reasons as non-executable observations. The full model
+        // entry is not available through this pure boundary, so their feature
+        // vector is the explicit UNKNOWN snapshot rather than fabricated data.
+        for candidate_decision in &decision.candidates {
+            let already_present = candidates.iter().any(|candidate| {
+                candidate.candidate_id == candidate_decision.model_id
+                    && candidate.provider_id == candidate_decision.provider_id
+            });
+            if already_present {
+                continue;
+            }
+            candidates.push(ShadowCandidateInput {
+                candidate_id: candidate_decision.model_id.clone(),
+                provider_id: candidate_decision.provider_id.clone(),
+                tier: candidate_decision
+                    .tier
+                    .as_deref()
+                    .and_then(|tier| ModelTier::ALL.into_iter().find(|known| known.as_str() == tier)),
+                eligible: false,
+                features: RoutingFeatures::default(),
+                rejection_reason: Some(
+                    candidate_decision
+                        .rejection
+                        .clone()
+                        .unwrap_or_else(|| "not in executable plan".to_string()),
+                ),
+            });
+        }
+
         Self {
             decision_id: decision.decision_id.clone(),
+            policy_id: decision.policy_id.clone(),
+            client_id: decision.client_id.clone(),
+            policy_revision: decision.policy_revision.clone(),
+            task: decision.task.clone(),
             production_selected: decision.selected.clone().unwrap_or_default(),
             feature_schema: FEATURE_SCHEMA_VERSION,
             candidates,
@@ -837,17 +1075,10 @@ impl ShadowStore {
 
     /// Store-boundary gate enforcement.
     ///
-    /// Rejects (with a reason) any decision that:
-    /// - has an empty request id, decision id, or production-selected model,
-    /// - has an empty model commit,
-    /// - carries a feature schema other than [`FEATURE_SCHEMA_VERSION`],
-    /// - has a zero input or decision checksum,
-    /// - carries a non-finite prediction field or utility component on any
-    ///   candidate,
-    /// - has no candidates.
-    ///
-    /// On success the decision is pushed, evicting the oldest when at
-    /// capacity.
+    /// A stored record is a replayable observation, not merely a rendered
+    /// verdict. The store therefore verifies the retained input/commit
+    /// relationship, candidate evidence identity, finite values, ranking
+    /// eligibility, and both checksums before accepting the record.
     pub fn push(&self, decision: ShadowDecision) -> Result<(), String> {
         if decision.actual.request_id.is_empty() {
             return Err("empty request_id".to_string());
@@ -861,11 +1092,41 @@ impl ShadowStore {
         if decision.shadow.model_commit.as_str().is_empty() {
             return Err("empty model_commit".to_string());
         }
+        if decision.observation.model_commit.as_str().is_empty() {
+            return Err("empty observation model_commit".to_string());
+        }
+        if decision.shadow.model_commit != decision.observation.model_commit {
+            return Err("observation model_commit does not match shadow verdict".to_string());
+        }
+        if decision.actual.decision_id != decision.observation.input.decision_id {
+            return Err("observation decision_id does not match actual decision".to_string());
+        }
+        if decision.actual.selected != decision.observation.input.production_selected {
+            return Err("observation planned selection does not match actual decision".to_string());
+        }
         if decision.shadow.feature_schema != FEATURE_SCHEMA_VERSION {
             return Err(format!(
                 "feature schema mismatch: {} != {}",
                 decision.shadow.feature_schema, FEATURE_SCHEMA_VERSION
             ));
+        }
+        if decision.observation.input.feature_schema != FEATURE_SCHEMA_VERSION {
+            return Err(format!(
+                "observation feature schema mismatch: {} != {}",
+                decision.observation.input.feature_schema, FEATURE_SCHEMA_VERSION
+            ));
+        }
+        if decision.shadow.feature_schema != decision.observation.input.feature_schema {
+            return Err("shadow and observation feature schemas differ".to_string());
+        }
+        if decision.observation.input.candidates.is_empty() {
+            return Err("observation has no candidates".to_string());
+        }
+        if decision.candidates.is_empty() {
+            return Err("no candidates".to_string());
+        }
+        if decision.observation.input.candidates.len() != decision.candidates.len() {
+            return Err("observation and evidence candidate counts differ".to_string());
         }
         if decision.decision_input_checksum == 0 {
             return Err("zero decision_input_checksum".to_string());
@@ -873,7 +1134,76 @@ impl ShadowStore {
         if decision.decision_checksum == 0 {
             return Err("zero decision_checksum".to_string());
         }
-        for candidate in &decision.candidates {
+
+        let mut ranked = HashSet::new();
+        for candidate_id in &decision.shadow.ranked_candidates {
+            if !ranked.insert(candidate_id.clone()) {
+                return Err(format!("duplicate ranked candidate '{candidate_id}'"));
+            }
+            let Some(candidate) = decision
+                .candidates
+                .iter()
+                .find(|candidate| &candidate.candidate_id == candidate_id)
+            else {
+                return Err(format!("ranked candidate '{candidate_id}' has no evidence"));
+            };
+            if !candidate.eligible || !candidate.valid {
+                return Err(format!(
+                    "ineligible or invalid candidate '{candidate_id}' cannot be ranked"
+                ));
+            }
+        }
+        let valid_candidate_ids: HashSet<String> = decision
+            .candidates
+            .iter()
+            .filter(|candidate| candidate.eligible && candidate.valid)
+            .map(|candidate| candidate.candidate_id.clone())
+            .collect();
+        if ranked != valid_candidate_ids {
+            return Err("ranked candidates do not match the valid evidence set".to_string());
+        }
+
+        for (input_candidate, candidate) in decision
+            .observation
+            .input
+            .candidates
+            .iter()
+            .zip(decision.candidates.iter())
+        {
+            if input_candidate.candidate_id != candidate.candidate_id
+                || input_candidate.provider_id != candidate.provider_id
+                || input_candidate.tier != candidate.tier
+                || input_candidate.eligible != candidate.eligible
+            {
+                return Err(format!(
+                    "candidate '{}' evidence does not match observation input",
+                    candidate.candidate_id
+                ));
+            }
+            if input_candidate.rejection_reason.is_some()
+                && input_candidate.rejection_reason != candidate.rejection_reason
+            {
+                return Err(format!(
+                    "candidate '{}' rejection evidence does not match observation input",
+                    candidate.candidate_id
+                ));
+            }
+            if input_candidate.features.schema_version != FEATURE_SCHEMA_VERSION
+                || input_candidate.features.values.iter().any(|value| !value.is_finite())
+            {
+                return Err(format!(
+                    "candidate '{}' has an invalid feature snapshot",
+                    candidate.candidate_id
+                ));
+            }
+            if candidate.prediction.candidate_model != candidate.candidate_id
+                || candidate.prediction.candidate_provider != candidate.provider_id
+            {
+                return Err(format!(
+                    "candidate '{}' prediction identity does not match evidence identity",
+                    candidate.candidate_id
+                ));
+            }
             let bundle = &candidate.prediction;
             for (model, prediction) in [
                 ("success", &bundle.success),
@@ -895,9 +1225,46 @@ impl ShadowStore {
                 ));
             }
         }
-        if decision.candidates.is_empty() {
-            return Err("no candidates".to_string());
+
+        // A rejected candidate may be named as the current planned identity in
+        // a Keep verdict, but it can never be emitted as an executable
+        // counterfactual action.
+        if let Some(selected_candidate) = decision
+            .candidates
+            .iter()
+            .find(|candidate| candidate.candidate_id == decision.shadow.selected)
+        {
+            if (!selected_candidate.eligible || !selected_candidate.valid)
+                && (decision.shadow.action != RoutingAction::Keep
+                    || decision.shadow.selected != decision.actual.selected)
+            {
+                return Err(format!(
+                    "shadow selected invalid candidate '{}' as an executable action",
+                    decision.shadow.selected
+                ));
+            }
         }
+
+        let expected_input_checksum =
+            shadow_input_checksum(&decision.observation.input, &decision.observation.model_commit);
+        if expected_input_checksum != decision.decision_input_checksum {
+            return Err("decision_input_checksum does not match retained observation".to_string());
+        }
+        let expected_decision_checksum = shadow_decision_checksum(
+            decision.decision_input_checksum,
+            &decision.candidates,
+            &decision.shadow.ranked_candidates,
+            &decision.shadow.selected,
+            decision.shadow.action,
+            &decision.shadow.reason,
+        );
+        if expected_decision_checksum != decision.decision_checksum {
+            return Err(format!(
+                "decision_checksum does not match retained verdict evidence: expected {}, got {}",
+                expected_decision_checksum, decision.decision_checksum
+            ));
+        }
+
         let mut decisions = crate::sync::lock(&self.decisions);
         if decisions.len() >= self.max_decisions {
             decisions.pop_front();
@@ -1112,6 +1479,41 @@ impl ShadowEngine {
         if input.candidates.is_empty() {
             return Err("shadow input has no candidates".to_string());
         }
+        if input.feature_schema != FEATURE_SCHEMA_VERSION {
+            return Err(format!(
+                "feature schema mismatch: {} != {}",
+                input.feature_schema, FEATURE_SCHEMA_VERSION
+            ));
+        }
+        if input.production_selected.is_empty() {
+            return Err("shadow input has no planned production selection".to_string());
+        }
+        for candidate in &input.candidates {
+            if candidate.candidate_id.is_empty() || candidate.provider_id.is_empty() {
+                return Err("shadow input contains an empty candidate identity".to_string());
+            }
+            if candidate.features.schema_version != input.feature_schema {
+                return Err(format!(
+                    "candidate '{}' feature schema mismatch: {} != {}",
+                    candidate.candidate_id,
+                    candidate.features.schema_version,
+                    input.feature_schema
+                ));
+            }
+            if candidate.features.values.iter().any(|value| !value.is_finite()) {
+                return Err(format!(
+                    "candidate '{}' has a non-finite feature snapshot",
+                    candidate.candidate_id
+                ));
+            }
+            if candidate.eligible && candidate.rejection_reason.is_some() {
+                return Err(format!(
+                    "eligible candidate '{}' carries rejection evidence",
+                    candidate.candidate_id
+                ));
+            }
+        }
+
         let commit = predictor.commit_id();
         if commit.as_str().is_empty() {
             return Err("predictor returned an empty commit id".to_string());
@@ -1119,16 +1521,20 @@ impl ShadowEngine {
 
         // Predict once per candidate. The decision engine owns classification
         // (eligibility, finiteness) and utility computation; this layer only
-        // records the evidence.
+        // records the evidence. Prediction identity is normalized back to the
+        // immutable input identity so a faulty predictor cannot rewrite the
+        // candidate key in the observation.
         let mut bundles: Vec<PredictionBundle> = Vec::with_capacity(input.candidates.len());
         let mut engine_candidates: Vec<EngineCandidate> =
             Vec::with_capacity(input.candidates.len());
         for candidate in &input.candidates {
-            let bundle = predictor.predict(
+            let mut bundle = predictor.predict(
                 &candidate.candidate_id,
                 &candidate.provider_id,
                 &candidate.features,
             );
+            bundle.candidate_model = candidate.candidate_id.clone();
+            bundle.candidate_provider = candidate.provider_id.clone();
             engine_candidates.push(EngineCandidate {
                 candidate_id: candidate.candidate_id.clone(),
                 bundle: bundle.clone(),
@@ -1144,7 +1550,9 @@ impl ShadowEngine {
             session_switch_count: input.session_switch_count,
             is_fallback: input.is_fallback,
         };
-        let output = self.engine.decide(&engine_input);
+        // The production plan order is retained as evidence, but the shadow
+        // path explicitly ranks valid candidates by ML utility.
+        let output = self.engine.decide_with_ml_ranking(&engine_input);
 
         if output.candidates.len() != input.candidates.len() {
             return Err(format!(
@@ -1164,13 +1572,21 @@ impl ShadowEngine {
             .zip(bundles.iter())
             .zip(output.candidates.iter())
         {
+            let rejection_reason = if !candidate.eligible {
+                candidate
+                    .rejection_reason
+                    .clone()
+                    .or_else(|| outcome.rejection_reason.clone())
+            } else {
+                outcome.rejection_reason.clone()
+            };
             candidates.push(ShadowCandidate {
                 candidate_id: candidate.candidate_id.clone(),
                 provider_id: candidate.provider_id.clone(),
                 tier: candidate.tier,
                 eligible: candidate.eligible,
                 valid: outcome.valid,
-                rejection_reason: outcome.rejection_reason.clone(),
+                rejection_reason,
                 prediction: if outcome.valid {
                     bundle.clone()
                 } else {
@@ -1185,10 +1601,15 @@ impl ShadowEngine {
         let decision_checksum = shadow_decision_checksum(
             decision_input_checksum,
             &candidates,
+            &output.ranked_candidates,
             &decision.selected_candidate,
             decision.action,
             &decision.reason,
         );
+        let observation = ShadowObservation {
+            input: input.clone(),
+            model_commit: commit.clone(),
+        };
         let shadow_decision = ShadowDecision {
             shadow_id: format!("shadow-{}", uuid::Uuid::new_v4().simple()),
             timestamp: chrono::Utc::now().timestamp(),
@@ -1197,13 +1618,18 @@ impl ShadowEngine {
                 request_id: request_id.to_string(),
                 decision_id: input.decision_id.clone(),
                 selected: input.production_selected.clone(),
+                // Final served identity is intentionally unknown in this pure
+                // seam. The full integration node may attach it later.
+                served: None,
             },
+            observation,
             shadow: ShadowVerdict {
                 model_commit: commit,
                 feature_schema: input.feature_schema,
                 selected: decision.selected_candidate.clone(),
                 action: decision.action,
                 reason: decision.reason.clone(),
+                ranked_candidates: output.ranked_candidates.clone(),
             },
             candidates,
             decision_input_checksum,
@@ -1243,7 +1669,7 @@ mod tests {
     use crate::feedback::DataOrigin;
     use crate::ml::coordinator::CoordinatorConfig;
     use crate::ml::dataset::Targets;
-    use crate::ml::reward::{compute_utility, RewardPolicy};
+    use crate::ml::reward::RewardPolicy;
 
     // -----------------------------------------------------------------------
     // Helpers
@@ -1267,12 +1693,17 @@ mod tests {
             tier: Some(ModelTier::Standard),
             eligible: true,
             features: features(seed),
+            rejection_reason: None,
         }
     }
 
     fn shadow_input() -> ShadowInput {
         ShadowInput {
             decision_id: "dec-1".to_string(),
+            policy_id: "policy-1".to_string(),
+            client_id: None,
+            policy_revision: PolicyRevision::default(),
+            task: TaskProfileSummary::default(),
             production_selected: "model-a".to_string(),
             feature_schema: FEATURE_SCHEMA_VERSION,
             candidates: vec![
@@ -1328,48 +1759,9 @@ mod tests {
 
     fn valid_decision() -> ShadowDecision {
         let input = shadow_input();
-        let predictor = ModelEnsemblePredictor::genesis();
-        let commit = predictor.commit();
-        let bundle = predictor.predict("model-a", "prov-a", &input.candidates[0].features);
-        let utility = compute_utility(&bundle, &RewardPolicy::default(), false, 0);
-        let candidates = vec![ShadowCandidate {
-            candidate_id: "model-a".to_string(),
-            provider_id: "prov-a".to_string(),
-            tier: Some(ModelTier::Standard),
-            eligible: true,
-            valid: true,
-            rejection_reason: None,
-            prediction: bundle,
-            utility,
-        }];
-        let input_checksum = shadow_input_checksum(&input, &commit);
-        let decision_checksum = shadow_decision_checksum(
-            input_checksum,
-            &candidates,
-            "model-a",
-            RoutingAction::Keep,
-            "test",
-        );
-        ShadowDecision {
-            shadow_id: format!("shadow-{}", uuid::Uuid::new_v4().simple()),
-            timestamp: chrono::Utc::now().timestamp(),
-            scope: ShadowScope::PolicyRouted,
-            actual: ProductionDecisionRef {
-                request_id: "req-1".to_string(),
-                decision_id: "dec-1".to_string(),
-                selected: "model-a".to_string(),
-            },
-            shadow: ShadowVerdict {
-                model_commit: commit,
-                feature_schema: FEATURE_SCHEMA_VERSION,
-                selected: "model-a".to_string(),
-                action: RoutingAction::Keep,
-                reason: "test".to_string(),
-            },
-            candidates,
-            decision_input_checksum: input_checksum,
-            decision_checksum,
-        }
+        ShadowEngine::new(decision_engine(), true)
+            .evaluate("req-1", &input)
+            .expect("fixture evaluation should succeed")
     }
 
     fn store_push_err(decision: ShadowDecision) -> String {
@@ -1644,6 +2036,7 @@ mod tests {
         let baseline = shadow_decision_checksum(
             decision.decision_input_checksum,
             &decision.candidates,
+            &decision.shadow.ranked_candidates,
             &decision.shadow.selected,
             decision.shadow.action,
             &decision.shadow.reason,
@@ -1653,6 +2046,7 @@ mod tests {
         let changed = shadow_decision_checksum(
             decision.decision_input_checksum,
             &decision.candidates,
+            &decision.shadow.ranked_candidates,
             &decision.shadow.selected,
             decision.shadow.action,
             &decision.shadow.reason,
@@ -1666,6 +2060,7 @@ mod tests {
         let baseline = shadow_decision_checksum(
             decision.decision_input_checksum,
             &decision.candidates,
+            &decision.shadow.ranked_candidates,
             &decision.shadow.selected,
             decision.shadow.action,
             &decision.shadow.reason,
@@ -1673,6 +2068,7 @@ mod tests {
         let switched = shadow_decision_checksum(
             decision.decision_input_checksum,
             &decision.candidates,
+            &decision.shadow.ranked_candidates,
             "model-b",
             RoutingAction::Switch,
             &decision.shadow.reason,

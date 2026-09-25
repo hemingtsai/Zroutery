@@ -85,6 +85,7 @@ fn candidate_input(id: &str, provider: &str, seed: f32) -> ShadowCandidateInput 
         tier: Some(ModelTier::Standard),
         eligible: true,
         features: make_features(seed),
+        rejection_reason: None,
     }
 }
 
@@ -99,12 +100,17 @@ fn candidate_input_with_features(
         tier: Some(ModelTier::Standard),
         eligible: true,
         features,
+        rejection_reason: None,
     }
 }
 
 fn shadow_input_with(candidates: Vec<ShadowCandidateInput>) -> ShadowInput {
     ShadowInput {
         decision_id: "dec-1".to_string(),
+        policy_id: "policy-1".to_string(),
+        client_id: None,
+        policy_revision: Default::default(),
+        task: Default::default(),
         production_selected: "model-a".to_string(),
         feature_schema: FEATURE_SCHEMA_VERSION,
         candidates,
@@ -630,6 +636,7 @@ fn shadow_decision_shape() {
             tier: Some(ModelTier::Fast),
             eligible: true,
             features: make_features(0.10),
+            rejection_reason: None,
         },
         ShadowCandidateInput {
             candidate_id: "model-b".to_string(),
@@ -637,6 +644,7 @@ fn shadow_decision_shape() {
             tier: Some(ModelTier::Standard),
             eligible: true,
             features: make_features(0.30),
+            rejection_reason: None,
         },
         ShadowCandidateInput {
             candidate_id: "model-c".to_string(),
@@ -644,6 +652,7 @@ fn shadow_decision_shape() {
             tier: Some(ModelTier::Reasoning),
             eligible: true,
             features: make_features(0.50),
+            rejection_reason: None,
         },
         ShadowCandidateInput {
             candidate_id: "model-d".to_string(),
@@ -651,6 +660,7 @@ fn shadow_decision_shape() {
             tier: None,
             eligible: false,
             features: make_features(0.70),
+            rejection_reason: Some("policy rejected".to_string()),
         },
     ];
     let input = shadow_input_with(candidates);
@@ -713,7 +723,7 @@ fn shadow_decision_shape() {
     assert!(!decision.candidates[3].valid);
     assert_eq!(
         decision.candidates[3].rejection_reason.as_deref(),
-        Some("ineligible")
+        Some("policy rejected")
     );
 
     // Identity checksums + store round-trip.

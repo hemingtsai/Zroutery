@@ -39,6 +39,6 @@ pub use reward::{
 };
 pub use shadow::{
     EnsemblePredictor, ModelEnsemblePredictor, ProductionDecisionRef, ShadowCandidate,
-    ShadowCandidateInput, ShadowDecision, ShadowEngine, ShadowInput, ShadowScope, ShadowStore,
-    ShadowVerdict,
+    ShadowCandidateInput, ShadowDecision, ShadowEngine, ShadowInput, ShadowObservation, ShadowScope,
+    ShadowStore, ShadowVerdict,
 };
