@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "node_id": "STAGE-7",
+  "display_name": "Stage 7 — learning foundation aggregate",
+  "status": "PARTIAL",
+  "implementation_state": "The aggregate contains partial foundations and blocked learning subnodes; it is not a completion shortcut.",
+  "dependencies": [
+    "STAGE-6",
+    "7A",
+    "7B",
+    "7C",
+    "7D",
+    "7E-0",
+    "7E-1"
+  ],
+  "dependents": [
+    "STAGE-8"
+  ],
+  "required_gates": [
+    "All Stage 7 child gates",
+    "No aggregate override of child state",
+    "Core-to-ML dependency direction"
+  ],
+  "blocked_by": [
+    "STAGE-6",
+    "7B",
+    "7E-0"
+  ],
+  "unblock_condition": "Close the child gates and revalidate the aggregate as a whole.",
+  "evidence": [
+    "E-005",
+    "E-006",
+    "E-007",
+    "E-016"
+  ],
+  "source_references": [
+    "docs/development/repository-audit-2026-09-25.md",
+    "crates/zroutery-core/src/ml/mod.rs",
+    "crates/zroutery-core/src/lib.rs"
+  ],
+  "notes": [
+    "Stage 7 remains PARTIAL even where child tests pass."
+  ]
+}

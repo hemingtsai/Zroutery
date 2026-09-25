@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "node_id": "7E-1B",
+  "display_name": "7E-1B — replayable shadow observation repair",
+  "status": "BLOCKED",
+  "implementation_state": "The required repair is defined by the audit but cannot start safely until 7E-1A and Core P1 repairs pass.",
+  "dependencies": [
+    "7E-1A",
+    "CORE-P1-REPAIR",
+    "STAGE-3",
+    "STAGE-4",
+    "STAGE-6"
+  ],
+  "dependents": [
+    "7E-2A"
+  ],
+  "required_gates": [
+    "7E-1A identity/replay acceptance",
+    "Core eligibility and served-identity repair",
+    "Failure/stream Outcome repair",
+    "Retained exact feature vectors"
+  ],
+  "blocked_by": [
+    "7E-1A",
+    "CORE-P1-REPAIR",
+    "STAGE-3",
+    "STAGE-4",
+    "STAGE-6"
+  ],
+  "unblock_condition": "Merge and revalidate 7E-1A plus Core P1 repairs, then prove a meaningful counterfactual with retained input and final served identity.",
+  "evidence": [
+    "E-016"
+  ],
+  "source_references": [
+    "docs/development/repository-audit-2026-09-25.md",
+    "crates/zroutery-core/src/ml/shadow.rs",
+    "crates/zroutery-core/src/server/pipeline.rs",
+    "crates/zroutery-core/src/policy.rs"
+  ],
+  "notes": [
+    "Do not dispatch this node before its stated unblock condition."
+  ]
+}

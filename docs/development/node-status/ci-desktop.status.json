@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "node_id": "CI-DESKTOP",
+  "display_name": "External macOS desktop CI",
+  "status": "DONE",
+  "implementation_state": "External CI passed a macOS workspace check for the exact audited SHA.",
+  "dependencies": [],
+  "dependents": [
+    "TEST-PACKAGING"
+  ],
+  "required_gates": [
+    "GitHub Actions run 36014406507",
+    "cargo check --workspace"
+  ],
+  "blocked_by": [],
+  "unblock_condition": "Retain exact run/SHA and do not generalize to Windows or packaging.",
+  "evidence": [
+    "E-015"
+  ],
+  "source_references": [
+    "docs/development/repository-audit-2026-09-25.md",
+    ".github/workflows/ci.yml",
+    "src-tauri/Cargo.toml"
+  ],
+  "notes": [
+    "Not a Windows gate."
+  ]
+}

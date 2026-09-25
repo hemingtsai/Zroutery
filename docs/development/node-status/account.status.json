@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "node_id": "ACCOUNT",
+  "display_name": "Account generic contract",
+  "status": "PARTIAL",
+  "implementation_state": "Account types, store, and pure calculations are useful, but persistence and production ownership/execution do not exist.",
+  "dependencies": [
+    "STAGE-5"
+  ],
+  "dependents": [
+    "NEWAPI",
+    "UI-NEW-TRACKS"
+  ],
+  "required_gates": [
+    "Generic account types and pure calculations",
+    "Persistence/runtime ownership",
+    "Default-build compatibility"
+  ],
+  "blocked_by": [
+    "STAGE-5"
+  ],
+  "unblock_condition": "Revalidate Stage 5 and add an owned persistence/runtime contract without changing ML feature order.",
+  "evidence": [
+    "E-005",
+    "E-007",
+    "E-016"
+  ],
+  "source_references": [
+    "docs/development/repository-audit-2026-09-25.md",
+    "crates/zroutery-core/src/account/types.rs",
+    "crates/zroutery-core/src/account/store.rs",
+    "crates/zroutery-core/src/account/provider.rs"
+  ],
+  "notes": [
+    "Account remains optional."
+  ]
+}

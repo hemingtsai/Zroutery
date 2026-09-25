@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "node_id": "7A",
+  "display_name": "7A — deterministic feature extraction",
+  "status": "PARTIAL",
+  "implementation_state": "Deterministic feature extraction exists, but identity and schema architecture memory is incomplete.",
+  "dependencies": [
+    "STAGE-4",
+    "STAGE-5"
+  ],
+  "dependents": [
+    "7B",
+    "7C",
+    "7E-1A",
+    "STAGE-7"
+  ],
+  "required_gates": [
+    "Fixed feature schema",
+    "Deterministic extraction and missing-data behavior",
+    "Identity/schema architecture memory"
+  ],
+  "blocked_by": [],
+  "unblock_condition": "Publish the canonical feature/identity schema and pass extraction, schema, and determinism gates.",
+  "evidence": [
+    "E-005",
+    "E-006",
+    "E-016"
+  ],
+  "source_references": [
+    "docs/development/repository-audit-2026-09-25.md",
+    "crates/zroutery-core/src/ml/features.rs",
+    "crates/zroutery-core/tests/feature_bench_percentiles.rs"
+  ],
+  "notes": [
+    "The feature library is not evidence of default desktop ML."
+  ]
+}

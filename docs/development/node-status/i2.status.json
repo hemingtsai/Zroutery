@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "node_id": "I2",
+  "display_name": "I2 — migration execution",
+  "status": "PARTIAL",
+  "implementation_state": "The state machine and local file mechanics exist, but actions do not own the intended process lifecycle and endpoint checks accept any HTTP response.",
+  "dependencies": [],
+  "dependents": [
+    "I4",
+    "UI-NEW-TRACKS"
+  ],
+  "required_gates": [
+    "Typed action runner",
+    "Owned stop/start process lifecycle",
+    "Config and auth policy",
+    "Local child-process fixtures",
+    "Endpoint response policy"
+  ],
+  "blocked_by": [],
+  "unblock_condition": "Implement the typed runner and pass local child-process, config, auth, and endpoint fixtures.",
+  "evidence": [
+    "E-005",
+    "E-016"
+  ],
+  "source_references": [
+    "docs/development/repository-audit-2026-09-25.md",
+    "crates/zroutery-core/src/migration.rs",
+    "crates/zroutery-core/tests/e2e.rs"
+  ],
+  "notes": [
+    "Migration is a parallel sidecar, not a completed product lifecycle."
+  ]
+}

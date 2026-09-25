@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "node_id": "TEST-CLIPPY",
+  "display_name": "Full workspace clippy",
+  "status": "FAILED",
+  "implementation_state": "The full local workspace all-target/all-feature clippy failed on an unused Tauri binding.",
+  "dependencies": [
+    "TEST-CHECK"
+  ],
+  "dependents": [
+    "BASELINE-GATE"
+  ],
+  "required_gates": [
+    "cargo clippy --workspace --all-targets --all-features -- -D warnings"
+  ],
+  "blocked_by": [
+    "TEST-CHECK"
+  ],
+  "unblock_condition": "BASELINE-GATE must repair the warning and rerun the exact command.",
+  "evidence": [
+    "E-008"
+  ],
+  "source_references": [
+    "docs/development/repository-audit-2026-09-25.md",
+    "src-tauri/src/store.rs",
+    ".github/workflows/ci.yml"
+  ],
+  "notes": [
+    "External CI is narrower."
+  ]
+}

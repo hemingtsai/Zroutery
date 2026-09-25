@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "node_id": "ORCH-DAG",
+  "display_name": "Dependency DAG",
+  "status": "DONE",
+  "implementation_state": "The dependency graph is documented and machine-checkable.",
+  "dependencies": [
+    "ORCH-INFRA"
+  ],
+  "dependents": [
+    "ORCH-VALIDATION"
+  ],
+  "required_gates": [
+    "Complete node inventory",
+    "Symmetric dependencies/dependents",
+    "Blocked-by membership",
+    "Acyclic graph"
+  ],
+  "blocked_by": [],
+  "unblock_condition": "Revalidate all edges and critical-path ordering after any node change.",
+  "evidence": [
+    "E-018",
+    "E-019",
+    "E-020"
+  ],
+  "source_references": [
+    "docs/development/repository-audit-2026-09-25.md",
+    "docs/development/dependency-dag.md"
+  ],
+  "notes": [
+    "A graph edge is not a completion claim."
+  ]
+}

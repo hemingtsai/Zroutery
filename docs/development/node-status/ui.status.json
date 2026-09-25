@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "node_id": "UI",
+  "display_name": "Operational UI",
+  "status": "DONE",
+  "implementation_state": "The existing operational provider/model/routing/activity/settings UI builds and is integrated.",
+  "dependencies": [
+    "STAGE-1"
+  ],
+  "dependents": [
+    "UI-LAYOUT",
+    "UI-NEW-TRACKS"
+  ],
+  "required_gates": [
+    "Production UI build",
+    "Provider/model/routing/activity/settings integration",
+    "Operational smoke/build evidence"
+  ],
+  "blocked_by": [],
+  "unblock_condition": "Keep the current operational surface within its existing scope; revalidate if Core or UI contracts change.",
+  "evidence": [
+    "E-009",
+    "E-014",
+    "E-016"
+  ],
+  "source_references": [
+    "docs/development/repository-audit-2026-09-25.md",
+    "ui/src/App.tsx",
+    "ui/src/pages/Providers.tsx",
+    "ui/src/pages/Models.tsx",
+    "ui/src/pages/Routing.tsx",
+    "ui/src/pages/Activity.tsx",
+    "ui/src/pages/Settings.tsx",
+    "package.json"
+  ],
+  "notes": [
+    "This DONE state does not expose Account, migration, takeover, shadow, or ML."
+  ]
+}

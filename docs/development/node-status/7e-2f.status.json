@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "node_id": "7E-2F",
+  "display_name": "7E-2F — immutable snapshot and atomic activation",
+  "status": "BLOCKED",
+  "implementation_state": "Immutable snapshot and atomic activation are not established behind a verified commit.",
+  "dependencies": [
+    "7E-2E"
+  ],
+  "dependents": [
+    "7E-3"
+  ],
+  "required_gates": [
+    "Verified immutable snapshot",
+    "Atomic activation",
+    "Rollback pointer and fail-closed activation",
+    "Packaging/reachability review"
+  ],
+  "blocked_by": [
+    "7E-2E"
+  ],
+  "unblock_condition": "Close 7E-2E and pass activation, rollback, and packaging gates before any reachability claim.",
+  "evidence": [
+    "E-016"
+  ],
+  "source_references": [
+    "docs/development/repository-audit-2026-09-25.md",
+    "crates/zroutery-core/src/ml/model_identity.rs",
+    "crates/zroutery-core/src/ml/shadow.rs"
+  ],
+  "notes": [
+    "Automatic activation is not authorized."
+  ]
+}

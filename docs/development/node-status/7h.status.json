@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "node_id": "7H",
+  "display_name": "7H — bounded exploration",
+  "status": "BLOCKED",
+  "implementation_state": "Exploration has no accepted takeover, budget, monitoring, or rollback evidence.",
+  "dependencies": [
+    "7G"
+  ],
+  "dependents": [
+    "STAGE-8"
+  ],
+  "required_gates": [
+    "Stable takeover",
+    "Budget and monitoring",
+    "Exploration bounds",
+    "Rollback"
+  ],
+  "blocked_by": [
+    "7G"
+  ],
+  "unblock_condition": "Pass 7G and the bounded exploration safety gates.",
+  "evidence": [
+    "E-016"
+  ],
+  "source_references": [
+    "docs/development/repository-audit-2026-09-25.md",
+    "crates/zroutery-core/src/ml/coordinator.rs",
+    "crates/zroutery-core/src/ml/reward.rs"
+  ],
+  "notes": [
+    "No exploration is authorized."
+  ]
+}

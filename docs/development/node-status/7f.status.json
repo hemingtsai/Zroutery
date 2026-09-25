@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "node_id": "7F",
+  "display_name": "7F — real-traffic shadow",
+  "status": "BLOCKED",
+  "implementation_state": "ML is not in the default desktop path and no accepted commit, shipping reachability, or stable real-traffic evidence exists.",
+  "dependencies": [
+    "7E-3",
+    "TEST-PACKAGING",
+    "OBSERVABILITY"
+  ],
+  "dependents": [
+    "7G"
+  ],
+  "required_gates": [
+    "Accepted ModelCommit",
+    "Offline replay evidence",
+    "Packaging/reachability",
+    "Stable observability and rollback"
+  ],
+  "blocked_by": [
+    "7E-3",
+    "TEST-PACKAGING"
+  ],
+  "unblock_condition": "Pass 7E-3 and TEST-PACKAGING, expose a read-only observability projection, and run a bounded shadow window with rollback.",
+  "evidence": [
+    "E-015",
+    "E-016"
+  ],
+  "source_references": [
+    "docs/development/repository-audit-2026-09-25.md",
+    "crates/zroutery-core/src/ml/shadow.rs",
+    "crates/zroutery-core/src/server/pipeline.rs"
+  ],
+  "notes": [
+    "External CI does not prove desktop packaging or real traffic."
+  ]
+}

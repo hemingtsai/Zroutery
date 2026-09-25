@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "node_id": "7G",
+  "display_name": "7G — controlled takeover",
+  "status": "BLOCKED",
+  "implementation_state": "Controlled takeover is not authorized and lacks stable shadow evidence and conflict-safe release.",
+  "dependencies": [
+    "7F"
+  ],
+  "dependents": [
+    "7H"
+  ],
+  "required_gates": [
+    "Stable real-traffic shadow window",
+    "Budget and monitoring",
+    "Conflict-safe ownership",
+    "Rollback rehearsal"
+  ],
+  "blocked_by": [
+    "7F"
+  ],
+  "unblock_condition": "Pass 7F and the I3/I4 ownership, confirmation, budget, monitoring, and rollback gates.",
+  "evidence": [
+    "E-016"
+  ],
+  "source_references": [
+    "docs/development/repository-audit-2026-09-25.md",
+    "crates/zroutery-core/src/agent_takeover.rs",
+    "crates/zroutery-core/src/migration.rs"
+  ],
+  "notes": [
+    "No production takeover is claimed."
+  ]
+}

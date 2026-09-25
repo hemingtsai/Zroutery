@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "node_id": "STAGE-8",
+  "display_name": "Stage 8 — continual policy learning",
+  "status": "BLOCKED",
+  "implementation_state": "No repository evidence supports Stage 8 implementation or acceptance.",
+  "dependencies": [
+    "STAGE-7",
+    "7H"
+  ],
+  "dependents": [],
+  "required_gates": [
+    "Complete 7E learning loop",
+    "Stable takeover and exploration",
+    "Rollback and monitoring"
+  ],
+  "blocked_by": [
+    "STAGE-7",
+    "7H"
+  ],
+  "unblock_condition": "Pass 7E-3, 7F, 7G, and 7H with real-traffic, rollback, budget, and monitoring evidence.",
+  "evidence": [
+    "E-016"
+  ],
+  "source_references": [
+    "docs/development/repository-audit-2026-09-25.md",
+    "crates/zroutery-core/src/ml/coordinator.rs",
+    "crates/zroutery-core/src/ml/reward.rs"
+  ],
+  "notes": [
+    "No production takeover or exploration is authorized."
+  ]
+}

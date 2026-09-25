@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "node_id": "UI-NEW-TRACKS",
+  "display_name": "New-track UI and Tauri surfaces",
+  "status": "BLOCKED",
+  "implementation_state": "The operational UI exists, but new backend lifecycles are not real or owned enough to expose product surfaces.",
+  "dependencies": [
+    "UI",
+    "ACCOUNT",
+    "NEWAPI",
+    "I2",
+    "I3",
+    "I4"
+  ],
+  "dependents": [],
+  "required_gates": [
+    "Backend lifecycle ownership",
+    "Real account/NewAPI/migration/takeover surfaces",
+    "Product confirmation and rollback UI"
+  ],
+  "blocked_by": [
+    "ACCOUNT",
+    "NEWAPI",
+    "I2",
+    "I3",
+    "I4"
+  ],
+  "unblock_condition": "Close the Account, NewAPI, I2, I3, and I4 lifecycle contracts before adding user-facing controls.",
+  "evidence": [
+    "E-016"
+  ],
+  "source_references": [
+    "docs/development/repository-audit-2026-09-25.md",
+    "ui/src/App.tsx",
+    "src-tauri/src/commands.rs",
+    "crates/zroutery-core/src/account/adapters/newapi.rs",
+    "crates/zroutery-core/src/migration.rs",
+    "crates/zroutery-core/src/agent_takeover.rs"
+  ],
+  "notes": [
+    "No placeholder control is treated as a product lifecycle."
+  ]
+}

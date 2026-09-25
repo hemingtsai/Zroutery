@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "node_id": "CORE-P1-REPAIR",
+  "display_name": "Core P1 contract repair",
+  "status": "QUEUED",
+  "implementation_state": "The P1 repairs are identified but not implemented in the documentation batch.",
+  "dependencies": [],
+  "dependents": [
+    "7E-1",
+    "7E-1B",
+    "STAGE-1",
+    "STAGE-2",
+    "STAGE-3",
+    "STAGE-4",
+    "STAGE-6"
+  ],
+  "required_gates": [
+    "Stage 2 capability/media repair",
+    "Stage 3 eligibility and served-identity repair",
+    "Stage 4 failure and stream-state repair",
+    "Stage 6 production Outcome/Feedback bridge",
+    "Core revalidation and workspace tests"
+  ],
+  "blocked_by": [],
+  "unblock_condition": "Implement the bounded Core repairs and pass their eligibility, failure, cancellation, Outcome, and regression gates.",
+  "evidence": [
+    "E-004",
+    "E-005",
+    "E-016"
+  ],
+  "source_references": [
+    "docs/development/repository-audit-2026-09-25.md",
+    "crates/zroutery-core/src/policy.rs",
+    "crates/zroutery-core/src/router.rs",
+    "crates/zroutery-core/src/failure.rs",
+    "crates/zroutery-core/src/error.rs",
+    "crates/zroutery-core/src/server/pipeline.rs",
+    "crates/zroutery-core/src/outcome.rs",
+    "crates/zroutery-core/src/feedback.rs"
+  ],
+  "notes": [
+    "This is a repair package, not a claim that any failed stage is already repaired."
+  ]
+}

@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "node_id": "STAGE-5",
+  "display_name": "Stage 5 — optional account component",
+  "status": "PARTIAL",
+  "implementation_state": "Account types, store, and pure calculations have useful tests; persistence and production ownership/execution are absent.",
+  "dependencies": [
+    "STAGE-1"
+  ],
+  "dependents": [
+    "7A",
+    "ACCOUNT"
+  ],
+  "required_gates": [
+    "Account contract and pure-calculation tests",
+    "Persistence/runtime ownership contract",
+    "Default-build compatibility"
+  ],
+  "blocked_by": [
+    "STAGE-1"
+  ],
+  "unblock_condition": "Revalidate the Stage 1 contract and add an owned persistence/runtime boundary without changing ML feature order.",
+  "evidence": [
+    "E-005",
+    "E-007",
+    "E-016"
+  ],
+  "source_references": [
+    "docs/development/repository-audit-2026-09-25.md",
+    "crates/zroutery-core/src/account/types.rs",
+    "crates/zroutery-core/src/account/store.rs",
+    "crates/zroutery-core/src/account/provider.rs",
+    "crates/zroutery-core/Cargo.toml"
+  ],
+  "notes": [
+    "Account remains optional and is not enabled by the default Tauri dependency."
+  ]
+}

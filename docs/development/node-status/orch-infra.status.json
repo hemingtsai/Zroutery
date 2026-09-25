@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "node_id": "ORCH-INFRA",
+  "display_name": "Orchestrator infrastructure contract",
+  "status": "DONE",
+  "implementation_state": "The orchestration record contract and validation responsibilities are defined in the allowed documentation files.",
+  "dependencies": [],
+  "dependents": [
+    "ORCH-ARCHITECTURE",
+    "ORCH-DAG",
+    "ORCH-EVIDENCE",
+    "ORCH-REGRESSION",
+    "ORCH-ROADMAP",
+    "ORCH-STATUS"
+  ],
+  "required_gates": [
+    "Consistent node JSON schema",
+    "Evidence and path ownership",
+    "Allowed-file boundary",
+    "Validation gate definitions"
+  ],
+  "blocked_by": [],
+  "unblock_condition": "Revalidate the schema, inventory, paths, graph, ADRs, and diff after any record change.",
+  "evidence": [
+    "E-016",
+    "E-017",
+    "E-018",
+    "E-019",
+    "E-020",
+    "E-021",
+    "E-022",
+    "E-023"
+  ],
+  "source_references": [
+    "docs/development/repository-audit-2026-09-25.md",
+    "docs/development/WORKFLOW.md",
+    "docs/development/architecture.md",
+    "docs/development/dependency-dag.md",
+    "docs/development/evidence-registry.md",
+    "docs/development/regression-ledger.md"
+  ],
+  "notes": [
+    "This node covers documentation infrastructure, not implementation gates."
+  ]
+}

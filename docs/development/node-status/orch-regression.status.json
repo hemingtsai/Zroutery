@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "node_id": "ORCH-REGRESSION",
+  "display_name": "Regression ledger",
+  "status": "DONE",
+  "implementation_state": "All ten audited regressions have canonical rows and recovery conditions.",
+  "dependencies": [
+    "ORCH-INFRA"
+  ],
+  "dependents": [
+    "ORCH-VALIDATION"
+  ],
+  "required_gates": [
+    "REG-001 through REG-010",
+    "Severity and owner",
+    "Evidence and impacted node links",
+    "Reopen conditions"
+  ],
+  "blocked_by": [],
+  "unblock_condition": "Keep severity/owner/evidence synchronized with status changes.",
+  "evidence": [
+    "E-008",
+    "E-010",
+    "E-012",
+    "E-016",
+    "E-017",
+    "E-021",
+    "E-023"
+  ],
+  "source_references": [
+    "docs/development/repository-audit-2026-09-25.md",
+    "docs/development/regression-ledger.md"
+  ],
+  "notes": [
+    "REG-010 is documentation closure only."
+  ]
+}

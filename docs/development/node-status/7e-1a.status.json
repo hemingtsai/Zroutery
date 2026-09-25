@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "node_id": "7E-1A",
+  "display_name": "7E-1A — model identity and replay repair",
+  "status": "READY",
+  "implementation_state": "The bounded repair is authorized and scoped, but no repair implementation is present in this documentation worktree.",
+  "dependencies": [
+    "7E-0",
+    "7A",
+    "7C"
+  ],
+  "dependents": [
+    "7E-1B"
+  ],
+  "required_gates": [
+    "Commit/checkpoint mismatch rejection",
+    "Parent/lineage retention",
+    "Ordered replay and checksum determinism",
+    "Corrupt checkpoint/event rejection",
+    "Core ML tests and diff check"
+  ],
+  "blocked_by": [],
+  "unblock_condition": "Implement the identity/lineage/replay gates, run the specified Core/ML tests and clippy, then revalidate before dispatching 7E-1B.",
+  "evidence": [
+    "E-005",
+    "E-006",
+    "E-007",
+    "E-016"
+  ],
+  "source_references": [
+    "docs/development/repository-audit-2026-09-25.md",
+    "crates/zroutery-core/src/ml/model_identity.rs",
+    "crates/zroutery-core/src/ml/shadow.rs",
+    "crates/zroutery-core/tests/model_identity_test.rs",
+    "crates/zroutery-core/tests/shadow_test.rs"
+  ],
+  "notes": [
+    "This node is a dispatch record, not evidence of 7E-0 repair."
+  ]
+}

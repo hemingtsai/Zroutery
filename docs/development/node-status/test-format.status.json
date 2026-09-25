@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "node_id": "TEST-FORMAT",
+  "display_name": "Rust formatting check",
+  "status": "FAILED",
+  "implementation_state": "The audited formatting check found pre-existing drift.",
+  "dependencies": [],
+  "dependents": [],
+  "required_gates": [
+    "cargo fmt --all -- --check"
+  ],
+  "blocked_by": [],
+  "unblock_condition": "A separately authorized formatting repair must run and pass the full check.",
+  "evidence": [
+    "E-013"
+  ],
+  "source_references": [
+    "docs/development/repository-audit-2026-09-25.md",
+    "Cargo.toml",
+    "crates/zroutery-core/Cargo.toml",
+    "src-tauri/Cargo.toml"
+  ],
+  "notes": [
+    "ORCH-DOCS does not reformat source."
+  ]
+}

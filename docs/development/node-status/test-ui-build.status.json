@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "node_id": "TEST-UI-BUILD",
+  "display_name": "Operational UI build",
+  "status": "DONE",
+  "implementation_state": "The audited TypeScript/Vite production UI build passed.",
+  "dependencies": [],
+  "dependents": [
+    "TEST-LAYOUT-SELF"
+  ],
+  "required_gates": [
+    "pnpm --dir ui build"
+  ],
+  "blocked_by": [],
+  "unblock_condition": "Rerun after UI changes.",
+  "evidence": [
+    "E-009"
+  ],
+  "source_references": [
+    "docs/development/repository-audit-2026-09-25.md",
+    "package.json",
+    "ui/package.json"
+  ],
+  "notes": [
+    "Build is not browser layout evidence."
+  ]
+}

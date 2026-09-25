@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "node_id": "TEST-PACKAGING",
+  "display_name": "Desktop packaging gate",
+  "status": "QUEUED",
+  "implementation_state": "No packaging gate was run in the audit.",
+  "dependencies": [
+    "CI-DESKTOP"
+  ],
+  "dependents": [
+    "7F"
+  ],
+  "required_gates": [
+    "Tauri/package build",
+    "artifact reachability",
+    "rollback/reinstall check"
+  ],
+  "blocked_by": [],
+  "unblock_condition": "Run and record a packaging/reachability/rollback gate on an exact revision.",
+  "evidence": [
+    "E-015",
+    "E-016"
+  ],
+  "source_references": [
+    "docs/development/repository-audit-2026-09-25.md",
+    "src-tauri/Cargo.toml",
+    "package.json"
+  ],
+  "notes": [
+    "External workspace check is not packaging."
+  ]
+}

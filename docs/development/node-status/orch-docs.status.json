@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "node_id": "ORCH-DOCS",
+  "display_name": "Audited node status and evidence records",
+  "status": "DONE",
+  "implementation_state": "The documentation-only orchestration batch records the audit without changing implementation or upgrading unverified nodes.",
+  "dependencies": [
+    "ORCH-VALIDATION"
+  ],
+  "dependents": [],
+  "required_gates": [
+    "Complete first inspection report",
+    "Allowed-file-only diff",
+    "All required records and gates",
+    "Requested commit trailers"
+  ],
+  "blocked_by": [],
+  "unblock_condition": "Revalidate and commit only after every required documentation gate passes.",
+  "evidence": [
+    "E-001",
+    "E-002",
+    "E-016",
+    "E-017",
+    "E-018",
+    "E-019",
+    "E-020",
+    "E-021",
+    "E-022",
+    "E-023"
+  ],
+  "source_references": [
+    "docs/development/repository-audit-2026-09-25.md",
+    "docs/development/WORKFLOW.md",
+    "docs/development/architecture.md",
+    "docs/development/roadmap.md",
+    "docs/development/dependency-dag.md",
+    "docs/development/evidence-registry.md",
+    "docs/development/regression-ledger.md",
+    "docs/development/decisions/0001-recoverable-node-records.md",
+    "docs/development/decisions/0002-production-ml-boundary.md"
+  ],
+  "notes": [
+    "Completion applies to ORCH-DOCS records, not audited implementation nodes."
+  ]
+}

@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "node_id": "TEST-SMOKE",
+  "display_name": "Windows local smoke",
+  "status": "FAILED",
+  "implementation_state": "The local smoke command could not find the Windows headless binary and did not establish a lifecycle result.",
+  "dependencies": [
+    "TEST-CHECK"
+  ],
+  "dependents": [
+    "BASELINE-GATE"
+  ],
+  "required_gates": [
+    "pnpm smoke",
+    "mock-provider lifecycle",
+    "platform binary resolution"
+  ],
+  "blocked_by": [
+    "TEST-CHECK"
+  ],
+  "unblock_condition": "BASELINE-GATE must repair binary resolution and rerun with only the local mock provider.",
+  "evidence": [
+    "E-010"
+  ],
+  "source_references": [
+    "docs/development/repository-audit-2026-09-25.md",
+    "package.json",
+    "scripts/smoke_test.py",
+    "src-tauri/Cargo.toml"
+  ],
+  "notes": [
+    "No real provider call is authorized."
+  ]
+}

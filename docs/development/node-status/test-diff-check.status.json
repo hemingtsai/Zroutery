@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "node_id": "TEST-DIFF-CHECK",
+  "display_name": "Whitespace diff check",
+  "status": "DONE",
+  "implementation_state": "The audited baseline diff had no whitespace errors.",
+  "dependencies": [],
+  "dependents": [],
+  "required_gates": [
+    "git diff --check"
+  ],
+  "blocked_by": [],
+  "unblock_condition": "Run again on every final documentation or implementation diff.",
+  "evidence": [
+    "E-014"
+  ],
+  "source_references": [
+    "docs/development/repository-audit-2026-09-25.md",
+    ".gitignore"
+  ],
+  "notes": [
+    "Whitespace is not a test gate."
+  ]
+}

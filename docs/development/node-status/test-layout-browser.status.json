@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "node_id": "TEST-LAYOUT-BROWSER",
+  "display_name": "UI layout browser gate",
+  "status": "FAILED",
+  "implementation_state": "No Chromium was found; the script printed `skipping` and returned success instead of failing the acceptance gate.",
+  "dependencies": [
+    "TEST-LAYOUT-SELF"
+  ],
+  "dependents": [
+    "BASELINE-GATE"
+  ],
+  "required_gates": [
+    "python scripts/ui_layout_test.py",
+    "Chromium discovery",
+    "real layout assertions"
+  ],
+  "blocked_by": [],
+  "unblock_condition": "BASELINE-GATE must make missing browser explicit non-success and run assertions when available.",
+  "evidence": [
+    "E-012"
+  ],
+  "source_references": [
+    "docs/development/repository-audit-2026-09-25.md",
+    "scripts/ui_layout_test.py",
+    "package.json"
+  ],
+  "notes": [
+    "The zero exit is a false green."
+  ]
+}

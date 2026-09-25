@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "node_id": "7E-2A",
+  "display_name": "7E-2A — candidate-aware decision contract",
+  "status": "BLOCKED",
+  "implementation_state": "No current contract exists for the candidate-aware decision types required by 7E-2A.",
+  "dependencies": [
+    "7E-1B"
+  ],
+  "dependents": [
+    "7E-2B"
+  ],
+  "required_gates": [
+    "ModelInput",
+    "DecisionModel",
+    "DecisionState",
+    "DecisionCandidate",
+    "DecisionDistribution",
+    "Replayable production input"
+  ],
+  "blocked_by": [
+    "7E-1B"
+  ],
+  "unblock_condition": "Complete 7E-1B and define the typed contract with a trustworthy production decision trace.",
+  "evidence": [
+    "E-016"
+  ],
+  "source_references": [
+    "docs/development/repository-audit-2026-09-25.md",
+    "crates/zroutery-core/src/ml/decision_engine.rs",
+    "crates/zroutery-core/src/ml/model.rs",
+    "crates/zroutery-core/src/ml/shadow.rs"
+  ],
+  "notes": [
+    "The audit decision is preserved as BLOCKED."
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "node_id": "7E-0",
+  "display_name": "7E-0 — immutable model identity and replay",
+  "status": "FAILED",
+  "implementation_state": "Identity and replay foundations exist, but commit/checkpoint binding, lineage, replay validation, and content-addressed identity are incomplete.",
+  "dependencies": [
+    "7C"
+  ],
+  "dependents": [
+    "7E-1",
+    "7E-1A",
+    "7E-2E",
+    "STAGE-7"
+  ],
+  "required_gates": [
+    "Checkpoint/commit binding",
+    "Parent and ordered lineage",
+    "Deterministic replay and checksum identity",
+    "Corrupt artifact fail-closed tests"
+  ],
+  "blocked_by": [],
+  "unblock_condition": "Complete 7E-1A and revalidate the identity/replay gates without relying on stage-7e0-v1 ancestry.",
+  "evidence": [
+    "E-005",
+    "E-006",
+    "E-016"
+  ],
+  "source_references": [
+    "docs/development/repository-audit-2026-09-25.md",
+    "crates/zroutery-core/src/ml/model_identity.rs",
+    "crates/zroutery-core/tests/model_identity_test.rs"
+  ],
+  "notes": [
+    "The audit decision is preserved as FAILED."
+  ]
+}

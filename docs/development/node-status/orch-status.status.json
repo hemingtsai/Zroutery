@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "node_id": "ORCH-STATUS",
+  "display_name": "Recoverable node-status records",
+  "status": "DONE",
+  "implementation_state": "Per-node JSON records are being generated from the audit matrix and graph.",
+  "dependencies": [
+    "ORCH-INFRA"
+  ],
+  "dependents": [
+    "ORCH-VALIDATION"
+  ],
+  "required_gates": [
+    "One consistent JSON record per node",
+    "Complete inventory",
+    "Legal status enum",
+    "Required fields"
+  ],
+  "blocked_by": [],
+  "unblock_condition": "Pass parse, inventory, enum, and path validation.",
+  "evidence": [
+    "E-017",
+    "E-018",
+    "E-020"
+  ],
+  "source_references": [
+    "docs/development/repository-audit-2026-09-25.md",
+    "docs/development/architecture.md",
+    "docs/development/dependency-dag.md"
+  ],
+  "notes": [
+    "No implementation status is upgraded by this record."
+  ]
+}

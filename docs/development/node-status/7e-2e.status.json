@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "node_id": "7E-2E",
+  "display_name": "7E-2E — durable learning events and verified commits",
+  "status": "BLOCKED",
+  "implementation_state": "Learning events are not durably ordered or idempotent, and model commit lineage is not yet repaired.",
+  "dependencies": [
+    "7E-2D",
+    "7E-0"
+  ],
+  "dependents": [
+    "7E-2F"
+  ],
+  "required_gates": [
+    "Durable ordered LearningEvent journal",
+    "Idempotency and sequence semantics",
+    "Verified ModelCommit lineage",
+    "Replay closure"
+  ],
+  "blocked_by": [
+    "7E-2D",
+    "7E-0"
+  ],
+  "unblock_condition": "Close 7E-2D and 7E-0/7E-1A, then pass durable journal, idempotency, and verified-commit gates.",
+  "evidence": [
+    "E-016"
+  ],
+  "source_references": [
+    "docs/development/repository-audit-2026-09-25.md",
+    "crates/zroutery-core/src/ml/model_identity.rs",
+    "crates/zroutery-core/src/ml/dataset.rs",
+    "crates/zroutery-core/src/feedback.rs"
+  ],
+  "notes": [
+    "A type-level LearningEvent is not a durable journal."
+  ]
+}

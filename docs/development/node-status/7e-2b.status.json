@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "node_id": "7E-2B",
+  "display_name": "7E-2B — supervised warmup",
+  "status": "BLOCKED",
+  "implementation_state": "Supervised warmup cannot be trusted without the typed decision contract and production Outcome.",
+  "dependencies": [
+    "7E-2A",
+    "STAGE-6"
+  ],
+  "dependents": [
+    "7E-2C"
+  ],
+  "required_gates": [
+    "DecisionModel contract",
+    "Production Outcome bridge",
+    "Warmup dataset and targets",
+    "Offline warmup evaluation"
+  ],
+  "blocked_by": [
+    "7E-2A",
+    "STAGE-6"
+  ],
+  "unblock_condition": "Close 7E-2A and Stage 6, then pass deterministic warmup and holdout gates.",
+  "evidence": [
+    "E-016"
+  ],
+  "source_references": [
+    "docs/development/repository-audit-2026-09-25.md",
+    "crates/zroutery-core/src/ml/dataset.rs",
+    "crates/zroutery-core/src/ml/reward.rs",
+    "crates/zroutery-core/src/outcome.rs"
+  ],
+  "notes": [
+    "No warmup model is claimed."
+  ]
+}

@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "node_id": "TEST-WORKSPACE",
+  "display_name": "Local workspace tests",
+  "status": "DONE",
+  "implementation_state": "The audited local default workspace tests passed.",
+  "dependencies": [
+    "TEST-CHECK"
+  ],
+  "dependents": [
+    "TEST-ML"
+  ],
+  "required_gates": [
+    "cargo test --workspace"
+  ],
+  "blocked_by": [],
+  "unblock_condition": "Rerun after implementation changes.",
+  "evidence": [
+    "E-005"
+  ],
+  "source_references": [
+    "docs/development/repository-audit-2026-09-25.md",
+    "Cargo.toml",
+    "crates/zroutery-core/Cargo.toml",
+    "src-tauri/Cargo.toml"
+  ],
+  "notes": [
+    "Inherited local evidence."
+  ]
+}

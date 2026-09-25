@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "node_id": "TEST-REAL-E2E",
+  "display_name": "External protocol and provider E2E",
+  "status": "BLOCKED",
+  "implementation_state": "No real provider protocol fixture, credential, or external lifecycle is available.",
+  "dependencies": [
+    "NEWAPI"
+  ],
+  "dependents": [],
+  "required_gates": [
+    "Documented protocol fixture",
+    "Test credential",
+    "Auth/expiry/refresh/usage/quota lifecycle",
+    "Explicit external authorization"
+  ],
+  "blocked_by": [
+    "NEWAPI"
+  ],
+  "unblock_condition": "Complete the local NewAPI mock contract and obtain documented external fixtures/authorization before E2E.",
+  "evidence": [
+    "E-016"
+  ],
+  "source_references": [
+    "docs/development/repository-audit-2026-09-25.md",
+    "crates/zroutery-core/src/account/adapters/newapi.rs"
+  ],
+  "notes": [
+    "No real provider call is claimed."
+  ]
+}

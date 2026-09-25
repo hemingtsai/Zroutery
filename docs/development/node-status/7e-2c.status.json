@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "node_id": "7E-2C",
+  "display_name": "7E-2C — bandit and reward learning",
+  "status": "BLOCKED",
+  "implementation_state": "Bandit learning has no accepted warmup, distribution, dataset, or reward-policy prerequisites.",
+  "dependencies": [
+    "7E-2B"
+  ],
+  "dependents": [
+    "7E-2D"
+  ],
+  "required_gates": [
+    "Supervised warmup",
+    "DecisionDistribution",
+    "Dataset",
+    "RewardPolicy",
+    "Offline safety evaluation"
+  ],
+  "blocked_by": [
+    "7E-2B"
+  ],
+  "unblock_condition": "Close 7E-2B and pass the typed distribution/reward safety gates.",
+  "evidence": [
+    "E-016"
+  ],
+  "source_references": [
+    "docs/development/repository-audit-2026-09-25.md",
+    "crates/zroutery-core/src/ml/reward.rs",
+    "crates/zroutery-core/src/ml/coordinator.rs",
+    "crates/zroutery-core/src/ml/dataset.rs"
+  ],
+  "notes": [
+    "No online RL is authorized."
+  ]
+}

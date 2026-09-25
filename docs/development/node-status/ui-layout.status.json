@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "node_id": "UI-LAYOUT",
+  "display_name": "UI layout harness",
+  "status": "FAILED",
+  "implementation_state": "The pure self-test passes, but the real browser path is not trustworthy when Chromium is absent and the fixture is stale.",
+  "dependencies": [
+    "UI"
+  ],
+  "dependents": [],
+  "required_gates": [
+    "Pure self-test",
+    "Real browser execution",
+    "Missing-browser non-success",
+    "Fresh built fixture"
+  ],
+  "blocked_by": [],
+  "unblock_condition": "Repair the false-green missing-browser behavior, refresh the fixture, and run real browser assertions.",
+  "evidence": [
+    "E-009",
+    "E-011",
+    "E-012",
+    "E-016"
+  ],
+  "source_references": [
+    "docs/development/repository-audit-2026-09-25.md",
+    "scripts/ui_layout_test.py",
+    "package.json",
+    "ui/src/pages/Settings.tsx",
+    "ui/src/pages/Routing.tsx"
+  ],
+  "notes": [
+    "A printed skip is not a layout pass."
+  ]
+}

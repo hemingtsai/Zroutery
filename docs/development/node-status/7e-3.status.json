@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "node_id": "7E-3",
+  "display_name": "7E-3 — offline replay and calibrated evaluation",
+  "status": "BLOCKED",
+  "implementation_state": "Offline replay/evaluation cannot be accepted until activation and Core P1 inputs are trustworthy.",
+  "dependencies": [
+    "7E-2F",
+    "STAGE-3",
+    "STAGE-4",
+    "STAGE-6"
+  ],
+  "dependents": [
+    "7F"
+  ],
+  "required_gates": [
+    "Replay equivalence",
+    "Holdout/calibration/statistical gates",
+    "Outcome and failure authority",
+    "Final served identity"
+  ],
+  "blocked_by": [
+    "7E-2F",
+    "STAGE-3",
+    "STAGE-4",
+    "STAGE-6"
+  ],
+  "unblock_condition": "Close 7E-2F, Stage 3, Stage 4, and Stage 6, then pass the complete offline gate suite.",
+  "evidence": [
+    "E-016"
+  ],
+  "source_references": [
+    "docs/development/repository-audit-2026-09-25.md",
+    "crates/zroutery-core/src/ml/evaluation.rs",
+    "crates/zroutery-core/src/ml/model_identity.rs",
+    "crates/zroutery-core/src/outcome.rs"
+  ],
+  "notes": [
+    "No current evaluation result substitutes for these prerequisites."
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "node_id": "CI-CORE",
+  "display_name": "External Linux core CI",
+  "status": "DONE",
+  "implementation_state": "External CI passed Linux core all-feature clippy/tests for the exact audited SHA.",
+  "dependencies": [],
+  "dependents": [],
+  "required_gates": [
+    "GitHub Actions run 36014406507",
+    "cargo clippy -p zroutery-core --all-features -- -D warnings",
+    "cargo test -p zroutery-core --all-features"
+  ],
+  "blocked_by": [],
+  "unblock_condition": "Retain exact run/SHA and do not generalize to unrun local gates.",
+  "evidence": [
+    "E-015"
+  ],
+  "source_references": [
+    "docs/development/repository-audit-2026-09-25.md",
+    ".github/workflows/ci.yml"
+  ],
+  "notes": [
+    "Scope is Linux core only."
+  ]
+}

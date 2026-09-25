@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "node_id": "7E-2D",
+  "display_name": "7E-2D — calibration and K-way distribution",
+  "status": "BLOCKED",
+  "implementation_state": "A trustworthy K-way distribution is not available for calibration.",
+  "dependencies": [
+    "7E-2C"
+  ],
+  "dependents": [
+    "7E-2E"
+  ],
+  "required_gates": [
+    "K-way probability normalization",
+    "Calibration metrics",
+    "Holdout and drift gates"
+  ],
+  "blocked_by": [
+    "7E-2C"
+  ],
+  "unblock_condition": "Close 7E-2C and pass calibration, holdout, and statistical acceptance gates.",
+  "evidence": [
+    "E-016"
+  ],
+  "source_references": [
+    "docs/development/repository-audit-2026-09-25.md",
+    "crates/zroutery-core/src/ml/evaluation.rs",
+    "crates/zroutery-core/src/ml/decision_engine.rs"
+  ],
+  "notes": [
+    "No production probability is claimed."
+  ]
+}

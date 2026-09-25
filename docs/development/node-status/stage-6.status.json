@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "node_id": "STAGE-6",
+  "display_name": "Stage 6 — Outcome and Feedback model",
+  "status": "FAILED",
+  "implementation_state": "Outcome and Feedback types exist, but no production path constructs them and training schemas are incompatible.",
+  "dependencies": [
+    "CORE-P1-REPAIR"
+  ],
+  "dependents": [
+    "7B",
+    "7E-1",
+    "7E-1B",
+    "7E-2B",
+    "7E-3",
+    "STAGE-7"
+  ],
+  "required_gates": [
+    "Production Outcome construction",
+    "Feedback bridge",
+    "Single TrainingSample schema",
+    "Outcome/Feedback regression tests"
+  ],
+  "blocked_by": [
+    "CORE-P1-REPAIR"
+  ],
+  "unblock_condition": "Build a production bridge, reconcile schemas, and pass cancellation/failure/Outcome gates.",
+  "evidence": [
+    "E-005",
+    "E-006",
+    "E-016"
+  ],
+  "source_references": [
+    "docs/development/repository-audit-2026-09-25.md",
+    "crates/zroutery-core/src/outcome.rs",
+    "crates/zroutery-core/src/feedback.rs",
+    "crates/zroutery-core/src/server/pipeline.rs",
+    "crates/zroutery-core/tests/outcome_test.rs"
+  ],
+  "notes": [
+    "The audit decision is preserved as FAILED."
+  ]
+}

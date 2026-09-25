@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "node_id": "I4",
+  "display_name": "I4 — restore and rollback",
+  "status": "FAILED",
+  "implementation_state": "Conflict resolution is disconnected from release and migration rollback can report success while restoration emits warnings.",
+  "dependencies": [
+    "I2",
+    "I3"
+  ],
+  "dependents": [
+    "UI-NEW-TRACKS"
+  ],
+  "required_gates": [
+    "Conflict resolution applied during release",
+    "Accurate restore failure reporting",
+    "Migration rollback semantics",
+    "Cross-track restore fixtures"
+  ],
+  "blocked_by": [
+    "I2",
+    "I3"
+  ],
+  "unblock_condition": "Close I2 and I3 contracts and pass conflict-safe restore/rollback tests with explicit failure reporting.",
+  "evidence": [
+    "E-016"
+  ],
+  "source_references": [
+    "docs/development/repository-audit-2026-09-25.md",
+    "crates/zroutery-core/src/agent_takeover.rs",
+    "crates/zroutery-core/src/migration.rs"
+  ],
+  "notes": [
+    "The audit decision is preserved as FAILED."
+  ]
+}

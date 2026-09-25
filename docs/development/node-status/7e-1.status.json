@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "node_id": "7E-1",
+  "display_name": "7E-1 — replayable shadow decision closure",
+  "status": "PARTIAL",
+  "implementation_state": "Purity, determinism, fault isolation, and non-authority foundations pass; production counterfactual and replay closure fail.",
+  "dependencies": [
+    "7E-0",
+    "CORE-P1-REPAIR",
+    "STAGE-3",
+    "STAGE-4",
+    "STAGE-6"
+  ],
+  "dependents": [
+    "STAGE-7"
+  ],
+  "required_gates": [
+    "Meaningful production counterfactual",
+    "Immutable decision-time input retention",
+    "Separate initial/final served identity",
+    "Shadow purity and determinism"
+  ],
+  "blocked_by": [
+    "7E-0",
+    "CORE-P1-REPAIR",
+    "STAGE-3",
+    "STAGE-4",
+    "STAGE-6"
+  ],
+  "unblock_condition": "Close 7E-1A and the Core P1 repairs, then prove replayable retained input and separate served identities.",
+  "evidence": [
+    "E-005",
+    "E-006",
+    "E-016"
+  ],
+  "source_references": [
+    "docs/development/repository-audit-2026-09-25.md",
+    "crates/zroutery-core/src/ml/shadow.rs",
+    "crates/zroutery-core/tests/shadow_test.rs",
+    "crates/zroutery-core/src/server/pipeline.rs"
+  ],
+  "notes": [
+    "The audit decision is preserved as PARTIAL."
+  ]
+}

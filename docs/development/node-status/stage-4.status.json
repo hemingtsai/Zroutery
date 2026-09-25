@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "node_id": "STAGE-4",
+  "display_name": "Stage 4 — failure, observation, and statistics",
+  "status": "FAILED",
+  "implementation_state": "Failure and statistics foundations exist, but competing authorities and stream finalization can record the wrong result.",
+  "dependencies": [
+    "CORE-P1-REPAIR"
+  ],
+  "dependents": [
+    "7A",
+    "7E-1",
+    "7E-1B",
+    "7E-3"
+  ],
+  "required_gates": [
+    "Single failure authority",
+    "Stream disconnect/interruption state",
+    "Observation/circuit/statistics invariants"
+  ],
+  "blocked_by": [
+    "CORE-P1-REPAIR"
+  ],
+  "unblock_condition": "Complete CORE-P1-REPAIR and pass failure, cancellation, observation, and circuit tests.",
+  "evidence": [
+    "E-005",
+    "E-016"
+  ],
+  "source_references": [
+    "docs/development/repository-audit-2026-09-25.md",
+    "crates/zroutery-core/src/failure.rs",
+    "crates/zroutery-core/src/error.rs",
+    "crates/zroutery-core/src/observation.rs",
+    "crates/zroutery-core/src/stats_ext.rs",
+    "crates/zroutery-core/src/server/pipeline.rs",
+    "crates/zroutery-core/tests/circuit_breaker_test.rs"
+  ],
+  "notes": [
+    "The audit decision is preserved as FAILED."
+  ]
+}

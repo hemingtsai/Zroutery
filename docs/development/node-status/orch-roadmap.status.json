@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "node_id": "ORCH-ROADMAP",
+  "display_name": "Audited roadmap",
+  "status": "DONE",
+  "implementation_state": "The roadmap preserves audit states, critical path, blockers, and sequencing guardrails.",
+  "dependencies": [
+    "ORCH-INFRA"
+  ],
+  "dependents": [
+    "ORCH-VALIDATION"
+  ],
+  "required_gates": [
+    "Stage/ML/parallel inventory",
+    "Critical path",
+    "First authorized batch",
+    "No-online-learning guardrails"
+  ],
+  "blocked_by": [],
+  "unblock_condition": "Update only with new evidence and an explicit status transition.",
+  "evidence": [
+    "E-018",
+    "E-019",
+    "E-022"
+  ],
+  "source_references": [
+    "docs/development/repository-audit-2026-09-25.md",
+    "docs/development/roadmap.md",
+    "docs/development/architecture.md"
+  ],
+  "notes": [
+    "No future node is marked DONE by intention."
+  ]
+}

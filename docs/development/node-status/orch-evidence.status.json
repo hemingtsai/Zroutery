@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "node_id": "ORCH-EVIDENCE",
+  "display_name": "Evidence registry",
+  "status": "DONE",
+  "implementation_state": "Exact revision, command, result, scope, and caveat records are present for inherited and documentation checks.",
+  "dependencies": [
+    "ORCH-INFRA"
+  ],
+  "dependents": [
+    "ORCH-VALIDATION"
+  ],
+  "required_gates": [
+    "Exact audited HEAD",
+    "Local/external/unrun classification",
+    "Command and result inventory",
+    "Known caveats"
+  ],
+  "blocked_by": [],
+  "unblock_condition": "Keep every evidence ID tied to an exact command/observation and caveat.",
+  "evidence": [
+    "E-001",
+    "E-002",
+    "E-003",
+    "E-004",
+    "E-005",
+    "E-006",
+    "E-007",
+    "E-008",
+    "E-009",
+    "E-010",
+    "E-011",
+    "E-012",
+    "E-013",
+    "E-014",
+    "E-015",
+    "E-016",
+    "E-017",
+    "E-021",
+    "E-023"
+  ],
+  "source_references": [
+    "docs/development/repository-audit-2026-09-25.md",
+    "docs/development/evidence-registry.md",
+    ".github/workflows/ci.yml"
+  ],
+  "notes": [
+    "Inherited audit results are not rerun by ORCH-DOCS."
+  ]
+}

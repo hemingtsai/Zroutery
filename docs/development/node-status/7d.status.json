@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "node_id": "7D",
+  "display_name": "7D — evaluation framework",
+  "status": "PARTIAL",
+  "implementation_state": "The evaluation framework exists, but required holdout, calibration, and statistical gates are incomplete.",
+  "dependencies": [
+    "7B",
+    "7C"
+  ],
+  "dependents": [
+    "STAGE-7"
+  ],
+  "required_gates": [
+    "Frozen holdout and temporal split",
+    "Calibration and statistical gates",
+    "Attempt-level attribution"
+  ],
+  "blocked_by": [
+    "7B"
+  ],
+  "unblock_condition": "Close 7B and run the complete offline evaluation/calibration gate suite.",
+  "evidence": [
+    "E-005",
+    "E-006",
+    "E-007",
+    "E-016"
+  ],
+  "source_references": [
+    "docs/development/repository-audit-2026-09-25.md",
+    "crates/zroutery-core/src/ml/evaluation.rs",
+    "crates/zroutery-core/tests/evaluation_test.rs"
+  ],
+  "notes": [
+    "Partial local evaluation is not an accepted offline release gate."
+  ]
+}

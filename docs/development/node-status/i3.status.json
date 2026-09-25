@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "node_id": "I3",
+  "display_name": "I3 — agent takeover ownership",
+  "status": "PARTIAL",
+  "implementation_state": "Ownership and temporary-adapter tests exist, but release does not apply computed conflict resolution and no durable manifest exists across process boundaries.",
+  "dependencies": [],
+  "dependents": [
+    "I4",
+    "UI-NEW-TRACKS"
+  ],
+  "required_gates": [
+    "Durable ownership manifest",
+    "Conflict detection and application",
+    "Confirmation flow",
+    "CAS restore fixtures"
+  ],
+  "blocked_by": [],
+  "unblock_condition": "Implement durable manifest, conflict application, confirmation, and CAS restore gates.",
+  "evidence": [
+    "E-005",
+    "E-016"
+  ],
+  "source_references": [
+    "docs/development/repository-audit-2026-09-25.md",
+    "crates/zroutery-core/src/agent_takeover.rs",
+    "crates/zroutery-core/tests/e2e.rs"
+  ],
+  "notes": [
+    "Takeover is not authorized for production."
+  ]
+}

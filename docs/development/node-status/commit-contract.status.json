@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "node_id": "COMMIT-CONTRACT",
+  "display_name": "Commit contract alignment",
+  "status": "READY",
+  "implementation_state": "CI and WORKFLOW still encode a stale commit contract; a separate authorized node owns the repair.",
+  "dependencies": [],
+  "dependents": [
+    "TEST-COMMIT-CONTRACT"
+  ],
+  "required_gates": [
+    "Type and scope rules",
+    "Node/Gate/Status trailers",
+    "Imperative/length/subject fixtures",
+    "Workflow YAML validation",
+    "Diff check"
+  ],
+  "blocked_by": [],
+  "unblock_condition": "Implement deterministic valid/invalid fixtures and align CI/WORKFLOW without rewriting history.",
+  "evidence": [
+    "E-016"
+  ],
+  "source_references": [
+    "docs/development/repository-audit-2026-09-25.md",
+    "docs/development/WORKFLOW.md",
+    ".github/workflows/commit-lint.yml"
+  ],
+  "notes": [
+    "A commit subject never proves node completion."
+  ]
+}

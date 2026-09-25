@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "node_id": "7C",
+  "display_name": "7C — routing models",
+  "status": "PARTIAL",
+  "implementation_state": "Specialist baseline models work as offline baselines, but the typed candidate decision interface is absent.",
+  "dependencies": [
+    "7A"
+  ],
+  "dependents": [
+    "7D",
+    "7E-0",
+    "7E-1A",
+    "STAGE-7"
+  ],
+  "required_gates": [
+    "Model load and state checks",
+    "Typed candidate-aware decision interface",
+    "NaN/Inf and dimension gates"
+  ],
+  "blocked_by": [],
+  "unblock_condition": "Define and test the 7E-2A contract without claiming a DecisionModel implementation from the current RoutingModel seam.",
+  "evidence": [
+    "E-005",
+    "E-006",
+    "E-007",
+    "E-016"
+  ],
+  "source_references": [
+    "docs/development/repository-audit-2026-09-25.md",
+    "crates/zroutery-core/src/ml/model.rs",
+    "crates/zroutery-core/src/ml/decision_engine.rs",
+    "crates/zroutery-core/tests/evaluation_test.rs"
+  ],
+  "notes": [
+    "Current RoutingModel is not a candidate-aware K-way DecisionModel."
+  ]
+}

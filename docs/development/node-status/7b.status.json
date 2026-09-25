@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "node_id": "7B",
+  "display_name": "7B — training dataset",
+  "status": "BLOCKED",
+  "implementation_state": "A dataset library exists, but it depends on a trustworthy production Outcome that is not wired.",
+  "dependencies": [
+    "STAGE-6",
+    "7A"
+  ],
+  "dependents": [
+    "7D",
+    "STAGE-7"
+  ],
+  "required_gates": [
+    "Trustworthy production Outcome",
+    "Dataset validation and retention",
+    "Schema compatibility"
+  ],
+  "blocked_by": [
+    "STAGE-6"
+  ],
+  "unblock_condition": "Close Stage 6 and prove Dataset samples are sourced from authoritative production outcomes.",
+  "evidence": [
+    "E-005",
+    "E-006",
+    "E-016"
+  ],
+  "source_references": [
+    "docs/development/repository-audit-2026-09-25.md",
+    "crates/zroutery-core/src/ml/dataset.rs",
+    "crates/zroutery-core/src/feedback.rs",
+    "crates/zroutery-core/src/outcome.rs"
+  ],
+  "notes": [
+    "The audit explicitly keeps 7B blocked."
+  ]
+}

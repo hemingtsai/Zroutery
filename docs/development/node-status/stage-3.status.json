@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "node_id": "STAGE-3",
+  "display_name": "Stage 3 — policy runtime and decision trace",
+  "status": "FAILED",
+  "implementation_state": "Policy and trace types exist, but capability enforcement and served identity are not reliable on all production paths.",
+  "dependencies": [
+    "CORE-P1-REPAIR"
+  ],
+  "dependents": [
+    "7E-1",
+    "7E-1B",
+    "7E-3"
+  ],
+  "required_gates": [
+    "Policy eligibility on tier and direct-ID paths",
+    "Separate initial planned and final served identity",
+    "Decision-trace replay tests"
+  ],
+  "blocked_by": [
+    "CORE-P1-REPAIR"
+  ],
+  "unblock_condition": "Complete CORE-P1-REPAIR and prove eligibility and identity invariants with production-path tests.",
+  "evidence": [
+    "E-005",
+    "E-016"
+  ],
+  "source_references": [
+    "docs/development/repository-audit-2026-09-25.md",
+    "crates/zroutery-core/src/policy.rs",
+    "crates/zroutery-core/src/router.rs",
+    "crates/zroutery-core/src/server/pipeline.rs",
+    "crates/zroutery-core/tests/routing_policy_test.rs"
+  ],
+  "notes": [
+    "The audit decision is preserved as FAILED."
+  ]
+}

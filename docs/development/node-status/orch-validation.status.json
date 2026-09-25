@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "node_id": "ORCH-VALIDATION",
+  "display_name": "Orchestration record validation",
+  "status": "DONE",
+  "implementation_state": "The validation gate is defined; its result is recorded only after execution.",
+  "dependencies": [
+    "ORCH-STATUS",
+    "ORCH-EVIDENCE",
+    "ORCH-REGRESSION",
+    "ORCH-ARCHITECTURE",
+    "ORCH-DAG",
+    "ORCH-ROADMAP"
+  ],
+  "dependents": [
+    "ORCH-DOCS"
+  ],
+  "required_gates": [
+    "JSON parse",
+    "Inventory completeness",
+    "DAG edge and cycle validation",
+    "Status enum validation",
+    "Referenced path validation",
+    "ADR inventory",
+    "Diff check"
+  ],
+  "blocked_by": [],
+  "unblock_condition": "Run every validation check on the final exact revision.",
+  "evidence": [
+    "E-017",
+    "E-018",
+    "E-019",
+    "E-020",
+    "E-021",
+    "E-022"
+  ],
+  "source_references": [
+    "docs/development/repository-audit-2026-09-25.md",
+    "docs/development/evidence-registry.md",
+    "docs/development/dependency-dag.md"
+  ],
+  "notes": [
+    "This gate does not run implementation tests."
+  ]
+}

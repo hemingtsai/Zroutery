@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "node_id": "OBSERVABILITY",
+  "display_name": "Runtime observability projection",
+  "status": "READY",
+  "implementation_state": "A read-only runtime projection can be built from existing Core observations and activity data without changing ML schemas.",
+  "dependencies": [],
+  "dependents": [
+    "7F"
+  ],
+  "required_gates": [
+    "Read-only Core projection",
+    "Stable decision/failure/usage correlation",
+    "No ML schema mutation",
+    "Projection tests"
+  ],
+  "blocked_by": [],
+  "unblock_condition": "Implement and test a read-only projection with explicit correlation and no routing or activation side effects.",
+  "evidence": [
+    "E-005",
+    "E-009",
+    "E-016"
+  ],
+  "source_references": [
+    "docs/development/repository-audit-2026-09-25.md",
+    "crates/zroutery-core/src/observation.rs",
+    "crates/zroutery-core/src/stats_ext.rs",
+    "ui/src/pages/Activity.tsx"
+  ],
+  "notes": [
+    "READY is an implementation opportunity, not a completion claim."
+  ]
+}

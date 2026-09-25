@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "node_id": "ORCH-ARCHITECTURE",
+  "display_name": "Architecture memory",
+  "status": "DONE",
+  "implementation_state": "Architecture memory distinguishes production Core, optional ML libraries, and parallel sidecars.",
+  "dependencies": [
+    "ORCH-INFRA"
+  ],
+  "dependents": [
+    "ORCH-VALIDATION"
+  ],
+  "required_gates": [
+    "Core/ML/sidecar boundary",
+    "Dependency direction",
+    "Contract invariants",
+    "Unresolved ADR list"
+  ],
+  "blocked_by": [],
+  "unblock_condition": "Resolve ADR-0002 and revalidate any boundary change.",
+  "evidence": [
+    "E-016",
+    "E-022"
+  ],
+  "source_references": [
+    "docs/development/repository-audit-2026-09-25.md",
+    "docs/development/architecture.md",
+    "docs/development/decisions/0002-production-ml-boundary.md"
+  ],
+  "notes": [
+    "No sidecar or activation implementation is claimed."
+  ]
+}

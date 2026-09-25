@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "node_id": "NEWAPI",
+  "display_name": "NewAPI adapter",
+  "status": "PARTIAL",
+  "implementation_state": "The adapter treats non-empty credentials as authentication, synthesizes an active runtime, and leaves usage/quota unimplemented.",
+  "dependencies": [
+    "ACCOUNT"
+  ],
+  "dependents": [
+    "TEST-REAL-E2E",
+    "UI-NEW-TRACKS"
+  ],
+  "required_gates": [
+    "Local mock-server auth",
+    "Expiry and refresh",
+    "Usage and quota",
+    "Documented protocol fixture"
+  ],
+  "blocked_by": [
+    "ACCOUNT"
+  ],
+  "unblock_condition": "Pass a local mock-server auth/expiry/refresh/usage/quota contract before any real protocol E2E.",
+  "evidence": [
+    "E-007",
+    "E-016"
+  ],
+  "source_references": [
+    "docs/development/repository-audit-2026-09-25.md",
+    "crates/zroutery-core/src/account/adapters/newapi.rs",
+    "crates/zroutery-core/src/account/provider.rs",
+    "crates/zroutery-core/src/account/types.rs"
+  ],
+  "notes": [
+    "No real NewAPI credential or provider call is evidence."
+  ]
+}

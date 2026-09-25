@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "node_id": "TEST-ML",
+  "display_name": "Local ML feature tests",
+  "status": "DONE",
+  "implementation_state": "The audited ML/shadow/replay/determinism suites passed with the feature enabled.",
+  "dependencies": [
+    "TEST-WORKSPACE"
+  ],
+  "dependents": [
+    "TEST-ALL-FEATURES"
+  ],
+  "required_gates": [
+    "cargo test --workspace --features ml"
+  ],
+  "blocked_by": [],
+  "unblock_condition": "Rerun after ML changes and retain feature scope.",
+  "evidence": [
+    "E-006"
+  ],
+  "source_references": [
+    "docs/development/repository-audit-2026-09-25.md",
+    "crates/zroutery-core/Cargo.toml",
+    "crates/zroutery-core/src/ml/mod.rs"
+  ],
+  "notes": [
+    "Not a default desktop build result."
+  ]
+}

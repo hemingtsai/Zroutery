@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "node_id": "TEST-ALL-FEATURES",
+  "display_name": "Local all-feature tests",
+  "status": "DONE",
+  "implementation_state": "The audited Core, Account, ML, and NewAPI feature suites passed.",
+  "dependencies": [
+    "TEST-ML"
+  ],
+  "dependents": [],
+  "required_gates": [
+    "cargo test --workspace --all-features"
+  ],
+  "blocked_by": [],
+  "unblock_condition": "Rerun after any feature or contract change.",
+  "evidence": [
+    "E-007"
+  ],
+  "source_references": [
+    "docs/development/repository-audit-2026-09-25.md",
+    "Cargo.toml",
+    "crates/zroutery-core/Cargo.toml",
+    "src-tauri/Cargo.toml"
+  ],
+  "notes": [
+    "Feature-enabled tests do not prove external lifecycle."
+  ]
+}

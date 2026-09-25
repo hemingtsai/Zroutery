@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "node_id": "TEST-CHECK",
+  "display_name": "Local workspace check",
+  "status": "DONE",
+  "implementation_state": "The audited local workspace check passed with one warning.",
+  "dependencies": [],
+  "dependents": [
+    "TEST-CLIPPY",
+    "TEST-SMOKE",
+    "TEST-WORKSPACE"
+  ],
+  "required_gates": [
+    "cargo check --workspace"
+  ],
+  "blocked_by": [],
+  "unblock_condition": "Keep the exact revision and warning disposition in evidence.",
+  "evidence": [
+    "E-004"
+  ],
+  "source_references": [
+    "docs/development/repository-audit-2026-09-25.md",
+    "Cargo.toml",
+    "src-tauri/Cargo.toml"
+  ],
+  "notes": [
+    "Inherited local evidence."
+  ]
+}

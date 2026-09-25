@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "node_id": "BASELINE-GATE",
+  "display_name": "Baseline executable local gates",
+  "status": "READY",
+  "implementation_state": "The three reproduced local gate failures are bounded and ready for the separate baseline repair node.",
+  "dependencies": [
+    "TEST-CLIPPY",
+    "TEST-SMOKE",
+    "TEST-LAYOUT-BROWSER"
+  ],
+  "dependents": [],
+  "required_gates": [
+    "Full workspace clippy",
+    "Windows headless binary resolution",
+    "Mock-provider smoke lifecycle",
+    "Real browser layout or explicit non-success",
+    "Diff check"
+  ],
+  "blocked_by": [
+    "TEST-CLIPPY",
+    "TEST-SMOKE",
+    "TEST-LAYOUT-BROWSER"
+  ],
+  "unblock_condition": "Repair the three failures and rerun the exact local commands with no ignored or skipped acceptance gate.",
+  "evidence": [
+    "E-008",
+    "E-010",
+    "E-012",
+    "E-016"
+  ],
+  "source_references": [
+    "docs/development/repository-audit-2026-09-25.md",
+    "src-tauri/src/store.rs",
+    "scripts/smoke_test.py",
+    "scripts/ui_layout_test.py",
+    "package.json"
+  ],
+  "notes": [
+    "The current node does not edit source or scripts."
+  ]
+}
