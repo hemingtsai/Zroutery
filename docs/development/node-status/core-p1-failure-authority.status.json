@@ -32,7 +32,7 @@
     "crates/zroutery-core/src/error.rs"
   ],
   "notes": [
-    "Accepted main commits: fc66853 and 898f547 (agent commits ac3842e and 534fb45).",
+    "Accepted main commits: 4048a61 and 97efde6 (agent commits ac3842e and 534fb45; subjects normalized for the commit contract).",
     "The first agent commit was rejected by parent review for replacing the public ClassifiedFailure::from_error(String) API; the follow-up preserves it and adds from_core_error for structural mapping.",
     "Error remains a structural/wire type; runtime decisions must consume the canonical classified result.",
     "This node does not wire the production pipeline or change ML contracts; router/pipeline runtime adapters remain deferred."
