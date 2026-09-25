@@ -2,8 +2,8 @@
   "schema_version": 1,
   "node_id": "CORE-P1-MEDIA-REQ",
   "display_name": "CORE-P1-MEDIA-REQ — capability and media fail-closed repair",
-  "status": "READY",
-  "implementation_state": "A bounded Core domain repair is authorized by ADR-0003 to make request-derived capabilities exhaustive and unknown content/media fail closed.",
+  "status": "RUNNING",
+  "implementation_state": "A bounded Core domain repair is executing in an isolated worktree to make request-derived capabilities exhaustive and unknown content/media fail closed; no result is accepted yet.",
   "dependencies": [],
   "dependents": [
     "CORE-P1-ELIGIBILITY-TRACE",
@@ -37,6 +37,7 @@
     "crates/zroutery-core/src/media/transform.rs"
   ],
   "notes": [
+    "Agent session ses_f284ed582ffer99iXqWbaJaauv is running on branch node/core-p1-media-req from c718942.",
     "This node owns IR/config/registry/protocol/media files only; it must not edit server/pipeline.rs or any ML file.",
     "Stage 2 remains FAILED until this node and the later Core integration gates are accepted."
   ]

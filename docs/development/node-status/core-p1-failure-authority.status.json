@@ -2,8 +2,8 @@
   "schema_version": 1,
   "node_id": "CORE-P1-FAILURE-AUTHORITY",
   "display_name": "CORE-P1-FAILURE-AUTHORITY — canonical failure classification",
-  "status": "READY",
-  "implementation_state": "A bounded Core domain repair is authorized by ADR-0004 to establish one Error-to-ClassifiedFailure mapping and one runtime impact table.",
+  "status": "RUNNING",
+  "implementation_state": "A bounded Core domain repair is executing in an isolated worktree to establish one Error-to-ClassifiedFailure mapping and one runtime impact table; no result is accepted yet.",
   "dependencies": [],
   "dependents": [
     "CORE-P1-ELIGIBILITY-TRACE",
@@ -30,6 +30,7 @@
     "crates/zroutery-core/src/error.rs"
   ],
   "notes": [
+    "Agent session ses_f284ed57effe1y62EvmJH6jmPp is running on branch node/core-p1-failure-authority from c718942.",
     "Error remains a structural/wire type; runtime decisions must consume the canonical classified result.",
     "This node does not wire the production pipeline or change ML contracts."
   ]
