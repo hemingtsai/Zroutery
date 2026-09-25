@@ -2,8 +2,8 @@
   "schema_version": 1,
   "node_id": "CORE-P1-FAILURE-AUTHORITY",
   "display_name": "CORE-P1-FAILURE-AUTHORITY — canonical failure classification",
-  "status": "RUNNING",
-  "implementation_state": "A bounded Core domain repair is executing in an isolated worktree to establish one Error-to-ClassifiedFailure mapping and one runtime impact table; no result is accepted yet.",
+  "status": "DONE",
+  "implementation_state": "The canonical Error-to-ClassifiedFailure authority, impact table, terminal cancellation/interruption constructors, and legacy API compatibility were independently reviewed and validated on main; downstream router/pipeline adapters remain separate work.",
   "dependencies": [],
   "dependents": [
     "CORE-P1-ELIGIBILITY-TRACE",
@@ -19,9 +19,11 @@
     "Core failure tests, clippy, and diff check"
   ],
   "blocked_by": [],
-  "unblock_condition": "Implement and independently validate ADR-0004 in failure.rs and error.rs without editing router, pipeline, ML, provider, UI, or Tauri files.",
+  "unblock_condition": "Reopen if the failure class, impact table, Error mapping, or public compatibility contract changes; downstream Core P1 nodes must consume the accepted authority before claiming runtime closure.",
   "evidence": [
-    "E-043"
+    "E-043",
+    "E-046",
+    "E-047"
   ],
   "source_references": [
     "docs/development/decisions/0004-failure-outcome-authority.md",
@@ -30,8 +32,9 @@
     "crates/zroutery-core/src/error.rs"
   ],
   "notes": [
-    "Agent session ses_f284ed57effe1y62EvmJH6jmPp is running on branch node/core-p1-failure-authority from c718942.",
+    "Accepted main commits: fc66853 and 898f547 (agent commits ac3842e and 534fb45).",
+    "The first agent commit was rejected by parent review for replacing the public ClassifiedFailure::from_error(String) API; the follow-up preserves it and adds from_core_error for structural mapping.",
     "Error remains a structural/wire type; runtime decisions must consume the canonical classified result.",
-    "This node does not wire the production pipeline or change ML contracts."
+    "This node does not wire the production pipeline or change ML contracts; router/pipeline runtime adapters remain deferred."
   ]
 }

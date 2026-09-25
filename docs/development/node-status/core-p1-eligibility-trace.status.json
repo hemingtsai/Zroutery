@@ -20,8 +20,7 @@
     "Routing policy regression tests and clippy"
   ],
   "blocked_by": [
-    "CORE-P1-MEDIA-REQ",
-    "CORE-P1-FAILURE-AUTHORITY"
+    "CORE-P1-MEDIA-REQ"
   ],
   "unblock_condition": "Accept Batch A domain contracts, then implement only policy.rs/router.rs and focused eligibility tests.",
   "evidence": [

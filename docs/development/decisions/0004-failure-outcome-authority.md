@@ -16,7 +16,10 @@ planned, last-attempted, and actually served identities are not separated.
 
 1. `Error` remains the structural/wire error type. One exhaustive
    `ClassifiedFailure` constructor is the sole source of retry, fallback,
-   circuit, observation, stats, and provider-fault decisions.
+   circuit, observation, stats, and provider-fault decisions. The canonical
+   structural entry point is `ClassifiedFailure::from_core_error`; the legacy
+   `ClassifiedFailure::from_error(String)` message adapter remains for API
+   compatibility and is not a second structural authority.
 2. Legacy `Error::is_retryable` and `Error::counts_against_health` may remain
    compatibility helpers, but runtime code must consume the classified result
    rather than independently reclassifying errors.

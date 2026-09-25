@@ -3,7 +3,7 @@
   "node_id": "CORE-P1-OUTCOME-FEEDBACK",
   "display_name": "CORE-P1-OUTCOME-FEEDBACK — outcome and feedback schema bridge",
   "status": "QUEUED",
-  "implementation_state": "This pure schema/conversion repair is queued until the canonical failure authority is accepted; it will not wire ML training or production lifecycle.",
+  "implementation_state": "The failure-authority dependency is accepted; this pure schema/conversion repair is queued for the next Batch B dispatch gate and will not wire ML training or production lifecycle.",
   "dependencies": [
     "CORE-P1-FAILURE-AUTHORITY"
   ],
@@ -18,10 +18,8 @@
     "Optional/no-signal feedback semantics",
     "Outcome/schema tests, workspace ML tests, clippy, and diff check"
   ],
-  "blocked_by": [
-    "CORE-P1-FAILURE-AUTHORITY"
-  ],
-  "unblock_condition": "Accept the failure-authority contract, then implement only Outcome/Feedback and the narrowly allowed ML dataset adapter.",
+  "blocked_by": [],
+  "unblock_condition": "Accept Batch A media repair and dispatch Batch B, then implement only Outcome/Feedback and the narrowly allowed ML dataset adapter.",
   "evidence": [
     "E-043"
   ],

@@ -102,7 +102,7 @@ The read-only audit produced ADR-0003 through ADR-0005 and five bounded nodes.
 | Node | State | Boundary |
 |---|---|---|
 | `CORE-P1-MEDIA-REQ` | `RUNNING` | IR/config/registry/protocol/media capability derivation and fail-closed content handling |
-| `CORE-P1-FAILURE-AUTHORITY` | `RUNNING` | `failure.rs`/`error.rs` canonical classification and impact table |
+| `CORE-P1-FAILURE-AUTHORITY` | `DONE` | `failure.rs`/`error.rs` canonical classification, impact table, and API compatibility accepted |
 | `CORE-P1-ELIGIBILITY-TRACE` | `QUEUED` | `policy.rs`/`router.rs` request eligibility, planned identity, and router adapter |
 | `CORE-P1-OUTCOME-FEEDBACK` | `QUEUED` | Outcome/Feedback schema and pure dataset conversion; no training/activation |
 | `CORE-P1-PIPELINE-LIFECYCLE` | `QUEUED` | Sole `pipeline.rs`/`server` lifecycle, final served identity, stream terminal state, and fan-out owner |
@@ -180,8 +180,9 @@ The audit authorizes four non-overlapping worktrees:
 3. `COMMIT-CONTRACT` (`DONE`) — CI/workflow commit evidence alignment; and
 4. `ORCH-DOCS` (`DONE`) — this recoverable documentation record.
 
-The next authorized work is Core P1 Batch A: `CORE-P1-MEDIA-REQ` and
-`CORE-P1-FAILURE-AUTHORITY` are both `RUNNING` in isolated worktrees. The pure
+The next authorized work is Core P1 Batch A: `CORE-P1-MEDIA-REQ` remains
+`RUNNING` in its isolated worktree, while `CORE-P1-FAILURE-AUTHORITY` is now
+`DONE` after parent review. Batch B waits for media acceptance. The pure
 `7E-1B-CORE` seam is accepted, but full `7E-1B` remains `BLOCKED` until the
 split Core contracts and the sole pipeline integration gate pass. No production
 takeover, online RL, exploration, real-provider E2E, or automatic model
