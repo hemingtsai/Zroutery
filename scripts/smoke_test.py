@@ -20,10 +20,24 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 TOKEN = "zr-smoke-token"
 FAILURES: list[str] = []
+SMOKE_KEY_REFS = {
+    provider: f"provider:{provider}-smoke-{uuid.uuid4().hex}"
+    for provider in ("deepseek", "openai", "relay")
+}
+
+
+def key_env_name(key_ref: str) -> str:
+    """Mirror the headless binary's key-ref-to-environment mapping."""
+    sanitized = "".join(
+        c.upper() if c.isascii() and (c.isalnum() or c == "-") else "_"
+        for c in key_ref
+    )
+    return f"ZROUTERY_KEY_{sanitized}"
 
 
 class Provider(BaseHTTPRequestHandler):
@@ -195,6 +209,7 @@ def write_config(path: str, upstream: str):
             "unknown_model_fallback": None,
             "client_aliases": {},
             "match_claude_names": True,
+            "naming_style": "anthropic",
         },
         "providers": [
             {
@@ -202,7 +217,7 @@ def write_config(path: str, upstream: str):
                 "name": "DeepSeek",
                 "kind": "openai_compatible",
                 "base_url": upstream,
-                "key_ref": "provider:deepseek",
+                "key_ref": SMOKE_KEY_REFS["deepseek"],
                 "enabled": True,
                 "timeout_secs": 30,
                 "balance": {
@@ -219,7 +234,7 @@ def write_config(path: str, upstream: str):
                 "name": "OpenAI",
                 "kind": "openai_compatible",
                 "base_url": upstream,
-                "key_ref": "provider:openai",
+                "key_ref": SMOKE_KEY_REFS["openai"],
                 "enabled": True,
                 "timeout_secs": 30,
             },
@@ -230,7 +245,7 @@ def write_config(path: str, upstream: str):
                 "name": "Relay",
                 "kind": "openai_compatible",
                 "base_url": upstream,
-                "key_ref": "provider:relay",
+                "key_ref": SMOKE_KEY_REFS["relay"],
                 "enabled": True,
                 "timeout_secs": 30,
                 "balance": {"preset": "sub2api", "custom": None},
@@ -339,6 +354,14 @@ def check_budgets(binary: str, upstream: str, base_env: dict) -> None:
             str(body)[:160],
         )
     finally:
+        # Windows' Popen.terminate() is a hard TerminateProcess, so the
+        # headless binary never reaches its graceful-shutdown flush. Let its
+        # existing ten-second keeper write the ledger before cleanup there.
+        if os.name == "nt":
+            ledger = os.path.join(config_dir, "spend.json")
+            deadline = time.monotonic() + 15
+            while not os.path.exists(ledger) and time.monotonic() < deadline and proxy.poll() is None:
+                time.sleep(0.1)
         proxy.terminate()
         try:
             proxy.wait(timeout=10)
@@ -354,11 +377,34 @@ def check_budgets(binary: str, upstream: str, base_env: dict) -> None:
     shutil.rmtree(config_dir, ignore_errors=True)
 
 
+def resolve_binary(requested: str | None = None) -> str | None:
+    """Return the built headless executable for the host platform.
+
+    Cargo emits an extensionless binary on Unix and an ``.exe`` file on Windows.
+    Keep an explicitly supplied path usable on both platforms, while preferring
+    the native executable when the default is resolved.
+    """
+    candidate = requested or os.path.join("target", "debug", "zroutery-headless")
+    candidates = [candidate]
+    if os.name == "nt":
+        executable = candidate if candidate.lower().endswith(".exe") else f"{candidate}.exe"
+        candidates = [executable, candidate]
+    for path in candidates:
+        if os.path.isfile(path):
+            return path
+    return None
+
+
 def main() -> int:
-    binary = sys.argv[1] if len(sys.argv) > 1 else "target/debug/zroutery-headless"
-    if not os.path.exists(binary):
-        print(f"binary not found: {binary}")
+    requested_binary = sys.argv[1] if len(sys.argv) > 1 else None
+    binary = resolve_binary(requested_binary)
+    if binary is None:
+        candidate = requested_binary or os.path.join("target", "debug", "zroutery-headless")
+        if os.name == "nt":
+            candidate = candidate if candidate.lower().endswith(".exe") else f"{candidate}.exe"
+        print(f"binary not found: {candidate}")
         return 2
+    print(f"smoke binary: {binary}")
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Provider)
     upstream = f"http://127.0.0.1:{server.server_port}"
@@ -369,9 +415,8 @@ def main() -> int:
 
     env = dict(os.environ)
     env["ZROUTERY_CONFIG_DIR"] = config_dir
-    env["ZROUTERY_KEY_PROVIDER_DEEPSEEK"] = "sk-mock-deepseek"
-    env["ZROUTERY_KEY_PROVIDER_OPENAI"] = "sk-mock-openai"
-    env["ZROUTERY_KEY_PROVIDER_RELAY"] = "sk-mock-relay"
+    for provider, key_ref in SMOKE_KEY_REFS.items():
+        env[key_env_name(key_ref)] = f"sk-mock-{provider}"
     env["ZROUTERY_LOG"] = "warn"
     proxy = subprocess.Popen([binary], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
 
@@ -464,7 +509,7 @@ def main() -> int:
             str(ids),
         )
         unclassified = next(m for m in listing["data"] if m["id"] == "openai-mystery")
-        check("unclassified model has no class", unclassified["zroutery"]["class"] is None)
+        check("unclassified model has no tier", unclassified["zroutery"]["tier"] is None)
 
         print("anthropic dialect, non streaming")
         status, headers, body = request(
