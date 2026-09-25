@@ -9,7 +9,8 @@ use zroutery_core::error::Error;
 use zroutery_core::failure::{ClassifiedFailure, FailureClass};
 use zroutery_core::ir::Capability;
 use zroutery_core::policy::{
-    canonical_capabilities, PolicyFallback, PolicyPreference, PolicyRequirements, RejectionReason,
+    canonical_capabilities, hash_to_u64, PolicyFallback, PolicyPreference, PolicyRequirements,
+    RejectionReason,
 };
 use zroutery_core::registry::{Registry, Resolution};
 use zroutery_core::router::{FailureDisposition, Router};
@@ -241,6 +242,104 @@ fn planned_identity_is_explicit_and_not_a_served_identity() {
     assert_eq!(planned.tier.as_deref(), Some("standard"));
     assert_eq!(decision.planned_selected(), Some("provider-a-vision"));
     assert_eq!(decision.selected.as_deref(), Some("provider-a-vision"));
+}
+
+#[test]
+fn policy_revision_preserves_empty_hash_and_tracks_canonical_nonempty_capabilities() {
+    let mut capable = model("capable", ModelTier::Standard);
+    capable.capabilities.vision = true;
+    let reg = registry(config(vec![capable]));
+    let router = Router::new();
+    let requirements = PolicyRequirements::default();
+
+    let empty = router
+        .plan_with_trace(
+            &reg,
+            &Resolution::Tier(ModelTier::Standard),
+            &[],
+        )
+        .unwrap()
+        .1;
+    assert_eq!(
+        empty.policy_revision.requirements_hash,
+        hash_to_u64(&requirements),
+        "empty request capabilities must retain the legacy policy revision hash"
+    );
+
+    let vision = router
+        .plan_with_trace(
+            &reg,
+            &Resolution::Tier(ModelTier::Standard),
+            &[Capability::Vision],
+        )
+        .unwrap()
+        .1;
+    let duplicate_vision = router
+        .plan_with_trace(
+            &reg,
+            &Resolution::Tier(ModelTier::Standard),
+            &[Capability::Vision, Capability::Vision],
+        )
+        .unwrap()
+        .1;
+    let tools = router
+        .plan_with_trace(
+            &reg,
+            &Resolution::Tier(ModelTier::Standard),
+            &[Capability::Tools],
+        )
+        .unwrap()
+        .1;
+
+    assert_eq!(
+        vision.policy_revision.requirements_hash,
+        duplicate_vision.policy_revision.requirements_hash,
+        "capability hashing must be canonical and deduplicated"
+    );
+    assert_ne!(
+        vision.policy_revision.requirements_hash,
+        tools.policy_revision.requirements_hash,
+        "different request capability vectors must have different revisions"
+    );
+    assert_ne!(
+        vision.policy_revision.requirements_hash,
+        hash_to_u64(&requirements),
+        "nonempty request capabilities must be included in the revision"
+    );
+}
+
+#[test]
+fn failure_disposition_is_a_priority_summary_not_a_second_classifier() {
+    let router = Router::new();
+    let both = ClassifiedFailure::from_core_error(Error::Upstream {
+        provider: "provider-a".into(),
+        status: 429,
+        body: "rate limited".into(),
+    });
+    assert_eq!(router.failure_disposition(&both), FailureDisposition::Retry);
+    assert!(router.should_retry_failure(&both));
+    assert!(router.should_fallback_failure(&both));
+
+    let unknown = ClassifiedFailure::from_core_error(Error::Upstream {
+        provider: "provider-a".into(),
+        status: 500,
+        body: "unclassified".into(),
+    });
+    assert_eq!(unknown.class, FailureClass::Unknown);
+    assert_eq!(
+        router.failure_disposition(&unknown),
+        FailureDisposition::Retry
+    );
+    assert!(router.should_retry_failure(&unknown));
+    assert!(router.should_fallback_failure(&unknown));
+
+    let timeout = ClassifiedFailure::from_core_error(Error::Timeout(5));
+    assert_eq!(
+        router.failure_disposition(&timeout),
+        FailureDisposition::Retry
+    );
+    assert!(router.should_retry_failure(&timeout));
+    assert!(router.should_fallback_failure(&timeout));
 }
 
 #[test]

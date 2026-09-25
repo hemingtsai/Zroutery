@@ -27,14 +27,21 @@ use crate::stats_ext::StatsStore;
 /// Round robin cursor key for the classifier pool, which is not a tier.
 const CLASSIFIER_POOL: &str = "classifier";
 
-/// The router's decision after consulting the canonical failure impact table.
+/// The router's priority disposition after consulting the canonical failure
+/// impact table.
+///
+/// This is intentionally a single, priority-ordered summary rather than the
+/// complete retry/fallback capability set. When a class is both retryable and
+/// fallbackable, [`FailureDisposition::Retry`] is returned; callers that need
+/// both decisions must still query [`Router::should_retry_failure`] and
+/// [`Router::should_fallback_failure`] independently.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FailureDisposition {
     /// Do not attempt another candidate.
     Stop,
-    /// Retry the same candidate before considering fallback.
+    /// Prefer retrying the same candidate before considering fallback.
     Retry,
-    /// Move to a different candidate.
+    /// Prefer moving to a different candidate.
     Fallback,
 }
 
@@ -448,15 +455,20 @@ impl Router {
             DecisionReason::PolicySelected
         };
 
+        // Preserve the legacy policy revision for requests with no
+        // request-derived capabilities. The accepted shadow checksum consumes
+        // this field, so changing the empty-vector representation would make
+        // otherwise identical replays appear to be new decisions. Non-empty
+        // requests include the canonical request vector in the identity.
+        let requirements_hash = if request_capabilities.is_empty() {
+            hash_to_u64(requirements)
+        } else {
+            hash_to_u64(&(requirements, request_capabilities.as_slice()))
+        };
         let policy_revision = PolicyRevision {
             policy_id: String::new(),
             policy_enabled: true,
-            // Include the request-derived vector so a trace cannot be replayed
-            // against a different capability contract under the same policy.
-            requirements_hash: hash_to_u64(&(
-                requirements,
-                request_capabilities.as_slice(),
-            )),
+            requirements_hash,
             preference_hash: hash_to_u64(preference),
         };
 
@@ -1133,8 +1145,12 @@ impl Router {
         failure.fallbackable()
     }
 
-    /// Convert the canonical impact table into the router's bounded attempt
-    /// disposition. This is an adapter, not a second classifier.
+    /// Convert the canonical impact table into a priority disposition.
+    ///
+    /// This is an adapter, not a second classifier. It is not an exhaustive
+    /// capability query: for failures that are both retryable and fallbackable,
+    /// `Retry` wins the summary, while callers can independently query
+    /// [`Self::should_retry_failure`] and [`Self::should_fallback_failure`].
     pub fn failure_disposition(&self, failure: &ClassifiedFailure) -> FailureDisposition {
         if failure.retryable() {
             FailureDisposition::Retry
