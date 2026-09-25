@@ -177,16 +177,24 @@ The value rules are deterministic:
 |---|---|
 | `Node` | uppercase hyphenated identifier, such as `COMMIT-CONTRACT` or `7E-1A` |
 | `Gate` | lowercase hyphenated identifier, such as `commit-contract` or `model-identity-replay` |
-| `Status` | exactly one of `DONE`, `PARTIAL`, `BLOCKED`, or `FAILED` |
+| `Status` | exactly one of `QUEUED`, `READY`, `RUNNING`, `VALIDATING`, `DONE`, `PARTIAL`, `BLOCKED`, `FAILED`, or `REVALIDATE` |
 
 If any one of `Node`, `Gate`, or `Status` appears, all three must appear as
 one final block in the order above. Duplicate, missing, reordered, malformed,
 or differently-cased evidence trailers are rejected. A non-Node repository
 commit may omit the block; a Node commit must not use a partial block.
 
-`Status` records the worker's legal final state, but it cannot upgrade a Node
-without passing that Node's required gates. In particular, a successful lint
-or a commit hash is not a `DONE` claim for the implementation being described.
+`Status` is a commit-level global Node state, not the worker's final report
+state. It accepts the complete canonical vocabulary documented by the node
+state architecture: `QUEUED`, `READY`, `RUNNING`, `VALIDATING`, `DONE`,
+`PARTIAL`, `BLOCKED`, `FAILED`, and `REVALIDATE`. Intermediate commits may
+therefore record `VALIDATING` or `REVALIDATE` accurately.
+
+The worker's final report remains restricted to `DONE`, `PARTIAL`, `BLOCKED`,
+or `FAILED`; that narrower completion vocabulary does not narrow commit-level
+trailers. A commit-level state cannot upgrade a Node without passing that
+Node's required gates. In particular, a successful lint or a commit hash is
+not a `DONE` claim for the implementation being described.
 
 ## Fixtures and Enforcement
 

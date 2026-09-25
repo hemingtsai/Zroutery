@@ -88,7 +88,22 @@ FORBIDDEN_TYPES = frozenset(
     {"misc", "update", "change", "stuff", "work", "tmp", "final", "done"}
 )
 TRAILER_KEYS = ("Node", "Gate", "Status")
-STATUSES = frozenset({"DONE", "PARTIAL", "BLOCKED", "FAILED"})
+# Commit trailers may record any canonical global Node state, including
+# intermediate validation/revalidation states.  The worker's final report has
+# a narrower completion vocabulary; that distinction belongs to the report
+# contract, not to commit-ticket validation.
+GLOBAL_NODE_STATES = (
+    "QUEUED",
+    "READY",
+    "RUNNING",
+    "VALIDATING",
+    "DONE",
+    "PARTIAL",
+    "BLOCKED",
+    "FAILED",
+    "REVALIDATE",
+)
+STATUSES = frozenset(GLOBAL_NODE_STATES)
 
 # The complete subject is capped at 72 characters.  The summary still receives
 # separate checks for case, punctuation, imperative form, and vagueness.
@@ -335,7 +350,7 @@ TRAILER_LINE_RE = re.compile(r"^(?P<key>Node|Gate|Status):(?P<value>.*)$")
 ANY_EVIDENCE_LINE_RE = re.compile(r"^(?:Node|Gate|Status)\s*:", re.IGNORECASE)
 NODE_VALUE_RE = re.compile(r"^[A-Z0-9]+(?:-[A-Z0-9]+)*$")
 GATE_VALUE_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
-STATUS_VALUE_RE = re.compile(rf"^(?:{'|'.join(sorted(STATUSES))})$")
+STATUS_VALUE_RE = re.compile(rf"^(?:{'|'.join(GLOBAL_NODE_STATES)})$")
 
 
 def _normalise_message(message: str) -> str:
@@ -508,7 +523,10 @@ def _trailer_value_errors(line: str) -> list[str]:
                 "(for example commit-contract)"
             ]
     elif key == "Status" and STATUS_VALUE_RE.fullmatch(value) is None:
-        return ["Status trailer must be one of DONE, PARTIAL, BLOCKED, FAILED"]
+        return [
+            "Status trailer must be one of "
+            + ", ".join(GLOBAL_NODE_STATES)
+        ]
     return []
 
 
@@ -585,6 +603,20 @@ def _fixture_messages() -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
             "Node: 7E-1A\n"
             "Gate: model-identity-replay\n"
             "Status: PARTIAL",
+        ),
+        (
+            "global validating status trailer",
+            "fix(tauri): remove platform-specific unused warning\n\n"
+            "Node: BASELINE-GATE\n"
+            "Gate: workspace-clippy\n"
+            "Status: VALIDATING",
+        ),
+        (
+            "global revalidate status trailer",
+            "fix(7e1): restore route candidate snapshot\n\n"
+            "Node: 7E-1A\n"
+            "Gate: model-identity-replay\n"
+            "Status: REVALIDATE",
         ),
     ]
     invalid = [
@@ -683,8 +715,8 @@ def _run_fixtures() -> int:
         else:
             print(f"PASS invalid fixture: {name} ({errors[0]})")
 
-    # Every legal final state is accepted, not just the happy path.
-    for status in sorted(STATUSES):
+    # Every canonical global Node state is accepted as a commit-level value.
+    for status in GLOBAL_NODE_STATES:
         message = (
             "fix(core): repair fallback logic\n\n"
             "Node: COMMIT-CONTRACT\n"
