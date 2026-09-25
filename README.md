@@ -2,8 +2,8 @@
 
 把多个 LLM provider 聚合成**一个**本地端点，入口同时支持 Anthropic Messages、OpenAI Chat
 Completions、OpenAI Responses 三种方言，外加 Gemini 原生 `generateContent`。除了真实模型 id，
-还额外暴露 `opus-class` / `sonnet-class` / `haiku-class` 三个虚拟模型，后端按你**手动指定**的
-级别去选模型。
+还额外暴露 `fast-class` / `standard-class` / `reasoning-class` 三个虚拟模型（名字随设置里的
+**层级命名**变，见下），后端按你**手动指定**的级别去选模型。
 
 macOS 桌面应用：常驻菜单栏，无 Dock 图标，关窗不退出。
 
@@ -115,13 +115,17 @@ openrouter + deepseek/r1:free →  openrouter-deepseek-r1-free   （/ 和 : 会�
 
 从 0.1.x 升级：旧配置里手写的 `id` 会自动变成 alias，老客户端不用改；界面会提示一次新 id 是什么。
 
-按简报里的例子配完之后，对外可用的模型是：
+按简报里的例子配完之后，对外可用的模型是（第二行是同一个 class 的成员）：
 
 ```
-deepseek-deepseek-v4-flash (haiku)   deepseek-deepseek-v4-pro (sonnet)
-openai-gpt-5.3-sol (opus)
-opus-class          sonnet-class          haiku-class
+fast-class                    standard-class                 reasoning-class
+deepseek-deepseek-v4-flash    deepseek-deepseek-v4-pro       openai-gpt-5.3-sol
 ```
+
+虚拟模型的名字由设置里的**层级命名**（`routing.naming_style`）决定，默认 `internal` 就是上面这
+三个；换成 `anthropic` 是 `haiku-class` / `sonnet-class` / `opus-class`，换成 `openai` 是
+`luna-class` / `terra-class` / `sol-class`。另外两套名字**仍然能解析**（老配置、老客户端不用改），
+只是模型列表里只出现当前那套。
 
 ## 接客户端
 
@@ -130,7 +134,7 @@ Anthropic 风格（含 Claude Code）：
 ```sh
 export ANTHROPIC_BASE_URL=http://127.0.0.1:8787
 export ANTHROPIC_AUTH_TOKEN=zr-…        # 界面里 Copy token
-export ANTHROPIC_MODEL=sonnet-class
+export ANTHROPIC_MODEL=standard-class
 ```
 
 OpenAI 风格：
@@ -143,7 +147,7 @@ export OPENAI_API_KEY=zr-…
 ```sh
 curl http://127.0.0.1:8787/v1/messages -H "x-api-key: $TOKEN" \
   -H 'content-type: application/json' -d '{
-    "model": "opus-class", "max_tokens": 256, "stream": true,
+    "model": "reasoning-class", "max_tokens": 256, "stream": true,
     "messages": [{"role": "user", "content": "hi"}]
   }'
 ```
@@ -197,7 +201,7 @@ usage 算出每次请求的花费：
 被预算拦下的请求不重试、不失败转移、也不计入模型健康度——重试就等于把刚拒掉的钱花出去。
 
 ```
-$ curl ... -d '{"model":"sonnet-class",...}'
+$ curl ... -d '{"model":"standard-class",...}'
 {"error":{"type":"budget_exceeded",
           "message":"stopped by a budget: the today limit for everything (5.00 USD) is used up"}}
 ```
@@ -286,7 +290,7 @@ zroutery-headless --balances     # 逐个查、打印、退出，适合塞进 cr
 # deepseek: 48.75 CNY remaining
 
 zroutery-headless --elect        # 跑一次选举，打印每个 class 的排序然后退出
-# sonnet-class:
+# standard-class:
 #   deepseek-deepseek-v4-pro     primary: 640 ms, 0.0060 CNY per reference request
 #   openai-gpt-sonnet            fallback 1: 710 ms, 0.0600 CNY per reference request
 ```
@@ -335,7 +339,7 @@ zroutery-headless --elect        # 跑一次选举，打印每个 class 的排�
 ## 项目结构
 
 ```
-crates/zroutery-core/     协议转换、模型注册表、路由、计费、预算、HTTP 服务（无 GUI 依赖，878 个测试）
+crates/zroutery-core/     协议转换、模型注册表、路由、计费、预算、HTTP 服务（无 GUI 依赖，879 个测试）
   src/ir/                 统一中间表示：每个方言一套 decoder + encoder（4 套），避免 N×M
   src/protocol/           anthropic.rs / openai.rs / responses.rs / gemini.rs + SSE 状态机
   src/billing.rs          价格计算（按币种分开）、余额 probe 与五个内置预设
@@ -378,8 +382,8 @@ reasoning tokens）、`stop_sequences` ↔ `stop`、`reasoning_effort` ↔ think
 
 - provider 的 “Compatibility” 开关用来对付 “OpenAI 兼容” 的方言差异：推理模型拒绝
   `max_tokens` / `temperature`，部分网关不认 `stream_options`。
-- `cargo test -p zroutery-core` 只跑纯逻辑，878 个测试，秒级；加 `--all-features` 会把 `ml` /
-  `account` 一起编译测试，1293 个。`pnpm smoke` 验证真实进程。
+- `cargo test -p zroutery-core` 只跑纯逻辑，879 个测试，秒级；加 `--all-features` 会把 `ml` /
+  `account` 一起编译测试，1294 个。`pnpm smoke` 验证真实进程。
 - 开发流程、历史处理记录和子系统设计记录都在 [docs/development/](docs/development/README.md)。
 - 想看请求细节：`ZROUTERY_LOG=debug`。
 - 价格是每百万 token，不是每 token；从目录里自动填的价格已经换算过了。
