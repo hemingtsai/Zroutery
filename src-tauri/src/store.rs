@@ -103,6 +103,7 @@ pub fn save(dir: &Path, cfg: &AppConfig) -> Result<PathBuf, String> {
 fn write_atomically(dir: &Path, name: &str, text: &str) -> Result<PathBuf, String> {
     use std::io::Write;
 
+    #[cfg(unix)]
     let existed = dir.is_dir();
     std::fs::create_dir_all(dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
     // The directory holds the local auth token, so make it owner-only on unix.
