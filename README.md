@@ -1,14 +1,17 @@
 # Zroutery
 
-把多个 LLM provider 聚合成**一个**本地端点，同时提供 Anthropic Messages API 和 OpenAI Chat
-Completions API。除了真实模型 id，还额外暴露 `opus-class` / `sonnet-class` / `haiku-class`
-三个虚拟模型，后端按你**手动指定**的级别去选模型。
+把多个 LLM provider 聚合成**一个**本地端点，入口同时支持 Anthropic Messages、OpenAI Chat
+Completions、OpenAI Responses 三种方言，外加 Gemini 原生 `generateContent`。除了真实模型 id，
+还额外暴露 `opus-class` / `sonnet-class` / `haiku-class` 三个虚拟模型，后端按你**手动指定**的
+级别去选模型。
 
 macOS 桌面应用：常驻菜单栏，无 Dock 图标，关窗不退出。
 
 ```
-客户端 ──┬─ POST /v1/messages          (Anthropic 方言)
-         └─ POST /v1/chat/completions  (OpenAI 方言)
+客户端 ──┬─ POST /v1/messages           (Anthropic 方言)
+         ├─ POST /v1/chat/completions   (OpenAI 方言)
+         ├─ POST /v1/responses          (OpenAI Responses 方言)
+         └─ POST /v1/generateContent    (Gemini 方言)
                     │
               统一 IR + 路由 + 失败转移
                     │
@@ -295,7 +298,11 @@ zroutery-headless --elect        # 跑一次选举，打印每个 class 的排�
 | POST | `/v1/messages` | Anthropic Messages，支持 SSE |
 | POST | `/v1/messages/count_tokens` | 本地 token 估算 + 价格估算，不打上游 |
 | POST | `/v1/chat/completions` | OpenAI Chat Completions，支持 SSE |
-| GET | `/v1/models`、`/v1/models/{id}` | 同一份 JSON 同时满足两种客户端 |
+| POST | `/v1/responses` | OpenAI Responses，支持 SSE；答案会存进内存供取回 |
+| GET/DELETE | `/v1/responses/{id}` | 取回或删除已存响应 |
+| POST | `/v1/responses/{id}/cancel` | 取消一个响应，留下 `cancelled` 占位 |
+| POST | `/v1/generateContent` | Gemini 原生入口（非流式，见下） |
+| GET | `/v1/models`、`/v1/models/{id}` | 同一份 JSON 同时满足 Anthropic 和 OpenAI 两种客户端 |
 | GET | `/v1/status` | 版本、模型数、provider 数（需要 token） |
 | GET | `/health` | 只回 `{"status":"ok"}`，唯一免鉴权的路由 |
 
@@ -328,14 +335,14 @@ zroutery-headless --elect        # 跑一次选举，打印每个 class 的排�
 ## 项目结构
 
 ```
-crates/zroutery-core/     协议转换、模型注册表、路由、计费、预算、HTTP 服务（无 GUI 依赖，1166 个测试）
-  src/ir.rs               统一中间表示：2 个 decoder + 2 个 encoder，避免 N×M
-  src/protocol/           anthropic.rs / openai.rs，含两个方向的 SSE 状态机
+crates/zroutery-core/     协议转换、模型注册表、路由、计费、预算、HTTP 服务（无 GUI 依赖，878 个测试）
+  src/ir/                 统一中间表示：每个方言一套 decoder + encoder（4 套），避免 N×M
+  src/protocol/           anthropic.rs / openai.rs / responses.rs / gemini.rs + SSE 状态机
   src/billing.rs          价格计算（按币种分开）、余额 probe 与五个内置预设
   src/budget.rs           支出账本（落盘）与限额判定：拒绝或降级
   src/config.rs           provider、模型身份与 id 推导、路由策略、配置迁移
   src/registry.rs         模型 id 解析：id/别名走一次哈希，class 成员表预先算好
-  src/election.rs         按延迟+价格给类内成员打分排序（纯函数，15 个测试）
+  src/election.rs         按延迟+价格给类内成员打分排序（纯函数，17 个测试）
   src/router.rs           类内候选排序、健康度、熔断、失败转移
   src/server/mod.rs       axum 路由、鉴权、请求体上限、CORS、选举执行
   src/server/pipeline.rs  单次请求的候选轮询、计费记账、SSE 管道
@@ -350,9 +357,10 @@ scripts/ui_layout_test.py 无头 Chromium 量界面控件的高度和基线
 
 ## 协议转换支持情况
 
-已覆盖：文本、system prompt、多轮、工具调用（含流式增量 JSON）、工具结果、图片、
-extended thinking ↔ `reasoning_content`、停止原因、usage（含缓存命中和 reasoning tokens）、
-`stop_sequences` ↔ `stop`、`reasoning_effort` ↔ thinking budget。
+四个入口方言（Anthropic Messages、OpenAI Chat Completions、OpenAI Responses、Gemini
+`generateContent`）走同一套转换，已覆盖：文本、system prompt、多轮、工具调用（含流式增量 JSON）、
+工具结果、图片、extended thinking ↔ `reasoning_content`、停止原因、usage（含缓存命中和
+reasoning tokens）、`stop_sequences` ↔ `stop`、`reasoning_effort` ↔ thinking budget。
 
 已知限制：
 
@@ -361,11 +369,16 @@ extended thinking ↔ `reasoning_content`、停止原因、usage（含缓存命�
 - Anthropic 的 `signature` / `redacted_thinking` 在转成 OpenAI 方言时会丢失，反向没问题。
 - 流式一旦开始就不再转移：握手失败可以换下一个候选，中途断了只能把错误透传给客户端。
 - 音频、文件、server-side tools 这类块会被丢掉而不是报错。
+- Gemini 只接了 `generateContent`：它的流式接口是 `:streamGenerateContent`，本代理没有这个路径，
+  所以 Gemini 客户端拿不到 SSE（其他三种方言都有）。
+- `/v1/responses` 的存储是内存 + 有界（默认 1000 条，超出淘汰最早的），不是持久化；进程退出即
+  取不回。
 
 ## 开发提示
 
 - provider 的 “Compatibility” 开关用来对付 “OpenAI 兼容” 的方言差异：推理模型拒绝
   `max_tokens` / `temperature`，部分网关不认 `stream_options`。
-- `cargo test -p zroutery-core` 只跑纯逻辑，秒级；`pnpm smoke` 验证真实进程。
+- `cargo test -p zroutery-core` 只跑纯逻辑，878 个测试，秒级；加 `--all-features` 会把 `ml` /
+  `account` 一起编译测试，1293 个。`pnpm smoke` 验证真实进程。
 - 想看请求细节：`ZROUTERY_LOG=debug`。
 - 价格是每百万 token，不是每 token；从目录里自动填的价格已经换算过了。
