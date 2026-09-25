@@ -80,7 +80,7 @@ Core P1 repair dependencies.
 | `7E-0` | `PARTIAL` | 7E-1A repaired identity/replay; durable model operations and journal remain for later nodes. |
 | `7E-1` | `PARTIAL` | Purity/determinism foundations pass; production counterfactual and replay closure fail. |
 | `7E-1A` | `DONE` | Identity, lineage, schema-envelope, predictor-swap, and replay substrate accepted on main. |
-| `7E-1B-CORE` | `READY` | Pure shadow observation and counterfactual seam; no Core pipeline changes. |
+| `7E-1B-CORE` | `RUNNING` | Pure shadow observation and counterfactual seam is executing; no Core pipeline changes. |
 | `7E-1B` | `BLOCKED` | Requires 7E-1B-CORE plus Core eligibility, failure, stream, and Outcome repairs. |
 | `7E-2A` | `BLOCKED` | Requires replayable input and separate final-served identity. |
 | `7E-2B` | `BLOCKED` | Requires 7E-2A and the Stage 6 Outcome bridge. |
@@ -160,7 +160,7 @@ The audit authorizes four non-overlapping worktrees:
 3. `COMMIT-CONTRACT` (`DONE`) — CI/workflow commit evidence alignment; and
 4. `ORCH-DOCS` (`DONE`) — this recoverable documentation record.
 
-The next authorized ML subtask is `7E-1B-CORE` (`READY`), isolated from
+The next authorized ML subtask is `7E-1B-CORE` (`RUNNING`), isolated from
 Core pipeline files. Full `7E-1B` remains `BLOCKED` until its Core P1
 prerequisites are repaired.
 

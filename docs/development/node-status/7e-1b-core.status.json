@@ -2,8 +2,8 @@
   "schema_version": 1,
   "node_id": "7E-1B-CORE",
   "display_name": "7E-1B-CORE — replayable shadow observation core",
-  "status": "READY",
-  "implementation_state": "A bounded pure-ML subtask is authorized to repair shadow observation retention and counterfactual semantics without touching Core pipeline contracts.",
+  "status": "RUNNING",
+  "implementation_state": "A bounded pure-ML subtask is repairing shadow observation retention and counterfactual semantics in an isolated worktree; no result is accepted yet.",
   "dependencies": [
     "7E-1A",
     "7A",
@@ -35,6 +35,7 @@
     "crates/zroutery-core/tests/shadow_test.rs"
   ],
   "notes": [
+    "Agent session ses_f2909eae6ffeYeYKeWkUgNw5u3 is running on branch node/7e-1b-core from 18b00dc.",
     "This node is deliberately separate from full 7E-1B because Core P1 repairs still block pipeline/session/outcome integration.",
     "No server/policy/router/session/account/provider files are in scope."
   ]
