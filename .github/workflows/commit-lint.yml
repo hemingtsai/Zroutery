@@ -1,6 +1,6 @@
 name: commit-lint
 
-on:
+"on":
   pull_request:
     branches: [main]
 
@@ -12,28 +12,15 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Validate commit messages
+      # Finite structural expression (implemented by the stdlib validator):
+      # ^(feat|fix|refactor|test|perf|docs|build|ci|chore)\((core|protocol|policy|routing|observation|stats|account|newapi|migration|takeover|server|ml|decision|shadow|reward|replay|dataset|model|ui|docs|tests|workflow|7e1|7e2a|7e2b|7e2c|7e2d|7e2e|7e2f|7e3|7f|7g|7h)\): [a-z][^\r\n]*$
+      # The exact allowlist and post-checks are documented in WORKFLOW.md.
+      - name: Run commit-contract fixtures
+        run: python3 scripts/commit_contract_test.py --self-test
+
+      - name: Validate pull request commit messages
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
-          set -eu
-          fail=0
-          for sha in $(git rev-list "$BASE_SHA..HEAD"); do
-            subject=$(git log -1 --format=%s "$sha")
-            body=$(git log -1 --format=%B "$sha")
-
-            if ! printf '%s' "$subject" | grep -qE '^(feat|fix|refactor|test|perf|docs|build|ci|chore)\((core|router|protocol|policy|runtime|ml|account|provider|integration|tauri|workflow|repo)\): [a-z].{0,70}$'; then
-              echo "::error title=commit $sha::subject does not match <type>(<scope>): <summary> — got: $subject"
-              fail=1
-            fi
-
-            if printf '%s' "$body" | grep -qiE '\bStage[[:space:]]*[0-9]|\[WORKFLOW\]|Gate[[:space:]]+[[:alnum:]_]+[[:space:]]*[—-][[:space:]]*PASS|^Roadmap:|^Next Stage:|^Tests:[[:space:]]*[0-9]|^Risks:|^Scope:|^Implementation:'; then
-              echo "::error title=commit $sha::message contains forbidden roadmap/gate content"
-              fail=1
-            fi
-          done
-          if [ "$fail" -ne 0 ]; then
-            echo "commit-lint: FAILED"
-            exit 1
-          fi
-          echo "commit-lint: all commits valid"
+          set -euo pipefail
+          python3 scripts/commit_contract_test.py --base "$BASE_SHA" --head HEAD
