@@ -40,7 +40,8 @@
     "E-043",
     "E-049",
     "E-050",
-    "E-051"
+    "E-051",
+    "E-052"
   ],
   "source_references": [
     "docs/development/decisions/0003-capability-media-fail-closed.md",
