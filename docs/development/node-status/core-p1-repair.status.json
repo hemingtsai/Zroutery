@@ -3,8 +3,14 @@
   "node_id": "CORE-P1-REPAIR",
   "display_name": "Core P1 contract repair",
   "status": "QUEUED",
-  "implementation_state": "The P1 repairs are identified but not implemented in the documentation batch.",
-  "dependencies": [],
+  "implementation_state": "The broad repair package is split into five bounded Core nodes by ADR-0005; no aggregate completion is claimed until the domain and sole pipeline integration gates pass.",
+  "dependencies": [
+    "CORE-P1-MEDIA-REQ",
+    "CORE-P1-FAILURE-AUTHORITY",
+    "CORE-P1-ELIGIBILITY-TRACE",
+    "CORE-P1-OUTCOME-FEEDBACK",
+    "CORE-P1-PIPELINE-LIFECYCLE"
+  ],
   "dependents": [
     "7E-1",
     "7E-1B",
@@ -21,14 +27,24 @@
     "Stage 6 production Outcome/Feedback bridge",
     "Core revalidation and workspace tests"
   ],
-  "blocked_by": [],
-  "unblock_condition": "Implement the bounded Core repairs and pass their eligibility, failure, cancellation, Outcome, and regression gates.",
+  "blocked_by": [
+    "CORE-P1-MEDIA-REQ",
+    "CORE-P1-FAILURE-AUTHORITY",
+    "CORE-P1-ELIGIBILITY-TRACE",
+    "CORE-P1-OUTCOME-FEEDBACK",
+    "CORE-P1-PIPELINE-LIFECYCLE"
+  ],
+  "unblock_condition": "Accept CORE-P1-MEDIA-REQ and CORE-P1-FAILURE-AUTHORITY, then CORE-P1-ELIGIBILITY-TRACE and CORE-P1-OUTCOME-FEEDBACK, then the sole CORE-P1-PIPELINE-LIFECYCLE integration; rerun aggregate Core gates.",
   "evidence": [
     "E-004",
     "E-005",
-    "E-016"
+    "E-016",
+    "E-043"
   ],
   "source_references": [
+    "docs/development/decisions/0003-capability-media-fail-closed.md",
+    "docs/development/decisions/0004-failure-outcome-authority.md",
+    "docs/development/decisions/0005-core-p1-node-boundaries.md",
     "docs/development/repository-audit-2026-09-25.md",
     "crates/zroutery-core/src/policy.rs",
     "crates/zroutery-core/src/router.rs",
@@ -39,6 +55,8 @@
     "crates/zroutery-core/src/feedback.rs"
   ],
   "notes": [
-    "This is a repair package, not a claim that any failed stage is already repaired."
+    "This is an aggregate gate, not a claim that any failed stage is already repaired.",
+    "ADR-0005 assigns server/pipeline.rs to exactly one later integration owner; no two workers may edit it concurrently.",
+    "7E-2A remains blocked; this package contains no DecisionModel, DecisionDistribution, training, activation, or durable journal work."
   ]
 }

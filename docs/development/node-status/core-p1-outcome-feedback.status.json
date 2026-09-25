@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "node_id": "CORE-P1-OUTCOME-FEEDBACK",
+  "display_name": "CORE-P1-OUTCOME-FEEDBACK — outcome and feedback schema bridge",
+  "status": "QUEUED",
+  "implementation_state": "This pure schema/conversion repair is queued until the canonical failure authority is accepted; it will not wire ML training or production lifecycle.",
+  "dependencies": [
+    "CORE-P1-FAILURE-AUTHORITY"
+  ],
+  "dependents": [
+    "CORE-P1-PIPELINE-LIFECYCLE",
+    "CORE-P1-REPAIR"
+  ],
+  "required_gates": [
+    "Single canonical training sample schema or compatibility conversion",
+    "Outcome to Feedback/dataset conversion",
+    "Attempt identity and terminal status preservation",
+    "Optional/no-signal feedback semantics",
+    "Outcome/schema tests, workspace ML tests, clippy, and diff check"
+  ],
+  "blocked_by": [
+    "CORE-P1-FAILURE-AUTHORITY"
+  ],
+  "unblock_condition": "Accept the failure-authority contract, then implement only Outcome/Feedback and the narrowly allowed ML dataset adapter.",
+  "evidence": [
+    "E-043"
+  ],
+  "source_references": [
+    "docs/development/decisions/0004-failure-outcome-authority.md",
+    "docs/development/repository-audit-2026-09-25.md",
+    "crates/zroutery-core/src/outcome.rs",
+    "crates/zroutery-core/src/feedback.rs",
+    "crates/zroutery-core/src/ml/dataset.rs",
+    "crates/zroutery-core/src/ml/mod.rs",
+    "crates/zroutery-core/src/lib.rs"
+  ],
+  "notes": [
+    "Do not modify accepted shadow, model identity, decision engine, model, or reward files.",
+    "No DatasetStore wiring, training, activation, or durable LearningEvent journal work belongs here."
+  ]
+}

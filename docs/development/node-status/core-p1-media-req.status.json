@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "node_id": "CORE-P1-MEDIA-REQ",
+  "display_name": "CORE-P1-MEDIA-REQ — capability and media fail-closed repair",
+  "status": "READY",
+  "implementation_state": "A bounded Core domain repair is authorized by ADR-0003 to make request-derived capabilities exhaustive and unknown content/media fail closed.",
+  "dependencies": [],
+  "dependents": [
+    "CORE-P1-ELIGIBILITY-TRACE",
+    "CORE-P1-PIPELINE-LIFECYCLE",
+    "CORE-P1-REPAIR"
+  ],
+  "required_gates": [
+    "Document and tool-result-image capability derivation",
+    "Unknown protocol content fail-closed behavior",
+    "Explicit transform/drop observability",
+    "Core media/protocol regression tests",
+    "Core clippy and diff check"
+  ],
+  "blocked_by": [],
+  "unblock_condition": "Implement and independently validate ADR-0003 without editing policy, router, pipeline, ML, provider, UI, or Tauri files.",
+  "evidence": [
+    "E-043"
+  ],
+  "source_references": [
+    "docs/development/decisions/0003-capability-media-fail-closed.md",
+    "docs/development/repository-audit-2026-09-25.md",
+    "crates/zroutery-core/src/ir/mod.rs",
+    "crates/zroutery-core/src/config.rs",
+    "crates/zroutery-core/src/registry.rs",
+    "crates/zroutery-core/src/protocol/mod.rs",
+    "crates/zroutery-core/src/protocol/anthropic.rs",
+    "crates/zroutery-core/src/protocol/openai.rs",
+    "crates/zroutery-core/src/protocol/responses.rs",
+    "crates/zroutery-core/src/protocol/gemini.rs",
+    "crates/zroutery-core/src/media/collect.rs",
+    "crates/zroutery-core/src/media/transform.rs"
+  ],
+  "notes": [
+    "This node owns IR/config/registry/protocol/media files only; it must not edit server/pipeline.rs or any ML file.",
+    "Stage 2 remains FAILED until this node and the later Core integration gates are accepted."
+  ]
+}

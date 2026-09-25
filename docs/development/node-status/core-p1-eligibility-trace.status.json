@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "node_id": "CORE-P1-ELIGIBILITY-TRACE",
+  "display_name": "CORE-P1-ELIGIBILITY-TRACE — request eligibility and planned identity",
+  "status": "QUEUED",
+  "implementation_state": "This router/policy domain repair is queued until the capability and failure-authority domain contracts are accepted.",
+  "dependencies": [
+    "CORE-P1-MEDIA-REQ",
+    "CORE-P1-FAILURE-AUTHORITY"
+  ],
+  "dependents": [
+    "CORE-P1-PIPELINE-LIFECYCLE",
+    "CORE-P1-REPAIR"
+  ],
+  "required_gates": [
+    "Direct and tier eligibility parity",
+    "Request-derived capability enforcement",
+    "Planned identity and rejection trace",
+    "Router classified-attempt adapter",
+    "Routing policy regression tests and clippy"
+  ],
+  "blocked_by": [
+    "CORE-P1-MEDIA-REQ",
+    "CORE-P1-FAILURE-AUTHORITY"
+  ],
+  "unblock_condition": "Accept Batch A domain contracts, then implement only policy.rs/router.rs and focused eligibility tests.",
+  "evidence": [
+    "E-043"
+  ],
+  "source_references": [
+    "docs/development/decisions/0003-capability-media-fail-closed.md",
+    "docs/development/decisions/0004-failure-outcome-authority.md",
+    "docs/development/repository-audit-2026-09-25.md",
+    "crates/zroutery-core/src/policy.rs",
+    "crates/zroutery-core/src/router.rs",
+    "crates/zroutery-core/tests/routing_policy_test.rs"
+  ],
+  "notes": [
+    "This node does not edit server/pipeline.rs or any ml/* file.",
+    "Final served identity is deferred to CORE-P1-PIPELINE-LIFECYCLE."
+  ]
+}

@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "node_id": "CORE-P1-FAILURE-AUTHORITY",
+  "display_name": "CORE-P1-FAILURE-AUTHORITY — canonical failure classification",
+  "status": "READY",
+  "implementation_state": "A bounded Core domain repair is authorized by ADR-0004 to establish one Error-to-ClassifiedFailure mapping and one runtime impact table.",
+  "dependencies": [],
+  "dependents": [
+    "CORE-P1-ELIGIBILITY-TRACE",
+    "CORE-P1-OUTCOME-FEEDBACK",
+    "CORE-P1-PIPELINE-LIFECYCLE",
+    "CORE-P1-REPAIR"
+  ],
+  "required_gates": [
+    "Exhaustive Error variant mapping",
+    "Retry/fallback/circuit/observation impact consistency",
+    "Local versus provider failure distinction",
+    "Cancellation and interruption classification",
+    "Core failure tests, clippy, and diff check"
+  ],
+  "blocked_by": [],
+  "unblock_condition": "Implement and independently validate ADR-0004 in failure.rs and error.rs without editing router, pipeline, ML, provider, UI, or Tauri files.",
+  "evidence": [
+    "E-043"
+  ],
+  "source_references": [
+    "docs/development/decisions/0004-failure-outcome-authority.md",
+    "docs/development/repository-audit-2026-09-25.md",
+    "crates/zroutery-core/src/failure.rs",
+    "crates/zroutery-core/src/error.rs"
+  ],
+  "notes": [
+    "Error remains a structural/wire type; runtime decisions must consume the canonical classified result.",
+    "This node does not wire the production pipeline or change ML contracts."
+  ]
+}

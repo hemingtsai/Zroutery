@@ -58,8 +58,13 @@ failed node. Historical tags are not graph edges.
 | `UI-LAYOUT` | `DONE` | `UI` |
 | `UI-NEW-TRACKS` | `BLOCKED` | `UI`, `ACCOUNT`, `NEWAPI`, `I2`, `I3`, `I4` |
 | `OBSERVABILITY` | `READY` | none |
-| `CORE-P1-REPAIR` | `QUEUED` | none |
+| `CORE-P1-REPAIR` | `QUEUED` | `CORE-P1-MEDIA-REQ`, `CORE-P1-FAILURE-AUTHORITY`, `CORE-P1-ELIGIBILITY-TRACE`, `CORE-P1-OUTCOME-FEEDBACK`, `CORE-P1-PIPELINE-LIFECYCLE` |
 | `BASELINE-GATE` | `DONE` | `TEST-CLIPPY`, `TEST-SMOKE`, `TEST-LAYOUT-BROWSER` |
+| `CORE-P1-MEDIA-REQ` | `READY` | none |
+| `CORE-P1-FAILURE-AUTHORITY` | `READY` | none |
+| `CORE-P1-ELIGIBILITY-TRACE` | `QUEUED` | `CORE-P1-MEDIA-REQ`, `CORE-P1-FAILURE-AUTHORITY` |
+| `CORE-P1-OUTCOME-FEEDBACK` | `QUEUED` | `CORE-P1-FAILURE-AUTHORITY` |
+| `CORE-P1-PIPELINE-LIFECYCLE` | `QUEUED` | `CORE-P1-MEDIA-REQ`, `CORE-P1-FAILURE-AUTHORITY`, `CORE-P1-ELIGIBILITY-TRACE`, `CORE-P1-OUTCOME-FEEDBACK` |
 | `COMMIT-CONTRACT` | `DONE` | none |
 | `TEST-CHECK` | `DONE` | none |
 | `TEST-WORKSPACE` | `DONE` | `TEST-CHECK` |
@@ -94,11 +99,16 @@ blocked-by membership, and topological acyclicity.
 ## Critical-path edges
 
 ```text
-CORE-P1-REPAIR ─┬─> STAGE-1 ─> STAGE-5 ─> ACCOUNT ─> NEWAPI
-                ├─> STAGE-2
-                ├─> STAGE-3 ───────────────┐
-                ├─> STAGE-4 ───────────────┼─> 7E-1B
-                └─> STAGE-6 ───────────────┘
+CORE-P1-MEDIA-REQ ───────────────┐
+                                 ├─> CORE-P1-ELIGIBILITY-TRACE ─┐
+CORE-P1-FAILURE-AUTHORITY ───────┤                              │
+                                 └─> CORE-P1-OUTCOME-FEEDBACK ──┼─> CORE-P1-PIPELINE-LIFECYCLE
+                                                                    │
+                                                                    └─> CORE-P1-REPAIR ─┬─> STAGE-1 ─> STAGE-5 ─> ACCOUNT ─> NEWAPI
+                                                                                       ├─> STAGE-2
+                                                                                       ├─> STAGE-3 ───────────────┐
+                                                                                       ├─> STAGE-4 ───────────────┼─> 7E-1B
+                                                                                       └─> STAGE-6 ───────────────┘
 
 7C ─> 7E-0 ─> 7E-1A ─> 7E-1B-CORE ─> 7E-1B ─> 7E-2A ─> 7E-2B
                                       │
@@ -113,7 +123,9 @@ CORE-P1-REPAIR ─┬─> STAGE-1 ─> STAGE-5 ─> ACCOUNT ─> NEWAPI
 
 The Stage 3, Stage 4, and Stage 6 repair edges are intentionally repeated in
 `7E-1B`, `7E-2B`/`7E-2E`, and `7E-3`: an offline ML gate is not valid if its
-Outcome, cancellation, or candidate identity inputs are untrustworthy.
+Outcome, cancellation, or candidate identity inputs are untrustworthy. The
+`CORE-P1-PIPELINE-LIFECYCLE` node is the sole owner of `server/pipeline.rs`; no
+parallel worker may edit that file.
 
 ## Stage and aggregate edges
 

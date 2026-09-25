@@ -142,3 +142,15 @@ These records accept only `7E-1B-CORE`. They do not close full `7E-1B`,
 `REG-009`, or any Core P1 repair: final served identity capture, production
 pipeline/session/outcome integration, and trustworthy runtime evidence remain
 separate gates.
+
+## Core P1 split audit and dispatch contract
+
+| ID | Class | Exact command or observation | Result | Known caveat |
+|---|---|---|---|---|
+| E-043 | audit, architecture | Read-only Agent audit of current main `5a7b295` in isolated worktree `audit/core-p1-split` | PASS; confirmed Stage 2/3/4/6 and REG-005/006/007 gaps, five non-overlapping bounded nodes, and sole ownership of `server/pipeline.rs` | Audit only; no implementation files or status nodes were changed by the audit worktree |
+| E-044 | documentation, architecture | ADR-0003, ADR-0004, ADR-0005 plus five new Core P1 node records and DAG/roadmap/regression updates | PASS; capability/media fail-closed, canonical failure/outcome authority, and dispatch order are now explicit | ADRs bind the current Core repair batch only; they do not authorize ML activation or full 7E-1B |
+
+Batch A is limited to `CORE-P1-MEDIA-REQ` and
+`CORE-P1-FAILURE-AUTHORITY`. `CORE-P1-ELIGIBILITY-TRACE` and
+`CORE-P1-OUTCOME-FEEDBACK` wait for Batch A acceptance;
+`CORE-P1-PIPELINE-LIFECYCLE` is serial and owns the production pipeline seam.

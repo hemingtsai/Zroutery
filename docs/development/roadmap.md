@@ -58,7 +58,9 @@ Stage 6 Outcome/Feedback bridge ─┘
 
 `7E-0` is `PARTIAL`, `7E-1` is `PARTIAL`, and `7E-2A` is `BLOCKED`; the repair
 nodes do not erase those decisions. `7E-1A` and `7E-1B-CORE` are now `DONE`;
-full `7E-1B` remains blocked by the recorded Core P1 repair dependencies.
+full `7E-1B` remains blocked by the recorded Core P1 repair dependencies. The
+read-only Core P1 split is accepted as ADR-0003 through ADR-0005; Batch A is
+the only currently authorized parallel implementation batch.
 
 ## Stage and ML inventory
 
@@ -91,6 +93,25 @@ full `7E-1B` remains blocked by the recorded Core P1 repair dependencies.
 | `7F` | `BLOCKED` | Requires an accepted commit, shipping reachability, and observability. |
 | `7G` | `BLOCKED` | Requires stable real-traffic shadow evidence and rollback. |
 | `7H` | `BLOCKED` | Requires stable takeover, budget, monitoring, and rollback. |
+
+## Core P1 repair split
+
+The read-only audit produced ADR-0003 through ADR-0005 and five bounded nodes.
+`server/pipeline.rs` has one owner only.
+
+| Node | State | Boundary |
+|---|---|---|
+| `CORE-P1-MEDIA-REQ` | `READY` | IR/config/registry/protocol/media capability derivation and fail-closed content handling |
+| `CORE-P1-FAILURE-AUTHORITY` | `READY` | `failure.rs`/`error.rs` canonical classification and impact table |
+| `CORE-P1-ELIGIBILITY-TRACE` | `QUEUED` | `policy.rs`/`router.rs` request eligibility, planned identity, and router adapter |
+| `CORE-P1-OUTCOME-FEEDBACK` | `QUEUED` | Outcome/Feedback schema and pure dataset conversion; no training/activation |
+| `CORE-P1-PIPELINE-LIFECYCLE` | `QUEUED` | Sole `pipeline.rs`/`server` lifecycle, final served identity, stream terminal state, and fan-out owner |
+
+Batch A (`CORE-P1-MEDIA-REQ` and `CORE-P1-FAILURE-AUTHORITY`) is the only
+parallel implementation batch. Batch B starts only after independent acceptance
+of Batch A. Batch C is serial and owns the production pipeline seam. The
+aggregate `CORE-P1-REPAIR` remains `QUEUED` until all five nodes and Stage
+2/3/4/6 revalidation pass.
 
 ## Parallel engineering inventory
 
@@ -159,11 +180,12 @@ The audit authorizes four non-overlapping worktrees:
 3. `COMMIT-CONTRACT` (`DONE`) — CI/workflow commit evidence alignment; and
 4. `ORCH-DOCS` (`DONE`) — this recoverable documentation record.
 
-The next authorized work is the Core P1 repair/split that unblocks full `7E-1B`.
-The pure `7E-1B-CORE` seam is accepted, but full `7E-1B` remains `BLOCKED`
-until its Core P1 prerequisites are repaired. No production takeover, online
-RL, exploration, real-provider E2E, or automatic model activation is
-authorized by this roadmap.
+The next authorized work is Core P1 Batch A: `CORE-P1-MEDIA-REQ` and
+`CORE-P1-FAILURE-AUTHORITY` in isolated worktrees. The pure `7E-1B-CORE` seam
+is accepted, but full `7E-1B` remains `BLOCKED` until the split Core contracts
+and the sole pipeline integration gate pass. No production takeover, online RL,
+exploration, real-provider E2E, or automatic model activation is authorized by
+this roadmap.
 
 ## Unresolved decisions
 
@@ -171,6 +193,12 @@ authorized by this roadmap.
   the versioned node-record schema and ownership rules.
 - [ADR-0002](decisions/0002-production-ml-boundary.md): choose the future
   deployment boundary for online ML and activation.
+- [ADR-0003](decisions/0003-capability-media-fail-closed.md): accepted for the
+  Core P1 capability/media boundary; revisit only with new evidence.
+- [ADR-0004](decisions/0004-failure-outcome-authority.md): accepted for the
+  Core P1 failure/Outcome boundary; revisit only with new evidence.
+- [ADR-0005](decisions/0005-core-p1-node-boundaries.md): accepted for the
+  current dispatch split and sole pipeline ownership rule.
 
 ## Acceptance rule for future nodes
 
