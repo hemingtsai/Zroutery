@@ -24,6 +24,9 @@ pub enum FailureClass {
     Authentication,
     /// Provider is unavailable (502, 503, 504, 529).
     ProviderUnavailable,
+    /// Upstream returned a terminal payment/precondition rejection (402/412)
+    /// without a deterministic local-configuration or budget marker.
+    ProviderRejected,
     /// Protocol-level error (malformed response, unexpected format).
     Protocol,
     /// Request requires capabilities the model does not have.
@@ -52,12 +55,13 @@ pub enum FailureClass {
 
 impl FailureClass {
     /// Every canonical class, useful for exhaustive table tests and adapters.
-    pub const ALL: [Self; 15] = [
+    pub const ALL: [Self; 16] = [
         Self::Transport,
         Self::Timeout,
         Self::RateLimit,
         Self::Authentication,
         Self::ProviderUnavailable,
+        Self::ProviderRejected,
         Self::Protocol,
         Self::Capability,
         Self::InvalidRequest,
@@ -112,6 +116,13 @@ impl FailureClass {
                 affects_circuit: true,
                 retryable: true,
                 fallbackable: true,
+                provider_fault: true,
+            },
+            Self::ProviderRejected => FailureImpact {
+                affects_observation: true,
+                affects_circuit: true,
+                retryable: false, // no evidence that another candidate helps
+                fallbackable: false,
                 provider_fault: true,
             },
             Self::Protocol => FailureImpact {
@@ -193,6 +204,9 @@ impl FailureClass {
     }
 
     /// Classify an HTTP status code without a body.
+    ///
+    /// A bare 402/412 is a provider rejection; it is not evidence that the
+    /// caller is over budget or missing a provider key.
     pub fn from_status(status: u16) -> Self {
         Self::from_upstream_status(status, None)
     }
@@ -215,6 +229,9 @@ impl FailureClass {
         {
             return Self::InvalidRequest;
         }
+        // A status alone is not evidence of a local budget/key decision.
+        // Only explicit, deterministic body markers may select local classes;
+        // otherwise 402/412 remain provider rejections below.
         if let Some(body) = lower.as_deref() {
             if matches!(status, 402 | 404 | 412 | 503) {
                 if is_missing_key_message(body) {
@@ -242,8 +259,7 @@ impl FailureClass {
         }
         match status {
             400 => Self::InvalidRequest,
-            402 => Self::OverBudget,
-            412 => Self::MissingApiKey,
+            402 | 412 => Self::ProviderRejected,
             413 => Self::InvalidRequest,
             500 => Self::Unknown,
             _ if status >= 400 => Self::Protocol,
@@ -886,6 +902,7 @@ mod tests {
             FailureClass::RateLimit,
             FailureClass::Authentication,
             FailureClass::ProviderUnavailable,
+            FailureClass::ProviderRejected,
             FailureClass::Protocol,
             FailureClass::Capability,
             FailureClass::InvalidRequest,
@@ -899,9 +916,9 @@ mod tests {
         ];
         for class in &classes {
             let impact = class.impact();
-            // At least one of retryable or fallbackable should be true for
-            // provider-attributable failures, and both false for client errors.
-            if impact.provider_fault {
+            // Most provider faults are actionable through retry/fallback;
+            // ProviderRejected is the explicit terminal exception.
+            if impact.provider_fault && !matches!(class, FailureClass::ProviderRejected) {
                 assert!(
                     impact.retryable || impact.fallbackable,
                     "{:?} is provider_fault but neither retryable nor fallbackable",

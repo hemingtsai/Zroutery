@@ -26,6 +26,78 @@ fn public_constructor_compatibility_preserves_message_and_structural_apis() {
     assert!(structural.impact.fallbackable);
 }
 
+#[test]
+fn generic_402_412_statuses_need_explicit_local_markers() {
+    // Status-only upstream responses are provider rejections, not local
+    // configuration or budget decisions.
+    assert_eq!(
+        FailureClass::from_status(402),
+        FailureClass::ProviderRejected
+    );
+    assert_eq!(
+        FailureClass::from_status(412),
+        FailureClass::ProviderRejected
+    );
+
+    let payment = ClassifiedFailure::from_status(402, "payment required".to_string());
+    assert_eq!(payment.class, FailureClass::ProviderRejected);
+    assert!(payment.affects_observation());
+    assert!(payment.affects_circuit());
+    assert!(payment.provider_fault());
+    assert!(!payment.retryable());
+    assert!(!payment.fallbackable());
+
+    let precondition = ClassifiedFailure::from_status(412, "precondition failed".to_string());
+    assert_eq!(precondition.class, FailureClass::ProviderRejected);
+    assert!(precondition.affects_observation());
+    assert!(precondition.affects_circuit());
+    assert!(precondition.provider_fault());
+    assert!(!precondition.retryable());
+    assert!(!precondition.fallbackable());
+
+    // Explicit body markers are the only status-path route to local classes.
+    assert_eq!(
+        FailureClass::from_status_with_body(402, "budget exceeded"),
+        FailureClass::OverBudget
+    );
+    let budget_marker = ClassifiedFailure::from_status(402, "budget exceeded".to_string());
+    assert_eq!(budget_marker.class, FailureClass::OverBudget);
+    assert!(!budget_marker.affects_observation());
+    assert!(!budget_marker.affects_circuit());
+    assert!(!budget_marker.provider_fault());
+    assert!(!budget_marker.fallbackable());
+
+    assert_eq!(
+        FailureClass::from_status_with_body(412, "missing api key"),
+        FailureClass::MissingApiKey
+    );
+    let key_marker = ClassifiedFailure::from_status(412, "missing api key".to_string());
+    assert_eq!(key_marker.class, FailureClass::MissingApiKey);
+    assert!(!key_marker.affects_observation());
+    assert!(!key_marker.affects_circuit());
+    assert!(!key_marker.provider_fault());
+    assert!(key_marker.fallbackable());
+
+    // Structural Error variants remain authoritative without status guessing.
+    let structural_budget = ClassifiedFailure::from_core_error(Error::OverBudget("limit".into()));
+    assert_eq!(structural_budget.class, FailureClass::OverBudget);
+    assert!(!structural_budget.affects_observation());
+    assert!(!structural_budget.fallbackable());
+
+    let structural_key = ClassifiedFailure::from_core_error(Error::MissingApiKey("p".into()));
+    assert_eq!(structural_key.class, FailureClass::MissingApiKey);
+    assert!(!structural_key.affects_observation());
+    assert!(structural_key.fallbackable());
+
+    let generic_upstream = Error::Upstream {
+        provider: "p".into(),
+        status: 402,
+        body: "payment required".into(),
+    };
+    assert!(!generic_upstream.is_retryable());
+    assert!(generic_upstream.counts_against_health());
+}
+
 #[tokio::test]
 async fn every_error_variant_has_one_canonical_classification() {
     // An invalid URL gives us a real reqwest::Error without making a network
@@ -147,6 +219,16 @@ fn one_impact_table_covers_routing_health_stats_and_fault_effects() {
                 affects_circuit: true,
                 retryable: true,
                 fallbackable: true,
+                provider_fault: true,
+            },
+        ),
+        (
+            FailureClass::ProviderRejected,
+            FailureImpact {
+                affects_observation: true,
+                affects_circuit: true,
+                retryable: false,
+                fallbackable: false,
                 provider_fault: true,
             },
         ),
