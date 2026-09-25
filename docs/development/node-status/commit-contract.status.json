@@ -2,8 +2,8 @@
   "schema_version": 1,
   "node_id": "COMMIT-CONTRACT",
   "display_name": "Commit contract alignment",
-  "status": "READY",
-  "implementation_state": "CI and WORKFLOW still encode a stale commit contract; a separate authorized node owns the repair.",
+  "status": "RUNNING",
+  "implementation_state": "An implementation Agent is aligning CI and WORKFLOW with the current Node commit and trailer contract in an isolated worktree; no repair is accepted yet.",
   "dependencies": [],
   "dependents": [
     "TEST-COMMIT-CONTRACT"
@@ -26,6 +26,7 @@
     ".github/workflows/commit-lint.yml"
   ],
   "notes": [
+    "Agent session ses_f29918c35ffeAwchATyqno7zAm is running on branch node/commit-contract from c8bed1b.",
     "A commit subject never proves node completion."
   ]
 }

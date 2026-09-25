@@ -2,8 +2,8 @@
   "schema_version": 1,
   "node_id": "7E-1A",
   "display_name": "7E-1A — model identity and replay repair",
-  "status": "READY",
-  "implementation_state": "The bounded repair is authorized and scoped, but no repair implementation is present in this documentation worktree.",
+  "status": "RUNNING",
+  "implementation_state": "An implementation Agent is executing the bounded identity, lineage, and replay repair in an isolated worktree; its result remains unaccepted until orchestrator validation.",
   "dependencies": [
     "7E-0",
     "7A",
@@ -35,6 +35,7 @@
     "crates/zroutery-core/tests/shadow_test.rs"
   ],
   "notes": [
-    "This node is a dispatch record, not evidence of 7E-0 repair."
+    "Agent session ses_f29918c38ffe45qE1Cyb7Nrea2 is running on branch node/7e-1a-model-identity from c8bed1b.",
+    "A worker report or commit is not accepted evidence until the orchestrator reviews the diff and reruns the gates."
   ]
 }

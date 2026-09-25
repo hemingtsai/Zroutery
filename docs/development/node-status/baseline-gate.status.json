@@ -2,8 +2,8 @@
   "schema_version": 1,
   "node_id": "BASELINE-GATE",
   "display_name": "Baseline executable local gates",
-  "status": "READY",
-  "implementation_state": "The three reproduced local gate failures are bounded and ready for the separate baseline repair node.",
+  "status": "RUNNING",
+  "implementation_state": "An implementation Agent is repairing the reproduced clippy, Windows smoke, and layout false-green failures in an isolated worktree; no repair is accepted yet.",
   "dependencies": [
     "TEST-CLIPPY",
     "TEST-SMOKE",
@@ -17,11 +17,7 @@
     "Real browser layout or explicit non-success",
     "Diff check"
   ],
-  "blocked_by": [
-    "TEST-CLIPPY",
-    "TEST-SMOKE",
-    "TEST-LAYOUT-BROWSER"
-  ],
+  "blocked_by": [],
   "unblock_condition": "Repair the three failures and rerun the exact local commands with no ignored or skipped acceptance gate.",
   "evidence": [
     "E-008",
@@ -37,6 +33,7 @@
     "package.json"
   ],
   "notes": [
-    "The current node does not edit source or scripts."
+    "Agent session ses_f29918c36ffeq7mN5d6qsnMPyH is running on branch node/baseline-gate from c8bed1b.",
+    "TEST-CLIPPY, TEST-SMOKE, and TEST-LAYOUT-BROWSER are repair targets, not upstream reasons preventing this node from starting."
   ]
 }

@@ -36,7 +36,7 @@ failed node. Historical tags are not graph edges.
 | `7D` | `PARTIAL` | `7B`, `7C` |
 | `7E-0` | `FAILED` | `7C` |
 | `7E-1` | `PARTIAL` | `7E-0`, `CORE-P1-REPAIR`, `STAGE-3`, `STAGE-4`, `STAGE-6` |
-| `7E-1A` | `READY` | `7E-0`, `7A`, `7C` |
+| `7E-1A` | `RUNNING` | `7E-0`, `7A`, `7C` |
 | `7E-1B` | `BLOCKED` | `7E-1A`, `CORE-P1-REPAIR`, `STAGE-3`, `STAGE-4`, `STAGE-6` |
 | `7E-2A` | `BLOCKED` | `7E-1B` |
 | `7E-2B` | `BLOCKED` | `7E-2A`, `STAGE-6` |
@@ -58,8 +58,8 @@ failed node. Historical tags are not graph edges.
 | `UI-NEW-TRACKS` | `BLOCKED` | `UI`, `ACCOUNT`, `NEWAPI`, `I2`, `I3`, `I4` |
 | `OBSERVABILITY` | `READY` | none |
 | `CORE-P1-REPAIR` | `QUEUED` | none |
-| `BASELINE-GATE` | `READY` | `TEST-CLIPPY`, `TEST-SMOKE`, `TEST-LAYOUT-BROWSER` |
-| `COMMIT-CONTRACT` | `READY` | none |
+| `BASELINE-GATE` | `RUNNING` | `TEST-CLIPPY`, `TEST-SMOKE`, `TEST-LAYOUT-BROWSER` |
+| `COMMIT-CONTRACT` | `RUNNING` | none |
 | `TEST-CHECK` | `DONE` | none |
 | `TEST-WORKSPACE` | `DONE` | `TEST-CHECK` |
 | `TEST-ML` | `DONE` | `TEST-WORKSPACE` |

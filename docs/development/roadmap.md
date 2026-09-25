@@ -76,7 +76,7 @@ remediation, and `7E-1B` remains blocked until it is merged and revalidated.
 | `7D` | `PARTIAL` | Evaluation framework exists; holdout, calibration, and statistical gates are incomplete. |
 | `7E-0` | `FAILED` | Commit/checkpoint binding, lineage, replay validation, and content identity require repair. |
 | `7E-1` | `PARTIAL` | Purity/determinism foundations pass; production counterfactual and replay closure fail. |
-| `7E-1A` | `READY` | Authorized bounded identity/lineage/replay repair; do not implement 7E-2. |
+| `7E-1A` | `RUNNING` | Authorized bounded identity/lineage/replay repair is executing in an isolated worktree; do not implement 7E-2. |
 | `7E-1B` | `BLOCKED` | Requires 7E-1A plus Core eligibility, failure, stream, and Outcome repairs. |
 | `7E-2A` | `BLOCKED` | Requires replayable input and separate final-served identity. |
 | `7E-2B` | `BLOCKED` | Requires 7E-2A and the Stage 6 Outcome bridge. |
@@ -151,10 +151,10 @@ not change implementation status for any audited node.
 
 The audit authorizes four non-overlapping worktrees:
 
-1. `7E-1A` — model identity, lineage, and replay repair;
-2. `BASELINE-GATE` — local clippy, Windows smoke, and layout-harness repair;
-3. `COMMIT-CONTRACT` — CI/workflow commit evidence alignment; and
-4. `ORCH-DOCS` — this recoverable documentation record.
+1. `7E-1A` (`RUNNING`) — model identity, lineage, and replay repair;
+2. `BASELINE-GATE` (`RUNNING`) — local clippy, Windows smoke, and layout-harness repair;
+3. `COMMIT-CONTRACT` (`RUNNING`) — CI/workflow commit evidence alignment; and
+4. `ORCH-DOCS` (`DONE`) — this recoverable documentation record.
 
 `7E-1B` must not be dispatched until `7E-1A` is merged and revalidated. No
 production takeover, online RL, exploration, real-provider E2E, or automatic
