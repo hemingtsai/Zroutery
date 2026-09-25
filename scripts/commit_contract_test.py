@@ -177,6 +177,7 @@ IMPERATIVE_VERBS = frozenset(
         "maintain",
         "make",
         "map",
+        "mark",
         "measure",
         "merge",
         "migrate",
@@ -546,6 +547,10 @@ def _fixture_messages() -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
         (
             "workflow subject",
             "ci(workflow): align commit lint with node evidence",
+        ),
+        (
+            "mark imperative compatibility subject",
+            "docs(workflow): mark first implementation batch running",
         ),
         (
             "tauri compatibility scope",
