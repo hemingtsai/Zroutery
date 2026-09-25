@@ -28,7 +28,7 @@ import threading
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DIST = os.path.join(ROOT, "ui", "dist")
-EXPECTED_CONTROL_HEIGHT = 28.0
+EXPECTED_CONTROL_HEIGHT = 30.0
 TOLERANCE = 0.6
 # Field boxes on one flex line share a top, give or take an action group's offset;
 # the next line starts a whole control lower.
@@ -41,6 +41,29 @@ CHROMIUM_CANDIDATES = [
     "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
     "/Applications/Helium.app/Contents/MacOS/Helium",
 ]
+
+
+def chromium_candidates() -> list[str]:
+    """Return common browser locations for the current operating system."""
+    candidates = list(CHROMIUM_CANDIDATES)
+    if os.name == "nt":
+        roots = [
+            os.environ.get("ProgramFiles"),
+            os.environ.get("ProgramFiles(x86)"),
+            os.environ.get("LOCALAPPDATA"),
+        ]
+        for root in roots:
+            if not root:
+                continue
+            candidates.extend(
+                [
+                    os.path.join(root, "Google", "Chrome", "Application", "chrome.exe"),
+                    os.path.join(root, "Chromium", "Application", "chrome.exe"),
+                    os.path.join(root, "Microsoft", "Edge", "Application", "msedge.exe"),
+                    os.path.join(root, "BraveSoftware", "Brave-Browser", "Application", "brave.exe"),
+                ]
+            )
+    return candidates
 
 # A snapshot shaped like the Rust one, with enough variety to exercise the rows:
 # fields with and without hints, selects, number inputs, buttons.
@@ -56,6 +79,7 @@ SNAPSHOT = {
             "cors_origins": [],
             "max_body_mib": 32,
             "log_limit": 500,
+            "bypass_proxy": False,
         },
         "routing": {
             "strategy": "balanced",
@@ -64,7 +88,7 @@ SNAPSHOT = {
             "break_after_failures": 3,
             "cooldown_secs": 60,
             "unknown_model_fallback": None,
-            "client_aliases": {"claude-opus-4-1-20250805": "haiku"},
+            "client_aliases": {"claude-opus-4-1-20250805": "fast"},
             "match_claude_names": True,
             # The balanced strategy is what shows the election card, so the layout
             # harness has to exercise it.
@@ -75,6 +99,37 @@ SNAPSHOT = {
                 "reference_output_tokens": 500,
             },
             "elect_on_start": True,
+            "naming_style": "anthropic",
+            "capability_filter": True,
+            "strict_capability_filter": False,
+            "policies": {"policies": [], "default_policy": None, "clients": []},
+        },
+        "classifier": {
+            "enabled": False,
+            "strategy": "priority",
+            "failover": True,
+            "max_attempts": 2,
+            "candidates": [],
+            "detection": {
+                "enabled": True,
+                "minimum_confidence": 0.85,
+                "builtins": {
+                    "anthropic_beta": True,
+                    "xml_classifier_signature": True,
+                    "model_1m_signature": True,
+                },
+                "signatures": [],
+            },
+        },
+        "window": {
+            "launch_on_login": False,
+            "silent_start": False,
+            "keep_in_tray": True,
+        },
+        "vision": {
+            "enabled": False,
+            "model": None,
+            "placeholder": "[Unsupported Image]",
         },
         "providers": [
             {
@@ -84,6 +139,8 @@ SNAPSHOT = {
                 "base_url": "https://api.deepseek.com/v1",
                 "key_ref": "provider:deepseek",
                 "extra_headers": {},
+                "impersonate_claude_code": False,
+                "bearer_auth": False,
                 "enabled": True,
                 "timeout_secs": 600,
                 "connect_timeout_secs": 15,
@@ -106,6 +163,8 @@ SNAPSHOT = {
                 "base_url": "https://api.anthropic.com",
                 "key_ref": "provider:anthropic",
                 "extra_headers": {},
+                "impersonate_claude_code": False,
+                "bearer_auth": False,
                 "enabled": True,
                 "timeout_secs": 600,
                 "connect_timeout_secs": 15,
@@ -124,6 +183,7 @@ SNAPSHOT = {
         ],
         "budgets": [
             {
+                "id": "budget_global",
                 "scope": {"kind": "global"},
                 "period": "day",
                 "limit": {"currency": "CNY", "amount": 20.0},
@@ -135,13 +195,19 @@ SNAPSHOT = {
             {
                 "provider_id": "deepseek",
                 "upstream_model": "deepseek-chat",
-                "class": "sonnet",
+                "tier": "standard",
                 "priority": 0,
                 "weight": 1,
                 "enabled": True,
-                "supports_tools": True,
-                "supports_vision": False,
-                "supports_thinking": False,
+                "capabilities": {
+                    "vision": False,
+                    "tools": True,
+                    "thinking": False,
+                    "structured_output": False,
+                    "audio": False,
+                    "video": False,
+                    "files": False,
+                },
                 "display_name": None,
                 "aliases": ["deepseek-v4-pro"],
                 "max_output_tokens": None,
@@ -156,13 +222,19 @@ SNAPSHOT = {
             {
                 "provider_id": "anthropic",
                 "upstream_model": "mystery",
-                "class": None,
+                "tier": None,
                 "priority": 0,
                 "weight": 1,
                 "enabled": True,
-                "supports_tools": True,
-                "supports_vision": False,
-                "supports_thinking": False,
+                "capabilities": {
+                    "vision": False,
+                    "tools": True,
+                    "thinking": False,
+                    "structured_output": False,
+                    "audio": False,
+                    "video": False,
+                    "files": False,
+                },
                 "display_name": None,
                 "aliases": [],
                 "max_output_tokens": None,
@@ -215,12 +287,14 @@ SNAPSHOT = {
                 "avg_latency_ms": 812.5,
             }
         ],
+        "per_kind": [],
     },
     "recent": [
         {
             "id": "req_1",
             "at": "2026-01-01T00:00:00Z",
             "ingress": "anthropic",
+            "kind": "main",
             "requested_model": "sonnet-class",
             "resolved_model": "deepseek-deepseek-chat",
             "provider_name": "DeepSeek",
@@ -252,9 +326,9 @@ SNAPSHOT = {
             "reference_input_tokens": 1000,
             "reference_output_tokens": 500,
         },
-        "classes": {
-            "sonnet": {
-                "class": "sonnet",
+        "tiers": {
+            "standard": {
+                "tier": "standard",
                 "priced": True,
                 "note": None,
                 "ranked": [
@@ -272,6 +346,7 @@ SNAPSHOT = {
     "budgets": [
         {
             "budget": {
+                "id": "budget_global",
                 "scope": {"kind": "global"},
                 "period": "day",
                 "limit": {"currency": "CNY", "amount": 20.0},
@@ -339,7 +414,7 @@ HARNESS = """
   (async () => {
     const out = [];
     for (let i = 0; i < 60 && document.querySelector(".field") === null; i++) await wait(50);
-    const tabs = [...document.querySelectorAll('[role="tab"]')];
+    const tabs = [...document.querySelectorAll('[role="tab"], .nav-item')];
     for (const tab of tabs) {
       tab.click();
       await wait(150);
@@ -415,26 +490,26 @@ def self_test() -> int:
 
     cases: list[tuple[str, dict, bool]] = [
         # One line, everything where it belongs.
-        ("aligned single line", row([(100, 118, 28), (100, 118, 28)]), True),
+        ("aligned single line", row([(100, 118, 30), (100, 118, 30)]), True),
         # Two lines: the second starts 56px lower, and each is internally aligned.
         (
             "wrapped but aligned",
-            row([(100, 118, 28), (100, 118, 28), (156, 174, 28), (156, 174, 28)]),
+            row([(100, 118, 30), (100, 118, 30), (156, 174, 30), (156, 174, 30)]),
             True,
         ),
         # The bug this test was written for: hint text pushed one control 17px up
         # while its field box stayed put.
-        ("control off its line", row([(100, 118, 28), (100, 101, 28)]), False),
+        ("control off its line", row([(100, 118, 30), (100, 101, 30)]), False),
         # A native select that picked its own height.
-        ("mixed heights", row([(100, 118, 28), (100, 118, 32)]), False),
-        # Uniform but wrong: every control 30px, so `--control-h` was not applied.
-        ("uniformly wrong height", row([(100, 118, 30), (100, 118, 30)]), False),
+        ("mixed heights", row([(100, 118, 30), (100, 118, 32)]), False),
+        # Uniform but wrong: every control 32px, so `--control-h` was not applied.
+        ("uniformly wrong height", row([(100, 118, 32), (100, 118, 32)]), False),
         # An action group sits lower than the fields but its button lines up.
-        ("action group on the same line", row([(100, 118, 28), (118, 118, 28)]), True),
+        ("action group on the same line", row([(100, 118, 30), (118, 118, 30)]), True),
         # A misplaced control on the second line must not hide behind the first.
         (
             "second line broken",
-            row([(100, 118, 28), (156, 174, 28), (156, 190, 28)]),
+            row([(100, 118, 30), (156, 174, 30), (156, 190, 30)]),
             False,
         ),
     ]
@@ -455,12 +530,21 @@ def self_test() -> int:
 
 
 def find_chromium() -> str | None:
-    for name in ("google-chrome", "chromium", "chromium-browser"):
+    for name in (
+        "google-chrome",
+        "google-chrome-stable",
+        "chrome",
+        "chromium",
+        "chromium-browser",
+        "microsoft-edge",
+        "msedge",
+        "brave-browser",
+    ):
         found = shutil.which(name)
         if found:
             return found
-    for path in CHROMIUM_CANDIDATES:
-        if os.path.exists(path):
+    for path in chromium_candidates():
+        if os.path.isfile(path):
             return path
     return None
 
@@ -497,8 +581,8 @@ def main() -> int:
         return 2
     browser = find_chromium()
     if not browser:
-        print("no Chromium based browser found, skipping the layout test")
-        return 0
+        print("no Chromium based browser found; the layout test did not run")
+        return 2
 
     stage = tempfile.mkdtemp(prefix="zr-layout-")
     shutil.copytree(DIST, stage, dirs_exist_ok=True)
