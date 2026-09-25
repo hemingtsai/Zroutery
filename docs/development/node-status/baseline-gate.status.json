@@ -2,8 +2,8 @@
   "schema_version": 1,
   "node_id": "BASELINE-GATE",
   "display_name": "Baseline executable local gates",
-  "status": "RUNNING",
-  "implementation_state": "An implementation Agent is repairing the reproduced clippy, Windows smoke, and layout false-green failures in an isolated worktree; no repair is accepted yet.",
+  "status": "DONE",
+  "implementation_state": "The reproduced clippy, Windows smoke, and layout false-green failures were repaired and independently revalidated on main; pre-existing repository-wide rustfmt debt remains outside this node.",
   "dependencies": [
     "TEST-CLIPPY",
     "TEST-SMOKE",
@@ -18,12 +18,17 @@
     "Diff check"
   ],
   "blocked_by": [],
-  "unblock_condition": "Repair the three failures and rerun the exact local commands with no ignored or skipped acceptance gate.",
+  "unblock_condition": "Reopen if the Tauri build, smoke harness, or layout harness changes; a future formatting-only repair remains separate.",
   "evidence": [
     "E-008",
     "E-010",
     "E-012",
-    "E-016"
+    "E-016",
+    "E-024",
+    "E-025",
+    "E-028",
+    "E-030",
+    "E-031"
   ],
   "source_references": [
     "docs/development/repository-audit-2026-09-25.md",
@@ -33,7 +38,8 @@
     "package.json"
   ],
   "notes": [
-    "Agent session ses_f29918c36ffeq7mN5d6qsnMPyH is running on branch node/baseline-gate from c8bed1b.",
-    "TEST-CLIPPY, TEST-SMOKE, and TEST-LAYOUT-BROWSER are repair targets, not upstream reasons preventing this node from starting."
+    "Accepted commits: 902db2c, f1797d2, and 4e36fdb on main.",
+    "The local mock smoke intentionally emits Windows connection-reset diagnostics for an aborted oversized request but exits successfully.",
+    "cargo fmt --all -- --check remains FAILED due pre-existing broad formatting drift; no unrelated formatting was included."
   ]
 }

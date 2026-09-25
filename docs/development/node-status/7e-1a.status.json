@@ -2,14 +2,15 @@
   "schema_version": 1,
   "node_id": "7E-1A",
   "display_name": "7E-1A — model identity and replay repair",
-  "status": "RUNNING",
-  "implementation_state": "An implementation Agent is executing the bounded identity, lineage, and replay repair in an isolated worktree; its result remains unaccepted until orchestrator validation.",
+  "status": "DONE",
+  "implementation_state": "The bounded identity, lineage, schema-envelope, predictor-swap, and deterministic replay repair was independently reviewed and passed all required ML and workspace gates.",
   "dependencies": [
     "7E-0",
     "7A",
     "7C"
   ],
   "dependents": [
+    "7E-1B-CORE",
     "7E-1B"
   ],
   "required_gates": [
@@ -20,12 +21,18 @@
     "Core ML tests and diff check"
   ],
   "blocked_by": [],
-  "unblock_condition": "Implement the identity/lineage/replay gates, run the specified Core/ML tests and clippy, then revalidate before dispatching 7E-1B.",
+  "unblock_condition": "Reopen if a model, checkpoint, replay, schema, or predictor consumer changes; 7E-1B may use the accepted substrate but remains responsible for shadow observation closure.",
   "evidence": [
     "E-005",
     "E-006",
     "E-007",
-    "E-016"
+    "E-016",
+    "E-024",
+    "E-025",
+    "E-026",
+    "E-027",
+    "E-028",
+    "E-033"
   ],
   "source_references": [
     "docs/development/repository-audit-2026-09-25.md",
@@ -35,7 +42,8 @@
     "crates/zroutery-core/tests/shadow_test.rs"
   ],
   "notes": [
-    "Agent session ses_f29918c38ffe45qE1Cyb7Nrea2 is running on branch node/7e-1a-model-identity from c8bed1b.",
-    "A worker report or commit is not accepted evidence until the orchestrator reviews the diff and reruns the gates."
+    "Accepted commits: 1c49109 and c782a49 on main.",
+    "The follow-up closes complete predictor lineage and explicit checkpoint/commit envelope migration.",
+    "7E-1B owns meaningful counterfactual and retained decision-time observation; 7E-2E owns the durable LearningEvent journal."
   ]
 }

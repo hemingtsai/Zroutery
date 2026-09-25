@@ -2,8 +2,8 @@
   "schema_version": 1,
   "node_id": "TEST-CLIPPY",
   "display_name": "Full workspace clippy",
-  "status": "FAILED",
-  "implementation_state": "The full local workspace all-target/all-feature clippy failed on an unused Tauri binding.",
+  "status": "DONE",
+  "implementation_state": "The full local workspace all-target/all-feature clippy passed on main after the platform-specific warning repair.",
   "dependencies": [
     "TEST-CHECK"
   ],
@@ -13,12 +13,12 @@
   "required_gates": [
     "cargo clippy --workspace --all-targets --all-features -- -D warnings"
   ],
-  "blocked_by": [
-    "TEST-CHECK"
-  ],
-  "unblock_condition": "BASELINE-GATE must repair the warning and rerun the exact command.",
+  "blocked_by": [],
+  "unblock_condition": "Reopen if the workspace feature set, Tauri targets, or lint baseline changes.",
   "evidence": [
-    "E-008"
+    "E-008",
+    "E-024",
+    "E-028"
   ],
   "source_references": [
     "docs/development/repository-audit-2026-09-25.md",
@@ -26,6 +26,7 @@
     ".github/workflows/ci.yml"
   ],
   "notes": [
-    "External CI is narrower."
+    "Accepted repair commits: 902db2c; current full command passed at c782a49.",
+    "External CI remains narrower than this local gate."
   ]
 }

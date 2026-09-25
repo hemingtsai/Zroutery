@@ -34,10 +34,11 @@ failed node. Historical tags are not graph edges.
 | `7B` | `BLOCKED` | `STAGE-6`, `7A` |
 | `7C` | `PARTIAL` | `7A` |
 | `7D` | `PARTIAL` | `7B`, `7C` |
-| `7E-0` | `FAILED` | `7C` |
+| `7E-0` | `PARTIAL` | `7C` |
 | `7E-1` | `PARTIAL` | `7E-0`, `CORE-P1-REPAIR`, `STAGE-3`, `STAGE-4`, `STAGE-6` |
-| `7E-1A` | `RUNNING` | `7E-0`, `7A`, `7C` |
-| `7E-1B` | `BLOCKED` | `7E-1A`, `CORE-P1-REPAIR`, `STAGE-3`, `STAGE-4`, `STAGE-6` |
+| `7E-1A` | `DONE` | `7E-0`, `7A`, `7C` |
+| `7E-1B-CORE` | `READY` | `7E-1A`, `7A`, `7C` |
+| `7E-1B` | `BLOCKED` | `7E-1A`, `7E-1B-CORE`, `CORE-P1-REPAIR`, `STAGE-3`, `STAGE-4`, `STAGE-6` |
 | `7E-2A` | `BLOCKED` | `7E-1B` |
 | `7E-2B` | `BLOCKED` | `7E-2A`, `STAGE-6` |
 | `7E-2C` | `BLOCKED` | `7E-2B` |
@@ -54,28 +55,28 @@ failed node. Historical tags are not graph edges.
 | `I3` | `PARTIAL` | none |
 | `I4` | `FAILED` | `I2`, `I3` |
 | `UI` | `DONE` | `STAGE-1` |
-| `UI-LAYOUT` | `FAILED` | `UI` |
+| `UI-LAYOUT` | `DONE` | `UI` |
 | `UI-NEW-TRACKS` | `BLOCKED` | `UI`, `ACCOUNT`, `NEWAPI`, `I2`, `I3`, `I4` |
 | `OBSERVABILITY` | `READY` | none |
 | `CORE-P1-REPAIR` | `QUEUED` | none |
-| `BASELINE-GATE` | `RUNNING` | `TEST-CLIPPY`, `TEST-SMOKE`, `TEST-LAYOUT-BROWSER` |
-| `COMMIT-CONTRACT` | `RUNNING` | none |
+| `BASELINE-GATE` | `DONE` | `TEST-CLIPPY`, `TEST-SMOKE`, `TEST-LAYOUT-BROWSER` |
+| `COMMIT-CONTRACT` | `DONE` | none |
 | `TEST-CHECK` | `DONE` | none |
 | `TEST-WORKSPACE` | `DONE` | `TEST-CHECK` |
 | `TEST-ML` | `DONE` | `TEST-WORKSPACE` |
 | `TEST-ALL-FEATURES` | `DONE` | `TEST-ML` |
-| `TEST-CLIPPY` | `FAILED` | `TEST-CHECK` |
+| `TEST-CLIPPY` | `DONE` | `TEST-CHECK` |
 | `TEST-UI-BUILD` | `DONE` | none |
-| `TEST-SMOKE` | `FAILED` | `TEST-CHECK` |
+| `TEST-SMOKE` | `DONE` | `TEST-CHECK` |
 | `TEST-LAYOUT-SELF` | `DONE` | `TEST-UI-BUILD` |
-| `TEST-LAYOUT-BROWSER` | `FAILED` | `TEST-LAYOUT-SELF` |
+| `TEST-LAYOUT-BROWSER` | `DONE` | `TEST-LAYOUT-SELF` |
 | `TEST-FORMAT` | `FAILED` | none |
 | `TEST-DIFF-CHECK` | `DONE` | none |
 | `CI-CORE` | `DONE` | none |
 | `CI-DESKTOP` | `DONE` | none |
 | `TEST-PACKAGING` | `QUEUED` | `CI-DESKTOP` |
 | `TEST-REAL-E2E` | `BLOCKED` | `NEWAPI` |
-| `TEST-COMMIT-CONTRACT` | `QUEUED` | `COMMIT-CONTRACT` |
+| `TEST-COMMIT-CONTRACT` | `DONE` | `COMMIT-CONTRACT` |
 | `ORCH-INFRA` | `DONE` | none |
 | `ORCH-STATUS` | `DONE` | `ORCH-INFRA` |
 | `ORCH-EVIDENCE` | `DONE` | `ORCH-INFRA` |
@@ -99,7 +100,7 @@ CORE-P1-REPAIR ─┬─> STAGE-1 ─> STAGE-5 ─> ACCOUNT ─> NEWAPI
                 ├─> STAGE-4 ───────────────┼─> 7E-1B
                 └─> STAGE-6 ───────────────┘
 
-7C ─> 7E-0 ─> 7E-1A ─> 7E-1B ─> 7E-2A ─> 7E-2B
+7C ─> 7E-0 ─> 7E-1A ─> 7E-1B-CORE ─> 7E-1B ─> 7E-2A ─> 7E-2B
                                       │
                                       └─> 7E-2C ─> 7E-2D ─> 7E-2E ─> 7E-2F
                                                                        │

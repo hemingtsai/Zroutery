@@ -2,8 +2,8 @@
   "schema_version": 1,
   "node_id": "TEST-SMOKE",
   "display_name": "Windows local smoke",
-  "status": "FAILED",
-  "implementation_state": "The local smoke command could not find the Windows headless binary and did not establish a lifecycle result.",
+  "status": "DONE",
+  "implementation_state": "The local Windows smoke command now resolves the native headless binary and completes the deterministic local mock-provider lifecycle.",
   "dependencies": [
     "TEST-CHECK"
   ],
@@ -15,12 +15,11 @@
     "mock-provider lifecycle",
     "platform binary resolution"
   ],
-  "blocked_by": [
-    "TEST-CHECK"
-  ],
-  "unblock_condition": "BASELINE-GATE must repair binary resolution and rerun with only the local mock provider.",
+  "blocked_by": [],
+  "unblock_condition": "Reopen if the smoke harness, binary name, or mock-provider contract changes.",
   "evidence": [
-    "E-010"
+    "E-010",
+    "E-030"
   ],
   "source_references": [
     "docs/development/repository-audit-2026-09-25.md",
@@ -29,6 +28,7 @@
     "src-tauri/Cargo.toml"
   ],
   "notes": [
-    "No real provider call is authorized."
+    "Accepted repair commits: f1797d2; current smoke passed at c782a49.",
+    "No real provider call is authorized; expected Windows reset diagnostics are not a gate failure."
   ]
 }

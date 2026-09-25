@@ -2,8 +2,8 @@
   "schema_version": 1,
   "node_id": "COMMIT-CONTRACT",
   "display_name": "Commit contract alignment",
-  "status": "RUNNING",
-  "implementation_state": "An implementation Agent is aligning CI and WORKFLOW with the current Node commit and trailer contract in an isolated worktree; no repair is accepted yet.",
+  "status": "DONE",
+  "implementation_state": "The finite commit contract, compatibility scopes, imperative fixtures, global-state trailers, workflow, and real-range validation were independently reviewed and accepted.",
   "dependencies": [],
   "dependents": [
     "TEST-COMMIT-CONTRACT"
@@ -16,9 +16,10 @@
     "Diff check"
   ],
   "blocked_by": [],
-  "unblock_condition": "Implement deterministic valid/invalid fixtures and align CI/WORKFLOW without rewriting history.",
+  "unblock_condition": "Reopen if the commit grammar, workflow, or global node-state vocabulary changes; a new exact-range validation is then required.",
   "evidence": [
-    "E-016"
+    "E-016",
+    "E-032"
   ],
   "source_references": [
     "docs/development/repository-audit-2026-09-25.md",
@@ -26,7 +27,8 @@
     ".github/workflows/commit-lint.yml"
   ],
   "notes": [
-    "Agent session ses_f29918c35ffeAwchATyqno7zAm is running on branch node/commit-contract from c8bed1b.",
-    "A commit subject never proves node completion."
+    "Accepted commits: efd8092, cf50328, 8ea7696, afba42c, and 0d3367b on main.",
+    "The real c66072f..c782a49 range validates with all 13 non-merge commits.",
+    "A commit subject never proves Node completion."
   ]
 }

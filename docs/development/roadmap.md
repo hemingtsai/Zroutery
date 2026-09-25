@@ -20,7 +20,9 @@ The safe online-learning path is:
 ```text
 7E-1A  model identity / lineage / replay repair
   ↓
-7E-1B  replayable shadow observation and meaningful counterfactual
+7E-1B-CORE  pure replayable shadow observation and counterfactual seam
+  ↓
+7E-1B  Core-integrated shadow observation closure
   ↓
 7E-2A  typed candidate-aware decision contract
   ↓
@@ -54,9 +56,10 @@ Stage 4 failure/stream repair ────┤
 Stage 6 Outcome/Feedback bridge ─┘
 ```
 
-`7E-0` is `FAILED`, `7E-1` is `PARTIAL`, and `7E-2A` is `BLOCKED`; the repair
-nodes do not erase those decisions. `7E-1A` is the bounded identity/replay
-remediation, and `7E-1B` remains blocked until it is merged and revalidated.
+`7E-0` is `PARTIAL`, `7E-1` is `PARTIAL`, and `7E-2A` is `BLOCKED`; the repair
+nodes do not erase those decisions. `7E-1A` is now `DONE`; `7E-1B-CORE` is the
+next bounded ML subtask, while full `7E-1B` remains blocked by the recorded
+Core P1 repair dependencies.
 
 ## Stage and ML inventory
 
@@ -74,10 +77,11 @@ remediation, and `7E-1B` remains blocked until it is merged and revalidated.
 | `7B` | `BLOCKED` | Dataset library exists but cannot be treated as trustworthy without production Outcome. |
 | `7C` | `PARTIAL` | Specialist baseline models work; typed candidate-aware decision contracts do not. |
 | `7D` | `PARTIAL` | Evaluation framework exists; holdout, calibration, and statistical gates are incomplete. |
-| `7E-0` | `FAILED` | Commit/checkpoint binding, lineage, replay validation, and content identity require repair. |
+| `7E-0` | `PARTIAL` | 7E-1A repaired identity/replay; durable model operations and journal remain for later nodes. |
 | `7E-1` | `PARTIAL` | Purity/determinism foundations pass; production counterfactual and replay closure fail. |
-| `7E-1A` | `RUNNING` | Authorized bounded identity/lineage/replay repair is executing in an isolated worktree; do not implement 7E-2. |
-| `7E-1B` | `BLOCKED` | Requires 7E-1A plus Core eligibility, failure, stream, and Outcome repairs. |
+| `7E-1A` | `DONE` | Identity, lineage, schema-envelope, predictor-swap, and replay substrate accepted on main. |
+| `7E-1B-CORE` | `READY` | Pure shadow observation and counterfactual seam; no Core pipeline changes. |
+| `7E-1B` | `BLOCKED` | Requires 7E-1B-CORE plus Core eligibility, failure, stream, and Outcome repairs. |
 | `7E-2A` | `BLOCKED` | Requires replayable input and separate final-served identity. |
 | `7E-2B` | `BLOCKED` | Requires 7E-2A and the Stage 6 Outcome bridge. |
 | `7E-2C` | `BLOCKED` | Requires supervised warmup, Dataset, and RewardPolicy. |
@@ -99,7 +103,7 @@ remediation, and `7E-1B` remains blocked until it is merged and revalidated.
 | `I3` | `PARTIAL` | Add a durable ownership manifest, conflict application, confirmation flow, and CAS restore fixtures. |
 | `I4` | `FAILED` | Make restore/rollback apply conflict resolution and report restoration failures accurately. |
 | `UI` | `DONE` | Existing provider/model/routing/activity/settings UI builds and is integrated. |
-| `UI-LAYOUT` | `FAILED` | Repair the stale fixture and missing-browser false-green behavior. |
+| `UI-LAYOUT` | `DONE` | Current fixture, real browser assertions, and fail-closed missing-browser behavior pass. |
 | `UI-NEW-TRACKS` | `BLOCKED` | Backend lifecycles must be real and owned before Account, migration, takeover, shadow, or ML surfaces are exposed. |
 | `OBSERVABILITY` | `READY` | A read-only runtime projection can be built without changing ML schemas. |
 
@@ -111,18 +115,18 @@ remediation, and `7E-1B` remains blocked until it is merged and revalidated.
 | `TEST-WORKSPACE` | `DONE` | Local `cargo test --workspace` passed at the audited SHA. |
 | `TEST-ML` | `DONE` | Local `cargo test --workspace --features ml` passed at the audited SHA. |
 | `TEST-ALL-FEATURES` | `DONE` | Local `cargo test --workspace --all-features` passed at the audited SHA. |
-| `TEST-CLIPPY` | `FAILED` | Full workspace all-target/all-feature clippy failed on the Tauri store warning. |
+| `TEST-CLIPPY` | `DONE` | Full workspace all-target/all-feature clippy passed after the baseline repair. |
 | `TEST-UI-BUILD` | `DONE` | Local `pnpm --dir ui build` passed at the audited SHA. |
-| `TEST-SMOKE` | `FAILED` | Windows binary resolution failed before the mock-provider lifecycle could run. |
+| `TEST-SMOKE` | `DONE` | Windows native binary resolution and local mock-provider lifecycle passed. |
 | `TEST-LAYOUT-SELF` | `DONE` | Seven pure layout self-tests passed. |
-| `TEST-LAYOUT-BROWSER` | `FAILED` | No Chromium was found; the script printed `skipping` and returned success, so this is not a browser pass. |
+| `TEST-LAYOUT-BROWSER` | `DONE` | Real Chrome layout assertions passed; missing browser now fails closed. |
 | `TEST-FORMAT` | `FAILED` | `cargo fmt --all -- --check` found pre-existing formatting drift. |
 | `TEST-DIFF-CHECK` | `DONE` | `git diff --check` passed at the audited baseline. |
 | `CI-CORE` | `DONE` | External run `36014406507` passed Linux core all-feature clippy/tests only. |
 | `CI-DESKTOP` | `DONE` | External run `36014406507` passed a macOS workspace check only. |
 | `TEST-PACKAGING` | `QUEUED` | No packaging gate was run in the audit; it remains unverified. |
 | `TEST-REAL-E2E` | `BLOCKED` | External protocol fixtures, credentials, and a real lifecycle contract are absent. |
-| `TEST-COMMIT-CONTRACT` | `QUEUED` | Commit-contract alignment and deterministic fixtures are not implemented in this documentation node. |
+| `TEST-COMMIT-CONTRACT` | `DONE` | Deterministic validator, compatibility scopes, global statuses, and real Git range passed. |
 
 External CI is not a substitute for the local failed or unrun gates. The
 full command inventory and caveats are canonical in the evidence registry.
@@ -151,10 +155,14 @@ not change implementation status for any audited node.
 
 The audit authorizes four non-overlapping worktrees:
 
-1. `7E-1A` (`RUNNING`) — model identity, lineage, and replay repair;
-2. `BASELINE-GATE` (`RUNNING`) — local clippy, Windows smoke, and layout-harness repair;
-3. `COMMIT-CONTRACT` (`RUNNING`) — CI/workflow commit evidence alignment; and
+1. `7E-1A` (`DONE`) — model identity, lineage, and replay repair;
+2. `BASELINE-GATE` (`DONE`) — local clippy, Windows smoke, and layout-harness repair;
+3. `COMMIT-CONTRACT` (`DONE`) — CI/workflow commit evidence alignment; and
 4. `ORCH-DOCS` (`DONE`) — this recoverable documentation record.
+
+The next authorized ML subtask is `7E-1B-CORE` (`READY`), isolated from
+Core pipeline files. Full `7E-1B` remains `BLOCKED` until its Core P1
+prerequisites are repaired.
 
 `7E-1B` must not be dispatched until `7E-1A` is merged and revalidated. No
 production takeover, online RL, exploration, real-provider E2E, or automatic

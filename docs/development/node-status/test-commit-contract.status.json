@@ -2,8 +2,8 @@
   "schema_version": 1,
   "node_id": "TEST-COMMIT-CONTRACT",
   "display_name": "Commit contract fixtures",
-  "status": "QUEUED",
-  "implementation_state": "The commit contract repair and deterministic fixtures are not implemented in this documentation node.",
+  "status": "DONE",
+  "implementation_state": "The commit contract validator and finite fixtures are implemented, workflow-integrated, and pass the real post-merge Git range.",
   "dependencies": [
     "COMMIT-CONTRACT"
   ],
@@ -13,12 +13,11 @@
     "Invalid vague subject fixtures",
     "Workflow YAML validation"
   ],
-  "blocked_by": [
-    "COMMIT-CONTRACT"
-  ],
-  "unblock_condition": "Complete COMMIT-CONTRACT and run its valid/invalid fixture suite.",
+  "blocked_by": [],
+  "unblock_condition": "Reopen if the commit grammar, workflow, or global state vocabulary changes.",
   "evidence": [
-    "E-016"
+    "E-016",
+    "E-032"
   ],
   "source_references": [
     "docs/development/repository-audit-2026-09-25.md",
@@ -26,6 +25,7 @@
     ".github/workflows/commit-lint.yml"
   ],
   "notes": [
-    "ORCH-DOCS does not edit CI or WORKFLOW."
+    "Accepted repair commits: efd8092, cf50328, 8ea7696, afba42c, and 0d3367b.",
+    "Commit validation passed for c66072f..c782a49."
   ]
 }

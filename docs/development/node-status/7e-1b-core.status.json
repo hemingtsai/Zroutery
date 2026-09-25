@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "node_id": "7E-1B-CORE",
+  "display_name": "7E-1B-CORE — replayable shadow observation core",
+  "status": "READY",
+  "implementation_state": "A bounded pure-ML subtask is authorized to repair shadow observation retention and counterfactual semantics without touching Core pipeline contracts.",
+  "dependencies": [
+    "7E-1A",
+    "7A",
+    "7C"
+  ],
+  "dependents": [
+    "7E-1B"
+  ],
+  "required_gates": [
+    "Exact decision-time input retention",
+    "Replayable observation serialization",
+    "Non-degenerate multi-candidate counterfactual",
+    "Policy-rejected candidate evidence",
+    "Deterministic checksum and shadow-purity tests"
+  ],
+  "blocked_by": [],
+  "unblock_condition": "Implement and validate the pure shadow observation/counterfactual seam; production pipeline integration remains a separate 7E-1B responsibility.",
+  "evidence": [
+    "E-016",
+    "E-024",
+    "E-026",
+    "E-028"
+  ],
+  "source_references": [
+    "docs/development/repository-audit-2026-09-25.md",
+    "crates/zroutery-core/src/ml/shadow.rs",
+    "crates/zroutery-core/src/ml/decision_engine.rs",
+    "crates/zroutery-core/src/ml/reward.rs",
+    "crates/zroutery-core/tests/shadow_test.rs"
+  ],
+  "notes": [
+    "This node is deliberately separate from full 7E-1B because Core P1 repairs still block pipeline/session/outcome integration.",
+    "No server/policy/router/session/account/provider files are in scope."
+  ]
+}

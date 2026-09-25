@@ -6,6 +6,7 @@
   "implementation_state": "The required repair is defined by the audit but cannot start safely until 7E-1A and Core P1 repairs pass.",
   "dependencies": [
     "7E-1A",
+    "7E-1B-CORE",
     "CORE-P1-REPAIR",
     "STAGE-3",
     "STAGE-4",
@@ -22,6 +23,7 @@
   ],
   "blocked_by": [
     "7E-1A",
+    "7E-1B-CORE",
     "CORE-P1-REPAIR",
     "STAGE-3",
     "STAGE-4",

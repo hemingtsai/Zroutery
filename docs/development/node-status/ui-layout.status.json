@@ -2,8 +2,8 @@
   "schema_version": 1,
   "node_id": "UI-LAYOUT",
   "display_name": "UI layout harness",
-  "status": "FAILED",
-  "implementation_state": "The pure self-test passes, but the real browser path is not trustworthy when Chromium is absent and the fixture is stale.",
+  "status": "DONE",
+  "implementation_state": "The current UI layout harness has a fresh fixture, real browser assertions, and explicit non-success when no browser is available.",
   "dependencies": [
     "UI"
   ],
@@ -15,12 +15,14 @@
     "Fresh built fixture"
   ],
   "blocked_by": [],
-  "unblock_condition": "Repair the false-green missing-browser behavior, refresh the fixture, and run real browser assertions.",
+  "unblock_condition": "Reopen if the UI snapshot, CSS control height, browser discovery, or layout harness changes.",
   "evidence": [
     "E-009",
     "E-011",
     "E-012",
-    "E-016"
+    "E-016",
+    "E-029",
+    "E-031"
   ],
   "source_references": [
     "docs/development/repository-audit-2026-09-25.md",
@@ -30,6 +32,7 @@
     "ui/src/pages/Routing.tsx"
   ],
   "notes": [
-    "A printed skip is not a layout pass."
+    "Accepted repair commit: 4e36fdb; pnpm test:layout passed on c782a49.",
+    "The harness is not Tauri IPC E2E."
   ]
 }

@@ -2,8 +2,8 @@
   "schema_version": 1,
   "node_id": "7E-0",
   "display_name": "7E-0 — immutable model identity and replay",
-  "status": "FAILED",
-  "implementation_state": "Identity and replay foundations exist, but commit/checkpoint binding, lineage, replay validation, and content-addressed identity are incomplete.",
+  "status": "PARTIAL",
+  "implementation_state": "7E-1A repaired the in-memory identity, lineage, schema-envelope, predictor, and deterministic replay substrate. Durable model operations, durable LearningEvent journaling, and future schema migrations remain outside 7E-0 completion.",
   "dependencies": [
     "7C"
   ],
@@ -20,11 +20,16 @@
     "Corrupt artifact fail-closed tests"
   ],
   "blocked_by": [],
-  "unblock_condition": "Complete 7E-1A and revalidate the identity/replay gates without relying on stage-7e0-v1 ancestry.",
+  "unblock_condition": "7E-1A is accepted; 7E-0 remains PARTIAL until durable model operations and the 7E-2E LearningEvent journal are separately gated.",
   "evidence": [
     "E-005",
     "E-006",
-    "E-016"
+    "E-016",
+    "E-024",
+    "E-026",
+    "E-027",
+    "E-028",
+    "E-033"
   ],
   "source_references": [
     "docs/development/repository-audit-2026-09-25.md",
@@ -32,6 +37,7 @@
     "crates/zroutery-core/tests/model_identity_test.rs"
   ],
   "notes": [
-    "The audit decision is preserved as FAILED."
+    "7E-1A commits 1c49109 and c782a49 were accepted on main.",
+    "Historical stage-7e0-v1 remains provenance, not current completion evidence."
   ]
 }

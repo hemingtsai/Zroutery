@@ -2,8 +2,8 @@
   "schema_version": 1,
   "node_id": "TEST-LAYOUT-BROWSER",
   "display_name": "UI layout browser gate",
-  "status": "FAILED",
-  "implementation_state": "No Chromium was found; the script printed `skipping` and returned success instead of failing the acceptance gate.",
+  "status": "DONE",
+  "implementation_state": "The browser layout gate now fails closed when no browser exists and passes real browser assertions on the current main revision.",
   "dependencies": [
     "TEST-LAYOUT-SELF"
   ],
@@ -18,7 +18,8 @@
   "blocked_by": [],
   "unblock_condition": "BASELINE-GATE must make missing browser explicit non-success and run assertions when available.",
   "evidence": [
-    "E-012"
+    "E-012",
+    "E-031"
   ],
   "source_references": [
     "docs/development/repository-audit-2026-09-25.md",
@@ -26,6 +27,7 @@
     "package.json"
   ],
   "notes": [
-    "The zero exit is a false green."
+    "Accepted repair commit: 4e36fdb; real Chrome layout assertions and missing-browser fail-closed behavior were revalidated.",
+    "This is not Tauri IPC E2E."
   ]
 }
