@@ -498,3 +498,66 @@ fn gate_7e1a_volatile_event_metadata_does_not_change_commit() {
     assert_eq!(first.commit_id, second.commit_id);
     assert_eq!(first.checkpoint.content_hash(), second.checkpoint.content_hash());
 }
+
+#[test]
+fn gate_7e1a_envelope_versions_are_explicit_and_legacy_is_explicitly_migrated() {
+    let checkpoint = ModelEnsemble::new().save_all();
+    let mut checkpoint_json = serde_json::to_value(&checkpoint).unwrap();
+    checkpoint_json
+        .as_object_mut()
+        .unwrap()
+        .remove("schema_version");
+    let legacy_checkpoint: ModelCheckpoint = serde_json::from_value(checkpoint_json).unwrap();
+    assert_eq!(
+        legacy_checkpoint.schema_version,
+        LEGACY_UNVERSIONED_SCHEMA_VERSION
+    );
+    assert!(!legacy_checkpoint.verify());
+    let migrated_checkpoint = legacy_checkpoint.migrate_legacy().unwrap();
+    assert_eq!(
+        migrated_checkpoint.schema_version,
+        MODEL_CHECKPOINT_SCHEMA_VERSION
+    );
+    assert!(migrated_checkpoint.verify());
+
+    let mut unknown_checkpoint = serde_json::to_value(&checkpoint).unwrap();
+    unknown_checkpoint["schema_version"] = serde_json::Value::from(99_u32);
+    assert!(serde_json::from_value::<ModelCheckpoint>(unknown_checkpoint).is_err());
+
+    let commit = ModelCommit::new(
+        ModelId::new("ensemble"),
+        checkpoint.clone(),
+        None,
+        0,
+    );
+    let mut legacy_commit_json = serde_json::to_value(&commit).unwrap();
+    legacy_commit_json
+        .as_object_mut()
+        .unwrap()
+        .remove("schema_version");
+    let mut legacy_checkpoint_json = serde_json::to_value(&checkpoint).unwrap();
+    legacy_checkpoint_json
+        .as_object_mut()
+        .unwrap()
+        .remove("schema_version");
+    legacy_commit_json["checkpoint"] = legacy_checkpoint_json;
+    let mut legacy_commit: ModelCommit = serde_json::from_value(legacy_commit_json).unwrap();
+    assert_eq!(legacy_commit.schema_version, LEGACY_UNVERSIONED_SCHEMA_VERSION);
+    assert!(!legacy_commit.verify());
+    legacy_commit.commit_id = CommitId::from_hash(legacy_commit.checkpoint.content_hash());
+    let migrated_commit = legacy_commit.migrate_legacy().unwrap();
+    assert!(migrated_commit.verify());
+    assert_eq!(
+        migrated_commit.schema_version,
+        MODEL_COMMIT_SCHEMA_VERSION
+    );
+
+    let mut unknown_commit = serde_json::to_value(&commit).unwrap();
+    unknown_commit["schema_version"] = serde_json::Value::from(99_u32);
+    assert!(serde_json::from_value::<ModelCommit>(unknown_commit).is_err());
+
+    let mut wrong_envelope = commit.clone();
+    wrong_envelope.schema_version = LEGACY_UNVERSIONED_SCHEMA_VERSION;
+    assert_ne!(wrong_envelope.canonical_identity(), commit.commit_id);
+    assert!(!wrong_envelope.verify());
+}

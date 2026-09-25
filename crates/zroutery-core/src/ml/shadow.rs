@@ -19,7 +19,7 @@
 //!   advances a deterministic commit chain equivalent to replaying all
 //!   samples from genesis.
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -407,7 +407,21 @@ impl ModelEnsemblePredictor {
     }
 
     /// Build a predictor from a complete immutable commit record.
+    ///
+    /// A root commit is self-contained and remains supported here. A child
+    /// commit must be supplied through [`Self::from_model_commit_with_lineage`]
+    /// so a parent reference can never be silently truncated.
     pub fn from_model_commit(commit: &ModelCommit) -> Result<Self, ReplayError> {
+        Self::from_model_commit_with_lineage(commit, std::slice::from_ref(commit))
+    }
+
+    /// Build a predictor from a commit plus its complete root-to-current
+    /// lineage. Every record is verified, model-consistent, linked, and
+    /// cycle-free before the predictor is retained.
+    pub fn from_model_commit_with_lineage(
+        commit: &ModelCommit,
+        lineage: &[ModelCommit],
+    ) -> Result<Self, ReplayError> {
         if !commit.verify() {
             return Err(ReplayError::InvalidCommit {
                 commit_id: commit.commit_id.clone(),
@@ -418,7 +432,7 @@ impl ModelEnsemblePredictor {
             ModelEnsemble::load_all(&commit.checkpoint)?,
             commit.clone(),
             None,
-            vec![commit.clone()],
+            lineage.to_vec(),
         )
     }
 
@@ -426,6 +440,94 @@ impl ModelEnsemblePredictor {
     /// boundary but is still checked again at this predictor boundary.
     pub fn from_verified_commit(commit: &ModelCommit) -> Result<Self, ReplayError> {
         Self::from_model_commit(commit)
+    }
+
+    /// Complete-lineage alias for callers that already named their artifact
+    /// boundary explicitly.
+    pub fn from_verified_commit_with_lineage(
+        commit: &ModelCommit,
+        lineage: &[ModelCommit],
+    ) -> Result<Self, ReplayError> {
+        Self::from_model_commit_with_lineage(commit, lineage)
+    }
+
+    fn validate_complete_lineage(
+        commit: &ModelCommit,
+        lineage: &[ModelCommit],
+    ) -> Result<(), ReplayError> {
+        if lineage.is_empty() {
+            return Err(ReplayError::LineageCorrupt {
+                commit_id: commit.commit_id.clone(),
+                reason: "lineage is empty".to_string(),
+            });
+        }
+        if lineage.last().map(|entry| entry.commit_id.clone()) != Some(commit.commit_id.clone()) {
+            return Err(ReplayError::LineageCorrupt {
+                commit_id: commit.commit_id.clone(),
+                reason: "lineage does not end at the requested commit".to_string(),
+            });
+        }
+        if commit.parent.is_none() && lineage.len() != 1 {
+            return Err(ReplayError::LineageCorrupt {
+                commit_id: commit.commit_id.clone(),
+                reason: "root commit has extra lineage records".to_string(),
+            });
+        }
+        if commit.parent.is_some() && lineage.len() < 2 {
+            return Err(ReplayError::LineageCorrupt {
+                commit_id: commit.commit_id.clone(),
+                reason: "non-root commit is missing its parent record".to_string(),
+            });
+        }
+
+        let mut seen = HashSet::new();
+        for entry in lineage {
+            if !seen.insert(entry.commit_id.clone()) {
+                return Err(ReplayError::LineageCorrupt {
+                    commit_id: commit.commit_id.clone(),
+                    reason: format!("cycle or duplicate at '{}'", entry.commit_id),
+                });
+            }
+            if !entry.verify() {
+                return Err(ReplayError::LineageCorrupt {
+                    commit_id: entry.commit_id.clone(),
+                    reason: "lineage record failed commit/checkpoint verification".to_string(),
+                });
+            }
+            if entry.model_id != commit.model_id {
+                return Err(ReplayError::LineageCorrupt {
+                    commit_id: entry.commit_id.clone(),
+                    reason: format!(
+                        "model '{}' does not match '{}'",
+                        entry.model_id, commit.model_id
+                    ),
+                });
+            }
+        }
+        if lineage[0].parent.is_some() {
+            return Err(ReplayError::LineageCorrupt {
+                commit_id: lineage[0].commit_id.clone(),
+                reason: "lineage does not start at a root commit".to_string(),
+            });
+        }
+        for pair in lineage.windows(2) {
+            if pair[1].parent.as_ref() != Some(&pair[0].commit_id) {
+                return Err(ReplayError::LineageCorrupt {
+                    commit_id: pair[1].commit_id.clone(),
+                    reason: format!(
+                        "parent link does not point to '{}'",
+                        pair[0].commit_id
+                    ),
+                });
+            }
+        }
+        if lineage.last().map(|entry| entry.parent.clone()) != Some(commit.parent.clone()) {
+            return Err(ReplayError::LineageCorrupt {
+                commit_id: commit.commit_id.clone(),
+                reason: "requested commit parent differs from retained lineage".to_string(),
+            });
+        }
+        Ok(())
     }
 
     fn from_verified_parts(
@@ -447,26 +549,7 @@ impl ModelEnsemblePredictor {
                 actual: CommitId::from_hash(held_checkpoint.content_hash()),
             });
         }
-        if lineage.last().map(|entry| entry.commit_id.clone()) != Some(commit.commit_id.clone()) {
-            return Err(ReplayError::InvalidCommit {
-                commit_id: commit.commit_id,
-                reason: "retained lineage does not end at the held commit".to_string(),
-            });
-        }
-        if lineage.iter().any(|entry| !entry.verify()) {
-            return Err(ReplayError::InvalidCommit {
-                commit_id: commit.commit_id,
-                reason: "retained lineage contains an unverified commit".to_string(),
-            });
-        }
-        for pair in lineage.windows(2) {
-            if pair[1].parent.as_ref() != Some(&pair[0].commit_id) {
-                return Err(ReplayError::InvalidCommit {
-                    commit_id: pair[1].commit_id.clone(),
-                    reason: "retained parent link is inconsistent".to_string(),
-                });
-            }
-        }
+        Self::validate_complete_lineage(&commit, &lineage)?;
         Ok(Self {
             ensemble: Arc::new(ensemble),
             commit,
@@ -599,7 +682,8 @@ impl ModelEnsemblePredictor {
                 reason: "shadow training produced an invalid commit".to_string(),
             });
         }
-        let lineage = vec![self.commit.clone(), commit.clone()];
+        let mut lineage = self.lineage.clone();
+        lineage.push(commit.clone());
         Ok((ensemble, commit, None, lineage))
     }
 
@@ -618,6 +702,7 @@ impl ModelEnsemblePredictor {
     pub fn verify(&self) -> bool {
         self.commit.verify()
             && self.ensemble.save_all().content_hash() == self.commit.checkpoint.content_hash()
+            && Self::validate_complete_lineage(&self.commit, &self.lineage).is_ok()
     }
 
     /// Checkpoint retained by the verified commit.
@@ -932,7 +1017,26 @@ impl ShadowEngine {
                 reason: "refusing to swap an unverified predictor".to_string(),
             });
         }
-        let commit_id = predictor.commit();
+        let current = crate::sync::read(&self.predictor).clone();
+        let current_commit = current.commit_record();
+        let replacement_commit = predictor.commit_record();
+        if replacement_commit.model_id != current_commit.model_id {
+            return Err(ReplayError::InvalidCommit {
+                commit_id: replacement_commit.commit_id,
+                reason: "predictor model does not match the active shadow lineage".to_string(),
+            });
+        }
+        if !predictor
+            .lineage()
+            .iter()
+            .any(|entry| entry.commit_id == current_commit.commit_id)
+        {
+            return Err(ReplayError::LineageCorrupt {
+                commit_id: replacement_commit.commit_id,
+                reason: "replacement lineage is unrelated to the active commit".to_string(),
+            });
+        }
+        let commit_id = replacement_commit.commit_id;
         *crate::sync::write(&self.predictor) = Arc::new(predictor);
         Ok(commit_id)
     }

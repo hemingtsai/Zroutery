@@ -8,7 +8,8 @@ use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use serde::{Deserialize, Serialize};
+use serde::de::Error as SerdeError;
+use serde::{Deserialize, Deserializer, Serialize};
 
 use super::dataset::{validate_sample, TrainingSample as DatasetTrainingSample};
 use super::features::{FEATURE_DIMENSION, FEATURE_SCHEMA_VERSION};
@@ -28,6 +29,29 @@ pub const MODEL_CHECKPOINT_SCHEMA_VERSION: u32 = 1;
 pub const MODEL_COMMIT_SCHEMA_VERSION: u32 = 1;
 /// Schema version of the learning-event envelope consumed by this module.
 pub const LEARNING_EVENT_SCHEMA_VERSION: u32 = 1;
+/// Marker used only for artifacts serialized before envelope versioning.
+pub const LEGACY_UNVERSIONED_SCHEMA_VERSION: u32 = 0;
+
+fn legacy_envelope_version() -> u32 {
+    LEGACY_UNVERSIONED_SCHEMA_VERSION
+}
+
+fn deserialize_supported_envelope_version<'de, D>(deserializer: D) -> Result<u32, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let version = u32::deserialize(deserializer)?;
+    if version == LEGACY_UNVERSIONED_SCHEMA_VERSION
+        || version == MODEL_CHECKPOINT_SCHEMA_VERSION
+        || version == MODEL_COMMIT_SCHEMA_VERSION
+    {
+        Ok(version)
+    } else {
+        Err(SerdeError::custom(format!(
+            "unsupported model envelope schema version {version}"
+        )))
+    }
+}
 
 const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
 const FNV_PRIME: u64 = 0x100000001b3;
@@ -154,6 +178,13 @@ impl fmt::Display for CommitId {
 /// A frozen snapshot of all four routing model states at a point in time.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelCheckpoint {
+    /// Serialized checkpoint envelope version. Missing legacy fields are
+    /// represented as version 0 and require explicit migration.
+    #[serde(
+        default = "legacy_envelope_version",
+        deserialize_with = "deserialize_supported_envelope_version"
+    )]
+    pub schema_version: u32,
     pub success: ModelState,
     pub latency: ModelState,
     pub ttft: ModelState,
@@ -173,7 +204,7 @@ impl ModelCheckpoint {
     pub fn content_hash(&self) -> u64 {
         let mut hash = FNV_OFFSET_BASIS;
         hash_bytes(&mut hash, b"zroutery-model-checkpoint-v1\0");
-        hash_u64(&mut hash, MODEL_CHECKPOINT_SCHEMA_VERSION as u64);
+        hash_u64(&mut hash, self.schema_version as u64);
         hash_u64(&mut hash, self.feature_schema_version as u64);
 
         for state in [&self.success, &self.latency, &self.ttft, &self.cost] {
@@ -195,6 +226,13 @@ impl ModelCheckpoint {
     /// the current representation. This is the fail-closed boundary used by
     /// stores, replay, and predictor construction.
     pub fn validate(&self) -> Result<(), ReplayError> {
+        if self.schema_version != MODEL_CHECKPOINT_SCHEMA_VERSION {
+            return Err(ReplayError::UnsupportedSchema {
+                component: "checkpoint envelope".to_string(),
+                version: self.schema_version,
+                supported: MODEL_CHECKPOINT_SCHEMA_VERSION,
+            });
+        }
         if self.feature_schema_version != FEATURE_SCHEMA_VERSION {
             return Err(ReplayError::UnsupportedSchema {
                 component: "checkpoint feature schema".to_string(),
@@ -234,6 +272,30 @@ impl ModelCheckpoint {
     pub fn verify(&self) -> bool {
         self.validate().is_ok() && ModelEnsemble::load_all(self).is_ok()
     }
+
+    /// Explicitly migrate an unversioned checkpoint artifact.
+    ///
+    /// Legacy artifacts are never accepted by `validate`/`verify`; callers
+    /// must opt into this operation after reviewing the payload. The migrated
+    /// checkpoint keeps its model bytes and gains the current envelope marker.
+    pub fn migrate_legacy(mut self) -> Result<Self, ReplayError> {
+        if self.schema_version != LEGACY_UNVERSIONED_SCHEMA_VERSION {
+            return Err(ReplayError::UnsupportedSchema {
+                component: "checkpoint envelope".to_string(),
+                version: self.schema_version,
+                supported: MODEL_CHECKPOINT_SCHEMA_VERSION,
+            });
+        }
+        self.schema_version = MODEL_CHECKPOINT_SCHEMA_VERSION;
+        self.validate()?;
+        if ModelEnsemble::load_all(&self).is_err() {
+            return Err(ReplayError::IncompatibleState {
+                model: "checkpoint".to_string(),
+                reason: "legacy checkpoint could not be loaded after migration".to_string(),
+            });
+        }
+        Ok(self)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -243,6 +305,13 @@ impl ModelCheckpoint {
 /// An immutable commit linking a checkpoint to its history.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelCommit {
+    /// Serialized commit envelope version. Missing legacy fields are
+    /// represented as version 0 and require explicit migration.
+    #[serde(
+        default = "legacy_envelope_version",
+        deserialize_with = "deserialize_supported_envelope_version"
+    )]
+    pub schema_version: u32,
     pub commit_id: CommitId,
     pub parent: Option<CommitId>,
     pub model_id: ModelId,
@@ -252,6 +321,17 @@ pub struct ModelCommit {
     pub feature_schema_version: u32,
     pub created_at: i64,
     pub metadata: HashMap<String, String>,
+}
+
+struct CommitIdentityInput<'a> {
+    schema_version: u32,
+    model_id: &'a ModelId,
+    parent: Option<&'a CommitId>,
+    feature_schema_version: u32,
+    learning_event_count: u64,
+    checkpoint: &'a ModelCheckpoint,
+    algorithm_versions: &'a [(String, String)],
+    metadata: &'a HashMap<String, String>,
 }
 
 impl ModelCommit {
@@ -288,6 +368,7 @@ impl ModelCommit {
         let feature_schema_version = checkpoint.feature_schema_version;
         let mut commit = ModelCommit {
             // Filled below after every identity-bearing field is present.
+            schema_version: MODEL_COMMIT_SCHEMA_VERSION,
             commit_id: CommitId::new(""),
             parent,
             model_id,
@@ -374,18 +455,23 @@ impl ModelCommit {
 
     /// Compute the canonical commit identity from all identity-bearing fields.
     pub fn canonical_identity(&self) -> CommitId {
-        Self::canonical_id_for(
-            &self.model_id,
-            self.parent.as_ref(),
-            self.feature_schema_version,
-            self.learning_event_count,
-            &self.checkpoint,
-            &self.algorithm_versions,
-            &self.metadata,
-        )
+        Self::canonical_id_for_input(CommitIdentityInput {
+            schema_version: self.schema_version,
+            model_id: &self.model_id,
+            parent: self.parent.as_ref(),
+            feature_schema_version: self.feature_schema_version,
+            learning_event_count: self.learning_event_count,
+            checkpoint: &self.checkpoint,
+            algorithm_versions: &self.algorithm_versions,
+            metadata: &self.metadata,
+        })
     }
 
     /// Canonical identity function used by constructors and verification.
+    ///
+    /// This compatibility wrapper assumes the current commit envelope. A
+    /// serialized commit's own [`Self::canonical_identity`] is the authority
+    /// for legacy or migrated envelope versions.
     pub fn canonical_id_for(
         model_id: &ModelId,
         parent: Option<&CommitId>,
@@ -395,32 +481,46 @@ impl ModelCommit {
         algorithm_versions: &[(String, String)],
         metadata: &HashMap<String, String>,
     ) -> CommitId {
+        Self::canonical_id_for_input(CommitIdentityInput {
+            schema_version: MODEL_COMMIT_SCHEMA_VERSION,
+            model_id,
+            parent,
+            feature_schema_version,
+            learning_event_count,
+            checkpoint,
+            algorithm_versions,
+            metadata,
+        })
+    }
+
+    fn canonical_id_for_input(input: CommitIdentityInput<'_>) -> CommitId {
         let mut hash = FNV_OFFSET_BASIS;
         hash_bytes(&mut hash, COMMIT_ID_DOMAIN);
-        hash_u64(&mut hash, MODEL_COMMIT_SCHEMA_VERSION as u64);
-        hash_string(&mut hash, model_id.as_str());
-        hash_u64(&mut hash, feature_schema_version as u64);
-        hash_optional_commit(&mut hash, parent);
+        hash_u64(&mut hash, input.schema_version as u64);
+        hash_string(&mut hash, input.model_id.as_str());
+        hash_u64(&mut hash, input.feature_schema_version as u64);
+        hash_optional_commit(&mut hash, input.parent);
 
         let mut lineage = FNV_OFFSET_BASIS;
         hash_bytes(&mut lineage, b"zroutery-model-lineage-v1\0");
-        hash_optional_commit(&mut lineage, parent);
-        hash_u64(&mut lineage, learning_event_count);
-        if let Some(token) = metadata.get("lineage") {
+        hash_optional_commit(&mut lineage, input.parent);
+        hash_u64(&mut lineage, input.learning_event_count);
+        if let Some(token) = input.metadata.get("lineage") {
             hash_string(&mut lineage, token);
         }
         hash_u64(&mut hash, lineage);
 
-        hash_u64(&mut hash, checkpoint.content_hash());
-        hash_u64(&mut hash, learning_event_count);
-        hash_algorithm_versions(&mut hash, algorithm_versions);
-        hash_metadata(&mut hash, metadata);
+        hash_u64(&mut hash, input.checkpoint.content_hash());
+        hash_u64(&mut hash, input.learning_event_count);
+        hash_algorithm_versions(&mut hash, input.algorithm_versions);
+        hash_metadata(&mut hash, input.metadata);
         CommitId::from_hash(hash)
     }
 
     /// Verify the checkpoint, schema, algorithm table, and canonical identity.
     pub fn verify(&self) -> bool {
         if self.model_id.as_str().is_empty()
+            || self.schema_version != MODEL_COMMIT_SCHEMA_VERSION
             || self.feature_schema_version != FEATURE_SCHEMA_VERSION
             || self.feature_schema_version != self.checkpoint.feature_schema_version
             || !self.checkpoint.verify()
@@ -431,6 +531,41 @@ impl ModelCommit {
             return false;
         }
         self.commit_id == self.canonical_identity()
+    }
+
+    /// Explicitly migrate an unversioned commit and its checkpoint envelope.
+    ///
+    /// The commit id is recomputed because the envelope version is part of
+    /// canonical identity. This operation is intentionally separate from
+    /// deserialization and verification so legacy bytes are never silently
+    /// reinterpreted as current artifacts.
+    pub fn migrate_legacy(mut self) -> Result<Self, ReplayError> {
+        if self.schema_version != LEGACY_UNVERSIONED_SCHEMA_VERSION {
+            return Err(ReplayError::UnsupportedSchema {
+                component: "commit envelope".to_string(),
+                version: self.schema_version,
+                supported: MODEL_COMMIT_SCHEMA_VERSION,
+            });
+        }
+        if self.checkpoint.schema_version == LEGACY_UNVERSIONED_SCHEMA_VERSION {
+            self.checkpoint = self.checkpoint.migrate_legacy()?;
+        } else if self.checkpoint.schema_version != MODEL_CHECKPOINT_SCHEMA_VERSION {
+            return Err(ReplayError::UnsupportedSchema {
+                component: "checkpoint envelope".to_string(),
+                version: self.checkpoint.schema_version,
+                supported: MODEL_CHECKPOINT_SCHEMA_VERSION,
+            });
+        }
+        self.schema_version = MODEL_COMMIT_SCHEMA_VERSION;
+        self.commit_id = self.canonical_identity();
+        if self.verify() {
+            Ok(self)
+        } else {
+            Err(ReplayError::InvalidCommit {
+                commit_id: self.commit_id,
+                reason: "legacy commit could not be verified after migration".to_string(),
+            })
+        }
     }
 }
 
@@ -821,6 +956,7 @@ impl ModelEnsemble {
             .unwrap_or_default()
             .as_secs() as i64;
         ModelCheckpoint {
+            schema_version: MODEL_CHECKPOINT_SCHEMA_VERSION,
             success: self.success.save(),
             latency: self.latency.save(),
             ttft: self.ttft.save(),

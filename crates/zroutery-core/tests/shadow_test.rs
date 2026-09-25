@@ -1013,9 +1013,13 @@ fn predictor_train_and_swap_retain_verified_lineage() {
     assert_eq!(first.learning_event_count, 2);
     assert_eq!(first.checkpoint.content_hash(), engine.predictor_checkpoint().content_hash());
 
-    let predictor = ModelEnsemblePredictor::from_model_commit(&first).unwrap();
+    let mut lineage = engine.predictor_lineage();
+    let predictor =
+        ModelEnsemblePredictor::from_model_commit_with_lineage(&first, &lineage).unwrap();
     let (ensemble, second) = predictor.try_train(&training_samples(2..4)).unwrap();
-    let replacement = ModelEnsemblePredictor::from_model_commit(&second).unwrap();
+    lineage.push(second.clone());
+    let replacement =
+        ModelEnsemblePredictor::from_model_commit_with_lineage(&second, &lineage).unwrap();
     assert_eq!(replacement.parent(), Some(first.commit_id.clone()));
     assert_eq!(replacement.checkpoint().content_hash(), ensemble.save_all().content_hash());
     assert_eq!(engine.swap(replacement).unwrap(), second.commit_id);
@@ -1036,4 +1040,95 @@ fn predictor_rejects_corrupt_full_commit_record() {
     let mut checkpoint: ModelCheckpoint = predictor.checkpoint();
     checkpoint.feature_schema_version = FEATURE_SCHEMA_VERSION + 1;
     assert!(ModelEnsemblePredictor::from_commit(&checkpoint, predictor.commit()).is_err());
+}
+
+#[test]
+fn predictor_requires_complete_lineage_for_children() {
+    let root = ModelCommit::new(
+        ModelId::new("shadow"),
+        ModelEnsemble::new().save_all(),
+        None,
+        0,
+    );
+    let mut child_ensemble = ModelEnsemble::new();
+    child_ensemble.update_all(&training_samples(0..1)[0]);
+    let child = ModelCommit::new(
+        ModelId::new("shadow"),
+        child_ensemble.save_all(),
+        Some(root.commit_id.clone()),
+        1,
+    );
+
+    let error = ModelEnsemblePredictor::from_model_commit(&child)
+        .err()
+        .expect("a child without its parent chain must fail closed");
+    assert!(matches!(error, ReplayError::LineageCorrupt { .. }));
+
+    let mut wrong_model_ensemble = ModelEnsemble::new();
+    wrong_model_ensemble.update_all(&training_samples(1..2)[0]);
+    let wrong_model = ModelCommit::new(
+        ModelId::new("other-shadow"),
+        wrong_model_ensemble.save_all(),
+        Some(root.commit_id.clone()),
+        1,
+    );
+    let error = ModelEnsemblePredictor::from_model_commit_with_lineage(
+        &wrong_model,
+        &[root.clone(), wrong_model.clone()],
+    )
+    .err()
+    .expect("a mixed-model lineage must fail closed");
+    assert!(matches!(error, ReplayError::LineageCorrupt { .. }));
+
+    let error = ModelEnsemblePredictor::from_model_commit_with_lineage(
+        &child,
+        &[child.clone(), child.clone()],
+    )
+    .err()
+    .expect("a cyclic/duplicate lineage must fail closed");
+    assert!(matches!(error, ReplayError::LineageCorrupt { .. }));
+}
+
+#[test]
+fn shadow_swap_rejects_unrelated_lineage_and_model() {
+    let engine = engine();
+    engine.train(&training_samples(0..1));
+    let current = engine.predictor_commit();
+    let root = engine
+        .predictor_lineage()
+        .into_iter()
+        .next()
+        .expect("the engine must retain a root");
+
+    let mut branch_ensemble = ModelEnsemble::new();
+    branch_ensemble.update_all(&training_samples(100..101)[0]);
+    let branch = ModelCommit::new(
+        ModelId::new("shadow"),
+        branch_ensemble.save_all(),
+        Some(root.commit_id.clone()),
+        1,
+    );
+    let branch_predictor =
+        ModelEnsemblePredictor::from_model_commit_with_lineage(&branch, &[root.clone(), branch.clone()])
+            .unwrap();
+    let error = match engine.swap(branch_predictor) {
+        Ok(_) => panic!("a branch that does not contain the active commit must not replace the predictor"),
+        Err(error) => error,
+    };
+    assert!(matches!(error, ReplayError::LineageCorrupt { .. }));
+    assert_eq!(engine.predictor_commit().commit_id, current.commit_id);
+
+    let other_root = ModelCommit::new(
+        ModelId::new("other-shadow"),
+        ModelEnsemble::new().save_all(),
+        None,
+        0,
+    );
+    let other_predictor = ModelEnsemblePredictor::from_model_commit(&other_root).unwrap();
+    let error = match engine.swap(other_predictor) {
+        Ok(_) => panic!("a predictor from another model lineage must not replace the predictor"),
+        Err(error) => error,
+    };
+    assert!(matches!(error, ReplayError::InvalidCommit { .. }));
+    assert_eq!(engine.predictor_commit().commit_id, current.commit_id);
 }
