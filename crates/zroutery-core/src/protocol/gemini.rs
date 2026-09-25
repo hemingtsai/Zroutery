@@ -632,16 +632,16 @@ impl StreamParser for GeminiStreamParser {
 // --------------------------------------------------------------- stream out
 
 pub struct GeminiStreamEncoder {
-    model: String,
     done: bool,
     /// Buffered tool calls awaiting completion: (index, id, name, accumulated args).
     tool_buffers: Vec<(u32, String, String, String)>,
 }
 
 impl GeminiStreamEncoder {
-    pub fn new(model: &str) -> Self {
+    /// The model is not stored: Gemini's wire format names no model, and the
+    /// client-facing id is not part of a streamed `candidates` frame.
+    pub fn new(_model: &str) -> Self {
         Self {
-            model: model.to_string(),
             done: false,
             tool_buffers: Vec::new(),
         }
@@ -673,10 +673,9 @@ impl GeminiStreamEncoder {
 impl StreamEncoder for GeminiStreamEncoder {
     fn encode(&mut self, event: &StreamEvent) -> Vec<SseFrame> {
         match event {
-            StreamEvent::Start { model, .. } => {
-                self.model = model.clone();
-                Vec::new()
-            }
+            // Gemini's wire format names no model, so nothing is echoed here;
+            // the upstream's own name in the event is deliberately dropped.
+            StreamEvent::Start { .. } => Vec::new(),
             StreamEvent::TextDelta { text, .. } => {
                 // Flush any buffered tool calls before emitting text.
                 let mut out = self.flush_tools();

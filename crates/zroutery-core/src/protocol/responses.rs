@@ -1330,12 +1330,11 @@ impl StreamEncoder for ResponsesStreamEncoder {
     fn encode(&mut self, event: &StreamEvent) -> Vec<SseFrame> {
         let mut out = Vec::new();
         match event {
-            StreamEvent::Start { id, model, .. } => {
+            StreamEvent::Start { id, .. } => {
+                // The upstream model name in the event is ignored: the frames
+                // carry the exposed id the client asked for.
                 if !id.is_empty() {
                     self.id = id.clone();
-                }
-                if !model.is_empty() {
-                    self.model = model.clone();
                 }
                 out.push(self.frame(
                     "response.created",

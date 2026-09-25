@@ -930,9 +930,10 @@ impl StreamEncoder for AnthropicStreamEncoder {
     fn encode(&mut self, event: &StreamEvent) -> Vec<SseFrame> {
         let mut out = Vec::new();
         match event {
-            StreamEvent::Start { id, model, usage } => {
+            StreamEvent::Start { id, usage, .. } => {
+                // Keep the model the client asked for; the upstream's own name
+                // never reaches a client-facing frame.
                 self.id = id.clone();
-                self.model = model.clone();
                 self.usage = *usage;
                 self.ensure_started(&mut out);
             }
@@ -1422,13 +1423,15 @@ mod tests {
         assert!(wire.contains("event: message_start"));
         assert!(wire.contains("event: message_stop"));
 
-        // And it re-parses into the same canonical events.
+        // And it re-parses into the same canonical events. The `model` is the
+        // one the encoder was built with — the id the client asked for — not
+        // the upstream name carried by the event.
         let events = frames_to_events(&wire, "m");
         assert_eq!(
             events[0],
             StreamEvent::Start {
                 id: "msg_1".into(),
-                model: "gpt".into(),
+                model: "m".into(),
                 usage: Usage {
                     input_tokens: 4,
                     ..Usage::default()

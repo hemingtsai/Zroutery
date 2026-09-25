@@ -1239,13 +1239,15 @@ impl StreamEncoder for OpenAiStreamEncoder {
     fn encode(&mut self, event: &StreamEvent) -> Vec<SseFrame> {
         let mut out = Vec::new();
         match event {
-            StreamEvent::Start { id, model, usage } => {
+            StreamEvent::Start { id, usage, .. } => {
+                // The upstream's own model name is ignored on purpose: a client
+                // that asked for an exposed id is told that id, exactly as the
+                // non-streaming encoder reports it.
                 self.id = if id.starts_with("chatcmpl") {
                     id.clone()
                 } else {
                     format!("chatcmpl-{id}")
                 };
-                self.model = model.clone();
                 self.usage = *usage;
                 self.ensure_role(&mut out);
             }
@@ -1804,6 +1806,21 @@ mod tests {
             index: 1,
             text: "hi".into()
         }));
+    }
+
+    #[test]
+    fn streamed_chunks_report_the_client_facing_model() {
+        // The upstream names what it served ("deepseek-v4-flash"); the client
+        // asked for an exposed id and must see that id, exactly as the
+        // non-streaming encoder reports it.
+        let mut enc = OpenAiStreamEncoder::new("deepseek-deepseek-v4-flash");
+        let frames = enc.encode(&StreamEvent::Start {
+            id: "chatcmpl-upstream".into(),
+            model: "deepseek-v4-flash".into(),
+            usage: Usage::default(),
+        });
+        let chunk: Value = serde_json::from_str(&frames[0].data).unwrap();
+        assert_eq!(chunk["model"], "deepseek-deepseek-v4-flash");
     }
 
     #[test]
