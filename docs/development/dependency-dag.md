@@ -62,8 +62,8 @@ failed node. Historical tags are not graph edges.
 | `BASELINE-GATE` | `DONE` | `TEST-CLIPPY`, `TEST-SMOKE`, `TEST-LAYOUT-BROWSER` |
 | `CORE-P1-MEDIA-REQ` | `DONE` | none |
 | `CORE-P1-FAILURE-AUTHORITY` | `DONE` | none |
-| `CORE-P1-ELIGIBILITY-TRACE` | `READY` | `CORE-P1-MEDIA-REQ`, `CORE-P1-FAILURE-AUTHORITY` |
-| `CORE-P1-OUTCOME-FEEDBACK` | `READY` | `CORE-P1-FAILURE-AUTHORITY` |
+| `CORE-P1-ELIGIBILITY-TRACE` | `RUNNING` | `CORE-P1-MEDIA-REQ`, `CORE-P1-FAILURE-AUTHORITY` |
+| `CORE-P1-OUTCOME-FEEDBACK` | `RUNNING` | `CORE-P1-FAILURE-AUTHORITY` |
 | `CORE-P1-PIPELINE-LIFECYCLE` | `QUEUED` | `CORE-P1-MEDIA-REQ`, `CORE-P1-FAILURE-AUTHORITY`, `CORE-P1-ELIGIBILITY-TRACE`, `CORE-P1-OUTCOME-FEEDBACK` |
 | `COMMIT-CONTRACT` | `DONE` | none |
 | `TEST-CHECK` | `DONE` | none |
@@ -126,7 +126,7 @@ The Stage 3, Stage 4, and Stage 6 repair edges are intentionally repeated in
 Outcome, cancellation, or candidate identity inputs are untrustworthy. The
 `CORE-P1-PIPELINE-LIFECYCLE` node is the sole owner of `server/pipeline.rs`; no
 parallel worker may edit that file. Batch A is accepted; the two Batch B
-`READY` nodes may run in parallel because they have disjoint ownership
+`RUNNING` nodes are executing in parallel because they have disjoint ownership
 (`policy.rs`/`router.rs` versus Outcome/Feedback/dataset conversion).
 
 ## Stage and aggregate edges

@@ -2,8 +2,8 @@
   "schema_version": 1,
   "node_id": "CORE-P1-OUTCOME-FEEDBACK",
   "display_name": "CORE-P1-OUTCOME-FEEDBACK — outcome and feedback schema bridge",
-  "status": "READY",
-  "implementation_state": "Batch A failure-authority is accepted; this pure Outcome/Feedback schema and dataset conversion repair is ready for bounded Batch B dispatch and will not wire ML training or production lifecycle.",
+  "status": "RUNNING",
+  "implementation_state": "Batch B Outcome/Feedback Agent is executing in an isolated worktree against the accepted failure contract; no result is accepted yet and production lifecycle wiring remains deferred.",
   "dependencies": [
     "CORE-P1-FAILURE-AUTHORITY"
   ],
@@ -34,6 +34,7 @@
     "crates/zroutery-core/src/lib.rs"
   ],
   "notes": [
+    "Agent session ses_f27aa6e13ffe86W0kuA3kUeVK0 is running on branch node/core-p1-outcome-feedback from 90ba6fe.",
     "Do not modify accepted shadow, model identity, decision engine, model, or reward files.",
     "No DatasetStore wiring, training, activation, or durable LearningEvent journal work belongs here."
   ]

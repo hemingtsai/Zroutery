@@ -104,15 +104,15 @@ The read-only audit produced ADR-0003 through ADR-0005 and five bounded nodes.
 |---|---|---|
 | `CORE-P1-MEDIA-REQ` | `DONE` | Canonical/deduplicated capability derivation and fail-closed protocol/media handling accepted on main |
 | `CORE-P1-FAILURE-AUTHORITY` | `DONE` | `failure.rs`/`error.rs` canonical classification, impact table, and API compatibility accepted |
-| `CORE-P1-ELIGIBILITY-TRACE` | `READY` | `policy.rs`/`router.rs` request eligibility, planned identity, and router adapter |
-| `CORE-P1-OUTCOME-FEEDBACK` | `READY` | Outcome/Feedback schema and pure dataset conversion; no training/activation |
+| `CORE-P1-ELIGIBILITY-TRACE` | `RUNNING` | `policy.rs`/`router.rs` request eligibility, planned identity, and router adapter |
+| `CORE-P1-OUTCOME-FEEDBACK` | `RUNNING` | Outcome/Feedback schema and pure dataset conversion; no training/activation |
 | `CORE-P1-PIPELINE-LIFECYCLE` | `QUEUED` | Sole `pipeline.rs`/`server` lifecycle, final served identity, stream terminal state, and fan-out owner |
 
 Batch A (`CORE-P1-MEDIA-REQ` and `CORE-P1-FAILURE-AUTHORITY`) is accepted on
-main. Batch B is the next parallel implementation batch: the two `READY`
-domain nodes have disjoint file ownership. Batch C is serial and owns the
-production pipeline seam. The aggregate `CORE-P1-REPAIR` remains `QUEUED`
-until Batch B, Batch C, and Stage 2/3/4/6 revalidation pass.
+main. Batch B is now running as two disjoint domain repairs:
+`CORE-P1-ELIGIBILITY-TRACE` and `CORE-P1-OUTCOME-FEEDBACK`. Batch C is serial
+and owns the production pipeline seam. The aggregate `CORE-P1-REPAIR` remains
+`QUEUED` until Batch B, Batch C, and Stage 2/3/4/6 revalidation pass.
 
 ## Parallel engineering inventory
 
@@ -182,8 +182,8 @@ The audit authorizes four non-overlapping worktrees:
 4. `ORCH-DOCS` (`DONE`) — this recoverable documentation record.
 
 The next authorized work is Core P1 Batch B: `CORE-P1-ELIGIBILITY-TRACE` and
-`CORE-P1-OUTCOME-FEEDBACK` are both `READY` and may run in isolated worktrees
-with disjoint ownership. The pure `7E-1B-CORE` seam and both Batch A domain
+`CORE-P1-OUTCOME-FEEDBACK` are both `RUNNING` in isolated worktrees with
+disjoint ownership. The pure `7E-1B-CORE` seam and both Batch A domain
 contracts are accepted, but full `7E-1B` remains `BLOCKED` until Batch B, the
 sole pipeline integration, and Stage 2/3/4/6 revalidation pass. No production
 takeover, online RL, exploration, real-provider E2E, or automatic model

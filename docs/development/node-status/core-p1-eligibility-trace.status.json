@@ -2,8 +2,8 @@
   "schema_version": 1,
   "node_id": "CORE-P1-ELIGIBILITY-TRACE",
   "display_name": "CORE-P1-ELIGIBILITY-TRACE — request eligibility and planned identity",
-  "status": "READY",
-  "implementation_state": "Batch A capability and failure-authority contracts are accepted; this router/policy domain repair is ready for bounded Batch B dispatch.",
+  "status": "RUNNING",
+  "implementation_state": "Batch B eligibility/trace Agent is executing in an isolated worktree against accepted capability and failure contracts; no result is accepted yet.",
   "dependencies": [
     "CORE-P1-MEDIA-REQ",
     "CORE-P1-FAILURE-AUTHORITY"
@@ -34,6 +34,7 @@
     "crates/zroutery-core/tests/routing_policy_test.rs"
   ],
   "notes": [
+    "Agent session ses_f27aa6e1effe6abit0AlbFdhzL is running on branch node/core-p1-eligibility-trace from 90ba6fe.",
     "This node does not edit server/pipeline.rs or any ml/* file.",
     "Final served identity is deferred to CORE-P1-PIPELINE-LIFECYCLE."
   ]
