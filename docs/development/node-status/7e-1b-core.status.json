@@ -2,8 +2,8 @@
   "schema_version": 1,
   "node_id": "7E-1B-CORE",
   "display_name": "7E-1B-CORE — replayable shadow observation core",
-  "status": "RUNNING",
-  "implementation_state": "A bounded pure-ML subtask is repairing shadow observation retention and counterfactual semantics in an isolated worktree; no result is accepted yet.",
+  "status": "DONE",
+  "implementation_state": "The pure-ML replayable shadow observation and non-degenerate counterfactual seam was independently reviewed, corrected for unknown selected identity, and validated on main; production integration remains outside this subtask.",
   "dependencies": [
     "7E-1A",
     "7A",
@@ -20,23 +20,32 @@
     "Deterministic checksum and shadow-purity tests"
   ],
   "blocked_by": [],
-  "unblock_condition": "Implement and validate the pure shadow observation/counterfactual seam; production pipeline integration remains a separate 7E-1B responsibility.",
+  "unblock_condition": "Reopen only if the pure shadow observation, ranking, checksum, or store validation contract changes; full 7E-1B still requires its Core P1 integration prerequisites.",
   "evidence": [
     "E-016",
     "E-024",
     "E-026",
-    "E-028"
+    "E-028",
+    "E-035",
+    "E-036",
+    "E-037",
+    "E-038",
+    "E-039",
+    "E-040",
+    "E-041"
   ],
   "source_references": [
     "docs/development/repository-audit-2026-09-25.md",
     "crates/zroutery-core/src/ml/shadow.rs",
     "crates/zroutery-core/src/ml/decision_engine.rs",
     "crates/zroutery-core/src/ml/reward.rs",
-    "crates/zroutery-core/tests/shadow_test.rs"
+    "crates/zroutery-core/tests/shadow_test.rs",
+    "crates/zroutery-core/tests/shadow_observation_test.rs"
   ],
   "notes": [
-    "Agent session ses_f2909eae6ffeYeYKeWkUgNw5u3 is running on branch node/7e-1b-core from 18b00dc.",
+    "Accepted main commits: b9a5d60 and de4e55f.",
+    "The follow-up explicitly rejects unknown selected evidence before checksum validation and enforces Keep/Switch/Explore identity semantics.",
     "This node is deliberately separate from full 7E-1B because Core P1 repairs still block pipeline/session/outcome integration.",
-    "No server/policy/router/session/account/provider files are in scope."
+    "Production final served identity, runtime session/outcome capture, and rejected-candidate full feature extraction remain deferred; no server/policy/router/session/account/provider files changed."
   ]
 }

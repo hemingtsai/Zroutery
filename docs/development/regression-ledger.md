@@ -16,7 +16,7 @@ state vocabulary. ORCH-DOCS records defects; it does not repair them.
 | `REG-006` | `FailureImpact`/`FailureClass` and `Error` are competing runtime failure authorities. | `FAILED` | `FAILED` | P1 | Future Core repair node (`CORE-P1-REPAIR`) | E-016; `crates/zroutery-core/src/failure.rs`; `crates/zroutery-core/src/error.rs` | `STAGE-4`, `7E-1B`, `7E-2E`, `7E-3`; choose one classified authority and prove consistent observation/circuit effects. |
 | `REG-007` | A client stream disconnect can be finalized as a successful request through the stream drop path. | `FAILED` | `FAILED` | P1 | Future Stage 4 repair node (`CORE-P1-REPAIR`) | E-016; `crates/zroutery-core/src/server/pipeline.rs:1508-1516` | `STAGE-4`, `7E-1B`, `7E-2E`, `7E-3`; distinguish cancellation/interruption from success and test the drop path. |
 | `REG-008` | A valid model checkpoint could be paired with an unrelated commit ID. | `FAILED` | `DONE` | P1 | `7E-1A` | E-016; E-026; E-027; E-028; E-033; `ml/model_identity.rs`; `ml/shadow.rs` | Closed by 1c49109 and c782a49 with complete lineage and schema-envelope gates. |
-| `REG-009` | Decision-time feature vectors and exact shadow input are not retained through production evaluation/training. | `FAILED` | `READY` | P1 | `7E-1B` | E-016; `crates/zroutery-core/src/ml/shadow.rs:220-325`; `crates/zroutery-core/src/ml/shadow.rs:598-813` | `7E-1`, `7E-1B`, `7E-2A`; retain immutable inputs, meaningful counterfactuals, and separate final served identity. |
+| `REG-009` | Decision-time feature vectors and exact shadow input were not retained through production evaluation/training. | `FAILED` | `PARTIAL` | P1 | `7E-1B-CORE` / `7E-1B` | E-016; E-035; E-037; E-041; `crates/zroutery-core/src/ml/shadow.rs`; `crates/zroutery-core/tests/shadow_observation_test.rs` | `7E-1`, `7E-1B`, `7E-2A`; pure replayable input/meaningful counterfactual is accepted, but production final served identity and runtime Outcome/session integration remain blocked by Core P1 repairs. |
 | `REG-010` | Node state, DAG, evidence, and regression recovery information was not present in development records. | `FAILED` | `DONE` | P1 | `ORCH-DOCS` | E-017 through E-023; `docs/development/node-status/`; `docs/development/dependency-dag.md`; `docs/development/evidence-registry.md` | `ORCH-INFRA`, `ORCH-STATUS`, `ORCH-EVIDENCE`, `ORCH-REGRESSION`, `ORCH-VALIDATION`; reopen if JSON, inventory, edge, enum, path, or diff validation fails. |
 
 ## Ownership and closure rules
@@ -26,8 +26,8 @@ state vocabulary. ORCH-DOCS records defects; it does not repair them.
   reopen them if the exact commands, toolchain, or validators change.
 - `REG-005`–`REG-007` remain open Core P1 repairs and are not fixed by the
   baseline batch.
-- `REG-008` is closed by 7E-1A; `REG-009` remains READY for 7E-1B and must
-  not be closed by historical tags.
+- `REG-008` is closed by 7E-1A; `REG-009` is PARTIAL after 7E-1B-CORE and
+  remains open until full 7E-1B production integration is proven.
 - `REG-010` is closed only for the documentation artifact itself. It does not
   imply that the implementation, test, or online-learning gates are closed.
 

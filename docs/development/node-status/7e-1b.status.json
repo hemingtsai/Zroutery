@@ -3,7 +3,7 @@
   "node_id": "7E-1B",
   "display_name": "7E-1B — replayable shadow observation repair",
   "status": "BLOCKED",
-  "implementation_state": "The required repair is defined by the audit but cannot start safely until 7E-1A and Core P1 repairs pass.",
+  "implementation_state": "The pure observation/counterfactual substrate is accepted through 7E-1B-CORE; full production integration cannot start safely until the recorded Core P1 eligibility, failure/stream, and Outcome repairs pass.",
   "dependencies": [
     "7E-1A",
     "7E-1B-CORE",
@@ -22,15 +22,19 @@
     "Retained exact feature vectors"
   ],
   "blocked_by": [
-    "7E-1B-CORE",
     "CORE-P1-REPAIR",
     "STAGE-3",
     "STAGE-4",
     "STAGE-6"
   ],
-  "unblock_condition": "Merge and revalidate 7E-1A plus Core P1 repairs, then prove a meaningful counterfactual with retained input and final served identity.",
+  "unblock_condition": "Complete and revalidate CORE-P1-REPAIR, STAGE-3, STAGE-4, and STAGE-6, then wire and prove final served identity plus runtime Outcome/session integration on top of the accepted 7E-1B-CORE seam.",
   "evidence": [
-    "E-016"
+    "E-016",
+    "E-035",
+    "E-037",
+    "E-038",
+    "E-040",
+    "E-041"
   ],
   "source_references": [
     "docs/development/repository-audit-2026-09-25.md",
@@ -39,6 +43,8 @@
     "crates/zroutery-core/src/policy.rs"
   ],
   "notes": [
-    "Do not dispatch this node before its stated unblock condition."
+    "7E-1B-CORE accepted the pure seam; this parent remains BLOCKED, not DONE, until Core integration and final served identity evidence exist.",
+    "The pure seam intentionally leaves served identity unknown and uses explicit UNKNOWN features for RouteDecision-only rejected candidates.",
+    "Do not dispatch the full integration node before its stated unblock condition."
   ]
 }

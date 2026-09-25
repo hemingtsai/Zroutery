@@ -119,3 +119,26 @@ The following evidence was executed by the parent orchestrator after merging
 The old `E-004` through `E-015` records remain historical evidence for the
 pre-merge audit revision. `E-024` through `E-034` are the current post-merge
 baseline and do not retroactively convert blocked Core/ML nodes to `DONE`.
+
+## 7E-1B-CORE acceptance evidence
+
+The parent orchestrator independently reviewed and re-ran the pure shadow
+subtask after the follow-up semantic gate. The accepted main commits are
+`b9a5d60` and `de4e55f`; the final tree is main revision
+`de4e55f02609a4cdcc2f6845ad105f8f2bd68ec7`.
+
+| ID | Class | Exact command or observation | Result | Known caveat |
+|---|---|---|---|---|
+| E-035 | review, integration | `git diff --name-status 18b00dc..de4e55f`; `git diff --check 18b00dc..de4e55f` | PASS; only the five authorized ML source/test files plus the follow-up shadow source/test files changed; no Core/server/router/policy/session/account/provider files | Pure ML seam only; production integration is deferred |
+| E-036 | local, integration | `cargo check --workspace` at `de4e55f` | PASS | Default feature set; ML is also gated separately |
+| E-037 | local, integration | `cargo test -p zroutery-core --all-features` at `de4e55f` | PASS; 937 Core unit tests and all Core integration suites passed, including 6 observation tests and 5 semantic store-gate tests | No real provider lifecycle |
+| E-038 | local, integration | `cargo test --workspace --features ml` at `de4e55f` | PASS; workspace ML/shadow/identity and existing runtime-mutation/provider-call gates passed | Production ML activation remains disabled |
+| E-039 | local, integration | `cargo test --workspace --all-features` at `de4e55f` | PASS; all workspace feature combinations passed | No real provider lifecycle |
+| E-040 | local, integration | `cargo clippy --workspace --all-targets --all-features -- -D warnings` at `de4e55f` | PASS; no warnings or errors | Rustfmt remains a separate known debt gate |
+| E-041 | local, performance | `cargo test -p zroutery-core --all-features --test shadow_test shadow_overhead_p95_under_1ms_p99_under_3ms -- --nocapture` at `de4e55f` | PASS; 8-candidate P95 `417.2µs`, P99 `667µs`, max `1.6085ms` | Hardware-dependent benchmark, not a production SLO |
+| E-042 | documentation, integration | Parent JSON/DAG/path/status validation, `git diff --check`, and `python -B scripts/commit_contract_test.py --base c66072f341664f67c1cd1c761e5f5adf1980ce16 --head HEAD` after the 7E-1B-CORE state update | PASS; 64 nodes, 95 edges, and all 18 non-merge commits valid | Re-run after every future status-only change |
+
+These records accept only `7E-1B-CORE`. They do not close full `7E-1B`,
+`REG-009`, or any Core P1 repair: final served identity capture, production
+pipeline/session/outcome integration, and trustworthy runtime evidence remain
+separate gates.
