@@ -380,5 +380,6 @@ reasoning tokens）、`stop_sequences` ↔ `stop`、`reasoning_effort` ↔ think
   `max_tokens` / `temperature`，部分网关不认 `stream_options`。
 - `cargo test -p zroutery-core` 只跑纯逻辑，878 个测试，秒级；加 `--all-features` 会把 `ml` /
   `account` 一起编译测试，1293 个。`pnpm smoke` 验证真实进程。
+- 开发流程、历史处理记录和子系统设计记录都在 [docs/development/](docs/development/README.md)。
 - 想看请求细节：`ZROUTERY_LOG=debug`。
 - 价格是每百万 token，不是每 token；从目录里自动填的价格已经换算过了。
