@@ -107,6 +107,7 @@ SUBJECT_RE = re.compile(
 # meaning.
 IMPERATIVE_VERBS = frozenset(
     {
+        "accept",
         "add",
         "align",
         "allow",
@@ -551,6 +552,10 @@ def _fixture_messages() -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
         (
             "mark imperative compatibility subject",
             "docs(workflow): mark first implementation batch running",
+        ),
+        (
+            "accept imperative compatibility subject",
+            "fix(workflow): accept mark as imperative verb",
         ),
         (
             "tauri compatibility scope",
