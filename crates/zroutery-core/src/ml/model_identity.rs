@@ -3,18 +3,81 @@
 //! Provides content-addressed model commits, checkpoint management,
 //! learning event tracking, and deterministic replay of training history.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use super::dataset::TrainingSample as DatasetTrainingSample;
-use super::features::FEATURE_DIMENSION;
+use super::dataset::{validate_sample, TrainingSample as DatasetTrainingSample};
+use super::features::{FEATURE_DIMENSION, FEATURE_SCHEMA_VERSION};
 use super::model::{
     CostModel, LatencyModel, ModelState, RoutingModel, SuccessModel, TtftModel,
 };
+
+// ---------------------------------------------------------------------------
+// Versioned identity and deterministic hashing
+// ---------------------------------------------------------------------------
+
+/// Schema version of the model-state serialization consumed by this module.
+pub const MODEL_STATE_SCHEMA_VERSION: u32 = 1;
+/// Schema version of the checkpoint envelope consumed by this module.
+pub const MODEL_CHECKPOINT_SCHEMA_VERSION: u32 = 1;
+/// Schema version of the commit envelope consumed by this module.
+pub const MODEL_COMMIT_SCHEMA_VERSION: u32 = 1;
+/// Schema version of the learning-event envelope consumed by this module.
+pub const LEARNING_EVENT_SCHEMA_VERSION: u32 = 1;
+
+const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
+const FNV_PRIME: u64 = 0x100000001b3;
+const COMMIT_ID_DOMAIN: &[u8] = b"zroutery-model-commit-v1\0";
+
+fn hash_bytes(hash: &mut u64, bytes: &[u8]) {
+    for byte in bytes {
+        *hash ^= u64::from(*byte);
+        *hash = hash.wrapping_mul(FNV_PRIME);
+    }
+}
+
+fn hash_u64(hash: &mut u64, value: u64) {
+    hash_bytes(hash, &value.to_le_bytes());
+}
+
+fn hash_string(hash: &mut u64, value: &str) {
+    hash_u64(hash, value.len() as u64);
+    hash_bytes(hash, value.as_bytes());
+}
+
+fn hash_optional_commit(hash: &mut u64, value: Option<&CommitId>) {
+    match value {
+        Some(commit) => {
+            hash_bytes(hash, &[1]);
+            hash_string(hash, commit.as_str());
+        }
+        None => hash_bytes(hash, &[0]),
+    }
+}
+
+fn hash_algorithm_versions(hash: &mut u64, versions: &[(String, String)]) {
+    hash_u64(hash, versions.len() as u64);
+    let mut ordered: Vec<&(String, String)> = versions.iter().collect();
+    ordered.sort();
+    for (model, version) in ordered {
+        hash_string(hash, model);
+        hash_string(hash, version);
+    }
+}
+
+fn hash_metadata(hash: &mut u64, metadata: &HashMap<String, String>) {
+    hash_u64(hash, metadata.len() as u64);
+    let mut ordered: Vec<(&String, &String)> = metadata.iter().collect();
+    ordered.sort();
+    for (key, value) in ordered {
+        hash_string(hash, key);
+        hash_string(hash, value);
+    }
+}
 
 // ---------------------------------------------------------------------------
 // ModelId — newtype String
@@ -100,42 +163,76 @@ pub struct ModelCheckpoint {
 }
 
 impl ModelCheckpoint {
-    /// Compute a content hash over all 4 states' checksum, update_count, and
-    /// algorithm bytes. Uses FNV-1a.
+    /// Compute a deterministic content hash over the complete model state.
+    ///
+    /// The wall-clock `created_at` field is deliberately excluded: it is
+    /// persistence metadata, not model identity. Every field that can change
+    /// predictions is included, including raw parameters as well as their
+    /// checksums, so a validly re-signed but different checkpoint cannot share
+    /// an identity by accident.
     pub fn content_hash(&self) -> u64 {
-        let mut hash: u64 = 0xcbf29ce484222325; // FNV offset basis
-        let states = [&self.success, &self.latency, &self.ttft, &self.cost];
-        for state in &states {
-            // Mix checksum
-            for b in state.checksum.to_le_bytes() {
-                hash ^= b as u64;
-                hash = hash.wrapping_mul(0x100000001b3);
+        let mut hash = FNV_OFFSET_BASIS;
+        hash_bytes(&mut hash, b"zroutery-model-checkpoint-v1\0");
+        hash_u64(&mut hash, MODEL_CHECKPOINT_SCHEMA_VERSION as u64);
+        hash_u64(&mut hash, self.feature_schema_version as u64);
+
+        for state in [&self.success, &self.latency, &self.ttft, &self.cost] {
+            hash_u64(&mut hash, state.schema_version as u64);
+            hash_string(&mut hash, &state.algorithm);
+            hash_u64(&mut hash, state.update_count);
+            hash_u64(&mut hash, state.checksum);
+            hash_u64(&mut hash, state.parameters.len() as u64);
+            for parameter in &state.parameters {
+                hash_u64(&mut hash, parameter.to_bits());
             }
-            // Mix update_count
-            for b in state.update_count.to_le_bytes() {
-                hash ^= b as u64;
-                hash = hash.wrapping_mul(0x100000001b3);
-            }
-            // Mix algorithm bytes
-            for b in state.algorithm.as_bytes() {
-                hash ^= *b as u64;
-                hash = hash.wrapping_mul(0x100000001b3);
-            }
-        }
-        // Mix feature_schema_version to distinguish schema-incompatible checkpoints
-        for b in self.feature_schema_version.to_le_bytes() {
-            hash ^= b as u64;
-            hash = hash.wrapping_mul(0x100000001b3);
         }
         hash
     }
 
-    /// Verify checksums on all 4 model states.
+    /// Validate the checkpoint envelope and all four serialized model states.
+    ///
+    /// Unknown schema versions are rejected rather than being interpreted as
+    /// the current representation. This is the fail-closed boundary used by
+    /// stores, replay, and predictor construction.
+    pub fn validate(&self) -> Result<(), ReplayError> {
+        if self.feature_schema_version != FEATURE_SCHEMA_VERSION {
+            return Err(ReplayError::UnsupportedSchema {
+                component: "checkpoint feature schema".to_string(),
+                version: self.feature_schema_version,
+                supported: FEATURE_SCHEMA_VERSION,
+            });
+        }
+        for (name, state) in [
+            ("success", &self.success),
+            ("latency", &self.latency),
+            ("ttft", &self.ttft),
+            ("cost", &self.cost),
+        ] {
+            if state.schema_version != MODEL_STATE_SCHEMA_VERSION {
+                return Err(ReplayError::UnsupportedSchema {
+                    component: format!("{name} model state"),
+                    version: state.schema_version,
+                    supported: MODEL_STATE_SCHEMA_VERSION,
+                });
+            }
+            if !state.verify_checksum() {
+                return Err(ReplayError::ChecksumMismatch {
+                    model: name.to_string(),
+                });
+            }
+            if state.parameters.iter().any(|parameter| !parameter.is_finite()) {
+                return Err(ReplayError::IncompatibleState {
+                    model: name.to_string(),
+                    reason: "parameter is not finite".to_string(),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Verify the checkpoint and reject incompatible or corrupt state.
     pub fn verify(&self) -> bool {
-        self.success.verify_checksum()
-            && self.latency.verify_checksum()
-            && self.ttft.verify_checksum()
-            && self.cost.verify_checksum()
+        self.validate().is_ok() && ModelEnsemble::load_all(self).is_ok()
     }
 }
 
@@ -160,44 +257,180 @@ pub struct ModelCommit {
 impl ModelCommit {
     /// Create a new commit from a checkpoint.
     ///
-    /// Computes the commit_id from `checkpoint.content_hash()`, populates
-    /// algorithm versions from each state's algorithm field, and timestamps
-    /// with the current wall clock.
+    /// The identity is canonical and content-addressed across the model id,
+    /// feature schema, parent, cumulative learning lineage, algorithm versions,
+    /// checkpoint content, and stable metadata. `created_at` is intentionally
+    /// excluded so replaying the same ordered events at different wall-clock
+    /// times produces the same commit id.
     pub fn new(
         model_id: ModelId,
         checkpoint: ModelCheckpoint,
         parent: Option<CommitId>,
         learning_event_count: u64,
     ) -> Self {
-        let commit_id = CommitId::from_hash(checkpoint.content_hash());
-        let algorithm_versions = vec![
-            ("success".to_string(), checkpoint.success.algorithm.clone()),
-            ("latency".to_string(), checkpoint.latency.algorithm.clone()),
-            ("ttft".to_string(), checkpoint.ttft.algorithm.clone()),
-            ("cost".to_string(), checkpoint.cost.algorithm.clone()),
-        ];
-        let created_at = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as i64;
+        Self::new_with_metadata(
+            model_id,
+            checkpoint,
+            parent,
+            learning_event_count,
+            HashMap::new(),
+        )
+    }
+
+    fn new_with_metadata(
+        model_id: ModelId,
+        checkpoint: ModelCheckpoint,
+        parent: Option<CommitId>,
+        learning_event_count: u64,
+        metadata: HashMap<String, String>,
+    ) -> Self {
+        let algorithm_versions = Self::algorithm_versions(&checkpoint);
         let feature_schema_version = checkpoint.feature_schema_version;
-        ModelCommit {
-            commit_id,
+        let mut commit = ModelCommit {
+            // Filled below after every identity-bearing field is present.
+            commit_id: CommitId::new(""),
             parent,
             model_id,
             checkpoint,
             learning_event_count,
             algorithm_versions,
             feature_schema_version,
-            created_at,
-            metadata: HashMap::new(),
+            created_at: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs() as i64,
+            metadata,
+        };
+        commit.commit_id = commit.canonical_identity();
+        commit
+    }
+
+    /// Fallible constructor for code that must never retain an invalid
+    /// artifact. The infallible `new` constructor remains for source
+    /// compatibility, while all operational boundaries use this method.
+    pub fn try_new(
+        model_id: ModelId,
+        checkpoint: ModelCheckpoint,
+        parent: Option<CommitId>,
+        learning_event_count: u64,
+    ) -> Result<Self, ReplayError> {
+        let commit = Self::new(model_id, checkpoint, parent, learning_event_count);
+        if commit.verify() {
+            Ok(commit)
+        } else {
+            Err(ReplayError::InvalidCommit {
+                commit_id: commit.commit_id,
+                reason: "constructed commit failed identity or artifact validation".to_string(),
+            })
         }
     }
 
-    /// Verify checkpoint integrity and that the commit_id matches the
-    /// recomputed content hash.
+    /// Construct a commit with a caller-supplied stable lineage token.
+    ///
+    /// The token is stored as reserved metadata so it is covered by the
+    /// canonical identity and cannot be changed without invalidating the
+    /// commit. The ordinary constructor uses an empty token and still binds
+    /// the complete parent/count lineage.
+    pub fn new_with_lineage(
+        model_id: ModelId,
+        checkpoint: ModelCheckpoint,
+        parent: Option<CommitId>,
+        learning_event_count: u64,
+        lineage: u64,
+    ) -> Self {
+        let mut metadata = HashMap::new();
+        metadata.insert("lineage".to_string(), format!("{lineage:016x}"));
+        Self::new_with_metadata(
+            model_id,
+            checkpoint,
+            parent,
+            learning_event_count,
+            metadata,
+        )
+    }
+
+    fn algorithm_versions(checkpoint: &ModelCheckpoint) -> Vec<(String, String)> {
+        vec![
+            ("success".to_string(), checkpoint.success.algorithm.clone()),
+            ("latency".to_string(), checkpoint.latency.algorithm.clone()),
+            ("ttft".to_string(), checkpoint.ttft.algorithm.clone()),
+            ("cost".to_string(), checkpoint.cost.algorithm.clone()),
+        ]
+    }
+
+    /// Hash the identity-bearing lineage (the parent reference and cumulative
+    /// event count). A child therefore cannot share an identity with a root or
+    /// with a different history length.
+    pub fn lineage_hash(&self) -> u64 {
+        let mut hash = FNV_OFFSET_BASIS;
+        hash_bytes(&mut hash, b"zroutery-model-lineage-v1\0");
+        hash_optional_commit(&mut hash, self.parent.as_ref());
+        hash_u64(&mut hash, self.learning_event_count);
+        if let Some(lineage) = self.metadata.get("lineage") {
+            hash_string(&mut hash, lineage);
+        }
+        hash
+    }
+
+    /// Compute the canonical commit identity from all identity-bearing fields.
+    pub fn canonical_identity(&self) -> CommitId {
+        Self::canonical_id_for(
+            &self.model_id,
+            self.parent.as_ref(),
+            self.feature_schema_version,
+            self.learning_event_count,
+            &self.checkpoint,
+            &self.algorithm_versions,
+            &self.metadata,
+        )
+    }
+
+    /// Canonical identity function used by constructors and verification.
+    pub fn canonical_id_for(
+        model_id: &ModelId,
+        parent: Option<&CommitId>,
+        feature_schema_version: u32,
+        learning_event_count: u64,
+        checkpoint: &ModelCheckpoint,
+        algorithm_versions: &[(String, String)],
+        metadata: &HashMap<String, String>,
+    ) -> CommitId {
+        let mut hash = FNV_OFFSET_BASIS;
+        hash_bytes(&mut hash, COMMIT_ID_DOMAIN);
+        hash_u64(&mut hash, MODEL_COMMIT_SCHEMA_VERSION as u64);
+        hash_string(&mut hash, model_id.as_str());
+        hash_u64(&mut hash, feature_schema_version as u64);
+        hash_optional_commit(&mut hash, parent);
+
+        let mut lineage = FNV_OFFSET_BASIS;
+        hash_bytes(&mut lineage, b"zroutery-model-lineage-v1\0");
+        hash_optional_commit(&mut lineage, parent);
+        hash_u64(&mut lineage, learning_event_count);
+        if let Some(token) = metadata.get("lineage") {
+            hash_string(&mut lineage, token);
+        }
+        hash_u64(&mut hash, lineage);
+
+        hash_u64(&mut hash, checkpoint.content_hash());
+        hash_u64(&mut hash, learning_event_count);
+        hash_algorithm_versions(&mut hash, algorithm_versions);
+        hash_metadata(&mut hash, metadata);
+        CommitId::from_hash(hash)
+    }
+
+    /// Verify the checkpoint, schema, algorithm table, and canonical identity.
     pub fn verify(&self) -> bool {
-        self.checkpoint.verify() && self.commit_id == CommitId::from_hash(self.checkpoint.content_hash())
+        if self.model_id.as_str().is_empty()
+            || self.feature_schema_version != FEATURE_SCHEMA_VERSION
+            || self.feature_schema_version != self.checkpoint.feature_schema_version
+            || !self.checkpoint.verify()
+        {
+            return false;
+        }
+        if self.algorithm_versions != Self::algorithm_versions(&self.checkpoint) {
+            return false;
+        }
+        self.commit_id == self.canonical_identity()
     }
 }
 
@@ -242,6 +475,37 @@ impl ModelRef {
 // ---------------------------------------------------------------------------
 // LearningEvent — a batch of training samples
 // ---------------------------------------------------------------------------
+
+/// Validate the complete sample envelope used by replay, including target
+/// domains that the feature-only dataset validator intentionally leaves to the
+/// dataset store.
+pub fn validate_replay_sample(sample: &DatasetTrainingSample) -> Result<(), String> {
+    if sample.schema_version != FEATURE_SCHEMA_VERSION {
+        return Err(format!(
+            "sample schema version mismatch: {} vs {}",
+            sample.schema_version, FEATURE_SCHEMA_VERSION
+        ));
+    }
+    if sample.sample_id.is_empty() || sample.outcome_id.is_empty() {
+        return Err("sample_id and outcome_id must not be empty".to_string());
+    }
+    if sample.provider_id.is_empty() || sample.model_id.is_empty() {
+        return Err("provider_id and model_id must not be empty".to_string());
+    }
+    validate_sample(sample)?;
+    for (name, value) in [
+        ("latency_ms", sample.targets.latency_ms),
+        ("ttft_ms", sample.targets.ttft_ms),
+        ("cost", sample.targets.cost),
+    ] {
+        if let Some(value) = value {
+            if !value.is_finite() || value < 0.0 {
+                return Err(format!("invalid {name}: {value}"));
+            }
+        }
+    }
+    Ok(())
+}
 
 static EVENT_COUNTER: AtomicU64 = AtomicU64::new(1);
 
@@ -293,6 +557,72 @@ impl LearningEvent {
     pub fn mark_applied(&mut self, commit_id: CommitId) {
         self.result_commit = Some(commit_id);
     }
+
+    /// Return the logical sequence encoded by the event id, when present.
+    ///
+    /// `LearningEvent::new` uses `evt-<sequence>` ids. The field remains a
+    /// string for compatibility with pre-7E-1 callers, but replay refuses to
+    /// reinterpret a decreasing or duplicate sequence as a new order.
+    pub fn logical_sequence(&self) -> Option<u64> {
+        self.event_id
+            .strip_prefix("evt-")
+            .and_then(|suffix| suffix.parse::<u64>().ok())
+    }
+
+    /// Stable hash of the ordered training payload. Volatile event id,
+    /// timestamp, and result metadata are intentionally excluded.
+    pub fn payload_hash(&self) -> u64 {
+        let mut hash = FNV_OFFSET_BASIS;
+        hash_bytes(&mut hash, b"zroutery-learning-event-payload-v1\0");
+        hash_string(&mut hash, self.model_id.as_str());
+        let serialized = serde_json::to_vec(&self.samples).unwrap_or_default();
+        hash_u64(&mut hash, serialized.len() as u64);
+        hash_bytes(&mut hash, &serialized);
+        if let Some(source) = &self.source {
+            hash_string(&mut hash, source);
+        } else {
+            hash_bytes(&mut hash, &[0]);
+        }
+        hash
+    }
+
+    /// Validate the event envelope and every training sample before replay.
+    pub fn validate(&self) -> Result<(), ReplayError> {
+        if self.event_id.is_empty() {
+            return Err(ReplayError::InvalidEvent {
+                event_id: self.event_id.clone(),
+                reason: "event id must not be empty".to_string(),
+            });
+        }
+        if self.model_id.as_str().is_empty() {
+            return Err(ReplayError::InvalidEvent {
+                event_id: self.event_id.clone(),
+                reason: "model id must not be empty".to_string(),
+            });
+        }
+        if self.samples.is_empty() {
+            return Err(ReplayError::InvalidEvent {
+                event_id: self.event_id.clone(),
+                reason: "an event must contain at least one sample".to_string(),
+            });
+        }
+        for (index, sample) in self.samples.iter().enumerate() {
+            if let Err(reason) = validate_replay_sample(sample) {
+                if sample.schema_version != FEATURE_SCHEMA_VERSION {
+                    return Err(ReplayError::UnsupportedSchema {
+                        component: format!("event {} sample {} schema", self.event_id, index),
+                        version: sample.schema_version,
+                        supported: FEATURE_SCHEMA_VERSION,
+                    });
+                }
+                return Err(ReplayError::InvalidEvent {
+                    event_id: self.event_id.clone(),
+                    reason: format!("sample {index}: {reason}"),
+                });
+            }
+        }
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -316,6 +646,46 @@ pub enum ReplayError {
     TagAlreadyExists(String),
     /// The store has no head commit.
     NoHead,
+    /// A serialized artifact or envelope is structurally invalid.
+    InvalidCommit {
+        commit_id: CommitId,
+        reason: String,
+    },
+    /// A checkpoint and the commit id supplied for it do not identify the
+    /// same canonical commit.
+    CommitMismatch {
+        expected: CommitId,
+        actual: CommitId,
+    },
+    /// An event is malformed or its sample payload cannot be replayed.
+    InvalidEvent { event_id: String, reason: String },
+    /// Events from different model lineages were mixed.
+    EventModelMismatch { expected: ModelId, actual: ModelId },
+    /// An event points at the wrong parent commit.
+    EventParentMismatch {
+        event_id: String,
+        expected: Option<CommitId>,
+        actual: Option<CommitId>,
+    },
+    /// An event points at the wrong result commit.
+    EventResultMismatch {
+        event_id: String,
+        expected: CommitId,
+        actual: CommitId,
+    },
+    /// A verified replay requires every event to carry its result.
+    EventResultMissing { event_id: String },
+    /// A parent chain is missing, cyclic, or otherwise unverifiable.
+    LineageCorrupt {
+        commit_id: CommitId,
+        reason: String,
+    },
+    /// A serialized schema is not supported by this implementation.
+    UnsupportedSchema {
+        component: String,
+        version: u32,
+        supported: u32,
+    },
 }
 
 impl fmt::Display for ReplayError {
@@ -334,17 +704,72 @@ impl fmt::Display for ReplayError {
                     expected, actual
                 )
             }
-            ReplayError::EmptyEventList => {
-                write!(f, "empty event list")
-            }
+            ReplayError::EmptyEventList => write!(f, "empty event list"),
             ReplayError::ChecksumMismatch { model } => {
                 write!(f, "checksum mismatch for model '{}'", model)
             }
             ReplayError::TagAlreadyExists(tag) => {
                 write!(f, "tag already exists: '{}'", tag)
             }
-            ReplayError::NoHead => {
-                write!(f, "no head commit")
+            ReplayError::NoHead => write!(f, "no head commit"),
+            ReplayError::InvalidCommit { commit_id, reason } => {
+                write!(f, "invalid commit '{}': {}", commit_id, reason)
+            }
+            ReplayError::CommitMismatch { expected, actual } => {
+                write!(
+                    f,
+                    "commit/checkpoint mismatch: checkpoint identifies '{}', got '{}'",
+                    expected, actual
+                )
+            }
+            ReplayError::InvalidEvent { event_id, reason } => {
+                write!(f, "invalid learning event '{}': {}", event_id, reason)
+            }
+            ReplayError::EventModelMismatch { expected, actual } => {
+                write!(
+                    f,
+                    "learning event model mismatch: expected '{}', got '{}'",
+                    expected, actual
+                )
+            }
+            ReplayError::EventParentMismatch {
+                event_id,
+                expected,
+                actual,
+            } => {
+                write!(
+                    f,
+                    "learning event '{}' parent mismatch: expected {:?}, got {:?}",
+                    event_id, expected, actual
+                )
+            }
+            ReplayError::EventResultMismatch {
+                event_id,
+                expected,
+                actual,
+            } => {
+                write!(
+                    f,
+                    "learning event '{}' result mismatch: expected '{}', got '{}'",
+                    event_id, expected, actual
+                )
+            }
+            ReplayError::EventResultMissing { event_id } => {
+                write!(f, "learning event '{}' has no result commit", event_id)
+            }
+            ReplayError::LineageCorrupt { commit_id, reason } => {
+                write!(f, "corrupt lineage at '{}': {}", commit_id, reason)
+            }
+            ReplayError::UnsupportedSchema {
+                component,
+                version,
+                supported,
+            } => {
+                write!(
+                    f,
+                    "unsupported {} version {} (supported version {})",
+                    component, version, supported
+                )
             }
         }
     }
@@ -410,6 +835,7 @@ impl ModelEnsemble {
     /// Validates that all model states can be deserialized. This is a
     /// constructor — `RoutingModel::load` is a static method.
     pub fn load_all(checkpoint: &ModelCheckpoint) -> Result<Self, ReplayError> {
+        checkpoint.validate()?;
         let success = SuccessModel::load(&checkpoint.success).map_err(|e| {
             ReplayError::IncompatibleState {
                 model: "success".to_string(),
@@ -497,61 +923,188 @@ impl Default for ModelEnsemble {
 // ModelStore — git-like commit storage
 // ---------------------------------------------------------------------------
 
-/// A git-like store for model checkpoints with commit history, tags, and HEAD.
+/// The immutable record and user-facing message retained by the store.
+struct StoredCommit {
+    commit: ModelCommit,
+    message: String,
+}
+
+/// A git-like store for verified model commits with tags and HEAD.
 pub struct ModelStore {
-    commits: HashMap<CommitId, (ModelCheckpoint, CommitInfo)>,
+    commits: HashMap<CommitId, StoredCommit>,
     tags: HashMap<String, CommitId>,
     head: Option<CommitId>,
-    next_seq: u64,
+    model_id: ModelId,
 }
 
 impl ModelStore {
     pub fn new() -> Self {
+        Self::with_model_id(ModelId::new("ensemble"))
+    }
+
+    /// Create a store for a named model lineage.
+    pub fn with_model_id(model_id: ModelId) -> Self {
         ModelStore {
             commits: HashMap::new(),
             tags: HashMap::new(),
             head: None,
-            next_seq: 1,
+            model_id,
         }
     }
 
-    /// Commit a new checkpoint with the given message.
+    /// The model lineage used by the convenience `commit` method.
+    pub fn model_id(&self) -> &ModelId {
+        &self.model_id
+    }
+
+    /// Commit a checkpoint using the store's model lineage and current head.
     ///
-    /// The parent is set to the current head. Advances head to the new commit.
+    /// This compatibility wrapper preserves the original infallible API. It
+    /// panics before mutation when the artifact is invalid; operational code
+    /// should use [`Self::try_commit`] and handle the error explicitly.
     pub fn commit(
         &mut self,
         checkpoint: ModelCheckpoint,
         message: String,
     ) -> CommitId {
-        let seq = self.next_seq;
-        self.next_seq += 1;
-        let commit_id = CommitId::new(format!("cmt-{:06}", seq));
-        let parent = self.head.clone();
-        let event_count = 0; // ModelStore doesn't track event counts
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as i64;
-
-        let info = CommitInfo {
-            commit_id: commit_id.clone(),
-            parent: parent.clone(),
-            message,
-            learning_event_count: event_count,
-            created_at: now,
-        };
-
-        self.commits.insert(commit_id.clone(), (checkpoint, info));
-        self.head = Some(commit_id.clone());
-        commit_id
+        self.try_commit(checkpoint, message)
+            .expect("ModelStore::commit received an invalid checkpoint")
     }
 
-    /// Checkout a checkpoint by commit ID.
+    /// Fallible, fail-closed commit operation.
+    pub fn try_commit(
+        &mut self,
+        checkpoint: ModelCheckpoint,
+        message: String,
+    ) -> Result<CommitId, ReplayError> {
+        let parent = self.head.clone();
+        self.try_commit_from(
+            self.model_id.clone(),
+            checkpoint,
+            parent,
+            0,
+            message,
+        )
+    }
+
+    /// Commit a checkpoint with explicit lineage metadata.
+    pub fn try_commit_from(
+        &mut self,
+        model_id: ModelId,
+        checkpoint: ModelCheckpoint,
+        parent: Option<CommitId>,
+        learning_event_count: u64,
+        message: String,
+    ) -> Result<CommitId, ReplayError> {
+        let commit = ModelCommit::new(model_id, checkpoint, parent, learning_event_count);
+        if !commit.verify() {
+            return Err(ReplayError::InvalidCommit {
+                commit_id: commit.commit_id,
+                reason: "checkpoint or lineage does not verify".to_string(),
+            });
+        }
+        self.try_insert_commit(commit, message)
+    }
+
+    /// Insert an already constructed commit after validating its lineage.
+    pub fn try_insert_commit(
+        &mut self,
+        commit: ModelCommit,
+        message: String,
+    ) -> Result<CommitId, ReplayError> {
+        if !commit.verify() {
+            return Err(ReplayError::InvalidCommit {
+                commit_id: commit.commit_id,
+                reason: "commit identity, schema, or checkpoint is invalid".to_string(),
+            });
+        }
+        if commit.model_id != self.model_id {
+            return Err(ReplayError::InvalidCommit {
+                commit_id: commit.commit_id,
+                reason: "commit model does not belong to this store".to_string(),
+            });
+        }
+        if let Some(parent_id) = commit.parent.clone() {
+            let parent = self.commits.get(&parent_id).ok_or_else(|| {
+                ReplayError::LineageCorrupt {
+                    commit_id: commit.commit_id.clone(),
+                    reason: format!("parent '{}' is not present", parent_id),
+                }
+            })?;
+            if parent.commit.model_id != commit.model_id {
+                return Err(ReplayError::InvalidCommit {
+                    commit_id: commit.commit_id,
+                    reason: "parent belongs to a different model lineage".to_string(),
+                });
+            }
+            self.verify_lineage(&parent_id)?;
+        }
+
+        let commit_id = commit.commit_id.clone();
+        if let Some(existing) = self.commits.get(&commit_id) {
+            if existing.commit.canonical_identity() != commit.canonical_identity() {
+                return Err(ReplayError::InvalidCommit {
+                    commit_id,
+                    reason: "content-address collision or altered commit".to_string(),
+                });
+            }
+        } else {
+            self.commits.insert(
+                commit_id.clone(),
+                StoredCommit {
+                    commit,
+                    message,
+                },
+            );
+        }
+        self.head = Some(commit_id.clone());
+        Ok(commit_id)
+    }
+
+    /// Checkout a verified checkpoint by commit ID.
     pub fn checkout(&self, commit_id: &CommitId) -> Result<ModelCheckpoint, ReplayError> {
+        self.checkout_commit(commit_id)
+            .map(|commit| commit.checkpoint)
+    }
+
+    /// Checkout the complete immutable commit record.
+    pub fn checkout_commit(&self, commit_id: &CommitId) -> Result<ModelCommit, ReplayError> {
+        if !self.commits.contains_key(commit_id) {
+            return Err(ReplayError::CheckpointNotFound(commit_id.clone()));
+        }
+        self.verify_lineage(commit_id)?;
         self.commits
             .get(commit_id)
-            .map(|(checkpoint, _)| checkpoint.clone())
+            .map(|stored| stored.commit.clone())
             .ok_or_else(|| ReplayError::CheckpointNotFound(commit_id.clone()))
+    }
+
+    /// Verify a complete parent chain, including artifact identity at every
+    /// node. Missing parents and cycles are errors; they are never silently
+    /// truncated from a log or checkout.
+    pub fn verify_lineage(&self, commit_id: &CommitId) -> Result<(), ReplayError> {
+        let mut current = Some(commit_id.clone());
+        let mut seen = HashSet::new();
+        while let Some(id) = current {
+            if !seen.insert(id.clone()) {
+                return Err(ReplayError::LineageCorrupt {
+                    commit_id: id,
+                    reason: "cycle detected in parent chain".to_string(),
+                });
+            }
+            let stored = self.commits.get(&id).ok_or_else(|| ReplayError::LineageCorrupt {
+                commit_id: id.clone(),
+                reason: "commit is not present in the store".to_string(),
+            })?;
+            if !stored.commit.verify() {
+                return Err(ReplayError::LineageCorrupt {
+                    commit_id: id,
+                    reason: "commit or checkpoint verification failed".to_string(),
+                });
+            }
+            current = stored.commit.parent.clone();
+        }
+        Ok(())
     }
 
     /// Get the current HEAD commit ID.
@@ -559,32 +1112,48 @@ impl ModelStore {
         self.head.clone()
     }
 
-    /// Set the HEAD to a specific commit ID.
+    /// Set the HEAD to a specific verified commit ID.
     pub fn set_head(&mut self, commit_id: CommitId) -> Result<(), ReplayError> {
         if !self.commits.contains_key(&commit_id) {
             return Err(ReplayError::CheckpointNotFound(commit_id));
         }
+        self.verify_lineage(&commit_id)?;
         self.head = Some(commit_id);
         Ok(())
     }
 
     /// Walk the parent chain from HEAD, returning commit info newest first.
-    pub fn log(&self) -> Vec<CommitInfo> {
+    pub fn log_checked(&self) -> Result<Vec<CommitInfo>, ReplayError> {
+        let Some(head) = self.head.clone() else {
+            return Ok(Vec::new());
+        };
+        self.verify_lineage(&head)?;
         let mut result = Vec::new();
-        let mut current = self.head.clone();
-        while let Some(cid) = current {
-            if let Some((_, info)) = self.commits.get(&cid) {
-                let next_parent = info.parent.clone();
-                result.push(info.clone());
-                current = next_parent;
-            } else {
+        let mut current = Some(head);
+        while let Some(id) = current {
+            let Some(stored) = self.commits.get(&id) else {
                 break;
-            }
+            };
+            current = stored.commit.parent.clone();
+            result.push(CommitInfo {
+                commit_id: stored.commit.commit_id.clone(),
+                parent: stored.commit.parent.clone(),
+                message: stored.message.clone(),
+                learning_event_count: stored.commit.learning_event_count,
+                created_at: stored.commit.created_at,
+            });
         }
-        result
+        Ok(result)
     }
 
-    /// Tag a commit with a name. Errors if the tag already exists.
+    /// Compatibility log view. Corrupt lineage returns no partial log; use
+    /// [`Self::log_checked`] when the error is required.
+    pub fn log(&self) -> Vec<CommitInfo> {
+        self.log_checked().unwrap_or_default()
+    }
+
+    /// Tag a commit with a name. Errors if the tag already exists or the
+    /// target lineage is corrupt.
     pub fn tag(
         &mut self,
         commit_id: &CommitId,
@@ -596,6 +1165,7 @@ impl ModelStore {
         if !self.commits.contains_key(commit_id) {
             return Err(ReplayError::CheckpointNotFound(commit_id.clone()));
         }
+        self.verify_lineage(commit_id)?;
         self.tags.insert(tag_name.to_string(), commit_id.clone());
         Ok(())
     }
@@ -624,51 +1194,214 @@ impl Default for ModelStore {
 // ReplayEngine — stateless replay of learning events
 // ---------------------------------------------------------------------------
 
-/// Stateless engine for replaying learning events against a base checkpoint.
+/// Stateless engine for replaying learning events against a verified base.
 pub struct ReplayEngine;
 
 impl ReplayEngine {
-    /// Replay a sequence of learning events starting from an optional base checkpoint.
+    /// Replay events and return only the resulting checkpoint.
     ///
-    /// 1. Validates the event list is non-empty.
-    /// 2. Verifies base checkpoint integrity if provided.
-    /// 3. Loads an ensemble from the base checkpoint, or creates a fresh one.
-    /// 4. Applies all samples from all events in order.
-    /// 5. Returns the resulting checkpoint via `save_all()`.
+    /// This compatibility API accepts legacy events whose parent/result fields
+    /// are not populated yet, but it still validates their model, payload,
+    /// schema, and order. Use [`Self::replay_verified`] when a complete,
+    /// fully checked event chain is required.
     pub fn replay(
         events: &[LearningEvent],
         base: Option<&ModelCheckpoint>,
     ) -> Result<ModelCheckpoint, ReplayError> {
+        let commit = Self::replay_internal(events, base, None, false)?;
+        Ok(commit.checkpoint)
+    }
+
+    /// Replay events against a verified base commit and return the resulting
+    /// commit. Unpopulated parent fields are tolerated for migration from the
+    /// original 7E-0 API; any supplied parent/result is checked exactly.
+    pub fn replay_commit(
+        events: &[LearningEvent],
+        base: Option<&ModelCommit>,
+    ) -> Result<ModelCommit, ReplayError> {
+        Self::replay_internal(events, None, base, false)
+    }
+
+    /// Strict replay: every event must explicitly carry the expected parent
+    /// and result, and the complete base commit must verify first.
+    pub fn replay_verified(
+        events: &[LearningEvent],
+        base: Option<&ModelCommit>,
+    ) -> Result<ModelCommit, ReplayError> {
+        Self::replay_internal(events, None, base, true)
+    }
+
+    /// Replay against a checkpoint while retaining the resulting commit
+    /// identity. This is useful to callers migrating from the old API without
+    /// discarding the newly repaired lineage.
+    pub fn replay_with_checkpoint(
+        events: &[LearningEvent],
+        base: Option<&ModelCheckpoint>,
+    ) -> Result<ModelCommit, ReplayError> {
+        Self::replay_internal(events, base, None, false)
+    }
+
+    fn replay_internal(
+        events: &[LearningEvent],
+        base_checkpoint: Option<&ModelCheckpoint>,
+        base_commit: Option<&ModelCommit>,
+        strict: bool,
+    ) -> Result<ModelCommit, ReplayError> {
         if events.is_empty() {
             return Err(ReplayError::EmptyEventList);
         }
+        for event in events {
+            event.validate()?;
+        }
+        Self::validate_event_order(events)?;
 
-        // Verify base checkpoint integrity if provided
-        if let Some(checkpoint) = base {
-            if !checkpoint.verify() {
-                return Err(ReplayError::ChecksumMismatch {
-                    model: "base checkpoint".to_string(),
+        if let Some(checkpoint) = base_checkpoint {
+            checkpoint.validate()?;
+        }
+        if let Some(commit) = base_commit {
+            if !commit.verify() {
+                return Err(ReplayError::InvalidCommit {
+                    commit_id: commit.commit_id.clone(),
+                    reason: "base commit failed verification".to_string(),
                 });
+            }
+            if let Some(checkpoint) = base_checkpoint {
+                if checkpoint.content_hash() != commit.checkpoint.content_hash() {
+                    return Err(ReplayError::CommitMismatch {
+                        expected: commit.commit_id.clone(),
+                        actual: Self::checkpoint_identity(checkpoint, &commit.model_id, commit.parent.as_ref(), commit.learning_event_count),
+                    });
+                }
             }
         }
 
-        // Load ensemble from base or create fresh
-        let mut ensemble = match base {
+        let model_id = base_commit
+            .map(|commit| commit.model_id.clone())
+            .unwrap_or_else(|| events[0].model_id.clone());
+        let mut ensemble = match base_checkpoint {
             Some(checkpoint) => ModelEnsemble::load_all(checkpoint)?,
-            None => ModelEnsemble::new(),
+            None => match base_commit {
+                Some(commit) => ModelEnsemble::load_all(&commit.checkpoint)?,
+                None => ModelEnsemble::new(),
+            },
         };
+        let mut current_commit = base_commit.cloned();
+        let mut learning_event_count = base_commit
+            .map(|commit| commit.learning_event_count)
+            .unwrap_or(0);
 
-        // Apply all samples from all events in order
         for event in events {
+            if event.model_id != model_id {
+                return Err(ReplayError::EventModelMismatch {
+                    expected: model_id,
+                    actual: event.model_id.clone(),
+                });
+            }
+
+            let expected_parent = current_commit.as_ref().map(|commit| commit.commit_id.clone());
+            match event.parent_commit.clone() {
+                Some(actual) if expected_parent.as_ref() != Some(&actual) => {
+                    return Err(ReplayError::EventParentMismatch {
+                        event_id: event.event_id.clone(),
+                        expected: expected_parent,
+                        actual: Some(actual),
+                    });
+                }
+                None if strict && expected_parent.is_some() => {
+                    return Err(ReplayError::EventParentMismatch {
+                        event_id: event.event_id.clone(),
+                        expected: expected_parent,
+                        actual: None,
+                    });
+                }
+                _ => {}
+            }
+
             for sample in &event.samples {
                 ensemble.update_all(sample);
             }
+            learning_event_count = learning_event_count
+                .checked_add(event.samples.len() as u64)
+                .ok_or_else(|| ReplayError::InvalidEvent {
+                    event_id: event.event_id.clone(),
+                    reason: "learning event count overflow".to_string(),
+                })?;
+            let child = ModelCommit::new(
+                model_id.clone(),
+                ensemble.save_all(),
+                current_commit.as_ref().map(|commit| commit.commit_id.clone()),
+                learning_event_count,
+            );
+            if !child.verify() {
+                return Err(ReplayError::InvalidCommit {
+                    commit_id: child.commit_id,
+                    reason: "replayed child commit failed verification".to_string(),
+                });
+            }
+            if let Some(actual) = event.result_commit.clone() {
+                if actual != child.commit_id {
+                    return Err(ReplayError::EventResultMismatch {
+                        event_id: event.event_id.clone(),
+                        expected: child.commit_id,
+                        actual,
+                    });
+                }
+            } else if strict {
+                return Err(ReplayError::EventResultMissing {
+                    event_id: event.event_id.clone(),
+                });
+            }
+            current_commit = Some(child);
         }
 
-        Ok(ensemble.save_all())
+        current_commit.ok_or(ReplayError::EmptyEventList)
     }
 
-    /// Verify checkpoint integrity (checksums on all 4 states).
+    /// Validate sequence-bearing event ids before applying any samples.
+    fn validate_event_order(events: &[LearningEvent]) -> Result<(), ReplayError> {
+        let mut seen_ids = HashSet::new();
+        let mut previous_sequence = None;
+        for (index, event) in events.iter().enumerate() {
+            if !seen_ids.insert(event.event_id.clone()) {
+                return Err(ReplayError::EventOutOfOrder {
+                    expected: index as u64,
+                    actual: index as u64,
+                });
+            }
+            if let Some(sequence) = event.logical_sequence() {
+                if let Some(previous) = previous_sequence {
+                    if sequence <= previous {
+                        return Err(ReplayError::EventOutOfOrder {
+                            expected: previous.saturating_add(1),
+                            actual: sequence,
+                        });
+                    }
+                }
+                previous_sequence = Some(sequence);
+            }
+        }
+        Ok(())
+    }
+
+    fn checkpoint_identity(
+        checkpoint: &ModelCheckpoint,
+        model_id: &ModelId,
+        parent: Option<&CommitId>,
+        learning_event_count: u64,
+    ) -> CommitId {
+        let algorithm_versions = ModelCommit::algorithm_versions(checkpoint);
+        ModelCommit::canonical_id_for(
+            model_id,
+            parent,
+            checkpoint.feature_schema_version,
+            learning_event_count,
+            checkpoint,
+            &algorithm_versions,
+            &HashMap::new(),
+        )
+    }
+
+    /// Verify checkpoint integrity and schema compatibility.
     pub fn verify_checkpoint_integrity(checkpoint: &ModelCheckpoint) -> bool {
         checkpoint.verify()
     }
@@ -864,7 +1597,7 @@ mod tests {
             None,
             0,
         );
-        assert_eq!(commit.commit_id, CommitId::from_hash(cp.content_hash()));
+        assert_eq!(commit.commit_id, commit.canonical_identity());
         assert!(commit.verify());
     }
 
@@ -1186,9 +1919,8 @@ mod tests {
         let mut events_b = events_a.clone();
         events_b.reverse();
 
-        let cp_a = ReplayEngine::replay(&events_a, None).unwrap();
-        let cp_b = ReplayEngine::replay(&events_b, None).unwrap();
-        assert_ne!(cp_a.content_hash(), cp_b.content_hash());
+        let result = ReplayEngine::replay(&events_b, None);
+        assert!(matches!(result, Err(ReplayError::EventOutOfOrder { .. })));
     }
 
     #[test]

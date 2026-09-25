@@ -33,7 +33,8 @@ use super::features::{
 };
 use super::model::{Prediction, RoutingModel};
 use super::model_identity::{
-    CommitId, ModelCheckpoint, ModelCommit, ModelEnsemble, ModelId, ReplayError,
+    validate_replay_sample, CommitId, ModelCheckpoint, ModelCommit, ModelEnsemble, ModelId,
+    ReplayError,
 };
 use super::reward::{PredictionBundle, UtilityBreakdown};
 use crate::config::ModelTier;
@@ -337,73 +338,330 @@ pub trait EnsemblePredictor: Send + Sync {
 }
 
 /// Production [`EnsemblePredictor`]: an immutable [`ModelEnsemble`] snapshot
-/// pinned to a [`CommitId`].
+/// pinned to a complete, verified [`ModelCommit`].
 pub struct ModelEnsemblePredictor {
     ensemble: Arc<ModelEnsemble>,
-    commit: CommitId,
+    commit: ModelCommit,
+    /// Ordered training payload retained to rebuild a canonical lineage from
+    /// genesis. It is never exposed as a mutable journal and is used only by
+    /// this predictor's train/swap seam.
+    history: Option<Vec<DatasetTrainingSample>>,
+    /// Verified commit records from the known root through the held commit.
+    lineage: Vec<ModelCommit>,
 }
+
+type TrainingLineageResult = Result<
+    (
+        ModelEnsemble,
+        ModelCommit,
+        Option<Vec<DatasetTrainingSample>>,
+        Vec<ModelCommit>,
+    ),
+    ReplayError,
+>;
 
 impl ModelEnsemblePredictor {
     /// The genesis predictor: a cold-start ensemble committed as the root of
-    /// the "shadow" model lineage.
-    ///
-    /// The commit id is derived from the checkpoint content hash, so two
-    /// genesis predictors always share the same (deterministic) commit id.
+    /// the `shadow` model lineage.
     pub fn genesis() -> Self {
         let ensemble = ModelEnsemble::new();
-        let commit = ModelCommit::new(ModelId::new("shadow"), ensemble.save_all(), None, 0);
-        Self {
-            ensemble: Arc::new(ensemble),
-            commit: commit.commit_id,
-        }
+        let checkpoint = ensemble.save_all();
+        let commit = ModelCommit::new(ModelId::new("shadow"), checkpoint, None, 0);
+        Self::from_verified_parts(
+            ensemble,
+            commit.clone(),
+            Some(Vec::new()),
+            vec![commit],
+        )
+        .expect("the deterministic shadow genesis commit must verify")
     }
 
-    /// Build a predictor from a checkpoint and its commit id.
+    /// Compatibility constructor for a root shadow commit.
     ///
-    /// Returns [`ReplayError`] when the checkpoint cannot be loaded — the
-    /// commit id and the ensemble must never disagree, so a corrupt or
-    /// foreign checkpoint surfaces as a `Result` (the caller keeps running
-    /// on its previous predictor) instead of a panic.
+    /// A checkpoint alone cannot describe a child lineage, so this method
+    /// accepts only the canonical root `shadow` commit. New callers loading a
+    /// child should use [`Self::from_model_commit`], which verifies the full
+    /// model/schema/parent/lineage record.
     pub fn from_commit(checkpoint: &ModelCheckpoint, commit: CommitId) -> Result<Self, ReplayError> {
+        // Load first so malformed state gets the detailed loader error rather
+        // than being hidden behind a generic id mismatch.
         let ensemble = ModelEnsemble::load_all(checkpoint)?;
+        let expected = ModelCommit::new(
+            ModelId::new("shadow"),
+            checkpoint.clone(),
+            None,
+            0,
+        );
+        if expected.commit_id != commit {
+            return Err(ReplayError::CommitMismatch {
+                expected: expected.commit_id,
+                actual: commit,
+            });
+        }
+        Self::from_verified_parts(
+            ensemble,
+            expected.clone(),
+            Some(Vec::new()),
+            vec![expected],
+        )
+    }
+
+    /// Build a predictor from a complete immutable commit record.
+    pub fn from_model_commit(commit: &ModelCommit) -> Result<Self, ReplayError> {
+        if !commit.verify() {
+            return Err(ReplayError::InvalidCommit {
+                commit_id: commit.commit_id.clone(),
+                reason: "predictor received an unverified commit".to_string(),
+            });
+        }
+        Self::from_verified_parts(
+            ModelEnsemble::load_all(&commit.checkpoint)?,
+            commit.clone(),
+            None,
+            vec![commit.clone()],
+        )
+    }
+
+    /// Alias emphasizing that the input has already passed the artifact
+    /// boundary but is still checked again at this predictor boundary.
+    pub fn from_verified_commit(commit: &ModelCommit) -> Result<Self, ReplayError> {
+        Self::from_model_commit(commit)
+    }
+
+    fn from_verified_parts(
+        ensemble: ModelEnsemble,
+        commit: ModelCommit,
+        history: Option<Vec<DatasetTrainingSample>>,
+        lineage: Vec<ModelCommit>,
+    ) -> Result<Self, ReplayError> {
+        if !commit.verify() {
+            return Err(ReplayError::InvalidCommit {
+                commit_id: commit.commit_id,
+                reason: "predictor received an unverified commit".to_string(),
+            });
+        }
+        let held_checkpoint = ensemble.save_all();
+        if held_checkpoint.content_hash() != commit.checkpoint.content_hash() {
+            return Err(ReplayError::CommitMismatch {
+                expected: commit.commit_id,
+                actual: CommitId::from_hash(held_checkpoint.content_hash()),
+            });
+        }
+        if lineage.last().map(|entry| entry.commit_id.clone()) != Some(commit.commit_id.clone()) {
+            return Err(ReplayError::InvalidCommit {
+                commit_id: commit.commit_id,
+                reason: "retained lineage does not end at the held commit".to_string(),
+            });
+        }
+        if lineage.iter().any(|entry| !entry.verify()) {
+            return Err(ReplayError::InvalidCommit {
+                commit_id: commit.commit_id,
+                reason: "retained lineage contains an unverified commit".to_string(),
+            });
+        }
+        for pair in lineage.windows(2) {
+            if pair[1].parent.as_ref() != Some(&pair[0].commit_id) {
+                return Err(ReplayError::InvalidCommit {
+                    commit_id: pair[1].commit_id.clone(),
+                    reason: "retained parent link is inconsistent".to_string(),
+                });
+            }
+        }
         Ok(Self {
             ensemble: Arc::new(ensemble),
             commit,
+            history,
+            lineage,
         })
     }
 
-    /// Pure training: clone the current ensemble state (through a checkpoint
-    /// round-trip), apply `samples`, and return the new ensemble with its
-    /// commit id. NEVER mutates `self`.
-    ///
-    /// The new commit's parent is the current commit, so repeated `train`
-    /// calls build a deterministic chain equivalent to replaying all samples
-    /// from genesis.
+    /// Pure training: clone the current verified ensemble, apply samples in
+    /// order, and retain the complete commit/parent/checkpoint lineage.
     pub fn train(&self, samples: &[DatasetTrainingSample]) -> (ModelEnsemble, CommitId) {
-        // ModelEnsemble is not Clone — clone through a checkpoint round-trip.
-        let checkpoint = self.ensemble.save_all();
-        let mut ensemble =
-            ModelEnsemble::load_all(&checkpoint).expect("shadow ensemble checkpoint is loadable");
+        self.try_train(samples)
+            .map(|(ensemble, commit)| (ensemble, commit.commit_id))
+            .expect("shadow training received an invalid sample")
+    }
+
+    /// Fallible training boundary used by swap-capable callers.
+    pub fn try_train(
+        &self,
+        samples: &[DatasetTrainingSample],
+    ) -> Result<(ModelEnsemble, ModelCommit), ReplayError> {
+        self.try_train_with_history(samples)
+            .map(|(ensemble, commit, _, _)| (ensemble, commit))
+    }
+
+    /// Training implementation that also returns the ordered payload retained
+    /// by the predictor. `Some(history)` means the predictor owns a complete
+    /// genesis-rebuildable lineage; `None` means the caller supplied only a
+    /// child checkpoint and the current commit must remain the parent.
+    fn try_train_with_history(
+        &self,
+        samples: &[DatasetTrainingSample],
+    ) -> TrainingLineageResult {
+        for sample in samples {
+            if sample.schema_version != FEATURE_SCHEMA_VERSION {
+                return Err(ReplayError::UnsupportedSchema {
+                    component: "shadow training sample".to_string(),
+                    version: sample.schema_version,
+                    supported: FEATURE_SCHEMA_VERSION,
+                });
+            }
+            validate_replay_sample(sample).map_err(|reason| ReplayError::InvalidEvent {
+                event_id: "shadow-train".to_string(),
+                reason,
+            })?;
+        }
+
+        if let Some(previous_history) = &self.history {
+            let expected_lineage_len = self
+                .commit
+                .learning_event_count
+                .checked_add(1)
+                .ok_or_else(|| ReplayError::InvalidCommit {
+                    commit_id: self.commit.commit_id.clone(),
+                    reason: "retained lineage count overflow".to_string(),
+                })?;
+            if previous_history.len() as u64 != self.commit.learning_event_count
+                || self.lineage.len() as u64 != expected_lineage_len
+            {
+                return Err(ReplayError::InvalidCommit {
+                    commit_id: self.commit.commit_id.clone(),
+                    reason: "retained history and commit count disagree".to_string(),
+                });
+            }
+            let mut history = previous_history.clone();
+            history.extend_from_slice(samples);
+            if history.is_empty() {
+                return Ok((
+                    ModelEnsemble::load_all(&self.commit.checkpoint)?,
+                    self.commit.clone(),
+                    Some(history),
+                    self.lineage.clone(),
+                ));
+            }
+
+            let mut ensemble = ModelEnsemble::new();
+            let mut commit = ModelCommit::new(
+                self.commit.model_id.clone(),
+                ensemble.save_all(),
+                None,
+                0,
+            );
+            let mut lineage = vec![commit.clone()];
+            for sample in &history {
+                ensemble.update_all(sample);
+                let count = commit.learning_event_count.checked_add(1).ok_or_else(|| {
+                    ReplayError::InvalidCommit {
+                        commit_id: commit.commit_id.clone(),
+                        reason: "learning event count overflow".to_string(),
+                    }
+                })?;
+                commit = ModelCommit::new(
+                    self.commit.model_id.clone(),
+                    ensemble.save_all(),
+                    Some(commit.commit_id.clone()),
+                    count,
+                );
+                if !commit.verify() {
+                    return Err(ReplayError::InvalidCommit {
+                        commit_id: commit.commit_id,
+                        reason: "shadow training produced an invalid commit".to_string(),
+                    });
+                }
+                lineage.push(commit.clone());
+            }
+            return Ok((ensemble, commit, Some(history), lineage));
+        }
+
+        let mut ensemble = ModelEnsemble::load_all(&self.commit.checkpoint)?;
         for sample in samples {
             ensemble.update_all(sample);
         }
+        let count = self
+            .commit
+            .learning_event_count
+            .checked_add(samples.len() as u64)
+            .ok_or_else(|| ReplayError::InvalidCommit {
+                commit_id: self.commit.commit_id.clone(),
+                reason: "learning event count overflow".to_string(),
+            })?;
         let commit = ModelCommit::new(
-            ModelId::new("shadow"),
+            self.commit.model_id.clone(),
             ensemble.save_all(),
-            Some(self.commit.clone()),
-            samples.len() as u64,
+            Some(self.commit.commit_id.clone()),
+            count,
         );
-        (ensemble, commit.commit_id)
+        if !commit.verify() {
+            return Err(ReplayError::InvalidCommit {
+                commit_id: commit.commit_id,
+                reason: "shadow training produced an invalid commit".to_string(),
+            });
+        }
+        let lineage = vec![self.commit.clone(), commit.clone()];
+        Ok((ensemble, commit, None, lineage))
     }
 
-    /// Checkpoint of the held ensemble snapshot.
+    /// Return a fully verified predictor for an already trained ensemble and
+    /// commit. This is the only path used by `ShadowEngine` when swapping.
+    fn from_trained_parts(
+        ensemble: ModelEnsemble,
+        commit: ModelCommit,
+        history: Option<Vec<DatasetTrainingSample>>,
+        lineage: Vec<ModelCommit>,
+    ) -> Result<Self, ReplayError> {
+        Self::from_verified_parts(ensemble, commit, history, lineage)
+    }
+
+    /// Verify the held commit and checkpoint.
+    pub fn verify(&self) -> bool {
+        self.commit.verify()
+            && self.ensemble.save_all().content_hash() == self.commit.checkpoint.content_hash()
+    }
+
+    /// Checkpoint retained by the verified commit.
     pub fn ensemble_checkpoint(&self) -> ModelCheckpoint {
-        self.ensemble.save_all()
+        self.commit.checkpoint.clone()
     }
 
     /// Commit id of the held ensemble snapshot.
     pub fn commit(&self) -> CommitId {
+        self.commit.commit_id.clone()
+    }
+
+    /// Complete commit record retained by this predictor.
+    pub fn commit_record(&self) -> ModelCommit {
         self.commit.clone()
+    }
+
+    /// Parent of the held commit, if it is not a root.
+    pub fn parent(&self) -> Option<CommitId> {
+        self.commit.parent.clone()
+    }
+
+    /// Full verified parent record when it is retained locally.
+    pub fn parent_record(&self) -> Option<ModelCommit> {
+        if self.lineage.len() < 2 {
+            None
+        } else {
+            self.lineage.get(self.lineage.len() - 2).cloned()
+        }
+    }
+
+    /// Ordered verified commit records retained by this predictor.
+    pub fn lineage(&self) -> Vec<ModelCommit> {
+        self.lineage.clone()
+    }
+
+    /// Number of ordered training samples retained for genesis replay.
+    pub fn history_len(&self) -> usize {
+        self.history.as_ref().map_or(0, Vec::len)
+    }
+
+    /// Checkpoint alias for callers that treat the predictor as a snapshot.
+    pub fn checkpoint(&self) -> ModelCheckpoint {
+        self.ensemble_checkpoint()
     }
 }
 
@@ -420,7 +678,7 @@ impl EnsemblePredictor for ModelEnsemblePredictor {
     }
 
     fn commit_id(&self) -> CommitId {
-        self.commit.clone()
+        self.commit.commit_id.clone()
     }
 }
 
@@ -642,16 +900,56 @@ impl ShadowEngine {
     /// Advance the shadow ensemble (TEST/7E-2 seam — NOT wired to production
     /// outcomes in 7E-1).
     ///
-    /// Trains a copy of the current ensemble, swaps the predictor in under
-    /// the write lock, and returns the new commit id.
+    /// The compatibility wrapper panics before swapping if a sample is
+    /// invalid; operational callers should use [`Self::try_train`] to handle
+    /// the error without touching the predictor.
     pub fn train(&self, samples: &[DatasetTrainingSample]) -> CommitId {
+        self.try_train(samples)
+            .expect("shadow training received an invalid sample")
+    }
+
+    /// Fallible training and atomic predictor swap. The new predictor retains
+    /// the complete verified commit, its parent, and its checkpoint.
+    pub fn try_train(&self, samples: &[DatasetTrainingSample]) -> Result<CommitId, ReplayError> {
         let current = crate::sync::read(&self.predictor).clone();
-        let (ensemble, commit) = current.train(samples);
-        *crate::sync::write(&self.predictor) = Arc::new(ModelEnsemblePredictor {
-            ensemble: Arc::new(ensemble),
-            commit: commit.clone(),
-        });
-        commit
+        let (ensemble, commit, history, lineage) = current.try_train_with_history(samples)?;
+        let predictor = ModelEnsemblePredictor::from_trained_parts(
+            ensemble,
+            commit.clone(),
+            history,
+            lineage,
+        )?;
+        let commit_id = predictor.commit();
+        *crate::sync::write(&self.predictor) = Arc::new(predictor);
+        Ok(commit_id)
+    }
+
+    /// Swap in an already verified predictor while retaining its lineage.
+    pub fn swap(&self, predictor: ModelEnsemblePredictor) -> Result<CommitId, ReplayError> {
+        if !predictor.verify() {
+            return Err(ReplayError::InvalidCommit {
+                commit_id: predictor.commit(),
+                reason: "refusing to swap an unverified predictor".to_string(),
+            });
+        }
+        let commit_id = predictor.commit();
+        *crate::sync::write(&self.predictor) = Arc::new(predictor);
+        Ok(commit_id)
+    }
+
+    /// Complete commit currently pinned by the predictor.
+    pub fn predictor_commit(&self) -> ModelCommit {
+        crate::sync::read(&self.predictor).commit_record()
+    }
+
+    /// Checkpoint currently pinned by the predictor.
+    pub fn predictor_checkpoint(&self) -> ModelCheckpoint {
+        crate::sync::read(&self.predictor).ensemble_checkpoint()
+    }
+
+    /// Verified commit lineage currently retained by the predictor.
+    pub fn predictor_lineage(&self) -> Vec<ModelCommit> {
+        crate::sync::read(&self.predictor).lineage()
     }
 
     /// Full shadow evaluation for one request.
@@ -1312,10 +1610,15 @@ mod tests {
             ensemble.update_all(sample);
         }
         let checkpoint = ensemble.save_all();
-        let commit = CommitId::from_hash(checkpoint.content_hash());
-        let predictor = ModelEnsemblePredictor::from_commit(&checkpoint, commit.clone())
-            .expect("round-trip checkpoint must load");
-        assert_eq!(predictor.commit(), commit);
+        let commit = ModelCommit::new(
+            ModelId::new("shadow"),
+            checkpoint.clone(),
+            None,
+            0,
+        );
+        let predictor = ModelEnsemblePredictor::from_model_commit(&commit)
+            .expect("round-trip commit must load");
+        assert_eq!(predictor.commit(), commit.commit_id);
 
         let features = features(0.5);
         let expected = ensemble.success.predict(&features);

@@ -275,3 +275,226 @@ fn gate_e0_full_lifecycle() {
     assert!(checked_out.verify());
     assert_eq!(checked_out.feature_schema_version, FEATURE_SCHEMA_VERSION);
 }
+
+// ---------------------------------------------------------------------------
+// Gate 7E-1A — verified identity, lineage, and replay
+// ---------------------------------------------------------------------------
+
+#[test]
+fn gate_7e1a_canonical_identity_includes_model_schema_parent_and_lineage() {
+    let checkpoint = ModelEnsemble::new().save_all();
+    let root = ModelCommit::new(ModelId::new("ensemble-a"), checkpoint.clone(), None, 0);
+    let other_model = ModelCommit::new(ModelId::new("ensemble-b"), checkpoint.clone(), None, 0);
+    assert_ne!(root.commit_id, other_model.commit_id);
+
+    let parent = ModelCommit::new(ModelId::new("ensemble-a"), checkpoint.clone(), None, 0);
+    let child = ModelCommit::new(
+        ModelId::new("ensemble-a"),
+        checkpoint.clone(),
+        Some(parent.commit_id.clone()),
+        1,
+    );
+    assert_ne!(root.commit_id, child.commit_id);
+
+    let longer_lineage = ModelCommit::new(
+        ModelId::new("ensemble-a"),
+        checkpoint,
+        Some(parent.commit_id),
+        2,
+    );
+    assert_ne!(child.commit_id, longer_lineage.commit_id);
+
+    let tagged_a = ModelCommit::new_with_lineage(
+        ModelId::new("ensemble-a"),
+        ModelEnsemble::new().save_all(),
+        None,
+        0,
+        11,
+    );
+    let tagged_b = ModelCommit::new_with_lineage(
+        ModelId::new("ensemble-a"),
+        ModelEnsemble::new().save_all(),
+        None,
+        0,
+        12,
+    );
+    assert_ne!(tagged_a.commit_id, tagged_b.commit_id);
+    assert!(tagged_a.verify() && tagged_b.verify());
+
+    let mut other_schema = ModelEnsemble::new().save_all();
+    other_schema.feature_schema_version = FEATURE_SCHEMA_VERSION + 1;
+    let schema_commit = ModelCommit::new(ModelId::new("ensemble-a"), other_schema, None, 0);
+    assert_ne!(root.commit_id, schema_commit.commit_id);
+    assert!(!schema_commit.verify());
+}
+
+#[test]
+fn gate_7e1a_model_store_uses_content_addressed_ids() {
+    let checkpoint = ModelEnsemble::new().save_all();
+    let expected = ModelCommit::new(ModelId::new("ensemble"), checkpoint.clone(), None, 0);
+    let mut store = ModelStore::new();
+    let id = store.try_commit(checkpoint.clone(), "root".into()).unwrap();
+    assert_eq!(id, expected.commit_id);
+    assert!(!id.as_str().starts_with("cmt-"));
+    assert!(store.checkout_commit(&id).unwrap().verify());
+
+    let child = store.try_commit(checkpoint, "child".into()).unwrap();
+    assert_ne!(child, id);
+    assert_eq!(store.log_checked().unwrap().len(), 2);
+}
+
+#[test]
+fn gate_7e1a_replay_composition_and_commit_determinism() {
+    let events = make_events(6);
+    let full = ReplayEngine::replay_commit(&events, None).unwrap();
+    let first = ReplayEngine::replay_commit(&events[..3], None).unwrap();
+    let staged = ReplayEngine::replay_commit(&events[3..], Some(&first)).unwrap();
+    assert_eq!(full.commit_id, staged.commit_id);
+    assert_eq!(full.checkpoint.content_hash(), staged.checkpoint.content_hash());
+
+    let repeated = ReplayEngine::replay_commit(&events, None).unwrap();
+    assert_eq!(full.commit_id, repeated.commit_id);
+    assert!(full.verify());
+}
+
+#[test]
+fn gate_7e1a_replay_rejects_wrong_model_parent_result_and_order() {
+    let mut wrong_model = make_events(2);
+    wrong_model[1].model_id = ModelId::new("other-model");
+    assert!(matches!(
+        ReplayEngine::replay_commit(&wrong_model, None),
+        Err(ReplayError::EventModelMismatch { .. })
+    ));
+
+    let mut wrong_parent = make_events(1);
+    wrong_parent[0].parent_commit = Some(CommitId::new("deadbeef"));
+    assert!(matches!(
+        ReplayEngine::replay_commit(&wrong_parent, None),
+        Err(ReplayError::EventParentMismatch { .. })
+    ));
+
+    let mut wrong_result = make_events(1);
+    let expected = ReplayEngine::replay_commit(&wrong_result, None).unwrap();
+    wrong_result[0].result_commit = Some(CommitId::new("0123456789abcdef"));
+    assert_ne!(wrong_result[0].result_commit.as_ref(), Some(&expected.commit_id));
+    assert!(matches!(
+        ReplayEngine::replay_commit(&wrong_result, None),
+        Err(ReplayError::EventResultMismatch { .. })
+    ));
+
+    let mut reversed = make_events(2);
+    reversed.reverse();
+    assert!(matches!(
+        ReplayEngine::replay_commit(&reversed, None),
+        Err(ReplayError::EventOutOfOrder { .. })
+    ));
+}
+
+#[test]
+fn gate_7e1a_corrupt_checkpoint_event_and_lineage_fail_closed() {
+    let events = make_events(1);
+    let mut corrupt_checkpoint = ModelEnsemble::new().save_all();
+    corrupt_checkpoint.success.parameters[0] = 12345.0;
+    assert!(matches!(
+        ReplayEngine::replay(&events, Some(&corrupt_checkpoint)),
+        Err(ReplayError::ChecksumMismatch { .. })
+    ));
+
+    let mut wrong_algorithm = ModelEnsemble::new().save_all();
+    wrong_algorithm.latency.algorithm = "unknown_algorithm".to_string();
+    assert!(!wrong_algorithm.verify());
+
+    let mut corrupt_event = make_events(1);
+    corrupt_event[0].samples[0].features.values[0] = f32::NAN;
+    assert!(matches!(
+        ReplayEngine::replay_commit(&corrupt_event, None),
+        Err(ReplayError::InvalidEvent { .. })
+    ));
+
+    let mut corrupt_target = make_events(1);
+    corrupt_target[0].samples[0].targets.cost = Some(f64::NAN);
+    assert!(matches!(
+        ReplayEngine::replay_commit(&corrupt_target, None),
+        Err(ReplayError::InvalidEvent { .. })
+    ));
+
+    let root = ModelCommit::new(
+        ModelId::new("ensemble"),
+        ModelEnsemble::new().save_all(),
+        None,
+        0,
+    );
+    let mut store = ModelStore::new();
+    store.try_insert_commit(root.clone(), "root".into()).unwrap();
+    let mut child = ModelCommit::new(
+        ModelId::new("ensemble"),
+        ModelEnsemble::new().save_all(),
+        Some(root.commit_id.clone()),
+        1,
+    );
+    child.parent = Some(CommitId::new("aaaaaaaaaaaaaaaa"));
+    assert!(matches!(
+        store.try_insert_commit(child, "tampered".into()),
+        Err(ReplayError::InvalidCommit { .. })
+    ));
+
+    let orphan = ModelCommit::new(
+        ModelId::new("ensemble"),
+        ModelEnsemble::new().save_all(),
+        Some(CommitId::new("0123456789abcdef")),
+        1,
+    );
+    assert!(matches!(
+        store.try_insert_commit(orphan, "orphan".into()),
+        Err(ReplayError::LineageCorrupt { .. })
+    ));
+}
+
+#[test]
+fn gate_7e1a_unknown_schema_versions_are_not_reinterpreted() {
+    let mut checkpoint = ModelEnsemble::new().save_all();
+    checkpoint.feature_schema_version = FEATURE_SCHEMA_VERSION + 1;
+    let events = make_events(1);
+    assert!(matches!(
+        ReplayEngine::replay(&events, Some(&checkpoint)),
+        Err(ReplayError::UnsupportedSchema { .. })
+    ));
+
+    let mut event = make_events(1);
+    event[0].samples[0].schema_version = FEATURE_SCHEMA_VERSION + 1;
+    assert!(matches!(
+        ReplayEngine::replay_commit(&event, None),
+        Err(ReplayError::UnsupportedSchema { .. })
+    ));
+}
+
+#[test]
+fn gate_7e1a_strict_replay_requires_explicit_result_lineage() {
+    let events = make_events(1);
+    assert!(matches!(
+        ReplayEngine::replay_verified(&events, None),
+        Err(ReplayError::EventResultMissing { .. })
+    ));
+}
+
+#[test]
+fn gate_7e1a_verified_replay_accepts_explicit_parent_result_chain() {
+    let mut events = make_events(2);
+    let first = ReplayEngine::replay_commit(&events[..1], None).unwrap();
+    events[0].result_commit = Some(first.commit_id.clone());
+    let second = ReplayEngine::replay_commit(&events[1..], Some(&first)).unwrap();
+    events[1].parent_commit = Some(first.commit_id.clone());
+    events[1].result_commit = Some(second.commit_id.clone());
+
+    let replayed = ReplayEngine::replay_verified(&events, None).unwrap();
+    assert_eq!(replayed.commit_id, second.commit_id);
+    assert!(replayed.verify());
+}
+
+#[test]
+fn gate_7e1a_volatile_event_metadata_does_not_change_commit() {
+    let first = ReplayEngine::replay_commit(&make_events(4), None).unwrap();
+    let second = ReplayEngine::replay_commit(&make_events(4), None).unwrap();
+    assert_eq!(first.commit_id, second.commit_id);
+    assert_eq!(first.checkpoint.content_hash(), second.checkpoint.content_hash());
+}

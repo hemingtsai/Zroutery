@@ -23,7 +23,9 @@ use zroutery_core::ml::features::{
     RoutingFeatures, FEATURE_DIMENSION, FEATURE_SCHEMA_VERSION,
 };
 use zroutery_core::ml::model::ModelState;
-use zroutery_core::ml::model_identity::{CommitId, ReplayError};
+use zroutery_core::ml::model_identity::{
+    CommitId, ModelCheckpoint, ModelCommit, ModelEnsemble, ModelId, ReplayError,
+};
 use zroutery_core::ml::reward::{PredictionBundle, RewardPolicy};
 use zroutery_core::ml::shadow::{
     EnsemblePredictor, ModelEnsemblePredictor, ShadowCandidateInput, ShadowEngine, ShadowInput,
@@ -354,7 +356,10 @@ fn invalid_model_state_falls_back() {
     let err = ModelEnsemblePredictor::from_commit(&checkpoint, CommitId::new("bogus"))
         .err()
         .expect("a stale checksum must fail construction");
-    assert!(matches!(err, ReplayError::IncompatibleState { .. }));
+    assert!(matches!(
+        err,
+        ReplayError::IncompatibleState { .. } | ReplayError::ChecksumMismatch { .. }
+    ));
 
     // A valid checkpoint still loads, and the engine is unaffected by the
     // rejected ones: it keeps evaluating on its own predictor.
@@ -543,6 +548,25 @@ fn same_commit_same_checksum_via_replay() {
 
 /// GATE 7E-1 (determinism): training materially changes the commit and the
 /// decision for an input whose feature regions were trained.
+#[test]
+fn same_ordered_training_events_same_commit_and_decision_checksum() {
+    let samples = training_samples(0..12);
+    let first = engine();
+    let second = engine();
+    let first_commit = first.train(&samples);
+    let second_commit = second.train(&samples);
+    assert_eq!(first_commit, second_commit);
+
+    let input = default_shadow_input();
+    let first_decision = first.evaluate("req-same-events", &input).unwrap();
+    let second_decision = second.evaluate("req-same-events", &input).unwrap();
+    assert_eq!(
+        first_decision.decision_input_checksum,
+        second_decision.decision_input_checksum
+    );
+    assert_eq!(first_decision.decision_checksum, second_decision.decision_checksum);
+}
+
 #[test]
 fn distinct_commits_distinct_decisions() {
     let engine = engine();
@@ -935,4 +959,81 @@ fn production_shadow_path_touches_no_session_or_account_state() {
             );
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Gate 7E-1A — predictor identity and checkpoint lineage
+// ---------------------------------------------------------------------------
+
+#[test]
+fn predictor_rejects_wrong_checkpoint_commit_pairing() {
+    let first = ModelEnsemblePredictor::genesis();
+    let mut other_ensemble = ModelEnsemble::new();
+    other_ensemble.update_all(&training_samples(0..1)[0]);
+    let other_checkpoint = other_ensemble.save_all();
+    let other_commit = ModelCommit::new(
+        ModelId::new("shadow"),
+        other_checkpoint.clone(),
+        None,
+        0,
+    );
+
+    let error = ModelEnsemblePredictor::from_commit(
+        &other_checkpoint,
+        first.commit(),
+    )
+    .err()
+    .expect("a valid checkpoint paired with a foreign commit must fail");
+    assert!(matches!(error, ReplayError::CommitMismatch { .. }));
+
+    // The full-record constructor is the supported path for child commits.
+    assert!(ModelEnsemblePredictor::from_model_commit(&other_commit).is_ok());
+}
+
+#[test]
+fn predictor_train_and_swap_retain_verified_lineage() {
+    let engine = engine();
+    let root = engine.predictor_commit();
+    assert_eq!(root.parent, None);
+    assert!(root.verify());
+    assert_eq!(
+        engine.predictor_checkpoint().content_hash(),
+        root.checkpoint.content_hash()
+    );
+
+    let first_id = engine.train(&training_samples(0..2));
+    let first = engine.predictor_commit();
+    assert_eq!(first.commit_id, first_id);
+    let parent = engine
+        .predictor_lineage()
+        .into_iter()
+        .find(|entry| Some(entry.commit_id.clone()) == first.parent)
+        .expect("the retained lineage must include the parent commit");
+    assert!(parent.verify());
+    assert_eq!(first.learning_event_count, 2);
+    assert_eq!(first.checkpoint.content_hash(), engine.predictor_checkpoint().content_hash());
+
+    let predictor = ModelEnsemblePredictor::from_model_commit(&first).unwrap();
+    let (ensemble, second) = predictor.try_train(&training_samples(2..4)).unwrap();
+    let replacement = ModelEnsemblePredictor::from_model_commit(&second).unwrap();
+    assert_eq!(replacement.parent(), Some(first.commit_id.clone()));
+    assert_eq!(replacement.checkpoint().content_hash(), ensemble.save_all().content_hash());
+    assert_eq!(engine.swap(replacement).unwrap(), second.commit_id);
+    assert_eq!(engine.predictor_commit().parent, Some(first.commit_id));
+    assert!(engine.predictor_commit().verify());
+}
+
+#[test]
+fn predictor_rejects_corrupt_full_commit_record() {
+    let predictor = ModelEnsemblePredictor::genesis();
+    let mut commit = predictor.commit_record();
+    commit.checkpoint.success.parameters[0] = 999.0;
+    let error = ModelEnsemblePredictor::from_model_commit(&commit)
+        .err()
+        .expect("a tampered full commit must fail closed");
+    assert!(matches!(error, ReplayError::InvalidCommit { .. }));
+
+    let mut checkpoint: ModelCheckpoint = predictor.checkpoint();
+    checkpoint.feature_schema_version = FEATURE_SCHEMA_VERSION + 1;
+    assert!(ModelEnsemblePredictor::from_commit(&checkpoint, predictor.commit()).is_err());
 }
