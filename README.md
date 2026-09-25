@@ -340,6 +340,8 @@ crates/zroutery-core/     协议转换、模型注册表、路由、计费、预
   src/server/mod.rs       axum 路由、鉴权、请求体上限、CORS、选举执行
   src/server/pipeline.rs  单次请求的候选轮询、计费记账、SSE 管道
   src/sync.rs             容忍中毒的锁封装（一个线程 panic 不该拖垮整个代理）
+  src/account/            可选账号子系统（feature = "account"）：额度/用量/限流状态与 provider trait
+    adapters/newapi.rs    NewAPI 面板适配器（feature = "newapi"）：登录态与令牌、额度、用量、签到、健康检查（尚未接入桌面外壳的配置与界面）
 src-tauri/                桌面外壳：菜单栏、钥匙串、配置持久化、Tauri 命令
 ui/                       React + TypeScript 仪表盘
 scripts/smoke_test.py     端到端冒烟测试（假 provider → 真二进制 → 真 HTTP）
