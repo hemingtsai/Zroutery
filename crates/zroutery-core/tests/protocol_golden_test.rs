@@ -1229,19 +1229,21 @@ fn cross_protocol_anthropic_thinking_to_openai_reasoning() {
     });
 
     let ir = anthropic::decode_request(anthropic_req).unwrap();
-    // Encode to OpenAI — thinking becomes reasoning_content.
-    let openai_req = openai::encode_request(&ir, "deepseek-r1").unwrap();
+    // OpenAI cannot represent Anthropic signed thinking in this projection;
+    // the fail-closed default must reject it instead of silently dropping it.
+    assert!(openai::encode_request(&ir, "deepseek-r1").is_err());
+
+    let mut placeholder = ir.clone();
+    placeholder.unsupported_content_policy = UnsupportedContentPolicy::Placeholder;
+    let openai_req = openai::encode_request(&placeholder, "deepseek-r1").unwrap();
     let messages = openai_req["messages"].as_array().unwrap();
     let assistant = messages
         .iter()
         .find(|m| m["role"] == "assistant")
         .unwrap();
-    // Note: The OpenAI encoder echoes reasoning only for OpenAI-sourced requests
-    // (source_dialect == OpenAI). For Anthropic-sourced, thinking blocks are
-    // dropped in assistant messages. So content should just be the text.
     let content = assistant["content"].as_str().unwrap();
-    assert_eq!(content, "Final answer.");
-    // reasoning_content should not be present since source_dialect is Anthropic.
+    assert!(content.contains("Unsupported"));
+    assert!(content.contains("Final answer."));
     assert!(assistant.get("reasoning_content").is_none());
 }
 

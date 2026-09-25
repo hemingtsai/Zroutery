@@ -26,9 +26,10 @@ impl Replacement {
 /// Replace the image at `slot` in the request with `replacement`.
 ///
 /// The block's neighbours, cache markers on the surrounding structure and the
-/// rest of the message are untouched — a swap, not a rewrite. Returns false
-/// when the slot no longer matches an image (the request changed underneath),
-/// which the caller treats as "nothing replaced".
+/// rest of the message are untouched — a swap, not a rewrite. A successful
+/// replacement also refreshes the request-derived capability evidence. Returns
+/// false when the slot no longer matches an image (the request changed
+/// underneath), which the caller treats as "nothing replaced".
 pub fn replace(req: &mut ChatRequest, slot: &ImageSlot, replacement: &Replacement) -> bool {
     let (message_index, block_index) = match slot {
         ImageSlot::Message { message_index, block_index }
@@ -36,7 +37,7 @@ pub fn replace(req: &mut ChatRequest, slot: &ImageSlot, replacement: &Replacemen
     };
     let Some(message) = req.messages.get_mut(message_index) else { return false };
 
-    match slot {
+    let replaced = match slot {
         ImageSlot::Message { .. } => {
             let Some(block) = message.content.get_mut(block_index) else { return false };
             if !matches!(block, ContentBlock::Image { .. }) {
@@ -57,13 +58,19 @@ pub fn replace(req: &mut ChatRequest, slot: &ImageSlot, replacement: &Replacemen
             };
             true
         }
+    };
+    if replaced {
+        // A replacement is a real remediation: the image requirement is no
+        // longer present in the transformed request.
+        req.refresh_required_capabilities();
     }
+    replaced
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::{Dialect, MediaSource, Message, Role};
+    use crate::ir::{Capability, Dialect, MediaSource, Message, Role};
 
     #[test]
     fn replaces_message_images_keeping_cache_markers() {
@@ -77,8 +84,11 @@ mod tests {
                 ContentBlock::text("what is this"),
             ],
         });
+        req.refresh_required_capabilities();
+        assert!(req.required_capabilities.contains(&Capability::Vision));
         let slot = ImageSlot::Message { message_index: 0, block_index: 0 };
         assert!(replace(&mut req, &slot, &Replacement::Description("a cat".into())));
+        assert!(!req.required_capabilities.contains(&Capability::Vision));
         assert_eq!(req.messages[0].content[0], ContentBlock::text("[Image description: a cat]"));
         assert_eq!(req.messages[0].content[1], ContentBlock::text("what is this"));
     }

@@ -11,7 +11,10 @@ use serde_json::{json, Map, Value};
 
 use super::apply_content_policy;
 use super::reasoning_bridge;
-use super::{SseFrame, StreamEncoder, StreamParser};
+use super::{
+    explicit_placeholder, unsupported_content, unsupported_upstream_content, SseFrame,
+    StreamEncoder, StreamParser,
+};
 use crate::error::{Error, Result};
 use crate::ir::{
     ChatRequest, ChatResponse, ContentBlock, Dialect, MediaSource, Message, Role, StopReason,
@@ -35,20 +38,37 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
         Some(Value::String(s)) => req.system.push(SystemPart::new(s.clone())),
         Some(Value::Array(parts)) => {
             for part in parts {
-                if let Some(text) = part.get("text").and_then(Value::as_str) {
+                if let Some(text) = part.as_str() {
                     req.system.push(SystemPart::new(text));
-                } else if let Some(text) = part.as_str() {
-                    req.system.push(SystemPart::new(text));
+                    continue;
                 }
+                let kind = part
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .unwrap_or("input_text");
+                if kind != "input_text" && kind != "text" {
+                    return Err(unsupported_content("instructions", Some(kind)));
+                }
+                let text = part
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| Error::invalid("instruction part is missing `text`"))?;
+                req.system.push(SystemPart::new(text));
             }
         }
-        _ => {}
+        None | Some(Value::Null) => {}
+        Some(_) => return Err(Error::invalid("`instructions` must be a string or an array")),
     }
 
-    if let Some(input) = obj.get("input").and_then(Value::as_array) {
-        for item in input {
-            decode_input_item(item, &mut req)?;
+    match obj.get("input") {
+        None | Some(Value::Null) => {}
+        Some(Value::String(text)) => req.messages.push(Message::user_text(text)),
+        Some(Value::Array(items)) => {
+            for item in items {
+                decode_input_item(item, &mut req)?;
+            }
         }
+        Some(_) => return Err(Error::invalid("`input` must be a string or an array")),
     }
 
     req.max_tokens = obj
@@ -77,49 +97,56 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
         }
     }
 
-    if let Some(tools) = obj.get("tools").and_then(Value::as_array) {
-        for t in tools {
-            let Some(name) = t.get("name").and_then(Value::as_str) else {
-                tracing::warn!("skipping tool definition without a `name` field");
-                continue;
-            };
-            req.tools.push(ToolDef {
-                name: name.to_string(),
-                description: t
-                    .get("description")
+    match obj.get("tools") {
+        None | Some(Value::Null) => {}
+        Some(Value::Array(tools)) => {
+            for t in tools {
+                let name = t
+                    .get("name")
                     .and_then(Value::as_str)
-                    .map(str::to_string),
-                input_schema: t
-                    .get("parameters")
-                    .cloned()
-                    .unwrap_or_else(|| json!({"type": "object"})),
-                cache_control: None,
-            });
+                    .ok_or_else(|| Error::invalid("tool definition is missing `name`"))?;
+                req.tools.push(ToolDef {
+                    name: name.to_string(),
+                    description: t
+                        .get("description")
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
+                    input_schema: t
+                        .get("parameters")
+                        .cloned()
+                        .unwrap_or_else(|| json!({"type": "object"})),
+                    cache_control: None,
+                });
+            }
         }
+        Some(_) => return Err(Error::invalid("`tools` must be an array")),
     }
 
     req.tool_choice = match obj.get("tool_choice") {
+        None | Some(Value::Null) => None,
         Some(Value::String(s)) => match s.as_str() {
             "auto" => Some(ToolChoice::Auto),
             "none" => Some(ToolChoice::None),
             "required" | "any" => Some(ToolChoice::Any),
-            _ => None,
+            other => return Err(unsupported_content("tool_choice", Some(other))),
         },
         Some(Value::Object(o)) => {
-            o.get("name")
+            let name = o
+                .get("name")
                 .and_then(Value::as_str)
-                .map(|n| ToolChoice::Specific {
-                    name: n.to_string(),
-                })
+                .ok_or_else(|| Error::invalid("tool_choice is missing `name`"))?;
+            Some(ToolChoice::Specific {
+                name: name.to_string(),
+            })
         }
-        _ => None,
+        Some(_) => return Err(Error::invalid("`tool_choice` must be a string or an object")),
     };
 
-    if let Some(effort) = obj
-        .get("reasoning")
-        .and_then(|r| r.get("effort"))
-        .and_then(Value::as_str)
-    {
+    if let Some(reasoning) = obj.get("reasoning") {
+        let effort = reasoning
+            .get("effort")
+            .and_then(Value::as_str)
+            .ok_or_else(|| Error::invalid("reasoning is missing `effort`"))?;
         req.thinking = Some(match effort {
             "none" | "minimal" => ThinkingConfig {
                 enabled: false,
@@ -129,118 +156,162 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
                 enabled: true,
                 budget_tokens: Some(1024),
             },
+            "medium" => ThinkingConfig {
+                enabled: true,
+                budget_tokens: Some(4096),
+            },
             "high" => ThinkingConfig {
                 enabled: true,
                 budget_tokens: Some(16384),
             },
-            _ => ThinkingConfig {
-                enabled: true,
-                budget_tokens: Some(4096),
-            },
+            other => return Err(unsupported_content("reasoning effort", Some(other))),
         });
     }
 
+    req.refresh_required_capabilities();
     Ok(req)
 }
 
+fn decode_tool_result_output(value: &Value) -> Result<Vec<ToolResultPart>> {
+    match value {
+        Value::String(text) => Ok(vec![ToolResultPart::Text { text: text.clone() }]),
+        Value::Array(parts) => parts
+            .iter()
+            .map(|part| {
+                let kind = part
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| Error::invalid("tool result part is missing `type`"))?;
+                match kind {
+                    "output_text" | "input_text" | "text" => Ok(ToolResultPart::Text {
+                        text: part
+                            .get("text")
+                            .and_then(Value::as_str)
+                            .ok_or_else(|| Error::invalid("tool result text part is missing `text`"))?
+                            .to_string(),
+                    }),
+                    "input_image" | "image" | "image_url" => {
+                        let source = if let Some(url) = part
+                            .pointer("/image_url/url")
+                            .and_then(Value::as_str)
+                        {
+                            MediaSource::from_url(url)
+                        } else if let Some(id) = part.get("file_id").and_then(Value::as_str) {
+                            MediaSource::Reference { id: id.to_string() }
+                        } else {
+                            return Err(Error::invalid(
+                                "tool result image is missing `image_url.url` or `file_id`",
+                            ));
+                        };
+                        Ok(ToolResultPart::Image { source })
+                    }
+                    other => Err(unsupported_content("tool result", Some(other))),
+                }
+            })
+            .collect(),
+        _ => Err(Error::invalid("tool result output must be a string or an array")),
+    }
+}
+
 fn decode_input_item(item: &Value, req: &mut ChatRequest) -> Result<()> {
-    let item_type = item.get("type").and_then(Value::as_str).unwrap_or("");
+    let item_type = item
+        .get("type")
+        .and_then(Value::as_str)
+        .ok_or_else(|| Error::invalid("input item is missing `type`"))?;
     match item_type {
         "function_call" => {
             let arguments = item
                 .get("arguments")
                 .and_then(Value::as_str)
-                .unwrap_or("{}");
+                .ok_or_else(|| Error::invalid("function_call is missing `arguments`"))?;
             let input =
                 serde_json::from_str(arguments).unwrap_or(Value::String(arguments.to_string()));
+            let id = item
+                .get("call_id")
+                .and_then(Value::as_str)
+                .ok_or_else(|| Error::invalid("function_call is missing `call_id`"))?;
+            let name = item
+                .get("name")
+                .and_then(Value::as_str)
+                .ok_or_else(|| Error::invalid("function_call is missing `name`"))?;
             req.messages.push(Message {
                 role: Role::Assistant,
                 content: vec![ContentBlock::ToolUse {
-                    id: item
-                        .get("call_id")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                        .to_string(),
-                    name: item
-                        .get("name")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                        .to_string(),
+                    id: id.to_string(),
+                    name: name.to_string(),
                     input,
                 }],
             });
         }
         "function_call_output" => {
+            let call_id = item
+                .get("call_id")
+                .and_then(Value::as_str)
+                .ok_or_else(|| Error::invalid("function_call_output is missing `call_id`"))?;
+            let output = item
+                .get("output")
+                .ok_or_else(|| Error::invalid("function_call_output is missing `output`"))?;
             req.messages.push(Message {
                 role: Role::User,
                 content: vec![ContentBlock::ToolResult {
-                    tool_use_id: item
-                        .get("call_id")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                        .to_string(),
+                    tool_use_id: call_id.to_string(),
                     name: String::new(),
-                    content: vec![ToolResultPart::Text {
-                        text: item
-                            .get("output")
-                            .and_then(Value::as_str)
-                            .unwrap_or_default()
-                            .to_string(),
-                    }],
+                    content: decode_tool_result_output(output)?,
                     is_error: false,
                 }],
             });
         }
         "input_text" => {
-            req.messages.push(Message::user_text(
-                item.get("text").and_then(Value::as_str).unwrap_or_default(),
-            ));
+            let text = item
+                .get("text")
+                .and_then(Value::as_str)
+                .ok_or_else(|| Error::invalid("input_text is missing `text`"))?;
+            req.messages.push(Message::user_text(text));
         }
         "input_image" => {
-            if let Some(url) = item
+            let source = if let Some(url) = item
                 .pointer("/image_url/url")
                 .and_then(Value::as_str)
             {
-                req.messages.push(Message {
-                    role: Role::User,
-                    content: vec![ContentBlock::Image {
-                        source: MediaSource::from_url(url),
-                    }],
-                });
+                MediaSource::from_url(url)
             } else if let Some(file_id) = item.get("file_id").and_then(Value::as_str) {
-                req.messages.push(Message {
-                    role: Role::User,
-                    content: vec![ContentBlock::Image {
-                        source: MediaSource::Reference {
-                            id: file_id.to_string(),
-                        },
-                    }],
-                });
-            }
+                MediaSource::Reference {
+                    id: file_id.to_string(),
+                }
+            } else {
+                return Err(Error::invalid(
+                    "input_image is missing `image_url.url` or `file_id`",
+                ));
+            };
+            req.messages.push(Message {
+                role: Role::User,
+                content: vec![ContentBlock::Image { source }],
+            });
         }
         "input_audio" => {
-            if let Some(audio) = item.get("input_audio") {
-                let data = audio
-                    .get("data")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string();
-                let format = audio
-                    .get("format")
-                    .and_then(Value::as_str)
-                    .unwrap_or("wav");
-                let media_type = format!("audio/{}", normalize_audio_format_to_mime(format));
-                req.messages.push(Message {
-                    role: Role::User,
-                    content: vec![ContentBlock::Audio {
-                        source: MediaSource::Base64 {
-                            media_type: media_type.clone(),
-                            data,
-                        },
-                        media_type,
-                    }],
-                });
-            }
+            let audio = item
+                .get("input_audio")
+                .ok_or_else(|| Error::invalid("input_audio is missing `input_audio`"))?;
+            let data = audio
+                .get("data")
+                .and_then(Value::as_str)
+                .ok_or_else(|| Error::invalid("input_audio is missing `data`"))?
+                .to_string();
+            let format = audio
+                .get("format")
+                .and_then(Value::as_str)
+                .unwrap_or("wav");
+            let media_type = format!("audio/{}", normalize_audio_format_to_mime(format));
+            req.messages.push(Message {
+                role: Role::User,
+                content: vec![ContentBlock::Audio {
+                    source: MediaSource::Base64 {
+                        media_type: media_type.clone(),
+                        data,
+                    },
+                    media_type,
+                }],
+            });
         }
         "input_file" => {
             let name = item
@@ -297,67 +368,86 @@ fn decode_input_item(item: &Value, req: &mut ChatRequest) -> Result<()> {
                         name,
                     }],
                 });
+            } else {
+                return Err(Error::invalid(
+                    "input_file is missing `file_data`, `file_url`, or `file_id`",
+                ));
             }
         }
         "reasoning" => {
-            let block = reasoning_bridge::decode_reasoning_item(item).or_else(|| {
-                item.get("summary")
-                    .and_then(Value::as_array)
-                    .and_then(|a| a.first())
-                    .and_then(|s| s.get("text"))
-                    .and_then(Value::as_str)
-                    .map(|text| ContentBlock::Thinking {
-                        text: text.to_string(),
-                        signature: None,
-                    })
+            let block = reasoning_bridge::decode_reasoning_item(item)
+                .or_else(|| {
+                    item.get("summary")
+                        .and_then(Value::as_array)
+                        .and_then(|a| a.first())
+                        .and_then(|s| s.get("text"))
+                        .and_then(Value::as_str)
+                        .map(|text| ContentBlock::Thinking {
+                            text: text.to_string(),
+                            signature: None,
+                        })
+                })
+                .ok_or_else(|| {
+                    unsupported_content("reasoning", Some("unrecognized reasoning item"))
+                })?;
+            req.messages.push(Message {
+                role: Role::Assistant,
+                content: vec![block],
             });
-            if let Some(block) = block {
-                req.messages.push(Message {
-                    role: Role::Assistant,
-                    content: vec![block],
-                });
-            }
         }
         "message" => {
-            let role = if item.get("role").and_then(Value::as_str) == Some("assistant") {
-                Role::Assistant
-            } else {
-                Role::User
+            let role = match item.get("role").and_then(Value::as_str) {
+                Some("assistant") => Role::Assistant,
+                Some("user") => Role::User,
+                Some(other) => return Err(unsupported_content("message role", Some(other))),
+                None => return Err(Error::invalid("message item is missing `role`")),
             };
             let mut content = Vec::new();
-            if let Some(parts) = item.get("content").and_then(Value::as_array) {
-                for part in parts {
-                    match part.get("type").and_then(Value::as_str) {
-                        Some("output_text") | Some("input_text") => {
-                            if let Some(text) = part.get("text").and_then(Value::as_str) {
+            match item.get("content") {
+                Some(Value::Array(parts)) => {
+                    for part in parts {
+                        let kind = part
+                            .get("type")
+                            .and_then(Value::as_str)
+                            .ok_or_else(|| Error::invalid("message part is missing `type`"))?;
+                        match kind {
+                            "output_text" | "input_text" => {
+                                let text = part
+                                    .get("text")
+                                    .and_then(Value::as_str)
+                                    .ok_or_else(|| Error::invalid("text part is missing `text`"))?;
                                 content.push(ContentBlock::text(text));
                             }
-                        }
-                        Some("input_image") => {
-                            if let Some(url) = part
-                                .get("image_url")
-                                .and_then(|i| i.get("url"))
-                                .and_then(Value::as_str)
-                            {
-                                content.push(ContentBlock::Image {
-                                    source: MediaSource::from_url(url),
-                                });
-                            } else if let Some(file_id) =
-                                part.get("file_id").and_then(Value::as_str)
-                            {
-                                content.push(ContentBlock::Image {
-                                    source: MediaSource::Reference {
+                            "input_image" => {
+                                let source = if let Some(url) = part
+                                    .get("image_url")
+                                    .and_then(|image| image.get("url"))
+                                    .and_then(Value::as_str)
+                                {
+                                    MediaSource::from_url(url)
+                                } else if let Some(file_id) =
+                                    part.get("file_id").and_then(Value::as_str)
+                                {
+                                    MediaSource::Reference {
                                         id: file_id.to_string(),
-                                    },
-                                });
+                                    }
+                                } else {
+                                    return Err(Error::invalid(
+                                        "input_image part is missing `image_url.url` or `file_id`",
+                                    ));
+                                };
+                                content.push(ContentBlock::Image { source });
                             }
-                        }
-                        Some("input_audio") => {
-                            if let Some(audio) = part.get("input_audio") {
+                            "input_audio" => {
+                                let audio = part
+                                    .get("input_audio")
+                                    .ok_or_else(|| {
+                                        Error::invalid("input_audio part is missing `input_audio`")
+                                    })?;
                                 let data = audio
                                     .get("data")
                                     .and_then(Value::as_str)
-                                    .unwrap_or_default()
+                                    .ok_or_else(|| Error::invalid("input_audio is missing `data`"))?
                                     .to_string();
                                 let format = audio
                                     .get("format")
@@ -373,63 +463,60 @@ fn decode_input_item(item: &Value, req: &mut ChatRequest) -> Result<()> {
                                     media_type,
                                 });
                             }
-                        }
-                        Some("input_file") => {
-                            let name = part
-                                .get("filename")
-                                .and_then(Value::as_str)
-                                .map(String::from);
-                            if let Some(data) = part.get("file_data").and_then(Value::as_str) {
+                            "input_file" => {
+                                let name = part
+                                    .get("filename")
+                                    .and_then(Value::as_str)
+                                    .map(String::from);
                                 let media_type = part
                                     .get("media_type")
                                     .and_then(Value::as_str)
                                     .unwrap_or("application/octet-stream")
                                     .to_string();
-                                content.push(ContentBlock::File {
-                                    source: MediaSource::Base64 {
+                                let source = if let Some(data) =
+                                    part.get("file_data").and_then(Value::as_str)
+                                {
+                                    MediaSource::Base64 {
                                         media_type: media_type.clone(),
                                         data: data.to_string(),
-                                    },
-                                    media_type,
-                                    name,
-                                });
-                            } else if let Some(url) = part.get("file_url").and_then(Value::as_str) {
-                                let media_type = part
-                                    .get("media_type")
-                                    .and_then(Value::as_str)
-                                    .unwrap_or("application/octet-stream")
-                                    .to_string();
-                                content.push(ContentBlock::File {
-                                    source: MediaSource::Url {
+                                    }
+                                } else if let Some(url) =
+                                    part.get("file_url").and_then(Value::as_str)
+                                {
+                                    MediaSource::Url {
                                         url: url.to_string(),
-                                    },
-                                    media_type,
-                                    name,
-                                });
-                            } else if let Some(file_id) =
-                                part.get("file_id").and_then(Value::as_str)
-                            {
-                                let media_type = part
-                                    .get("media_type")
-                                    .and_then(Value::as_str)
-                                    .unwrap_or("application/octet-stream")
-                                    .to_string();
-                                content.push(ContentBlock::File {
-                                    source: MediaSource::Reference {
+                                    }
+                                } else if let Some(file_id) =
+                                    part.get("file_id").and_then(Value::as_str)
+                                {
+                                    MediaSource::Reference {
                                         id: file_id.to_string(),
-                                    },
+                                    }
+                                } else {
+                                    return Err(Error::invalid(
+                                        "input_file part is missing `file_data`, `file_url`, or `file_id`",
+                                    ));
+                                };
+                                content.push(ContentBlock::File {
+                                    source,
                                     media_type,
                                     name,
                                 });
                             }
+                            other => return Err(unsupported_content("message", Some(other))),
                         }
-                        _ => {}
                     }
+                }
+                None | Some(Value::Null) => {}
+                Some(_) => {
+                    return Err(Error::invalid(
+                        "message content must be an array or null",
+                    ));
                 }
             }
             req.messages.push(Message { role, content });
         }
-        _ => {}
+        other => return Err(unsupported_content("input item", Some(other))),
     }
     Ok(())
 }
@@ -499,18 +586,28 @@ pub fn encode_request(req: &ChatRequest, upstream_model: &str) -> Result<Value> 
                     content,
                     ..
                 } => {
-                    let text = content
-                        .iter()
-                        .map(|p| match p {
-                            ToolResultPart::Text { text } => text.clone(),
-                            ToolResultPart::Image { .. } => "[image]".to_string(),
-                        })
-                        .collect::<Vec<_>>()
-                        .join("\n");
+                    let mut text_parts = Vec::new();
+                    for part in content {
+                        match part {
+                            ToolResultPart::Text { text } => text_parts.push(text.clone()),
+                            ToolResultPart::Image { source } => {
+                                let image = ContentBlock::Image {
+                                    source: source.clone(),
+                                };
+                                if let Some(replacement) =
+                                    apply_content_policy(req.unsupported_content_policy, &image)?
+                                {
+                                    if let Some(text) = replacement.as_text() {
+                                        text_parts.push(text.to_string());
+                                    }
+                                }
+                            }
+                        }
+                    }
                     separate_items.push(json!({
                         "type": "function_call_output",
                         "call_id": tool_use_id,
-                        "output": text,
+                        "output": text_parts.join("\n"),
                     }));
                 }
                 ContentBlock::Thinking { text, signature } => {
@@ -521,11 +618,29 @@ pub fn encode_request(req: &ChatRequest, upstream_model: &str) -> Result<Value> 
                             "type": "reasoning",
                             "summary": [{"type": "summary_text", "text": text}],
                         }));
+                    } else if let Some(replacement) =
+                        apply_content_policy(req.unsupported_content_policy, b)?
+                    {
+                        if let Some(text) = replacement.as_text() {
+                            parts.push(json!({"type": "input_text", "text": text}));
+                        }
+                    } else {
+                        return Err(Error::internal("thinking content could not be encoded"));
                     }
                 }
                 ContentBlock::RedactedThinking { .. } => {
                     if let Some(item) = reasoning_bridge::encode_thinking_block(b) {
                         separate_items.push(item);
+                    } else if let Some(replacement) =
+                        apply_content_policy(req.unsupported_content_policy, b)?
+                    {
+                        if let Some(text) = replacement.as_text() {
+                            parts.push(json!({"type": "input_text", "text": text}));
+                        }
+                    } else {
+                        return Err(Error::internal(
+                            "redacted thinking content could not be encoded",
+                        ));
                     }
                 }
                 ContentBlock::Audio { source, media_type } => {
@@ -549,12 +664,17 @@ pub fn encode_request(req: &ChatRequest, upstream_model: &str) -> Result<Value> 
                         }
                     }
                 }
-                ContentBlock::File { source, media_type: _, name } => {
+                ContentBlock::File {
+                    source,
+                    media_type,
+                    name,
+                } => {
                     match source {
                         MediaSource::Base64 { data, .. } => {
                             let mut item = json!({
                                 "type": "input_file",
                                 "file_data": data,
+                                "media_type": media_type,
                             });
                             if let Some(n) = name {
                                 item["filename"] = json!(n);
@@ -565,6 +685,7 @@ pub fn encode_request(req: &ChatRequest, upstream_model: &str) -> Result<Value> 
                             let mut item = json!({
                                 "type": "input_file",
                                 "file_url": url,
+                                "media_type": media_type,
                             });
                             if let Some(n) = name {
                                 item["filename"] = json!(n);
@@ -575,6 +696,7 @@ pub fn encode_request(req: &ChatRequest, upstream_model: &str) -> Result<Value> 
                             let mut item = json!({
                                 "type": "input_file",
                                 "file_id": id,
+                                "media_type": media_type,
                             });
                             if let Some(n) = name {
                                 item["filename"] = json!(n);
@@ -695,60 +817,103 @@ pub fn decode_response(body: Value) -> Result<ChatResponse> {
         return Err(Error::BadUpstreamPayload(msg.to_string()));
     }
     let mut content = Vec::new();
-    if let Some(output) = body.get("output").and_then(Value::as_array) {
-        for item in output {
-            match item.get("type").and_then(Value::as_str) {
-                Some("message") => {
-                    if let Some(parts) = item.get("content").and_then(Value::as_array) {
-                        for part in parts {
-                            if let Some("output_text") = part.get("type").and_then(Value::as_str) {
-                                if let Some(text) = part.get("text").and_then(Value::as_str) {
-                                    content.push(ContentBlock::text(text));
-                                }
+    let output = match body.get("output") {
+        None | Some(Value::Null) => &[][..],
+        Some(Value::Array(items)) => items.as_slice(),
+        Some(_) => {
+            return Err(Error::BadUpstreamPayload(
+                "Responses output must be an array".into(),
+            ));
+        }
+    };
+    for item in output {
+            let item_type = item
+                .get("type")
+                .and_then(Value::as_str)
+                .ok_or_else(|| Error::BadUpstreamPayload("response item is missing `type`".into()))?;
+            match item_type {
+                "message" => {
+                    let parts = item
+                        .get("content")
+                        .and_then(Value::as_array)
+                        .ok_or_else(|| {
+                            Error::BadUpstreamPayload("response message is missing `content`".into())
+                        })?;
+                    for part in parts {
+                        let part_type = part
+                            .get("type")
+                            .and_then(Value::as_str)
+                            .ok_or_else(|| {
+                                Error::BadUpstreamPayload(
+                                    "response message part is missing `type`".into(),
+                                )
+                            })?;
+                        match part_type {
+                            "output_text" => {
+                                let text = part.get("text").and_then(Value::as_str).ok_or_else(
+                                    || Error::BadUpstreamPayload("output_text is missing `text`".into()),
+                                )?;
+                                content.push(ContentBlock::text(text));
+                            }
+                            _ => {
+                                return Err(unsupported_upstream_content(
+                                    "Responses response message",
+                                ));
                             }
                         }
                     }
                 }
-                Some("function_call") => {
+                "function_call" => {
                     let arguments = item
                         .get("arguments")
                         .and_then(Value::as_str)
-                        .unwrap_or("{}");
+                        .ok_or_else(|| {
+                            Error::BadUpstreamPayload("function_call is missing `arguments`".into())
+                        })?;
+                    let id = item
+                        .get("call_id")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| {
+                            Error::BadUpstreamPayload("function_call is missing `call_id`".into())
+                        })?;
+                    let name = item
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| {
+                            Error::BadUpstreamPayload("function_call is missing `name`".into())
+                        })?;
                     content.push(ContentBlock::ToolUse {
-                        id: item
-                            .get("call_id")
-                            .and_then(Value::as_str)
-                            .unwrap_or_default()
-                            .to_string(),
-                        name: item
-                            .get("name")
-                            .and_then(Value::as_str)
-                            .unwrap_or_default()
-                            .to_string(),
+                        id: id.to_string(),
+                        name: name.to_string(),
                         input: serde_json::from_str(arguments)
                             .unwrap_or(Value::String(arguments.to_string())),
                     });
                 }
-                Some("reasoning") => {
-                    if let Some(block) = reasoning_bridge::decode_reasoning_item(item) {
-                        content.push(block);
-                    } else if let Some(summary) = item
-                        .get("summary")
-                        .and_then(Value::as_array)
-                        .and_then(|a| a.first())
-                        .and_then(|s| s.get("text"))
-                        .and_then(Value::as_str)
-                    {
-                        content.push(ContentBlock::Thinking {
-                            text: summary.to_string(),
-                            signature: None,
-                        });
-                    }
+                "reasoning" => {
+                    let block = reasoning_bridge::decode_reasoning_item(item)
+                        .or_else(|| {
+                            item.get("summary")
+                                .and_then(Value::as_array)
+                                .and_then(|a| a.first())
+                                .and_then(|s| s.get("text"))
+                                .and_then(Value::as_str)
+                                .map(|text| ContentBlock::Thinking {
+                                    text: text.to_string(),
+                                    signature: None,
+                                })
+                        })
+                        .ok_or_else(|| {
+                            Error::BadUpstreamPayload(
+                                "unsupported or empty reasoning item".into(),
+                            )
+                        })?;
+                    content.push(block);
                 }
-                _ => {}
+                _ => {
+                    return Err(unsupported_upstream_content("Responses response item"));
+                }
             }
         }
-    }
 
     let mut passthrough = Map::new();
     if let Some(prev_id) = body.get("previous_response_id").and_then(Value::as_str) {
@@ -826,7 +991,23 @@ pub fn encode_response(resp: &ChatResponse) -> Value {
                     output.push(item);
                 }
             }
-            _ => {}
+            ContentBlock::Image { .. }
+            | ContentBlock::Document { .. }
+            | ContentBlock::File { .. }
+            | ContentBlock::Audio { .. }
+            | ContentBlock::Video { .. }
+            | ContentBlock::ToolResult { .. }
+            | ContentBlock::Citation { .. }
+            | ContentBlock::Annotation { .. } => {
+                if let Some(text) = explicit_placeholder(block).as_text() {
+                    output.push(json!({
+                        "type": "message",
+                        "role": "assistant",
+                        "status": "completed",
+                        "content": [{"type": "output_text", "text": text, "annotations": []}],
+                    }));
+                }
+            }
         }
     }
     let text = resp.text();
@@ -964,7 +1145,10 @@ impl StreamParser for ResponsesStreamParser {
             return Ok(Vec::new());
         }
         let event = frame.json()?;
-        let event_type = event.get("type").and_then(Value::as_str).unwrap_or("");
+        let event_type = event
+            .get("type")
+            .and_then(Value::as_str)
+            .ok_or_else(|| Error::BadUpstreamPayload("Responses stream event is missing `type`".into()))?;
         let mut out = Vec::new();
 
         match event_type {
@@ -986,55 +1170,95 @@ impl StreamParser for ResponsesStreamParser {
                 });
             }
             "response.output_item.added" => {
-                let item = event.get("item").cloned().unwrap_or_default();
-                if item.get("type").and_then(Value::as_str) == Some("function_call") {
-                    let index = self.next_index;
-                    self.next_index += 1;
-                    let item_id = item
-                        .get("id")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                        .to_string();
-                    let call_id = item
-                        .get("call_id")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                        .to_string();
-                    if !item_id.is_empty() {
-                        self.tool_indices.insert(item_id.clone(), index);
-                    }
-                    if !call_id.is_empty() {
-                        self.tool_indices.insert(call_id.clone(), index);
-                    }
-                    out.push(StreamEvent::ToolUseStart {
-                        index,
-                        id: call_id,
-                        name: item
+                let item = event
+                    .get("item")
+                    .ok_or_else(|| Error::BadUpstreamPayload("output item event is missing `item`".into()))?;
+                match item.get("type").and_then(Value::as_str) {
+                    Some("function_call") => {
+                        let index = self.next_index;
+                        self.next_index += 1;
+                        let item_id = item
+                            .get("id")
+                            .and_then(Value::as_str)
+                            .ok_or_else(|| {
+                                Error::BadUpstreamPayload("function call item is missing `id`".into())
+                            })?
+                            .to_string();
+                        let call_id = item
+                            .get("call_id")
+                            .and_then(Value::as_str)
+                            .ok_or_else(|| {
+                                Error::BadUpstreamPayload("function call item is missing `call_id`".into())
+                            })?
+                            .to_string();
+                        let name = item
                             .get("name")
                             .and_then(Value::as_str)
-                            .unwrap_or_default()
-                            .to_string(),
-                    });
+                            .ok_or_else(|| {
+                                Error::BadUpstreamPayload("function call item is missing `name`".into())
+                            })?
+                            .to_string();
+                        self.tool_indices.insert(item_id, index);
+                        self.tool_indices.insert(call_id.clone(), index);
+                        out.push(StreamEvent::ToolUseStart {
+                            index,
+                            id: call_id,
+                            name,
+                        });
+                    }
+                    Some("message") | Some("reasoning") => {}
+                    Some(_) => {
+                        return Err(unsupported_upstream_content(
+                            "Responses stream output item",
+                        ));
+                    }
+                    None => {
+                        return Err(Error::BadUpstreamPayload(
+                            "Responses stream output item is missing `type`".into(),
+                        ));
+                    }
                 }
             }
             "response.content_part.added" => {
-                let part = event.get("part").cloned().unwrap_or_default();
+                let part = event
+                    .get("part")
+                    .ok_or_else(|| Error::BadUpstreamPayload("content part event is missing `part`".into()))?;
                 match part.get("type").and_then(Value::as_str) {
                     Some("output_text") => {
                         self.open_index("text");
                     }
-                    Some("reasoning") => {
+                    Some("reasoning") | Some("summary_text") => {
                         self.open_index("thinking");
                     }
-                    _ => {}
+                    Some(_) => {
+                        return Err(unsupported_upstream_content(
+                            "Responses stream content part",
+                        ));
+                    }
+                    None => {
+                        return Err(Error::BadUpstreamPayload(
+                            "Responses stream content part is missing `type`".into(),
+                        ));
+                    }
                 }
             }
             "response.content_part.done" => {
-                let part = event.get("part").cloned().unwrap_or_default();
+                let part = event
+                    .get("part")
+                    .ok_or_else(|| Error::BadUpstreamPayload("content part event is missing `part`".into()))?;
                 match part.get("type").and_then(Value::as_str) {
                     Some("output_text") => self.text_index = None,
-                    Some("reasoning") => self.thinking_index = None,
-                    _ => {}
+                    Some("reasoning") | Some("summary_text") => self.thinking_index = None,
+                    Some(_) => {
+                        return Err(unsupported_upstream_content(
+                            "Responses stream content part",
+                        ));
+                    }
+                    None => {
+                        return Err(Error::BadUpstreamPayload(
+                            "Responses stream content part is missing `type`".into(),
+                        ));
+                    }
                 }
             }
             "response.output_item.done" => {
@@ -1043,12 +1267,14 @@ impl StreamParser for ResponsesStreamParser {
             }
             "response.output_text.delta" => {
                 let index = self.open_index("text");
-                if let Some(delta) = event.get("delta").and_then(Value::as_str) {
-                    out.push(StreamEvent::TextDelta {
-                        index,
-                        text: delta.to_string(),
-                    });
-                }
+                let delta = event
+                    .get("delta")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| Error::BadUpstreamPayload("output text delta is missing `delta`".into()))?;
+                out.push(StreamEvent::TextDelta {
+                    index,
+                    text: delta.to_string(),
+                });
             }
             "response.function_call_arguments.delta" => {
                 let item_id = event
@@ -1061,23 +1287,36 @@ impl StreamParser for ResponsesStreamParser {
                         .and_then(Value::as_str)
                         .and_then(|id| self.tool_indices.get(id).copied())
                 });
-                if let Some(index) = index {
-                    if let Some(delta) = event.get("delta").and_then(Value::as_str) {
-                        out.push(StreamEvent::ToolUseDelta {
-                            index,
-                            partial_json: delta.to_string(),
-                        });
-                    }
-                }
+                let index = index.ok_or_else(|| {
+                    Error::BadUpstreamPayload(
+                        "function argument delta does not reference a known tool call".into(),
+                    )
+                })?;
+                let delta = event
+                    .get("delta")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        Error::BadUpstreamPayload("function argument delta is missing `delta`".into())
+                    })?;
+                out.push(StreamEvent::ToolUseDelta {
+                    index,
+                    partial_json: delta.to_string(),
+                });
             }
             "response.reasoning_summary_text.delta" => {
                 let index = self.open_index("thinking");
-                if let Some(delta) = event.get("delta").and_then(Value::as_str) {
-                    out.push(StreamEvent::ThinkingDelta {
-                        index,
-                        text: delta.to_string(),
-                    });
-                }
+                let delta = event
+                    .get("delta")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        Error::BadUpstreamPayload(
+                            "reasoning summary delta is missing `delta`".into(),
+                        )
+                    })?;
+                out.push(StreamEvent::ThinkingDelta {
+                    index,
+                    text: delta.to_string(),
+                });
             }
             "response.completed" => {
                 if !self.started {
@@ -1100,7 +1339,14 @@ impl StreamParser for ResponsesStreamParser {
                     usage: self.usage,
                 });
             }
-            _ => {}
+            "response.in_progress"
+            | "response.queued"
+            | "response.output_text.done"
+            | "response.reasoning_summary_text.done"
+            | "response.function_call_arguments.done" => {}
+            _ => {
+                return Err(unsupported_upstream_content("Responses stream event"));
+            }
         }
         Ok(out)
     }

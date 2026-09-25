@@ -7,7 +7,7 @@
 use serde_json::{json, Map, Value};
 
 use super::apply_content_policy;
-use super::{SseFrame, StreamEncoder, StreamParser};
+use super::{explicit_placeholder, unsupported_content, SseFrame, StreamEncoder, StreamParser};
 use crate::error::{Error, Result};
 use crate::ir::{
     classify_media, ChatRequest, ChatResponse, ContentBlock, Dialect, MediaSource, Message, Role,
@@ -27,24 +27,33 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
         .to_string();
     let mut req = ChatRequest::new(model, Dialect::Gemini);
 
-    if let Some(parts) = obj
-        .get("system_instruction")
-        .and_then(|s| s.get("parts"))
-        .and_then(Value::as_array)
-    {
-        for part in parts {
-            if let Some(text) = part.get("text").and_then(Value::as_str) {
+    match obj.get("system_instruction") {
+        None | Some(Value::Null) => {}
+        Some(instruction) => {
+            let parts = instruction
+                .get("parts")
+                .and_then(Value::as_array)
+                .ok_or_else(|| Error::invalid("system_instruction is missing `parts`"))?;
+            for part in parts {
+                let text = part
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| unsupported_content("system", Some("non-text part")))?;
                 req.system.push(SystemPart::new(text));
             }
         }
     }
 
-    if let Some(contents) = obj.get("contents").and_then(Value::as_array) {
-        for content in contents {
-            let role = if content.get("role").and_then(Value::as_str) == Some("model") {
-                Role::Assistant
-            } else {
-                Role::User
+    let contents = match obj.get("contents") {
+        None | Some(Value::Null) => &[][..],
+        Some(Value::Array(contents)) => contents.as_slice(),
+        Some(_) => return Err(Error::invalid("`contents` must be an array")),
+    };
+    for content in contents {
+            let role = match content.get("role").and_then(Value::as_str) {
+                Some("model") => Role::Assistant,
+                Some("user") | None => Role::User,
+                Some(other) => return Err(unsupported_content("content role", Some(other))),
             };
             let mut blocks = Vec::new();
             if let Some(parts) = content.get("parts").and_then(Value::as_array) {
@@ -52,31 +61,31 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
                     if let Some(text) = part.get("text").and_then(Value::as_str) {
                         blocks.push(ContentBlock::text(text));
                     } else if let Some(call) = part.get("functionCall") {
+                        let id = call
+                            .get("id")
+                            .and_then(Value::as_str)
+                            .ok_or_else(|| Error::invalid("functionCall is missing `id`"))?;
+                        let name = call
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .ok_or_else(|| Error::invalid("functionCall is missing `name`"))?;
                         blocks.push(ContentBlock::ToolUse {
-                            id: call
-                                .get("id")
-                                .and_then(Value::as_str)
-                                .unwrap_or_default()
-                                .to_string(),
-                            name: call
-                                .get("name")
-                                .and_then(Value::as_str)
-                                .unwrap_or_default()
-                                .to_string(),
+                            id: id.to_string(),
+                            name: name.to_string(),
                             input: call.get("args").cloned().unwrap_or_else(|| json!({})),
                         });
                     } else if let Some(response) = part.get("functionResponse") {
+                        let id = response
+                            .get("id")
+                            .and_then(Value::as_str)
+                            .ok_or_else(|| Error::invalid("functionResponse is missing `id`"))?;
+                        let name = response
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .ok_or_else(|| Error::invalid("functionResponse is missing `name`"))?;
                         blocks.push(ContentBlock::ToolResult {
-                            tool_use_id: response
-                                .get("id")
-                                .and_then(Value::as_str)
-                                .unwrap_or_default()
-                                .to_string(),
-                            name: response
-                                .get("name")
-                                .and_then(Value::as_str)
-                                .unwrap_or_default()
-                                .to_string(),
+                            tool_use_id: id.to_string(),
+                            name: name.to_string(),
                             content: vec![ToolResultPart::Text {
                                 text: response.get("response").unwrap_or(&Value::Null).to_string(),
                             }],
@@ -86,20 +95,22 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
                         let mime = data
                             .get("mimeType")
                             .and_then(Value::as_str)
-                            .unwrap_or("application/octet-stream");
+                            .filter(|value| !value.trim().is_empty())
+                            .ok_or_else(|| Error::invalid("inlineData is missing `mimeType`"))?;
                         let payload = data
                             .get("data")
                             .and_then(Value::as_str)
-                            .unwrap_or_default()
-                            .to_string();
+                            .ok_or_else(|| Error::invalid("inlineData is missing `data`"))?;
                         blocks.push(classify_media(
                             mime,
                             MediaSource::Base64 {
                                 media_type: mime.to_string(),
-                                data: payload,
+                                data: payload.to_string(),
                             },
                             None,
                         ));
+                    } else {
+                        return Err(unsupported_content("message", Some("unknown part")));
                     }
                 }
             }
@@ -108,7 +119,6 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
                 content: blocks,
             });
         }
-    }
 
     if let Some(gc) = obj.get("generationConfig") {
         req.max_tokens = gc
@@ -117,24 +127,34 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
             .map(|v| v.min(u32::MAX as u64) as u32);
         req.temperature = gc.get("temperature").and_then(Value::as_f64);
         req.top_p = gc.get("topP").and_then(Value::as_f64);
-        req.stop_sequences = match gc.get("stopSequences").and_then(Value::as_array) {
-            Some(a) => a
+        req.stop_sequences = match gc.get("stopSequences") {
+            None | Some(Value::Null) => Vec::new(),
+            Some(Value::Array(values)) => values
                 .iter()
-                .filter_map(Value::as_str)
-                .map(str::to_string)
-                .collect(),
-            None => Vec::new(),
+                .map(|value| {
+                    value
+                        .as_str()
+                        .map(str::to_string)
+                        .ok_or_else(|| Error::invalid("stop sequence entries must be strings"))
+                })
+                .collect::<Result<Vec<_>>>()?,
+            Some(_) => return Err(Error::invalid("`stopSequences` must be an array")),
         };
     }
 
-    if let Some(tools) = obj.get("tools").and_then(Value::as_array) {
-        for tool in tools {
-            if let Some(decls) = tool.get("functionDeclarations").and_then(Value::as_array) {
+    match obj.get("tools") {
+        None | Some(Value::Null) => {}
+        Some(Value::Array(tools)) => {
+            for tool in tools {
+                let decls = tool
+                    .get("functionDeclarations")
+                    .and_then(Value::as_array)
+                    .ok_or_else(|| Error::invalid("Gemini tool is missing `functionDeclarations`"))?;
                 for decl in decls {
-                    let Some(name) = decl.get("name").and_then(Value::as_str) else {
-                        tracing::warn!("skipping tool definition without a `name` field");
-                        continue;
-                    };
+                    let name = decl
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| Error::invalid("function declaration is missing `name`"))?;
                     req.tools.push(ToolDef {
                         name: name.to_string(),
                         description: decl
@@ -150,19 +170,34 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
                 }
             }
         }
+        Some(_) => return Err(Error::invalid("`tools` must be an array")),
     }
 
-    req.tool_choice = obj
+    req.tool_choice = match obj
         .get("toolConfig")
         .and_then(|c| c.get("functionCallingConfig"))
-        .and_then(|c| c.get("mode"))
-        .and_then(Value::as_str)
-        .map(|mode| match mode {
-            "NONE" => ToolChoice::None,
-            "ANY" => ToolChoice::Any,
-            _ => ToolChoice::Auto,
-        });
+    {
+        None | Some(Value::Null) => None,
+        Some(config) => {
+            let mode = config
+                .get("mode")
+                .and_then(Value::as_str)
+                .ok_or_else(|| Error::invalid("functionCallingConfig is missing `mode`"))?;
+            Some(match mode {
+                "NONE" => ToolChoice::None,
+                "ANY" | "AUTO" => {
+                    if mode == "ANY" {
+                        ToolChoice::Any
+                    } else {
+                        ToolChoice::Auto
+                    }
+                }
+                other => return Err(unsupported_content("function calling mode", Some(other))),
+            })
+        }
+    };
 
+    req.refresh_required_capabilities();
     Ok(req)
 }
 
@@ -217,20 +252,38 @@ pub fn encode_request(req: &ChatRequest, upstream_model: &str) -> Result<Value> 
                     content,
                     ..
                 } => {
-                    let text = content
-                        .iter()
-                        .map(|p| match p {
-                            ToolResultPart::Text { text } => text.clone(),
-                            ToolResultPart::Image { .. } => "[image]".to_string(),
-                        })
-                        .collect::<Vec<_>>()
-                        .join("\n");
+                    let mut text_parts = Vec::new();
+                    for part in content {
+                        match part {
+                            ToolResultPart::Text { text } => text_parts.push(text.clone()),
+                            ToolResultPart::Image { source } => {
+                                let image = ContentBlock::Image {
+                                    source: source.clone(),
+                                };
+                                if let Some(replacement) =
+                                    apply_content_policy(req.unsupported_content_policy, &image)?
+                                {
+                                    if let Some(text) = replacement.as_text() {
+                                        text_parts.push(text.to_string());
+                                    }
+                                }
+                            }
+                        }
+                    }
                     parts.push(json!({
-                        "functionResponse": {"id": tool_use_id, "name": name, "response": {"text": text}}
+                        "functionResponse": {"id": tool_use_id, "name": name, "response": {"text": text_parts.join("\n")}}
                     }));
                 }
                 ContentBlock::Thinking { .. }
-                | ContentBlock::RedactedThinking { .. } => {}
+                | ContentBlock::RedactedThinking { .. } => {
+                    if let Some(replacement) =
+                        apply_content_policy(req.unsupported_content_policy, b)?
+                    {
+                        if let Some(text) = replacement.as_text() {
+                            parts.push(json!({"text": text}));
+                        }
+                    }
+                }
                 // Gemini supports inlineData for any MIME type.
                 ContentBlock::Document { source } => match source {
                     MediaSource::Base64 {
@@ -353,10 +406,15 @@ pub fn decode_response(body: Value) -> Result<ChatResponse> {
                 .to_string(),
         ));
     }
-    let candidate = body
-        .get("candidates")
-        .and_then(Value::as_array)
-        .and_then(|c| c.first());
+    let candidate = match body.get("candidates") {
+        None | Some(Value::Null) => None,
+        Some(Value::Array(candidates)) => candidates.first(),
+        Some(_) => {
+            return Err(Error::BadUpstreamPayload(
+                "Gemini candidates must be an array".into(),
+            ));
+        }
+    };
     let mut content = Vec::new();
     let mut stop_reason = StopReason::Unknown;
     if let Some(candidate) = candidate {
@@ -369,19 +427,23 @@ pub fn decode_response(body: Value) -> Result<ChatResponse> {
                 if let Some(text) = part.get("text").and_then(Value::as_str) {
                     content.push(ContentBlock::text(text));
                 } else if let Some(call) = part.get("functionCall") {
+                    let id = call
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| Error::BadUpstreamPayload("functionCall is missing `id`".into()))?;
+                    let name = call
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| Error::BadUpstreamPayload("functionCall is missing `name`".into()))?;
                     content.push(ContentBlock::ToolUse {
-                        id: call
-                            .get("id")
-                            .and_then(Value::as_str)
-                            .unwrap_or_default()
-                            .to_string(),
-                        name: call
-                            .get("name")
-                            .and_then(Value::as_str)
-                            .unwrap_or_default()
-                            .to_string(),
+                        id: id.to_string(),
+                        name: name.to_string(),
                         input: call.get("args").cloned().unwrap_or_else(|| json!({})),
                     });
+                } else {
+                    return Err(Error::BadUpstreamPayload(
+                        "unsupported Gemini response part".into(),
+                    ));
                 }
             }
         }
@@ -441,12 +503,15 @@ pub fn encode_response(resp: &ChatResponse) -> Value {
     let parts: Vec<Value> = resp
         .content
         .iter()
-        .filter_map(|b| match b {
-            ContentBlock::Text { text, .. } => Some(json!({"text": text})),
-            ContentBlock::ToolUse { id, name, input } => Some(json!({
+        .map(|b| match b {
+            ContentBlock::Text { text, .. } => json!({"text": text}),
+            ContentBlock::ToolUse { id, name, input } => json!({
                 "functionCall": {"id": id, "name": name, "args": input}
-            })),
-            _ => None,
+            }),
+            _ => explicit_placeholder(b)
+                .as_text()
+                .map(|text| json!({"text": text}))
+                .unwrap_or_else(|| json!({"text": "[Unsupported content]"})),
         })
         .collect();
     json!({
@@ -565,18 +630,18 @@ impl StreamParser for GeminiStreamParser {
                         }
                         let index = self.next_index;
                         self.next_index += 1;
+                        let id = call
+                            .get("id")
+                            .and_then(Value::as_str)
+                            .ok_or_else(|| Error::BadUpstreamPayload("stream functionCall is missing `id`".into()))?;
+                        let name = call
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .ok_or_else(|| Error::BadUpstreamPayload("stream functionCall is missing `name`".into()))?;
                         out.push(StreamEvent::ToolUseStart {
                             index,
-                            id: call
-                                .get("id")
-                                .and_then(Value::as_str)
-                                .unwrap_or_default()
-                                .to_string(),
-                            name: call
-                                .get("name")
-                                .and_then(Value::as_str)
-                                .unwrap_or_default()
-                                .to_string(),
+                            id: id.to_string(),
+                            name: name.to_string(),
                         });
                         if let Some(args) = call.get("args") {
                             out.push(StreamEvent::ToolUseDelta {
@@ -586,6 +651,10 @@ impl StreamParser for GeminiStreamParser {
                         }
                         // Gemini sends functionCall as a complete block, so close it.
                         out.push(StreamEvent::BlockStop { index });
+                    } else {
+                        return Err(Error::BadUpstreamPayload(
+                            "unsupported Gemini stream response part".into(),
+                        ));
                     }
                 }
             }

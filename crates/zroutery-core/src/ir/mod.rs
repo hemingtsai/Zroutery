@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 /// A capability a model may support and a request may require.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Capability {
     Vision,
@@ -24,6 +24,22 @@ pub enum Capability {
     Tools,
     Thinking,
     StructuredOutput,
+}
+
+impl Capability {
+    /// The canonical capability order used by request derivation.
+    ///
+    /// Keeping this order in one place makes derived requirements independent
+    /// of the order in which content blocks happen to arrive.
+    pub const ALL: [Capability; 7] = [
+        Capability::Vision,
+        Capability::Audio,
+        Capability::Video,
+        Capability::Files,
+        Capability::Tools,
+        Capability::Thinking,
+        Capability::StructuredOutput,
+    ];
 }
 
 /// Whether a model supports, explicitly doesn't support, or hasn't declared a
@@ -373,17 +389,21 @@ pub struct ThinkingConfig {
 }
 
 /// What to do with content types the target provider cannot represent.
+///
+/// `Reject` is deliberately the default.  `Transform` and `Drop` are explicit
+/// policy choices; neither may be treated as an implicit no-op by an encoder.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UnsupportedContentPolicy {
     /// Return an error to the client (safest default).
-    Reject,
-    /// Try to convert (e.g. URL image → base64 download).
-    Transform,
-    /// Replace with a placeholder text.
-    Placeholder,
-    /// Silently remove.
     #[default]
+    Reject,
+    /// Convert only when the caller supplies an explicit replacement.
+    Transform,
+    /// Replace with a visible placeholder text.
+    Placeholder,
+    /// Record an explicit drop decision; the fail-closed encoder rejects it
+    /// unless a later policy can attach auditable evidence.
     Drop,
 }
 
@@ -491,54 +511,68 @@ impl ChatRequest {
     }
 
     /// Compute which capabilities this request requires based on its content.
+    ///
+    /// The result is deduplicated and emitted in [`Capability::ALL`] order,
+    /// rather than in message traversal order.  This gives every protocol and
+    /// every caller the same requirement vector for the same request.
     pub fn compute_required_capabilities(&self) -> Vec<Capability> {
-        let mut caps = Vec::new();
-        for msg in &self.messages {
-            for block in &msg.content {
+        use std::collections::BTreeSet;
+
+        let mut required = BTreeSet::new();
+        for message in &self.messages {
+            for block in &message.content {
                 match block {
                     ContentBlock::Image { .. } => {
-                        if !caps.contains(&Capability::Vision) {
-                            caps.push(Capability::Vision);
-                        }
+                        required.insert(Capability::Vision);
+                    }
+                    ContentBlock::Document { .. } | ContentBlock::File { .. } => {
+                        // Documents and generic files use the same provider
+                        // capability in the current model configuration.
+                        required.insert(Capability::Files);
                     }
                     ContentBlock::Audio { .. } => {
-                        if !caps.contains(&Capability::Audio) {
-                            caps.push(Capability::Audio);
-                        }
+                        required.insert(Capability::Audio);
                     }
                     ContentBlock::Video { .. } => {
-                        if !caps.contains(&Capability::Video) {
-                            caps.push(Capability::Video);
+                        required.insert(Capability::Video);
+                    }
+                    ContentBlock::ToolUse { .. } => {
+                        required.insert(Capability::Tools);
+                    }
+                    ContentBlock::ToolResult { content, .. } => {
+                        required.insert(Capability::Tools);
+                        if content
+                            .iter()
+                            .any(|part| matches!(part, ToolResultPart::Image { .. }))
+                        {
+                            required.insert(Capability::Vision);
                         }
                     }
-                    ContentBlock::File { .. } => {
-                        if !caps.contains(&Capability::Files) {
-                            caps.push(Capability::Files);
-                        }
+                    ContentBlock::Thinking { .. } | ContentBlock::RedactedThinking { .. } => {
+                        required.insert(Capability::Thinking);
                     }
-                    ContentBlock::ToolUse { .. } | ContentBlock::ToolResult { .. } => {
-                        if !caps.contains(&Capability::Tools) {
-                            caps.push(Capability::Tools);
-                        }
-                    }
-                    ContentBlock::Thinking { .. } | ContentBlock::RedactedThinking { .. }
-                        if !caps.contains(&Capability::Thinking) =>
-                    {
-                        caps.push(Capability::Thinking);
-                    }
-                    _ => {}
+                    ContentBlock::Text { .. }
+                    | ContentBlock::Annotation { .. }
+                    | ContentBlock::Citation { .. } => {}
                 }
             }
         }
-        if !self.tools.is_empty() && !caps.contains(&Capability::Tools) {
-            caps.push(Capability::Tools);
+        if !self.tools.is_empty() || self.tool_choice.is_some() {
+            required.insert(Capability::Tools);
         }
-        if self.thinking.as_ref().is_some_and(|t| t.enabled)
-            && !caps.contains(&Capability::Thinking)
-        {
-            caps.push(Capability::Thinking);
+        if self.thinking.as_ref().is_some_and(|thinking| thinking.enabled) {
+            required.insert(Capability::Thinking);
         }
-        caps
+
+        Capability::ALL
+            .into_iter()
+            .filter(|capability| required.contains(capability))
+            .collect()
+    }
+
+    /// Refresh the canonical request-derived capability vector in place.
+    pub fn refresh_required_capabilities(&mut self) {
+        self.required_capabilities = self.compute_required_capabilities();
     }
 }
 

@@ -11,7 +11,10 @@ use crate::ir::{
 };
 
 use super::apply_content_policy;
-use super::{SseFrame, StreamEncoder, StreamParser};
+use super::{
+    explicit_placeholder, unsupported_content, unsupported_upstream_content, SseFrame,
+    StreamEncoder, StreamParser,
+};
 
 /// Anthropic requires `max_tokens`; used when the client omits it.
 pub const DEFAULT_MAX_TOKENS: u32 = 4096;
@@ -51,15 +54,26 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
         Some(Value::String(s)) => vec![SystemPart::new(s.clone())],
         Some(Value::Array(items)) => items
             .iter()
-            .filter_map(|b| {
-                Some(SystemPart {
-                    text: b.get("text").and_then(Value::as_str)?.to_string(),
-                    // A breakpoint on a system block is the caller's decision about
-                    // money, so it travels with the text.
-                    cache_control: b.get("cache_control").cloned(),
+            .map(|block| {
+                let kind = block
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| Error::invalid("system content block is missing `type`"))?;
+                if kind != "text" {
+                    return Err(unsupported_content("system", Some(kind)));
+                }
+                let text = block
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| Error::invalid("system text block is missing `text`"))?;
+                // A breakpoint on a system block is the caller's decision about
+                // money, so it travels with the text.
+                Ok(SystemPart {
+                    text: text.to_string(),
+                    cache_control: block.get("cache_control").cloned(),
                 })
             })
-            .collect(),
+            .collect::<Result<Vec<_>>>()?,
         Some(_) => return Err(Error::invalid("`system` must be a string or an array")),
     };
 
@@ -82,52 +96,83 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
         .and_then(Value::as_u64)
         .map(|v| v.min(u32::MAX as u64) as u32);
     req.stream = obj.get("stream").and_then(Value::as_bool).unwrap_or(false);
-    if let Some(stops) = obj.get("stop_sequences").and_then(Value::as_array) {
-        req.stop_sequences = stops
-            .iter()
-            .filter_map(Value::as_str)
-            .map(str::to_string)
-            .collect();
-    }
-
-    if let Some(tools) = obj.get("tools").and_then(Value::as_array) {
-        for t in tools {
-            let Some(name) = t.get("name").and_then(Value::as_str) else {
-                tracing::warn!("skipping tool definition without a `name` field");
-                continue;
-            };
-            req.tools.push(ToolDef {
-                name: name.to_string(),
-                description: t
-                    .get("description")
-                    .and_then(Value::as_str)
-                    .map(str::to_string),
-                input_schema: t
-                    .get("input_schema")
-                    .cloned()
-                    .unwrap_or_else(|| json!({"type": "object"})),
-                cache_control: t.get("cache_control").cloned(),
-            });
+    if let Some(stops) = obj.get("stop_sequences") {
+        match stops {
+            Value::Null => {}
+            Value::Array(values) => {
+                req.stop_sequences = values
+                    .iter()
+                    .map(|value| {
+                        value.as_str().map(str::to_string).ok_or_else(|| {
+                            Error::invalid("stop sequence entries must be strings")
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+            }
+            _ => return Err(Error::invalid("`stop_sequences` must be an array")),
         }
     }
 
-    req.tool_choice =
-        obj.get("tool_choice")
-            .and_then(|tc| match tc.get("type").and_then(Value::as_str)? {
+    match obj.get("tools") {
+        None | Some(Value::Null) => {}
+        Some(Value::Array(tools)) => {
+            for t in tools {
+                let name = t
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| Error::invalid("tool definition is missing `name`"))?;
+                req.tools.push(ToolDef {
+                    name: name.to_string(),
+                    description: t
+                        .get("description")
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
+                    input_schema: t
+                        .get("input_schema")
+                        .cloned()
+                        .unwrap_or_else(|| json!({"type": "object"})),
+                    cache_control: t.get("cache_control").cloned(),
+                });
+            }
+        }
+        Some(_) => return Err(Error::invalid("`tools` must be an array")),
+    }
+
+    req.tool_choice = match obj.get("tool_choice") {
+        None | Some(Value::Null) => None,
+        Some(tc) => {
+            let kind = tc
+                .get("type")
+                .and_then(Value::as_str)
+                .ok_or_else(|| Error::invalid("tool_choice is missing `type`"))?;
+            match kind {
                 "auto" => Some(ToolChoice::Auto),
                 "any" => Some(ToolChoice::Any),
                 "none" => Some(ToolChoice::None),
-                "tool" => tc
-                    .get("name")
-                    .and_then(Value::as_str)
-                    .map(|n| ToolChoice::Specific {
-                        name: n.to_string(),
-                    }),
-                _ => None,
-            });
+                "tool" => {
+                    let name = tc
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| Error::invalid("tool_choice is missing `name`"))?;
+                    Some(ToolChoice::Specific {
+                        name: name.to_string(),
+                    })
+                }
+                other => return Err(unsupported_content("tool_choice", Some(other))),
+            }
+        }
+    };
 
     if let Some(th) = obj.get("thinking") {
-        let enabled = th.get("type").and_then(Value::as_str) == Some("enabled");
+        let kind = th
+            .get("type")
+            .and_then(Value::as_str)
+            .ok_or_else(|| Error::invalid("thinking is missing `type`"))?;
+        let enabled = match kind {
+            "enabled" => true,
+            "disabled" => false,
+            other => return Err(unsupported_content("thinking", Some(other))),
+        };
         req.thinking = Some(ThinkingConfig {
             enabled,
             budget_tokens: th
@@ -149,6 +194,7 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
         }
     }
 
+    req.refresh_required_capabilities();
     Ok(req)
 }
 
@@ -156,11 +202,7 @@ fn decode_message(m: &Value) -> Result<Message> {
     let role = match m.get("role").and_then(Value::as_str) {
         Some("user") => Role::User,
         Some("assistant") => Role::Assistant,
-        Some(other) => {
-            return Err(Error::invalid(format!(
-                "unsupported message role `{other}`"
-            )))
-        }
+        Some(other) => return Err(unsupported_content("message role", Some(other))),
         None => return Err(Error::invalid("message is missing `role`")),
     };
     let content = match m.get("content") {
@@ -190,7 +232,7 @@ fn decode_block(b: &Value) -> Result<Option<ContentBlock>> {
             text: b
                 .get("text")
                 .and_then(Value::as_str)
-                .unwrap_or("")
+                .ok_or_else(|| Error::invalid("text block is missing `text`"))?
                 .to_string(),
             cache_control: b.get("cache_control").cloned(),
         },
@@ -198,7 +240,7 @@ fn decode_block(b: &Value) -> Result<Option<ContentBlock>> {
             text: b
                 .get("thinking")
                 .and_then(Value::as_str)
-                .unwrap_or("")
+                .ok_or_else(|| Error::invalid("thinking block is missing `thinking`"))?
                 .to_string(),
             signature: b
                 .get("signature")
@@ -209,7 +251,7 @@ fn decode_block(b: &Value) -> Result<Option<ContentBlock>> {
             data: b
                 .get("data")
                 .and_then(Value::as_str)
-                .unwrap_or("")
+                .ok_or_else(|| Error::invalid("redacted_thinking block is missing `data`"))?
                 .to_string(),
         },
         "image" => ContentBlock::Image {
@@ -222,7 +264,7 @@ fn decode_block(b: &Value) -> Result<Option<ContentBlock>> {
             id: b
                 .get("id")
                 .and_then(Value::as_str)
-                .unwrap_or("")
+                .ok_or_else(|| Error::invalid("tool_use block is missing `id`"))?
                 .to_string(),
             name: b
                 .get("name")
@@ -241,21 +283,34 @@ fn decode_block(b: &Value) -> Result<Option<ContentBlock>> {
                 Some(Value::String(s)) => vec![ToolResultPart::Text { text: s.clone() }],
                 Some(Value::Array(parts)) => parts
                     .iter()
-                    .filter_map(|p| match p.get("type").and_then(Value::as_str) {
-                        Some("text") => Some(ToolResultPart::Text {
-                            text: p
-                                .get("text")
-                                .and_then(Value::as_str)
-                                .unwrap_or("")
-                                .to_string(),
-                        }),
-                        Some("image") => decode_source(p.get("source"))
-                            .ok()
-                            .map(|source| ToolResultPart::Image { source }),
-                        _ => None,
+                    .map(|part| {
+                        let part_kind = part
+                            .get("type")
+                            .and_then(Value::as_str)
+                            .ok_or_else(|| Error::invalid("tool result part is missing `type`"))?;
+                        match part_kind {
+                            "text" => Ok(ToolResultPart::Text {
+                                text: part
+                                    .get("text")
+                                    .and_then(Value::as_str)
+                                    .ok_or_else(|| {
+                                        Error::invalid("tool result text part is missing `text`")
+                                    })?
+                                    .to_string(),
+                            }),
+                            "image" => Ok(ToolResultPart::Image {
+                                source: decode_source(part.get("source"))?,
+                            }),
+                            other => Err(unsupported_content("tool result", Some(other))),
+                        }
                     })
-                    .collect(),
-                _ => Vec::new(),
+                    .collect::<Result<Vec<_>>>()?,
+                None | Some(Value::Null) => Vec::new(),
+                Some(_) => {
+                    return Err(Error::invalid(
+                        "tool_result content must be a string or an array",
+                    ));
+                }
             };
             ContentBlock::ToolResult {
                 tool_use_id,
@@ -264,36 +319,40 @@ fn decode_block(b: &Value) -> Result<Option<ContentBlock>> {
                 is_error: b.get("is_error").and_then(Value::as_bool).unwrap_or(false),
             }
         }
-        // Unknown block types (e.g. server side tools) are dropped rather than
-        // failing the whole request.
-        _ => return Ok(None),
+        other => return Err(unsupported_content("message", Some(other))),
     };
     Ok(Some(block))
 }
 
 fn decode_source(source: Option<&Value>) -> Result<MediaSource> {
     let s = source.ok_or_else(|| Error::invalid("media block is missing `source`"))?;
-    match s.get("type").and_then(Value::as_str) {
-        Some("base64") => Ok(MediaSource::Base64 {
+    let kind = s
+        .get("type")
+        .and_then(Value::as_str)
+        .ok_or_else(|| Error::invalid("media source is missing `type`"))?;
+    match kind {
+        "base64" => Ok(MediaSource::Base64 {
             media_type: s
                 .get("media_type")
                 .and_then(Value::as_str)
-                .unwrap_or("application/octet-stream")
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| Error::invalid("base64 media source is missing `media_type`"))?
                 .to_string(),
             data: s
                 .get("data")
                 .and_then(Value::as_str)
-                .unwrap_or("")
+                .ok_or_else(|| Error::invalid("base64 media source is missing `data`"))?
                 .to_string(),
         }),
-        Some("url") => Ok(MediaSource::Url {
+        "url" => Ok(MediaSource::Url {
             url: s
                 .get("url")
                 .and_then(Value::as_str)
-                .unwrap_or("")
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| Error::invalid("url media source is missing `url`"))?
                 .to_string(),
         }),
-        _ => Err(Error::invalid("unsupported media source type")),
+        other => Err(unsupported_content("media source", Some(other))),
     }
 }
 
@@ -488,8 +547,13 @@ pub(crate) fn encode_block(b: &ContentBlock) -> Value {
                 "is_error": is_error,
             })
         }
-        // New IR variants not yet mapped to Anthropic wire format.
-        _ => json!(null),
+        // Response encoding has no request policy context; make an explicit
+        // visible replacement instead of emitting a null block.
+        ContentBlock::File { .. }
+        | ContentBlock::Audio { .. }
+        | ContentBlock::Video { .. }
+        | ContentBlock::Citation { .. }
+        | ContentBlock::Annotation { .. } => encode_block(&explicit_placeholder(b)),
     }
 }
 
@@ -593,7 +657,12 @@ pub fn decode_response(body: Value) -> Result<ChatResponse> {
             }
             out
         }
-        _ => Vec::new(),
+        None | Some(Value::Null) => Vec::new(),
+        Some(_) => {
+            return Err(Error::BadUpstreamPayload(
+                "Anthropic response content must be an array".into(),
+            ));
+        }
     };
     Ok(ChatResponse {
         id: body
@@ -732,7 +801,7 @@ impl StreamParser for AnthropicStreamParser {
                             }]
                         }
                     }
-                    _ => {
+                    Some("text") => {
                         let t = block
                             .and_then(|b| b.get("text"))
                             .and_then(Value::as_str)
@@ -745,6 +814,16 @@ impl StreamParser for AnthropicStreamParser {
                                 text: t.to_string(),
                             }]
                         }
+                    }
+                    Some(_) => {
+                        return Err(unsupported_upstream_content(
+                            "Anthropic stream block",
+                        ));
+                    }
+                    None => {
+                        return Err(Error::BadUpstreamPayload(
+                            "Anthropic stream content block is missing `type`".into(),
+                        ));
                     }
                 }
             }
@@ -783,7 +862,16 @@ impl StreamParser for AnthropicStreamParser {
                             .unwrap_or_default()
                             .to_string(),
                     }],
-                    _ => Vec::new(),
+                    Some(_) => {
+                        return Err(unsupported_upstream_content(
+                            "Anthropic stream delta",
+                        ));
+                    }
+                    None => {
+                        return Err(Error::BadUpstreamPayload(
+                            "Anthropic stream delta is missing `type`".into(),
+                        ));
+                    }
                 }
             }
             "content_block_stop" => {
@@ -824,7 +912,9 @@ impl StreamParser for AnthropicStreamParser {
                     .unwrap_or("upstream stream error");
                 return Err(Error::BadUpstreamPayload(msg.to_string()));
             }
-            _ => Vec::new(),
+            _ => {
+                return Err(unsupported_upstream_content("Anthropic stream event"));
+            }
         };
         Ok(events)
     }

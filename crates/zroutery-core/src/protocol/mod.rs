@@ -15,15 +15,65 @@ use crate::ir::{ChatRequest, ChatResponse, ContentBlock, Dialect, StreamEvent, U
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// Apply the unsupported content policy to a content block that the target
-/// protocol cannot represent.
+/// The explicit result of evaluating an unsupported-content policy.
 ///
-/// Returns `Ok(Some(replacement))` for `Placeholder`, `Ok(None)` for `Drop`
-/// and `Transform`, or `Err` for `Reject`.
-pub fn apply_content_policy(
+/// `Transform` is intentionally not represented as a successful result here:
+/// a transform must provide a concrete replacement before it can be encoded.
+/// `Drop` is represented as a distinct decision, but the fail-closed encoder
+/// refuses to apply it until a caller can attach auditable evidence.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case")]
+pub enum ContentPolicyOutcome {
+    /// Encode this explicit replacement in place of the original block.
+    Replacement(ContentBlock),
+    /// The caller explicitly selected a drop.  The encoder must not silently
+    /// omit the block; it must reject or record the decision first.
+    Drop,
+}
+
+/// Make a fail-closed, non-sensitive error for an unknown protocol content
+/// type.  Only a short, sanitized type token is included in the client error;
+/// the original payload is never copied into it.
+pub(crate) fn unsupported_content(context: &str, kind: Option<&str>) -> Error {
+    let kind = kind.map(sanitize_type).unwrap_or_else(|| "unknown".to_string());
+    Error::invalid(format!(
+        "unsupported {context} content type `{kind}`"
+    ))
+}
+
+/// Fail-closed error for an unknown item received from an upstream response.
+/// The payload and its type string are intentionally not echoed.
+pub(crate) fn unsupported_upstream_content(context: &str) -> Error {
+    Error::BadUpstreamPayload(format!("unsupported {context} content"))
+}
+
+fn sanitize_type(kind: &str) -> String {
+    let mut out = String::new();
+    for ch in kind.chars().take(64) {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.') {
+            out.push(ch);
+        } else {
+            out.push('_');
+        }
+    }
+    if out.is_empty() {
+        "unknown".to_string()
+    } else {
+        out
+    }
+}
+
+/// Evaluate an unsupported-content policy without collapsing distinct actions.
+///
+/// A successful transform must carry an explicit replacement.  The current
+/// protocol layer has no safe implicit transformer, so `Transform` fails
+/// closed.  `Drop` is returned as an explicit outcome; callers that are about
+/// to encode must use [`apply_content_policy`], which rejects that outcome
+/// rather than silently losing the block.
+pub fn evaluate_content_policy(
     policy: UnsupportedContentPolicy,
     block: &ContentBlock,
-) -> Result<Option<ContentBlock>> {
+) -> Result<ContentPolicyOutcome> {
     match policy {
         UnsupportedContentPolicy::Reject => {
             let label = content_label(block);
@@ -32,10 +82,29 @@ pub fn apply_content_policy(
             )))
         }
         UnsupportedContentPolicy::Placeholder => {
-            let label = content_label(block);
-            Ok(Some(ContentBlock::text(format!("[Unsupported: {label}]"))))
+            Ok(ContentPolicyOutcome::Replacement(explicit_placeholder(block)))
         }
-        UnsupportedContentPolicy::Transform | UnsupportedContentPolicy::Drop => Ok(None),
+        UnsupportedContentPolicy::Transform => Err(Error::invalid(
+            "content transform requires an explicit replacement",
+        )),
+        UnsupportedContentPolicy::Drop => Ok(ContentPolicyOutcome::Drop),
+    }
+}
+
+/// Apply an unsupported-content policy at an encoding boundary.
+///
+/// Only an explicit replacement can be applied.  In particular, `Drop` is not
+/// converted into `None`: a caller must either record an auditable decision or
+/// receive an explicit error.
+pub fn apply_content_policy(
+    policy: UnsupportedContentPolicy,
+    block: &ContentBlock,
+) -> Result<Option<ContentBlock>> {
+    match evaluate_content_policy(policy, block)? {
+        ContentPolicyOutcome::Replacement(replacement) => Ok(Some(replacement)),
+        ContentPolicyOutcome::Drop => Err(Error::invalid(
+            "content was explicitly selected for drop but no auditable replacement or drop evidence was supplied",
+        )),
     }
 }
 
@@ -53,23 +122,32 @@ pub(crate) fn normalize_audio_format(media_type: &str) -> &str {
     }
 }
 
-/// Human-readable label for a content block, used in placeholder text and
-/// error messages.
+/// The explicit replacement used when a response encoder cannot represent a
+/// block and has no request policy context.  It is deliberately visible text,
+/// never a missing/null block.
+pub(crate) fn explicit_placeholder(block: &ContentBlock) -> ContentBlock {
+    ContentBlock::text(format!("[Unsupported: {}]", content_label(block)))
+}
+
+/// Human-readable, non-sensitive label for a content block, used in
+/// placeholder text and error messages.
 fn content_label(block: &ContentBlock) -> String {
     match block {
         ContentBlock::Document { .. } => "document".into(),
-        ContentBlock::File {
-            name, media_type, ..
-        } => format!("file ({})", name.as_deref().unwrap_or(media_type)),
-        ContentBlock::Audio { media_type, .. } => format!("audio ({media_type})"),
-        ContentBlock::Video { media_type, .. } => format!("video ({media_type})"),
-        ContentBlock::Citation { text, .. } => {
-            let preview = if text.len() > 50 { &text[..50] } else { text };
-            format!("citation: {preview}")
+        ContentBlock::File { media_type, .. } => {
+            let category = sanitize_type(media_type.split('/').next().unwrap_or("file"));
+            format!("file ({category})")
         }
-        ContentBlock::Annotation {
-            annotation_type, ..
-        } => format!("annotation ({annotation_type})"),
+        ContentBlock::Audio { media_type, .. } => {
+            let category = sanitize_type(media_type.split('/').next().unwrap_or("audio"));
+            format!("audio ({category})")
+        }
+        ContentBlock::Video { media_type, .. } => {
+            let category = sanitize_type(media_type.split('/').next().unwrap_or("video"));
+            format!("video ({category})")
+        }
+        ContentBlock::Citation { .. } => "citation".into(),
+        ContentBlock::Annotation { .. } => "annotation".into(),
         _ => "unsupported content".into(),
     }
 }
@@ -122,12 +200,14 @@ impl Default for ProviderQuirks {
 
 /// Decode an inbound request body of the given dialect into the IR.
 pub fn decode_request(dialect: Dialect, body: Value) -> Result<ChatRequest> {
-    match dialect {
+    let mut request = match dialect {
         Dialect::Anthropic => anthropic::decode_request(body),
         Dialect::OpenAI => openai::decode_request(body),
         Dialect::OpenAIResponses => responses::decode_request(body),
         Dialect::Gemini => gemini::decode_request(body),
-    }
+    }?;
+    request.refresh_required_capabilities();
+    Ok(request)
 }
 
 /// Encode the IR into an upstream request body for the given dialect.

@@ -9,7 +9,7 @@ use serde_json::{json, Map, Value};
 
 use super::apply_content_policy;
 use super::reasoning_bridge;
-use super::ProviderQuirks;
+use super::{explicit_placeholder, unsupported_content, ProviderQuirks};
 use crate::error::{Error, Result};
 use crate::ir::{
     ChatRequest, ChatResponse, ContentBlock, Dialect, MediaSource, Message, Role, StopReason,
@@ -57,10 +57,13 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
         .ok_or_else(|| Error::invalid("`messages` is required"))?;
 
     for m in messages {
-        let role = m.get("role").and_then(Value::as_str).unwrap_or("user");
+        let role = m
+            .get("role")
+            .and_then(Value::as_str)
+            .ok_or_else(|| Error::invalid("message is missing `role`"))?;
         match role {
             "system" | "developer" => {
-                if let Some(text) = flatten_content(m.get("content")) {
+                if let Some(text) = flatten_content(m.get("content"))? {
                     req.system.push(SystemPart::new(text));
                 }
             }
@@ -68,14 +71,12 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
                 let tool_use_id = m
                     .get("tool_call_id")
                     .and_then(Value::as_str)
-                    .unwrap_or_default()
+                    .ok_or_else(|| Error::invalid("tool message is missing `tool_call_id`"))?
                     .to_string();
                 let block = ContentBlock::ToolResult {
                     tool_use_id,
                     name: String::new(),
-                    content: vec![ToolResultPart::Text {
-                        text: flatten_content(m.get("content")).unwrap_or_default(),
-                    }],
+                    content: decode_tool_result_content(m.get("content"))?,
                     is_error: false,
                 };
                 // Tool results belong to the following user turn.
@@ -100,57 +101,22 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
                 // Reasoning models (DeepSeek et al) put their chain of thought in
                 // `reasoning_content`; some relays require it to be passed back on
                 // history turns, so it is preserved through the IR as a Thinking block.
-                if let Some(reasoning) = m
-                    .get("reasoning_content")
-                    .and_then(Value::as_str)
-                    .filter(|s| !s.is_empty())
-                {
-                    content.push(ContentBlock::Thinking {
-                        text: reasoning.to_string(),
-                        signature: None,
-                    });
-                } else if let Some(reasoning) = m
-                    .get("reasoning")
-                    .and_then(Value::as_str)
-                    .filter(|s| !s.is_empty())
-                {
-                    content.push(ContentBlock::Thinking {
-                        text: reasoning.to_string(),
-                        signature: None,
-                    });
+                if let Some(reasoning) = m.get("reasoning_content").filter(|value| !value.is_null()) {
+                    decode_reasoning_value(reasoning, &mut content, "reasoning_content")?;
+                } else if let Some(reasoning) = m.get("reasoning") {
+                    decode_reasoning_value(reasoning, &mut content, "reasoning")?;
                 }
-                // Responses-style reasoning items can carry an encrypted
-                // Anthropic thinking block through the reasoning bridge.
-                if let Some(items) = m.get("reasoning").and_then(Value::as_array) {
-                    for item in items {
-                        if let Some(block) = reasoning_bridge::decode_reasoning_item(item) {
-                            content.push(block);
-                        }
-                    }
-                }
-                if let Some(text) = flatten_content(m.get("content")) {
+                if let Some(text) = flatten_content(m.get("content"))? {
                     if !text.is_empty() {
                         content.push(ContentBlock::text(text));
                     }
                 }
-                if let Some(calls) = m.get("tool_calls").and_then(Value::as_array) {
-                    for c in calls {
-                        let f = c.get("function");
-                        content.push(ContentBlock::ToolUse {
-                            id: c
-                                .get("id")
-                                .and_then(Value::as_str)
-                                .unwrap_or_default()
-                                .to_string(),
-                            name: f
-                                .and_then(|f| f.get("name"))
-                                .and_then(Value::as_str)
-                                .unwrap_or_default()
-                                .to_string(),
-                            input: parse_arguments(
-                                f.and_then(|f| f.get("arguments")).and_then(Value::as_str),
-                            ),
-                        });
+                if let Some(calls_value) = m.get("tool_calls") {
+                    let calls = calls_value
+                        .as_array()
+                        .ok_or_else(|| Error::invalid("assistant tool_calls must be an array"))?;
+                    for call in calls {
+                        content.push(decode_tool_call(call)?);
                     }
                 }
                 req.messages.push(Message {
@@ -158,14 +124,19 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
                     content,
                 });
             }
-            _ => {
+            "user" => {
                 let content = decode_user_content(m.get("content"))?;
                 req.messages.push(Message {
                     role: Role::User,
                     content,
                 });
             }
+            other => return Err(unsupported_content("message role", Some(other))),
         }
+    }
+
+    if obj.get("n").and_then(Value::as_u64).is_some_and(|n| n > 1) {
+        return Err(Error::invalid("`n` greater than one is not representable"));
     }
 
     req.max_tokens = obj
@@ -177,57 +148,74 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
     req.top_p = obj.get("top_p").and_then(Value::as_f64);
     req.stream = obj.get("stream").and_then(Value::as_bool).unwrap_or(false);
     req.stop_sequences = match obj.get("stop") {
+        None | Some(Value::Null) => Vec::new(),
         Some(Value::String(s)) => vec![s.clone()],
-        Some(Value::Array(a)) => a
+        Some(Value::Array(values)) => values
             .iter()
-            .filter_map(Value::as_str)
-            .map(str::to_string)
-            .collect(),
-        _ => Vec::new(),
+            .map(|value| {
+                value
+                    .as_str()
+                    .map(str::to_string)
+                    .ok_or_else(|| Error::invalid("stop sequence entries must be strings"))
+            })
+            .collect::<Result<Vec<_>>>()?,
+        Some(_) => return Err(Error::invalid("`stop` must be a string or an array")),
     };
 
-    if let Some(tools) = obj.get("tools").and_then(Value::as_array) {
-        for t in tools {
-            let f = t.get("function").unwrap_or(t);
-            let Some(name) = f.get("name").and_then(Value::as_str) else {
-                tracing::warn!("skipping tool definition without a `name` field");
-                continue;
-            };
-            req.tools.push(ToolDef {
-                name: name.to_string(),
-                description: f
-                    .get("description")
+    let tool_source = obj.get("tools").or_else(|| obj.get("functions"));
+    match tool_source {
+        None | Some(Value::Null) => {}
+        Some(Value::Array(tools)) => {
+            for t in tools {
+                let f = t.get("function").unwrap_or(t);
+                let name = f
+                    .get("name")
                     .and_then(Value::as_str)
-                    .map(str::to_string),
-                input_schema: f
-                    .get("parameters")
-                    .cloned()
-                    .unwrap_or_else(|| json!({"type": "object"})),
-                cache_control: None,
-            });
+                    .ok_or_else(|| Error::invalid("tool definition is missing `name`"))?;
+                req.tools.push(ToolDef {
+                    name: name.to_string(),
+                    description: f
+                        .get("description")
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
+                    input_schema: f
+                        .get("parameters")
+                        .cloned()
+                        .unwrap_or_else(|| json!({"type": "object"})),
+                    cache_control: None,
+                });
+            }
         }
+        Some(_) => return Err(Error::invalid("`tools` must be an array")),
     }
 
     req.tool_choice = match obj.get("tool_choice") {
+        None | Some(Value::Null) => None,
         Some(Value::String(s)) => match s.as_str() {
             "auto" => Some(ToolChoice::Auto),
             "none" => Some(ToolChoice::None),
             "required" | "any" => Some(ToolChoice::Any),
-            _ => None,
+            other => return Err(unsupported_content("tool_choice", Some(other))),
         },
-        Some(Value::Object(o)) => o
-            .get("function")
-            .and_then(|f| f.get("name"))
-            .and_then(Value::as_str)
-            .map(|n| ToolChoice::Specific {
-                name: n.to_string(),
-            }),
-        _ => None,
+        Some(Value::Object(o)) => {
+            let name = o
+                .get("function")
+                .and_then(|f| f.get("name"))
+                .and_then(Value::as_str)
+                .ok_or_else(|| Error::invalid("tool_choice is missing function `name`"))?;
+            Some(ToolChoice::Specific {
+                name: name.to_string(),
+            })
+        }
+        Some(_) => return Err(Error::invalid("`tool_choice` must be a string or an object")),
     };
 
     // Reasoning effort is the OpenAI knob; translate to a thinking budget so
     // Anthropic upstreams get something meaningful.
-    if let Some(effort) = obj.get("reasoning_effort").and_then(Value::as_str) {
+    if let Some(effort) = obj.get("reasoning_effort") {
+        let effort = effort
+            .as_str()
+            .ok_or_else(|| Error::invalid("`reasoning_effort` must be a string"))?;
         req.thinking = Some(match effort {
             "none" | "minimal" => ThinkingConfig {
                 enabled: false,
@@ -237,14 +225,15 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
                 enabled: true,
                 budget_tokens: Some(1024),
             },
+            "medium" => ThinkingConfig {
+                enabled: true,
+                budget_tokens: Some(4096),
+            },
             "high" => ThinkingConfig {
                 enabled: true,
                 budget_tokens: Some(16384),
             },
-            _ => ThinkingConfig {
-                enabled: true,
-                budget_tokens: Some(4096),
-            },
+            other => return Err(unsupported_content("reasoning effort", Some(other))),
         });
     }
 
@@ -256,6 +245,7 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
         }
     }
 
+    req.refresh_required_capabilities();
     Ok(req)
 }
 
@@ -267,21 +257,135 @@ pub fn wants_stream_usage(body: &Value) -> bool {
         .unwrap_or(false)
 }
 
-fn flatten_content(v: Option<&Value>) -> Option<String> {
+fn flatten_content(v: Option<&Value>) -> Result<Option<String>> {
     match v {
-        Some(Value::String(s)) => Some(s.clone()),
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(s)) => Ok(Some(s.clone())),
         Some(Value::Array(parts)) => {
-            let joined: String = parts
-                .iter()
-                .filter_map(|p| match p {
-                    Value::String(s) => Some(s.clone()),
-                    _ => p.get("text").and_then(Value::as_str).map(str::to_string),
-                })
-                .collect::<Vec<_>>()
-                .join("");
-            Some(joined)
+            let mut text = String::new();
+            for part in parts {
+                match part {
+                    Value::String(s) => text.push_str(s),
+                    Value::Object(_) => {
+                        let kind = part.get("type").and_then(Value::as_str);
+                        match kind {
+                            Some("text") | None => {
+                                let value = part.get("text").and_then(Value::as_str).ok_or_else(
+                                    || Error::invalid("text content part is missing `text`"),
+                                )?;
+                                text.push_str(value);
+                            }
+                            Some(other) => {
+                                return Err(unsupported_content("message", Some(other)));
+                            }
+                        }
+                    }
+                    _ => return Err(Error::invalid("content parts must be strings or objects")),
+                }
+            }
+            Ok(Some(text))
         }
-        _ => None,
+        Some(_) => Err(Error::invalid("message content must be a string or an array")),
+    }
+}
+
+fn decode_reasoning_value(
+    value: &Value,
+    content: &mut Vec<ContentBlock>,
+    context: &str,
+) -> Result<()> {
+    match value {
+        Value::Null => Ok(()),
+        Value::String(text) => {
+            if !text.is_empty() {
+                content.push(ContentBlock::Thinking {
+                    text: text.clone(),
+                    signature: None,
+                });
+            }
+            Ok(())
+        }
+        Value::Array(items) => {
+            for item in items {
+                let block = reasoning_bridge::decode_reasoning_item(item).ok_or_else(|| {
+                    unsupported_content(context, item.get("type").and_then(Value::as_str))
+                })?;
+                content.push(block);
+            }
+            Ok(())
+        }
+        _ => Err(Error::invalid(format!("`{context}` must be a string or an array"))),
+    }
+}
+
+fn decode_tool_call(call: &Value) -> Result<ContentBlock> {
+    let function = call
+        .get("function")
+        .ok_or_else(|| Error::invalid("tool call is missing `function`"))?;
+    let name = function
+        .get("name")
+        .and_then(Value::as_str)
+        .ok_or_else(|| Error::invalid("tool call is missing function `name`"))?;
+    let id = call
+        .get("id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| Error::invalid("tool call is missing `id`"))?;
+    let arguments = function.get("arguments").and_then(Value::as_str).unwrap_or("{}");
+    Ok(ContentBlock::ToolUse {
+        id: id.to_string(),
+        name: name.to_string(),
+        input: parse_arguments(Some(arguments)),
+    })
+}
+
+fn decode_tool_result_content(value: Option<&Value>) -> Result<Vec<ToolResultPart>> {
+    match value {
+        None | Some(Value::Null) => Ok(Vec::new()),
+        Some(Value::String(text)) => Ok(vec![ToolResultPart::Text { text: text.clone() }]),
+        Some(Value::Array(parts)) => parts
+            .iter()
+            .map(|part| {
+                let kind = part
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| Error::invalid("tool result part is missing `type`"))?;
+                match kind {
+                    "text" => Ok(ToolResultPart::Text {
+                        text: part
+                            .get("text")
+                            .and_then(Value::as_str)
+                            .ok_or_else(|| Error::invalid("tool result text part is missing `text`"))?
+                            .to_string(),
+                    }),
+                    "image_url" | "input_image" | "image" => {
+                        let url = part
+                            .get("image_url")
+                            .and_then(|image| image.get("url"))
+                            .and_then(Value::as_str)
+                            .or_else(|| part.get("url").and_then(Value::as_str))
+                            .or_else(|| part.get("file_id").and_then(Value::as_str));
+                        let source = match url {
+                            Some(url) if part.get("file_id").is_some() => {
+                                MediaSource::Reference {
+                                    id: url.to_string(),
+                                }
+                            }
+                            Some(url) => MediaSource::from_url(url),
+                            None => {
+                                return Err(Error::invalid(
+                                    "image tool result part is missing `image_url.url`",
+                                ));
+                            }
+                        };
+                        Ok(ToolResultPart::Image { source })
+                    }
+                    other => Err(unsupported_content("tool result", Some(other))),
+                }
+            })
+            .collect(),
+        Some(_) => Err(Error::invalid(
+            "tool message content must be a string or an array",
+        )),
     }
 }
 
@@ -290,113 +394,112 @@ fn decode_user_content(v: Option<&Value>) -> Result<Vec<ContentBlock>> {
         Some(Value::String(s)) => Ok(vec![ContentBlock::text(s.clone())]),
         Some(Value::Array(parts)) => {
             let mut out = Vec::new();
-            for p in parts {
-                match p.get("type").and_then(Value::as_str) {
-                    Some("text") | None => {
-                        if let Some(t) = p.get("text").and_then(Value::as_str) {
-                            out.push(ContentBlock::text(t));
-                        }
-                    }
-                    Some("image_url") => {
-                        if let Some(url) = p
-                            .get("image_url")
-                            .and_then(|i| i.get("url"))
+            for part in parts {
+                let kind = part
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| Error::invalid("content part is missing `type`"))?;
+                match kind {
+                    "text" => {
+                        let text = part
+                            .get("text")
                             .and_then(Value::as_str)
-                        {
-                            out.push(ContentBlock::Image {
-                                source: MediaSource::from_url(url),
-                            });
-                        }
+                            .ok_or_else(|| Error::invalid("text content part is missing `text`"))?;
+                        out.push(ContentBlock::text(text));
                     }
-                    Some("input_audio") => {
-                        if let Some(audio) = p.get("input_audio") {
-                            let format = audio
-                                .get("format")
-                                .and_then(Value::as_str)
-                                .unwrap_or("wav");
-                            let data = audio
-                                .get("data")
-                                .and_then(Value::as_str)
-                                .unwrap_or_default();
-                            out.push(ContentBlock::Audio {
-                                source: MediaSource::Base64 {
-                                    media_type: format!("audio/{format}"),
-                                    data: data.to_string(),
-                                },
-                                media_type: format!("audio/{format}"),
-                            });
-                        }
+                    "image_url" => {
+                        let url = part
+                            .get("image_url")
+                            .and_then(|image| image.get("url"))
+                            .and_then(Value::as_str)
+                            .ok_or_else(|| Error::invalid("image_url content part is missing `url`"))?;
+                        out.push(ContentBlock::Image {
+                            source: MediaSource::from_url(url),
+                        });
                     }
-                    Some("file") => {
+                    "input_audio" => {
+                        let audio = part
+                            .get("input_audio")
+                            .ok_or_else(|| Error::invalid("input_audio content part is missing `input_audio`"))?;
+                        let format = audio
+                            .get("format")
+                            .and_then(Value::as_str)
+                            .unwrap_or("wav");
+                        let data = audio
+                            .get("data")
+                            .and_then(Value::as_str)
+                            .ok_or_else(|| Error::invalid("input_audio is missing `data`"))?;
+                        let media_type = format!("audio/{format}");
+                        out.push(ContentBlock::Audio {
+                            source: MediaSource::Base64 {
+                                media_type: media_type.clone(),
+                                data: data.to_string(),
+                            },
+                            media_type,
+                        });
+                    }
+                    "file" => {
                         // Support both legacy {file: {data, url, media_type}} and
-                        // Responses-style {file_data, file_url, file_id, filename, media_type}
-                        let (source, media_type, name) = if let Some(file_obj) = p.get("file") {
-                            // Legacy nested format
+                        // Responses-style {file_data, file_url, file_id, filename, media_type}.
+                        let (source, media_type, name) = if let Some(file_obj) = part.get("file") {
                             let data = file_obj.get("data").and_then(Value::as_str);
                             let url = file_obj.get("url").and_then(Value::as_str);
-                            let mt = file_obj
+                            let media_type = file_obj
                                 .get("media_type")
                                 .or_else(|| file_obj.get("mime_type"))
                                 .and_then(Value::as_str)
                                 .unwrap_or("application/octet-stream")
                                 .to_string();
-                            let n = file_obj
+                            let name = file_obj
                                 .get("filename")
                                 .or_else(|| file_obj.get("name"))
                                 .and_then(Value::as_str)
                                 .map(String::from);
-                            let src = if let Some(d) = data {
+                            let source = if let Some(data) = data {
                                 MediaSource::Base64 {
-                                    media_type: mt.clone(),
-                                    data: d.to_string(),
+                                    media_type: media_type.clone(),
+                                    data: data.to_string(),
                                 }
-                            } else if let Some(u) = url {
+                            } else if let Some(url) = url {
                                 MediaSource::Url {
-                                    url: u.to_string(),
+                                    url: url.to_string(),
                                 }
                             } else {
-                                continue; // No data or url
+                                return Err(Error::invalid(
+                                    "file content is missing `data`, `url`, or `file_id`",
+                                ));
                             };
-                            (src, mt, n)
+                            (source, media_type, name)
                         } else {
-                            // Responses-style flat format
-                            let mt = p
+                            let media_type = part
                                 .get("media_type")
                                 .and_then(Value::as_str)
                                 .unwrap_or("application/octet-stream")
                                 .to_string();
-                            let n = p
+                            let name = part
                                 .get("filename")
                                 .and_then(Value::as_str)
                                 .map(String::from);
-                            if let Some(d) = p.get("file_data").and_then(Value::as_str) {
-                                (
-                                    MediaSource::Base64 {
-                                        media_type: mt.clone(),
-                                        data: d.to_string(),
-                                    },
-                                    mt,
-                                    n,
-                                )
-                            } else if let Some(u) = p.get("file_url").and_then(Value::as_str) {
-                                (
-                                    MediaSource::Url {
-                                        url: u.to_string(),
-                                    },
-                                    mt,
-                                    n,
-                                )
-                            } else if let Some(id) = p.get("file_id").and_then(Value::as_str) {
-                                (
-                                    MediaSource::Reference {
-                                        id: id.to_string(),
-                                    },
-                                    mt,
-                                    n,
-                                )
+                            let source = if let Some(data) = part.get("file_data").and_then(Value::as_str)
+                            {
+                                MediaSource::Base64 {
+                                    media_type: media_type.clone(),
+                                    data: data.to_string(),
+                                }
+                            } else if let Some(url) = part.get("file_url").and_then(Value::as_str) {
+                                MediaSource::Url {
+                                    url: url.to_string(),
+                                }
+                            } else if let Some(id) = part.get("file_id").and_then(Value::as_str) {
+                                MediaSource::Reference {
+                                    id: id.to_string(),
+                                }
                             } else {
-                                continue;
-                            }
+                                return Err(Error::invalid(
+                                    "file content is missing `file_data`, `file_url`, or `file_id`",
+                                ));
+                            };
+                            (source, media_type, name)
                         };
                         out.push(ContentBlock::File {
                             source,
@@ -404,7 +507,7 @@ fn decode_user_content(v: Option<&Value>) -> Result<Vec<ContentBlock>> {
                             name,
                         });
                     }
-                    _ => {}
+                    other => return Err(unsupported_content("message", Some(other))),
                 }
             }
             Ok(out)
@@ -580,28 +683,43 @@ fn encode_message_into(
                         "type": "function",
                         "function": {"name": name, "arguments": arguments_json(input)},
                     })),
-                    // Thinking blocks are echoed only when the client itself sent
-                    // reasoning (OpenAI source): some gateways require history
-                    // turns to carry `reasoning_content` back. For other sources
-                    // (e.g. Anthropic) it is dropped — most providers reject it.
-                    ContentBlock::Thinking { text: t, signature } if echo_reasoning => {
-                        if let Some(item) = reasoning_bridge::encode_thinking_block(b) {
-                            reasoning_items.push(item);
-                        } else {
-                            reasoning.push_str(t);
+                    // Reasoning history is echoed only when the source dialect
+                    // supports it.  Otherwise it follows the same explicit
+                    // unsupported-content policy as every other block; it is
+                    // never silently discarded.
+                    ContentBlock::Thinking { text: t, signature } => {
+                        if echo_reasoning {
+                            if let Some(item) = reasoning_bridge::encode_thinking_block(b) {
+                                reasoning_items.push(item);
+                            } else {
+                                reasoning.push_str(t);
+                            }
+                            let _ = signature;
+                        } else if let Some(replacement) = apply_content_policy(policy, b)? {
+                            if let Some(replacement_text) = replacement.as_text() {
+                                text.push_str(replacement_text);
+                            }
                         }
-                        let _ = signature;
                     }
-                    ContentBlock::RedactedThinking { .. } if echo_reasoning => {
-                        if let Some(item) = reasoning_bridge::encode_thinking_block(b) {
-                            reasoning_items.push(item);
+                    ContentBlock::RedactedThinking { .. } => {
+                        if echo_reasoning {
+                            if let Some(item) = reasoning_bridge::encode_thinking_block(b) {
+                                reasoning_items.push(item);
+                            }
+                        } else if let Some(replacement) = apply_content_policy(policy, b)? {
+                            if let Some(replacement_text) = replacement.as_text() {
+                                text.push_str(replacement_text);
+                            }
                         }
                     }
-                    // Audio is not representable in assistant messages.
+                    // Media and structured content that cannot be represented in
+                    // an assistant turn follows the explicit policy.
                     ContentBlock::Audio { .. }
                     | ContentBlock::Document { .. }
                     | ContentBlock::File { .. }
                     | ContentBlock::Video { .. }
+                    | ContentBlock::Image { .. }
+                    | ContentBlock::ToolResult { .. }
                     | ContentBlock::Citation { .. }
                     | ContentBlock::Annotation { .. } => {
                         if let Some(replacement) = apply_content_policy(policy, b)? {
@@ -610,7 +728,6 @@ fn encode_message_into(
                             }
                         }
                     }
-                    _ => {}
                 }
             }
             let mut msg = Map::new();
@@ -640,22 +757,41 @@ fn encode_message_into(
                         content,
                         ..
                     } => {
-                        let text: String = content
-                            .iter()
-                            .map(|p| match p {
-                                ToolResultPart::Text { text } => text.clone(),
-                                ToolResultPart::Image { .. } => "[image]".to_string(),
-                            })
-                            .collect::<Vec<_>>()
-                            .join("\n");
+                        let mut text_parts = Vec::new();
+                        for part in content {
+                            match part {
+                                ToolResultPart::Text { text } => text_parts.push(text.clone()),
+                                ToolResultPart::Image { source } => {
+                                    let image = ContentBlock::Image {
+                                        source: source.clone(),
+                                    };
+                                    if let Some(replacement) =
+                                        apply_content_policy(policy, &image)?
+                                    {
+                                        if let Some(text) = replacement.as_text() {
+                                            text_parts.push(text.to_string());
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         out.push(json!({
                             "role": "tool",
                             "tool_call_id": tool_use_id,
-                            "content": text,
+                            "content": text_parts.join("\n"),
                         }));
                     }
                     ContentBlock::Text { text, .. } => {
                         parts.push(json!({"type": "text", "text": text}))
+                    }
+                    ContentBlock::Image {
+                        source: MediaSource::Reference { .. },
+                    } => {
+                        if let Some(replacement) = apply_content_policy(policy, b)? {
+                            if let Some(t) = replacement.as_text() {
+                                parts.push(json!({"type": "text", "text": t}));
+                            }
+                        }
                     }
                     ContentBlock::Image { source } => parts.push(json!({
                         "type": "image_url",
@@ -685,14 +821,16 @@ fn encode_message_into(
                     | ContentBlock::File { .. }
                     | ContentBlock::Video { .. }
                     | ContentBlock::Citation { .. }
-                    | ContentBlock::Annotation { .. } => {
+                    | ContentBlock::Annotation { .. }
+                    | ContentBlock::ToolUse { .. }
+                    | ContentBlock::Thinking { .. }
+                    | ContentBlock::RedactedThinking { .. } => {
                         if let Some(replacement) = apply_content_policy(policy, b)? {
                             if let Some(t) = replacement.as_text() {
                                 parts.push(json!({"type": "text", "text": t}));
                             }
                         }
                     }
-                    _ => {}
                 }
             }
             if !parts.is_empty() {
@@ -786,10 +924,17 @@ pub fn decode_response(body: Value) -> Result<ChatResponse> {
             .unwrap_or("unknown upstream error");
         return Err(Error::BadUpstreamPayload(msg.to_string()));
     }
-    let choice = body
+    let choices = body
         .get("choices")
         .and_then(Value::as_array)
-        .and_then(|c| c.first())
+        .ok_or_else(|| Error::BadUpstreamPayload("response has no choices".into()))?;
+    if choices.len() > 1 {
+        return Err(Error::BadUpstreamPayload(
+            "multiple response choices are not representable".into(),
+        ));
+    }
+    let choice = choices
+        .first()
         .ok_or_else(|| Error::BadUpstreamPayload("response has no choices".into()))?;
     let msg = choice
         .get("message")
@@ -799,33 +944,18 @@ pub fn decode_response(body: Value) -> Result<ChatResponse> {
     if let Some(reasoning) = msg
         .get("reasoning_content")
         .or_else(|| msg.get("reasoning"))
-        .and_then(Value::as_str)
-        .filter(|s| !s.is_empty())
     {
-        content.push(ContentBlock::Thinking {
-            text: reasoning.to_string(),
-            signature: None,
-        });
+        decode_reasoning_value(reasoning, &mut content, "reasoning_content")?;
     }
-    if let Some(text) = flatten_content(msg.get("content")).filter(|t| !t.is_empty()) {
+    if let Some(text) = flatten_content(msg.get("content"))?.filter(|t| !t.is_empty()) {
         content.push(ContentBlock::text(text));
     }
-    if let Some(calls) = msg.get("tool_calls").and_then(Value::as_array) {
-        for c in calls {
-            let f = c.get("function");
-            content.push(ContentBlock::ToolUse {
-                id: c
-                    .get("id")
-                    .and_then(Value::as_str)
-                    .map(str::to_string)
-                    .unwrap_or_else(|| format!("call_{}", uuid::Uuid::new_v4().simple())),
-                name: f
-                    .and_then(|f| f.get("name"))
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string(),
-                input: parse_arguments(f.and_then(|f| f.get("arguments")).and_then(Value::as_str)),
-            });
+    if let Some(calls_value) = msg.get("tool_calls") {
+        let calls = calls_value
+            .as_array()
+            .ok_or_else(|| Error::BadUpstreamPayload("tool_calls must be an array".into()))?;
+        for call in calls {
+            content.push(decode_tool_call(call)?);
         }
     }
 
@@ -866,7 +996,19 @@ pub fn encode_response(resp: &ChatResponse) -> Value {
                 "type": "function",
                 "function": {"name": name, "arguments": arguments_json(input)},
             })),
-            _ => {}
+            ContentBlock::Image { .. }
+            | ContentBlock::Document { .. }
+            | ContentBlock::File { .. }
+            | ContentBlock::Audio { .. }
+            | ContentBlock::Video { .. }
+            | ContentBlock::ToolResult { .. }
+            | ContentBlock::RedactedThinking { .. }
+            | ContentBlock::Citation { .. }
+            | ContentBlock::Annotation { .. } => {
+                if let Some(placeholder_text) = explicit_placeholder(b).as_text() {
+                    text.push_str(placeholder_text);
+                }
+            }
         }
     }
 
@@ -1059,33 +1201,40 @@ impl StreamParser for OpenAiStreamParser {
             // Only the first choice is supported; `n > 1` is not representable
             // in the Anthropic dialect.
             if choice.get("index").and_then(Value::as_u64).unwrap_or(0) != 0 {
-                continue;
+                return Err(Error::BadUpstreamPayload(
+                    "multiple response choices are not representable".into(),
+                ));
             }
             let delta = choice.get("delta").or_else(|| choice.get("message"));
 
             if let Some(reasoning) = delta
                 .and_then(|d| d.get("reasoning_content").or_else(|| d.get("reasoning")))
-                .and_then(Value::as_str)
-                .filter(|s| !s.is_empty())
             {
-                let index = self.block_for(Block::Thinking, &mut out);
-                out.push(StreamEvent::ThinkingDelta {
-                    index,
-                    text: reasoning.to_string(),
-                });
+                let text = match reasoning {
+                    Value::Null => String::new(),
+                    Value::String(text) => text.clone(),
+                    _ => {
+                        return Err(Error::BadUpstreamPayload(
+                            "stream reasoning must be a string".into(),
+                        ));
+                    }
+                };
+                if !text.is_empty() {
+                    let index = self.block_for(Block::Thinking, &mut out);
+                    out.push(StreamEvent::ThinkingDelta { index, text });
+                }
             }
 
-            if let Some(text) = delta
-                .and_then(|d| d.get("content"))
-                .and_then(|c| match c {
-                    Value::String(s) => Some(s.clone()),
-                    Value::Array(_) => flatten_content(Some(c)),
-                    _ => None,
-                })
-                .filter(|s| !s.is_empty())
-            {
-                let index = self.block_for(Block::Text, &mut out);
-                out.push(StreamEvent::TextDelta { index, text });
+            if let Some(content) = delta.and_then(|d| d.get("content")) {
+                let text = match content {
+                    Value::String(s) => s.clone(),
+                    Value::Array(_) => flatten_content(Some(content))?.unwrap_or_default(),
+                    _ => return Err(Error::invalid("stream content must be a string or an array")),
+                };
+                if !text.is_empty() {
+                    let index = self.block_for(Block::Text, &mut out);
+                    out.push(StreamEvent::TextDelta { index, text });
+                }
             }
 
             if let Some(calls) = delta
@@ -1102,23 +1251,29 @@ impl StreamParser for OpenAiStreamParser {
                     let index = match known {
                         Some(i) => i,
                         None => {
+                            let id = call
+                                .get("id")
+                                .and_then(Value::as_str)
+                                .ok_or_else(|| {
+                                    Error::BadUpstreamPayload(
+                                        "stream tool call is missing `id`".into(),
+                                    )
+                                })?;
+                            let name = call
+                                .get("function")
+                                .and_then(|f| f.get("name"))
+                                .and_then(Value::as_str)
+                                .ok_or_else(|| {
+                                    Error::BadUpstreamPayload(
+                                        "stream tool call is missing function `name`".into(),
+                                    )
+                                })?;
                             let i = self.open_block(Block::Tool, &mut out);
                             self.tool_slots.push((slot, i));
                             out.push(StreamEvent::ToolUseStart {
                                 index: i,
-                                id: call
-                                    .get("id")
-                                    .and_then(Value::as_str)
-                                    .map(str::to_string)
-                                    .unwrap_or_else(|| {
-                                        format!("call_{}", uuid::Uuid::new_v4().simple())
-                                    }),
-                                name: call
-                                    .get("function")
-                                    .and_then(|f| f.get("name"))
-                                    .and_then(Value::as_str)
-                                    .unwrap_or_default()
-                                    .to_string(),
+                                id: id.to_string(),
+                                name: name.to_string(),
                             });
                             i
                         }
@@ -1910,9 +2065,15 @@ mod tests {
                 ContentBlock::text("answer"),
             ],
         });
+        assert!(encode_request(&req, "m").is_err());
+        req.unsupported_content_policy = UnsupportedContentPolicy::Placeholder;
         let body = encode_request(&req, "m").unwrap();
         let msgs = body["messages"].as_array().unwrap();
         assert!(msgs[1].get("reasoning_content").is_none());
-        assert_eq!(msgs[1]["content"], "answer");
+        assert!(msgs[1]["content"]
+            .as_str()
+            .unwrap()
+            .contains("Unsupported"));
+        assert!(msgs[1]["content"].as_str().unwrap().contains("answer"));
     }
 }

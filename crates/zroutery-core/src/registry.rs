@@ -244,20 +244,26 @@ impl Registry {
             let Some(members) = self.index.by_tier.get(&tier) else {
                 continue;
             };
+            // A virtual tier is only advertised as capable when every usable
+            // member is declared capable.  An unknown member must not turn a
+            // soft capability into a capability pass in the public listing.
             let mut caps = ModelCapabilities {
                 vision: true,
                 tools: true,
                 thinking: true,
-                ..ModelCapabilities::default()
+                structured_output: true,
+                audio: true,
+                video: true,
+                files: true,
             };
             for m in members.iter().map(|i| &self.config.models[*i]) {
                 caps.tools &= m.capabilities.tools;
                 caps.vision &= m.capabilities.vision;
                 caps.thinking &= m.capabilities.thinking;
-                caps.structured_output |= m.capabilities.structured_output;
-                caps.audio |= m.capabilities.audio;
-                caps.video |= m.capabilities.video;
-                caps.files |= m.capabilities.files;
+                caps.structured_output &= m.capabilities.structured_output;
+                caps.audio &= m.capabilities.audio;
+                caps.video &= m.capabilities.video;
+                caps.files &= m.capabilities.files;
             }
             out.push(ModelInfo {
                 id: tier.virtual_id_styled(style).to_string(),
