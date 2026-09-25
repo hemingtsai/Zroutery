@@ -254,8 +254,8 @@ impl FailureClass {
     /// Classify a non-structural error message.
     ///
     /// This is retained for adapters that receive a message before an
-    /// [`crate::Error`] is available.  Once an `Error` exists,
-    /// [`ClassifiedFailure::from_error`] is the authoritative path.
+    /// [`crate::Error`] is available.  Once a structural `Error` exists,
+    /// [`ClassifiedFailure::from_core_error`] is the authoritative path.
     pub fn from_error_message(message: &str) -> Self {
         let lower = message.to_ascii_lowercase();
         if is_cancelled_message(&lower) {
@@ -380,9 +380,10 @@ impl FailureImpact {
 
 /// A classified failure with context.
 ///
-/// Construct this through [`ClassifiedFailure::from_error`] (or one of its
+/// Construct this through [`ClassifiedFailure::from_core_error`] (or one of its
 /// explicit terminal constructors) rather than assembling a second policy in
-/// a caller.
+/// a caller.  The legacy [`ClassifiedFailure::from_error`] entry point accepts
+/// only a message and is a compatibility adapter, not the structural mapping.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClassifiedFailure {
     pub class: FailureClass,
@@ -410,8 +411,17 @@ impl ClassifiedFailure {
         Self::from_message(message)
     }
 
-    /// The sole exhaustive `Error`-to-classification constructor.
-    pub fn from_error<E>(error: E) -> Self
+    /// Legacy compatibility constructor for the original message-only API.
+    ///
+    /// This deliberately keeps the original `String` signature and message
+    /// classification semantics.  Structural errors must use
+    /// [`ClassifiedFailure::from_core_error`].
+    pub fn from_error(message: String) -> Self {
+        Self::from_message(message)
+    }
+
+    /// The sole exhaustive structural `Error`-to-classification constructor.
+    pub fn from_core_error<E>(error: E) -> Self
     where
         E: std::borrow::Borrow<crate::Error>,
     {
@@ -524,13 +534,13 @@ impl ClassifiedFailure {
 
 impl From<&crate::Error> for ClassifiedFailure {
     fn from(error: &crate::Error) -> Self {
-        Self::from_error(error)
+        Self::from_core_error(error)
     }
 }
 
 impl From<crate::Error> for ClassifiedFailure {
     fn from(error: crate::Error) -> Self {
-        Self::from_error(&error)
+        Self::from_core_error(&error)
     }
 }
 

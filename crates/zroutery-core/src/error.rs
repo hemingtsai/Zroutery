@@ -129,7 +129,7 @@ impl Error {
     /// should consume this value rather than reclassifying the variant or
     /// message themselves.
     pub fn classified(&self) -> crate::failure::ClassifiedFailure {
-        crate::failure::ClassifiedFailure::from_error(self)
+        crate::failure::ClassifiedFailure::from_core_error(self)
     }
 
     /// Alias for [`Error::classified`] used by failure-aware adapters.

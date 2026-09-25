@@ -2,12 +2,28 @@ use zroutery_core::{ClassifiedFailure, Error, FailureClass, FailureImpact};
 
 fn assert_error_class(error: Error, expected: FailureClass) {
     let status = error.status().as_u16();
-    let classified = ClassifiedFailure::from_error(&error);
+    let classified = ClassifiedFailure::from_core_error(&error);
     assert_eq!(classified.class, expected, "wrong class for {error:?}");
     assert_eq!(classified.status, Some(status));
     assert_eq!(classified.impact, expected.impact());
     assert!(classified.records_stats());
     assert!(!classified.is_success());
+}
+
+#[test]
+fn public_constructor_compatibility_preserves_message_and_structural_apis() {
+    // This is the original public call shape and must remain source-compatible.
+    let legacy = ClassifiedFailure::from_error("connection refused".into());
+    assert_eq!(legacy.class, FailureClass::Transport);
+    assert_eq!(legacy.status, None);
+    assert!(legacy.impact.retryable);
+
+    // Structural errors use the explicitly named canonical constructor.
+    let error = Error::Timeout(5);
+    let structural = ClassifiedFailure::from_core_error(&error);
+    assert_eq!(structural.class, FailureClass::Timeout);
+    assert_eq!(structural.status, Some(error.status().as_u16()));
+    assert!(structural.impact.fallbackable);
 }
 
 #[tokio::test]
@@ -267,22 +283,22 @@ fn local_and_configuration_failures_cannot_poison_provider_health() {
         assert!(!error.counts_against_health());
     }
 
-    let missing_key = ClassifiedFailure::from_error(Error::MissingApiKey("p".into()));
+    let missing_key = ClassifiedFailure::from_core_error(Error::MissingApiKey("p".into()));
     assert!(missing_key.fallbackable());
     assert!(!missing_key.retryable());
 
-    let budget = ClassifiedFailure::from_error(Error::OverBudget("limit".into()));
+    let budget = ClassifiedFailure::from_core_error(Error::OverBudget("limit".into()));
     assert!(!budget.fallbackable());
     assert!(!budget.retryable());
 
-    let no_candidate = ClassifiedFailure::from_error(Error::NoCandidate("model".into()));
+    let no_candidate = ClassifiedFailure::from_core_error(Error::NoCandidate("model".into()));
     assert!(!no_candidate.fallbackable());
     assert!(!no_candidate.retryable());
 }
 
 #[test]
 fn capability_authentication_transport_timeout_and_rate_limit_are_explicit() {
-    let capability = ClassifiedFailure::from_error(&Error::Upstream {
+    let capability = ClassifiedFailure::from_core_error(&Error::Upstream {
         provider: "p".into(),
         status: 422,
         body: "model does not support vision".into(),
@@ -294,14 +310,14 @@ fn capability_authentication_transport_timeout_and_rate_limit_are_explicit() {
     assert!(!capability.affects_circuit());
     assert!(!capability.provider_fault());
 
-    let authentication = ClassifiedFailure::from_error(&Error::Unauthorized);
+    let authentication = ClassifiedFailure::from_core_error(&Error::Unauthorized);
     assert_eq!(authentication.class, FailureClass::Authentication);
     assert!(!authentication.fallbackable());
     assert!(!authentication.affects_observation());
     assert!(!authentication.affects_circuit());
     assert!(!authentication.provider_fault());
 
-    let timeout = ClassifiedFailure::from_error(Error::Timeout(7));
+    let timeout = ClassifiedFailure::from_core_error(Error::Timeout(7));
     assert_eq!(timeout.class, FailureClass::Timeout);
     assert!(timeout.retryable());
     assert!(timeout.fallbackable());
@@ -309,7 +325,7 @@ fn capability_authentication_transport_timeout_and_rate_limit_are_explicit() {
     assert!(timeout.affects_circuit());
     assert!(timeout.provider_fault());
 
-    let rate_limit = ClassifiedFailure::from_error(&Error::Upstream {
+    let rate_limit = ClassifiedFailure::from_core_error(&Error::Upstream {
         provider: "p".into(),
         status: 429,
         body: "too many requests".into(),
@@ -400,9 +416,9 @@ fn cancellation_and_interruption_are_terminal_non_successes() {
     );
 
     let cancelled_error =
-        ClassifiedFailure::from_error(Error::Internal("request cancelled by client".into()));
+        ClassifiedFailure::from_core_error(Error::Internal("request cancelled by client".into()));
     assert_eq!(cancelled_error.class, FailureClass::ClientCancelled);
-    let interrupted_error = ClassifiedFailure::from_error(Error::BadUpstreamPayload(
+    let interrupted_error = ClassifiedFailure::from_core_error(Error::BadUpstreamPayload(
         "stream interrupted after partial output".into(),
     ));
     assert_eq!(interrupted_error.class, FailureClass::Interrupted);
