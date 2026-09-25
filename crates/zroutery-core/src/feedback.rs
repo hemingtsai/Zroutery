@@ -8,12 +8,14 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::outcome::{failure_class_wire_name, Outcome};
+
 // ---------------------------------------------------------------------------
 // FeedbackSignal
 // ---------------------------------------------------------------------------
 
 /// A single feedback signal for a completed outcome.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum FeedbackSignal {
     /// User explicitly rated the response.
@@ -28,6 +30,19 @@ pub enum FeedbackSignal {
     ToolExecution { success: bool },
     /// Response was truncated or incomplete.
     Incomplete,
+}
+
+impl FeedbackSignal {
+    pub fn is_explicit_rating(&self) -> bool {
+        matches!(self, Self::ExplicitRating { .. })
+    }
+
+    pub fn rating(&self) -> Option<f64> {
+        match self {
+            Self::ExplicitRating { score } if score.is_finite() => Some(*score),
+            _ => None,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -67,7 +82,7 @@ pub enum DataOrigin {
 // ---------------------------------------------------------------------------
 
 /// Feedback signals for a completed outcome.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Feedback {
     pub outcome_id: String,
     pub timestamp: i64,
@@ -76,12 +91,148 @@ pub struct Feedback {
     pub data_origin: DataOrigin,
 }
 
+impl Feedback {
+    /// Whether this record contains no actual signal.  An absent signal is not
+    /// converted into a positive or negative rating.
+    pub fn is_empty(&self) -> bool {
+        self.signals.is_empty()
+    }
+
+    pub fn has_explicit_rating(&self) -> bool {
+        self.signals.iter().any(FeedbackSignal::is_explicit_rating)
+    }
+
+    /// Return a rating only when exactly one finite explicit rating exists.
+    pub fn rating(&self) -> Option<f64> {
+        let mut ratings = self.signals.iter().filter_map(FeedbackSignal::rating);
+        let first = ratings.next()?;
+        ratings.next().is_none().then_some(first)
+    }
+
+    pub fn matches_outcome(&self, outcome: &Outcome) -> bool {
+        self.outcome_id == outcome.outcome_id
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        if self.outcome_id.trim().is_empty() {
+            return Err("feedback outcome_id must not be empty".to_string());
+        }
+        if self.signals.is_empty() {
+            return Err("feedback with no signal must be represented as None".to_string());
+        }
+        for (index, signal) in self.signals.iter().enumerate() {
+            if let FeedbackSignal::ExplicitRating { score } = signal {
+                if !score.is_finite() {
+                    return Err(format!("feedback signal[{index}] rating is not finite"));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Pure, checked conversion from an outcome plus explicitly supplied
+    /// signals.  No outcome fact is converted into a user signal.
+    pub fn try_from_outcome(
+        outcome: &Outcome,
+        signals: Vec<FeedbackSignal>,
+        timestamp: i64,
+        source: FeedbackSource,
+        data_origin: DataOrigin,
+    ) -> Result<Option<Self>, String> {
+        outcome.validate()?;
+        if signals.is_empty() {
+            return Ok(None);
+        }
+        let feedback = Self {
+            outcome_id: outcome.outcome_id.clone(),
+            timestamp,
+            signals,
+            source,
+            data_origin,
+        };
+        feedback.validate()?;
+        Ok(Some(feedback))
+    }
+
+    /// Compatibility form that treats an empty signal list as `None`.
+    pub fn from_outcome(
+        outcome: &Outcome,
+        signals: Vec<FeedbackSignal>,
+        timestamp: i64,
+        source: FeedbackSource,
+        data_origin: DataOrigin,
+    ) -> Option<Self> {
+        Self::try_from_outcome(outcome, signals, timestamp, source, data_origin)
+            .ok()
+            .flatten()
+    }
+
+    /// Client-origin native feedback convenience constructor.
+    pub fn from_outcome_signals(
+        outcome: &Outcome,
+        signals: Vec<FeedbackSignal>,
+        timestamp: i64,
+    ) -> Option<Self> {
+        Self::from_outcome(
+            outcome,
+            signals,
+            timestamp,
+            FeedbackSource::Client,
+            DataOrigin::Native,
+        )
+    }
+
+    pub fn try_from_optional_signals(
+        outcome: &Outcome,
+        signals: Option<Vec<FeedbackSignal>>,
+        timestamp: i64,
+        source: FeedbackSource,
+        data_origin: DataOrigin,
+    ) -> Result<Option<Self>, String> {
+        Self::try_from_outcome(outcome, signals.unwrap_or_default(), timestamp, source, data_origin)
+    }
+}
+
+/// Pure Outcome-to-Feedback bridge.  `None` means no signal was supplied;
+/// success/failure status alone never creates a rating.
+pub fn feedback_from_outcome(
+    outcome: &Outcome,
+    signals: Option<Vec<FeedbackSignal>>,
+    timestamp: i64,
+    source: FeedbackSource,
+    data_origin: DataOrigin,
+) -> Option<Feedback> {
+    Feedback::from_outcome(outcome, signals.unwrap_or_default(), timestamp, source, data_origin)
+}
+
+/// Checked variant for adapters that must distinguish an invalid outcome from
+/// a valid no-signal outcome.
+pub fn try_feedback_from_outcome(
+    outcome: &Outcome,
+    signals: Option<Vec<FeedbackSignal>>,
+    timestamp: i64,
+    source: FeedbackSource,
+    data_origin: DataOrigin,
+) -> Result<Option<Feedback>, String> {
+    Feedback::try_from_outcome(outcome, signals.unwrap_or_default(), timestamp, source, data_origin)
+}
+
+pub fn outcome_to_feedback(
+    outcome: &Outcome,
+    signals: Option<Vec<FeedbackSignal>>,
+    timestamp: i64,
+    source: FeedbackSource,
+    data_origin: DataOrigin,
+) -> Option<Feedback> {
+    feedback_from_outcome(outcome, signals, timestamp, source, data_origin)
+}
+
 // ---------------------------------------------------------------------------
 // OutcomeSummary
 // ---------------------------------------------------------------------------
 
 /// Serializable summary of an Outcome for training purposes.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OutcomeSummary {
     pub success: bool,
     pub final_status: String,
@@ -95,6 +246,51 @@ pub struct OutcomeSummary {
     pub failure_class: Option<String>,
 }
 
+impl OutcomeSummary {
+    /// Build the legacy summary shape from a validated Outcome.  New ML code
+    /// should use the canonical sample in `ml::dataset`, which also carries
+    /// planned/last-attempted/served identity and optional Feedback.
+    pub fn try_from_outcome(outcome: &Outcome) -> Result<Self, String> {
+        outcome.validate()?;
+        let identity = outcome.identity();
+        let initial_model = identity
+            .planned
+            .as_ref()
+            .map(|candidate| candidate.model.clone())
+            .unwrap_or_else(|| outcome.initial_model.clone());
+        let final_model = identity
+            .served
+            .as_ref()
+            .map(|candidate| candidate.model.clone())
+            .unwrap_or_default();
+        Ok(Self {
+            success: outcome.is_terminal_success(),
+            final_status: serde_json::to_value(outcome.final_status)
+                .ok()
+                .and_then(|value| value.as_str().map(str::to_owned))
+                .unwrap_or_else(|| format!("{:?}", outcome.final_status).to_lowercase()),
+            initial_model,
+            final_model,
+            fallback_count: outcome.fallback_count,
+            total_latency_ms: outcome.total_latency_ms,
+            ttft_ms: if outcome.is_terminal_success() {
+                outcome.ttft_ms
+            } else {
+                None
+            },
+            input_tokens: outcome.usage.as_ref().map_or(0, |usage| usage.input_tokens),
+            output_tokens: outcome.usage.as_ref().map_or(0, |usage| usage.output_tokens),
+            failure_class: outcome
+                .terminal_failure_facts()
+                .map(|facts| failure_class_wire_name(facts.class).to_string()),
+        })
+    }
+
+    pub fn from_outcome(outcome: &Outcome) -> Result<Self, String> {
+        Self::try_from_outcome(outcome)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // TrainingSample
 // ---------------------------------------------------------------------------
@@ -102,7 +298,7 @@ pub struct OutcomeSummary {
 /// A training sample combining decision, features, outcome, and feedback.
 ///
 /// This is the schema boundary -- Stage 6 will consume these.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TrainingSample {
     pub sample_id: String,
     pub outcome_id: String,
@@ -115,6 +311,71 @@ pub struct TrainingSample {
     pub feedback: Vec<FeedbackSignal>,
     /// Feature snapshot at decision time (placeholder for Stage 6).
     pub features: Option<serde_json::Value>,
+}
+
+impl TryFrom<&Outcome> for OutcomeSummary {
+    type Error = String;
+
+    fn try_from(outcome: &Outcome) -> Result<Self, Self::Error> {
+        Self::try_from_outcome(outcome)
+    }
+}
+
+impl TrainingSample {
+    /// Compatibility conversion from the original Stage 6 schema to the
+    /// canonical outcome boundary.  It is intentionally lossless only for the
+    /// fields that this legacy shape can represent; new code should consume
+    /// `ml::dataset::OutcomeTrainingSample`.
+    pub fn from_outcome(outcome: &Outcome) -> Result<Self, String> {
+        Self::from_outcome_with(
+            outcome,
+            format!("feedback-sample-{}", outcome.outcome_id),
+            None,
+            DataOrigin::Native,
+            None,
+        )
+    }
+
+    pub fn from_outcome_with(
+        outcome: &Outcome,
+        sample_id: impl Into<String>,
+        features: Option<serde_json::Value>,
+        data_origin: DataOrigin,
+        feedback: Option<&Feedback>,
+    ) -> Result<Self, String> {
+        outcome.validate()?;
+        if let Some(feedback) = feedback {
+            feedback.validate()?;
+            if !feedback.matches_outcome(outcome) {
+                return Err("feedback outcome_id does not match outcome".to_string());
+            }
+        }
+        Ok(Self {
+            sample_id: sample_id.into(),
+            outcome_id: outcome.outcome_id.clone(),
+            decision_id: outcome.decision_id.clone(),
+            timestamp: outcome.timestamp,
+            data_origin,
+            outcome_summary: OutcomeSummary::try_from_outcome(outcome)?,
+            feedback: feedback
+                .map(|feedback| feedback.signals.clone())
+                .unwrap_or_default(),
+            features,
+        })
+    }
+
+    pub fn with_feedback(mut self, feedback: Option<&Feedback>) -> Result<Self, String> {
+        if let Some(feedback) = feedback {
+            feedback.validate()?;
+            if feedback.outcome_id != self.outcome_id {
+                return Err("feedback outcome_id does not match sample".to_string());
+            }
+            self.feedback = feedback.signals.clone();
+        } else {
+            self.feedback.clear();
+        }
+        Ok(self)
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -74,7 +74,11 @@ pub use config::{
 pub use election::{TierElection, Election, Measurement, Ranked, ScoringConfig};
 pub use error::{Error, Result};
 pub use failure::{ClassifiedFailure, FailureClass, FailureImpact};
-pub use feedback::{DataOrigin, Feedback, FeedbackSignal, FeedbackSource};
+pub use feedback::{
+    feedback_from_outcome, outcome_to_feedback, try_feedback_from_outcome, DataOrigin, Feedback,
+    FeedbackSignal, FeedbackSource, OutcomeSummary,
+    TrainingSample as FeedbackTrainingSample,
+};
 pub use ir::{
     Capability, ChatRequest, ChatResponse, ContentBlock, Dialect, Message, Role, StopReason,
     StreamEvent, SystemPart, ToolChoice, Usage,
@@ -84,7 +88,10 @@ pub use observation::{
     HealthState, LatencyObservation, ObservationFreshness, ObservationStore, RuntimeObservation,
     Signal,
 };
-pub use outcome::{Attempt, FinalStatus, Outcome, OutcomeBuilder};
+pub use outcome::{
+    failure_class_wire_name, Attempt, CandidateIdentity, ErrorFacts, FailureFacts, FinalStatus,
+    Outcome, OutcomeBuilder, OutcomeIdentity,
+};
 pub use policy::{
     ClientContext, ClientMatcher, ClientProfile, EligibilityCheck, PolicyConfig, PolicyFallback,
     PolicyMatcher, PolicyPreference, PolicyRequirements, RejectionReason, RoutingPolicy,
@@ -105,7 +112,10 @@ pub use migration::{
 #[cfg(feature = "ml")]
 pub use ml::{
     Action, ActionGuard, AttemptReward, RequestReward, RewardComputer, RewardPolicy,
-    DatasetStore, DatasetTrainingSample, SampleBuilder, Targets, validate_sample,
+    CanonicalTrainingSample, DatasetStore, DatasetTrainingSample, OutcomeDatasetSample,
+    outcome_to_dataset_sample,
+    OutcomeTrainingSample, SampleBuilder, SampleScope, Targets, samples_from_outcome,
+    validate_outcome_sample, validate_sample,
     extract_features, FeatureContext, RoutingFeatures, FEATURE_DIMENSION, FEATURE_SCHEMA_VERSION,
     ComparisonReport, Evaluator, FrozenHoldout, PredictionMetrics, Recommendation, RoutingDeltas,
     RoutingMetrics, temporal_split,

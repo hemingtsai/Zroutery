@@ -15,7 +15,11 @@ pub mod reward;
 pub mod shadow;
 pub use coordinator::{Coordinator, CoordinatorConfig, RoutingAction, RoutingDecision};
 pub use dataset::{
-    DatasetStore, SampleBuilder, Targets, TrainingSample as DatasetTrainingSample, validate_sample,
+    canonical_samples_from_outcome, outcome_to_dataset_sample, sample_from_outcome, samples_from_outcome,
+    try_outcome_sample, try_samples_from_outcome, try_samples_from_outcome_with_feedback,
+    validate_outcome_sample, CanonicalTrainingSample, DatasetStore, OutcomeDatasetSample,
+    OutcomeTrainingSample, SampleBuilder, SampleScope, Targets, TrainingSample as DatasetTrainingSample,
+    validate_sample,
 };
 pub use decision_engine::{DecisionEngine, EngineCandidate, EngineInput, EngineOutput};
 pub use evaluation::{
