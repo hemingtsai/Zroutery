@@ -123,46 +123,36 @@ impl Error {
         }
     }
 
-    /// True when trying another candidate model could plausibly help.
+    /// Return the canonical classification for this structural error.
     ///
-    /// 405 is included even though it is deterministic *per provider*: edge
-    /// WAFs (e.g. Aliyun) block agent traffic by content rules that differ
-    /// per relay, so a different provider can succeed where this one 405s.
-    /// (Same-provider handshake retries deliberately exclude 405 — retrying
-    /// there just re-uploads the body.)
-    pub fn is_retryable(&self) -> bool {
-        match self {
-            Error::Transport { .. } | Error::Timeout(_) | Error::BadUpstreamPayload(_) => true,
-            // The next candidate may belong to a provider whose key does exist.
-            Error::MissingApiKey(_) => true,
-            Error::Upstream { status, body, .. } => {
-                // Some relays return 500 for what is really an invalid
-                // request (body contains "invalid_request_error").  Retrying
-                // or failing over would just burn quota on the same bad
-                // request.
-                if *status == 500 && body.to_lowercase().contains("invalid_request_error") {
-                    return false;
-                }
-                matches!(*status, 405 | 408 | 409 | 425 | 429 | 500..=599)
-            }
-            _ => false,
-        }
+    /// `Error` remains the wire/structural type; routing and health adapters
+    /// should consume this value rather than reclassifying the variant or
+    /// message themselves.
+    pub fn classified(&self) -> crate::failure::ClassifiedFailure {
+        crate::failure::ClassifiedFailure::from_error(self)
     }
 
-    /// True when the failure should count against the model's health.
+    /// Alias for [`Error::classified`] used by failure-aware adapters.
+    pub fn classify(&self) -> crate::failure::ClassifiedFailure {
+        self.classified()
+    }
+
+    /// Legacy compatibility helper: historically this flag meant that the
+    /// request loop may continue to another candidate.  It therefore delegates
+    /// to the canonical `fallbackable` decision, not to a second status policy.
+    pub fn is_retryable(&self) -> bool {
+        self.classified().impact.fallbackable
+    }
+
+    /// Legacy compatibility helper for the legacy router health gate.
+    ///
+    /// This follows the canonical observation bit.  Adapters that need the
+    /// independent circuit decision must read
+    /// [`crate::failure::FailureImpact::affects_circuit`] from the classified
+    /// result.  Local/configuration and cancellation failures are recorded in
+    /// stats but never poison health.
     pub fn counts_against_health(&self) -> bool {
-        !matches!(
-            self,
-            Error::InvalidRequest(_)
-                | Error::UnknownModel(_)
-                | Error::UnknownRoute(_)
-                | Error::OverBudget(_)
-                | Error::TooLarge { .. }
-                // An absent key is a configuration problem, not evidence about
-                // the model: counting it would cool down every model of the
-                // provider until someone fixes the keychain.
-                | Error::MissingApiKey(_)
-        )
+        self.classified().impact.affects_observation
     }
 
     /// The message safe to show a client or the GUI.
@@ -173,7 +163,9 @@ impl Error {
     /// nothing of the provider's own error page.
     pub fn safe_message(&self) -> String {
         match self {
-            Error::Upstream { provider, status, .. } => {
+            Error::Upstream {
+                provider, status, ..
+            } => {
                 format!("upstream {provider} returned {status}")
             }
             Error::Internal(_) => "internal error".to_string(),
