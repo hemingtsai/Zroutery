@@ -85,7 +85,7 @@ must be typed against now exists. Development continues on `dev`.
 | `7E-1B` | `DONE` | The production path records one counterfactual per request over the retained decision-time input and attaches the final served identity from the single validated Outcome. |
 | `7E-2A` | `DONE` | The typed candidate-aware contract exists, is validated, and sits beside the accepted engine. |
 | `7E-2B` | `DONE` | Offline supervised warmup: deterministic, verifiable lineage, disjoint holdout, honest verdict, and no activation path. |
-| `7E-2C` | `RUNNING` | Offline bandit and reward learning with inspectable arm state and a tail-aware safety verdict that can refuse. |
+| `7E-2C` | `DONE` | The reward weights are fitted from data and a UCB1 rule is evaluated offline behind a safety gate that can refuse on tail grounds. |
 | `7E-2D` | `BLOCKED` | Requires a trustworthy K-way distribution. |
 | `7E-2E` | `BLOCKED` | Requires durable ordered `LearningEvent` and verified `ModelCommit`. |
 | `7E-2F` | `BLOCKED` | Requires verified immutable snapshots and atomic activation. |
@@ -120,18 +120,21 @@ defined and validated, and canonical training samples are collected once per
 request from the retained decision-time input with bounded, observable refusal.
 `7E-2B` is `DONE`, so a supervised model can be trained offline from real
 collected samples with a verified commit and an honest verdict — and nothing
-installs it. `7E-2C` is `RUNNING` and owns offline bandit and reward learning
-with a safety evaluation that can refuse on tail grounds, not more supervised
-warmup. `7D` is unblocked. Two limitations are recorded
+installs it. `7E-2C` is `DONE`, so a reward is fitted from real samples and a
+selection rule is evaluated offline behind a safety gate that refuses when the
+mean improved while failures, cost, tail latency, or fallbacks regressed, and
+nothing installs or explores with it. `7E-2D` is next and owns calibration.
+`7D` is unblocked. Two limitations are recorded
 rather than smoothed over: a sample's features currently come from a snapshot
-cloned at decision time rather than a re-read of the accepted record; dataset
+cloned at decision time rather than a re-read of the accepted record; and dataset
 collection follows `config.shadow.enabled` because no dataset-specific
 configuration exists. The accepted sample validator's attempt-scope timing gap is
 now closed in the validator itself. Because every production sample carries no
 feedback, any learned reward is an outcome-derived proxy rather than a user
 preference, and a bandit optimizing it can diverge from what a user would have
-chosen. No production takeover, online RL, exploration, real-provider E2E, or
-automatic model activation is authorized by this roadmap.
+chosen; the accepted reward basis also cannot order two requests that both
+exceeded its latency clamp. No production takeover, online RL, exploration,
+real-provider E2E, or automatic model activation is authorized by this roadmap.
 
 ## Parallel engineering inventory
 

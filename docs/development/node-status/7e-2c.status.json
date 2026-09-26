@@ -2,8 +2,8 @@
   "schema_version": 1,
   "node_id": "7E-2C",
   "display_name": "7E-2C — bandit and reward learning",
-  "status": "RUNNING",
-  "implementation_state": "Bandit and reward learning is being built on branch node/7e-2c-bandit as offline fitting plus a bandit selection rule with inspectable arm state and a safety evaluation that can refuse. Nothing installs a policy, and Action::Explore stays unreachable from the live router.",
+  "status": "DONE",
+  "implementation_state": "The six accepted RewardPolicy weights are now fitted from data by a ridge-regularized pairwise ranking fit against a published total order, so the fitted weights ARE a RewardPolicy and no second reward representation exists. A UCB1 selection rule runs offline over declared arms with per-arm counts and scores reported, and a three-stage safety gate can refuse: insufficient evidence is not an acceptance, the mean must beat the reference by more than the floor, and four named dimensions (failure rate, mean cost, p95 latency, fallback rate) must not regress. Accepted on dev at 96891ab.",
   "dependencies": [
     "7E-2B"
   ],
@@ -18,10 +18,12 @@
     "Offline safety evaluation"
   ],
   "blocked_by": [],
-  "unblock_condition": "Dispatched: implement offline bandit and reward learning with inspectable arm state, a tail-aware safety evaluation that can refuse, and no reachable path from the running product.",
+  "unblock_condition": "Accepted: a fitted reward, a bandit selection rule with inspectable arm state, a safety gate that can refuse on tail grounds, and no path from the running product to any of it.",
   "evidence": [
     "E-016",
-    "E-078"
+    "E-078",
+    "E-079",
+    "E-080"
   ],
   "source_references": [
     "docs/development/repository-audit-2026-09-25.md",
@@ -30,11 +32,11 @@
     "crates/zroutery-core/src/ml/dataset.rs"
   ],
   "notes": [
-    "No online RL is authorized, and no exploration in production. Action::Explore exists in accepted code and must stay unreachable from the live router.",
-    "The DecisionDistribution gate is satisfied by the 7E-2A type, not by a calibrated producer: calibration is 7E-2D, so any distribution this node emits must be labeled uncalibrated.",
-    "Every production sample carries feedback None because no user-rating source exists, so the reward here is an outcome-derived proxy and never a user preference. A bandit optimizing that proxy can diverge from what a user would have preferred, which is a limitation to record rather than to average away.",
-    "ml/reward.rs and ml/coordinator.rs are accepted and read-only here; this node consumes them and adds a new module.",
-    "A mean-reward improvement that regresses the failure rate, the cost, or a tail latency percentile is not an improvement. The safety evaluation must be able to withhold acceptance on tail grounds.",
-    "No bandit, arm statistic, or fitting exists anywhere in ml/ yet, so this node is building the capability rather than repairing it."
+    "No online RL is authorized, and no exploration in production. Action::Explore exists in accepted code and stays unreachable from the live router; the tripwire that proves it strips comment lines first, so a doc comment mentioning it cannot mask a real use.",
+    "The DecisionDistribution gate is satisfied by the 7E-2A type, not by a calibrated producer: the bandit reports a selected name and per-arm UCB scores, never a probability vector, so it cannot be mistaken for 7E-2D's artifact.",
+    "Every production sample carries feedback None because no user-rating source exists, so the reward is an outcome-derived proxy and never a user preference. That is structural rather than documented: OutcomeProxy has exactly four fields and no field a rating could occupy, the fit never reads Feedback, and the fit target description is reproduced verbatim in every report.",
+    "KNOWN LIMITATION of the accepted reward basis, deliberately not widened: RewardComputer's clamps mean two requests both above 1000 ms are unorderable by latency under any weights. The worker documented the ceiling instead of changing an accepted surface to make its own numbers look better, and it shows up as out-of-sample disagreement.",
+    "The worker caught two silent defects in its own work and fixed both: the fit and holdout partition was built in first-seen order and therefore depended on a per-outcome UUID, making it non-deterministic across process runs; and the degenerate-holdout downgrade was applied unconditionally, which meant a fit could never report Better. The second is the same trap 7E-2B closed, reached independently.",
+    "ml/reward.rs and ml/coordinator.rs were consumed read-only. Two gaps were worked around rather than edited: RewardPolicy has no PartialEq, and evaluation::percentile is private, so p95 is restated in the module and pinned to the accepted evaluator by test."
   ]
 }

@@ -355,6 +355,21 @@ must be able to refuse on tail grounds, because a policy that improves mean
 reward while regressing failures, cost, or a tail latency percentile is not an
 improvement.
 
+## 7E-2C acceptance evidence
+
+| ID | Class | Exact command or observation | Result | Known caveat |
+|---|---|---|---|---|
+| E-079 | review, integration | `git diff --name-status 4854b65..5a53e68`; read of `bandit.rs` for the partition construction, `accepted_arm`, `OutcomeProxy`, and the safety metric sources; read of the `Action::Explore` tripwire in the test file | PASS; the diff is a new `ml/bandit.rs`, its test, and additive `ml/mod.rs` registration, with no read-only file touched. Five claims were checked rather than believed: the fit and holdout partition is built from a `BTreeMap` in sorted key order, so it no longer depends on a per-outcome UUID; `accepted_arm` derives from the verdict enum rather than a stored boolean, so a forged verdict field changes nothing; `OutcomeProxy` carries exactly four fields with no slot a rating could occupy; the safety metrics are computed from raw measurements so a reward weighting cannot grade itself; and the `Action::Explore` tripwire strips comment lines before matching | The worker also found and fixed two silent defects in its own work, which E-080 records rather than this row |
+| E-080 | local, review | Worker self-review of its own diff, reported to the parent unprompted | Two defects found and fixed; the fit and holdout partition was built in first-seen order, so because `sample_id` derives from a per-outcome UUID the partition was non-deterministic across process runs, and the degenerate-holdout downgrade was applied unconditionally, so a fit could never report `Better` | The second defect is the same trap 7E-2B closed one node earlier, reached independently. Two workers hitting the same statistical trap suggests it deserves a shared regression test rather than a per-node lesson |
+
+`7E-2C` is `DONE`. A reward can now be fitted from collected samples and a
+selection rule evaluated offline, and the run can refuse to endorse a policy
+whose mean reward improved while failures, cost, tail latency, or fallbacks
+regressed. Nothing installs it, nothing explores in production, and no calibrated
+distribution is produced. `7E-2D` is next on the critical path and owns
+calibration, `7E-2E` owns the durable journal, and `7E-2F` owns activation, so
+nothing here can reach a live router.
+
 Batch A was accepted earlier on `main`: `CORE-P1-MEDIA-REQ` and
 `CORE-P1-FAILURE-AUTHORITY` are `DONE`. The records above supersede the state
 that existed when they were still `READY` for a Batch B dispatch.
