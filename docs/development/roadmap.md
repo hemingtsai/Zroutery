@@ -126,10 +126,10 @@ learning, not more warmup. `7D` is unblocked. Three limitations are recorded
 rather than smoothed over: a sample's features currently come from a snapshot
 cloned at decision time rather than a re-read of the accepted record; dataset
 collection follows `config.shadow.enabled` because no dataset-specific
-configuration exists; and the accepted `validate_outcome_sample` does not enforce
-the non-success timing discipline for attempt scope, which 7E-2B closed locally
-but 7B still owns. No production takeover, online RL, exploration,
-real-provider E2E, or automatic model activation is authorized by this roadmap.
+configuration exists. The accepted sample validator's attempt-scope timing gap is
+now closed in the validator itself. No production takeover, online RL,
+exploration, real-provider E2E, or automatic model activation is authorized by
+this roadmap.
 
 ## Parallel engineering inventory
 

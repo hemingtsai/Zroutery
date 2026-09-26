@@ -323,6 +323,21 @@ withholds its own improvement claim when the holdout is degenerate. Nothing
 installs that commit: `7E-2C` is next on the critical path, and it owns bandit
 and reward learning rather than more supervised warmup.
 
+## E-075 repair: attempt-scope sample timing
+
+`E-075` recorded a real gap in an accepted validator rather than closing it in
+the node that happened to find it. It is repaired here, in the file that owns
+the rule.
+
+| ID | Class | Exact command or observation | Result | Known caveat |
+|---|---|---|---|---|
+| E-077 | local, repair | `validate_outcome_sample` attempt-scope branch in `ml/dataset.rs`; `Targets::from_attempt`; the focused `dataset_ingestion_test` plus the four-way matrix | PASS; the attempt scope now refuses success timing on a non-success attempt, exactly as the request scope already did, and `Targets::from_attempt` never emitted such a value in the first place, so nothing the producer legitimately produced is now invalid. Two tests cover both directions: a failed attempt carrying `latency_ms` or `ttft_ms` is refused by name, a failed attempt carrying `cost` is still accepted and stored, and a successful attempt keeps its own measured timing | `7E-2B`'s `WarmupError::NonSuccessTiming` is deliberately left in place as defense in depth for samples built in memory and never passed through the store; two gates on one invariant is intentional, not duplication to clean up |
+
+The fix belongs in the validator rather than in the training node because the
+validator is the single authority every stored sample passes, and the defect was
+reachable by any hand-built or deserialized sample, not only by the warmup path
+that stumbled on it.
+
 Batch A was accepted earlier on `main`: `CORE-P1-MEDIA-REQ` and
 `CORE-P1-FAILURE-AUTHORITY` are `DONE`. The records above supersede the state
 that existed when they were still `READY` for a Batch B dispatch.

@@ -29,7 +29,8 @@
     "E-068",
     "E-069",
     "E-070",
-    "E-072"
+    "E-072",
+    "E-077"
   ],
   "source_references": [
     "docs/development/repository-audit-2026-09-25.md",
@@ -43,6 +44,7 @@
     "The worker refused the only existing alternative, ShadowStore::decisions(), because it clones the whole retained window and would put an O(n) clone on the request terminal path.",
     "Dataset collection currently follows config.shadow.enabled, because no dataset-specific configuration exists and inventing a second switch would imply a second feature source. Collection is therefore off wherever shadow recording is off.",
     "The Outcome is cloned once per request so the activity log and the dataset can each own one; the dataset ring is in-process and bounded, with no disk persistence.",
-    "Accepted as 597f553 on node/7b-dataset, integrated as 5e3f49b; review and gates are E-070 through E-072."
+    "The attempt-scope timing gap that 7E-2B found is now closed here rather than only in the training node: validate_outcome_sample mirrors the request-scope rule, so a failed attempt cannot carry a service latency into a regression head. Cost stays exempt on both scopes, and 7E-2B's local WarmupError::NonSuccessTiming is deliberately kept as defense in depth for samples that never pass the store.",
+    "Accepted as 597f553 on node/7b-dataset, integrated as 5e3f49b; review and gates are E-070 through E-072, and the validator repair is E-077."
   ]
 }
