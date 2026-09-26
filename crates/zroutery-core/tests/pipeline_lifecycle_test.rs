@@ -419,13 +419,20 @@ async fn a_client_disconnect_does_not_count_against_provider_health() {
     assert_eq!(alpha.total_success, 1, "one handshake, reported once");
     assert_eq!(alpha.total_failure, 0, "a client leaving is not a failure");
     assert!(!h.state.router().is_cooling("alpha-hold-model"));
-    let observation = h
-        .state
-        .router()
-        .observations()
-        .get("alpha-hold-model", "alpha");
-    assert_eq!(observation.health.total_failures, 0);
-    assert_eq!(observation.health.total_requests, 1);
+    // The observation store only exists when the `ml` feature is compiled in, so
+    // this assertion is feature-gated rather than gating the whole lifecycle
+    // suite: the drop behaviour itself must still be covered by the default
+    // build, which is the configuration the desktop app ships.
+    #[cfg(feature = "ml")]
+    {
+        let observation = h
+            .state
+            .router()
+            .observations()
+            .get("alpha-hold-model", "alpha");
+        assert_eq!(observation.health.total_failures, 0);
+        assert_eq!(observation.health.total_requests, 1);
+    }
     // The terminal state is still recorded as a classified fact, once.
     let breakdown = h
         .state
