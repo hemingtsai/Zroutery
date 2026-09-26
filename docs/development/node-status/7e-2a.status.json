@@ -2,8 +2,8 @@
   "schema_version": 1,
   "node_id": "7E-2A",
   "display_name": "7E-2A — candidate-aware decision contract",
-  "status": "RUNNING",
-  "implementation_state": "The typed candidate-aware contract is being defined on branch node/7e-2a-contract against the replayable production input 7E-1B now retains. The existing untyped engine surface is an accepted baseline and must not be silently replaced; how the new contract relates to it is part of the worker's report.",
+  "status": "DONE",
+  "implementation_state": "The typed contract exists as five validated types plus one error enum in ml/decision_contract.rs: ModelInput rejects malformed and wrong-dimension snapshots, DecisionState admits exactly one legal successor per phase and refuses a transition that contradicts the input, DecisionCandidate keeps planned/attempted/served as three separate facts, and DecisionDistribution validates arity, uniqueness, finiteness, and normalization. It sits beside the accepted engine rather than replacing it. Accepted on dev at 79304a4.",
   "dependencies": [
     "7E-1B"
   ],
@@ -19,12 +19,15 @@
     "Replayable production input"
   ],
   "blocked_by": [],
-  "unblock_condition": "Dispatched: define the typed contract on node/7e-2a-contract against the retained decision-time input, and state explicitly how it relates to the existing engine surface.",
+  "unblock_condition": "Accepted: every required type exists, is validated, and is provable from the retained production input.",
   "evidence": [
     "E-016",
     "E-064",
     "E-068",
-    "E-069"
+    "E-069",
+    "E-070",
+    "E-071",
+    "E-072"
   ],
   "source_references": [
     "docs/development/repository-audit-2026-09-25.md",
@@ -33,8 +36,11 @@
     "crates/zroutery-core/src/ml/shadow.rs"
   ],
   "notes": [
-    "The audit decision was BLOCKED for want of a trustworthy production input; that reason is closed, but this node's own contract work had not started before this dispatch.",
-    "Defining the types is authorized. Training, warmup, RL, calibration, activation, and the durable journal are not, and DecisionDistribution is a type here, not a calibrated producer.",
-    "Runs on node/7e-2a-contract from 2580850 and owns ml/decision_engine.rs, ml/model.rs, a new contract module, and ml/mod.rs registration. It must not edit server/pipeline.rs, which belongs to the concurrent 7B dispatch."
+    "The audit decision was BLOCKED for want of a trustworthy production input; that reason is closed and this node's contract work is accepted.",
+    "The contract deliberately sits beside DecisionEngine rather than wrapping or replacing it: the engine is an exact reproduction of frozen Coordinator::decide semantics, so a wrapper would create a second decision path free to diverge. ml/decision_engine.rs and ml/model.rs are byte-for-byte unchanged.",
+    "No contract type derives Deserialize, so a decision contract cannot be reconstructed from unvalidated bytes; validation happens where ModelInput is built from the retained snapshot.",
+    "DecisionModel exposes no update, reset, train, fit, or &mut self method, so the training surface is unreachable through this API. A later node must add a seam deliberately.",
+    "DecisionDistribution is the type only. Calibrated K-way distributions belong to 7E-2D.",
+    "Accepted as c253805 on node/7e-2a-contract, integrated as 79304a4; review and gates are E-070 through E-072."
   ]
 }

@@ -16,10 +16,8 @@
     "Calibration and statistical gates",
     "Attempt-level attribution"
   ],
-  "blocked_by": [
-    "7B"
-  ],
-  "unblock_condition": "Close 7B and run the complete offline evaluation/calibration gate suite.",
+  "blocked_by": [],
+  "unblock_condition": "Unblocked: 7B is accepted, so the holdout, calibration, and statistical gates can be built and run against real collected samples.",
   "evidence": [
     "E-005",
     "E-006",

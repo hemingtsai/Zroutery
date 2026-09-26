@@ -272,6 +272,26 @@ is authorized by this dispatch. `7B` may ingest, validate, and retain canonical
 samples; it may not train on them, and it may not make dataset collection
 silently depend on an undeclared configuration state.
 
+## 7E-2A and 7B acceptance evidence
+
+Both nodes were reviewed against their own required gates and then integrated
+together, so the matrix below covers the combined tree.
+
+| ID | Class | Exact command or observation | Result | Known caveat |
+|---|---|---|---|---|
+| E-070 | review, integration | `git diff --name-status` for both dispatches; read of the contract types, the `DecisionPhase` successor table, `DecisionState::advance`, `DecisionDistribution::try_new`, the ingestion entry point, `store_all`, and the pipeline hook | PASS; 7E-2A added one module and 7 additive `ml/mod.rs` lines and left `decision_engine.rs` and `model.rs` byte-for-byte unchanged; 7B touched only `ml/dataset.rs`, `server/mod.rs`, `server/pipeline.rs`, and two new test files, and satisfied the accepted 7E-1B tripwires instead of loosening them | Reviewing the two designs separately does not prove they compose; the combined matrix and the cross-node tests do |
+| E-071 | local, review | Search of the new contract for a training surface and for unguarded deserialization | PASS; no `&mut self`, `update`, `reset`, `train`, or `fit` on `DecisionModel`, and no contract type derives `Deserialize` | The privacy that keeps training unreachable is a property of the current shape, not a language guarantee; a later node must add a seam deliberately |
+| E-072 | local, integration | `cargo check --workspace`; `cargo test --workspace`; `cargo test -p zroutery-core --all-features`; `cargo test --workspace --features ml`; `cargo test --workspace --all-features`; `cargo clippy --workspace --all-targets --all-features -- -D warnings`; `pnpm smoke`; `pnpm test:layout`; `git diff --check`; `python -B scripts/orch_docs_test.py`; commit-contract range validation at `5e3f49b` on `dev` | PASS; all four test feature combinations, the 26 contract tests, the 21 ingestion-boundary and 10 production ingestion tests, both UI gates, the whitespace check, and all 47 non-merge commits valid; worktree clean | Tauri does not enable `ml`, so neither the shadow path nor dataset collection runs in the shipped desktop app; `config.shadow.enabled` is the de facto dataset switch |
+
+`7E-2A` and `7B` are both `DONE`. Two consequences are recorded rather than
+smoothed over: a sample's features currently come from a snapshot cloned at
+decision time on the path where the shadow record was accepted, so the store
+needs a read accessor to make that correlation authoritative; and dataset
+collection follows the shadow configuration because no dataset-specific
+configuration exists. `7E-2B` is the next critical-path node, and it is where the
+first consumer of this dataset and of the typed contract may be built — training,
+warmup, and calibration are still unauthorized until that node is dispatched.
+
 Batch A was accepted earlier on `main`: `CORE-P1-MEDIA-REQ` and
 `CORE-P1-FAILURE-AUTHORITY` are `DONE`. The records above supersede the state
 that existed when they were still `READY` for a Batch B dispatch.

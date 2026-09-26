@@ -75,16 +75,16 @@ must be typed against now exists. Development continues on `dev`.
 | `STAGE-7` | `PARTIAL` | This aggregate contains partial foundations and blocked learning subnodes; it is not a DONE umbrella. |
 | `STAGE-8` | `BLOCKED` | Requires the complete learning loop through `7H`. |
 | `7A` | `PARTIAL` | Deterministic feature extraction exists; identity/schema architecture memory is incomplete. |
-| `7B` | `RUNNING` | Building the DatasetStore ingestion, validation, and retention path on the canonical Outcome-derived sample. |
-| `7C` | `PARTIAL` | Specialist baseline models work; typed candidate-aware decision contracts do not. |
-| `7D` | `PARTIAL` | Evaluation framework exists; holdout, calibration, and statistical gates are incomplete. |
+| `7B` | `DONE` | The store holds the canonical sample; production ingestion is once per request, validated, bounded by count and age, and refuses explicitly. |
+| `7C` | `PARTIAL` | Specialist baseline models work; the typed contract now exists in `ml/decision_contract.rs` but nothing produces a decision through it. |
+| `7D` | `PARTIAL` | The framework exists and its blocker is closed; holdout, calibration, and statistical gates are still unbuilt. |
 | `7E-0` | `PARTIAL` | 7E-1A repaired identity/replay; durable model operations and journal remain for later nodes. |
 | `7E-1` | `DONE` | All three children accepted: identity/lineage, the pure shadow seam, and the production integration that retains the decision-time input and correlates the served identity. |
 | `7E-1A` | `DONE` | Identity, lineage, schema-envelope, predictor-swap, and replay substrate accepted on main. |
 | `7E-1B-CORE` | `DONE` | Pure replayable observation, non-degenerate counterfactual, rejected-candidate evidence, and fail-closed store semantics accepted on main. |
 | `7E-1B` | `DONE` | The production path records one counterfactual per request over the retained decision-time input and attaches the final served identity from the single validated Outcome. |
-| `7E-2A` | `RUNNING` | Typing the candidate-aware decision contract against the retained decision-time input. |
-| `7E-2B` | `BLOCKED` | Requires 7E-2A and supervised warmup with a trustworthy Outcome. |
+| `7E-2A` | `DONE` | The typed candidate-aware contract exists, is validated, and sits beside the accepted engine. |
+| `7E-2B` | `READY` | Both blockers are closed; supervised warmup is dispatchable but not started, and no training is authorized yet. |
 | `7E-2C` | `BLOCKED` | Requires supervised warmup, Dataset, and RewardPolicy. |
 | `7E-2D` | `BLOCKED` | Requires a trustworthy K-way distribution. |
 | `7E-2E` | `BLOCKED` | Requires durable ordered `LearningEvent` and verified `ModelCommit`. |
@@ -113,16 +113,19 @@ integration landed as `c4188be`, and the aggregate plus the audited stage record
 were revalidated with the parent review and gates recorded as E-053 through
 E-063. `CORE-P1-REPAIR` is `DONE`.
 
-The current position on the critical path: `7E-1` and `7E-1B` are `DONE`, so the
-first production ML fact — a per-request counterfactual correlated with the
-identity that actually served — now exists on `dev`. `7E-2A` and `7B` are both
-`RUNNING` as one parallel batch with disjoint file ownership: `7E-2A` types the
-candidate-aware decision contract against the retained input, and `7B` builds
-the DatasetStore ingestion, validation, and retention path. `7E-2A` is the
-critical-path node. `REG-009` is `PARTIAL` because the training-side consumer of
-the retained input does not exist yet. No production takeover, online RL,
-exploration, real-provider E2E, or automatic model activation is authorized by
-this roadmap.
+The current position on the critical path: the whole observation-and-collection
+spine now exists on `dev`. A per-request counterfactual correlated with the
+identity that actually served is recorded, the typed candidate-aware contract is
+defined and validated, and canonical training samples are collected once per
+request from the retained decision-time input with bounded, observable refusal.
+`7E-2B` is `READY` and is the next critical-path node: it would be the first
+consumer of the dataset and of the contract, so its dispatch brief must state the
+warmup boundaries explicitly. `7D` is also unblocked. Two limitations are recorded
+rather than smoothed over: a sample's features currently come from a snapshot
+cloned at decision time rather than a re-read of the accepted record, and dataset
+collection follows `config.shadow.enabled` because no dataset-specific
+configuration exists. No production takeover, online RL, exploration,
+real-provider E2E, or automatic model activation is authorized by this roadmap.
 
 ## Parallel engineering inventory
 

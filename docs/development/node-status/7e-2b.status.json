@@ -2,8 +2,8 @@
   "schema_version": 1,
   "node_id": "7E-2B",
   "display_name": "7E-2B — supervised warmup",
-  "status": "BLOCKED",
-  "implementation_state": "Supervised warmup cannot be trusted without the typed decision contract and production Outcome.",
+  "status": "READY",
+  "implementation_state": "Both named blockers are closed: the typed decision contract exists and production Outcomes are trustworthy and collected. Supervised warmup is dispatchable but not started, and no training, calibration, or activation work is authorized until it is dispatched with its own brief.",
   "dependencies": [
     "7E-2A",
     "STAGE-6"
@@ -17,10 +17,8 @@
     "Warmup dataset and targets",
     "Offline warmup evaluation"
   ],
-  "blocked_by": [
-    "7E-2A"
-  ],
-  "unblock_condition": "Close 7E-2A and Stage 6, then pass deterministic warmup and holdout gates.",
+  "blocked_by": [],
+  "unblock_condition": "Unblocked: the typed contract and trustworthy Outcomes both exist. Dispatch must state the warmup boundaries explicitly, because this is the first node that would consume the dataset.",
   "evidence": [
     "E-016"
   ],

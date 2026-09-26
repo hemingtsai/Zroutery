@@ -22,7 +22,6 @@
     "Core-to-ML dependency direction"
   ],
   "blocked_by": [
-    "7B",
     "7E-0"
   ],
   "unblock_condition": "Close the child gates and revalidate the aggregate as a whole.",
