@@ -1210,6 +1210,20 @@ pub fn validate_outcome_sample(sample: &OutcomeTrainingSample) -> Result<(), Str
             if sample.targets.success != sample.success {
                 return Err("attempt sample target success disagrees with sample success".to_string());
             }
+            // The same discipline the request scope already enforces, and the
+            // one `Targets::from_attempt` already follows: a candidate that
+            // failed has no service latency to learn from. Without this, a
+            // hand-built or deserialized attempt sample could carry a failed
+            // attempt's duration into the latency regression head and teach the
+            // model that a failure was fast. `cost` is deliberately exempt: it
+            // is money actually spent, not a service-quality measurement.
+            if !sample.success
+                && (sample.targets.latency_ms.is_some() || sample.targets.ttft_ms.is_some())
+            {
+                return Err(
+                    "non-success attempt sample cannot carry success timing targets".to_string(),
+                );
+            }
         }
     }
     if sample.final_status == FinalStatus::Success && sample.terminal_error.is_some() {

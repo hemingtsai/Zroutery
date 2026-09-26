@@ -565,11 +565,89 @@ fn a_failed_request_is_retained_as_a_negative_sample() {
     );
 }
 
+/// A failed attempt must not carry a service latency, for the same reason a
+/// failed request must not: there was no service to be slow.
+///
+/// The producer never produced one — `Targets::from_attempt` leaves the timing
+/// absent for a non-success attempt — so this is about the hand-built and
+/// deserialized paths, which are exactly the ones that reach a training head
+/// without passing through the producer. Before the validator mirrored the
+/// request-scope rule, such a sample validated and `update_all` would have fed
+/// a failed attempt's duration to the latency regression.
+#[test]
+fn a_failed_attempt_sample_cannot_carry_service_timing() {
+    let store = DatasetStore::new(10, 3600);
+    let mut samples = zroutery_core::ml::dataset::try_samples_from_outcome(
+        &failover_outcome(),
+        &[features(11), features(12)],
+        DataOrigin::Native,
+    )
+    .expect("the failover outcome converts");
+    let failed = samples
+        .iter_mut()
+        .find(|sample| matches!(sample.scope, zroutery_core::ml::dataset::SampleScope::Attempt { .. }) && !sample.success)
+        .expect("the failover keeps a failed attempt sample");
+    assert!(
+        failed.targets.latency_ms.is_none() && failed.targets.ttft_ms.is_none(),
+        "the producer leaves timing absent on a failed attempt"
+    );
+
+    // Hand-build the forbidden shape: a negative attempt that claims a latency.
+    failed.targets.latency_ms = Some(1_500.0);
+    let reason = zroutery_core::ml::dataset::validate_outcome_sample(failed)
+        .expect_err("a failed attempt carrying a latency must be refused");
+    assert!(
+        reason.contains("non-success attempt sample cannot carry success timing"),
+        "the refusal names the discipline: {reason}"
+    );
+
+    // The same claim on the time-to-first-token field is refused too.
+    failed.targets.latency_ms = None;
+    failed.targets.ttft_ms = Some(42.0);
+    assert!(
+        zroutery_core::ml::dataset::validate_outcome_sample(failed).is_err(),
+        "ttft is the same claim as latency"
+    );
+
+    // Cost stays exempt on both sides: it is money spent, not a latency.
+    failed.targets.ttft_ms = None;
+    failed.targets.cost = Some(0.004);
+    zroutery_core::ml::dataset::validate_outcome_sample(failed)
+        .expect("a failed attempt may still carry the cost it incurred");
+    store.push(failed.clone()).expect("and the store accepts it");
+    let stored = store
+        .training_slice()
+        .into_iter()
+        .find(|sample| sample.sample_id == failed.sample_id)
+        .expect("the exempt sample is stored");
+    assert_eq!(stored.targets.cost, Some(0.004));
+}
+
+/// The positive case is unaffected: a successful attempt keeps its timing.
+#[test]
+fn a_successful_attempt_still_carries_its_own_timing() {
+    let samples = zroutery_core::ml::dataset::try_samples_from_outcome(
+        &failover_outcome(),
+        &[features(11), features(12)],
+        DataOrigin::Native,
+    )
+    .expect("the failover outcome converts");
+    let served = samples
+        .iter()
+        .find(|sample| sample.success)
+        .expect("the failover keeps a served attempt sample");
+    assert!(
+        served.targets.latency_ms.is_some() || served.targets.ttft_ms.is_some(),
+        "a served attempt reports the timing that was actually measured"
+    );
+    zroutery_core::ml::dataset::validate_outcome_sample(served)
+        .expect("a successful attempt may carry its own timing");
+}
+
 /// A failed attempt inside an otherwise successful request keeps its own label:
 /// the failover's first candidate stays a negative sample.
 #[test]
-fn a_failover_keeps_the_failed_attempt_as_its_own_negative_sample() {
-    let store = DatasetStore::new(10, 3600);
+fn a_failover_keeps_the_failed_attempt_as_its_own_negative_sample() {    let store = DatasetStore::new(10, 3600);
     let outcome = failover_outcome();
     ingest_ok(&store, &outcome, &failover_input());
 
