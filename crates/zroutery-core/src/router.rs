@@ -237,6 +237,14 @@ impl Router {
     /// requirements on every path. A policy fallback may change the tier or
     /// relax policy-only constraints, but it may not relax a request capability
     /// or reintroduce a candidate that the hard gate rejected.
+    ///
+    /// [`PolicyFallback::IgnoreRequirements`] is the narrowest such relaxation:
+    /// it retries the pool with only the capability contract in force, dropping
+    /// tier bounds and the provider/model allow-deny lists while keeping policy
+    /// `required_capabilities`, the request-derived capability vector, and an
+    /// open circuit as hard rejections. If nothing satisfies that contract the
+    /// call still fails with `Error::NoCandidate` rather than planning an
+    /// incapable candidate.
     #[allow(clippy::too_many_arguments)]
     pub fn plan_with_policy(
         &self,

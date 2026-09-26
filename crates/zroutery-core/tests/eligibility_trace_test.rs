@@ -224,6 +224,109 @@ fn ignore_requirements_cannot_reinsert_an_incapable_request_candidate() {
 }
 
 #[test]
+fn ignore_requirements_bypasses_non_capability_constraints_but_keeps_capability_gates() {
+    // A Standard-tier model with tools only, so vision is `Unknown` rather than
+    // supported, plus a vision-capable peer for the positive control.
+    let text = model("text", ModelTier::Standard);
+    let vision = with_vision(model("vision", ModelTier::Standard));
+    let standard = Resolution::Tier(ModelTier::Standard);
+    let router = Router::new();
+
+    // Non-capability policy constraints: a provider allow-list that excludes the
+    // whole pool, and a tier bound above the whole pool.
+    let non_capability = PolicyRequirements {
+        allowed_providers: vec!["provider-b".into()],
+        min_tier: Some(ModelTier::Frontier),
+        ..Default::default()
+    };
+
+    // The constraints are real: a strict fallback rejects the entire pool.
+    no_candidate(
+        router
+            .plan_with_policy(
+                &registry(config(vec![text.clone()])),
+                &standard,
+                &[],
+                &non_capability,
+                &PolicyPreference::default(),
+                &PolicyFallback::Reject,
+                None,
+            )
+            .map(|_| ()),
+    );
+
+    // `IgnoreRequirements` bypasses exactly those non-capability constraints.
+    let text_only = registry(config(vec![text]));
+    let (plan, decision) = router
+        .plan_with_policy(
+            &text_only,
+            &standard,
+            &[],
+            &non_capability,
+            &PolicyPreference::default(),
+            &PolicyFallback::IgnoreRequirements,
+            None,
+        )
+        .expect("non-capability policy constraints are bypassed");
+    assert_eq!(plan[0].model_id(), "provider-a-text");
+    let candidate = &decision.candidates[0];
+    assert!(
+        candidate.eligible && candidate.rejection.is_none(),
+        "the bypassed candidate must be planned without residual rejection evidence"
+    );
+
+    // The bypass does not rescue a request-derived capability. The same
+    // non-capability constraints are still relaxed here, so `NoCandidate` can
+    // only come from the remaining hard capability gate.
+    no_candidate(
+        router
+            .plan_with_policy(
+                &text_only,
+                &standard,
+                &[Capability::Vision],
+                &non_capability,
+                &PolicyPreference::default(),
+                &PolicyFallback::IgnoreRequirements,
+                None,
+            )
+            .map(|_| ()),
+    );
+
+    // Policy `required_capabilities` is equally preserved: an unsatisfied
+    // policy capability still rejects, a satisfied one still passes.
+    let policy_capability = PolicyRequirements {
+        required_capabilities: vec![Capability::Vision],
+        ..Default::default()
+    };
+    no_candidate(
+        router
+            .plan_with_policy(
+                &text_only,
+                &standard,
+                &[],
+                &policy_capability,
+                &PolicyPreference::default(),
+                &PolicyFallback::IgnoreRequirements,
+                None,
+            )
+            .map(|_| ()),
+    );
+    let (plan, decision) = router
+        .plan_with_policy(
+            &registry(config(vec![vision])),
+            &standard,
+            &[],
+            &policy_capability,
+            &PolicyPreference::default(),
+            &PolicyFallback::IgnoreRequirements,
+            None,
+        )
+        .expect("a satisfied policy capability requirement is preserved, not bypassed");
+    assert_eq!(plan[0].model_id(), "provider-a-vision");
+    assert!(decision.candidates[0].eligible);
+}
+
+#[test]
 fn planned_identity_is_explicit_and_not_a_served_identity() {
     let vision = with_vision(model("vision", ModelTier::Standard));
     let reg = registry(config(vec![vision]));

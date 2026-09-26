@@ -361,7 +361,22 @@ pub enum PolicyFallback {
         #[serde(default = "default_max_escalations")]
         max_steps: u32,
     },
-    /// Ignore requirements and try all candidates.
+    /// Bypass the non-capability policy constraints and retry the pool.
+    ///
+    /// Despite the legacy name this is deliberately *not* "ignore every
+    /// requirement". ADR-0003 keeps the capability contract hard, so this
+    /// action only relaxes the constraints that are not part of that contract:
+    ///
+    /// - dropped: tier bounds, allowed/forbidden providers, and
+    ///   allowed/forbidden models;
+    /// - kept as hard requirements: policy `required_capabilities` (evaluated
+    ///   strictly) and the request-derived capability vector;
+    /// - kept as a hard rejection: an open circuit, which is candidate health
+    ///   state rather than a policy requirement.
+    ///
+    /// If no candidate in the pool satisfies the capability contract, the
+    /// router still returns `Error::NoCandidate` instead of planning an
+    /// incapable candidate.
     IgnoreRequirements,
 }
 
