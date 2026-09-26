@@ -40,7 +40,7 @@ failed node. Historical tags are not graph edges.
 | `7E-1B-CORE` | `DONE` | `7E-1A`, `7A`, `7C` |
 | `7E-1B` | `DONE` | `7E-1A`, `7E-1B-CORE`, `CORE-P1-REPAIR`, `STAGE-3`, `STAGE-4`, `STAGE-6` |
 | `7E-2A` | `DONE` | `7E-1B` |
-| `7E-2B` | `READY` | `7E-2A`, `STAGE-6` |
+| `7E-2B` | `RUNNING` | `7E-2A`, `STAGE-6` |
 | `7E-2C` | `BLOCKED` | `7E-2B` |
 | `7E-2D` | `BLOCKED` | `7E-2C` |
 | `7E-2E` | `BLOCKED` | `7E-2D`, `7E-0` |

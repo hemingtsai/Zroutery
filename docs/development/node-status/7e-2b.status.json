@@ -2,8 +2,8 @@
   "schema_version": 1,
   "node_id": "7E-2B",
   "display_name": "7E-2B — supervised warmup",
-  "status": "READY",
-  "implementation_state": "Both named blockers are closed: the typed decision contract exists and production Outcomes are trustworthy and collected. Supervised warmup is dispatchable but not started, and no training, calibration, or activation work is authorized until it is dispatched with its own brief.",
+  "status": "RUNNING",
+  "implementation_state": "Supervised warmup is being built on branch node/7e-2b-warmup as a pure offline library entry point: it takes a dataset snapshot and returns a trained ensemble, a verified ModelCommit with lineage, and an honest report. It installs nothing, runs on no schedule, and is not reachable from the running product.",
   "dependencies": [
     "7E-2A",
     "STAGE-6"
@@ -18,9 +18,12 @@
     "Offline warmup evaluation"
   ],
   "blocked_by": [],
-  "unblock_condition": "Unblocked: the typed contract and trustworthy Outcomes both exist. Dispatch must state the warmup boundaries explicitly, because this is the first node that would consume the dataset.",
+  "unblock_condition": "Dispatched: implement offline warmup only, with a documented sample projection, deterministic and verifiable output, a disjoint holdout, and no reachable activation path.",
   "evidence": [
-    "E-016"
+    "E-016",
+    "E-069",
+    "E-072",
+    "E-073"
   ],
   "source_references": [
     "docs/development/repository-audit-2026-09-25.md",
@@ -29,6 +32,10 @@
     "crates/zroutery-core/src/outcome.rs"
   ],
   "notes": [
-    "No warmup model is claimed."
+    "This is the first node that consumes the collected dataset, and the first that would train anything at all. Training is authorized here; activation is not.",
+    "Activation is a different call: ShadowEngine::swap and try_train_and_swap install a predictor, and both are forbidden in this node. Installing a verified commit is node 7E-2F.",
+    "The accepted training and evaluation surface is built on the legacy TrainingSample, while production collects the canonical OutcomeTrainingSample. The projection between them must be explicit and proven unable to turn a non-success into a positive label.",
+    "ModelEnsemblePredictor::train is the infallible wrapper that expects; warmup must use the fallible form only.",
+    "No bandit or RL (7E-2C), no calibration (7E-2D), no durable journal (7E-2E), and no snapshot or activation machinery (7E-2F) belongs here."
   ]
 }

@@ -292,6 +292,23 @@ configuration exists. `7E-2B` is the next critical-path node, and it is where th
 first consumer of this dataset and of the typed contract may be built — training,
 warmup, and calibration are still unauthorized until that node is dispatched.
 
+## 7E-2B supervised warmup dispatch
+
+`7E-2B` is dispatched on `node/7e-2b-warmup` from revision `f5fca90`. It is the
+first node that consumes the collected dataset and the first that would train
+anything, so the dispatch named the seam explicitly rather than letting the
+worker discover it.
+
+| ID | Class | Exact command or observation | Result | Known caveat |
+|---|---|---|---|---|
+| E-073 | review, architecture | Read of the training and evaluation surface before dispatch: `ModelEnsemblePredictor::try_train` and `try_train_with_history` take `&self` and return the ordered lineage instead of storing it, the infallible `train` wrapper `.expect()`s, `FrozenHoldout` and `Evaluator` are built on the legacy `TrainingSample`, and `OutcomeTrainingSample::into_legacy` copies `targets` verbatim while dropping the evidence fields | PASS; training is a pure function whose installation is a separate `ShadowEngine::swap` or `try_train_and_swap` call, so an offline warmup can produce a verified commit with no reachable activation path | The accepted training surface is the legacy shape while production collects the canonical one, so warmup must project between them and prove the projection cannot turn a failure into a positive label. Reading the seam proves the split is possible, not that warmup is correct |
+
+`7E-2B` may train. It may not activate, may not be reachable from the running
+product, may not run on a schedule, and may not fabricate a Feedback rating.
+Bandit and RL work is `7E-2C`, calibration is `7E-2D`, the durable journal is
+`7E-2E`, and installing a verified commit is `7E-2F`; none of them is authorized
+by this dispatch.
+
 Batch A was accepted earlier on `main`: `CORE-P1-MEDIA-REQ` and
 `CORE-P1-FAILURE-AUTHORITY` are `DONE`. The records above supersede the state
 that existed when they were still `READY` for a Batch B dispatch.
