@@ -6,6 +6,7 @@
 
 pub mod coordinator;
 pub mod dataset;
+pub mod decision_contract;
 pub mod decision_engine;
 pub mod evaluation;
 pub mod features;
@@ -20,6 +21,12 @@ pub use dataset::{
     validate_outcome_sample, CanonicalTrainingSample, DatasetStore, OutcomeDatasetSample,
     OutcomeTrainingSample, SampleBuilder, SampleScope, Targets, TrainingSample as DatasetTrainingSample,
     validate_sample,
+};
+pub use decision_contract::{
+    CandidateEligibility, CandidatePredictions, CandidateRoles, CandidateScore,
+    DecisionCandidate, DecisionContractError, DecisionDimension, DecisionDistribution,
+    DecisionIdentities, DecisionModel, DecisionModelStates, DecisionPhase, DecisionState,
+    ModelInput, OpenStep, SettledStep, DISTRIBUTION_NORMALIZATION_TOLERANCE,
 };
 pub use decision_engine::{DecisionEngine, EngineCandidate, EngineInput, EngineOutput};
 pub use evaluation::{
