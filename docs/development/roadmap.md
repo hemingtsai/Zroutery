@@ -114,6 +114,14 @@ integration landed as `c4188be`, and the aggregate plus the audited stage record
 were revalidated with the parent review and gates recorded as E-053 through
 E-063. `CORE-P1-REPAIR` is `DONE`.
 
+The current implementation node is `7E-1B`, which is `RUNNING` on
+`node/7e-1b-integration`: it must consume the final served identity from the
+single validated Outcome instead of re-deriving it. `7B` is `READY` but is
+dispatched after it, not alongside it, because the dataset ingestion point is the
+same production lifecycle seam and that file has exactly one owner at a time.
+No production takeover, online RL, exploration, real-provider E2E, or automatic
+model activation is authorized by this roadmap.
+
 ## Parallel engineering inventory
 
 | Node | State | Boundary and next safe work |

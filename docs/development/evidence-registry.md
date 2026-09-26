@@ -213,11 +213,28 @@ summary of a full-workspace pass.
 | E-063 | documentation, integration | `python -B scripts/orch_docs_test.py --self-test` and `python -B scripts/orch_docs_test.py`, plus `git diff --check` and `python -B scripts/commit_contract_test.py --base c66072f341664f67c1cd1c761e5f5adf1980ce16 --head HEAD` after the revalidation state update | PASS; 17 self-test fixtures reject as designed, 69 nodes, 107 edges, 63 evidence rows, 10 regressions, 5 ADRs, and 13 development links are valid, and the range has no invalid commit | A record that says DONE is still only as strong as this evidence; a later change to any cited suite must produce a new record |
 
 The Core P1 aggregate and the five audited stage records are `DONE` on `dev`.
-Their blockers were removed, not their edges: `7E-1B` and `7B` are now `READY`
-and dispatchable, `7E-1` is blocked only by `7E-0`, and every later ML node keeps
-its own predecessor as the blocker. No DecisionModel, DecisionDistribution,
-warmup, RL, calibration, activation, or durable journal work is authorized, and
-the final served identity is still not consumed by the shadow seam.
+Their blockers were removed, not their edges: `7E-1B` and `7B` became dispatchable,
+`7E-1` is blocked only by `7E-0`, and every later ML node keeps its own
+predecessor as the blocker. No DecisionModel, DecisionDistribution, warmup, RL,
+calibration, activation, or durable journal work is authorized, and the final
+served identity is not consumed by the shadow seam until `7E-1B` proves it.
+
+## 7E-1B production integration dispatch
+
+`7E-1B` is dispatched on `node/7e-1b-integration` from revision `1e62e33`. It
+owns the production lifecycle seam again for the duration of the dispatch, so
+`7B` is held back rather than run in parallel: both would need the same
+terminal transition point, and that file has one owner at a time.
+
+| ID | Class | Exact command or observation | Result | Known caveat |
+|---|---|---|---|---|
+| E-064 | review, architecture | Read of the accepted seam before dispatch: `ProductionDecisionRef.served` is documented as `None` until an integration node supplies it, `ShadowEngine::evaluate` is already panic-isolated and returns `None` when disabled, and `shadow_decision_checksum` covers the decision-time input and verdict but not `actual.served` | PASS; the served identity can be correlated after evaluation without invalidating the decision identity, so the integration does not need to re-derive or recompute anything | Reading the seam proves the contract is satisfiable, not that the wiring is correct; only the integration tests and gates can do that |
+
+The worker may claim `DONE` for this node only when the served identity is
+consumed from the single validated Outcome, the exact decision-time input is
+retained rather than reconstructed, a dropped or cancelled stream is correlated
+as a non-success observation, shadow faults never affect the request, and
+determinism plus the accepted 7E-1B-CORE suites still pass.
 
 Batch A was accepted earlier on `main`: `CORE-P1-MEDIA-REQ` and
 `CORE-P1-FAILURE-AUTHORITY` are `DONE`. The records above supersede the state

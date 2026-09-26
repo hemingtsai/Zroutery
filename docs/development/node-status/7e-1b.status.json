@@ -2,8 +2,8 @@
   "schema_version": 1,
   "node_id": "7E-1B",
   "display_name": "7E-1B — replayable shadow observation repair",
-  "status": "READY",
-  "implementation_state": "The pure observation/counterfactual substrate is accepted through 7E-1B-CORE and every recorded Core P1 dependency is now revalidated, so the production integration is dispatchable. The served identity exists on exactly one validated Outcome per request, but nothing consumes it for shadow evaluation yet, so this node is READY rather than DONE.",
+  "status": "RUNNING",
+  "implementation_state": "The production integration is executing in an isolated worktree against the accepted pure seam and the revalidated Core boundary. The final served identity now exists on exactly one validated Outcome per request, and this node must consume it rather than re-derive it.",
   "dependencies": [
     "7E-1A",
     "7E-1B-CORE",
@@ -22,7 +22,7 @@
     "Retained exact feature vectors"
   ],
   "blocked_by": [],
-  "unblock_condition": "Unblocked: wire and prove final served identity plus runtime Outcome/session integration on top of the accepted 7E-1B-CORE seam and the revalidated Core boundary.",
+  "unblock_condition": "Dispatched: wire and prove final served identity plus runtime Outcome/session integration on top of the accepted 7E-1B-CORE seam and the revalidated Core boundary.",
   "evidence": [
     "E-016",
     "E-035",
@@ -31,7 +31,8 @@
     "E-040",
     "E-041",
     "E-059",
-    "E-062"
+    "E-062",
+    "E-064"
   ],
   "source_references": [
     "docs/development/repository-audit-2026-09-25.md",
@@ -40,9 +41,10 @@
     "crates/zroutery-core/src/policy.rs"
   ],
   "notes": [
-    "7E-1B-CORE accepted the pure seam; this node is now READY, not DONE, because Core integration and final served identity consumption do not exist yet.",
+    "7E-1B-CORE accepted the pure seam; this node must not claim DONE until production integration and final served identity evidence exist.",
     "The pure seam intentionally leaves served identity unknown and uses explicit UNKNOWN features for RouteDecision-only rejected candidates.",
-    "The pipeline now produces the served identity on the Outcome but deliberately does not wire the shadow store; doing so is this node's work.",
-    "Do not claim production counterfactual closure until the runtime evidence exists."
+    "The pipeline now produces the served identity on the Outcome; consuming it here is this node's work, and it must come from the Outcome rather than a second derivation.",
+    "Running on branch node/7e-1b-integration from 1e62e33. This node is again the sole owner of the production lifecycle seam while it runs, so 7B cannot run in parallel with it.",
+    "No training, activation, takeover, exploration, or durable LearningEvent journal work belongs here."
   ]
 }
