@@ -2,8 +2,8 @@
   "schema_version": 1,
   "node_id": "7E-2B",
   "display_name": "7E-2B — supervised warmup",
-  "status": "RUNNING",
-  "implementation_state": "Supervised warmup is being built on branch node/7e-2b-warmup as a pure offline library entry point: it takes a dataset snapshot and returns a trained ensemble, a verified ModelCommit with lineage, and an honest report. It installs nothing, runs on no schedule, and is not reachable from the running product.",
+  "status": "DONE",
+  "implementation_state": "Warmup is a pure library entry point: it takes a canonical dataset snapshot, projects it once at the training boundary, trains the four per-dimension models through the accepted fallible seam, and returns a verified ModelCommit with complete root-to-commit lineage plus an honest report. It installs nothing, runs on no schedule, and is unreachable from the running product. Accepted on dev at a332b79.",
   "dependencies": [
     "7E-2A",
     "STAGE-6"
@@ -18,12 +18,15 @@
     "Offline warmup evaluation"
   ],
   "blocked_by": [],
-  "unblock_condition": "Dispatched: implement offline warmup only, with a documented sample projection, deterministic and verifiable output, a disjoint holdout, and no reachable activation path.",
+  "unblock_condition": "Accepted: deterministic output, verifiable lineage, a holdout disjoint by construction, an honest improvement verdict that cannot be claimed on a degenerate holdout, and no reachable activation path.",
   "evidence": [
     "E-016",
     "E-069",
     "E-072",
-    "E-073"
+    "E-073",
+    "E-074",
+    "E-075",
+    "E-076"
   ],
   "source_references": [
     "docs/development/repository-audit-2026-09-25.md",
@@ -32,10 +35,13 @@
     "crates/zroutery-core/src/outcome.rs"
   ],
   "notes": [
-    "This is the first node that consumes the collected dataset, and the first that would train anything at all. Training is authorized here; activation is not.",
-    "Activation is a different call: ShadowEngine::swap and try_train_and_swap install a predictor, and both are forbidden in this node. Installing a verified commit is node 7E-2F.",
-    "The accepted training and evaluation surface is built on the legacy TrainingSample, while production collects the canonical OutcomeTrainingSample. The projection between them must be explicit and proven unable to turn a non-success into a positive label.",
-    "ModelEnsemblePredictor::train is the infallible wrapper that expects; warmup must use the fallible form only.",
+    "This is the first node that consumes the collected dataset, and the first that trains anything at all. Training happened here; activation did not and may not.",
+    "The worker's commit arrived with no subject line at all, so the message began at Why: and violated the commit contract. The parent rewrote the subject on integration; the three source files were already bit-identical to the worker's tree, so only the message changed.",
+    "The dispatch brief asserted two facts about the seam that were both wrong: try_train_with_history is private rather than returning a lineage, and try_train_and_swap does not exist while ShadowEngine::swap plus ShadowEngine::try_train is the real activation surface. The worker verified both instead of trusting them.",
+    "The typed contract participates only as a load-and-score attestation. A training row has no representation in ModelInput, DecisionCandidate, or DecisionState, so adding a training method there would be the wrong fix.",
+    "FOLLOW-UP OWNED BY 7B, recorded rather than hidden: validate_outcome_sample enforces the non-success timing discipline for request scope only, so an attempt-scope sample can carry latency_ms or ttft_ms with success false. Warmup closes this locally with WarmupError::NonSuccessTiming, but the gap is still in the accepted dataset validator.",
+    "Determinism is scoped to the four ModelState payloads, the commit id, the checkpoint content hash, and the report. ModelCheckpoint::created_at and FrozenHoldout::frozen_at are wall-clock and are excluded from the claim.",
+    "A Better verdict requires strictly lower log loss and no Brier regression, and is withheld entirely when the holdout holds one class, because the cold baseline answering p=0.5 makes any base-rate learner look like an improvement on such a holdout.",
     "No bandit or RL (7E-2C), no calibration (7E-2D), no durable journal (7E-2E), and no snapshot or activation machinery (7E-2F) belongs here."
   ]
 }

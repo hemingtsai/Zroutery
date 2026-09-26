@@ -309,6 +309,20 @@ Bandit and RL work is `7E-2C`, calibration is `7E-2D`, the durable journal is
 `7E-2E`, and installing a verified commit is `7E-2F`; none of them is authorized
 by this dispatch.
 
+## 7E-2B acceptance evidence
+
+| ID | Class | Exact command or observation | Result | Known caveat |
+|---|---|---|---|---|
+| E-074 | review, integration | `git diff --name-status f5fca90..85dd8b8`; read of `warmup.rs` for the activation tripwire, the verdict logic, and the refusal set; read of the attempt-scope branch of `validate_outcome_sample` in `dataset.rs` | PASS with one repair; the diff is `ml/warmup.rs`, its test, and additive `ml/mod.rs` registration, and `warmup.rs` cannot name `ShadowEngine`, `swap`, or `server::` at all. Two of the three premises in the dispatch brief were wrong — `try_train_with_history` is private rather than lineage-returning, and `try_train_and_swap` does not exist while `ShadowEngine::swap` plus `ShadowEngine::try_train` is the real activation surface — and the worker verified both instead of trusting them. The worker's commit had no subject line, so it violated the commit contract; the parent rewrote the subject on integration and confirmed the three source files were already bit-identical. | The contract violation reached `dev` through the cherry-pick before it was caught, so a malformed subject does pass a cherry-pick unnoticed; only the range validator sees it |
+| E-075 | review, local | Read of `validate_outcome_sample`'s request-scope and attempt-scope branches in the accepted `ml/dataset.rs` | FAIL in the accepted artifact, closed locally; the request scope rejects success timing on a non-success sample, but the attempt scope checks only index, ids, identity, and success agreement, so an attempt sample can carry `latency_ms` or `ttft_ms` with `success` false and would train the latency head on a failed attempt | The gap is in `7B`'s accepted file and is still open there. `7E-2B` closed it in the node that owns the training consequence with `WarmupError::NonSuccessTiming`; the validator itself is unchanged |
+| E-076 | local, integration | `cargo check --workspace`; `cargo test --workspace`; `cargo test -p zroutery-core --all-features`; `cargo test --workspace --features ml`; `cargo test --workspace --all-features`; `cargo clippy --workspace --all-targets --all-features -- -D warnings`; `pnpm smoke`; `pnpm test:layout`; `git diff --check`; `python -B scripts/orch_docs_test.py`; commit-contract range validation at `a332b79` on `dev`; the 29-test warmup suite | PASS; all four test feature combinations, the 29 warmup tests, both UI gates, the whitespace check, and all 51 non-merge commits valid; worktree clean | `run_warmup` has exactly one caller, the test file, so nothing in the product can trigger a warmup. Tauri does not enable `ml`, so the shipped desktop app has neither the dataset nor the warmup entry point |
+
+`7E-2B` is `DONE`. A supervised model can now be trained offline from real
+collected samples, with a verified commit, honest lineage, and a verdict that
+withholds its own improvement claim when the holdout is degenerate. Nothing
+installs that commit: `7E-2C` is next on the critical path, and it owns bandit
+and reward learning rather than more supervised warmup.
+
 Batch A was accepted earlier on `main`: `CORE-P1-MEDIA-REQ` and
 `CORE-P1-FAILURE-AUTHORITY` are `DONE`. The records above supersede the state
 that existed when they were still `READY` for a Batch B dispatch.
