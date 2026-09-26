@@ -2,8 +2,8 @@
   "schema_version": 1,
   "node_id": "7E-2D",
   "display_name": "7E-2D — calibration and K-way distribution",
-  "status": "BLOCKED",
-  "implementation_state": "A trustworthy K-way distribution is not available for calibration.",
+  "status": "DONE",
+  "implementation_state": "A fitted KWayCalibrator emits one DecisionDistribution per holdout cohort, and the measurement is taken on the FINAL emitted vector rather than on its inputs. On the recorded holdout the emitted vector reaches ECE 0.0667, MCE 0.1032, and worst named candidate 0.1032, against default ceilings 0.10, 0.25 and 0.15, for a Calibrated verdict; the same parameterization left unfitted scores ECE 0.1243 and MCE 0.2865. Normalizing the independent route's near-perfectly-calibrated marginals destroyed their calibration by +0.0667 ECE, which is why the joint route is the claim. Accepted on dev at f3337b1.",
   "dependencies": [
     "7E-2C"
   ],
@@ -15,12 +15,13 @@
     "Calibration metrics",
     "Holdout and drift gates"
   ],
-  "blocked_by": [
-    "7E-2C"
-  ],
-  "unblock_condition": "Close 7E-2C and pass calibration, holdout, and statistical acceptance gates.",
+  "blocked_by": [],
+  "unblock_condition": "Accepted: a fitted calibrator, a measured final vector that meets the reliability ceilings, UUID-invariant determinism, a drift gate that refuses, and no consumer of the emitted distribution.",
   "evidence": [
-    "E-016"
+    "E-016",
+    "E-081",
+    "E-082",
+    "E-083"
   ],
   "source_references": [
     "docs/development/repository-audit-2026-09-25.md",
@@ -28,6 +29,13 @@
     "crates/zroutery-core/src/ml/decision_engine.rs"
   ],
   "notes": [
-    "No production probability is claimed."
+    "No production probability is claimed. The emitted vector is labelled an unconsumed offline diagnostic and planning artifact in every report, and the running product cannot construct a distribution at all.",
+    "The K axis is the RETROSPECTIVE set of candidates actually attempted, reconstructed from recorded attempts. A candidate that was never tried carries no observation and therefore no mass claim; that is stated in the module and in DISTRIBUTION_ROLE rather than papered over.",
+    "PARENT CAUGHT TWO FALSE PREMISES IN THE WORKER'S PLAN before implementation: it asserted that sample_id is content-derived, and planned to order cohorts by decision_id or outcome_id. All three are UUID-derived (dataset.rs:365, stats.rs:327, router.rs:494) and Decision.timestamp is second-resolution, so that ordering would have reintroduced the non-determinism 7E-2C had just fixed. Ordering is now a function of cohort content only.",
+    "The worker's own in-process byte-comparison determinism gate could not have caught that, because UUIDs are fixed within a process. The UUID-invariance test now renders the same logical data under two salts, asserts no shared identifier, reverses arrival order, and asserts identical partition, calibrator bytes, emitted bytes, report and verdict.",
+    "WORKER CAUGHT A BLIND SPOT IN ITS OWN METRIC: three independently-calibrated masses all landed in one bin where their errors cancelled to a binned ECE of 5.55e-17 while the worst named candidate was 12.2 points out. A bin-free per-candidate table and a third ceiling, max_candidate_calibration_error, were added, and the blind spot is pinned by a test.",
+    "A maximally uninformative constant head is largely invisible to a binned gap measure, which is the reason the per-candidate table exists; that limitation is stated rather than hidden.",
+    "A request whose attempts disagree about carrying a decision_id is refused as MixedDecisionScope rather than coalesced, because coalescing would merge two real planning events into one invented candidate set and could count a candidate twice.",
+    "Mixed decision ownership aside, ml/evaluation.rs was held exclusively by this node and every change to it is additive: try_compute_* constructors returning Result, with no existing signature or field altered. 7D consumes this surface later and must not be dispatched against that file concurrently."
   ]
 }

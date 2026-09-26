@@ -86,7 +86,7 @@ must be typed against now exists. Development continues on `dev`.
 | `7E-2A` | `DONE` | The typed candidate-aware contract exists, is validated, and sits beside the accepted engine. |
 | `7E-2B` | `DONE` | Offline supervised warmup: deterministic, verifiable lineage, disjoint holdout, honest verdict, and no activation path. |
 | `7E-2C` | `DONE` | The reward weights are fitted from data and a UCB1 rule is evaluated offline behind a safety gate that can refuse on tail grounds. |
-| `7E-2D` | `BLOCKED` | Requires a trustworthy K-way distribution. |
+| `7E-2D` | `DONE` | A fitted calibrator emits a K-way distribution measured on the final vector; nothing consumes it. |
 | `7E-2E` | `BLOCKED` | Requires durable ordered `LearningEvent` and verified `ModelCommit`. |
 | `7E-2F` | `BLOCKED` | Requires verified immutable snapshots and atomic activation. |
 | `7E-3` | `BLOCKED` | Requires calibrated offline replay/evaluation gates. |
@@ -123,8 +123,13 @@ collected samples with a verified commit and an honest verdict — and nothing
 installs it. `7E-2C` is `DONE`, so a reward is fitted from real samples and a
 selection rule is evaluated offline behind a safety gate that refuses when the
 mean improved while failures, cost, tail latency, or fallbacks regressed, and
-nothing installs or explores with it. `7E-2D` is next and owns calibration.
-`7D` is unblocked. Two limitations are recorded
+nothing installs or explores with it. `7E-2D` is `DONE` too: a calibrated K-way
+distribution now exists, measured on the vector actually emitted rather than on
+its inputs, and the independent route's near-perfect marginals lost 0.0667 ECE to
+normalization, which is the measured reason the joint parameterization is the
+claim. `7E-2E` is next and owns the durable ordered learning journal. `7D` is
+unblocked and may now consume the evaluation surface this node built.
+Two limitations are recorded
 rather than smoothed over: a sample's features currently come from a snapshot
 cloned at decision time rather than a re-read of the accepted record; and dataset
 collection follows `config.shadow.enabled` because no dataset-specific

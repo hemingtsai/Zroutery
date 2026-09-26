@@ -370,6 +370,29 @@ distribution is produced. `7E-2D` is next on the critical path and owns
 calibration, `7E-2E` owns the durable journal, and `7E-2F` owns activation, so
 nothing here can reach a live router.
 
+## 7E-2D calibration and distribution evidence
+
+| ID | Class | Exact command or observation | Result | Known caveat |
+|---|---|---|---|---|
+| E-081 | review, architecture | Comparison of the declared boundaries before dispatch: `7D` and `7E-2D` both list `ml/evaluation.rs` in `source_references`, and their required gates overlap on calibration metrics and a frozen holdout | PASS with a decision recorded; `7E-2D` holds that file exclusively for its dispatch and is required to build the calibration and holdout surface as a reusable public API, including the `passes` rule on both measurement types so `7D` can later judge two routes under one rule. `7D` must not be dispatched against that file concurrently | The decision lives here and in the node notes rather than in a new ADR, because it resolves a collision between two existing records rather than changing a boundary policy. If `7D`'s remaining scope grows, this deserves an ADR |
+| E-082 | review, integration | `git diff --name-status c71e561..c2240b4`; read of the cohort ordering key, the `EmittedDecision` field privacy, the `checked_add` split refusal, the UUID-invariance test, and the confidently-wrong assertions | PASS after two parent corrections; the diff is a new `ml/calibration.rs`, additive `ml/evaluation.rs`, `ml/mod.rs` registration, and two test files, with `lib.rs`, `server/`, `ui/`, `docs/**` and every other read-only `ml/*.rs` untouched. The parent verified that the ordering key is built only from cohort content, that `EmittedDecision.distribution` is private with no bare-`f64` constructor and no `Deserialize`, that the split overflow refuses instead of panicking, and that both a constant-0.98 head and a fully inverted head are judged `Miscalibrated` while a merely-miscalibrated honest head is rejected and the fitted joint over the same snapshot is accepted | Two premises in the worker's plan were false and were caught before implementation rather than after: `sample_id` is UUID-derived, and both `decision_id` and `outcome_id` are too, with second-resolution timestamps, so the planned ordering was UUID-dependent |
+| E-083 | local, review | Worker self-review reported unprompted, plus its own metric probe | Four defects found and fixed; a binned gap measure averaged a real error away, with three calibrated masses landing in one bin and cancelling to an ECE of 5.55e-17 while the worst named candidate was 12.2 points out, which is why the bin-free per-candidate table and a third ceiling exist; the Platt map used `ln p` instead of log-odds; the initial and final log losses were both read from the gradient-accumulation loop and were near-duplicates; and the split addition overflowed and panicked instead of refusing | The binned-cancellation case is the reason this row exists. It is a metric that reported success while a named candidate was badly wrong, and it would have passed a mean-only gate |
+
+The recorded holdout is 40 decisions and 120 candidate observations, disjoint
+from the 160-decision fit, with a hand-computable truth of `(0.20, 0.40, 0.20)`.
+The emitted vector reached ECE 0.0667, MCE 0.1032, worst named candidate 0.1032,
+Brier 0.1918 and multiclass log loss 1.0397 for a `Calibrated` verdict, against
+ECE 0.1243 and MCE 0.2865 for the same parameterization left unfitted. The
+independent route's pre-normalization marginals were near-perfectly calibrated
+and normalization destroyed that by `+0.0667` ECE, which is the measured reason
+the joint parameterization is the claim rather than the independent one.
+
+`7E-2D` is `DONE`. A calibrated K-way distribution now exists, it is measured on
+the vector actually emitted, and nothing consumes it: the emitted vector is an
+unconsumed offline artifact, the running product cannot construct a distribution
+at all, and `7E-2E` (durable journal) and `7E-2F` (activation) remain the only
+routes from here to a live router.
+
 Batch A was accepted earlier on `main`: `CORE-P1-MEDIA-REQ` and
 `CORE-P1-FAILURE-AUTHORITY` are `DONE`. The records above supersede the state
 that existed when they were still `READY` for a Batch B dispatch.
