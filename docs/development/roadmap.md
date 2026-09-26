@@ -56,12 +56,11 @@ Stage 4 failure/stream repair ────┤
 Stage 6 Outcome/Feedback bridge ─┘
 ```
 
-`7E-0` is `PARTIAL`, `7E-1` is `PARTIAL`, and `7E-2A` is `BLOCKED`; the repair
-nodes do not erase those decisions. `7E-1A` and `7E-1B-CORE` are `DONE`; the
-Core P1 split (ADR-0003 through ADR-0005) is fully accepted and the audited stage
-records were revalidated, so `7E-1B` is now `READY` and dispatchable. Full
-`7E-1B` is not `DONE`: nothing consumes the final served identity yet.
-Development continues on `dev`.
+`7E-0` remains `PARTIAL`; that decision is not erased by anything below. `7E-1A`,
+`7E-1B-CORE`, and `7E-1B` are all `DONE`, so `7E-1` is `DONE` as well, and the
+Core P1 split (ADR-0003 through ADR-0005) is fully accepted with the audited
+stage records revalidated. `7E-2A` is `READY`: the replayable production input it
+must be typed against now exists. Development continues on `dev`.
 
 ## Stage and ML inventory
 
@@ -80,12 +79,12 @@ Development continues on `dev`.
 | `7C` | `PARTIAL` | Specialist baseline models work; typed candidate-aware decision contracts do not. |
 | `7D` | `PARTIAL` | Evaluation framework exists; holdout, calibration, and statistical gates are incomplete. |
 | `7E-0` | `PARTIAL` | 7E-1A repaired identity/replay; durable model operations and journal remain for later nodes. |
-| `7E-1` | `PARTIAL` | Purity/determinism foundations pass; production counterfactual and replay closure fail. |
+| `7E-1` | `DONE` | All three children accepted: identity/lineage, the pure shadow seam, and the production integration that retains the decision-time input and correlates the served identity. |
 | `7E-1A` | `DONE` | Identity, lineage, schema-envelope, predictor-swap, and replay substrate accepted on main. |
 | `7E-1B-CORE` | `DONE` | Pure replayable observation, non-degenerate counterfactual, rejected-candidate evidence, and fail-closed store semantics accepted on main. |
-| `7E-1B` | `READY` | Pure seam accepted and every Core dependency revalidated; the served identity exists on the Outcome but is not yet wired into shadow evaluation. |
-| `7E-2A` | `BLOCKED` | Requires replayable input and separate final-served identity. |
-| `7E-2B` | `BLOCKED` | Requires 7E-2A and the Stage 6 Outcome bridge. |
+| `7E-1B` | `DONE` | The production path records one counterfactual per request over the retained decision-time input and attaches the final served identity from the single validated Outcome. |
+| `7E-2A` | `READY` | The replayable production input exists; the typed candidate-aware decision contract is still undefined. |
+| `7E-2B` | `BLOCKED` | Requires 7E-2A and supervised warmup with a trustworthy Outcome. |
 | `7E-2C` | `BLOCKED` | Requires supervised warmup, Dataset, and RewardPolicy. |
 | `7E-2D` | `BLOCKED` | Requires a trustworthy K-way distribution. |
 | `7E-2E` | `BLOCKED` | Requires durable ordered `LearningEvent` and verified `ModelCommit`. |
@@ -114,13 +113,15 @@ integration landed as `c4188be`, and the aggregate plus the audited stage record
 were revalidated with the parent review and gates recorded as E-053 through
 E-063. `CORE-P1-REPAIR` is `DONE`.
 
-The current implementation node is `7E-1B`, which is `RUNNING` on
-`node/7e-1b-integration`: it must consume the final served identity from the
-single validated Outcome instead of re-deriving it. `7B` is `READY` but is
-dispatched after it, not alongside it, because the dataset ingestion point is the
-same production lifecycle seam and that file has exactly one owner at a time.
-No production takeover, online RL, exploration, real-provider E2E, or automatic
-model activation is authorized by this roadmap.
+The current position on the critical path: `7E-1` and `7E-1B` are `DONE`, so the
+first production ML fact — a per-request counterfactual correlated with the
+identity that actually served — now exists on `dev`. Two nodes are `READY`:
+`7E-2A`, which types the candidate-aware decision contract against that retained
+input, and `7B`, which builds the DatasetStore ingestion path. Neither may be
+reported as started work until it is dispatched, and `7E-2A` is on the critical
+path. `REG-009` is `PARTIAL` because the training-side consumer of the retained
+input does not exist yet. No production takeover, online RL, exploration,
+real-provider E2E, or automatic model activation is authorized by this roadmap.
 
 ## Parallel engineering inventory
 
@@ -141,7 +142,7 @@ model activation is authorized by this roadmap.
 | Gate | State | Scope and caveat |
 |---|---|---|
 | `TEST-CHECK` | `DONE` | Local `cargo check --workspace` passed at the audited SHA with one unused-variable warning. |
-| `TEST-WORKSPACE` | `DONE` | Local `cargo test --workspace` passed at the audited SHA. |
+| `TEST-WORKSPACE` | `DONE` | Local `cargo test --workspace` passed at the audited SHA and at `0f5c935`; it regressed at `c4188be` because a new test used an ml-gated API, and the gap is recorded in E-065. |
 | `TEST-ML` | `DONE` | Local `cargo test --workspace --features ml` passed at the audited SHA. |
 | `TEST-ALL-FEATURES` | `DONE` | Local `cargo test --workspace --all-features` passed at the audited SHA. |
 | `TEST-CLIPPY` | `DONE` | Full workspace all-target/all-feature clippy passed after the baseline repair. |
@@ -180,22 +181,28 @@ The status files are initially written as a documentation batch and may only
 move to `DONE` after their evidence and validation IDs pass. This record does
 not change implementation status for any audited node.
 
-## Authorized first batch
+## Authorized batches
 
-The audit authorizes four non-overlapping worktrees:
+The audit authorized four non-overlapping worktrees, all accepted:
 
 1. `7E-1A` (`DONE`) — model identity, lineage, and replay repair;
 2. `BASELINE-GATE` (`DONE`) — local clippy, Windows smoke, and layout-harness repair;
 3. `COMMIT-CONTRACT` (`DONE`) — CI/workflow commit evidence alignment; and
 4. `ORCH-DOCS` (`DONE`) — this recoverable documentation record.
 
-The next authorized work is `7E-1B`, which is `READY` and dispatchable now that
-all five bounded Core P1 nodes and the audited stage records are accepted. It
-must consume the final served identity from the single validated Outcome rather
-than re-deriving it, and it must not claim production counterfactual closure
-without runtime evidence. `7E-2A` and every later ML node stay blocked on their
-own predecessors. No production takeover, online RL, exploration,
-real-provider E2E, or automatic model activation is authorized by this roadmap.
+Core P1 then ran as three bounded batches: Batch A (`CORE-P1-MEDIA-REQ`,
+`CORE-P1-FAILURE-AUTHORITY`), Batch B (`CORE-P1-ELIGIBILITY-TRACE`,
+`CORE-P1-OUTCOME-FEEDBACK`, dispatched in parallel because their ownership was
+disjoint), and the serial Batch C (`CORE-P1-PIPELINE-LIFECYCLE`, the sole owner of
+the production lifecycle seam). All five nodes, the aggregate, and the audited
+stage records are accepted. `7E-1B` followed as the production ML integration and
+is accepted.
+
+The next authorized work is `7E-2A`, which is `READY` on the critical path, and
+`7B`, which is `READY` beside it. They own different files, so they may be
+dispatched together; neither may be reported as started work before dispatch. No
+production takeover, online RL, exploration, real-provider E2E, or automatic
+model activation is authorized by this roadmap.
 
 ## Unresolved decisions
 

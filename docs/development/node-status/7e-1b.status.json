@@ -2,8 +2,8 @@
   "schema_version": 1,
   "node_id": "7E-1B",
   "display_name": "7E-1B — replayable shadow observation repair",
-  "status": "RUNNING",
-  "implementation_state": "The production integration is executing in an isolated worktree against the accepted pure seam and the revalidated Core boundary. The final served identity now exists on exactly one validated Outcome per request, and this node must consume it rather than re-derive it.",
+  "status": "DONE",
+  "implementation_state": "The production path evaluates the shadow counterfactual over the decision-time snapshot, retains that exact input in the stored record, and attaches the final served identity in the single terminal transition, read from the one validated Outcome and from nowhere else. A failed, cancelled, or abandoned request correlates as the non-success it was, and a refused or faulted correlation can never affect the response. Accepted on dev at 0f5c935.",
   "dependencies": [
     "7E-1A",
     "7E-1B-CORE",
@@ -22,7 +22,7 @@
     "Retained exact feature vectors"
   ],
   "blocked_by": [],
-  "unblock_condition": "Dispatched: wire and prove final served identity plus runtime Outcome/session integration on top of the accepted 7E-1B-CORE seam and the revalidated Core boundary.",
+  "unblock_condition": "Accepted: the served identity is consumed from the single validated Outcome, the decision-time input is retained and replayable, non-success terminal states stay uncorrelated, faults are absorbed, and the accepted 7E-1B-CORE suites still pass.",
   "evidence": [
     "E-016",
     "E-035",
@@ -32,7 +32,11 @@
     "E-041",
     "E-059",
     "E-062",
-    "E-064"
+    "E-064",
+    "E-065",
+    "E-066",
+    "E-067",
+    "E-068"
   ],
   "source_references": [
     "docs/development/repository-audit-2026-09-25.md",
@@ -41,10 +45,11 @@
     "crates/zroutery-core/src/policy.rs"
   ],
   "notes": [
-    "7E-1B-CORE accepted the pure seam; this node must not claim DONE until production integration and final served identity evidence exist.",
-    "The pure seam intentionally leaves served identity unknown and uses explicit UNKNOWN features for RouteDecision-only rejected candidates.",
-    "The pipeline now produces the served identity on the Outcome; consuming it here is this node's work, and it must come from the Outcome rather than a second derivation.",
-    "Running on branch node/7e-1b-integration from 1e62e33. This node is again the sole owner of the production lifecycle seam while it runs, so 7B cannot run in parallel with it.",
-    "No training, activation, takeover, exploration, or durable LearningEvent journal work belongs here."
+    "7E-1B-CORE accepted the pure seam and this node closed the production half; both are required before 7E-1 can be DONE.",
+    "The pure seam intentionally leaves served identity unknown and uses explicit UNKNOWN features for RouteDecision-only rejected candidates; the integration supplies the former from the Outcome and does not invent the latter.",
+    "Implemented on branch node/7e-1b-integration as 48018af and integrated into dev as 0f5c935; parent review and gates are E-065 through E-068.",
+    "The seam gained one additive primitive, ShadowStore::correlate_served, because a stored record could not otherwise receive a terminal fact. No signature, checksum, or accepted behavior changed.",
+    "REG-009 is only half closed: retention through production evaluation is proven, while training-side consumption does not exist yet.",
+    "Tauri still does not enable the ml feature, so the desktop app does not exercise this path in production. That is a packaging decision, not a code gap."
   ]
 }

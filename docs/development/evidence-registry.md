@@ -234,7 +234,24 @@ The worker may claim `DONE` for this node only when the served identity is
 consumed from the single validated Outcome, the exact decision-time input is
 retained rather than reconstructed, a dropped or cancelled stream is correlated
 as a non-success observation, shadow faults never affect the request, and
-determinism plus the accepted 7E-1B-CORE suites still pass.
+determinism plus the accepted 7E-1B-CORE suites still pass. The worker reported
+`PARTIAL` for exactly that reason, which was correct.
+
+## 7E-1B acceptance and a corrected gate failure
+
+| ID | Class | Exact command or observation | Result | Known caveat |
+|---|---|---|---|---|
+| E-065 | review, local | `cargo test --workspace` at the Batch C acceptance revision; `Select-String` on the compiler output; the same failure reproduced with the integration diff stashed at `1e62e33` | FAIL then PASS; `pipeline_lifecycle_test.rs` called the ml-gated `Router::observations()` without a feature gate, so the default-feature test target did not compile from `c4188be` until `ccdbe15` feature-gated that one assertion | This was a parent acceptance failure, not a worker failure: the Batch C gate matrix (E-060) omitted `cargo test --workspace`, so a broken default-feature gate was accepted and recorded as green. The default-feature gate is now in the matrix for every Core and ML acceptance. |
+| E-066 | review, integration | `git diff --name-status 1e62e33..48018af` and a read of the seam, lifecycle, and correlation changes | PASS; only `ml/shadow.rs`, `server/pipeline.rs`, and a new focused `tests/shadow_integration_test.rs` changed; the seam change is purely additive (`ShadowStore::correlate_served`, `ShadowEngine::correlate_served`, a private `count_fault` helper) with no existing signature, checksum, or behavior changed | The seam gained one primitive because a stored record had no way to receive a terminal fact; 7B will build on that surface |
+| E-067 | local, review | Worker mutation checks on its own wiring, repeated by the parent reading the same assertions | PASS; deleting the correlation call fails 5 tests, and substituting `last_attempted_identity` for `served_identity` fails exactly the failed, abandoned-stream, and cancelled-stream tests | Mutation evidence shows the gates bite; it is not a substitute for the behavioral tests themselves |
+| E-068 | local, integration | `cargo check --workspace`; `cargo test --workspace`; `cargo test -p zroutery-core --all-features`; `cargo test --workspace --features ml`; `cargo test --workspace --all-features`; `cargo clippy --workspace --all-targets --all-features -- -D warnings`; `pnpm smoke`; `pnpm test:layout`; `git diff --check`; `python -B scripts/orch_docs_test.py`; commit-contract range validation at `0f5c935` on `dev` | PASS; all four test feature combinations, 937 Core unit tests, the 14 new integration tests, both UI gates, the whitespace check, and all 43 non-merge commits valid; worktree clean | Tauri does not enable the `ml` feature, so the shipped desktop app does not exercise the shadow path; that is a packaging decision, not a code gap |
+
+`7E-1B` is `DONE`, which makes `7E-1` DONE as well because all three of its
+children are accepted. The served identity is now consumed from the single
+validated Outcome, and the record retains the exact decision-time input, so
+REG-009 is closed on the evaluation side only. `7E-2A` is `READY` and `7B` is
+`READY`; neither may be claimed as started work, and no training, activation,
+takeover, exploration, or durable journal work is authorized by this acceptance.
 
 Batch A was accepted earlier on `main`: `CORE-P1-MEDIA-REQ` and
 `CORE-P1-FAILURE-AUTHORITY` are `DONE`. The records above supersede the state

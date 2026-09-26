@@ -35,11 +35,11 @@ failed node. Historical tags are not graph edges.
 | `7C` | `PARTIAL` | `7A` |
 | `7D` | `PARTIAL` | `7B`, `7C` |
 | `7E-0` | `PARTIAL` | `7C` |
-| `7E-1` | `PARTIAL` | `7E-0`, `CORE-P1-REPAIR`, `STAGE-3`, `STAGE-4`, `STAGE-6` |
+| `7E-1` | `DONE` | `7E-0`, `CORE-P1-REPAIR`, `STAGE-3`, `STAGE-4`, `STAGE-6` |
 | `7E-1A` | `DONE` | `7E-0`, `7A`, `7C` |
 | `7E-1B-CORE` | `DONE` | `7E-1A`, `7A`, `7C` |
-| `7E-1B` | `RUNNING` | `7E-1A`, `7E-1B-CORE`, `CORE-P1-REPAIR`, `STAGE-3`, `STAGE-4`, `STAGE-6` |
-| `7E-2A` | `BLOCKED` | `7E-1B` |
+| `7E-1B` | `DONE` | `7E-1A`, `7E-1B-CORE`, `CORE-P1-REPAIR`, `STAGE-3`, `STAGE-4`, `STAGE-6` |
+| `7E-2A` | `READY` | `7E-1B` |
 | `7E-2B` | `BLOCKED` | `7E-2A`, `STAGE-6` |
 | `7E-2C` | `BLOCKED` | `7E-2B` |
 | `7E-2D` | `BLOCKED` | `7E-2C` |

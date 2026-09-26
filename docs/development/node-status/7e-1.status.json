@@ -2,8 +2,8 @@
   "schema_version": 1,
   "node_id": "7E-1",
   "display_name": "7E-1 — replayable shadow decision closure",
-  "status": "PARTIAL",
-  "implementation_state": "Purity, determinism, fault isolation, and non-authority foundations pass; production counterfactual and replay closure fail.",
+  "status": "DONE",
+  "implementation_state": "Purity, determinism, fault isolation, and non-authority hold in production, and the counterfactual is now recorded per request over the exact decision-time input, with the final served identity attached from the one validated Outcome. 7E-1A, 7E-1B-CORE, and 7E-1B are all accepted.",
   "dependencies": [
     "7E-0",
     "CORE-P1-REPAIR",
@@ -20,14 +20,16 @@
     "Separate initial/final served identity",
     "Shadow purity and determinism"
   ],
-  "blocked_by": [
-    "7E-0"
-  ],
-  "unblock_condition": "Close 7E-0, then prove replayable retained input and separate served identities through the 7E-1B production integration.",
+  "blocked_by": [],
+  "unblock_condition": "Accepted: the three child nodes are DONE and each required gate is covered by their evidence.",
   "evidence": [
     "E-005",
     "E-006",
-    "E-016"
+    "E-016",
+    "E-037",
+    "E-041",
+    "E-062",
+    "E-068"
   ],
   "source_references": [
     "docs/development/repository-audit-2026-09-25.md",
@@ -36,7 +38,8 @@
     "crates/zroutery-core/src/server/pipeline.rs"
   ],
   "notes": [
-    "The audit decision is preserved as PARTIAL.",
-    "The four Core P1 blockers are revalidated, so the only remaining named blocker is 7E-0; the production counterfactual itself is still unproven and belongs to 7E-1B."
+    "The audit decision was PARTIAL and is superseded only by the accepted child nodes and their evidence.",
+    "7E-0 remains PARTIAL for its own reasons — durable model operations and the journal — and that is not one of this node's gates, so it is no longer listed as a blocker.",
+    "REG-009 stays PARTIAL: the training-side consumer of the retained input does not exist yet."
   ]
 }

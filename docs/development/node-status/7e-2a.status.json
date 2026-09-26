@@ -2,8 +2,8 @@
   "schema_version": 1,
   "node_id": "7E-2A",
   "display_name": "7E-2A — candidate-aware decision contract",
-  "status": "BLOCKED",
-  "implementation_state": "No current contract exists for the candidate-aware decision types required by 7E-2A.",
+  "status": "READY",
+  "implementation_state": "The replayable production input this contract must be typed against now exists, so the node is dispatchable. The typed candidate-aware contract itself is still undefined: no ModelInput, DecisionModel, DecisionState, DecisionCandidate, or DecisionDistribution type has been written.",
   "dependencies": [
     "7E-1B"
   ],
@@ -18,12 +18,12 @@
     "DecisionDistribution",
     "Replayable production input"
   ],
-  "blocked_by": [
-    "7E-1B"
-  ],
-  "unblock_condition": "Complete 7E-1B and define the typed contract with a trustworthy production decision trace.",
+  "blocked_by": [],
+  "unblock_condition": "Unblocked: define the typed contract against the replayable production input that 7E-1B now retains.",
   "evidence": [
-    "E-016"
+    "E-016",
+    "E-064",
+    "E-068"
   ],
   "source_references": [
     "docs/development/repository-audit-2026-09-25.md",
@@ -32,6 +32,7 @@
     "crates/zroutery-core/src/ml/shadow.rs"
   ],
   "notes": [
-    "The audit decision is preserved as BLOCKED."
+    "The audit decision was BLOCKED for want of a trustworthy production input; that reason is closed, but this node's own contract work has not started.",
+    "Defining the types is authorized now; training, warmup, RL, calibration, activation, and the durable journal are not."
   ]
 }

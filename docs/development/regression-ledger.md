@@ -16,7 +16,7 @@ state vocabulary. ORCH-DOCS records defects; it does not repair them.
 | `REG-006` | `FailureImpact`/`FailureClass` and `Error` are competing runtime failure authorities. | `FAILED` | `DONE` | P1 | `CORE-P1-FAILURE-AUTHORITY` | E-016; E-043; E-046; E-047; E-049; E-051; E-053; E-056; E-058; E-059; E-060; `crates/zroutery-core/src/failure.rs`; `crates/zroutery-core/src/error.rs` | Closed by 4048a61, the Batch B router adapters, and c4188be: one canonical mapping, no local classifier in the pipeline, and a structural tripwire that fails if a second one returns. |
 | `REG-007` | A client stream disconnect can be finalized as a successful request through the stream drop path. | `FAILED` | `DONE` | P1 | `CORE-P1-PIPELINE-LIFECYCLE` | E-016; E-043; E-058; E-059; E-060; `crates/zroutery-core/src/server/pipeline.rs:1508-1516`; `crates/zroutery-core/tests/pipeline_lifecycle_test.rs` | Closed by c4188be: a drop is Interrupted or Cancelled, never served, and a behavioral test drops a real response mid-answer to prove it. |
 | `REG-008` | A valid model checkpoint could be paired with an unrelated commit ID. | `FAILED` | `DONE` | P1 | `7E-1A` | E-016; E-026; E-027; E-028; E-033; `ml/model_identity.rs`; `ml/shadow.rs` | Closed by 1c49109 and c782a49 with complete lineage and schema-envelope gates. |
-| `REG-009` | Decision-time feature vectors and exact shadow input were not retained through production evaluation/training. | `FAILED` | `PARTIAL` | P1 | `7E-1B-CORE` / `7E-1B` | E-016; E-035; E-037; E-041; `crates/zroutery-core/src/ml/shadow.rs`; `crates/zroutery-core/tests/shadow_observation_test.rs` | `7E-1`, `7E-1B`, `7E-2A`; pure replayable input/meaningful counterfactual is accepted, but production final served identity and runtime Outcome/session integration remain blocked by Core P1 repairs. |
+| `REG-009` | Decision-time feature vectors and exact shadow input were not retained through production evaluation/training. | `FAILED` | `PARTIAL` | P1 | `7E-1B-CORE` / `7E-1B` | E-016; E-035; E-037; E-041; E-062; E-067; E-068; `crates/zroutery-core/src/ml/shadow.rs`; `crates/zroutery-core/tests/shadow_integration_test.rs` | `7E-2A`, `7E-2B`; retention through production evaluation is closed — the stored record holds the exact decision-time input and a test replays it through a fresh engine to reproduce both checksums — but the training-side consumer does not exist yet, so reopen this row when 7E-2B adds one. |
 | `REG-010` | Node state, DAG, evidence, and regression recovery information was not present in development records. | `FAILED` | `DONE` | P1 | `ORCH-DOCS` | E-017 through E-023; `docs/development/node-status/`; `docs/development/dependency-dag.md`; `docs/development/evidence-registry.md` | `ORCH-INFRA`, `ORCH-STATUS`, `ORCH-EVIDENCE`, `ORCH-REGRESSION`, `ORCH-VALIDATION`; reopen if JSON, inventory, edge, enum, path, or diff validation fails. |
 
 ## Ownership and closure rules
@@ -28,8 +28,8 @@ state vocabulary. ORCH-DOCS records defects; it does not repair them.
   closed by c4188be and the revalidation in E-062. Reopen any of them if a
   later change reintroduces a second failure classifier, loses the planned versus
   served distinction, or records a client drop as success.
-- `REG-008` is closed by 7E-1A; `REG-009` is PARTIAL after 7E-1B-CORE and
-  remains open until full 7E-1B production integration is proven.
+- `REG-008` is closed by 7E-1A; `REG-009` is `PARTIAL` after 7E-1B because the
+  evaluation side is proven and the training side does not exist yet.
 - `REG-010` is closed only for the documentation artifact itself. It does not
   imply that the implementation, test, or online-learning gates are closed.
 
