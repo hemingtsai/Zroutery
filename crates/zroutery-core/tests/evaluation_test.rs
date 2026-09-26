@@ -527,3 +527,152 @@ fn recommendation_reject_when_below_threshold() {
         "marginal improvement below all thresholds should be rejected"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Node 7E-2D: the fallible metric constructors
+// ---------------------------------------------------------------------------
+//
+// The calibration node measures a K-way vector, so it cannot prove its
+// probabilities are finite and inside [0, 1] before handing them over. These
+// tests pin the fallible twins added for it: the same arithmetic, a typed
+// refusal instead of a `NaN` metrics struct, and exact agreement with the
+// `assert!`-based constructors on well-formed input.
+
+use zroutery_core::ml::evaluation::EvaluationError;
+
+#[test]
+fn try_compute_classification_agrees_with_the_infallible_constructor() {
+    let predictions = [1.0, 0.0, 0.5, 0.9, 0.1, 0.7, 0.3, 0.0, 1.0];
+    let actuals = [true, false, true, true, false, true, false, false, true];
+
+    let fallible = PredictionMetrics::try_compute_classification(&predictions, &actuals)
+        .expect("well-formed input is accepted");
+    let infallible = PredictionMetrics::compute_classification(&predictions, &actuals);
+
+    assert_eq!(fallible.sample_count, infallible.sample_count);
+    assert_eq!(fallible.mean_prediction, infallible.mean_prediction);
+    assert_eq!(fallible.mean_actual, infallible.mean_actual);
+    assert_eq!(fallible.log_loss, infallible.log_loss);
+    assert_eq!(fallible.brier_score, infallible.brier_score);
+    assert_eq!(fallible.mae, infallible.mae);
+    assert_eq!(fallible.rmse, infallible.rmse);
+}
+
+#[test]
+fn try_compute_regression_agrees_with_the_infallible_constructor() {
+    let predictions = [10.0, 20.0, 30.0, -5.5];
+    let actuals = [12.0, 18.0, 33.0, -5.5];
+
+    let fallible =
+        PredictionMetrics::try_compute_regression(&predictions, &actuals).expect("well-formed");
+    let infallible = PredictionMetrics::compute_regression(&predictions, &actuals);
+
+    assert_eq!(fallible.sample_count, infallible.sample_count);
+    assert_eq!(fallible.mae, infallible.mae);
+    assert_eq!(fallible.rmse, infallible.rmse);
+    assert_eq!(fallible.mean_prediction, infallible.mean_prediction);
+    assert_eq!(fallible.mean_actual, infallible.mean_actual);
+    assert_eq!(fallible.log_loss, infallible.log_loss);
+    assert_eq!(fallible.brier_score, infallible.brier_score);
+}
+
+#[test]
+fn try_compute_classification_refuses_rather_than_returning_nan_metrics() {
+    assert_eq!(
+        PredictionMetrics::try_compute_classification(&[], &[]).unwrap_err(),
+        EvaluationError::EmptyObservations
+    );
+    assert_eq!(
+        PredictionMetrics::try_compute_classification(&[0.5], &[true, false]).unwrap_err(),
+        EvaluationError::LengthMismatch {
+            predictions: 1,
+            actuals: 2,
+        }
+    );
+    // Matched rather than compared: `NaN != NaN`, so a `PartialEq` assertion on
+    // a refusal that carries a `NaN` would fail for the wrong reason.
+    for non_finite in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        match PredictionMetrics::try_compute_classification(&[0.5, non_finite], &[true, false])
+            .unwrap_err()
+        {
+            EvaluationError::NonFinitePrediction { index, value } => {
+                assert_eq!(index, 1, "the refusal must name the offending index");
+                assert!(value.is_nan() == non_finite.is_nan());
+                assert_eq!(value.is_infinite(), non_finite.is_infinite());
+            }
+            other => panic!("expected a non-finite refusal, got {other:?}"),
+        }
+    }
+    for out_of_range in [1.5_f64, -0.001] {
+        assert_eq!(
+            PredictionMetrics::try_compute_classification(&[out_of_range], &[true]).unwrap_err(),
+            EvaluationError::PredictionOutOfRange {
+                index: 0,
+                value: out_of_range,
+            }
+        );
+    }
+
+    // A prediction of exactly 0.0 and exactly 1.0 are probabilities, not
+    // out-of-range values, and must be accepted.
+    assert!(PredictionMetrics::try_compute_classification(&[0.0, 1.0], &[false, true]).is_ok());
+}
+
+#[test]
+fn try_compute_regression_refuses_a_non_finite_prediction_but_not_a_magnitude() {
+    assert_eq!(
+        PredictionMetrics::try_compute_regression(&[], &[]).unwrap_err(),
+        EvaluationError::EmptyObservations
+    );
+    assert_eq!(
+        PredictionMetrics::try_compute_regression(&[1.0], &[1.0, 2.0]).unwrap_err(),
+        EvaluationError::LengthMismatch {
+            predictions: 1,
+            actuals: 2,
+        }
+    );
+    match PredictionMetrics::try_compute_regression(&[1.0, f64::NEG_INFINITY], &[1.0, 2.0])
+        .unwrap_err()
+    {
+        EvaluationError::NonFiniteRegressionPrediction { index, value } => {
+            assert_eq!(index, 1);
+            assert!(value.is_infinite() && value.is_sign_negative());
+        }
+        other => panic!("expected a non-finite refusal, got {other:?}"),
+    }
+    // Unlike a probability, a regression target has no interval to lie in: a
+    // negative latency is a magnitude, and policing a range here would be
+    // inventing a constraint the accepted type does not have.
+    assert!(PredictionMetrics::try_compute_regression(&[-1.0, 1e9], &[0.0, 0.0]).is_ok());
+}
+
+#[test]
+fn every_evaluation_error_carries_a_reason() {
+    let cases = [
+        EvaluationError::EmptyObservations,
+        EvaluationError::LengthMismatch {
+            predictions: 2,
+            actuals: 3,
+        },
+        EvaluationError::NonFinitePrediction {
+            index: 0,
+            value: -1.0,
+        },
+        EvaluationError::PredictionOutOfRange {
+            index: 4,
+            value: 2.0,
+        },
+        EvaluationError::NonFiniteRegressionPrediction {
+            index: 1,
+            value: 1.0e300,
+        },
+    ];
+    for case in cases {
+        let rendered = case.to_string();
+        assert!(!rendered.is_empty(), "every refusal must render a reason");
+        assert!(
+            !rendered.contains("Error {"),
+            "the rendered reason must be prose, not a debug dump: {rendered}"
+        );
+    }
+}

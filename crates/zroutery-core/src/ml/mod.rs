@@ -5,6 +5,7 @@
 //! that collects samples for model training.
 
 pub mod bandit;
+pub mod calibration;
 pub mod coordinator;
 pub mod dataset;
 pub mod decision_contract;
@@ -26,6 +27,17 @@ pub use bandit::{
     DEFAULT_TAIL_PERCENTILE, FITTED_ARM_NAME, OUTCOME_PROXY_FIT_TARGET, OUTCOME_PROXY_ORDER,
     REWARD_FIT_TARGET_DESCRIPTION, UNIDENTIFIABLE_REASON, UNIDENTIFIABLE_WEIGHT, WEIGHT_NAMES,
 };
+pub use calibration::{
+    collect_marginal_observations, measure_drift, measure_emitted, measure_marginal, project_cohorts,
+    run_calibration, AcceptanceTolerances, CalibrationConfig, CalibrationError, CalibrationMeasure,
+    CalibrationOutcome, CalibrationReport, CalibrationVerdict, CandidateInput, CandidateIntercept,
+    CohortContext, DecisionCohort, DegeneracyReason, DistributionRecord, DriftConfig,
+    DriftMeasurement, DriftTolerances, DriftVerdict, EmittedDecision, FitConfig, HoldoutConfig,
+    KWayCalibrator, MarginalCalibration, MarginalCalibrator, MarginalFitConfig, MarginalObservation,
+    MarginalView, NormalizationDamage, PartitionKind, ReliabilityBin, ReliabilityConfig,
+    ReliabilityCurve, UnrankedReason, DEFAULT_DRIFT_BINS, DEFAULT_PROBABILITY_FLOOR,
+    DEFAULT_RELIABILITY_BINS, DISTRIBUTION_ROLE,
+};
 pub use coordinator::{Coordinator, CoordinatorConfig, RoutingAction, RoutingDecision};
 pub use dataset::{
     canonical_samples_from_outcome, outcome_to_dataset_sample, sample_from_outcome, samples_from_outcome,
@@ -42,8 +54,8 @@ pub use decision_contract::{
 };
 pub use decision_engine::{DecisionEngine, EngineCandidate, EngineInput, EngineOutput};
 pub use evaluation::{
-    ComparisonReport, Evaluator, FrozenHoldout, PredictionMetrics, Recommendation, RoutingDeltas,
-    RoutingMetrics, temporal_split,
+    ComparisonReport, EvaluationError, Evaluator, FrozenHoldout, PredictionMetrics, Recommendation,
+    RoutingDeltas, RoutingMetrics, temporal_split,
 };
 pub use features::{
     extract_features, FeatureContext, RoutingFeatures, FEATURE_DIMENSION, FEATURE_SCHEMA_VERSION,

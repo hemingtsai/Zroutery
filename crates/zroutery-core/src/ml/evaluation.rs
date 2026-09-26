@@ -10,6 +10,43 @@ use crate::ml::dataset::TrainingSample;
 use crate::ml::model::RoutingModel;
 
 // ---------------------------------------------------------------------------
+// EvaluationError
+// ---------------------------------------------------------------------------
+
+/// Every way the fallible metric constructors refuse.
+///
+/// [`PredictionMetrics::compute_classification`] and
+/// [`PredictionMetrics::compute_regression`] predate this type and keep their
+/// `assert!`-based signatures, so a caller that has already validated its input
+/// is not forced through a `Result`. The fallible constructors below are the
+/// same arithmetic behind a typed refusal, for callers that have *not* — the
+/// offline calibration node among them, which measures a K-way vector and must
+/// not be able to turn a malformed probability into a `NaN` metric.
+#[derive(Debug, Clone, Copy, PartialEq, thiserror::Error)]
+pub enum EvaluationError {
+    /// The metric needs at least one observation. An empty input has no mean.
+    #[error("cannot compute metrics on empty data")]
+    EmptyObservations,
+
+    /// The prediction and outcome slices are not parallel.
+    #[error("predictions and actuals must have the same length: {predictions} predictions, {actuals} actuals")]
+    LengthMismatch { predictions: usize, actuals: usize },
+
+    /// A prediction is `NaN` or infinite, which would poison every mean below.
+    #[error("classification prediction at index {index} is not finite: {value}")]
+    NonFinitePrediction { index: usize, value: f64 },
+
+    /// A classification prediction is outside `[0, 1]`, so it is not a
+    /// probability and `mean_prediction` would not be a probability either.
+    #[error("classification prediction at index {index} is outside [0, 1]: {value}")]
+    PredictionOutOfRange { index: usize, value: f64 },
+
+    /// A regression prediction is `NaN` or infinite.
+    #[error("regression prediction at index {index} is not finite: {value}")]
+    NonFiniteRegressionPrediction { index: usize, value: f64 },
+}
+
+// ---------------------------------------------------------------------------
 // PredictionMetrics — model prediction quality
 // ---------------------------------------------------------------------------
 
@@ -57,6 +94,109 @@ impl PredictionMetrics {
             mean_prediction,
             mean_actual,
         }
+    }
+
+    /// Compute classification metrics, refusing a malformed input.
+    ///
+    /// The fallible twin of [`PredictionMetrics::compute_classification`], and
+    /// the same arithmetic behind a typed refusal instead of a panic. Every
+    /// consumer that cannot prove its probabilities are finite and inside
+    /// `[0, 1]` belongs here: a `NaN` that reaches the arithmetic returns a
+    /// metrics struct whose every field is `NaN` and whose `Option`s are
+    /// populated, which reads exactly like a measurement.
+    pub fn try_compute_classification(
+        predictions: &[f64],
+        actuals: &[bool],
+    ) -> Result<Self, EvaluationError> {
+        if predictions.len() != actuals.len() {
+            return Err(EvaluationError::LengthMismatch {
+                predictions: predictions.len(),
+                actuals: actuals.len(),
+            });
+        }
+        if predictions.is_empty() {
+            return Err(EvaluationError::EmptyObservations);
+        }
+        for (index, prediction) in predictions.iter().enumerate() {
+            if !prediction.is_finite() {
+                return Err(EvaluationError::NonFinitePrediction {
+                    index,
+                    value: *prediction,
+                });
+            }
+            if *prediction < 0.0 || *prediction > 1.0 {
+                return Err(EvaluationError::PredictionOutOfRange {
+                    index,
+                    value: *prediction,
+                });
+            }
+        }
+
+        let n = predictions.len();
+        let log_loss = Some(compute_log_loss(predictions, actuals));
+        let brier_score = Some(compute_brier_score(predictions, actuals));
+        let mean_prediction = predictions.iter().sum::<f64>() / n as f64;
+        let mean_actual = actuals.iter().map(|&b| if b { 1.0 } else { 0.0 }).sum::<f64>() / n as f64;
+
+        Ok(PredictionMetrics {
+            sample_count: n,
+            log_loss,
+            brier_score,
+            mae: None,
+            rmse: None,
+            mean_prediction,
+            mean_actual,
+        })
+    }
+
+    /// Compute regression metrics, refusing a malformed input.
+    ///
+    /// The fallible twin of [`PredictionMetrics::compute_regression`]. Unlike
+    /// the classification twin this one does not police a range: a latency or a
+    /// cost is a magnitude, and there is no interval a magnitude must lie in.
+    pub fn try_compute_regression(
+        predictions: &[f64],
+        actuals: &[f64],
+    ) -> Result<Self, EvaluationError> {
+        if predictions.len() != actuals.len() {
+            return Err(EvaluationError::LengthMismatch {
+                predictions: predictions.len(),
+                actuals: actuals.len(),
+            });
+        }
+        if predictions.is_empty() {
+            return Err(EvaluationError::EmptyObservations);
+        }
+        for (index, prediction) in predictions.iter().enumerate() {
+            if !prediction.is_finite() {
+                return Err(EvaluationError::NonFiniteRegressionPrediction {
+                    index,
+                    value: *prediction,
+                });
+            }
+        }
+
+        let n = predictions.len();
+        let mut sum_abs_err = 0.0;
+        let mut sum_sq_err = 0.0;
+        for (prediction, actual) in predictions.iter().zip(actuals) {
+            let error = prediction - actual;
+            sum_abs_err += error.abs();
+            sum_sq_err += error * error;
+        }
+
+        let mean_prediction = predictions.iter().sum::<f64>() / n as f64;
+        let mean_actual = actuals.iter().sum::<f64>() / n as f64;
+
+        Ok(PredictionMetrics {
+            sample_count: n,
+            log_loss: None,
+            brier_score: None,
+            mae: Some(sum_abs_err / n as f64),
+            rmse: Some((sum_sq_err / n as f64).sqrt()),
+            mean_prediction,
+            mean_actual,
+        })
     }
 
     /// Compute regression metrics from predicted and actual continuous values.
