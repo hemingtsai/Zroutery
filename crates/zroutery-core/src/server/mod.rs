@@ -37,7 +37,7 @@ use crate::ir::{Dialect, ResponseStore};
 use crate::protocol;
 use crate::registry::Registry;
 use crate::router::Router;
-use crate::stats::Stats;
+use crate::stats::{OutcomeLog, Stats};
 use crate::upstream::Upstream;
 
 use pipeline::handle_chat;
@@ -65,12 +65,17 @@ pub struct AppState {
     /// construction — nothing in the request pipeline reads its verdicts.
     #[cfg(feature = "ml")]
     shadow: crate::ml::ShadowEngine,
+    /// Terminal outcomes, one per request, as the lifecycle built them. A
+    /// diagnostic view of the same single accounting the request log records;
+    /// nothing routes on it and no training consumes it yet.
+    outcomes: OutcomeLog,
     pub response_store: ResponseStore,
 }
 
 impl AppState {
     pub fn new(config: AppConfig, secrets: Arc<dyn SecretStore>) -> Self {
-        let stats = Arc::new(Stats::new(config.server.log_limit));
+        let log_limit = config.server.log_limit;
+        let stats = Arc::new(Stats::new(log_limit));
         let bypass_proxy = config.server.bypass_proxy;
         let connect_timeout_secs = config
             .providers
@@ -84,6 +89,7 @@ impl AppState {
             registry: RwLock::new(Arc::new(Registry::new(Arc::new(config)))),
             router: Arc::new(Router::new()),
             stats,
+            outcomes: OutcomeLog::new(log_limit),
             upstream: Upstream::new(bypass_proxy, connect_timeout_secs),
             secrets,
             ledger: RwLock::new(Ledger::new()),
@@ -151,6 +157,11 @@ impl AppState {
 
     pub fn stats(&self) -> &Arc<Stats> {
         &self.stats
+    }
+
+    /// The terminal outcomes the request lifecycle built, newest first.
+    pub fn outcomes(&self) -> &OutcomeLog {
+        &self.outcomes
     }
 
     pub fn upstream(&self) -> &Upstream {

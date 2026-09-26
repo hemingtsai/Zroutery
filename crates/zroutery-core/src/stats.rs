@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::billing::{Cost, CostTotals};
 use crate::ir::{Dialect, Usage};
+use crate::outcome::Outcome;
 use crate::policy::RouteDecision;
 use crate::query::RequestKind;
 
@@ -250,6 +251,70 @@ impl Default for Stats {
     }
 }
 
+/// Bounded log of the terminal [`Outcome`] built for each request.
+///
+/// The request log above answers "what happened to this request"; this keeps
+/// the accepted outcome the lifecycle built for it, so the planned /
+/// last-attempted / served identity distinction and the classified terminal
+/// state stay available without a second accounting path. It is a ring buffer
+/// like the request log: same reason, same bound, same in-memory-only promise.
+#[derive(Debug)]
+pub struct OutcomeLog {
+    inner: Mutex<OutcomeLogInner>,
+}
+
+#[derive(Debug)]
+struct OutcomeLogInner {
+    limit: usize,
+    outcomes: VecDeque<Outcome>,
+}
+
+impl OutcomeLog {
+    pub fn new(limit: usize) -> Self {
+        OutcomeLog {
+            inner: Mutex::new(OutcomeLogInner {
+                limit: limit.max(1),
+                outcomes: VecDeque::new(),
+            }),
+        }
+    }
+
+    /// Append one request's terminal outcome. The lifecycle guarantees it calls
+    /// this exactly once per request; the log does not second-guess that.
+    pub fn record(&self, outcome: Outcome) {
+        let mut inner = crate::sync::lock(&self.inner);
+        let limit = inner.limit;
+        inner.outcomes.push_back(outcome);
+        while inner.outcomes.len() > limit {
+            inner.outcomes.pop_front();
+        }
+    }
+
+    /// Most recent outcomes first, newest at the head of the returned list.
+    pub fn recent(&self, limit: usize) -> Vec<Outcome> {
+        let inner = crate::sync::lock(&self.inner);
+        inner.outcomes.iter().rev().take(limit).cloned().collect()
+    }
+
+    pub fn len(&self) -> usize {
+        crate::sync::lock(&self.inner).outcomes.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn clear(&self) {
+        crate::sync::lock(&self.inner).outcomes.clear();
+    }
+}
+
+impl Default for OutcomeLog {
+    fn default() -> Self {
+        OutcomeLog::new(500)
+    }
+}
+
 /// Accumulates the facts about one in-flight request.
 pub struct RecordBuilder {
     record: RequestRecord,
@@ -339,9 +404,14 @@ impl RecordBuilder {
         self
     }
 
-    pub fn finish(mut self, latency_ms: u64) -> RequestRecord {
+    /// Close the record and hand it over.
+    ///
+    /// Takes `&mut self` like every other builder step, so the request
+    /// lifecycle can finish the record it owns without giving up the request
+    /// state around it.
+    pub fn finish(&mut self, latency_ms: u64) -> RequestRecord {
         self.record.latency_ms = latency_ms;
-        self.record
+        self.record.clone()
     }
 
     /// Attach a routing decision trace for diagnostics.

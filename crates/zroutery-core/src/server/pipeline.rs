@@ -20,9 +20,11 @@ use tokio::sync::watch;
 use super::{error_response, AppState};
 use crate::billing::{Cost, Pricing};
 use crate::budget::Verdict;
-use crate::config::ModelTier;
+use crate::config::{ModelTier, RoutingConfig};
 use crate::error::{Error, Result};
+use crate::failure::ClassifiedFailure;
 use crate::ir::{ChatRequest, Dialect, StoredResponse, StreamEvent, Usage};
+use crate::outcome::{Attempt as OutcomeAttempt, CandidateIdentity, Outcome};
 use crate::policy::{self, ClientContext, RouteDecision, RoutingPolicy};
 use crate::protocol::{self, openai, SseFrame, StreamEncoder};
 use crate::query::RequestKind;
@@ -32,7 +34,7 @@ use crate::rectifier::media_fallback::MediaFallbackRectifier;
 use crate::ml::ShadowInput;
 use crate::registry::{Registry, Resolution};
 use crate::router::Candidate;
-use crate::stats::RecordBuilder;
+use crate::stats::{RecordBuilder, RequestRecord};
 pub(super) async fn handle_chat(
     state: Arc<AppState>,
     dialect: Dialect,
@@ -164,10 +166,16 @@ pub(super) async fn handle_chat(
             match result {
                 Ok((plan, decision)) => (plan, decision),
                 Err(e) => {
-                    let mut rec = RecordBuilder::new(dialect, &req.model, req.stream);
-                    rec.kind(kind);
-                    rec.fail(e.status().as_u16(), e.to_string());
-                    state.stats.record(rec.finish(0));
+                    // Terminal before any candidate was tried: one record, one
+                    // outcome, one canonical classification.
+                    reject(
+                        Arc::clone(&state),
+                        dialect,
+                        req.stream,
+                        kind,
+                        &req.model,
+                        &e,
+                    );
                     return error_response(dialect, &e);
                 }
             }
@@ -182,10 +190,14 @@ pub(super) async fn handle_chat(
             match state.router.plan_classifier(&registry, &classifier) {
                 Ok(plan) => (plan, None),
                 Err(e) => {
-                    let mut rec = RecordBuilder::new(dialect, &req.model, req.stream);
-                    rec.kind(kind);
-                    rec.fail(e.status().as_u16(), e.to_string());
-                    state.stats.record(rec.finish(0));
+                    reject(
+                        Arc::clone(&state),
+                        dialect,
+                        req.stream,
+                        kind,
+                        &req.model,
+                        &e,
+                    );
                     return error_response(dialect, &e);
                 }
             }
@@ -708,9 +720,10 @@ async fn buffered_chat(
     routing_decision: Option<RouteDecision>,
     #[cfg(feature = "ml")] shadow_input: Option<ShadowInput>,
 ) -> Response {
-    let started = Instant::now();
-    let mut rec = RecordBuilder::new(dialect, &req.model, false);
-    rec.kind(kind);
+    let mut lifecycle = RequestLifecycle::new(Arc::clone(&state), dialect, false, kind, &req.model);
+    // The router's own decision supplies the planned identity, before any
+    // attempt is made and before anything can fail.
+    lifecycle.planned_from(routing_decision.as_ref(), &plan);
     // shadow-block-begin
     // Shadow evaluation runs before the attempt loop, over the snapshot taken
     // while ranking state was untouched. It is record-only: the engine
@@ -719,16 +732,14 @@ async fn buffered_chat(
     // back into this request.
     #[cfg(feature = "ml")]
     if let Some(input) = &shadow_input {
-        let _ = state.shadow().evaluate(rec.id(), input);
+        let _ = state.shadow().evaluate(lifecycle.id(), input);
     }
     // shadow-block-end
-    let routing = state.config().routing.clone();
     let mode = encode_mode_for(kind);
     let mut last_error = Error::NoCandidate(req.model.clone());
 
     for candidate in &plan {
-        rec.attempt();
-        rec.resolved(candidate.model_id(), &candidate.provider.name);
+        lifecycle.attempted(candidate);
         if !kind.is_main() {
             // The three names the debugging session needs: what the client
             // asked for, which pool member was chosen, and what the provider
@@ -760,21 +771,16 @@ async fn buffered_chat(
         let (key, body) = match prepare(&state, candidate, &req, mode) {
             Ok(v) => v,
             Err(e) => {
-                state
-                    .router
-                    .report_failure(candidate.model_id(), &e, &routing);
-                let class = crate::failure::ClassifiedFailure::from_status(
-                    e.status().as_u16(),
-                    e.to_string(),
-                )
-                .class;
-                state.router.record_classified_outcome(
+                // The candidate was never reached, but the loop did try it, so
+                // the attempt evidence records the same canonical failure the
+                // router adapter accounts for.
+                lifecycle.begin_attempt(candidate, false);
+                lifecycle.failed_attempt(attempt_start, &e);
+                state.router.record_classified_attempt(
                     candidate.model_id(),
                     &candidate.provider.id,
-                    0.0,
-                    None,
-                    false,
-                    Some(class),
+                    &e.classified(),
+                    lifecycle.routing(),
                 );
                 last_error = e;
                 continue;
@@ -787,9 +793,12 @@ async fn buffered_chat(
                 model = candidate.model_id(),
                 "half-open probe already in flight; skipping candidate"
             );
+            // No attempt is opened: nothing was sent and nothing failed, so
+            // there is no attempt evidence to record.
             continue;
         }
 
+        lifecycle.begin_attempt(candidate, false);
         match state
             .upstream
             .send(&candidate.provider, key.as_deref(), &body)
@@ -813,25 +822,16 @@ async fn buffered_chat(
                             );
                         }
                         crate::classifier::ClassifierVerdict::Unparseable => {
-                            let e = Error::BadUpstreamPayload(format!(
+                            let unusable = Error::BadUpstreamPayload(format!(
                                 "classifier response from `{}` carried no <block> verdict",
                                 candidate.model_id()
                             ));
-                            state
-                                .router
-                                .report_failure(candidate.model_id(), &e, &routing);
-                            let class = crate::failure::ClassifiedFailure::from_status(
-                                e.status().as_u16(),
-                                e.to_string(),
-                            )
-                            .class;
-                            state.router.record_classified_outcome(
+                            lifecycle.failed_attempt(attempt_start, &unusable);
+                            state.router.record_classified_attempt(
                                 candidate.model_id(),
                                 &candidate.provider.id,
-                                0.0,
-                                None,
-                                false,
-                                Some(class),
+                                &unusable.classified(),
+                                lifecycle.routing(),
                             );
                             tracing::warn!(
                                 kind = kind.as_str(),
@@ -839,42 +839,41 @@ async fn buffered_chat(
                                 upstream_model = %candidate.entry.upstream_model,
                                 "classifier response had no <block> verdict; failing over"
                             );
-                            last_error = e;
+                            last_error = unusable;
                             continue;
                         }
                     }
                 }
-                state.router.report_success(
-                    candidate.model_id(),
-                    attempt_start.elapsed().as_millis() as u64,
-                    &routing,
-                );
+                let latency_ms = attempt_start.elapsed().as_millis() as u64;
+                state
+                    .router
+                    .report_success(candidate.model_id(), latency_ms, lifecycle.routing());
                 state.router.record_classified_outcome(
                     candidate.model_id(),
                     &candidate.provider.id,
-                    attempt_start.elapsed().as_millis() as f64,
+                    latency_ms as f64,
                     None,
                     true,
                     None,
                 );
-                rec.usage(resp.usage)
-                    .priced_with(candidate.entry.pricing.as_ref());
+                lifecycle.served_attempt(attempt_start);
+                lifecycle.note_response_id(&resp.id);
                 let cost = candidate
                     .entry
                     .pricing
                     .as_ref()
                     .map(|p| p.cost_of(&resp.usage));
-                if let Some(cost) = &cost {
-                    // Booked against the model that answered, so a failover spends
-                    // from the provider it actually reached.
-                    state.charge(&candidate.provider.id, candidate.entry.tier, cost);
-                }
-                if let Some(ref decision) = routing_decision {
-                    rec.routing_decision(decision.clone());
-                }
-                state
-                    .stats
-                    .record(rec.finish(started.elapsed().as_millis() as u64));
+                // The terminal transition below owns the charge, the record and
+                // the outcome: booking here as well would spend twice.
+                lifecycle.finalize(
+                    TerminalKind::Served,
+                    Settlement {
+                        usage: resp.usage,
+                        pricing: candidate.entry.pricing.clone(),
+                        provider_id: candidate.provider.id.clone(),
+                        tier: candidate.entry.tier,
+                    },
+                );
                 // Report the model that actually answered, not the virtual id.
                 resp.model = candidate.exposed_id.clone();
                 let wire = protocol::encode_response(dialect, &resp);
@@ -891,7 +890,7 @@ async fn buffered_chat(
                         output,
                         resp.usage,
                         previous_response_id.clone(),
-                        routing_decision,
+                        lifecycle.decision(),
                     );
                     state.response_store.put(stored);
                 }
@@ -903,11 +902,16 @@ async fn buffered_chat(
             Err(e) => {
                 // Rectifier cascade: try to repair the request and retry the
                 // same provider without touching circuit-breaker health.
+                let repair_start = Instant::now();
                 match try_rectify_buffered(&state, candidate, key.as_deref(), &mut req, &e).await {
                     Ok(Some(mut resp)) => {
                         // The repaired retry is not a fresh probe: give the
                         // half-open permit back without recording health.
                         state.router.release_half_open_permit(candidate.model_id());
+                        // The repair is a second send in its own right, so it is
+                        // explicit attempt evidence rather than an invisible
+                        // retry inside the first attempt.
+                        lifecycle.begin_attempt(candidate, true);
                         // A repaired classifier answer still has to carry a
                         // verdict; the same fail-closed rule as the direct
                         // path applies, minus the health report (this was a
@@ -921,28 +925,30 @@ async fn buffered_chat(
                                 candidate_model = candidate.model_id(),
                                 "rectified classifier response still had no <block> verdict; failing over"
                             );
-                            last_error = Error::BadUpstreamPayload(format!(
+                            let verdict = Error::BadUpstreamPayload(format!(
                                 "classifier response from `{}` carried no <block> verdict",
                                 candidate.model_id()
                             ));
+                            lifecycle.failed_attempt(repair_start, &verdict);
+                            last_error = verdict;
                             continue;
                         }
-                        rec.usage(resp.usage)
-                            .priced_with(candidate.entry.pricing.as_ref());
+                        lifecycle.served_attempt(repair_start);
+                        lifecycle.note_response_id(&resp.id);
                         let cost = candidate
                             .entry
                             .pricing
                             .as_ref()
                             .map(|p| p.cost_of(&resp.usage));
-                        if let Some(cost) = &cost {
-                            state.charge(&candidate.provider.id, candidate.entry.tier, cost);
-                        }
-                        if let Some(ref decision) = routing_decision {
-                            rec.routing_decision(decision.clone());
-                        }
-                        state
-                            .stats
-                            .record(rec.finish(started.elapsed().as_millis() as u64));
+                        lifecycle.finalize(
+                            TerminalKind::Served,
+                            Settlement {
+                                usage: resp.usage,
+                                pricing: candidate.entry.pricing.clone(),
+                                provider_id: candidate.provider.id.clone(),
+                                tier: candidate.entry.tier,
+                            },
+                        );
                         resp.model = candidate.exposed_id.clone();
                         let wire = protocol::encode_response(dialect, &resp);
                         if dialect == Dialect::OpenAIResponses {
@@ -958,7 +964,7 @@ async fn buffered_chat(
                                 output,
                                 resp.usage,
                                 previous_response_id.clone(),
-                                routing_decision,
+                                lifecycle.decision(),
                             );
                             state.response_store.put(stored);
                         }
@@ -969,58 +975,48 @@ async fn buffered_chat(
                         return response;
                     }
                     Ok(None) => {
-                        state
-                            .router
-                            .report_failure(candidate.model_id(), &e, &routing);
-                        let err_msg = e.to_string();
-                        let class = crate::failure::FailureClass::from_status_with_body(
-                            e.status().as_u16(),
-                            &err_msg,
-                        );
-                        state.router.record_classified_outcome(
+                        lifecycle.failed_attempt(attempt_start, &e);
+                        let failure = e.classified();
+                        state.router.record_classified_attempt(
                             candidate.model_id(),
                             &candidate.provider.id,
-                            0.0,
-                            None,
-                            false,
-                            Some(class),
+                            &failure,
+                            lifecycle.routing(),
                         );
                         tracing::warn!(
                             model = candidate.model_id(),
                             provider = candidate.provider.name.as_str(),
                             "upstream attempt failed: {e}"
                         );
-                        let retryable = e.is_retryable();
+                        // Whether to keep going is the classified impact
+                        // table's answer, asked through the router adapter.
+                        let keep_going = state.router.should_fallback_failure(&failure);
                         last_error = e;
-                        if !retryable {
+                        if !keep_going {
                             break;
                         }
                     }
                     Err(rectified_err) => {
-                        state
-                            .router
-                            .report_failure(candidate.model_id(), &rectified_err, &routing);
-                        let err_msg = rectified_err.to_string();
-                        let class = crate::failure::FailureClass::from_status_with_body(
-                            rectified_err.status().as_u16(),
-                            &err_msg,
-                        );
-                        state.router.record_classified_outcome(
+                        // The repair was its own attempt and it failed; the
+                        // canonical classification of that failure is what the
+                        // router and the outcome both record.
+                        lifecycle.begin_attempt(candidate, true);
+                        lifecycle.failed_attempt(repair_start, &rectified_err);
+                        let failure = rectified_err.classified();
+                        state.router.record_classified_attempt(
                             candidate.model_id(),
                             &candidate.provider.id,
-                            0.0,
-                            None,
-                            false,
-                            Some(class),
+                            &failure,
+                            lifecycle.routing(),
                         );
                         tracing::warn!(
                             model = candidate.model_id(),
                             provider = candidate.provider.name.as_str(),
                             "rectifier retry failed: {rectified_err}"
                         );
-                        let retryable = rectified_err.is_retryable();
+                        let keep_going = state.router.should_fallback_failure(&failure);
                         last_error = rectified_err;
-                        if !retryable {
+                        if !keep_going {
                             break;
                         }
                     }
@@ -1029,10 +1025,7 @@ async fn buffered_chat(
         }
     }
 
-    rec.fail(last_error.status().as_u16(), last_error.to_string());
-    state
-        .stats
-        .record(rec.finish(started.elapsed().as_millis() as u64));
+    lifecycle.finalize(TerminalKind::failed(&last_error), Settlement::default());
     error_response(dialect, &last_error)
 }
 
@@ -1047,24 +1040,23 @@ async fn stream_chat(
     routing_decision: Option<RouteDecision>,
     #[cfg(feature = "ml")] shadow_input: Option<ShadowInput>,
 ) -> Response {
-    let started = Instant::now();
-    let mut rec = RecordBuilder::new(dialect, &req.model, true);
-    rec.kind(kind);
+    let mut lifecycle = RequestLifecycle::new(Arc::clone(&state), dialect, true, kind, &req.model);
+    // Same correlation as the buffered path: the router's decision fixes the
+    // planned identity before the first handshake.
+    lifecycle.planned_from(routing_decision.as_ref(), &plan);
     // shadow-block-begin
     // Same record-only shadow hook as the buffered path: before the attempt
     // loop, over the pre-attempt snapshot, verdict discarded.
     #[cfg(feature = "ml")]
     if let Some(input) = &shadow_input {
-        let _ = state.shadow().evaluate(rec.id(), input);
+        let _ = state.shadow().evaluate(lifecycle.id(), input);
     }
     // shadow-block-end
-    let routing = state.config().routing.clone();
     let mode = encode_mode_for(kind);
     let mut last_error = Error::NoCandidate(req.model.clone());
 
     for candidate in &plan {
-        rec.attempt();
-        rec.resolved(candidate.model_id(), &candidate.provider.name);
+        lifecycle.attempted(candidate);
         if !kind.is_main() {
             tracing::debug!(
                 kind = kind.as_str(),
@@ -1093,21 +1085,13 @@ async fn stream_chat(
         let (key, body) = match prepare(&state, candidate, &req, mode) {
             Ok(v) => v,
             Err(e) => {
-                state
-                    .router
-                    .report_failure(candidate.model_id(), &e, &routing);
-                let class = crate::failure::ClassifiedFailure::from_status(
-                    e.status().as_u16(),
-                    e.to_string(),
-                )
-                .class;
-                state.router.record_classified_outcome(
+                lifecycle.begin_attempt(candidate, false);
+                lifecycle.failed_attempt(attempt_start, &e);
+                state.router.record_classified_attempt(
                     candidate.model_id(),
                     &candidate.provider.id,
-                    0.0,
-                    None,
-                    false,
-                    Some(class),
+                    &e.classified(),
+                    lifecycle.routing(),
                 );
                 last_error = e;
                 continue;
@@ -1120,11 +1104,14 @@ async fn stream_chat(
                 model = candidate.model_id(),
                 "half-open probe already in flight; skipping candidate"
             );
+            // Nothing was sent and nothing failed: no attempt evidence.
             continue;
         }
 
         // Only the handshake can be retried; once bytes are flowing the client
-        // has already seen part of the answer.
+        // has already seen part of the answer. The attempt stays open: its
+        // verdict is the stream's terminal state, not the handshake.
+        lifecycle.begin_attempt(candidate, false);
         match state
             .upstream
             .stream(
@@ -1144,7 +1131,7 @@ async fn stream_chat(
                 state.router.report_success(
                     candidate.model_id(),
                     attempt_start.elapsed().as_millis() as u64,
-                    &routing,
+                    lifecycle.routing(),
                 );
                 // For streaming, handshake time approximates TTFT.
                 let handshake_ms = attempt_start.elapsed().as_millis() as f64;
@@ -1156,146 +1143,79 @@ async fn stream_chat(
                     true,
                     None,
                 );
-                if let Some(ref decision) = routing_decision {
-                    rec.routing_decision(decision.clone());
-                }
-                let (response_id, cancel_rx) = if dialect == Dialect::OpenAIResponses {
-                    let id = format!("resp-{}", uuid::Uuid::new_v4().simple());
-                    let rx = state.response_store.register_in_flight(id.clone());
-                    (Some(id), Some(rx))
-                } else {
-                    (None, None)
-                };
-                let encoder =
-                    protocol::stream_encoder(dialect, &candidate.exposed_id, include_usage);
-                let body = Body::from_stream(sse_body(
-                    Arc::clone(&state),
+                let (response_id, cancel_rx) = register_in_flight(&state, dialect);
+                return stream_response(
+                    &state,
+                    candidate,
+                    kind,
+                    dialect,
+                    include_usage,
+                    lifecycle,
                     events,
-                    encoder,
-                    StreamContext {
-                        record: rec,
-                        started,
-                        model_id: candidate.model_id().to_string(),
-                        routing: routing.clone(),
-                        pricing: candidate.entry.pricing.clone(),
-                        provider_id: candidate.provider.id.clone(),
-                        tier: candidate.entry.tier,
-                        kind,
-                        response_id,
-                        cancel_rx,
-                    },
-                ));
-                // Built from a plain body and static headers, so nothing here can
-                // fail and there is no reason to unwrap.
-                let mut response = Response::new(body);
-                let headers = response.headers_mut();
-                headers.insert(
-                    header::CONTENT_TYPE,
-                    HeaderValue::from_static("text/event-stream"),
+                    response_id,
+                    cancel_rx,
                 );
-                headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
-                headers.insert("x-accel-buffering", HeaderValue::from_static("no"));
-                inject_routing_headers(response.headers_mut(), candidate, kind);
-                return response;
             }
             Err(e) => {
                 // Rectifier cascade for handshake failures. A successful repaired
                 // stream is served to the client without reporting health.
+                let repair_start = Instant::now();
                 match try_rectify_stream(&state, candidate, key.as_deref(), &mut req, &e).await {
                     Ok(Some(events)) => {
                         // The repaired stream is not a fresh half-open probe.
                         state.router.release_half_open_permit(candidate.model_id());
-                        if let Some(ref decision) = routing_decision {
-                            rec.routing_decision(decision.clone());
-                        }
-                        let (response_id, cancel_rx) = if dialect == Dialect::OpenAIResponses {
-                            let id = format!("resp-{}", uuid::Uuid::new_v4().simple());
-                            let rx = state.response_store.register_in_flight(id.clone());
-                            (Some(id), Some(rx))
-                        } else {
-                            (None, None)
-                        };
-                        let encoder =
-                            protocol::stream_encoder(dialect, &candidate.exposed_id, include_usage);
-                        let body = Body::from_stream(sse_body(
-                            Arc::clone(&state),
+                        // The repair is a second handshake, so it is explicit
+                        // attempt evidence rather than an invisible retry.
+                        lifecycle.begin_attempt(candidate, true);
+                        let (response_id, cancel_rx) = register_in_flight(&state, dialect);
+                        return stream_response(
+                            &state,
+                            candidate,
+                            kind,
+                            dialect,
+                            include_usage,
+                            lifecycle,
                             events,
-                            encoder,
-                            StreamContext {
-                                record: rec,
-                                started,
-                                model_id: candidate.model_id().to_string(),
-                                routing: routing.clone(),
-                                pricing: candidate.entry.pricing.clone(),
-                                provider_id: candidate.provider.id.clone(),
-                                tier: candidate.entry.tier,
-                                kind,
-                                response_id,
-                                cancel_rx,
-                            },
-                        ));
-                        let mut response = Response::new(body);
-                        let headers = response.headers_mut();
-                        headers.insert(
-                            header::CONTENT_TYPE,
-                            HeaderValue::from_static("text/event-stream"),
+                            response_id,
+                            cancel_rx,
                         );
-                        headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
-                        headers.insert("x-accel-buffering", HeaderValue::from_static("no"));
-                        inject_routing_headers(response.headers_mut(), candidate, kind);
-                        return response;
                     }
                     Ok(None) => {
-                        state
-                            .router
-                            .report_failure(candidate.model_id(), &e, &routing);
-                        let err_msg = e.to_string();
-                        let class = crate::failure::FailureClass::from_status_with_body(
-                            e.status().as_u16(),
-                            &err_msg,
-                        );
-                        state.router.record_classified_outcome(
+                        lifecycle.failed_attempt(attempt_start, &e);
+                        let failure = e.classified();
+                        state.router.record_classified_attempt(
                             candidate.model_id(),
                             &candidate.provider.id,
-                            0.0,
-                            None,
-                            false,
-                            Some(class),
+                            &failure,
+                            lifecycle.routing(),
                         );
                         tracing::warn!(
                             model = candidate.model_id(),
                             "upstream stream handshake failed: {e}"
                         );
-                        let retryable = e.is_retryable();
+                        let keep_going = state.router.should_fallback_failure(&failure);
                         last_error = e;
-                        if !retryable {
+                        if !keep_going {
                             break;
                         }
                     }
                     Err(rectified_err) => {
-                        state
-                            .router
-                            .report_failure(candidate.model_id(), &rectified_err, &routing);
-                        let err_msg = rectified_err.to_string();
-                        let class = crate::failure::FailureClass::from_status_with_body(
-                            rectified_err.status().as_u16(),
-                            &err_msg,
-                        );
-                        state.router.record_classified_outcome(
+                        lifecycle.begin_attempt(candidate, true);
+                        lifecycle.failed_attempt(repair_start, &rectified_err);
+                        let failure = rectified_err.classified();
+                        state.router.record_classified_attempt(
                             candidate.model_id(),
                             &candidate.provider.id,
-                            0.0,
-                            None,
-                            false,
-                            Some(class),
+                            &failure,
+                            lifecycle.routing(),
                         );
                         tracing::warn!(
                             model = candidate.model_id(),
                             "rectifier stream retry failed: {rectified_err}"
                         );
-                        let retryable = rectified_err.is_retryable();
+                        let keep_going = state.router.should_fallback_failure(&failure);
                         last_error = rectified_err;
-                        if !retryable {
+                        if !keep_going {
                             break;
                         }
                     }
@@ -1304,11 +1224,72 @@ async fn stream_chat(
         }
     }
 
-    rec.fail(last_error.status().as_u16(), last_error.to_string());
-    state
-        .stats
-        .record(rec.finish(started.elapsed().as_millis() as u64));
+    lifecycle.finalize(TerminalKind::failed(&last_error), Settlement::default());
     error_response(dialect, &last_error)
+}
+
+/// Claim a Responses API id for an in-flight stream, if this dialect has one.
+fn register_in_flight(
+    state: &Arc<AppState>,
+    dialect: Dialect,
+) -> (Option<String>, Option<watch::Receiver<bool>>) {
+    if dialect == Dialect::OpenAIResponses {
+        let id = format!("resp-{}", uuid::Uuid::new_v4().simple());
+        let rx = state.response_store.register_in_flight(id.clone());
+        (Some(id), Some(rx))
+    } else {
+        (None, None)
+    }
+}
+
+/// Hand an established upstream stream to the client as an SSE response.
+///
+/// The request's lifecycle moves into the body stream: from here the stream
+/// owns the terminal transition, because a stream can end in four different
+/// ways and only the stream knows which one happened.
+#[allow(clippy::too_many_arguments)]
+fn stream_response(
+    state: &Arc<AppState>,
+    candidate: &Candidate,
+    kind: RequestKind,
+    dialect: Dialect,
+    include_usage: bool,
+    mut lifecycle: RequestLifecycle,
+    events: crate::upstream::EventStream,
+    response_id: Option<String>,
+    cancel_rx: Option<watch::Receiver<bool>>,
+) -> Response {
+    let encoder = protocol::stream_encoder(dialect, &candidate.exposed_id, include_usage);
+    if let Some(ref id) = response_id {
+        lifecycle.note_response_id(id);
+    }
+    let body = Body::from_stream(sse_body(
+        Arc::clone(state),
+        events,
+        encoder,
+        StreamContext {
+            lifecycle,
+            usage: Usage::default(),
+            pricing: candidate.entry.pricing.clone(),
+            provider_id: candidate.provider.id.clone(),
+            tier: candidate.entry.tier,
+            kind,
+            response_id,
+            cancel_rx,
+        },
+    ));
+    // Built from a plain body and static headers, so nothing here can fail and
+    // there is no reason to unwrap.
+    let mut response = Response::new(body);
+    let headers = response.headers_mut();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("text/event-stream"),
+    );
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+    headers.insert("x-accel-buffering", HeaderValue::from_static("no"));
+    inject_routing_headers(response.headers_mut(), candidate, kind);
+    response
 }
 
 /// Report the estimated spend of a buffered answer.
@@ -1425,15 +1406,564 @@ fn resolve_policy<'a>(
     Some(Cow::Owned(policy::default_policy()))
 }
 
+/// The status an activity record carries for a request whose client went away.
+///
+/// 499 is the conventional code for "the client closed the request": there is no
+/// HTTP response to quote, and the terminal state is exactly the point.
+const CLIENT_CLOSED_REQUEST: u16 = 499;
+const DROPPED_MID_STREAM: &str = "client disconnected before the stream completed";
+const DROPPED_BEFORE_OUTPUT: &str = "client disconnected before any output was produced";
+const CANCELLED_BY_CLIENT: &str = "cancelled by the client";
+
+/// The usage and price facts known when a request reaches its terminal state.
+///
+/// A buffered answer has both from the moment the response arrives; a stream
+/// only learns its usage at the end, which is why this is settled at the
+/// terminal transition rather than during the attempt.
+#[derive(Default)]
+struct Settlement {
+    usage: Usage,
+    pricing: Option<Pricing>,
+    /// Who to bill. Empty means nothing is billable, which is the honest state
+    /// of a request that never produced usage.
+    provider_id: String,
+    tier: Option<ModelTier>,
+}
+
+/// Why a request reached its terminal state.
+///
+/// Chosen once, by whichever part of the pipeline actually observed the end, and
+/// never re-derived from a message or a status code: every classification here
+/// comes from [`Error::classified`], and the two states an `Error` cannot
+/// express — a client that vanished, and a client that cancelled — are named
+/// explicitly rather than smuggled in as a success.
+enum TerminalKind {
+    /// The upstream answered, and that answer was delivered to the client.
+    Served,
+    /// The request failed. The class is the canonical one.
+    Failed {
+        failure: ClassifiedFailure,
+        /// The full message for the activity log, redacted by the record.
+        message: String,
+    },
+    /// The client went away before the answer was finished. `emitted` says
+    /// whether any answer byte had already been produced: a drop after output
+    /// truncated the answer (interrupted), a drop before the first byte simply
+    /// cancelled it.
+    ClientDisconnected { emitted: bool },
+    /// The client asked for this request to be cancelled.
+    ClientCancelled,
+}
+
+impl TerminalKind {
+    /// A request that failed, with the canonical classification of `error`.
+    fn failed(error: &Error) -> Self {
+        TerminalKind::Failed {
+            failure: error.classified(),
+            message: error.to_string(),
+        }
+    }
+
+    /// The canonical classification of this terminal state.
+    ///
+    /// `None` only for a served request: a delivered answer is not a failure to
+    /// classify. The cancellation and interruption facts come from the accepted
+    /// constructors, so the impact table — not this file — decides what they
+    /// mean for health, retry and stats.
+    fn classified(&self) -> Option<ClassifiedFailure> {
+        match self {
+            TerminalKind::Served => None,
+            TerminalKind::Failed { failure, .. } => Some(failure.clone()),
+            TerminalKind::ClientDisconnected { emitted: true } => {
+                Some(ClassifiedFailure::interrupted(DROPPED_MID_STREAM))
+            }
+            TerminalKind::ClientDisconnected { emitted: false } => {
+                Some(ClassifiedFailure::cancelled(DROPPED_BEFORE_OUTPUT))
+            }
+            TerminalKind::ClientCancelled => Some(ClassifiedFailure::cancelled(CANCELLED_BY_CLIENT)),
+        }
+    }
+
+    fn is_served(&self) -> bool {
+        matches!(self, TerminalKind::Served)
+    }
+
+    /// The status the activity record shows for this terminal state.
+    fn record_status(&self) -> u16 {
+        match self {
+            TerminalKind::Served => 200,
+            TerminalKind::Failed { failure, .. } => failure
+                .status
+                .unwrap_or_else(|| axum::http::StatusCode::INTERNAL_SERVER_ERROR.as_u16()),
+            TerminalKind::ClientDisconnected { .. } | TerminalKind::ClientCancelled => {
+                CLIENT_CLOSED_REQUEST
+            }
+        }
+    }
+
+    /// The message the activity record shows for this terminal state.
+    fn record_message(&self) -> String {
+        match self {
+            TerminalKind::Served => String::new(),
+            TerminalKind::Failed { message, .. } => message.clone(),
+            other => other
+                .classified()
+                .map(|failure| failure.message)
+                .unwrap_or_default(),
+        }
+    }
+}
+
+/// The identity of a candidate, as the outcome records it.
+fn identity_of(candidate: &Candidate) -> CandidateIdentity {
+    CandidateIdentity::new(candidate.model_id(), candidate.provider.id.clone())
+}
+
+/// The identity the router selected before any attempt, resolved in one place.
+///
+/// A policy-routed request carries the router's own evidence, so its decision
+/// is the authority. A direct or classifier request has no decision object, and
+/// the router's selection is then the head of the plan it returned. Nothing
+/// downstream re-derives this: a served identity is never a stand-in for the
+/// planned one, and vice versa.
+fn planned_identity(
+    decision: Option<&RouteDecision>,
+    plan: &[Candidate],
+) -> Option<CandidateIdentity> {
+    if let Some(planned) = decision.and_then(RouteDecision::planned_identity) {
+        return Some(CandidateIdentity::new(planned.model_id, planned.provider_id));
+    }
+    plan.first().map(identity_of)
+}
+
+/// The wire name of the dialect the client spoke, as the outcome records it.
+fn dialect_name(dialect: Dialect) -> &'static str {
+    match dialect {
+        Dialect::Anthropic => "anthropic",
+        Dialect::OpenAI => "openai",
+        Dialect::OpenAIResponses => "openai_responses",
+        Dialect::Gemini => "gemini",
+    }
+}
+
+/// Record a request that ended before any candidate was tried.
+///
+/// A budget denial, an unresolvable model and a pool with no candidate all land
+/// here, and each of them is still a real request: one activity record, one
+/// outcome, one canonical classification — and no router accounting, because no
+/// provider was involved.
+fn reject(
+    state: Arc<AppState>,
+    dialect: Dialect,
+    streaming: bool,
+    kind: RequestKind,
+    requested_model: &str,
+    error: &Error,
+) {
+    let mut lifecycle = RequestLifecycle::new(state, dialect, streaming, kind, requested_model);
+    lifecycle.finalize(TerminalKind::failed(error), Settlement::default());
+}
+
+/// Everything one client request needs to reach exactly one terminal state.
+///
+/// This is the lifecycle's single writer. It owns the activity record, the
+/// attempt evidence and the router accounting for a request, and it builds that
+/// request's one [`Outcome`]. Attempt-level health is still reported where the
+/// attempt happens, because that is the signal a routing decision can act on;
+/// but the terminal transition itself is recorded here, once, whichever path
+/// reached it: a delivered answer, an upstream error, a client disconnect, or a
+/// cancellation.
+struct RequestLifecycle {
+    state: Arc<AppState>,
+    record: RecordBuilder,
+    routing: RoutingConfig,
+    dialect: Dialect,
+    streaming: bool,
+    started: Instant,
+    /// The decision trace, kept for the record, the stored response and the
+    /// outcome's decision id.
+    decision: Option<RouteDecision>,
+    /// Selected before any attempt, from the router's own evidence.
+    planned: Option<CandidateIdentity>,
+    /// One entry per send the pipeline observed, in order.
+    attempts: Vec<OutcomeAttempt>,
+    /// The candidate whose response was actually delivered, if any.
+    served: Option<CandidateIdentity>,
+    /// Response store id, for the Responses API lifecycle.
+    response_id: Option<String>,
+    /// Set once an attempt has failed inside the loop, where the router adapters
+    /// accounted for that failure at the attempt. The terminal transition must
+    /// not report the same failure a second time: the loop's last error usually
+    /// *is* the terminal error.
+    attempt_failure_accounted: bool,
+    /// The exactly-once guard for the whole request.
+    terminal: bool,
+}
+
+impl RequestLifecycle {
+    fn new(
+        state: Arc<AppState>,
+        dialect: Dialect,
+        streaming: bool,
+        kind: RequestKind,
+        requested_model: &str,
+    ) -> Self {
+        let mut record = RecordBuilder::new(dialect, requested_model, streaming);
+        record.kind(kind);
+        let routing = state.config().routing.clone();
+        RequestLifecycle {
+            state,
+            record,
+            routing,
+            dialect,
+            streaming,
+            started: Instant::now(),
+            decision: None,
+            planned: None,
+            attempts: Vec::new(),
+            served: None,
+            response_id: None,
+            attempt_failure_accounted: false,
+            terminal: false,
+        }
+    }
+
+    /// The request id the activity record, the outcome and the shadow
+    /// evaluation all correlate on.
+    #[cfg_attr(not(feature = "ml"), allow(dead_code))]
+    fn id(&self) -> &str {
+        self.record.id()
+    }
+
+    /// Whether this request already reached its terminal transition.
+    fn is_terminal(&self) -> bool {
+        self.terminal
+    }
+
+    /// How long this request has been running, for the record's own fields.
+    fn elapsed_ms(&self) -> u64 {
+        self.started.elapsed().as_millis() as u64
+    }
+
+    /// Stamp time to first token, once.
+    fn ttft_ms(&mut self, ms: u64) {
+        self.record.ttft(ms);
+    }
+
+    /// The routing config the router's health adapters need.
+    fn routing(&self) -> &RoutingConfig {
+        &self.routing
+    }
+
+    /// The decision trace, for the Responses API record.
+    fn decision(&self) -> Option<RouteDecision> {
+        self.decision.clone()
+    }
+
+    /// Note the response store id this request is served under.
+    fn note_response_id(&mut self, id: &str) {
+        self.response_id = Some(id.to_string());
+    }
+
+    /// Fix the planned identity and the decision trace, before any attempt.
+    fn planned_from(&mut self, decision: Option<&RouteDecision>, plan: &[Candidate]) {
+        self.planned = planned_identity(decision, plan);
+        if let Some(decision) = decision {
+            self.decision = Some(decision.clone());
+            self.record.routing_decision(decision.clone());
+        }
+    }
+
+    /// The loop is about to try `candidate`: the activity record counts the
+    /// attempt and names what it resolved to.
+    fn attempted(&mut self, candidate: &Candidate) {
+        self.record.attempt();
+        self.record
+            .resolved(candidate.model_id(), &candidate.provider.name);
+    }
+
+    /// Open an attempt: the request is now committed to this candidate.
+    ///
+    /// A rectifier repair is a second send in its own right, so it is opened
+    /// with `rectified` set rather than hidden inside the attempt it replaces.
+    /// Attempts are strictly sequential — the loop sends, settles, and only then
+    /// moves on — so at most one is ever open. A buffered attempt is settled
+    /// immediately; a stream's is settled by the terminal transition, because a
+    /// handshake is all that is known once the body belongs to the client.
+    fn begin_attempt(&mut self, candidate: &Candidate, rectified: bool) {
+        let now = chrono::Utc::now().timestamp();
+        self.attempts.push(OutcomeAttempt {
+            attempt_id: format!("att_{}", uuid::Uuid::new_v4().simple()),
+            candidate_model: candidate.model_id().to_string(),
+            candidate_provider: candidate.provider.id.clone(),
+            started_at: now,
+            completed_at: now,
+            latency_ms: 0.0,
+            ttft_ms: None,
+            success: false,
+            failure_class: None,
+            failure_message: None,
+            http_status: None,
+            rectified,
+        });
+    }
+
+    /// The attempt that has no verdict yet, if one is open.
+    fn open_attempt(&self) -> Option<usize> {
+        let index = self.attempts.len().checked_sub(1)?;
+        let attempt = self.attempts.get(index)?;
+        (!attempt.success && attempt.failure_class.is_none()).then_some(index)
+    }
+
+    /// The open attempt produced the answer the client received, so it is the
+    /// identity that served the request.
+    fn served_attempt(&mut self, since: Instant) {
+        let Some(index) = self.open_attempt() else {
+            tracing::warn!("a served attempt had no open attempt to settle");
+            return;
+        };
+        let Some(attempt) = self.attempts.get_mut(index) else {
+            return;
+        };
+        attempt.success = true;
+        attempt.completed_at = chrono::Utc::now().timestamp();
+        attempt.latency_ms = since.elapsed().as_secs_f64() * 1000.0;
+        let identity = CandidateIdentity::new(
+            attempt.candidate_model.clone(),
+            attempt.candidate_provider.clone(),
+        );
+        self.served = Some(identity);
+    }
+
+    /// The open attempt failed, with the canonical classification of `error`.
+    ///
+    /// A failure here is reported to the router adapters by the loop that owns
+    /// the attempt, because that is where a routing decision can still act on
+    /// it. The terminal transition then leaves it alone.
+    fn failed_attempt(&mut self, since: Instant, error: &Error) {
+        self.attempt_failure_accounted = true;
+        let Some(index) = self.open_attempt() else {
+            tracing::warn!(error = %error, "a failed attempt had no open attempt to settle");
+            return;
+        };
+        let failure = error.classified();
+        let Some(attempt) = self.attempts.get_mut(index) else {
+            return;
+        };
+        attempt.completed_at = chrono::Utc::now().timestamp();
+        attempt.latency_ms = since.elapsed().as_secs_f64() * 1000.0;
+        attempt.failure_class = Some(failure.class);
+        attempt.failure_message = Some(failure.message);
+        attempt.http_status = failure.status;
+    }
+
+    /// The identity of the final attempt actually made, if any.
+    fn last_attempted_identity(&self) -> Option<CandidateIdentity> {
+        self.attempts.last().map(|attempt| {
+            CandidateIdentity::new(&attempt.candidate_model, &attempt.candidate_provider)
+        })
+    }
+
+    /// The model name to report for this request, used by the placeholder a
+    /// cancelled Responses API request leaves behind.
+    fn served_model(&self) -> String {
+        self.served
+            .clone()
+            .or_else(|| self.last_attempted_identity())
+            .map(|identity| identity.model)
+            .unwrap_or_else(|| "unknown".to_string())
+    }
+
+    /// Settle the attempt a stream left open, from the terminal state.
+    ///
+    /// A stream hands its body to the client before the answer is finished, so
+    /// the handshake proved reachability and nothing more. An answer that
+    /// reached the client in full is the only successful attempt: a broken,
+    /// abandoned or cancelled stream is not, and saying otherwise would be
+    /// exactly the "usage exists, so it must have worked" reading this lifecycle
+    /// exists to remove.
+    fn settle_open_attempt(&mut self, terminal: &TerminalKind) {
+        let Some(index) = self.open_attempt() else {
+            return;
+        };
+        let Some(attempt) = self.attempts.get_mut(index) else {
+            return;
+        };
+        let failure = terminal.classified();
+        let identity = CandidateIdentity::new(
+            attempt.candidate_model.clone(),
+            attempt.candidate_provider.clone(),
+        );
+        attempt.completed_at = chrono::Utc::now().timestamp();
+        match failure {
+            None => attempt.success = true,
+            Some(ref failure) => {
+                attempt.failure_class = Some(failure.class);
+                attempt.failure_message = Some(failure.message.clone());
+                attempt.http_status = failure.status;
+            }
+        }
+        if terminal.is_served() {
+            self.served = Some(identity);
+        }
+    }
+
+    /// The one terminal transition of this request.
+    ///
+    /// Every path that can end a request arrives here and only the first one
+    /// counts. The attempt verdict, the classified router accounting, the
+    /// activity record, the charge and the request's single `Outcome` are each
+    /// written exactly once, in that order, from one place.
+    fn finalize(&mut self, terminal: TerminalKind, settlement: Settlement) {
+        if self.terminal {
+            return;
+        }
+        self.terminal = true;
+
+        // 1. Anything still in flight is settled by the terminal state. A
+        //    buffered request has nothing open here; a stream does.
+        self.settle_open_attempt(&terminal);
+
+        // 2. Router accounting, once, through the classified adapter. A failure
+        //    the loop already reported at its attempt is not reported again, and
+        //    a served request already had its attempt health reported where the
+        //    attempt happened. What is left is a terminal failure that belongs to
+        //    no attempt — a stream that broke or was abandoned after its
+        //    handshake — and the impact table keeps a client that vanished out of
+        //    provider health entirely.
+        if !self.attempt_failure_accounted {
+            if let (Some(failure), Some(identity)) =
+                (terminal.classified(), self.last_attempted_identity())
+            {
+                self.state.router.record_classified_attempt(
+                    identity.model(),
+                    identity.provider(),
+                    &failure,
+                    &self.routing,
+                );
+            }
+        }
+
+        // 3. Spend. A stream only reports its usage at the end, so this is the
+        //    one moment its cost can be charged.
+        let cost = settlement
+            .pricing
+            .as_ref()
+            .map(|pricing| pricing.cost_of(&settlement.usage));
+        if let Some(cost) = &cost {
+            if !settlement.provider_id.is_empty() {
+                // Booked against the model that answered, so a failover spends
+                // from the provider it actually reached.
+                self.state
+                    .charge(&settlement.provider_id, settlement.tier, cost);
+            }
+        }
+
+        // 4. The activity record, once.
+        let latency_ms = self.elapsed_ms();
+        let record = self
+            .record
+            .usage(settlement.usage)
+            .priced_with(settlement.pricing.as_ref());
+        if terminal.is_served() {
+            record.ok();
+        } else {
+            record.fail(terminal.record_status(), terminal.record_message());
+        }
+        let record = record.finish(latency_ms);
+        self.state.stats.record(record.clone());
+
+        // 5. Exactly one outcome per request, from the accepted schema.
+        let outcome = self.build_outcome(&record, &terminal, cost.as_ref());
+        if let Err(reason) = outcome.validate() {
+            tracing::error!(
+                request_id = %record.id,
+                reason,
+                "constructed an outcome the schema rejected"
+            );
+        }
+        self.state.outcomes().record(outcome);
+    }
+
+    /// Build this request's outcome from the accepted schema.
+    ///
+    /// Identity comes from exactly one place: the router's planned selection,
+    /// the final attempt made, and the candidate whose response was actually
+    /// delivered. A non-success outcome never claims a served identity, and
+    /// every other field is evidence the terminal transition established rather
+    /// than a second opinion formed here.
+    fn build_outcome(
+        &self,
+        record: &RequestRecord,
+        terminal: &TerminalKind,
+        cost: Option<&Cost>,
+    ) -> Outcome {
+        let mut builder = Outcome::builder(record.id.clone())
+            .streaming(self.streaming)
+            .dialect(dialect_name(self.dialect))
+            .total_latency_ms(record.latency_ms as f64)
+            .timestamp(record.at.timestamp());
+        if let Some(ref decision) = self.decision {
+            builder = builder.decision_id(decision.decision_id.clone());
+        }
+        if let Some(ref response_id) = self.response_id {
+            builder = builder.response_id(response_id.clone());
+        }
+        if let Some(ref planned) = self.planned {
+            builder = builder.planned(planned.model.clone(), planned.provider.clone());
+        }
+        for attempt in &self.attempts {
+            builder = builder.attempt(attempt.clone());
+        }
+        if terminal.is_served() || record.usage != Usage::default() {
+            builder = builder.usage(record.usage);
+        }
+        if let Some(ttft_ms) = record.ttft_ms {
+            builder = builder.ttft_ms(ttft_ms as f64);
+        }
+        if let Some(cost) = cost {
+            // The per-currency split stays in the activity record; the outcome
+            // carries the amount that was charged.
+            builder = builder.cost(None, Some(cost.amount));
+        }
+        match terminal {
+            TerminalKind::Served => {
+                if let Some(served) = self.served.clone() {
+                    builder = builder.served_candidate(served.model, served.provider);
+                }
+            }
+            other => {
+                if let Some(failure) = other.classified() {
+                    builder = builder.classified_failure(failure);
+                }
+            }
+        }
+        builder.build()
+    }
+}
+
+/// Why a stream stopped producing events.
+///
+/// A stream has four genuinely different endings, and only the stream knows
+/// which one happened. Collapsing them — as a success-defaulted drop path does
+/// — is what turns an abandoned answer into a served one.
+enum StreamTerminal {
+    /// The upstream closed the stream after its end.
+    Completed,
+    /// The upstream reported an error part way through.
+    UpstreamError(Error),
+    /// The client asked for this request to be cancelled.
+    Cancelled,
+    /// The client went away before the stream finished.
+    ClientDisconnected,
+}
+
 struct SseState {
     events: crate::upstream::EventStream,
     encoder: Box<dyn StreamEncoder>,
     pending: VecDeque<SseFrame>,
-    rec: Option<RecordBuilder>,
+    lifecycle: RequestLifecycle,
     state: Arc<AppState>,
-    started: Instant,
-    model_id: String,
-    routing: crate::config::RoutingConfig,
     usage: Usage,
     pricing: Option<Pricing>,
     /// Who to bill, once the stream reports what it used.
@@ -1443,6 +1973,9 @@ struct SseState {
     /// can be checked once the stream ends. Main streams never pay for this.
     classifier_text: Option<String>,
     finished: bool,
+    /// Whether any answer byte has been produced for this client yet. A client
+    /// that disappears after that truncated the answer it was reading.
+    emitted: bool,
     /// Pre-generated response ID for in-flight tracking (Responses API).
     response_id: Option<String>,
     /// Cancel receiver for cancellation detection (Responses API).
@@ -1450,8 +1983,19 @@ struct SseState {
 }
 
 impl SseState {
-    /// Record the request exactly once, when the stream ends for any reason.
-    fn finalize(&mut self, error: Option<&Error>) {
+    /// How long this stream has been running, for the record's own fields.
+    fn elapsed_ms(&self) -> u64 {
+        self.lifecycle.elapsed_ms()
+    }
+
+    /// The stream's one terminal transition.
+    ///
+    /// Idempotent, so [`Drop`] can call it for a client that walked away
+    /// without disturbing a stream that already ended normally.
+    fn finalize(&mut self, terminal: StreamTerminal) {
+        if self.lifecycle.is_terminal() {
+            return;
+        }
         // Clean up in-flight tracking for Responses API streams.
         if let Some(ref id) = self.response_id {
             self.state.response_store.complete_in_flight(id);
@@ -1460,68 +2004,51 @@ impl SseState {
         // is worth a warning. The bytes have already gone out, so there is
         // nothing to fail over to — but the client will fail closed on its own
         // parse, and this line is how that shows up in the proxy's log.
-        if error.is_none() {
+        if let StreamTerminal::Completed = terminal {
             if let Some(text) = self.classifier_text.take() {
                 if crate::classifier::parse_verdict(&text)
                     == crate::classifier::ClassifierVerdict::Unparseable
                 {
                     tracing::warn!(
-                        model = %self.model_id,
+                        model = %self.lifecycle.served_model(),
                         "streamed classifier response carried no <block> verdict"
                     );
                 }
             }
         }
-        if let Some(mut rec) = self.rec.take() {
-            rec.usage(self.usage).priced_with(self.pricing.as_ref());
-            // A stream only reports its usage at the end, so this is the first
-            // moment its cost can be charged.
-            if let Some(cost) = self.pricing.as_ref().map(|p| p.cost_of(&self.usage)) {
-                self.state.charge(&self.provider_id, self.tier, &cost);
-            }
-            if let Some(e) = error {
-                rec.fail(e.status().as_u16(), e.to_string());
-                self.state
-                    .router
-                    .report_failure(&self.model_id, e, &self.routing);
-                let err_msg = e.to_string();
-                let class = crate::failure::FailureClass::from_status_with_body(
-                    e.status().as_u16(),
-                    &err_msg,
-                );
-                self.state.router.record_classified_outcome(
-                    &self.model_id,
-                    &self.provider_id,
-                    0.0,
-                    None,
-                    false,
-                    Some(class),
-                );
-            }
-            self.state
-                .stats
-                .record(rec.finish(self.started.elapsed().as_millis() as u64));
-        }
+        let kind = match terminal {
+            StreamTerminal::Completed => TerminalKind::Served,
+            StreamTerminal::UpstreamError(error) => TerminalKind::failed(&error),
+            StreamTerminal::Cancelled => TerminalKind::ClientCancelled,
+            StreamTerminal::ClientDisconnected => TerminalKind::ClientDisconnected {
+                emitted: self.emitted,
+            },
+        };
+        let settlement = Settlement {
+            usage: self.usage,
+            pricing: self.pricing.clone(),
+            provider_id: self.provider_id.clone(),
+            tier: self.tier,
+        };
+        self.lifecycle.finalize(kind, settlement);
     }
 }
 
 impl Drop for SseState {
     fn drop(&mut self) {
-        // A client disconnect drops the body stream without the unfold loop
-        // reaching `None`/`Some(Err)`. Record the request anyway so Activity,
-        // stats and the budget ledger see whatever was consumed so far.
-        // `finalize` is idempotent (`rec.take()`), so streams that ended
-        // normally are unaffected.
-        self.finalize(None);
+        // A client disconnect drops the body stream without the unfold loop ever
+        // reaching the end of it. That is a terminal state in its own right:
+        // the answer was abandoned, and an abandoned answer is never a served
+        // one. Activity, the ledger and the outcome still record what happened,
+        // exactly once, and the provider's health is left alone.
+        self.finalize(StreamTerminal::ClientDisconnected);
     }
 }
 
 /// What the SSE pipeline needs to know about the request it is serving.
 struct StreamContext {
-    record: RecordBuilder,
-    started: Instant,
-    model_id: String,
-    routing: crate::config::RoutingConfig,
+    lifecycle: RequestLifecycle,
+    usage: Usage,
     pricing: Option<Pricing>,
     provider_id: String,
     tier: Option<ModelTier>,
@@ -1546,17 +2073,15 @@ fn sse_body(
         events,
         encoder,
         pending: VecDeque::new(),
-        rec: Some(context.record),
+        lifecycle: context.lifecycle,
         state: app,
-        started: context.started,
-        model_id: context.model_id,
-        routing: context.routing,
-        usage: Usage::default(),
+        usage: context.usage,
         pricing: context.pricing,
         provider_id: context.provider_id,
         tier: context.tier,
         classifier_text,
         finished: false,
+        emitted: false,
         response_id: context.response_id,
         cancel_rx: context.cancel_rx,
     };
@@ -1577,9 +2102,12 @@ fn sse_body(
                         if result.is_ok() && *rx.borrow() {
                             st.finished = true;
                             if let Some(ref id) = st.response_id {
-                                st.state.response_store.mark_cancelled(id, st.model_id.clone());
+                                let model = st.lifecycle.served_model();
+                                st.state.response_store.mark_cancelled(id, model);
                             }
-                            st.finalize(None);
+                            // An explicit cancellation is a terminal state of its
+                            // own, never a success.
+                            st.finalize(StreamTerminal::Cancelled);
                             return None;
                         }
                         // Spurious wakeup or channel closed — continue
@@ -1607,14 +2135,12 @@ fn sse_body(
                         };
                     match &event {
                         StreamEvent::ThinkingDelta { .. } => {
-                            if let Some(rec) = st.rec.as_mut() {
-                                rec.ttft(st.started.elapsed().as_millis() as u64);
-                            }
+                            let elapsed = st.elapsed_ms();
+                            st.lifecycle.ttft_ms(elapsed);
                         }
                         StreamEvent::TextDelta { text, .. } => {
-                            if let Some(rec) = st.rec.as_mut() {
-                                rec.ttft(st.started.elapsed().as_millis() as u64);
-                            }
+                            let elapsed = st.elapsed_ms();
+                            st.lifecycle.ttft_ms(elapsed);
                             // Classifier streams keep their text so the verdict
                             // can be checked once the stream ends.
                             if let Some(acc) = st.classifier_text.as_mut() {
@@ -1626,19 +2152,24 @@ fn sse_body(
                         _ => {}
                     }
                     let frames = st.encoder.encode(&event);
+                    // From here the client holds part of the answer, so a
+                    // disconnect that happens later truncates it.
+                    st.emitted |= !frames.is_empty();
                     st.pending.extend(frames);
                 }
                 Some(Err(err)) => {
                     st.finished = true;
-                    st.finalize(Some(&err));
                     let frames = st.encoder.error(&err);
+                    st.emitted |= !frames.is_empty();
                     st.pending.extend(frames);
+                    st.finalize(StreamTerminal::UpstreamError(err));
                 }
                 None => {
                     st.finished = true;
                     let frames = st.encoder.finish();
+                    st.emitted |= !frames.is_empty();
                     st.pending.extend(frames);
-                    st.finalize(None);
+                    st.finalize(StreamTerminal::Completed);
                 }
             }
         }
