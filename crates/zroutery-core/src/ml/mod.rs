@@ -14,6 +14,7 @@ pub mod model;
 pub mod model_identity;
 pub mod reward;
 pub mod shadow;
+pub mod warmup;
 pub use coordinator::{Coordinator, CoordinatorConfig, RoutingAction, RoutingDecision};
 pub use dataset::{
     canonical_samples_from_outcome, outcome_to_dataset_sample, sample_from_outcome, samples_from_outcome,
@@ -52,4 +53,8 @@ pub use shadow::{
     EnsemblePredictor, ModelEnsemblePredictor, ProductionDecisionRef, ShadowCandidate,
     ShadowCandidateInput, ShadowDecision, ShadowEngine, ShadowInput, ShadowObservation, ShadowScope,
     ShadowStore, ShadowVerdict,
+};
+pub use warmup::{
+    run_warmup, LabelCoverage, WarmupConfig, WarmupError, WarmupOutcome, WarmupReport,
+    WarmupVerdict, BASELINE_DESCRIPTION,
 };
