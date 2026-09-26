@@ -82,12 +82,27 @@ def _development_dir(root: Path) -> Path:
     return root / "docs" / "development"
 
 
+def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict:
+    """Refuse a JSON object that repeats a key.
+
+    ``json.loads`` keeps the last occurrence and reports nothing, so a record
+    with two ``evidence`` arrays validates cleanly while silently ignoring one of
+    them. A record is a contract, so an ambiguous one is not a record.
+    """
+    seen: dict[str, object] = {}
+    for key, value in pairs:
+        if key in seen:
+            raise ValueError(f"duplicate key {key!r}")
+        seen[key] = value
+    return seen
+
+
 def _load_records(root: Path, errors: list[str]) -> dict[str, dict]:
     status_dir = _development_dir(root) / "node-status"
     records: dict[str, dict] = {}
     for path in sorted(status_dir.glob("*.status.json")):
         try:
-            data = json.loads(_read(path))
+            data = json.loads(_read(path), object_pairs_hook=_reject_duplicate_keys)
         except (OSError, ValueError) as exc:
             errors.append(f"JSON parse {path.name}: {exc}")
             continue
@@ -438,6 +453,17 @@ def _run_self_test() -> int:
         for name, node_id, mutate, needle in cases:
             _fixture_tree(root)
             expect(name, _mutate(root, node_id, mutate), needle)
+
+        _fixture_tree(root)
+        record = _development_dir(root) / "node-status" / "synth-c.status.json"
+        # A duplicated key is invisible to a plain parse: the last one silently
+        # wins, so this fixture has to be written as raw text.
+        raw = record.read_text(encoding="utf-8")
+        duplicate = raw.replace(
+            '  "notes": [', '  "evidence": [\n    "E-001"\n  ],\n  "notes": [', 1
+        )
+        record.write_text(duplicate, encoding="utf-8")
+        expect("duplicate key", validate(root)[0], "duplicate key 'evidence'")
 
         _fixture_tree(root)
         inventory = _development_dir(root) / "dependency-dag.md"
