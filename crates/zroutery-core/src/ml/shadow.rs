@@ -1304,6 +1304,57 @@ impl ShadowStore {
         Ok(())
     }
 
+    /// Attach a production served identity to one already-stored decision.
+    ///
+    /// The served identity is a *terminal* fact: it only exists once the
+    /// request has actually delivered an answer, which is necessarily after the
+    /// counterfactual was recorded. This attaches that fact to the record the
+    /// decision-time evaluation produced, and deliberately does nothing else —
+    /// the decision identity (both checksums) was computed without it, so the
+    /// stored counterfactual stays exactly replayable.
+    ///
+    /// `None` means "nothing was served" and leaves the record untouched, so a
+    /// failed, cancelled or interrupted request can never be correlated as a
+    /// success. An unknown `shadow_id` is a no-op rather than an error: the
+    /// bounded store may legitimately have evicted the record by then, and that
+    /// is never a fact about the request.
+    pub fn correlate_served(&self, shadow_id: &str, served: Option<&str>) -> Result<bool, String> {
+        let Some(served) = served else {
+            return Ok(false);
+        };
+        if served.trim().is_empty() {
+            return Err("empty served identity".to_string());
+        }
+        let mut decisions = crate::sync::lock(&self.decisions);
+        let Some(decision) = decisions.iter_mut().find(|entry| entry.shadow_id == shadow_id) else {
+            return Ok(false);
+        };
+        // The served identity has to be one production actually chose from the
+        // candidates this very record observed. Anything else is a wiring fault,
+        // not evidence, and is refused rather than stored.
+        if !decision
+            .observation
+            .input
+            .candidates
+            .iter()
+            .any(|candidate| candidate.candidate_id == served)
+        {
+            return Err(format!(
+                "served identity '{served}' is not among the observed candidates"
+            ));
+        }
+        if let Some(existing) = decision.actual.served.as_deref() {
+            if existing != served {
+                return Err(format!(
+                    "decision already correlates served identity '{existing}'"
+                ));
+            }
+            return Ok(false);
+        }
+        decision.actual.served = Some(served.to_string());
+        Ok(true)
+    }
+
     /// Number of decisions currently stored (regardless of age).
     pub fn len(&self) -> usize {
         crate::sync::lock(&self.decisions).len()
@@ -1378,6 +1429,31 @@ impl ShadowEngine {
     /// The shadow decision store.
     pub fn store(&self) -> &ShadowStore {
         &self.store
+    }
+
+    /// Correlate one stored decision with the served identity the request
+    /// actually delivered, as read from that request's terminal outcome.
+    ///
+    /// This is the production-integration boundary for
+    /// [`ProductionDecisionRef::served`], which the pure evaluation seam cannot
+    /// know. It is fault-contained exactly like evaluation: a refused
+    /// correlation is counted and logged, never propagated, and the record it
+    /// concerned is diagnostic evidence anyway.
+    ///
+    /// Returns whether a stored decision was updated.
+    pub fn correlate_served(&self, shadow_id: &str, served: Option<&str>) -> bool {
+        match self.store.correlate_served(shadow_id, served) {
+            Ok(correlated) => correlated,
+            Err(reason) => {
+                self.count_fault();
+                tracing::debug!(
+                    shadow_id = %shadow_id,
+                    fault = %reason,
+                    "shadow served-identity correlation fault"
+                );
+                false
+            }
+        }
     }
 
     /// Advance the shadow ensemble (TEST/7E-2 seam — NOT wired to production
@@ -1674,8 +1750,14 @@ impl ShadowEngine {
 
     /// Count a fault and emit a one-line diagnostic (decision id + reason).
     fn record_fault(&self, decision_id: &str, reason: &str) {
-        self.faults.fetch_add(1, Ordering::Relaxed);
+        self.count_fault();
         tracing::debug!(decision_id = %decision_id, fault = %reason, "shadow evaluation fault");
+    }
+
+    /// Count one contained fault. Every step the shadow path can fail in —
+    /// evaluation, storing, correlating — reports through this one counter.
+    fn count_fault(&self) {
+        self.faults.fetch_add(1, Ordering::Relaxed);
     }
 }
 

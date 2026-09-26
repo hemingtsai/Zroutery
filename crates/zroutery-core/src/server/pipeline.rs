@@ -726,13 +726,14 @@ async fn buffered_chat(
     lifecycle.planned_from(routing_decision.as_ref(), &plan);
     // shadow-block-begin
     // Shadow evaluation runs before the attempt loop, over the snapshot taken
-    // while ranking state was untouched. It is record-only: the engine
-    // contains its own faults (catch_unwind + fault counter) and the store is
-    // the record — the verdict is deliberately discarded here and never feeds
-    // back into this request.
+    // while ranking state was untouched. It is record-only: the engine contains
+    // its own faults (catch_unwind + fault counter) and the store is the record
+    // — the verdict is deliberately discarded here and never feeds back into
+    // this request. Only the record's identity is retained, so the terminal
+    // transition can attach what actually served.
     #[cfg(feature = "ml")]
     if let Some(input) = &shadow_input {
-        let _ = state.shadow().evaluate(lifecycle.id(), input);
+        lifecycle.shadow_evaluated(input);
     }
     // shadow-block-end
     let mode = encode_mode_for(kind);
@@ -1046,10 +1047,11 @@ async fn stream_chat(
     lifecycle.planned_from(routing_decision.as_ref(), &plan);
     // shadow-block-begin
     // Same record-only shadow hook as the buffered path: before the attempt
-    // loop, over the pre-attempt snapshot, verdict discarded.
+    // loop, over the pre-attempt snapshot, verdict discarded, record identity
+    // retained for the terminal transition.
     #[cfg(feature = "ml")]
     if let Some(input) = &shadow_input {
-        let _ = state.shadow().evaluate(lifecycle.id(), input);
+        lifecycle.shadow_evaluated(input);
     }
     // shadow-block-end
     let mode = encode_mode_for(kind);
@@ -1596,6 +1598,13 @@ struct RequestLifecycle {
     /// not report the same failure a second time: the loop's last error usually
     /// *is* the terminal error.
     attempt_failure_accounted: bool,
+    /// Identity of the shadow record this request produced at decision time.
+    /// The record itself — and with it the exact decision-time input it was
+    /// computed from — stays in the store; only the key travels, so the
+    /// terminal transition attaches the served identity to *that* record
+    /// instead of rebuilding one from whatever the request looks like later.
+    #[cfg(feature = "ml")]
+    shadow_id: Option<String>,
     /// The exactly-once guard for the whole request.
     terminal: bool,
 }
@@ -1624,6 +1633,8 @@ impl RequestLifecycle {
             served: None,
             response_id: None,
             attempt_failure_accounted: false,
+            #[cfg(feature = "ml")]
+            shadow_id: None,
             terminal: false,
         }
     }
@@ -1672,6 +1683,55 @@ impl RequestLifecycle {
             self.decision = Some(decision.clone());
             self.record.routing_decision(decision.clone());
         }
+    }
+
+    /// Evaluate this request's shadow counterfactual over the decision-time
+    /// snapshot and remember which record it produced.
+    ///
+    /// Strictly record-only. The engine absorbs its own faults and reports
+    /// them through its own counter, so there is nothing here to handle: a
+    /// disabled engine, a fault, or a refused record all simply mean this
+    /// request has no shadow record to correlate later. The verdict is never
+    /// read back, and the snapshot is not retained here — the record holds it.
+    #[cfg(feature = "ml")]
+    fn shadow_evaluated(&mut self, input: &ShadowInput) {
+        if self.shadow_id.is_some() {
+            return;
+        }
+        let shadow_id = self
+            .state
+            .shadow()
+            .evaluate(self.id(), input)
+            .map(|decision| decision.shadow_id);
+        self.shadow_id = shadow_id;
+    }
+
+    /// Attach what actually served to this request's shadow record.
+    ///
+    /// The served identity is read off the request's one terminal outcome and
+    /// from nowhere else: not the plan, not the store, not a re-run of the
+    /// router. That is what makes the correlation trustworthy in both
+    /// directions — a failover records the candidate that really answered, and a
+    /// request that served nothing (failed, cancelled, or abandoned part-way)
+    /// leaves the record uncorrelated, because the outcome has no served
+    /// identity for those terminal states.
+    #[cfg(feature = "ml")]
+    fn shadow_correlated(&self, outcome: &Outcome, validated: bool) {
+        let Some(shadow_id) = self.shadow_id.as_deref() else {
+            return;
+        };
+        // An outcome the schema rejected carries no trustworthy identity
+        // evidence, so it correlates nothing rather than something guessed.
+        let served = if validated {
+            outcome
+                .served_identity()
+                .map(|identity| identity.model().to_string())
+        } else {
+            None
+        };
+        self.state
+            .shadow()
+            .correlate_served(shadow_id, served.as_deref());
     }
 
     /// The loop is about to try `candidate`: the activity record counts the
@@ -1875,13 +1935,23 @@ impl RequestLifecycle {
 
         // 5. Exactly one outcome per request, from the accepted schema.
         let outcome = self.build_outcome(&record, &terminal, cost.as_ref());
-        if let Err(reason) = outcome.validate() {
+        let validation = outcome.validate();
+        if let Err(reason) = &validation {
             tracing::error!(
                 request_id = %record.id,
                 reason,
                 "constructed an outcome the schema rejected"
             );
         }
+        // shadow-block-begin
+        // Shadow correlation is the last step of the same terminal transition,
+        // because that is the only moment the served identity exists. It reads
+        // the outcome built above and touches nothing else: a fault or an
+        // uncorrelated record can never affect the response, which has already
+        // been decided by this point in every path.
+        #[cfg(feature = "ml")]
+        self.shadow_correlated(&outcome, validation.is_ok());
+        // shadow-block-end
         self.state.outcomes().record(outcome);
     }
 
