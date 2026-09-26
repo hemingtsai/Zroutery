@@ -2,8 +2,8 @@
   "schema_version": 1,
   "node_id": "7B",
   "display_name": "7B — training dataset",
-  "status": "READY",
-  "implementation_state": "A dataset library and a canonical lossless sample schema now exist, and every request produces one validated production Outcome, so the previous blocker is gone. The node is READY: no DatasetStore wiring, retention, or production ingestion has been built yet.",
+  "status": "RUNNING",
+  "implementation_state": "The DatasetStore ingestion, validation, and retention path is being built on branch node/7b-dataset on the canonical Outcome-derived sample, correlating the retained decision-time features with the one validated Outcome per request. Training and activation remain out of scope.",
   "dependencies": [
     "STAGE-6",
     "7A"
@@ -18,14 +18,16 @@
     "Schema compatibility"
   ],
   "blocked_by": [],
-  "unblock_condition": "Unblocked: build the DatasetStore ingestion, validation, and retention path on the canonical Outcome-derived sample.",
+  "unblock_condition": "Dispatched: build store, ingestion, validation, and retention on node/7b-dataset without wiring training or activation.",
   "evidence": [
     "E-005",
     "E-006",
     "E-016",
     "E-055",
     "E-059",
-    "E-062"
+    "E-062",
+    "E-068",
+    "E-069"
   ],
   "source_references": [
     "docs/development/repository-audit-2026-09-25.md",
@@ -34,7 +36,9 @@
     "crates/zroutery-core/src/outcome.rs"
   ],
   "notes": [
-    "The audit kept this node blocked for want of a trustworthy production Outcome; that reason is closed, but the node's own work has not started.",
-    "Nothing may treat the pipeline's in-memory Outcome ring as a dataset: it is a diagnostic buffer with no retention or validation contract."
+    "The audit kept this node blocked for want of a trustworthy production Outcome; that reason is closed, and this dispatch is the node's own work.",
+    "Nothing may treat the pipeline's in-memory Outcome ring as a dataset: ingestion must be an explicit, bounded, validated path.",
+    "Runs on node/7b-dataset from 2580850 and owns ml/dataset.rs plus the production ingestion hook in server/pipeline.rs, where it is the sole owner for the duration. It must not edit ml/decision_engine.rs, ml/model.rs, or a new 7E-2A contract module.",
+    "If ingestion depends on the shadow record for the exact decision-time features, the dependency on that record being enabled must be explicit rather than a silent no-op."
   ]
 }

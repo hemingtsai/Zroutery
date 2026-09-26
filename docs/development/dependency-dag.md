@@ -31,7 +31,7 @@ failed node. Historical tags are not graph edges.
 | `STAGE-7` | `PARTIAL` | `STAGE-6`, `7A`, `7B`, `7C`, `7D`, `7E-0`, `7E-1` |
 | `STAGE-8` | `BLOCKED` | `STAGE-7`, `7H` |
 | `7A` | `PARTIAL` | `STAGE-4`, `STAGE-5` |
-| `7B` | `READY` | `STAGE-6`, `7A` |
+| `7B` | `RUNNING` | `STAGE-6`, `7A` |
 | `7C` | `PARTIAL` | `7A` |
 | `7D` | `PARTIAL` | `7B`, `7C` |
 | `7E-0` | `PARTIAL` | `7C` |
@@ -39,7 +39,7 @@ failed node. Historical tags are not graph edges.
 | `7E-1A` | `DONE` | `7E-0`, `7A`, `7C` |
 | `7E-1B-CORE` | `DONE` | `7E-1A`, `7A`, `7C` |
 | `7E-1B` | `DONE` | `7E-1A`, `7E-1B-CORE`, `CORE-P1-REPAIR`, `STAGE-3`, `STAGE-4`, `STAGE-6` |
-| `7E-2A` | `READY` | `7E-1B` |
+| `7E-2A` | `RUNNING` | `7E-1B` |
 | `7E-2B` | `BLOCKED` | `7E-2A`, `STAGE-6` |
 | `7E-2C` | `BLOCKED` | `7E-2B` |
 | `7E-2D` | `BLOCKED` | `7E-2C` |

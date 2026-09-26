@@ -253,6 +253,25 @@ REG-009 is closed on the evaluation side only. `7E-2A` is `READY` and `7B` is
 `READY`; neither may be claimed as started work, and no training, activation,
 takeover, exploration, or durable journal work is authorized by this acceptance.
 
+## 7E-2A and 7B parallel dispatch
+
+Both nodes are dispatched together from revision `2580850`. Parallelism is
+allowed only because their file ownership is disjoint, which was checked rather
+than assumed: `7E-2A` owns `ml/decision_engine.rs`, `ml/model.rs`, a new contract
+module, and its `ml/mod.rs` registration; `7B` owns `ml/dataset.rs` and the
+production ingestion hook in `server/pipeline.rs`, where it is the sole owner for
+the duration. Neither may edit the other's files.
+
+| ID | Class | Exact command or observation | Result | Known caveat |
+|---|---|---|---|---|
+| E-069 | review, architecture | Read of the current module surfaces before dispatch: `ml/mod.rs` registration list, the existing `EngineInput`/`EngineCandidate`/`EngineOutput` surface in `decision_engine.rs`, the `ModelState`/`Prediction` types in `model.rs`, the `DatasetStore` and `OutcomeTrainingSample` in `dataset.rs`, and the correlation key shared by the Outcome and the shadow record | PASS; the two nodes touch disjoint files, and both can be correlated on the request id that `RequestLifecycle` already uses | Deciding the file split is not the same as proving the two designs compose; that is what the parent review and the gate matrix are for |
+
+`7E-2A` may define `DecisionDistribution` as a type only. Calibrated K-way
+distributions belong to `7E-2D`, and no warmup, RL, activation, or journal work
+is authorized by this dispatch. `7B` may ingest, validate, and retain canonical
+samples; it may not train on them, and it may not make dataset collection
+silently depend on an undeclared configuration state.
+
 Batch A was accepted earlier on `main`: `CORE-P1-MEDIA-REQ` and
 `CORE-P1-FAILURE-AUTHORITY` are `DONE`. The records above supersede the state
 that existed when they were still `READY` for a Batch B dispatch.
