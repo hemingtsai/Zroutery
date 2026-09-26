@@ -338,6 +338,23 @@ validator is the single authority every stored sample passes, and the defect was
 reachable by any hand-built or deserialized sample, not only by the warmup path
 that stumbled on it.
 
+## 7E-2C bandit and reward learning dispatch
+
+`7E-2C` is dispatched on `node/7e-2c-bandit` from revision `4854b65`. The
+pre-dispatch read is what makes this node's boundary precise: it is not a repair,
+because the capability does not exist yet.
+
+| ID | Class | Exact command or observation | Result | Known caveat |
+|---|---|---|---|---|
+| E-078 | review, architecture | Read of `ml/reward.rs` and a search across `ml/` before dispatch: `RewardPolicy` is a hand-set weight vector, `ActionGuard::decide` is a hand-written rule, there is no `fit`, `train`, `update`, or `learn` in the reward module, and a search for UCB, Thompson, epsilon-greedy, arm counts, and confidence accumulators finds none | PASS; no bandit, no arm statistics, and no learned reward exist anywhere, so this node builds the capability rather than repairing it. `Action::Explore` exists in the accepted coordinator, which is why the production-inaccessibility gate is explicit rather than assumed | Reading the absence establishes scope, not correctness. The binding risk here is not the fitting but the safety claim, because every production sample carries `feedback: None` and the reward is therefore an outcome proxy that can diverge from user preference |
+
+`7E-2C` may fit a reward offline and evaluate a selection rule offline. It may
+not explore in production, install a policy, calibrate a distribution, write a
+durable journal, or fabricate a user preference signal. The safety evaluation
+must be able to refuse on tail grounds, because a policy that improves mean
+reward while regressing failures, cost, or a tail latency percentile is not an
+improvement.
+
 Batch A was accepted earlier on `main`: `CORE-P1-MEDIA-REQ` and
 `CORE-P1-FAILURE-AUTHORITY` are `DONE`. The records above supersede the state
 that existed when they were still `READY` for a Batch B dispatch.

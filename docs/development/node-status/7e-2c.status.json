@@ -2,8 +2,8 @@
   "schema_version": 1,
   "node_id": "7E-2C",
   "display_name": "7E-2C — bandit and reward learning",
-  "status": "BLOCKED",
-  "implementation_state": "Bandit learning has no accepted warmup, distribution, dataset, or reward-policy prerequisites.",
+  "status": "RUNNING",
+  "implementation_state": "Bandit and reward learning is being built on branch node/7e-2c-bandit as offline fitting plus a bandit selection rule with inspectable arm state and a safety evaluation that can refuse. Nothing installs a policy, and Action::Explore stays unreachable from the live router.",
   "dependencies": [
     "7E-2B"
   ],
@@ -17,12 +17,11 @@
     "RewardPolicy",
     "Offline safety evaluation"
   ],
-  "blocked_by": [
-    "7E-2B"
-  ],
-  "unblock_condition": "Close 7E-2B and pass the typed distribution/reward safety gates.",
+  "blocked_by": [],
+  "unblock_condition": "Dispatched: implement offline bandit and reward learning with inspectable arm state, a tail-aware safety evaluation that can refuse, and no reachable path from the running product.",
   "evidence": [
-    "E-016"
+    "E-016",
+    "E-078"
   ],
   "source_references": [
     "docs/development/repository-audit-2026-09-25.md",
@@ -31,6 +30,11 @@
     "crates/zroutery-core/src/ml/dataset.rs"
   ],
   "notes": [
-    "No online RL is authorized."
+    "No online RL is authorized, and no exploration in production. Action::Explore exists in accepted code and must stay unreachable from the live router.",
+    "The DecisionDistribution gate is satisfied by the 7E-2A type, not by a calibrated producer: calibration is 7E-2D, so any distribution this node emits must be labeled uncalibrated.",
+    "Every production sample carries feedback None because no user-rating source exists, so the reward here is an outcome-derived proxy and never a user preference. A bandit optimizing that proxy can diverge from what a user would have preferred, which is a limitation to record rather than to average away.",
+    "ml/reward.rs and ml/coordinator.rs are accepted and read-only here; this node consumes them and adds a new module.",
+    "A mean-reward improvement that regresses the failure rate, the cost, or a tail latency percentile is not an improvement. The safety evaluation must be able to withhold acceptance on tail grounds.",
+    "No bandit, arm statistic, or fitting exists anywhere in ml/ yet, so this node is building the capability rather than repairing it."
   ]
 }
