@@ -1605,8 +1605,26 @@ struct RequestLifecycle {
     /// instead of rebuilding one from whatever the request looks like later.
     #[cfg(feature = "ml")]
     shadow_id: Option<String>,
+    /// The decision-time input this request's shadow record was accepted with.
+    ///
+    /// A sample's features have to be the ones captured at decision time, and
+    /// they are only captured at all when a record was accepted for this
+    /// request. The hook therefore retains the snapshot *only* on the path
+    /// where `evaluate` returned a record, so the dataset can never be a second
+    /// source of features: with no retained record there is no input here either.
+    ///
+    /// The stronger form of this correlation — re-reading the record out of the
+    /// shadow store by request id at the terminal transition — needs a
+    /// read accessor this crate does not expose yet.
+    #[cfg(feature = "ml")]
+    decision_time: Option<ShadowInput>,
     /// The exactly-once guard for the whole request.
     terminal: bool,
+    /// The exactly-once guard for dataset ingestion. It is redundant with
+    /// `terminal` on purpose: the dataset's contract is "one ingestion per
+    /// request", and a redundant guard is cheaper than discovering otherwise.
+    #[cfg(feature = "ml")]
+    ingested: bool,
 }
 
 impl RequestLifecycle {
@@ -1635,7 +1653,11 @@ impl RequestLifecycle {
             attempt_failure_accounted: false,
             #[cfg(feature = "ml")]
             shadow_id: None,
+            #[cfg(feature = "ml")]
+            decision_time: None,
             terminal: false,
+            #[cfg(feature = "ml")]
+            ingested: false,
         }
     }
 
@@ -1698,12 +1720,14 @@ impl RequestLifecycle {
         if self.shadow_id.is_some() {
             return;
         }
-        let shadow_id = self
-            .state
-            .shadow()
-            .evaluate(self.id(), input)
-            .map(|decision| decision.shadow_id);
-        self.shadow_id = shadow_id;
+        let Some(decision) = self.state.shadow().evaluate(self.id(), input) else {
+            return;
+        };
+        // A returned record is the proof that the store accepted this input, so
+        // the same snapshot can be handed to dataset ingestion later. Nothing is
+        // re-derived here: these are the very values the record holds.
+        self.shadow_id = Some(decision.shadow_id);
+        self.decision_time = Some(input.clone());
     }
 
     /// Attach what actually served to this request's shadow record.
@@ -1732,6 +1756,61 @@ impl RequestLifecycle {
         self.state
             .shadow()
             .correlate_served(shadow_id, served.as_deref());
+    }
+
+    /// Ingest this request's terminal outcome into the canonical dataset.
+    ///
+    /// Strictly one-way and strictly last: it runs after the request's single
+    /// validated Outcome exists, it feeds the store, and nothing reads the
+    /// result back. A request whose Outcome the schema rejected contributes
+    /// nothing — an outcome with untrustworthy identity evidence cannot be
+    /// labelled, and guessing would be worse than having no sample.
+    ///
+    /// Three outcomes, never conflated: the samples were stored, the request
+    /// retained no decision-time input so it has no features at all, or the
+    /// sample was refused with a reason. Every one of the three is counted, so
+    /// "no decision-time input" can never be mistaken for "collected".
+    ///
+    /// The ingestion is contained: it returns nothing, propagates no error, and
+    /// catches its own panics, so no dataset condition can fail a request.
+    #[cfg(feature = "ml")]
+    fn dataset_ingested(&mut self, outcome: &Outcome, validated: bool) {
+        if self.ingested {
+            return;
+        }
+        if !validated {
+            self.ingested = true;
+            return;
+        }
+        let ingestion = crate::ml::dataset::contained_ingest(
+            self.state.dataset(),
+            self.id(),
+            outcome,
+            self.decision_time.as_ref(),
+        );
+        self.ingested = true;
+        match ingestion {
+            crate::ml::dataset::Ingestion::Ingested { sample_ids } => {
+                tracing::debug!(
+                    request_id = %self.id(),
+                    samples = sample_ids.len(),
+                    "training samples collected"
+                );
+            }
+            crate::ml::dataset::Ingestion::NoDecisionTimeInput => {
+                tracing::debug!(
+                    request_id = %self.id(),
+                    "no retained decision-time input; no training sample collected"
+                );
+            }
+            crate::ml::dataset::Ingestion::Rejected { reason } => {
+                tracing::warn!(
+                    request_id = %self.id(),
+                    reason,
+                    "training sample refused at the dataset boundary"
+                );
+            }
+        }
     }
 
     /// The loop is about to try `candidate`: the activity record counts the
@@ -1952,7 +2031,19 @@ impl RequestLifecycle {
         #[cfg(feature = "ml")]
         self.shadow_correlated(&outcome, validation.is_ok());
         // shadow-block-end
-        self.state.outcomes().record(outcome);
+        // The log takes its own copy of the outcome; this one is the dataset's
+        // to read, and neither can see the other's.
+        self.state.outcomes().record(outcome.clone());
+        // dataset-block-begin
+        // Dataset ingestion is the very last step of the same terminal
+        // transition, and it is one-way: the request's own validated Outcome
+        // plus the decision-time input this request's record was accepted with,
+        // and nothing else. It is not a routing input, it returns nothing, and
+        // it cannot fail the request — by this point the response, the spend,
+        // the activity record and the outcome are all already decided.
+        #[cfg(feature = "ml")]
+        self.dataset_ingested(&outcome, validation.is_ok());
+        // dataset-block-end
     }
 
     /// Build this request's outcome from the accepted schema.

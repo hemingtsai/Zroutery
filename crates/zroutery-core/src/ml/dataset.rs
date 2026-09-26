@@ -5,9 +5,29 @@
 //! [`FeedbackSignal`](crate::feedback::FeedbackSignal) signals into
 //! [`TrainingSample`] units that ML models consume.
 //!
-//! [`DatasetStore`] provides bounded, retention-aware storage.
+//! [`DatasetStore`] holds the canonical [`OutcomeTrainingSample`] under both a
+//! count and an age bound, and ingests one request at a time through
+//! [`DatasetStore::ingest`].
+//!
+//! # Where a sample's feature vector comes from
+//!
+//! The [`Outcome`](crate::outcome::Outcome) deliberately holds identity,
+//! terminal state, timing and usage only — it has no feature vector, and
+//! nothing here derives one. The exact per-candidate vectors captured at
+//! decision time live in the retained shadow record's
+//! [`ShadowInput::candidates`](super::shadow::ShadowInput), so ingestion takes
+//! the retained decision-time input as an input and correlates it with the
+//! request's one Outcome by request id.
+//!
+//! A request with no retained record — the `ml` feature off,
+//! `config.shadow.enabled` false, evaluation refused, or a shadow fault — has no
+//! features and therefore no sample. That case is reported as
+//! [`Ingestion::NoDecisionTimeInput`] and counted separately from a refusal, so
+//! "nothing was collected" is never indistinguishable from "something was
+//! collected and rejected". See [`canonical_samples_from_decision_time`].
 
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
@@ -15,6 +35,7 @@ use serde::{Deserialize, Serialize};
 use crate::feedback::{DataOrigin, Feedback, FeedbackSignal};
 use crate::ir::Usage;
 use crate::ml::features::{RoutingFeatures, FEATURE_DIMENSION, FEATURE_SCHEMA_VERSION};
+use crate::ml::shadow::ShadowInput;
 use crate::outcome::{
     Attempt, CandidateIdentity, FinalStatus, Outcome, OutcomeIdentity,
 };
@@ -369,13 +390,26 @@ pub fn try_outcome_sample(
     origin: DataOrigin,
     feedback: Option<&Feedback>,
 ) -> Result<OutcomeTrainingSample, String> {
-    let outcome = outcome.canonicalized()?;
-    validate_feedback(&outcome, feedback)?;
+    let canonical = outcome.canonicalized()?;
+    request_sample(&canonical, features, origin, feedback)
+}
+
+/// The request-scope sample for an already canonical Outcome.
+///
+/// Separated from [`try_outcome_sample`] so the decision-time path can build the
+/// request sample from the same code with a vector it looked up itself.
+fn request_sample(
+    outcome: &Outcome,
+    features: RoutingFeatures,
+    origin: DataOrigin,
+    feedback: Option<&Feedback>,
+) -> Result<OutcomeTrainingSample, String> {
+    validate_feedback(outcome, feedback)?;
     let identity = outcome.identity();
-    let model_provider = request_identity(&outcome);
-    let targets = Targets::try_from_outcome(&outcome)?;
+    let model_provider = request_identity(outcome);
+    let targets = Targets::try_from_outcome(outcome)?;
     let sample = OutcomeTrainingSample {
-        sample_id: deterministic_sample_id(&outcome, "request"),
+        sample_id: deterministic_sample_id(outcome, "request"),
         schema_version: FEATURE_SCHEMA_VERSION,
         timestamp: outcome.timestamp,
         streaming: outcome.streaming,
@@ -439,18 +473,142 @@ pub fn try_samples_from_outcome_with_feedback(
     origin: DataOrigin,
     feedback: Option<&Feedback>,
 ) -> Result<Vec<OutcomeTrainingSample>, String> {
-    let outcome = outcome.canonicalized()?;
-    validate_feedback(&outcome, feedback)?;
+    // The compatibility form tolerates a missing snapshot by substituting the
+    // default vector; the decision-time path below refuses instead. `None` here
+    // means "no snapshot was supplied for this attempt".
+    let per_attempt: Vec<Option<RoutingFeatures>> = (0..outcome.attempts.len())
+        .map(|index| feature_snapshots.get(index).cloned())
+        .collect();
+    let request_features = feature_snapshots.last().cloned();
+    samples_from_features(
+        outcome,
+        &per_attempt,
+        request_features,
+        origin,
+        feedback,
+        false,
+    )
+}
+
+/// Canonical samples for one request, built **only** from the feature vectors
+/// retained at decision time.
+///
+/// `decision_time` is the request's own retained shadow input. Each attempt's
+/// vector is looked up by the identity the attempt actually used, and the
+/// request-scope vector by the identity the request ended on (served, else last
+/// attempted, else planned — the same resolution
+/// [`try_outcome_sample`] applies).
+///
+/// A retained vector that is absent, carries a foreign feature schema, or holds
+/// a non-finite value is refused with a reason. Nothing is substituted,
+/// reconstructed or re-derived: a request whose evidence is incomplete produces
+/// no sample at all rather than one carrying invented features.
+pub fn canonical_samples_from_decision_time(
+    outcome: &Outcome,
+    decision_time: &ShadowInput,
+    origin: DataOrigin,
+) -> Result<Vec<OutcomeTrainingSample>, String> {
+    if decision_time.feature_schema != FEATURE_SCHEMA_VERSION {
+        return Err(format!(
+            "retained decision-time schema mismatch: {} != {}",
+            decision_time.feature_schema, FEATURE_SCHEMA_VERSION
+        ));
+    }
+    let canonical = outcome.canonicalized()?;
+    let per_attempt: Vec<Option<RoutingFeatures>> = canonical
+        .attempts
+        .iter()
+        .map(|attempt| {
+            retained_features(
+                decision_time,
+                &attempt.candidate_model,
+                &attempt.candidate_provider,
+            )
+            .map(Some)
+            .ok_or_else(|| {
+                format!(
+                    "no usable retained features for attempted candidate '{}/{}'",
+                    attempt.candidate_provider, attempt.candidate_model
+                )
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let ended_on = request_identity(&canonical);
+    let request_features = retained_features(
+        decision_time,
+        &ended_on.model,
+        &ended_on.provider,
+    )
+    .ok_or_else(|| {
+        format!(
+            "no usable retained features for the request's final candidate '{}/{}'",
+            ended_on.provider, ended_on.model
+        )
+    })?;
+    samples_from_features(
+        &canonical,
+        &per_attempt,
+        Some(request_features),
+        origin,
+        None,
+        true,
+    )
+}
+
+/// The retained feature vector for one candidate identity, if it is usable.
+///
+/// A policy-rejected candidate is retained with the explicit UNKNOWN vector and
+/// a rejection reason. That vector is a fact about the candidate (it was
+/// considered and refused), not evidence about serving it, so an ineligible
+/// candidate yields nothing rather than a sample full of UNKNOWNs.
+fn retained_features(
+    decision_time: &ShadowInput,
+    model_id: &str,
+    provider_id: &str,
+) -> Option<RoutingFeatures> {
+    decision_time
+        .candidates
+        .iter()
+        .find(|candidate| candidate.candidate_id == model_id && candidate.provider_id == provider_id)
+        .filter(|candidate| {
+            candidate.eligible
+                && candidate.features.schema_version == FEATURE_SCHEMA_VERSION
+                && candidate
+                    .features
+                    .values
+                    .iter()
+                    .all(|value| value.is_finite())
+        })
+        .map(|candidate| candidate.features.clone())
+}
+
+/// Build every canonical sample for one canonical Outcome.
+///
+/// `require_retained` is the difference that matters: when it is set, a missing
+/// vector is an error instead of a substituted default. `per_attempt` is indexed
+/// by attempt, and `request_features` is the request-scope vector.
+fn samples_from_features(
+    outcome: &Outcome,
+    per_attempt: &[Option<RoutingFeatures>],
+    request_features: Option<RoutingFeatures>,
+    origin: DataOrigin,
+    feedback: Option<&Feedback>,
+    require_retained: bool,
+) -> Result<Vec<OutcomeTrainingSample>, String> {
+    validate_feedback(outcome, feedback)?;
     let identity = outcome.identity();
     let mut samples = Vec::with_capacity(outcome.attempts.len() + 1);
     for (index, attempt) in outcome.attempts.iter().enumerate() {
-        let features = feature_snapshots
-            .get(index)
-            .cloned()
-            .unwrap_or_else(RoutingFeatures::default);
+        let features = resolve_features(
+            per_attempt.get(index).cloned().flatten(),
+            require_retained,
+            &format!("attempt {index} ({}/{})", attempt.candidate_provider, attempt.candidate_model),
+        )?;
+
         let targets = Targets::from_attempt(attempt);
         let sample = OutcomeTrainingSample {
-            sample_id: deterministic_sample_id(&outcome, &format!("attempt-{index}")),
+            sample_id: deterministic_sample_id(outcome, &format!("attempt-{index}")),
             schema_version: FEATURE_SCHEMA_VERSION,
             timestamp: outcome.timestamp,
             streaming: outcome.streaming,
@@ -483,14 +641,29 @@ pub fn try_samples_from_outcome_with_feedback(
         validate_outcome_sample(&sample)?;
         samples.push(sample);
     }
-    let request_features = feature_snapshots
-        .last()
-        .cloned()
-        .unwrap_or_else(RoutingFeatures::default);
-    samples.push(
-        try_outcome_sample(&outcome, request_features, origin, feedback)?,
-    );
+    let request_features = resolve_features(
+        request_features,
+        require_retained,
+        "the request as a whole",
+    )?;
+    samples.push(request_sample(outcome, request_features, origin, feedback)?);
     Ok(samples)
+}
+
+/// One feature vector, or an explicit refusal. A substituted default is only
+/// ever allowed on the compatibility path.
+fn resolve_features(
+    features: Option<RoutingFeatures>,
+    require_retained: bool,
+    subject: &str,
+) -> Result<RoutingFeatures, String> {
+    match features {
+        Some(features) => Ok(features),
+        None if require_retained => Err(format!(
+            "refusing to synthesize a feature vector for {subject}"
+        )),
+        None => Ok(RoutingFeatures::default()),
+    }
 }
 
 /// Descriptive alias for the canonical pure conversion.
@@ -569,14 +742,96 @@ fn sample_scope_from_id(sample_id: &str) -> SampleScope {
 }
 
 // ---------------------------------------------------------------------------
-// DatasetStore — bounded storage for training samples
+// DatasetStore — bounded storage for canonical training samples
 // ---------------------------------------------------------------------------
 
-/// Bounded store for training samples with retention policies.
+/// Production retention bounds.
+///
+/// A canonical sample carries its full attempt evidence, so the count bound is
+/// deliberately far below the legacy 100k default: at roughly a kilobyte per
+/// sample this caps the in-process dataset in the low tens of megabytes, which
+/// is what a desktop proxy can hold without the dataset becoming the largest
+/// thing in the process. Age is the second bound, because a sample's usefulness
+/// is bounded by how stale the routing state it describes has become.
+pub const PRODUCTION_MAX_SAMPLES: usize = 10_000;
+/// Thirty days is the default age window; production uses a shorter one.
+pub const PRODUCTION_MAX_AGE_SECS: i64 = 7 * 24 * 3600;
+
+/// The outcome of one ingestion attempt, and the only way to tell the three
+/// cases apart.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Ingestion {
+    /// The request produced these stored samples, in scope order.
+    Ingested { sample_ids: Vec<String> },
+    /// The request retained no decision-time input, so it has no features and
+    /// no sample. Nothing was stored, and nothing was fabricated.
+    NoDecisionTimeInput,
+    /// The sample or its Outcome was refused. The reason is the boundary's own
+    /// words; nothing is stored and nothing is repaired.
+    Rejected { reason: String },
+}
+
+impl Ingestion {
+    /// The ids stored, or an empty slice for the two non-storing cases.
+    pub fn sample_ids(&self) -> &[String] {
+        match self {
+            Ingestion::Ingested { sample_ids } => sample_ids,
+            _ => &[],
+        }
+    }
+
+    /// Whether this ingestion stored at least one sample.
+    pub fn is_ingested(&self) -> bool {
+        matches!(self, Ingestion::Ingested { .. })
+    }
+
+    /// Whether nothing was stored because there were no decision-time features.
+    pub fn is_without_decision_time_input(&self) -> bool {
+        matches!(self, Ingestion::NoDecisionTimeInput)
+    }
+}
+
+/// One snapshot of what the store collected, refused and evicted.
+///
+/// `no_decision_time_input` is the observable half of the dependency on
+/// retained decision-time input: it counts requests that had no features to
+/// collect from, which is a different fact from `rejected`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IngestionCounters {
+    /// Requests that stored at least one sample.
+    pub ingested: u64,
+    /// Samples stored in total, across all requests.
+    pub samples: u64,
+    /// Requests with no retained decision-time input.
+    pub no_decision_time_input: u64,
+    /// Requests refused at the boundary, with a reason.
+    pub rejected: u64,
+    /// Samples dropped to stay inside the count bound.
+    pub evicted_by_count: u64,
+    /// Samples dropped for being older than the age bound.
+    pub evicted_by_age: u64,
+    /// Ingestion panics contained at the boundary.
+    pub faults: u64,
+}
+
+/// Bounded store for canonical samples with a count and an age retention
+/// policy.
+///
+/// The store holds [`OutcomeTrainingSample`]. The legacy [`TrainingSample`]
+/// shape is reachable only through the explicit one-way
+/// [`Self::legacy_training_slice`] adapter, never as the storage path.
 pub struct DatasetStore {
-    samples: Mutex<VecDeque<TrainingSample>>,
+    samples: Mutex<VecDeque<OutcomeTrainingSample>>,
     max_samples: usize,
     max_age_secs: i64,
+    ingested: AtomicU64,
+    samples_stored: AtomicU64,
+    without_decision_time: AtomicU64,
+    rejected: AtomicU64,
+    evicted_by_count: AtomicU64,
+    evicted_by_age: AtomicU64,
+    faults: AtomicU64,
 }
 
 impl DatasetStore {
@@ -585,36 +840,165 @@ impl DatasetStore {
             samples: Mutex::new(VecDeque::with_capacity(max_samples.min(10_000))),
             max_samples,
             max_age_secs,
+            ingested: AtomicU64::new(0),
+            samples_stored: AtomicU64::new(0),
+            without_decision_time: AtomicU64::new(0),
+            rejected: AtomicU64::new(0),
+            evicted_by_count: AtomicU64::new(0),
+            evicted_by_age: AtomicU64::new(0),
+            faults: AtomicU64::new(0),
         }
     }
 
-    /// Push a sample, evicting the oldest if at capacity.
+    /// The production store: the bounds above, nothing configurable and no
+    /// second feature source.
+    pub fn production() -> Self {
+        Self::new(PRODUCTION_MAX_SAMPLES, PRODUCTION_MAX_AGE_SECS)
+    }
+
+    /// The count bound.
+    pub fn max_samples(&self) -> usize {
+        self.max_samples
+    }
+
+    /// The age bound, in seconds.
+    pub fn max_age_secs(&self) -> i64 {
+        self.max_age_secs
+    }
+
+    /// Store one canonical sample, enforcing both retention bounds.
     ///
-    /// Validates the sample before inserting. Returns an error if the sample
-    /// has invalid targets (NaN, Inf, or negative latency/ttft/cost).
-    pub fn push(&self, sample: TrainingSample) -> Result<(), String> {
-        validate_sample(&sample)?;
-        if let Some(latency) = sample.targets.latency_ms {
-            if !latency.is_finite() || latency < 0.0 {
-                return Err(format!("invalid latency_ms: {}", latency));
-            }
-        }
-        if let Some(ttft) = sample.targets.ttft_ms {
-            if !ttft.is_finite() || ttft < 0.0 {
-                return Err(format!("invalid ttft_ms: {}", ttft));
-            }
-        }
-        if let Some(cost) = sample.targets.cost {
-            if !cost.is_finite() || cost < 0.0 {
-                return Err(format!("invalid cost: {}", cost));
-            }
-        }
+    /// The sample is validated first and refused with a reason if it is
+    /// malformed or internally inconsistent; nothing is repaired and nothing
+    /// invalid is stored. Expired samples are dropped before the insert, so a
+    /// store whose traffic stops cannot keep expired samples resident.
+    pub fn push(&self, sample: OutcomeTrainingSample) -> Result<(), String> {
+        validate_outcome_sample(&sample)?;
         let mut samples = crate::sync::lock(&self.samples);
-        if samples.len() >= self.max_samples {
-            samples.pop_front();
+        self.evict_expired_locked(&mut samples, chrono::Utc::now().timestamp());
+        while samples.len() >= self.max_samples {
+            if samples.pop_front().is_some() {
+                self.evicted_by_count.fetch_add(1, Ordering::Relaxed);
+            }
         }
         samples.push_back(sample);
         Ok(())
+    }
+
+    /// Ingest one request: the single validated Outcome plus the feature
+    /// vectors retained at decision time.
+    ///
+    /// `request_id` is the correlation key and must be the request's own id: a
+    /// caller that correlates the wrong record is refused rather than allowed
+    /// to attribute one request's features to another request's outcome.
+    ///
+    /// `decision_time` is the request's retained shadow input, or `None` when it
+    /// retained none. `None` yields [`Ingestion::NoDecisionTimeInput`] — never a
+    /// sample built from re-derived or default features.
+    ///
+    /// All-or-nothing: the samples are built and validated together, and either
+    /// every one of them is stored or none is. A request that is already
+    /// represented is refused, so "one ingestion per request" is a property of
+    /// the store rather than of the one caller that happens to exist today.
+    pub fn ingest(
+        &self,
+        request_id: &str,
+        outcome: &Outcome,
+        decision_time: Option<&ShadowInput>,
+    ) -> Ingestion {
+        let Some(decision_time) = decision_time else {
+            self.without_decision_time.fetch_add(1, Ordering::Relaxed);
+            return Ingestion::NoDecisionTimeInput;
+        };
+        if outcome.request_id != request_id {
+            return self.refuse(format!(
+                "decision-time input correlated to request '{request_id}' does not match outcome request '{}'",
+                outcome.request_id
+            ));
+        }
+        let samples = match canonical_samples_from_decision_time(
+            outcome,
+            decision_time,
+            DataOrigin::Native,
+        ) {
+            Ok(samples) => samples,
+            Err(reason) => return self.refuse(reason),
+        };
+        let sample_ids = match self.store_all(request_id, &samples) {
+            Ok(sample_ids) => sample_ids,
+            Err(reason) => return self.refuse(reason),
+        };
+        self.ingested.fetch_add(1, Ordering::Relaxed);
+        self.samples_stored
+            .fetch_add(sample_ids.len() as u64, Ordering::Relaxed);
+        Ingestion::Ingested { sample_ids }
+    }
+
+    /// Validate and store one whole ingestion, or none of it.
+    fn store_all(
+        &self,
+        request_id: &str,
+        samples: &[OutcomeTrainingSample],
+    ) -> Result<Vec<String>, String> {
+        for sample in samples {
+            validate_outcome_sample(sample)?;
+        }
+        let mut stored = crate::sync::lock(&self.samples);
+        if stored
+            .iter()
+            .any(|sample| sample.request_id == request_id)
+        {
+            return Err(format!(
+                "request '{request_id}' is already represented in the dataset"
+            ));
+        }
+        self.evict_expired_locked(&mut stored, chrono::Utc::now().timestamp());
+        // The count bound holds absolutely: a single request whose evidence
+        // exceeds the whole store keeps its most recent samples and counts the
+        // rest as evicted, rather than growing past the bound.
+        let skipped = samples.len().saturating_sub(self.max_samples);
+        let kept = &samples[skipped..];
+        if skipped > 0 {
+            self.evicted_by_count.fetch_add(skipped as u64, Ordering::Relaxed);
+        }
+        while stored.len() + kept.len() > self.max_samples {
+            if stored.pop_front().is_some() {
+                self.evicted_by_count.fetch_add(1, Ordering::Relaxed);
+            } else {
+                break;
+            }
+        }
+        let sample_ids = kept
+            .iter()
+            .map(|sample| sample.sample_id.clone())
+            .collect();
+        stored.extend(kept.iter().cloned());
+        Ok(sample_ids)
+    }
+
+    /// Count one refusal and describe it.
+    fn refuse(&self, reason: String) -> Ingestion {
+        self.rejected.fetch_add(1, Ordering::Relaxed);
+        Ingestion::Rejected { reason }
+    }
+
+    /// Count one contained fault. Every panic this module can suffer is
+    /// reported here rather than propagated.
+    pub fn record_fault(&self) {
+        self.faults.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Everything the store collected, refused and evicted so far.
+    pub fn counters(&self) -> IngestionCounters {
+        IngestionCounters {
+            ingested: self.ingested.load(Ordering::Relaxed),
+            samples: self.samples_stored.load(Ordering::Relaxed),
+            no_decision_time_input: self.without_decision_time.load(Ordering::Relaxed),
+            rejected: self.rejected.load(Ordering::Relaxed),
+            evicted_by_count: self.evicted_by_count.load(Ordering::Relaxed),
+            evicted_by_age: self.evicted_by_age.load(Ordering::Relaxed),
+            faults: self.faults.load(Ordering::Relaxed),
+        }
     }
 
     /// Number of samples currently stored (regardless of age).
@@ -627,13 +1011,41 @@ impl DatasetStore {
         crate::sync::lock(&self.samples).is_empty()
     }
 
-    /// Get samples that are within the retention window.
-    pub fn training_slice(&self) -> Vec<TrainingSample> {
+    /// Drop every sample older than the age bound and report how many left.
+    pub fn evict_expired(&self) -> usize {
+        let mut samples = crate::sync::lock(&self.samples);
+        self.evict_expired_locked(&mut samples, chrono::Utc::now().timestamp())
+    }
+
+    fn evict_expired_locked(&self, samples: &mut VecDeque<OutcomeTrainingSample>, now: i64) -> usize {
+        let before = samples.len();
+        samples.retain(|sample| now - sample.timestamp < self.max_age_secs);
+        let evicted = before - samples.len();
+        if evicted > 0 {
+            self.evicted_by_age.fetch_add(evicted as u64, Ordering::Relaxed);
+        }
+        evicted
+    }
+
+    /// The stored samples that are inside the retention window, oldest first.
+    pub fn training_slice(&self) -> Vec<OutcomeTrainingSample> {
         let now = chrono::Utc::now().timestamp();
         crate::sync::lock(&self.samples)
             .iter()
-            .filter(|s| now - s.timestamp < self.max_age_secs)
+            .filter(|sample| now - sample.timestamp < self.max_age_secs)
             .cloned()
+            .collect()
+    }
+
+    /// The compatibility view of the retained samples.
+    ///
+    /// This is the only path from the store to the legacy [`TrainingSample`]
+    /// shape, and it is one-way: nothing in this store is ever built from a
+    /// legacy sample.
+    pub fn legacy_training_slice(&self) -> Vec<TrainingSample> {
+        self.training_slice()
+            .into_iter()
+            .map(OutcomeTrainingSample::into_legacy)
             .collect()
     }
 
@@ -647,6 +1059,38 @@ impl Default for DatasetStore {
     fn default() -> Self {
         Self::new(100_000, 30 * 24 * 3600) // 100k samples, 30 days
     }
+}
+
+/// Run one dataset step with any panic contained and counted.
+///
+/// A dataset problem is a dataset problem: the boundary reports it and the
+/// request continues. The closure form is what makes that testable, because the
+/// store's own failure modes are all ordinary refusals.
+pub fn contain_dataset_fault<T>(store: &DatasetStore, step: impl FnOnce() -> T) -> Result<T, String> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(step)) {
+        Ok(value) => Ok(value),
+        Err(panic) => {
+            store.record_fault();
+            let reason = panic
+                .downcast_ref::<&str>()
+                .map(|reason| (*reason).to_string())
+                .or_else(|| panic.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "unknown payload".to_string());
+            Err(format!("dataset fault: {reason}"))
+        }
+    }
+}
+
+/// [`DatasetStore::ingest`] with any panic contained and turned into an
+/// observable refusal, so ingestion can never fail a request.
+pub fn contained_ingest(
+    store: &DatasetStore,
+    request_id: &str,
+    outcome: &Outcome,
+    decision_time: Option<&ShadowInput>,
+) -> Ingestion {
+    contain_dataset_fault(store, || store.ingest(request_id, outcome, decision_time))
+        .unwrap_or_else(|reason| Ingestion::Rejected { reason })
 }
 
 // ---------------------------------------------------------------------------
@@ -985,6 +1429,13 @@ mod tests {
 
     // -- 5. DatasetStore push/get/len --
 
+    /// The canonical request-scope sample for a validated Outcome.
+    fn canonical_sample(outcome: &Outcome) -> OutcomeTrainingSample {
+        try_outcome_sample(outcome, sample_features(), DataOrigin::Native, None)
+            .expect("canonical sample from a valid outcome")
+
+    }
+
     #[test]
     fn dataset_store_push_len() {
         let store = DatasetStore::new(100, 3600);
@@ -992,11 +1443,21 @@ mod tests {
         assert_eq!(store.len(), 0);
 
         let outcome = success_outcome();
-        let sample = SampleBuilder::build(&outcome, sample_features(), DataOrigin::Native);
-        store.push(sample).unwrap();
+        store.push(canonical_sample(&outcome)).unwrap();
 
         assert_eq!(store.len(), 1);
         assert!(!store.is_empty());
+    }
+
+    #[test]
+    fn dataset_store_refuses_an_inconsistent_canonical_sample() {
+        let store = DatasetStore::new(100, 3600);
+        let mut sample = canonical_sample(&success_outcome());
+        // A success label the terminal state does not support.
+        sample.final_status = FinalStatus::Failed;
+        let err = store.push(sample).unwrap_err();
+        assert!(err.contains("disagrees with final_status"), "got: {err}");
+        assert!(store.is_empty(), "a refused sample is never stored");
     }
 
     // -- 6. DatasetStore eviction at capacity --
@@ -1007,35 +1468,46 @@ mod tests {
         let outcome = success_outcome();
 
         for _ in 0..5 {
-            let sample = SampleBuilder::build(&outcome, sample_features(), DataOrigin::Native);
-            store.push(sample).unwrap();
+            store.push(canonical_sample(&outcome)).unwrap();
         }
 
         assert_eq!(store.len(), 3, "should evict oldest to stay at capacity");
+        assert_eq!(store.counters().evicted_by_count, 2);
     }
 
-    // -- 7. DatasetStore age-based filtering --
+    // -- 7. DatasetStore age-based filtering and eviction --
 
     #[test]
     fn dataset_store_age_filtering() {
-        // Use a very short retention window so "old" samples are filtered.
+        // A sample that was inside the window when it was stored and has since
+        // aged out of it stays resident but is hidden from every read: the age
+        // bound is enforced on read as well as on insert.
         let store = DatasetStore::new(100, 1); // 1 second retention
+        let mut aged = success_outcome();
+        aged.timestamp = chrono::Utc::now().timestamp() - 60;
+        store.push(canonical_sample(&aged)).unwrap();
 
+        assert_eq!(store.len(), 1, "it was inside the window on insert");
+        assert!(store.training_slice().is_empty(), "and outside it now");
+        assert!(store.legacy_training_slice().is_empty());
+
+        // A fresh sample is inside the window.
+        store.push(canonical_sample(&success_outcome())).unwrap();
+        assert_eq!(store.training_slice().len(), 1);
+    }
+
+    #[test]
+    fn dataset_store_evicts_expired_samples_physically() {
+        let store = DatasetStore::new(100, 60);
         let mut outcome = success_outcome();
-        // Push with a timestamp far in the past
-        outcome.timestamp = chrono::Utc::now().timestamp() - 60;
-        let old_sample = SampleBuilder::build(&outcome, sample_features(), DataOrigin::Native);
-        store.push(old_sample).unwrap();
+        outcome.timestamp = chrono::Utc::now().timestamp() - 3600;
+        store.push(canonical_sample(&outcome)).unwrap();
+        assert_eq!(store.len(), 1);
 
-        // Push with current timestamp
-        let fresh_outcome = success_outcome();
-        let fresh_sample =
-            SampleBuilder::build(&fresh_outcome, sample_features(), DataOrigin::Native);
-        store.push(fresh_sample).unwrap();
-
-        assert_eq!(store.len(), 2, "both stored");
-        let slice = store.training_slice();
-        assert_eq!(slice.len(), 1, "only fresh sample within retention");
+        assert_eq!(store.evict_expired(), 1, "the stale sample left");
+        assert!(store.is_empty(), "age eviction is physical, not read-time only");
+        assert_eq!(store.counters().evicted_by_age, 1);
+        assert!(store.training_slice().is_empty());
     }
 
     // -- 8. validate_sample passes valid sample --
@@ -1232,13 +1704,7 @@ mod tests {
         let store = DatasetStore::new(100, 3600);
         let outcome = success_outcome();
         for _ in 0..10 {
-            store
-                .push(SampleBuilder::build(
-                    &outcome,
-                    sample_features(),
-                    DataOrigin::Native,
-                ))
-                .unwrap();
+            store.push(canonical_sample(&outcome)).unwrap();
         }
         assert_eq!(store.len(), 10);
         store.clear();

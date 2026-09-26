@@ -69,6 +69,16 @@ pub struct AppState {
     /// diagnostic view of the same single accounting the request log records;
     /// nothing routes on it and no training consumes it yet.
     outcomes: OutcomeLog,
+    /// Canonical training samples, ingested once per eligible request from the
+    /// request's retained decision-time input and its own terminal Outcome.
+    ///
+    /// Collection only: nothing trains on it, reads a verdict from it, or lets
+    /// it influence a response. Whether a request contributes a sample depends
+    /// entirely on whether a decision-time record was retained for it, so
+    /// `config.shadow.enabled` is the effective switch and there is deliberately
+    /// no second, independent dataset switch.
+    #[cfg(feature = "ml")]
+    dataset: crate::ml::DatasetStore,
     pub response_store: ResponseStore,
 }
 
@@ -102,6 +112,8 @@ impl AppState {
                 ),
                 shadow_enabled,
             ),
+            #[cfg(feature = "ml")]
+            dataset: crate::ml::DatasetStore::production(),
             response_store: ResponseStore::default(),
         }
     }
@@ -172,6 +184,13 @@ impl AppState {
     #[cfg(feature = "ml")]
     pub fn shadow(&self) -> &crate::ml::ShadowEngine {
         &self.shadow
+    }
+
+    /// The canonical training dataset (collection only; never read for a
+    /// decision).
+    #[cfg(feature = "ml")]
+    pub fn dataset(&self) -> &crate::ml::DatasetStore {
+        &self.dataset
     }
 
     /// Rebuild the upstream HTTP client (e.g. when bypass_proxy changes).
