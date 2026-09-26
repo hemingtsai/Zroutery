@@ -2,8 +2,8 @@
   "schema_version": 1,
   "node_id": "STAGE-4",
   "display_name": "Stage 4 — failure, observation, and statistics",
-  "status": "FAILED",
-  "implementation_state": "Failure and statistics foundations exist, but competing authorities and stream finalization can record the wrong result.",
+  "status": "DONE",
+  "implementation_state": "One canonical failure authority now covers the domain, the router adapters, and the pipeline, and a client disconnect or cancellation is recorded as interrupted or cancelled instead of success. Observation, circuit, and statistics invariants are revalidated at c4188be.",
   "dependencies": [
     "CORE-P1-REPAIR"
   ],
@@ -18,13 +18,13 @@
     "Stream disconnect/interruption state",
     "Observation/circuit/statistics invariants"
   ],
-  "blocked_by": [
-    "CORE-P1-REPAIR"
-  ],
-  "unblock_condition": "Complete CORE-P1-REPAIR and pass failure, cancellation, observation, and circuit tests.",
+  "blocked_by": [],
+  "unblock_condition": "Accepted: single failure authority, stream disconnect and interruption state, and the observation, circuit, and statistics invariants all pass.",
   "evidence": [
     "E-005",
-    "E-016"
+    "E-016",
+    "E-062",
+    "E-063"
   ],
   "source_references": [
     "docs/development/repository-audit-2026-09-25.md",
@@ -36,6 +36,6 @@
     "crates/zroutery-core/tests/circuit_breaker_test.rs"
   ],
   "notes": [
-    "The audit decision is preserved as FAILED."
+    "The audit decision was FAILED and is superseded only by revalidation evidence; REG-006 and REG-007 are closed by it."
   ]
 }

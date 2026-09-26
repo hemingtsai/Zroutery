@@ -22,23 +22,23 @@ failed node. Historical tags are not graph edges.
 
 | Node | State | Dependencies |
 |---|---|---|
-| `STAGE-1` | `REVALIDATE` | `CORE-P1-REPAIR` |
-| `STAGE-2` | `FAILED` | `CORE-P1-REPAIR` |
-| `STAGE-3` | `FAILED` | `CORE-P1-REPAIR` |
-| `STAGE-4` | `FAILED` | `CORE-P1-REPAIR` |
+| `STAGE-1` | `DONE` | `CORE-P1-REPAIR` |
+| `STAGE-2` | `DONE` | `CORE-P1-REPAIR` |
+| `STAGE-3` | `DONE` | `CORE-P1-REPAIR` |
+| `STAGE-4` | `DONE` | `CORE-P1-REPAIR` |
 | `STAGE-5` | `PARTIAL` | `STAGE-1` |
-| `STAGE-6` | `FAILED` | `CORE-P1-REPAIR` |
+| `STAGE-6` | `DONE` | `CORE-P1-REPAIR` |
 | `STAGE-7` | `PARTIAL` | `STAGE-6`, `7A`, `7B`, `7C`, `7D`, `7E-0`, `7E-1` |
 | `STAGE-8` | `BLOCKED` | `STAGE-7`, `7H` |
 | `7A` | `PARTIAL` | `STAGE-4`, `STAGE-5` |
-| `7B` | `BLOCKED` | `STAGE-6`, `7A` |
+| `7B` | `READY` | `STAGE-6`, `7A` |
 | `7C` | `PARTIAL` | `7A` |
 | `7D` | `PARTIAL` | `7B`, `7C` |
 | `7E-0` | `PARTIAL` | `7C` |
 | `7E-1` | `PARTIAL` | `7E-0`, `CORE-P1-REPAIR`, `STAGE-3`, `STAGE-4`, `STAGE-6` |
 | `7E-1A` | `DONE` | `7E-0`, `7A`, `7C` |
 | `7E-1B-CORE` | `DONE` | `7E-1A`, `7A`, `7C` |
-| `7E-1B` | `BLOCKED` | `7E-1A`, `7E-1B-CORE`, `CORE-P1-REPAIR`, `STAGE-3`, `STAGE-4`, `STAGE-6` |
+| `7E-1B` | `READY` | `7E-1A`, `7E-1B-CORE`, `CORE-P1-REPAIR`, `STAGE-3`, `STAGE-4`, `STAGE-6` |
 | `7E-2A` | `BLOCKED` | `7E-1B` |
 | `7E-2B` | `BLOCKED` | `7E-2A`, `STAGE-6` |
 | `7E-2C` | `BLOCKED` | `7E-2B` |
@@ -58,7 +58,7 @@ failed node. Historical tags are not graph edges.
 | `UI-LAYOUT` | `DONE` | `UI` |
 | `UI-NEW-TRACKS` | `BLOCKED` | `UI`, `ACCOUNT`, `NEWAPI`, `I2`, `I3`, `I4` |
 | `OBSERVABILITY` | `READY` | none |
-| `CORE-P1-REPAIR` | `QUEUED` | `CORE-P1-MEDIA-REQ`, `CORE-P1-FAILURE-AUTHORITY`, `CORE-P1-ELIGIBILITY-TRACE`, `CORE-P1-OUTCOME-FEEDBACK`, `CORE-P1-PIPELINE-LIFECYCLE` |
+| `CORE-P1-REPAIR` | `DONE` | `CORE-P1-MEDIA-REQ`, `CORE-P1-FAILURE-AUTHORITY`, `CORE-P1-ELIGIBILITY-TRACE`, `CORE-P1-OUTCOME-FEEDBACK`, `CORE-P1-PIPELINE-LIFECYCLE` |
 | `BASELINE-GATE` | `DONE` | `TEST-CLIPPY`, `TEST-SMOKE`, `TEST-LAYOUT-BROWSER` |
 | `CORE-P1-MEDIA-REQ` | `DONE` | none |
 | `CORE-P1-FAILURE-AUTHORITY` | `DONE` | none |
@@ -123,12 +123,13 @@ CORE-P1-FAILURE-AUTHORITY ───────┤                              
 
 The Stage 3, Stage 4, and Stage 6 repair edges are intentionally repeated in
 `7E-1B`, `7E-2B`/`7E-2E`, and `7E-3`: an offline ML gate is not valid if its
-Outcome, cancellation, or candidate identity inputs are untrustworthy. The
-`CORE-P1-PIPELINE-LIFECYCLE` node is the sole owner of `server/pipeline.rs`; no
-parallel worker may edit that file. All five bounded Core P1 nodes are now
-accepted: Batch B ran in parallel only because its two nodes had disjoint
-ownership (`policy.rs`/`router.rs` versus Outcome/Feedback/dataset conversion),
-and the serial Batch C integration closed the production lifecycle seam.
+Outcome, cancellation, or candidate identity inputs are untrustworthy. Those
+edges stay in the graph after revalidation because the dependency is real, not
+because it is still blocking; only the `blocked_by` sets changed. The
+`CORE-P1-PIPELINE-LIFECYCLE` node was the sole owner of `server/pipeline.rs` and
+has completed its work. All five bounded Core P1 nodes and the aggregate are
+accepted, so `7E-1B` and `7B` are the next dispatchable nodes while `7E-2A`
+stays blocked on `7E-1B`.
 
 ## Stage and aggregate edges
 

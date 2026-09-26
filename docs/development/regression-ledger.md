@@ -12,7 +12,7 @@ state vocabulary. ORCH-DOCS records defects; it does not repair them.
 | `REG-002` | Windows smoke searched an extensionless Unix binary while the Windows build emitted `zroutery-headless.exe`. | `FAILED` | `DONE` | P2 | `BASELINE-GATE` | E-010; E-030; `scripts/smoke_test.py` | Closed by f1797d2; native binary and local mock lifecycle pass. |
 | `REG-003` | UI layout validation returned success after printing `skipping` when no Chromium browser was found. | `FAILED` | `DONE` | P1 | `BASELINE-GATE` | E-012; E-031; `scripts/ui_layout_test.py` | Closed by 4e36fdb; missing browser fails closed and real Chrome assertions pass. |
 | `REG-004` | Commit lint encoded a stale subject/body contract and did not accept the current Node/Gate/Status trailer contract. | `FAILED` | `DONE` | P1 | `COMMIT-CONTRACT` | E-016; E-032; commit-lint workflow and WORKFLOW.md | Closed by efd8092, cf50328, 8ea7696, afba42c, and 0d3367b. |
-| `REG-005` | Main policy and direct model-ID paths do not consistently enforce request-derived capabilities, and the initial planned candidate is not the final served identity. | `FAILED` | `PARTIAL` | P1 | `CORE-P1-MEDIA-REQ` / `CORE-P1-ELIGIBILITY-TRACE` | E-016; E-043; E-050; E-051; E-053; E-054; E-056; `crates/zroutery-core/src/policy.rs`; `crates/zroutery-core/src/router.rs`; `crates/zroutery-core/src/server/pipeline.rs` | `STAGE-1`, `STAGE-3`, `7E-1B`, `7E-2A`, `7E-3`; capability/media derivation and request eligibility on the direct, tier, and policy paths are accepted, but only the sole pipeline owner can prove that the final served identity is the candidate that actually served the response. |
+| `REG-005` | Main policy and direct model-ID paths do not consistently enforce request-derived capabilities, and the initial planned candidate is not the final served identity. | `FAILED` | `DONE` | P1 | `CORE-P1-MEDIA-REQ` / `CORE-P1-ELIGIBILITY-TRACE` | E-016; E-043; E-050; E-051; E-053; E-054; E-056; E-059; E-062; `crates/zroutery-core/src/policy.rs`; `crates/zroutery-core/src/router.rs`; `crates/zroutery-core/src/server/pipeline.rs` | Closed by the Batch A/B domain contracts and c4188be: the derived capability vector is enforced on the direct, tier, and policy paths, and the served identity is recorded on exactly one validated Outcome per request. |
 | `REG-006` | `FailureImpact`/`FailureClass` and `Error` are competing runtime failure authorities. | `FAILED` | `DONE` | P1 | `CORE-P1-FAILURE-AUTHORITY` | E-016; E-043; E-046; E-047; E-049; E-051; E-053; E-056; E-058; E-059; E-060; `crates/zroutery-core/src/failure.rs`; `crates/zroutery-core/src/error.rs` | Closed by 4048a61, the Batch B router adapters, and c4188be: one canonical mapping, no local classifier in the pipeline, and a structural tripwire that fails if a second one returns. |
 | `REG-007` | A client stream disconnect can be finalized as a successful request through the stream drop path. | `FAILED` | `DONE` | P1 | `CORE-P1-PIPELINE-LIFECYCLE` | E-016; E-043; E-058; E-059; E-060; `crates/zroutery-core/src/server/pipeline.rs:1508-1516`; `crates/zroutery-core/tests/pipeline_lifecycle_test.rs` | Closed by c4188be: a drop is Interrupted or Cancelled, never served, and a behavioral test drops a real response mid-answer to prove it. |
 | `REG-008` | A valid model checkpoint could be paired with an unrelated commit ID. | `FAILED` | `DONE` | P1 | `7E-1A` | E-016; E-026; E-027; E-028; E-033; `ml/model_identity.rs`; `ml/shadow.rs` | Closed by 1c49109 and c782a49 with complete lineage and schema-envelope gates. |
@@ -24,11 +24,10 @@ state vocabulary. ORCH-DOCS records defects; it does not repair them.
 - Severity is a risk classification, not a completion percentage.
 - `REG-001`–`REG-004` are closed by the baseline and commit-contract batches;
   reopen them if the exact commands, toolchain, or validators change.
-- `REG-005`–`REG-007` were the open Core P1 repairs assigned by ADR-0005.
-  `REG-006` and `REG-007` are closed by c4188be, and `REG-005` is `PARTIAL`
-  because the domain contracts, request eligibility, and the router failure
-  adapters are accepted while the stage that consumes final served identity is
-  not yet revalidated.
+- `REG-005`–`REG-007` were the Core P1 repairs assigned by ADR-0005 and are all
+  closed by c4188be and the revalidation in E-062. Reopen any of them if a
+  later change reintroduces a second failure classifier, loses the planned versus
+  served distinction, or records a client drop as success.
 - `REG-008` is closed by 7E-1A; `REG-009` is PARTIAL after 7E-1B-CORE and
   remains open until full 7E-1B production integration is proven.
 - `REG-010` is closed only for the documentation artifact itself. It does not

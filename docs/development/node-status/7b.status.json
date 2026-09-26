@@ -2,8 +2,8 @@
   "schema_version": 1,
   "node_id": "7B",
   "display_name": "7B — training dataset",
-  "status": "BLOCKED",
-  "implementation_state": "A dataset library exists, but it depends on a trustworthy production Outcome that is not wired.",
+  "status": "READY",
+  "implementation_state": "A dataset library and a canonical lossless sample schema now exist, and every request produces one validated production Outcome, so the previous blocker is gone. The node is READY: no DatasetStore wiring, retention, or production ingestion has been built yet.",
   "dependencies": [
     "STAGE-6",
     "7A"
@@ -17,14 +17,15 @@
     "Dataset validation and retention",
     "Schema compatibility"
   ],
-  "blocked_by": [
-    "STAGE-6"
-  ],
-  "unblock_condition": "Close Stage 6 and prove Dataset samples are sourced from authoritative production outcomes.",
+  "blocked_by": [],
+  "unblock_condition": "Unblocked: build the DatasetStore ingestion, validation, and retention path on the canonical Outcome-derived sample.",
   "evidence": [
     "E-005",
     "E-006",
-    "E-016"
+    "E-016",
+    "E-055",
+    "E-059",
+    "E-062"
   ],
   "source_references": [
     "docs/development/repository-audit-2026-09-25.md",
@@ -33,6 +34,7 @@
     "crates/zroutery-core/src/outcome.rs"
   ],
   "notes": [
-    "The audit explicitly keeps 7B blocked."
+    "The audit kept this node blocked for want of a trustworthy production Outcome; that reason is closed, but the node's own work has not started.",
+    "Nothing may treat the pipeline's in-memory Outcome ring as a dataset: it is a diagnostic buffer with no retention or validation contract."
   ]
 }

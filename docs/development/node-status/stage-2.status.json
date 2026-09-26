@@ -2,8 +2,8 @@
   "schema_version": 1,
   "node_id": "STAGE-2",
   "display_name": "Stage 2 — canonical IR and media policy",
-  "status": "FAILED",
-  "implementation_state": "The IR and media foundation exists, but unknown media and capability derivation can silently lose or bypass requirements.",
+  "status": "DONE",
+  "implementation_state": "Unknown media and capability derivation are canonical, deduplicated, and fail closed at the protocol boundary, and the derived vector is enforced on every resolution path. Revalidated at c4188be.",
   "dependencies": [
     "CORE-P1-REPAIR"
   ],
@@ -13,13 +13,13 @@
     "Capability derivation and strict filtering",
     "Protocol/IR golden and regression tests"
   ],
-  "blocked_by": [
-    "CORE-P1-REPAIR"
-  ],
-  "unblock_condition": "Repair the media/capability boundary and pass the Stage 2 regression and protocol gates.",
+  "blocked_by": [],
+  "unblock_condition": "Accepted: unknown-media handling, capability derivation and strict filtering, and the protocol/IR golden and regression tests all pass.",
   "evidence": [
     "E-005",
-    "E-016"
+    "E-016",
+    "E-062",
+    "E-063"
   ],
   "source_references": [
     "docs/development/repository-audit-2026-09-25.md",
@@ -30,6 +30,6 @@
     "crates/zroutery-core/tests/vision_test.rs"
   ],
   "notes": [
-    "The audit decision is preserved as FAILED."
+    "The audit decision was FAILED and is superseded only by revalidation evidence, never by a tag or a commit hash."
   ]
 }

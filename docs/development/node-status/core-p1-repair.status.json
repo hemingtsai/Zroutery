@@ -2,8 +2,8 @@
   "schema_version": 1,
   "node_id": "CORE-P1-REPAIR",
   "display_name": "Core P1 contract repair",
-  "status": "QUEUED",
-  "implementation_state": "Batches A and B are accepted on dev: capability/media derivation, failure authority, request eligibility/planned identity, and the Outcome/Feedback schema plus pure dataset conversion. The aggregate stays unfinished until the sole CORE-P1-PIPELINE-LIFECYCLE integration and the Stage 2/3/4/6 revalidation pass.",
+  "status": "DONE",
+  "implementation_state": "All five bounded Core nodes are accepted on dev: capability/media derivation, failure authority, request eligibility and planned identity, the Outcome/Feedback schema with pure dataset conversion, and the sole production lifecycle integration. The aggregate gates and the audited stage records were revalidated at c4188be.",
   "dependencies": [
     "CORE-P1-MEDIA-REQ",
     "CORE-P1-FAILURE-AUTHORITY",
@@ -27,10 +27,8 @@
     "Stage 6 production Outcome/Feedback bridge",
     "Core revalidation and workspace tests"
   ],
-  "blocked_by": [
-    "CORE-P1-PIPELINE-LIFECYCLE"
-  ],
-  "unblock_condition": "Accept the sole CORE-P1-PIPELINE-LIFECYCLE integration, rerun aggregate Core gates, and only then revalidate Stage 2/3/4/6.",
+  "blocked_by": [],
+  "unblock_condition": "Accepted: the four bounded domain repairs, the sole pipeline integration, the aggregate Core gate set, and the per-stage revalidation are all recorded as evidence.",
   "evidence": [
     "E-004",
     "E-005",
@@ -42,7 +40,11 @@
     "E-052",
     "E-053",
     "E-056",
-    "E-057"
+    "E-057",
+    "E-058",
+    "E-060",
+    "E-062",
+    "E-063"
   ],
   "source_references": [
     "docs/development/decisions/0003-capability-media-fail-closed.md",
@@ -58,9 +60,9 @@
     "crates/zroutery-core/src/feedback.rs"
   ],
   "notes": [
-    "This is an aggregate gate, not a claim that any failed stage is already repaired.",
-    "ADR-0005 assigns server/pipeline.rs to exactly one later integration owner; no two workers may edit it concurrently.",
-    "Batches A and B are accepted, so CORE-P1-PIPELINE-LIFECYCLE is the only remaining Core P1 node.",
-    "7E-2A remains blocked; this package contains no DecisionModel, DecisionDistribution, training, activation, or durable journal work."
+    "This aggregate was closed only after all five bounded nodes and the per-stage revalidation passed; it is not a claim that any unaudited area was repaired.",
+    "ADR-0005 assigned server/pipeline.rs to exactly one integration owner, and that owner has completed its work.",
+    "REG-005, REG-006, and REG-007 are closed; REG-009 stays PARTIAL because nothing consumes the final served identity yet.",
+    "7E-1B is now unblocked; 7E-2A and every later ML node stay blocked on their own predecessors. This package contained no DecisionModel, DecisionDistribution, training, activation, or durable journal work."
   ]
 }

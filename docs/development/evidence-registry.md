@@ -200,6 +200,25 @@ Core P1 nodes are accepted and `REG-006`/`REG-007` are closed. `CORE-P1-REPAIR`
 remains `QUEUED` until the aggregate gates and the audited stage revalidation
 are recorded; `7E-1B` remains `BLOCKED` until then.
 
+## Core P1 revalidation evidence
+
+Revalidation ran after the integration node was accepted, as ADR-0005 requires.
+It re-ran the per-stage gate suites by name at the integration revision
+`c4188be` on `dev`, so each stage decision cites a specific suite rather than a
+summary of a full-workspace pass.
+
+| ID | Class | Exact command or observation | Result | Known caveat |
+|---|---|---|---|---|
+| E-062 | local, revalidation | `cargo test -p zroutery-core --all-features --no-fail-fast` over the 15 stage gate targets `tier_contract_test`, `media_capability_test`, `protocol_media_gate_test`, `protocol_golden_test`, `vision_test`, `eligibility_trace_test`, `routing_policy_test`, `failure_authority_test`, `circuit_breaker_test`, `outcome_test`, `outcome_feedback_test`, `pipeline_lifecycle_test`, `shadow_observation_test`, `shadow_test` at `c4188be` | PASS; 28, 3, 9, 48, 6, 15, 86, 8, 11, 15, 10, 12, 6, and 19 tests respectively, 0 failed, which covers every listed gate of the audited stages 1, 2, 3, 4, and 6 | One earlier sweep of the same targets reported a single failure in the load-dependent `shadow_overhead_p95_under_1ms_p99_under_3ms` benchmark. It passed inside the full gate matrix and in five subsequent runs, so it is recorded as an intermittent performance assertion, not a functional regression. The stage gates cited above are deterministic. |
+| E-063 | documentation, integration | `python -B scripts/orch_docs_test.py --self-test` and `python -B scripts/orch_docs_test.py`, plus `git diff --check` and `python -B scripts/commit_contract_test.py --base c66072f341664f67c1cd1c761e5f5adf1980ce16 --head HEAD` after the revalidation state update | PASS; 17 self-test fixtures reject as designed, 69 nodes, 107 edges, 63 evidence rows, 10 regressions, 5 ADRs, and 13 development links are valid, and the range has no invalid commit | A record that says DONE is still only as strong as this evidence; a later change to any cited suite must produce a new record |
+
+The Core P1 aggregate and the five audited stage records are `DONE` on `dev`.
+Their blockers were removed, not their edges: `7E-1B` and `7B` are now `READY`
+and dispatchable, `7E-1` is blocked only by `7E-0`, and every later ML node keeps
+its own predecessor as the blocker. No DecisionModel, DecisionDistribution,
+warmup, RL, calibration, activation, or durable journal work is authorized, and
+the final served identity is still not consumed by the shadow seam.
+
 Batch A was accepted earlier on `main`: `CORE-P1-MEDIA-REQ` and
 `CORE-P1-FAILURE-AUTHORITY` are `DONE`. The records above supersede the state
 that existed when they were still `READY` for a Batch B dispatch.

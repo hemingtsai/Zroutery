@@ -2,8 +2,8 @@
   "schema_version": 1,
   "node_id": "STAGE-6",
   "display_name": "Stage 6 — Outcome and Feedback model",
-  "status": "FAILED",
-  "implementation_state": "Outcome and Feedback types exist, but no production path constructs them and training schemas are incompatible.",
+  "status": "DONE",
+  "implementation_state": "Every request now produces exactly one validated Outcome carrying planned, last-attempted, and served identity, and there is one canonical lossless TrainingSample schema with a pure Outcome-to-dataset conversion. Feedback conversion exists and stays absent when there is no signal. Revalidated at c4188be.",
   "dependencies": [
     "CORE-P1-REPAIR"
   ],
@@ -21,14 +21,14 @@
     "Single TrainingSample schema",
     "Outcome/Feedback regression tests"
   ],
-  "blocked_by": [
-    "CORE-P1-REPAIR"
-  ],
-  "unblock_condition": "Build a production bridge, reconcile schemas, and pass cancellation/failure/Outcome gates.",
+  "blocked_by": [],
+  "unblock_condition": "Accepted: production Outcome construction, the Outcome-to-Feedback bridge, one TrainingSample schema, and the Outcome and Feedback regression tests all pass.",
   "evidence": [
     "E-005",
     "E-006",
-    "E-016"
+    "E-016",
+    "E-062",
+    "E-063"
   ],
   "source_references": [
     "docs/development/repository-audit-2026-09-25.md",
@@ -38,6 +38,7 @@
     "crates/zroutery-core/tests/outcome_test.rs"
   ],
   "notes": [
-    "The audit decision is preserved as FAILED."
+    "The audit decision was FAILED and is superseded only by revalidation evidence, never by a tag or a commit hash.",
+    "The Feedback bridge is a pure conversion; no rating is fabricated from a request outcome, so production Feedback legitimately stays absent."
   ]
 }

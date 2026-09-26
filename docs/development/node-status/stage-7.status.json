@@ -22,7 +22,6 @@
     "Core-to-ML dependency direction"
   ],
   "blocked_by": [
-    "STAGE-6",
     "7B",
     "7E-0"
   ],

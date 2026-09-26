@@ -21,13 +21,9 @@
     "Shadow purity and determinism"
   ],
   "blocked_by": [
-    "7E-0",
-    "CORE-P1-REPAIR",
-    "STAGE-3",
-    "STAGE-4",
-    "STAGE-6"
+    "7E-0"
   ],
-  "unblock_condition": "Close 7E-1A and the Core P1 repairs, then prove replayable retained input and separate served identities.",
+  "unblock_condition": "Close 7E-0, then prove replayable retained input and separate served identities through the 7E-1B production integration.",
   "evidence": [
     "E-005",
     "E-006",
@@ -40,6 +36,7 @@
     "crates/zroutery-core/src/server/pipeline.rs"
   ],
   "notes": [
-    "The audit decision is preserved as PARTIAL."
+    "The audit decision is preserved as PARTIAL.",
+    "The four Core P1 blockers are revalidated, so the only remaining named blocker is 7E-0; the production counterfactual itself is still unproven and belongs to 7E-1B."
   ]
 }

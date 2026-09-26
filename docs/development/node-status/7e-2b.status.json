@@ -18,8 +18,7 @@
     "Offline warmup evaluation"
   ],
   "blocked_by": [
-    "7E-2A",
-    "STAGE-6"
+    "7E-2A"
   ],
   "unblock_condition": "Close 7E-2A and Stage 6, then pass deterministic warmup and holdout gates.",
   "evidence": [

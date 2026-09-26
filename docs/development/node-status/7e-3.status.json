@@ -20,10 +20,7 @@
     "Final served identity"
   ],
   "blocked_by": [
-    "7E-2F",
-    "STAGE-3",
-    "STAGE-4",
-    "STAGE-6"
+    "7E-2F"
   ],
   "unblock_condition": "Close 7E-2F, Stage 3, Stage 4, and Stage 6, then pass the complete offline gate suite.",
   "evidence": [

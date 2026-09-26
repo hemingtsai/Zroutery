@@ -16,9 +16,7 @@
     "Persistence/runtime ownership contract",
     "Default-build compatibility"
   ],
-  "blocked_by": [
-    "STAGE-1"
-  ],
+  "blocked_by": [],
   "unblock_condition": "Revalidate the Stage 1 contract and add an owned persistence/runtime boundary without changing ML feature order.",
   "evidence": [
     "E-005",

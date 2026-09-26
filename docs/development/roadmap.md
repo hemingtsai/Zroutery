@@ -47,7 +47,7 @@ The safe online-learning path is:
 8      continual policy learning
 ```
 
-Required P1 repairs feed the path from the side:
+Required P1 repairs fed the path from the side and are now accepted:
 
 ```text
 Stage 2 media/capability repair ─┐
@@ -57,33 +57,33 @@ Stage 6 Outcome/Feedback bridge ─┘
 ```
 
 `7E-0` is `PARTIAL`, `7E-1` is `PARTIAL`, and `7E-2A` is `BLOCKED`; the repair
-nodes do not erase those decisions. `7E-1A` and `7E-1B-CORE` are `DONE`;
-full `7E-1B` remains blocked by the recorded Core P1 repair dependencies. The
-read-only Core P1 split is accepted as ADR-0003 through ADR-0005; Batches A and B
-are accepted, and the serial pipeline integration is the only currently
-authorized Core P1 work. Development continues on `dev`.
+nodes do not erase those decisions. `7E-1A` and `7E-1B-CORE` are `DONE`; the
+Core P1 split (ADR-0003 through ADR-0005) is fully accepted and the audited stage
+records were revalidated, so `7E-1B` is now `READY` and dispatchable. Full
+`7E-1B` is not `DONE`: nothing consumes the final served identity yet.
+Development continues on `dev`.
 
 ## Stage and ML inventory
 
 | Node | State | Current decision and next safe work |
 |---|---|---|
-| `STAGE-1` | `REVALIDATE` | Naming/tier tests pass, but capability enforcement needs P1 repair and revalidation. |
-| `STAGE-2` | `FAILED` | Unknown media and capability derivation can lose or bypass requirements; repair before relying on derived policy input. |
-| `STAGE-3` | `FAILED` | Main policy/direct-ID capability checks and final-served identity are not trustworthy. |
-| `STAGE-4` | `FAILED` | Failure authority conflicts and client stream disconnect can be recorded as success. |
+| `STAGE-1` | `DONE` | Naming/tier contracts and request-derived capability enforcement on every resolution path revalidated. |
+| `STAGE-2` | `DONE` | Canonical, deduplicated capability derivation with fail-closed protocol/media handling. |
+| `STAGE-3` | `DONE` | Eligibility parity on tier/direct/policy paths; planned identity is separate from the served identity on one Outcome. |
+| `STAGE-4` | `DONE` | One failure authority end to end; a client disconnect or cancellation is never recorded as success. |
 | `STAGE-5` | `PARTIAL` | Account contracts and unit tests exist; persistence and production ownership/execution do not. |
-| `STAGE-6` | `FAILED` | No production `Outcome`/`Feedback` bridge and incompatible training schemas remain. |
+| `STAGE-6` | `DONE` | One validated Outcome per production request and one canonical lossless TrainingSample schema. |
 | `STAGE-7` | `PARTIAL` | This aggregate contains partial foundations and blocked learning subnodes; it is not a DONE umbrella. |
 | `STAGE-8` | `BLOCKED` | Requires the complete learning loop through `7H`. |
 | `7A` | `PARTIAL` | Deterministic feature extraction exists; identity/schema architecture memory is incomplete. |
-| `7B` | `BLOCKED` | Dataset library exists but cannot be treated as trustworthy without production Outcome. |
+| `7B` | `READY` | A trustworthy production Outcome and a canonical sample schema now exist; the DatasetStore, validation, and retention path is unbuilt. |
 | `7C` | `PARTIAL` | Specialist baseline models work; typed candidate-aware decision contracts do not. |
 | `7D` | `PARTIAL` | Evaluation framework exists; holdout, calibration, and statistical gates are incomplete. |
 | `7E-0` | `PARTIAL` | 7E-1A repaired identity/replay; durable model operations and journal remain for later nodes. |
 | `7E-1` | `PARTIAL` | Purity/determinism foundations pass; production counterfactual and replay closure fail. |
 | `7E-1A` | `DONE` | Identity, lineage, schema-envelope, predictor-swap, and replay substrate accepted on main. |
 | `7E-1B-CORE` | `DONE` | Pure replayable observation, non-degenerate counterfactual, rejected-candidate evidence, and fail-closed store semantics accepted on main. |
-| `7E-1B` | `BLOCKED` | Pure seam accepted; full integration still requires Core eligibility, failure, stream, and Outcome repairs. |
+| `7E-1B` | `READY` | Pure seam accepted and every Core dependency revalidated; the served identity exists on the Outcome but is not yet wired into shadow evaluation. |
 | `7E-2A` | `BLOCKED` | Requires replayable input and separate final-served identity. |
 | `7E-2B` | `BLOCKED` | Requires 7E-2A and the Stage 6 Outcome bridge. |
 | `7E-2C` | `BLOCKED` | Requires supervised warmup, Dataset, and RewardPolicy. |
@@ -109,10 +109,10 @@ The read-only audit produced ADR-0003 through ADR-0005 and five bounded nodes.
 | `CORE-P1-PIPELINE-LIFECYCLE` | `DONE` | Sole `pipeline.rs`/`server` lifecycle, final served identity, stream terminal state, and fan-out owner accepted |
 
 Batches A, B, and C are accepted. Batch B ran as two disjoint domain repairs
-(`2633092`, `e5f3874`, `9bf2911`, `b99baa4` on `dev`), and the serial pipeline
-integration landed as `c4188be` with the parent review and gates recorded as
-E-053 through E-061. The aggregate `CORE-P1-REPAIR` and the four audited stage
-records are the only remaining Core P1 bookkeeping.
+(`2633092`, `e5f3874`, `9bf2911`, `b99baa4` on `dev`), the serial pipeline
+integration landed as `c4188be`, and the aggregate plus the audited stage records
+were revalidated with the parent review and gates recorded as E-053 through
+E-063. `CORE-P1-REPAIR` is `DONE`.
 
 ## Parallel engineering inventory
 
@@ -181,12 +181,13 @@ The audit authorizes four non-overlapping worktrees:
 3. `COMMIT-CONTRACT` (`DONE`) — CI/workflow commit evidence alignment; and
 4. `ORCH-DOCS` (`DONE`) — this recoverable documentation record.
 
-The next authorized work is the Core P1 revalidation: `CORE-P1-REPAIR` and the
-audited `STAGE-1`/`STAGE-2`/`STAGE-3`/`STAGE-4`/`STAGE-6` records must be
-revalidated against their own required gates now that all five bounded nodes are
-accepted. `7E-1B` is the next implementation node after that. No production
-takeover, online RL, exploration, real-provider E2E, or automatic model
-activation is authorized by this roadmap.
+The next authorized work is `7E-1B`, which is `READY` and dispatchable now that
+all five bounded Core P1 nodes and the audited stage records are accepted. It
+must consume the final served identity from the single validated Outcome rather
+than re-deriving it, and it must not claim production counterfactual closure
+without runtime evidence. `7E-2A` and every later ML node stay blocked on their
+own predecessors. No production takeover, online RL, exploration,
+real-provider E2E, or automatic model activation is authorized by this roadmap.
 
 ## Unresolved decisions
 

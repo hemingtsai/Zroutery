@@ -2,8 +2,8 @@
   "schema_version": 1,
   "node_id": "7E-1B",
   "display_name": "7E-1B — replayable shadow observation repair",
-  "status": "BLOCKED",
-  "implementation_state": "The pure observation/counterfactual substrate is accepted through 7E-1B-CORE; full production integration cannot start safely until the recorded Core P1 eligibility, failure/stream, and Outcome repairs pass.",
+  "status": "READY",
+  "implementation_state": "The pure observation/counterfactual substrate is accepted through 7E-1B-CORE and every recorded Core P1 dependency is now revalidated, so the production integration is dispatchable. The served identity exists on exactly one validated Outcome per request, but nothing consumes it for shadow evaluation yet, so this node is READY rather than DONE.",
   "dependencies": [
     "7E-1A",
     "7E-1B-CORE",
@@ -21,20 +21,17 @@
     "Failure/stream Outcome repair",
     "Retained exact feature vectors"
   ],
-  "blocked_by": [
-    "CORE-P1-REPAIR",
-    "STAGE-3",
-    "STAGE-4",
-    "STAGE-6"
-  ],
-  "unblock_condition": "Complete and revalidate CORE-P1-REPAIR, STAGE-3, STAGE-4, and STAGE-6, then wire and prove final served identity plus runtime Outcome/session integration on top of the accepted 7E-1B-CORE seam.",
+  "blocked_by": [],
+  "unblock_condition": "Unblocked: wire and prove final served identity plus runtime Outcome/session integration on top of the accepted 7E-1B-CORE seam and the revalidated Core boundary.",
   "evidence": [
     "E-016",
     "E-035",
     "E-037",
     "E-038",
     "E-040",
-    "E-041"
+    "E-041",
+    "E-059",
+    "E-062"
   ],
   "source_references": [
     "docs/development/repository-audit-2026-09-25.md",
@@ -43,8 +40,9 @@
     "crates/zroutery-core/src/policy.rs"
   ],
   "notes": [
-    "7E-1B-CORE accepted the pure seam; this parent remains BLOCKED, not DONE, until Core integration and final served identity evidence exist.",
+    "7E-1B-CORE accepted the pure seam; this node is now READY, not DONE, because Core integration and final served identity consumption do not exist yet.",
     "The pure seam intentionally leaves served identity unknown and uses explicit UNKNOWN features for RouteDecision-only rejected candidates.",
-    "Do not dispatch the full integration node before its stated unblock condition."
+    "The pipeline now produces the served identity on the Outcome but deliberately does not wire the shadow store; doing so is this node's work.",
+    "Do not claim production counterfactual closure until the runtime evidence exists."
   ]
 }

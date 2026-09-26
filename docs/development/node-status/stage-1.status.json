@@ -2,8 +2,8 @@
   "schema_version": 1,
   "node_id": "STAGE-1",
   "display_name": "Stage 1 — naming and capability contracts",
-  "status": "REVALIDATE",
-  "implementation_state": "Naming and tier tests exist, but current capability enforcement requires a P1 repair and revalidation.",
+  "status": "DONE",
+  "implementation_state": "Naming and tier contracts are enforced, and request-derived capabilities are hard inputs on every resolution path, so the earlier capability-enforcement doubt is resolved and revalidated at c4188be.",
   "dependencies": [
     "CORE-P1-REPAIR"
   ],
@@ -16,13 +16,13 @@
     "Request-derived capability enforcement on all resolution paths",
     "Core P1 revalidation"
   ],
-  "blocked_by": [
-    "CORE-P1-REPAIR"
-  ],
-  "unblock_condition": "Complete CORE-P1-REPAIR and rerun the naming, capability, and workspace gates.",
+  "blocked_by": [],
+  "unblock_condition": "Accepted: the naming and tier contract tests, capability enforcement on the direct, tier, and policy paths, and the Core P1 revalidation all pass.",
   "evidence": [
     "E-005",
-    "E-016"
+    "E-016",
+    "E-062",
+    "E-063"
   ],
   "source_references": [
     "docs/development/repository-audit-2026-09-25.md",
@@ -31,6 +31,6 @@
     "crates/zroutery-core/tests/tier_contract_test.rs"
   ],
   "notes": [
-    "The stage tag is ancestry evidence only."
+    "The stage tag remains ancestry evidence only; this state comes from the revalidation evidence, not from ancestry."
   ]
 }
