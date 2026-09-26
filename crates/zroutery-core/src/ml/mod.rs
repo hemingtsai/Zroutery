@@ -4,6 +4,7 @@
 //! scoring and ranking routing candidates, and the training dataset
 //! that collects samples for model training.
 
+pub mod bandit;
 pub mod coordinator;
 pub mod dataset;
 pub mod decision_contract;
@@ -15,6 +16,16 @@ pub mod model_identity;
 pub mod reward;
 pub mod shadow;
 pub mod warmup;
+pub use bandit::{
+    accepted_outcome_proxy_score, compare_outcome_proxy, percentile, policy_from_weights,
+    run_bandit, weights_vector, ArmSafetyMetrics, ArmSelectionStatistics, BanditConfig, BanditError,
+    BanditOutcome, BanditReport, OutcomeProxy, RewardArm, RewardBasis, RewardFitConfig,
+    RewardFitReport, RewardFitVerdict, SafetyConfig, SafetyEvaluation, SafetyEvidence, SafetyTolerances,
+    SafetyVerdict, SafetyViolation, SelectionConfig, SelectionTrace, ACCEPTED_PRIOR_ARM_NAME,
+    B_COST, B_FALLBACK, B_LATENCY, B_SUCCESS, B_SWITCH, B_UNCERTAINTY, BASIS_WIDTH, DEFAULT_SEED,
+    DEFAULT_TAIL_PERCENTILE, FITTED_ARM_NAME, OUTCOME_PROXY_FIT_TARGET, OUTCOME_PROXY_ORDER,
+    REWARD_FIT_TARGET_DESCRIPTION, UNIDENTIFIABLE_REASON, UNIDENTIFIABLE_WEIGHT, WEIGHT_NAMES,
+};
 pub use coordinator::{Coordinator, CoordinatorConfig, RoutingAction, RoutingDecision};
 pub use dataset::{
     canonical_samples_from_outcome, outcome_to_dataset_sample, sample_from_outcome, samples_from_outcome,
