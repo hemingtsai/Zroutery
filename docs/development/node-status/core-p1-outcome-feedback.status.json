@@ -2,8 +2,8 @@
   "schema_version": 1,
   "node_id": "CORE-P1-OUTCOME-FEEDBACK",
   "display_name": "CORE-P1-OUTCOME-FEEDBACK — outcome and feedback schema bridge",
-  "status": "RUNNING",
-  "implementation_state": "Batch B Outcome/Feedback Agent is executing in an isolated worktree against the accepted failure contract; no result is accepted yet and production lifecycle wiring remains deferred.",
+  "status": "DONE",
+  "implementation_state": "A validated Outcome boundary keeps planned, last-attempted, and served identity distinct, classifies terminal success, failure, cancellation, and interruption without reclassification, and converts to a canonical lossless OutcomeTrainingSample through pure deterministic adapters. Absent feedback stays None and a non-success outcome can never become a success training label. Accepted on dev at b99baa4; production emission remains owned by CORE-P1-PIPELINE-LIFECYCLE.",
   "dependencies": [
     "CORE-P1-FAILURE-AUTHORITY"
   ],
@@ -19,10 +19,14 @@
     "Outcome/schema tests, workspace ML tests, clippy, and diff check"
   ],
   "blocked_by": [],
-  "unblock_condition": "Dispatch Batch B and implement only Outcome/Feedback plus the narrowly allowed ML dataset adapter; production lifecycle wiring remains the pipeline owner's responsibility.",
+  "unblock_condition": "Accepted: the canonical Outcome schema, the Outcome-to-Feedback and Outcome-to-dataset conversions, attempt identity preservation, and no-signal feedback semantics are proven by focused tests, the ML feature gates, and the full Core gate set.",
   "evidence": [
     "E-043",
-    "E-051"
+    "E-051",
+    "E-053",
+    "E-055",
+    "E-056",
+    "E-057"
   ],
   "source_references": [
     "docs/development/decisions/0004-failure-outcome-authority.md",
@@ -34,8 +38,8 @@
     "crates/zroutery-core/src/lib.rs"
   ],
   "notes": [
-    "Agent session ses_f27aa6e13ffe86W0kuA3kUeVK0 is running on branch node/core-p1-outcome-feedback from 90ba6fe.",
-    "Do not modify accepted shadow, model identity, decision engine, model, or reward files.",
-    "No DatasetStore wiring, training, activation, or durable LearningEvent journal work belongs here."
+    "Implemented on branch node/core-p1-outcome-feedback as b99baa4 and integrated into dev; parent review and gates are E-053 through E-057.",
+    "Accepted shadow, model identity, decision engine, model, and reward files were not modified; only the ML dataset adapter changed.",
+    "No DatasetStore wiring, training, activation, or durable LearningEvent journal work belongs here; acceptance does not close STAGE-6."
   ]
 }

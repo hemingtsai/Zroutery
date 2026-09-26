@@ -2,8 +2,8 @@
   "schema_version": 1,
   "node_id": "CORE-P1-PIPELINE-LIFECYCLE",
   "display_name": "CORE-P1-PIPELINE-LIFECYCLE — sole production lifecycle integration",
-  "status": "QUEUED",
-  "implementation_state": "The sole pipeline integration owner is queued until all four bounded Core domain contracts and terminal-state decisions are accepted.",
+  "status": "READY",
+  "implementation_state": "All four bounded Core domain contracts are accepted on dev, so the sole production lifecycle owner is unblocked and is the only authorized Core P1 work left. It must correlate planned/last-attempted/served identity, use one classified failure path, stop recording a client drop as success, and construct exactly one Outcome.",
   "dependencies": [
     "CORE-P1-MEDIA-REQ",
     "CORE-P1-FAILURE-AUTHORITY",
@@ -21,14 +21,14 @@
     "Exactly-once Outcome/Feedback construction",
     "No-double-accounting and Core full-gate validation"
   ],
-  "blocked_by": [
-    "CORE-P1-ELIGIBILITY-TRACE",
-    "CORE-P1-OUTCOME-FEEDBACK"
-  ],
-  "unblock_condition": "Accept all four domain nodes, then integrate only the production lifecycle seam without reopening accepted ML contracts.",
+  "blocked_by": [],
+  "unblock_condition": "Unblocked: accept all four domain nodes, then integrate only the production lifecycle seam without reopening accepted ML contracts.",
   "evidence": [
     "E-043",
-    "E-051"
+    "E-051",
+    "E-053",
+    "E-056",
+    "E-057"
   ],
   "source_references": [
     "docs/development/decisions/0004-failure-outcome-authority.md",
@@ -42,6 +42,7 @@
   ],
   "notes": [
     "This is the only Core repair node allowed to edit server/pipeline.rs; no concurrent pipeline worker is permitted.",
-    "It must not modify accepted ml/shadow.rs or model identity files, and it must not implement ML activation."
+    "It must not modify accepted ml/shadow.rs or model identity files, and it must not implement ML activation.",
+    "The concrete open defect is the SseState drop path, which finalizes a client disconnect with no error and therefore records an abandoned stream as success (REG-007)."
   ]
 }

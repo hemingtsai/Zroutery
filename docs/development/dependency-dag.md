@@ -62,9 +62,9 @@ failed node. Historical tags are not graph edges.
 | `BASELINE-GATE` | `DONE` | `TEST-CLIPPY`, `TEST-SMOKE`, `TEST-LAYOUT-BROWSER` |
 | `CORE-P1-MEDIA-REQ` | `DONE` | none |
 | `CORE-P1-FAILURE-AUTHORITY` | `DONE` | none |
-| `CORE-P1-ELIGIBILITY-TRACE` | `RUNNING` | `CORE-P1-MEDIA-REQ`, `CORE-P1-FAILURE-AUTHORITY` |
-| `CORE-P1-OUTCOME-FEEDBACK` | `RUNNING` | `CORE-P1-FAILURE-AUTHORITY` |
-| `CORE-P1-PIPELINE-LIFECYCLE` | `QUEUED` | `CORE-P1-MEDIA-REQ`, `CORE-P1-FAILURE-AUTHORITY`, `CORE-P1-ELIGIBILITY-TRACE`, `CORE-P1-OUTCOME-FEEDBACK` |
+| `CORE-P1-ELIGIBILITY-TRACE` | `DONE` | `CORE-P1-MEDIA-REQ`, `CORE-P1-FAILURE-AUTHORITY` |
+| `CORE-P1-OUTCOME-FEEDBACK` | `DONE` | `CORE-P1-FAILURE-AUTHORITY` |
+| `CORE-P1-PIPELINE-LIFECYCLE` | `READY` | `CORE-P1-MEDIA-REQ`, `CORE-P1-FAILURE-AUTHORITY`, `CORE-P1-ELIGIBILITY-TRACE`, `CORE-P1-OUTCOME-FEEDBACK` |
 | `COMMIT-CONTRACT` | `DONE` | none |
 | `TEST-CHECK` | `DONE` | none |
 | `TEST-WORKSPACE` | `DONE` | `TEST-CHECK` |
@@ -125,9 +125,10 @@ The Stage 3, Stage 4, and Stage 6 repair edges are intentionally repeated in
 `7E-1B`, `7E-2B`/`7E-2E`, and `7E-3`: an offline ML gate is not valid if its
 Outcome, cancellation, or candidate identity inputs are untrustworthy. The
 `CORE-P1-PIPELINE-LIFECYCLE` node is the sole owner of `server/pipeline.rs`; no
-parallel worker may edit that file. Batch A is accepted; the two Batch B
-`RUNNING` nodes are executing in parallel because they have disjoint ownership
-(`policy.rs`/`router.rs` versus Outcome/Feedback/dataset conversion).
+parallel worker may edit that file. Batches A and B are accepted; Batch B ran in
+parallel only because its two nodes had disjoint ownership
+(`policy.rs`/`router.rs` versus Outcome/Feedback/dataset conversion). Batch C is
+serial, so the sole pipeline owner now runs alone and is the final Core P1 node.
 
 ## Stage and aggregate edges
 
@@ -189,15 +190,26 @@ dependencies or claim that any audited node passed a missing gate.
 
 ## Edge validation procedure
 
-The documentation batch validates the graph with these checks:
+The checks are owned by a repository script so they are reproducible from any
+checkout instead of a scratch path:
 
-1. parse every `*.status.json` file;
-2. verify the complete inventory in this document and the status directory;
+```bash
+python -B scripts/orch_docs_test.py --self-test
+python -B scripts/orch_docs_test.py
+```
+
+The first command proves that every rejection rule actually rejects a synthetic
+tree; the second validates the real records. Together they:
+
+1. parse every `*.status.json` file against the exact record schema;
+2. verify the complete inventory in this document and the status directory, and
+   that each DAG state matches its record;
 3. reject unknown IDs, self edges, asymmetric dependency/dependent sets,
    blocked-by values outside dependencies, illegal states, and cycles;
 4. verify every `source_references` path exists;
-5. verify the ADR inventory and unresolved list;
+5. verify the ADR inventory, ADR references, the regression ledger sequence,
+   the evidence rows referenced by records, and the development Markdown links;
 6. run `git diff --check` and confirm the diff is limited to allowed files.
 
-The exact command/result records are E-017 through E-023 in
+The historical command/result records are E-017 through E-023 and E-052 in
 [`evidence-registry.md`](evidence-registry.md).

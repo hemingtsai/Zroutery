@@ -57,11 +57,11 @@ Stage 6 Outcome/Feedback bridge ─┘
 ```
 
 `7E-0` is `PARTIAL`, `7E-1` is `PARTIAL`, and `7E-2A` is `BLOCKED`; the repair
-nodes do not erase those decisions. `7E-1A` and `7E-1B-CORE` are now `DONE`;
+nodes do not erase those decisions. `7E-1A` and `7E-1B-CORE` are `DONE`;
 full `7E-1B` remains blocked by the recorded Core P1 repair dependencies. The
-read-only Core P1 split is accepted as ADR-0003 through ADR-0005; Batch A is
-accepted and Batch B is the only currently authorized parallel implementation
-batch.
+read-only Core P1 split is accepted as ADR-0003 through ADR-0005; Batches A and B
+are accepted, and the serial pipeline integration is the only currently
+authorized Core P1 work. Development continues on `dev`.
 
 ## Stage and ML inventory
 
@@ -102,17 +102,19 @@ The read-only audit produced ADR-0003 through ADR-0005 and five bounded nodes.
 
 | Node | State | Boundary |
 |---|---|---|
-| `CORE-P1-MEDIA-REQ` | `DONE` | Canonical/deduplicated capability derivation and fail-closed protocol/media handling accepted on main |
+| `CORE-P1-MEDIA-REQ` | `DONE` | Canonical/deduplicated capability derivation and fail-closed protocol/media handling accepted |
 | `CORE-P1-FAILURE-AUTHORITY` | `DONE` | `failure.rs`/`error.rs` canonical classification, impact table, and API compatibility accepted |
-| `CORE-P1-ELIGIBILITY-TRACE` | `RUNNING` | `policy.rs`/`router.rs` request eligibility, planned identity, and router adapter |
-| `CORE-P1-OUTCOME-FEEDBACK` | `RUNNING` | Outcome/Feedback schema and pure dataset conversion; no training/activation |
-| `CORE-P1-PIPELINE-LIFECYCLE` | `QUEUED` | Sole `pipeline.rs`/`server` lifecycle, final served identity, stream terminal state, and fan-out owner |
+| `CORE-P1-ELIGIBILITY-TRACE` | `DONE` | Request eligibility on the direct/tier/policy paths, planned identity, rejection trace, and router classified-attempt adapter accepted |
+| `CORE-P1-OUTCOME-FEEDBACK` | `DONE` | Outcome/Feedback schema, terminal classification, and pure lossless dataset conversion accepted |
+| `CORE-P1-PIPELINE-LIFECYCLE` | `READY` | Sole `pipeline.rs`/`server` lifecycle, final served identity, stream terminal state, and fan-out owner |
 
-Batch A (`CORE-P1-MEDIA-REQ` and `CORE-P1-FAILURE-AUTHORITY`) is accepted on
-main. Batch B is now running as two disjoint domain repairs:
-`CORE-P1-ELIGIBILITY-TRACE` and `CORE-P1-OUTCOME-FEEDBACK`. Batch C is serial
-and owns the production pipeline seam. The aggregate `CORE-P1-REPAIR` remains
-`QUEUED` until Batch B, Batch C, and Stage 2/3/4/6 revalidation pass.
+Batches A and B are accepted. Batch B ran as two disjoint domain repairs and was
+integrated on `dev` as `2633092`, `e5f3874`, `9bf2911`, and `b99baa4`, with the
+parent review and gates recorded as E-053 through E-057. Batch C is serial and
+owns the production pipeline seam; its concrete open defect is the `SseState`
+drop path that finalizes a client disconnect without an error. The aggregate
+`CORE-P1-REPAIR` remains `QUEUED` until Batch C and the Stage 2/3/4/6
+revalidation pass.
 
 ## Parallel engineering inventory
 
@@ -181,11 +183,10 @@ The audit authorizes four non-overlapping worktrees:
 3. `COMMIT-CONTRACT` (`DONE`) — CI/workflow commit evidence alignment; and
 4. `ORCH-DOCS` (`DONE`) — this recoverable documentation record.
 
-The next authorized work is Core P1 Batch B: `CORE-P1-ELIGIBILITY-TRACE` and
-`CORE-P1-OUTCOME-FEEDBACK` are both `RUNNING` in isolated worktrees with
-disjoint ownership. The pure `7E-1B-CORE` seam and both Batch A domain
-contracts are accepted, but full `7E-1B` remains `BLOCKED` until Batch B, the
-sole pipeline integration, and Stage 2/3/4/6 revalidation pass. No production
+The next authorized work is Core P1 Batch C: `CORE-P1-PIPELINE-LIFECYCLE` is
+`READY` and is the only node allowed to edit `server/pipeline.rs`. Batches A and
+B and the pure `7E-1B-CORE` seam are accepted, but full `7E-1B` remains
+`BLOCKED` until Batch C and the Stage 2/3/4/6 revalidation pass. No production
 takeover, online RL, exploration, real-provider E2E, or automatic model
 activation is authorized by this roadmap.
 

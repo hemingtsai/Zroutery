@@ -159,8 +159,29 @@ separate gates.
 | E-051 | local, integration | Main integration at `74de4d0` after `e048480` and `74de4d0`; `cargo check --workspace`, Core all-feature tests, workspace ML/all-feature tests, workspace all-target/all-feature clippy, `pnpm smoke`, `pnpm test:layout`, `git diff --check`, and commit-contract range validation | PASS; Batch A code and existing runtime/UI gates remained green | Batch B and the sole pipeline integration are not yet accepted |
 | E-052 | documentation, integration | Parent JSON/DAG/path/status validation, `git diff --check`, and `python -B scripts/commit_contract_test.py --base c66072f341664f67c1cd1c761e5f5adf1980ce16 --head HEAD` after Batch A state commit `b95b109` | PASS; 69 nodes, 107 edges, all 29 non-merge commits valid, and main working tree clean | Re-run after every future status/DAG/ADR change |
 
-Batch A is accepted: `CORE-P1-MEDIA-REQ` and
-`CORE-P1-FAILURE-AUTHORITY` are `DONE` on main. `CORE-P1-ELIGIBILITY-TRACE`
-and `CORE-P1-OUTCOME-FEEDBACK` are now `READY` for the next non-overlapping
-Batch B dispatch. `CORE-P1-PIPELINE-LIFECYCLE` remains serial and is the sole
-owner of the production pipeline seam.
+## Core P1 Batch B acceptance evidence
+
+Batch B was executed on `dev` after `dev` was fast-forwarded to the accepted
+main state. The reviewed commits are `2633092`, `e5f3874`, `9bf2911`
+(eligibility/trace) and `b99baa4` (Outcome/Feedback); the integration revision
+is `b99baa4`.
+
+| ID | Class | Exact command or observation | Result | Known caveat |
+|---|---|---|---|---|
+| E-053 | review, integration | `git diff --name-status a5c55b1..9bf2911` and `9bf2911..b99baa4`; read of the eligibility, policy, Outcome, and dataset boundaries | PASS; eligibility touched only `policy.rs`, `router.rs`, and its focused tests; Outcome/Feedback touched only `outcome.rs`, `feedback.rs`, the ML dataset adapter, `lib.rs`, and its focused tests; no `server/pipeline.rs`, shadow, identity, decision-engine, reward, `src-tauri`, or `ui/` file | Boundary and invariant review; the sole pipeline lifecycle, `STAGE-2`/`STAGE-3`/`STAGE-4`/`STAGE-6` revalidation, and `CORE-P1-REPAIR` remain open |
+| E-054 | local, integration | `cargo test -p zroutery-core --all-features --test eligibility_trace_test` and `--test outcome_feedback_test` at `9bf2911` and `b99baa4` | PASS; 15 eligibility/trace tests and 15 Outcome/Feedback tests, including request/direct/tier parity, planned identity, `IgnoreRequirements` limits, terminal classification, identity correlation, malformed-record rejection, and determinism | Focused tests do not prove production emission; the pipeline owner must construct exactly one Outcome |
+| E-055 | local, integration | `cargo test -p zroutery-core --all-features` at `b99baa4` | PASS; all Core unit and integration suites passed, including the accepted 7E-1B-CORE shadow, identity, and media/failure suites | No real provider lifecycle and no packaging gate |
+| E-056 | local, integration | `cargo check --workspace`; `cargo test -p zroutery-core --all-features`; `cargo test --workspace --features ml`; `cargo test --workspace --all-features`; `cargo clippy --workspace --all-targets --all-features -- -D warnings`; `pnpm smoke`; `pnpm test:layout`; `git diff --check` at `b99baa4` on `dev` | PASS; all Rust gates, the Windows native-binary and local mock-provider lifecycle, the 7 layout self-tests with real browser assertions, and the whitespace check passed | A green regression suite is not evidence that the pipeline records a client drop correctly; `TEST-FORMAT` remains a separate known debt gate |
+| E-057 | documentation, integration | `python -B scripts/orch_docs_test.py --self-test` and `python -B scripts/orch_docs_test.py` at the Batch B acceptance state update, plus `python -B scripts/commit_contract_test.py --base c66072f341664f67c1cd1c761e5f5adf1980ce16 --head HEAD` | PASS; 17 self-test fixtures reject as designed, 69 nodes, 107 edges, 52 evidence rows, 10 regressions, 5 ADRs, and 13 development links are valid | The documentation gate validates records and paths, not code behavior |
+
+Batch B is accepted: `CORE-P1-ELIGIBILITY-TRACE` and
+`CORE-P1-OUTCOME-FEEDBACK` are `DONE` on `dev`. `CORE-P1-PIPELINE-LIFECYCLE` is
+now the only authorized Core P1 work and is the sole owner of
+`server/pipeline.rs`; `CORE-P1-REPAIR` stays `QUEUED` until that integration and
+the Stage 2/3/4/6 revalidation pass. Development continues on `dev`, not
+`main`; a historical tag, a green gate, or a commit hash is still not a `DONE`
+claim for a node whose required gates have not run.
+
+Batch A was accepted earlier on `main`: `CORE-P1-MEDIA-REQ` and
+`CORE-P1-FAILURE-AUTHORITY` are `DONE`. The records above supersede the state
+that existed when they were still `READY` for a Batch B dispatch.

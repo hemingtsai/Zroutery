@@ -2,8 +2,8 @@
   "schema_version": 1,
   "node_id": "CORE-P1-ELIGIBILITY-TRACE",
   "display_name": "CORE-P1-ELIGIBILITY-TRACE — request eligibility and planned identity",
-  "status": "RUNNING",
-  "implementation_state": "Batch B eligibility/trace Agent is executing in an isolated worktree against accepted capability and failure contracts; no result is accepted yet.",
+  "status": "DONE",
+  "implementation_state": "Request-derived capabilities are enforced on the direct, tier, and policy paths; every planning attempt retains bounded rejection reasons and an explicit planned identity; retry, fallback, and health decisions read the canonical ClassifiedFailure impact table. Accepted on dev at b99baa4; final served identity remains owned by CORE-P1-PIPELINE-LIFECYCLE.",
   "dependencies": [
     "CORE-P1-MEDIA-REQ",
     "CORE-P1-FAILURE-AUTHORITY"
@@ -20,10 +20,14 @@
     "Routing policy regression tests and clippy"
   ],
   "blocked_by": [],
-  "unblock_condition": "Dispatch Batch B and implement only policy.rs/router.rs plus focused eligibility tests; final served identity remains the pipeline owner's responsibility.",
+  "unblock_condition": "Accepted: direct/tier parity, request-derived capability enforcement, planned identity, rejection trace, and the classified-attempt adapter are all proven by focused tests and the full Core gate set.",
   "evidence": [
     "E-043",
-    "E-051"
+    "E-051",
+    "E-053",
+    "E-054",
+    "E-056",
+    "E-057"
   ],
   "source_references": [
     "docs/development/decisions/0003-capability-media-fail-closed.md",
@@ -34,8 +38,8 @@
     "crates/zroutery-core/tests/routing_policy_test.rs"
   ],
   "notes": [
-    "Agent session ses_f27aa6e1effe6abit0AlbFdhzL is running on branch node/core-p1-eligibility-trace from 90ba6fe.",
+    "Implemented on branch node/core-p1-eligibility-trace as 2633092, e5f3874, and 9bf2911 and integrated into dev ahead of the Outcome/Feedback node; parent review and gates are E-053 through E-057.",
     "This node does not edit server/pipeline.rs or any ml/* file.",
-    "Final served identity is deferred to CORE-P1-PIPELINE-LIFECYCLE."
+    "Final served identity is deferred to CORE-P1-PIPELINE-LIFECYCLE; acceptance here does not close STAGE-3."
   ]
 }

@@ -3,7 +3,7 @@
   "node_id": "CORE-P1-REPAIR",
   "display_name": "Core P1 contract repair",
   "status": "QUEUED",
-  "implementation_state": "The broad repair package is split into five bounded Core nodes by ADR-0005; no aggregate completion is claimed until the domain and sole pipeline integration gates pass.",
+  "implementation_state": "Batches A and B are accepted on dev: capability/media derivation, failure authority, request eligibility/planned identity, and the Outcome/Feedback schema plus pure dataset conversion. The aggregate stays unfinished until the sole CORE-P1-PIPELINE-LIFECYCLE integration and the Stage 2/3/4/6 revalidation pass.",
   "dependencies": [
     "CORE-P1-MEDIA-REQ",
     "CORE-P1-FAILURE-AUTHORITY",
@@ -28,11 +28,9 @@
     "Core revalidation and workspace tests"
   ],
   "blocked_by": [
-    "CORE-P1-ELIGIBILITY-TRACE",
-    "CORE-P1-OUTCOME-FEEDBACK",
     "CORE-P1-PIPELINE-LIFECYCLE"
   ],
-  "unblock_condition": "Accept the two Batch B domain nodes, then the sole CORE-P1-PIPELINE-LIFECYCLE integration; rerun aggregate Core gates and only then revalidate Stage 2/3/4/6.",
+  "unblock_condition": "Accept the sole CORE-P1-PIPELINE-LIFECYCLE integration, rerun aggregate Core gates, and only then revalidate Stage 2/3/4/6.",
   "evidence": [
     "E-004",
     "E-005",
@@ -41,7 +39,10 @@
     "E-049",
     "E-050",
     "E-051",
-    "E-052"
+    "E-052",
+    "E-053",
+    "E-056",
+    "E-057"
   ],
   "source_references": [
     "docs/development/decisions/0003-capability-media-fail-closed.md",
@@ -59,6 +60,7 @@
   "notes": [
     "This is an aggregate gate, not a claim that any failed stage is already repaired.",
     "ADR-0005 assigns server/pipeline.rs to exactly one later integration owner; no two workers may edit it concurrently.",
+    "Batches A and B are accepted, so CORE-P1-PIPELINE-LIFECYCLE is the only remaining Core P1 node.",
     "7E-2A remains blocked; this package contains no DecisionModel, DecisionDistribution, training, activation, or durable journal work."
   ]
 }
