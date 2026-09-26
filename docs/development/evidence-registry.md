@@ -176,11 +176,29 @@ is `b99baa4`.
 
 Batch B is accepted: `CORE-P1-ELIGIBILITY-TRACE` and
 `CORE-P1-OUTCOME-FEEDBACK` are `DONE` on `dev`. `CORE-P1-PIPELINE-LIFECYCLE` is
-now the only authorized Core P1 work and is the sole owner of
-`server/pipeline.rs`; `CORE-P1-REPAIR` stays `QUEUED` until that integration and
-the Stage 2/3/4/6 revalidation pass. Development continues on `dev`, not
-`main`; a historical tag, a green gate, or a commit hash is still not a `DONE`
-claim for a node whose required gates have not run.
+the only remaining Core P1 work at that point, and `CORE-P1-REPAIR` stays
+`QUEUED` until that integration and the audited stage revalidation pass.
+Development continues on `dev`, not `main`; a historical tag, a green gate, or a
+commit hash is still not a `DONE` claim for a node whose required gates have not
+run.
+
+## Core P1 Batch C acceptance evidence
+
+Batch C is the serial production lifecycle integration, the sole owner of
+`server/pipeline.rs`. The reviewed commit is `cbe2240` on
+`node/core-p1-pipeline-lifecycle`, integrated into `dev` as `c4188be`.
+
+| ID | Class | Exact command or observation | Result | Known caveat |
+|---|---|---|---|---|
+| E-058 | review, integration | `git diff --name-status d6f6e83..cbe2240`; read of the lifecycle, stream loop, drop path, and Outcome construction | PASS; only `server/pipeline.rs`, `server/mod.rs`, `stats.rs`, and a new focused `tests/pipeline_lifecycle_test.rs` changed; no ML, outcome, feedback, failure, error, policy, router, protocol, Tauri, UI, or documentation file | Mock upstream and real HTTP client only; the Outcome has no production ML consumer yet |
+| E-059 | local, integration | `cargo test -p zroutery-core --all-features --test pipeline_lifecycle_test` at `c4188be` | PASS; 12 tests, including a real mid-answer client drop that is `Interrupted` and never served, a drop before output that is `Cancelled`, a drop that does not count against provider health, explicit Responses-API cancellation, exactly one terminal transition across served/failed/dropped paths with record-to-outcome id correlation, planned/last-attempted/served correlation, a budget denial with no candidate, a rate limit classified once without opening the circuit, and structural tripwires for the absent second classifier and the single record/charge sites | No real provider lifecycle; the drop tests use a held-open mock stream rather than a real upstream abort |
+| E-060 | local, integration | `cargo check --workspace`; `cargo test -p zroutery-core --all-features`; `cargo test --workspace --features ml`; `cargo test --workspace --all-features`; `cargo clippy --workspace --all-targets --all-features -- -D warnings`; `pnpm smoke`; `pnpm test:layout`; `git diff --check`; `python -B scripts/commit_contract_test.py --base c66072f341664f67c1cd1c761e5f5adf1980ce16 --head HEAD` at `c4188be` on `dev` | PASS; every Rust gate, the Windows native-binary and local mock-provider smoke lifecycle, the 7 layout self-tests with real browser assertions, the whitespace check, and all 38 non-merge commits valid; worktree clean | A client-closed request now shows activity status 499 and counts as a failure, which is a deliberate user-visible change; an interrupted stream still reports the usage it consumed so the charge and the Outcome agree |
+| E-061 | documentation, integration | `python -B scripts/orch_docs_test.py` after the Batch C acceptance state update | PASS; 69 nodes, 107 edges, and every evidence reference, ADR, regression, and development link valid | The documentation gate validates records and paths, not code behavior |
+
+Batch C is accepted: `CORE-P1-PIPELINE-LIFECYCLE` is `DONE`, so all five bounded
+Core P1 nodes are accepted and `REG-006`/`REG-007` are closed. `CORE-P1-REPAIR`
+remains `QUEUED` until the aggregate gates and the audited stage revalidation
+are recorded; `7E-1B` remains `BLOCKED` until then.
 
 Batch A was accepted earlier on `main`: `CORE-P1-MEDIA-REQ` and
 `CORE-P1-FAILURE-AUTHORITY` are `DONE`. The records above supersede the state

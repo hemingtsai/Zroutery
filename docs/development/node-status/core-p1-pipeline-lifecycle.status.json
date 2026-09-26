@@ -2,8 +2,8 @@
   "schema_version": 1,
   "node_id": "CORE-P1-PIPELINE-LIFECYCLE",
   "display_name": "CORE-P1-PIPELINE-LIFECYCLE — sole production lifecycle integration",
-  "status": "READY",
-  "implementation_state": "All four bounded Core domain contracts are accepted on dev, so the sole production lifecycle owner is unblocked and is the only authorized Core P1 work left. It must correlate planned/last-attempted/served identity, use one classified failure path, stop recording a client drop as success, and construct exactly one Outcome.",
+  "status": "DONE",
+  "implementation_state": "Each request now has one RequestLifecycle that owns the single terminal transition. A stream distinguishes a clean end, an upstream error, a client disconnect, and an explicit cancellation; a disconnect is recorded as interrupted or cancelled and never as served. Every failure decision reads the canonical ClassifiedFailure impact table, and exactly one validated Outcome per request carries planned, last-attempted, and served identity. Accepted on dev at c4188be.",
   "dependencies": [
     "CORE-P1-MEDIA-REQ",
     "CORE-P1-FAILURE-AUTHORITY",
@@ -22,13 +22,17 @@
     "No-double-accounting and Core full-gate validation"
   ],
   "blocked_by": [],
-  "unblock_condition": "Unblocked: accept all four domain nodes, then integrate only the production lifecycle seam without reopening accepted ML contracts.",
+  "unblock_condition": "Accepted: identity correlation, one classified failure path, the buffered and streaming terminal lifecycle, the drop and cancellation terminal states, exactly-once Outcome construction, and single-site accounting are all proven by behavioral tests and the full dev gate set.",
   "evidence": [
     "E-043",
     "E-051",
     "E-053",
     "E-056",
-    "E-057"
+    "E-057",
+    "E-058",
+    "E-059",
+    "E-060",
+    "E-061"
   ],
   "source_references": [
     "docs/development/decisions/0004-failure-outcome-authority.md",
@@ -43,6 +47,9 @@
   "notes": [
     "This is the only Core repair node allowed to edit server/pipeline.rs; no concurrent pipeline worker is permitted.",
     "It must not modify accepted ml/shadow.rs or model identity files, and it must not implement ML activation.",
-    "The concrete open defect is the SseState drop path, which finalizes a client disconnect with no error and therefore records an abandoned stream as success (REG-007)."
+    "Implemented on branch node/core-p1-pipeline-lifecycle as cbe2240 and integrated into dev as c4188be; the parent review and gates are E-058 through E-061.",
+    "The REG-007 defect is closed: the drop path no longer finalizes a client disconnect as success. A client-closed request now shows activity status 499 and is counted as a failure, which is a deliberate user-visible change.",
+    "The pipeline fabricates no Feedback: it has no user-signal source, and ADR-0004 forbids inventing a rating. Exactly-once refers to the single Outcome, with zero Feedback.",
+    "The Outcome log is a bounded in-memory diagnostic ring. No DatasetStore, training, activation, or LearningEvent journal is wired, and the served identity is left available but unwired for 7E-1B."
   ]
 }

@@ -64,7 +64,7 @@ failed node. Historical tags are not graph edges.
 | `CORE-P1-FAILURE-AUTHORITY` | `DONE` | none |
 | `CORE-P1-ELIGIBILITY-TRACE` | `DONE` | `CORE-P1-MEDIA-REQ`, `CORE-P1-FAILURE-AUTHORITY` |
 | `CORE-P1-OUTCOME-FEEDBACK` | `DONE` | `CORE-P1-FAILURE-AUTHORITY` |
-| `CORE-P1-PIPELINE-LIFECYCLE` | `READY` | `CORE-P1-MEDIA-REQ`, `CORE-P1-FAILURE-AUTHORITY`, `CORE-P1-ELIGIBILITY-TRACE`, `CORE-P1-OUTCOME-FEEDBACK` |
+| `CORE-P1-PIPELINE-LIFECYCLE` | `DONE` | `CORE-P1-MEDIA-REQ`, `CORE-P1-FAILURE-AUTHORITY`, `CORE-P1-ELIGIBILITY-TRACE`, `CORE-P1-OUTCOME-FEEDBACK` |
 | `COMMIT-CONTRACT` | `DONE` | none |
 | `TEST-CHECK` | `DONE` | none |
 | `TEST-WORKSPACE` | `DONE` | `TEST-CHECK` |
@@ -125,10 +125,10 @@ The Stage 3, Stage 4, and Stage 6 repair edges are intentionally repeated in
 `7E-1B`, `7E-2B`/`7E-2E`, and `7E-3`: an offline ML gate is not valid if its
 Outcome, cancellation, or candidate identity inputs are untrustworthy. The
 `CORE-P1-PIPELINE-LIFECYCLE` node is the sole owner of `server/pipeline.rs`; no
-parallel worker may edit that file. Batches A and B are accepted; Batch B ran in
-parallel only because its two nodes had disjoint ownership
-(`policy.rs`/`router.rs` versus Outcome/Feedback/dataset conversion). Batch C is
-serial, so the sole pipeline owner now runs alone and is the final Core P1 node.
+parallel worker may edit that file. All five bounded Core P1 nodes are now
+accepted: Batch B ran in parallel only because its two nodes had disjoint
+ownership (`policy.rs`/`router.rs` versus Outcome/Feedback/dataset conversion),
+and the serial Batch C integration closed the production lifecycle seam.
 
 ## Stage and aggregate edges
 

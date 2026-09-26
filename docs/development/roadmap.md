@@ -106,15 +106,13 @@ The read-only audit produced ADR-0003 through ADR-0005 and five bounded nodes.
 | `CORE-P1-FAILURE-AUTHORITY` | `DONE` | `failure.rs`/`error.rs` canonical classification, impact table, and API compatibility accepted |
 | `CORE-P1-ELIGIBILITY-TRACE` | `DONE` | Request eligibility on the direct/tier/policy paths, planned identity, rejection trace, and router classified-attempt adapter accepted |
 | `CORE-P1-OUTCOME-FEEDBACK` | `DONE` | Outcome/Feedback schema, terminal classification, and pure lossless dataset conversion accepted |
-| `CORE-P1-PIPELINE-LIFECYCLE` | `READY` | Sole `pipeline.rs`/`server` lifecycle, final served identity, stream terminal state, and fan-out owner |
+| `CORE-P1-PIPELINE-LIFECYCLE` | `DONE` | Sole `pipeline.rs`/`server` lifecycle, final served identity, stream terminal state, and fan-out owner accepted |
 
-Batches A and B are accepted. Batch B ran as two disjoint domain repairs and was
-integrated on `dev` as `2633092`, `e5f3874`, `9bf2911`, and `b99baa4`, with the
-parent review and gates recorded as E-053 through E-057. Batch C is serial and
-owns the production pipeline seam; its concrete open defect is the `SseState`
-drop path that finalizes a client disconnect without an error. The aggregate
-`CORE-P1-REPAIR` remains `QUEUED` until Batch C and the Stage 2/3/4/6
-revalidation pass.
+Batches A, B, and C are accepted. Batch B ran as two disjoint domain repairs
+(`2633092`, `e5f3874`, `9bf2911`, `b99baa4` on `dev`), and the serial pipeline
+integration landed as `c4188be` with the parent review and gates recorded as
+E-053 through E-061. The aggregate `CORE-P1-REPAIR` and the four audited stage
+records are the only remaining Core P1 bookkeeping.
 
 ## Parallel engineering inventory
 
@@ -183,10 +181,10 @@ The audit authorizes four non-overlapping worktrees:
 3. `COMMIT-CONTRACT` (`DONE`) — CI/workflow commit evidence alignment; and
 4. `ORCH-DOCS` (`DONE`) — this recoverable documentation record.
 
-The next authorized work is Core P1 Batch C: `CORE-P1-PIPELINE-LIFECYCLE` is
-`READY` and is the only node allowed to edit `server/pipeline.rs`. Batches A and
-B and the pure `7E-1B-CORE` seam are accepted, but full `7E-1B` remains
-`BLOCKED` until Batch C and the Stage 2/3/4/6 revalidation pass. No production
+The next authorized work is the Core P1 revalidation: `CORE-P1-REPAIR` and the
+audited `STAGE-1`/`STAGE-2`/`STAGE-3`/`STAGE-4`/`STAGE-6` records must be
+revalidated against their own required gates now that all five bounded nodes are
+accepted. `7E-1B` is the next implementation node after that. No production
 takeover, online RL, exploration, real-provider E2E, or automatic model
 activation is authorized by this roadmap.
 
