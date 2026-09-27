@@ -43,7 +43,7 @@ failed node. Historical tags are not graph edges.
 | `7E-2B` | `DONE` | `7E-2A`, `STAGE-6` |
 | `7E-2C` | `DONE` | `7E-2B` |
 | `7E-2D` | `DONE` | `7E-2C` |
-| `7E-2E` | `REVALIDATE` | `7E-2D`, `7E-0` |
+| `7E-2E` | `DONE` | `7E-2D`, `7E-0` |
 | `7E-2F` | `DONE` | `7E-2E` |
 | `7E-3` | `BLOCKED` | `7E-2F`, `STAGE-3`, `STAGE-4`, `STAGE-6` |
 | `7F` | `BLOCKED` | `7E-3`, `TEST-PACKAGING`, `OBSERVABILITY` |

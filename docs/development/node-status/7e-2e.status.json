@@ -2,8 +2,8 @@
   "schema_version": 1,
   "node_id": "7E-2E",
   "display_name": "7E-2E — durable learning events and verified commits",
-  "status": "REVALIDATE",
-  "implementation_state": "The journal is durable, ordered, and fail-closed, and its corruption handling is sound. One accepted gate is NOT met and has been reproduced: idempotency compares a value re-parsed from disk against the caller's in-memory value, so a byte-identical retry of a record containing a float that does not survive a serde_json round trip is REFUSED as an idempotency conflict instead of reported as a duplicate. Every other required gate still holds.",
+  "status": "DONE",
+  "implementation_state": "The journal is durable, ordered, and fail-closed, its corruption handling is sound, and the idempotency defect found at revalidation has been repaired: the duplicate check now compares the bytes the incoming record would be written as against the bytes already on disk, so a byte-identical retry is a duplicate even when a float does not survive a JSON round trip. All required gates hold.",
   "dependencies": [
     "7E-2D",
     "7E-0"
@@ -18,13 +18,15 @@
     "Replay closure"
   ],
   "blocked_by": [],
-  "unblock_condition": "Satisfied for durability, ordering, commit re-verification and fail-closed corruption handling. Idempotency remains open: the duplicate check must compare the bytes that would be written against the bytes already on disk, rather than a re-parsed value against an in-memory one. See E-089.",
+  "unblock_condition": "Satisfied. All four required gates hold: durability, ordering, idempotency and sequence semantics, verified commit lineage, and replay closure. Idempotency is established by byte comparison against the stored frame, with a regression test that reproduces the original refusal when the fix is reverted.",
   "evidence": [
     "E-016",
     "E-084",
     "E-085",
     "E-086",
-    "E-089"
+    "E-089",
+    "E-093",
+    "E-094"
   ],
   "source_references": [
     "docs/development/repository-audit-2026-09-25.md",
@@ -34,7 +36,9 @@
   ],
   "notes": [
     "A type-level LearningEvent is no longer a process-local value. The accepted event type is journalled as-is and no second event type was introduced; model_identity.rs was not modified.",
-    "OPEN DEFECT, reproduced by the parent and not yet repaired: same_content compares the record re-parsed from disk with the caller's in-memory record, including exact equality over all 32 f32 features and every f64 target. Because the workspace uses serde_json WITHOUT float_roundtrip, roughly 5 of 11 arbitrary finite f64 values change by one ULP through a parse round trip, so a byte-identical retry is refused as an idempotency conflict. That is the one scenario idempotency exists for. The original suite missed it because its fixtures use round-trip-safe decimals such as 0.0021, 200.0 and 50.0. The fix is to compare the bytes that would be written against the bytes already on disk, which is exact and immune to the parse; enabling serde_json's float_roundtrip in the workspace manifest would also work but is a global change outside this node's ownership.",
+    "REPAIRED, E-089: each scanned frame now retains its body exactly as it appears on disk, and the duplicate check compares the bytes the incoming record WOULD be written as against those bytes, so the comparison never passes through a float parser. The two volatile wall-clock fields, recorded_at and event.created_at, are substituted with the stored record's own values first, which preserves the contract that a retry re-creating the same event at a different instant is still the same event. The new test reproduces the exact IdempotencyConflict on sequence 1 when only the source fix is reverted, and covers all three directions: unchanged retry is a duplicate, later-instant retry is a duplicate, and a genuinely changed record is still refused and writes nothing.",
+    "ACCEPTED COSTS of the byte comparison, stated rather than left implicit: a scan now holds each raw body alongside the parsed one, which at the bounded record count roughly doubles body memory; and the comparison depends on a stable serializer byte form, which the pinned serde_json gives inside this repository but a log written by a different serializer version could disagree with. The comparison is also STRICTER than the field comparison it replaced, so a field added later that turns out to be volatile now fails safe instead of silently ignored.",
+    "The write path cannot be reached with a foreign schema version, because both record constructors hardcode the current version and the scan already refuses another one. So making the comparison exact over the whole body changed no legitimate caller's outcome.",
     "CONSTRAINT CARRIED FORWARD TO 7E-2F: the journal is append-only and last-write-wins is refused, so an event recorded before it was applied cannot be updated in place to add its result commit. An applied event is a NEW record, and activation is designed around that rather than around mutation.",
     "A prefix of a valid log is itself a valid log, so no per-record checksum can detect a suffix removed at a frame boundary. The completion anchor exists for that case alone: record count, next sequence, log length, whole-log checksum, tail frame checksum, and its own checksum, written after the log is flushed and renamed into place.",
     "The frame checksum chains its predecessor, which is what makes a removed or reordered INTERIOR frame detectable independently of the sequence check. It is deliberately public, because a durable format only its own writer can verify is not a durable format.",

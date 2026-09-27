@@ -87,7 +87,7 @@ must be typed against now exists. Development continues on `dev`.
 | `7E-2B` | `DONE` | Offline supervised warmup: deterministic, verifiable lineage, disjoint holdout, honest verdict, and no activation path. |
 | `7E-2C` | `DONE` | The reward weights are fitted from data and a UCB1 rule is evaluated offline behind a safety gate that can refuse on tail grounds. |
 | `7E-2D` | `DONE` | A fitted calibrator emits a K-way distribution measured on the final vector; nothing consumes it. |
-| `7E-2E` | `REVALIDATE` | Durable, ordered, fail-closed journal; its idempotency gate is reopened by a reproduced defect. |
+| `7E-2E` | `DONE` | Durable, ordered, fail-closed journal; idempotency is byte-exact against the stored frame, so a retry survives a lossy float round trip. |
 | `7E-2F` | `DONE` | Immutable content-addressed snapshot, atomic pointer, journaled rollback, and a proven-unreachable mechanism. |
 | `7E-3` | `BLOCKED` | Requires calibrated offline replay/evaluation gates. |
 | `7F` | `BLOCKED` | Requires an accepted commit, shipping reachability, and observability. |
@@ -132,12 +132,19 @@ activation pointer, and a journaled rollback now exist, and the mechanism is
 inert by construction rather than merely unreferenced — the only reader of the
 pointer is that module's own accessor, and no predictor or serving handle is ever
 built. Nothing reaches a live router, and `7E-3` is the next node.
-`7E-2E` went back to `REVALIDATE` in the same step: auditing 7E-2F turned up a
-reproduced violation of its idempotency gate, because the workspace uses
-serde_json without `float_roundtrip` and the duplicate check compares a re-parsed
-value against an in-memory one, so a byte-identical retry is refused instead of
-reported as a duplicate. Its other gates still hold. `7D` is unblocked and may
-consume the evaluation surface 7E-2D built.
+`7E-2E` was sent back to `REVALIDATE` in the same step, because auditing 7E-2F
+turned up a reproduced violation of its idempotency gate: the workspace uses
+serde_json without `float_roundtrip`, and the duplicate check compared a re-parsed
+value against an in-memory one, so a byte-identical retry was refused instead of
+reported as a duplicate. It is `DONE` again. Each frame now retains its body as it
+appears on disk and the check compares the bytes the record would be written as
+against those bytes, with the two volatile wall-clock fields substituted from the
+stored record so a later-instant retry is still a duplicate. The regression test
+was seen to fail with the original `IdempotencyConflict` when only the source fix
+was reverted, so the gate is proven rather than asserted. This mattered beyond the
+node itself: `7E-3` reads records back through the same parser, so a lossy round
+trip would have made its replay-equivalence gate unprovable. `7D` is unblocked and
+may consume the evaluation surface 7E-2D built.
 Two limitations are recorded
 rather than smoothed over: a sample's features currently come from a snapshot
 cloned at decision time rather than a re-read of the accepted record; and dataset
