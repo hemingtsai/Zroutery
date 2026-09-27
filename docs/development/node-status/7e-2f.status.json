@@ -2,8 +2,8 @@
   "schema_version": 1,
   "node_id": "7E-2F",
   "display_name": "7E-2F — immutable snapshot and atomic activation",
-  "status": "READY",
-  "implementation_state": "Every upstream node is accepted, so activation is the only remaining route from this work to a live router and is dispatchable. Nothing is activated yet: no immutable snapshot, no rollback pointer, and no packaging reachability exist, and automatic activation remains unauthorized.",
+  "status": "DONE",
+  "implementation_state": "An immutable content-addressed snapshot, an atomic activation pointer, a rollback target, and journaled intent-then-completion records now exist offline, and the mechanism is inert by construction: the only reader of the pointer in the repository is this module's own read_active, no predictor, ensemble, decision engine, or serving handle is ever constructed, and the live shadow swap is never called. Crash windows are nameable rather than inferred, because the journal holds a durable intent record before the pointer rename. Accepted on dev at b234e15.",
   "dependencies": [
     "7E-2E"
   ],
@@ -17,10 +17,12 @@
     "Packaging/reachability review"
   ],
   "blocked_by": [],
-  "unblock_condition": "Unblocked: pass the activation, rollback, and packaging gates before any reachability claim. The 7E-2E journal constrains this design, because an applied event is a new record rather than a mutation.",
+  "unblock_condition": "Accepted: a content-addressed snapshot that verifies on load, an atomic pointer that never exposes a partial or corrupt active snapshot, a journaled rollback, typed refusal for every failure shape with no repair, and a proven-unreachable mechanism.",
   "evidence": [
     "E-016",
-    "E-086"
+    "E-086",
+    "E-087",
+    "E-088"
   ],
   "source_references": [
     "docs/development/repository-audit-2026-09-25.md",
@@ -28,8 +30,13 @@
     "crates/zroutery-core/src/ml/shadow.rs"
   ],
   "notes": [
-    "Automatic activation is not authorized, and this node is READY rather than started.",
-    "The journal is append-only and refuses last-write-wins, so an event recorded before it was applied cannot be updated in place to carry its result commit. Activation must be designed around an applied event being a NEW record, not around mutating one.",
-    "Tauri does not enable the ml feature, so the shipped desktop app has no path to an activated model today. Any reachability claim must be earned by a packaging gate, not assumed from library code."
+    "Automatic activation is not authorized, and nothing is activated. The pointer flips and nothing else does: no in-memory model, no lineage, no configuration, registry, router, provider, server, or UI state changes, and there is no timer, thread, startup hook, scheduler, endpoint, feature flag, Default, environment variable, or default location that could be flipped instead.",
+    "Atomicity is one file on purpose. The active snapshot and the rollback target live in the same pointer, so they cannot disagree; a verification failure at activation time leaves the previous active snapshot exactly as it was, so there is no state with no active snapshot and no state with a corrupt one.",
+    "Crash windows are named because the design is two-phase: append the intent record, rename the pointer, append the completion record. A pointer naming the old snapshot means the old one is active with a pending intent; a pointer naming the new one means the flip landed with the completion pending. A pointer that does not parse, fails its checksum, or names a snapshot that no longer verifies is refused and never repaired.",
+    "A collision is refused with SnapshotExists, and the existence check is repeated immediately before the rename because a POSIX rename replaces. A collision placed on disk is caught at load, because load re-derives the address and the accepted commit identity requires commit_id to equal the canonical identity, so at most one content can verify under a name.",
+    "The worker's central finding: serde_json is used in this workspace WITHOUT float_roundtrip, so its float parsing is not correctly rounded, and a checkpoint stored as plain JSON refuses to load itself because the accepted verify hashes f64::to_bits. This node answered it with a bit-exact wire form in its own module and by NOT touching the workspace manifest, which is outside its ownership. The same finding undermines 7E-2E's idempotency and is recorded against that node as E-089.",
+    "Unreachability is an executable test rather than a claim, and it deliberately does NOT scan a bare activation substring, because two accepted modules use that word in prose about a mathematical activation function and a scan flagging them would be measuring the wrong thing.",
+    "Windows rename is a replace but not a guaranteed atomic one, so the pointer is fsynced before the rename and read back afterwards, refusing PointerNotDurable rather than assuming the rename landed. A lost directory entry leaves the OLD pointer, which is fail-closed, never a pointer naming nothing.",
+    "Two locks, the activation lock and the journal's, are always taken in one order. A stale lock is refused loudly and never broken, because deciding which of two writers came first is last-write-wins on the pointer."
   ]
 }

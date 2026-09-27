@@ -2,8 +2,8 @@
   "schema_version": 1,
   "node_id": "7E-2E",
   "display_name": "7E-2E — durable learning events and verified commits",
-  "status": "DONE",
-  "implementation_state": "The accepted LearningEvent is now durably recorded in an append-only frame log plus a completion anchor inside a caller-supplied directory, with a chained per-frame checksum, a sequence recovered from the file on every open and re-scanned on every append, content-exact idempotency, and commit verification re-run on read. A torn tail, a corrupt interior record, a lost suffix, a sequence conflict and a stale or foreign lock are all reported rather than repaired, and nothing is ever auto-repaired. Accepted on dev at 83659ee.",
+  "status": "REVALIDATE",
+  "implementation_state": "The journal is durable, ordered, and fail-closed, and its corruption handling is sound. One accepted gate is NOT met and has been reproduced: idempotency compares a value re-parsed from disk against the caller's in-memory value, so a byte-identical retry of a record containing a float that does not survive a serde_json round trip is REFUSED as an idempotency conflict instead of reported as a duplicate. Every other required gate still holds.",
   "dependencies": [
     "7E-2D",
     "7E-0"
@@ -18,12 +18,13 @@
     "Replay closure"
   ],
   "blocked_by": [],
-  "unblock_condition": "Accepted: durability across restart, a file-authoritative sequence, content-exact idempotency, commit re-verification on read, and typed refusal for every corruption shape with no auto-repair.",
+  "unblock_condition": "Satisfied for durability, ordering, commit re-verification and fail-closed corruption handling. Idempotency remains open: the duplicate check must compare the bytes that would be written against the bytes already on disk, rather than a re-parsed value against an in-memory one. See E-089.",
   "evidence": [
     "E-016",
     "E-084",
     "E-085",
-    "E-086"
+    "E-086",
+    "E-089"
   ],
   "source_references": [
     "docs/development/repository-audit-2026-09-25.md",
@@ -33,7 +34,8 @@
   ],
   "notes": [
     "A type-level LearningEvent is no longer a process-local value. The accepted event type is journalled as-is and no second event type was introduced; model_identity.rs was not modified.",
-    "CONSTRAINT CARRIED FORWARD TO 7E-2F: the journal is append-only and last-write-wins is refused, so an event recorded before it was applied cannot be updated in place to add its result commit. An applied event is a NEW record, and activation must be designed around that rather than around mutation.",
+    "OPEN DEFECT, reproduced by the parent and not yet repaired: same_content compares the record re-parsed from disk with the caller's in-memory record, including exact equality over all 32 f32 features and every f64 target. Because the workspace uses serde_json WITHOUT float_roundtrip, roughly 5 of 11 arbitrary finite f64 values change by one ULP through a parse round trip, so a byte-identical retry is refused as an idempotency conflict. That is the one scenario idempotency exists for. The original suite missed it because its fixtures use round-trip-safe decimals such as 0.0021, 200.0 and 50.0. The fix is to compare the bytes that would be written against the bytes already on disk, which is exact and immune to the parse; enabling serde_json's float_roundtrip in the workspace manifest would also work but is a global change outside this node's ownership.",
+    "CONSTRAINT CARRIED FORWARD TO 7E-2F: the journal is append-only and last-write-wins is refused, so an event recorded before it was applied cannot be updated in place to add its result commit. An applied event is a NEW record, and activation is designed around that rather than around mutation.",
     "A prefix of a valid log is itself a valid log, so no per-record checksum can detect a suffix removed at a frame boundary. The completion anchor exists for that case alone: record count, next sequence, log length, whole-log checksum, tail frame checksum, and its own checksum, written after the log is flushed and renamed into place.",
     "The frame checksum chains its predecessor, which is what makes a removed or reordered INTERIOR frame detectable independently of the sequence check. It is deliberately public, because a durable format only its own writer can verify is not a durable format.",
     "FNV-1a-64 is an accidental-corruption checksum, not a MAC, and the module says so. The real integrity witness is the content-addressed CommitId.",
