@@ -5,6 +5,7 @@
 //! that collects samples for model training.
 
 pub mod activation;
+pub mod attribution;
 pub mod bandit;
 pub mod calibration;
 pub mod coordinator;
@@ -19,6 +20,7 @@ pub mod model_identity;
 pub mod offline_gate;
 pub mod reward;
 pub mod shadow;
+pub mod statistics;
 pub mod warmup;
 pub use activation::{
     activation_applied_event_id, activation_plan_event_id, pointer_checksum, snapshot_checksum,
@@ -31,6 +33,9 @@ pub use activation::{
     ACTIVATION_SNAPSHOT_SCHEMA_VERSION, ACTIVATION_SOURCE_PREFIX, DONE_EVENT_PREFIX,
     JOURNAL_DIR_NAME, PLAN_EVENT_PREFIX, SNAPSHOTS_DIR_NAME, SNAPSHOT_FILE_SUFFIX,
     SNAPSHOT_ID_HEX_DIGITS, SNAPSHOT_ID_PREFIX, SNAPSHOT_INCOMING_SUFFIX,
+};
+pub use attribution::{
+    attribute, AttributionError, CandidateCredit, CreditLedger, DecisionOutcome, Independence,
 };
 pub use bandit::{
     accepted_outcome_proxy_score, compare_outcome_proxy, percentile, policy_from_weights,
@@ -106,6 +111,13 @@ pub use shadow::{
     EnsemblePredictor, ModelEnsemblePredictor, ProductionDecisionRef, ShadowCandidate,
     ShadowCandidateInput, ShadowDecision, ShadowEngine, ShadowInput, ShadowObservation, ShadowScope,
     ShadowStore, ShadowVerdict,
+};
+pub use statistics::{
+    holm_adjust, ln_gamma, mcnemar_exact_log_p, mcnemar_exact_p, measure_release_evidence,
+    normal_quantile, required_decisions, wilson_interval, BaselinePolicy, Criterion, EvidenceSupport,
+    Family, FamilyMember, FamilyMemberKind, Interval, PairedComparison, StatisticalConfig,
+    StatisticalInput, StatisticalRefusal, StatisticalRelease, StatisticsError, STATISTICAL_SCOPE,
+    UNMEASURABLE_LABEL,
 };
 pub use warmup::{
     run_warmup, LabelCoverage, WarmupConfig, WarmupError, WarmupOutcome, WarmupReport,

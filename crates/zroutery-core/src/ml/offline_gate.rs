@@ -150,8 +150,8 @@ use serde::Serialize;
 use crate::failure::{FailureClass, FailureImpact};
 use crate::feedback::DataOrigin;
 use crate::ml::calibration::{
-    run_calibration, CalibrationConfig, CalibrationError, CalibrationReport, CalibrationVerdict,
-    DegeneracyReason, PartitionKind,
+    project_cohorts, run_calibration, CalibrationConfig, CalibrationError, CalibrationOutcome,
+    CalibrationReport, CalibrationVerdict, DegeneracyReason, PartitionKind,
 };
 use crate::ml::coordinator::{CoordinatorConfig, RoutingAction};
 use crate::ml::dataset::{canonical_samples_from_decision_time, OutcomeTrainingSample, SampleScope};
@@ -166,6 +166,10 @@ use crate::ml::reward::RewardPolicy;
 use crate::ml::shadow::{
     ModelEnsemblePredictor, ShadowCandidate, ShadowDecision, ShadowInput, ShadowEngine,
 };
+use crate::ml::statistics::{
+    measure_release_evidence, StatisticalConfig, StatisticalInput, StatisticalRefusal,
+    StatisticalRelease,
+};
 use crate::outcome::{FinalStatus, Outcome};
 
 /// What a release verdict from this gate is, and what it is not.
@@ -175,6 +179,15 @@ use crate::outcome::{FinalStatus, Outcome};
 pub const RELEASE_SCOPE: &str = "whether the recorded evidence for this model is intact, \
 replayable and sufficient to be worth looking at; it is NOT a statistical claim, NOT a claim \
 that the model is better than the baseline, and NOT a claim that the model can be served";
+
+/// What 7D's statistical constituent of that verdict is, and what it is not.
+///
+/// Carried beside [`RELEASE_SCOPE`] rather than folded into it. 7E-3's string
+/// describes the replay and integrity constituents, which are unchanged; this
+/// one describes the statistical constituent added alongside them. A reader
+/// holding both can see which part of the verdict is evidence of integrity and
+/// which part is evidence of effect, and neither string over-reads the other.
+pub use crate::ml::statistics::STATISTICAL_SCOPE;
 
 /// The honest limit of [`JournalFloatFidelity`].
 pub const JOURNAL_FLOAT_NOTE: &str = "measured by re-serialising and re-parsing the canonical \
@@ -438,6 +451,16 @@ pub struct GateConfig {
     pub engine: CoordinatorConfig,
     /// The reward policy at decision time, for the same reason.
     pub reward_policy: RewardPolicy,
+    /// 7D's claim specification: the level, the power and the minimum effect the
+    /// statistical constituent is held to.
+    ///
+    /// Required and never defaulted. There is no value of
+    /// [`StatisticalConfig`] that disables the gate, and
+    /// [`StatisticalConfig::checked`] refuses a specification that would make
+    /// the claim vacuous. A caller may demand *more* evidence — a smaller
+    /// alpha, a higher power, a smaller minimum effect — and demanding more
+    /// withholds the verdict more often, never less.
+    pub statistics: StatisticalConfig,
 }
 
 impl Default for GateConfig {
@@ -448,6 +471,7 @@ impl Default for GateConfig {
             retention_probes: 8,
             engine: CoordinatorConfig::default(),
             reward_policy: RewardPolicy::default(),
+            statistics: StatisticalConfig::default(),
         }
     }
 }
@@ -931,6 +955,15 @@ pub struct ReleaseMeasurements {
     pub calibration: CalibrationVerdict,
     /// The float fidelity of the holdout across this workspace's read path.
     pub float_fidelity: JournalFloatFidelity,
+    /// 7D's statistical constituent, carried whole.
+    ///
+    /// Required, never optional, and never defaulted: there is no value of
+    /// [`StatisticalRelease`] that means "not measured, carry on". A run that
+    /// cannot measure the statistical claim records
+    /// [`StatisticalRelease::Refused`] with a typed reason, and that refusal is
+    /// a blocker. The alternative — omitting the field — would make the
+    /// statistical gate something a caller could switch off by not supplying it.
+    pub statistics: StatisticalRelease,
 }
 
 /// The one computed value that says whether the evidence supports considering
@@ -1014,7 +1047,38 @@ impl ReleaseVerdict {
         if !measurements.float_fidelity.round_trip_exact {
             blockers.push("canonical sample floats do not survive this workspace's JSON read path");
         }
+        // -- 7D's statistical constituent, appended, never substituted --
+        //
+        // These are appended after every check above and they short-circuit
+        // nothing: each one is evaluated on the same measurements as before and
+        // is reported alongside the eleven above. A run that withholds for any
+        // of the reasons above still withholds for them.
+        //
+        // One blocker per unmet criterion, in a fixed order, so a reader can see
+        // *which* of adequacy / interval / family-wise significance failed
+        // rather than being handed a single opaque reason. The numbers behind
+        // each are on [`ReleaseReport::statistical_reasons`].
+        blockers.extend(measurements.statistics.blockers());
         blockers
+    }
+
+    /// Every constituent that withholds the verdict, with 7D's numbers spelled
+    /// out.
+    ///
+    /// The labels are the same list [`ReleaseVerdict::blockers`] returns, in
+    /// the same order, so the two cannot disagree. This is the one to read when
+    /// a statistical constituent is the reason: a label says *which* requirement
+    /// failed, and a reason says by how much and against what.
+    pub fn blocker_details(measurements: &ReleaseMeasurements) -> Vec<String> {
+        let mut details: Vec<String> = ReleaseVerdict::blockers(measurements)
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+        // The labels are already in `details`, in order; the reasons are keyed
+        // by criterion and appended so neither list is a re-derivation of the
+        // other.
+        details.extend(measurements.statistics.reasons());
+        details
     }
 
     /// Whether this verdict says the model may be considered.
@@ -1061,11 +1125,16 @@ pub struct ReleaseReport {
     pub float_fidelity: JournalFloatFidelity,
     /// Every constituent measurement.
     pub measurements: ReleaseMeasurements,
+    /// 7D's statistical constituent, carried whole beside the measurements it
+    /// was derived from.
+    pub statistics: StatisticalRelease,
     /// The recorded verdict. Recompute it with
     /// [`ReleaseReport::recomputed_verdict`] — a test asserts the two agree.
     pub verdict: ReleaseVerdict,
-    /// What this verdict is and is not.
+    /// What 7E-3's constituents say this verdict is and is not.
     pub scope: &'static str,
+    /// What 7D's statistical constituent says it is and is not.
+    pub statistical_scope: &'static str,
 }
 
 impl ReleaseReport {
@@ -1084,6 +1153,19 @@ impl ReleaseReport {
         ReleaseVerdict::blockers(&self.measurements)
     }
 
+    /// Every constituent that withholds, with 7D's numbers spelled out.
+    pub fn blocker_details(&self) -> Vec<String> {
+        ReleaseVerdict::blocker_details(&self.measurements)
+    }
+
+    /// 7D's unmet statistical requirements as sentences carrying the numbers.
+    ///
+    /// A label says which requirement failed; this says by how much and against
+    /// what. The measurement itself is on [`ReleaseReport::statistics`].
+    pub fn statistical_reasons(&self) -> Vec<String> {
+        self.measurements.statistics.reasons()
+    }
+
     /// The headline, in one line.
     pub fn headline(&self) -> String {
         format!(
@@ -1091,7 +1173,7 @@ impl ReleaseReport {
              load-bearing {}/{}; served identities {}; holdout {} decisions ({} attributed, {} \
              overlap); calibration={}; commit plain-JSON transport exact={} ({} of {} commit \
              parameters moved); float round trip exact={} ({} of {} f64 fields moved, max {} \
-             ulp); scope: {}",
+             ulp); {}; scope: {}; statistical scope: {}",
             self.recomputed_verdict(),
             self.measurements.decisions_equivalent,
             self.measurements.decisions_replayed,
@@ -1111,8 +1193,83 @@ impl ReleaseReport {
             self.float_fidelity.moved_fields,
             self.float_fidelity.f64_fields,
             self.float_fidelity.max_ulp,
+            self.statistics.headline(),
             RELEASE_SCOPE,
+            self.statistical_scope,
         )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 7D's measurement, carried from its own module
+// ---------------------------------------------------------------------------
+
+/// Measure 7D's statistical constituent over the holdout 7E-2D already
+/// reserved, consuming only 7E-2D's own outputs.
+///
+/// Three things are taken, none of them recomputed:
+///
+/// * the holdout partition, from the accepted `project_cohorts`, split at the
+///   same trailing count 7E-2D's `run_calibration` documents. The K axis comes
+///   from attempt-scope rows, so a partition built from request-scope rows
+///   alone cannot produce a one-candidate axis here: it produces the refusal
+///   7E-2D raises first;
+/// * the emitted distributions, from the accepted [`CalibrationOutcome`], whose
+///   per-row fingerprint is checked against the partition's, so a misaligned
+///   pair is refused rather than cross-attributed;
+/// * the unconditional base rate, from the accepted marginal route's
+///   per-candidate table, whose counts are cross-checked against the counts this
+///   walk measures.
+fn measure_statistics(
+    holdout_samples: &[OutcomeTrainingSample],
+    ensemble: &ModelEnsemble,
+    calibration: &CalibrationOutcome,
+    calibration_config: &CalibrationConfig,
+    config: StatisticalConfig,
+) -> StatisticalRelease {
+    let cohorts = match project_cohorts(
+        holdout_samples,
+        &ensemble.success,
+        calibration_config.probability_floor,
+    ) {
+        Ok(cohorts) => cohorts,
+        Err(error) => {
+            return StatisticalRelease::Refused(StatisticalRefusal {
+                code: "calibration_projection_refused",
+                reason: format!("7E-2D's projection could not be repeated: {error}"),
+            });
+        }
+    };
+    // 7E-2D split at `len - holdout_cohorts` and its own report carries the
+    // numbers. If the two disagree, the partition 7D measured is not the one
+    // 7E-2D's verdict was about, so it is refused rather than assumed.
+    let report = calibration.report();
+    let split = cohorts.len().saturating_sub(calibration_config.holdout.holdout_cohorts);
+    if report.holdout_cohorts != cohorts.len() - split
+        || report.fit_cohorts != split
+        || report.cohorts_total != cohorts.len()
+    {
+        return StatisticalRelease::Refused(StatisticalRefusal {
+            code: "partition_disagrees_with_calibration",
+            reason: format!(
+                "7E-2D reported {} cohorts split {}/{} but the projection yields {} split {split}/{}",
+                report.cohorts_total,
+                report.fit_cohorts,
+                report.holdout_cohorts,
+                cohorts.len(),
+                cohorts.len() - split
+            ),
+        });
+    }
+    let partition = &cohorts[split..];
+    match measure_release_evidence(&StatisticalInput {
+        partition,
+        emitted: calibration.holdout_distributions(),
+        marginal: &report.marginal_calibrated.per_candidate,
+        config,
+    }) {
+        Ok(measured) => measured,
+        Err(error) => StatisticalRelease::Refused(StatisticalRefusal::from(&error)),
     }
 }
 
@@ -1246,6 +1403,29 @@ pub fn run_offline_gate(input: &GateInput) -> Result<GateOutcome, OfflineGateErr
     .map_err(map_calibration_refusal)?;
     let calibration_verdict = calibration.report().recomputed_verdict();
 
+    // -- 7D's statistical constituent, measured over the same partition --
+    //
+    // Everything here is 7E-2D's: the cohorts come from the accepted
+    // `project_cohorts`, the emitted distributions come from the accepted
+    // `CalibrationOutcome`, the unconditional base rate is the accepted
+    // marginal route's per-candidate table, and the partition is the same
+    // trailing holdout 7E-2D already reserved, recomputed by the same
+    // arithmetic it documents. Nothing about the measurement is re-derived here.
+    //
+    // A refusal is recorded rather than propagated. This gate has to keep
+    // producing its report when the statistical claim cannot be measured — a
+    // thin holdout is a finding, not a crash — and recording the refusal is
+    // what makes it a blocker instead of a silence. The refusal is carried
+    // whole, with 7E-2D's own error nested inside it if that is what happened,
+    // so nothing is flattened into a generic error.
+    let statistics = measure_statistics(
+        &holdout_samples,
+        &ensemble,
+        &calibration,
+        &input.config.calibration,
+        input.config.statistics,
+    );
+
     let measurements = ReleaseMeasurements {
         commit_verified: true,
         lineage_verified: true,
@@ -1271,6 +1451,7 @@ pub fn run_offline_gate(input: &GateInput) -> Result<GateOutcome, OfflineGateErr
         holdout,
         calibration: calibration_verdict,
         float_fidelity: float_fidelity.clone(),
+        statistics: statistics.clone(),
     };
     let verdict = ReleaseVerdict::from_measurements(&measurements);
 
@@ -1282,9 +1463,11 @@ pub fn run_offline_gate(input: &GateInput) -> Result<GateOutcome, OfflineGateErr
         holdout: measurements.holdout.clone(),
         calibration: calibration.report().clone(),
         float_fidelity,
+        statistics,
         measurements,
         verdict,
         scope: RELEASE_SCOPE,
+        statistical_scope: STATISTICAL_SCOPE,
     };
 
     Ok(GateOutcome { predictor, report })

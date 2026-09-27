@@ -42,12 +42,13 @@ use zroutery_core::ir::Usage;
 use zroutery_core::ml::model_identity::{CommitId, ModelCommit};
 use zroutery_core::ml::offline_gate::{
     run_offline_gate, EvidenceFloors, GateConfig, GateInput, OfflineGateError, RecordedDecision,
-    ReleaseVerdict, RetentionAblation, TerminalAgreement, RELEASE_SCOPE,
+    ReleaseReport, ReleaseVerdict, RetentionAblation, TerminalAgreement, RELEASE_SCOPE,
 };
 use zroutery_core::ml::reward::RewardPolicy;
 use zroutery_core::ml::shadow::{
     ModelEnsemblePredictor, ShadowCandidateInput, ShadowEngine, ShadowInput,
 };
+use zroutery_core::ml::statistics::StatisticalConfig;
 use zroutery_core::outcome::{Attempt, FailureFacts, FinalStatus, Outcome};
 use zroutery_core::session::SessionRoutingMode;
 
@@ -274,6 +275,11 @@ fn gate_config() -> GateConfig {
         retention_probes: 6,
         engine: engine_config(),
         reward_policy: RewardPolicy::default(),
+        // 7D's claim specification, at 7D's own defaults. This suite makes no
+        // claim about statistical support: 7D's suite does, in
+        // `statistics_test.rs`. Naming the defaults here keeps the fixture from
+        // silently depending on a future change to them.
+        statistics: StatisticalConfig::default(),
     }
 }
 
@@ -926,6 +932,43 @@ fn the_holdout_carries_the_candidate_axis_and_not_only_the_request_row() {
 // 6. The release verdict
 // ---------------------------------------------------------------------------
 
+/// The eleven blockers 7E-3 contributes to the release verdict, by the exact
+/// strings it emits.
+///
+/// 7D appends its own statistical blockers to the same list, which is the point
+/// of the list: the gate got stronger, not weaker. That does mean a fixture that
+/// satisfies all of 7E-3's constituents can still be `NotConsiderable` — 7E-3's
+/// `Considerable` was explicitly "not a statistical claim of any kind", and 7D
+/// added the statistical claim. So this suite asserts what it owns: that no
+/// **7E-3** constituent withholds. Whether 7D's constituents withhold is 7D's
+/// suite's job, in `statistics_test.rs` and `release_evidence_test.rs`.
+///
+/// The list is also the documentation of what this node contributes. If a 7E-3
+/// blocker string changes, this constant fails to match and the reader is told
+/// which constituent moved.
+const NODE_7E3_BLOCKERS: &[&str] = &[
+    "the commit did not pass the accepted verification",
+    "the retained lineage did not verify",
+    "no decision was replayed",
+    "at least one replay was not bit-identical to its record",
+    "at least one replay disagreed with its Outcome",
+    "no retained feature position was shown to be load-bearing for the replayed decision",
+    "at least one Outcome records no served identity",
+    "the holdout overlaps the model's fit set",
+    "the holdout is empty",
+    "7E-2D reports the emitted vector as miscalibrated",
+    "canonical sample floats do not survive this workspace's JSON read path",
+];
+
+/// The blockers of this node alone, leaving 7D's statistical blockers out.
+fn node_7e3_blockers(report: &ReleaseReport) -> Vec<&'static str> {
+    report
+        .blockers()
+        .into_iter()
+        .filter(|blocker| NODE_7E3_BLOCKERS.contains(blocker))
+        .collect()
+}
+
 #[test]
 fn the_positive_path_produces_a_considerable_verdict_with_no_stored_boolean() {
     let trained = trained();
@@ -936,10 +979,33 @@ fn the_positive_path_produces_a_considerable_verdict_with_no_stored_boolean() {
     let outcome = run_offline_gate(&input).expect("the fixture replays");
     let report = outcome.report();
 
-    assert_eq!(report.recomputed_verdict(), ReleaseVerdict::Considerable);
-    assert_eq!(report.verdict, ReleaseVerdict::Considerable);
-    assert!(report.blockers().is_empty(), "{:?}", report.blockers());
-    assert!(outcome.is_considerable());
+    // This node's claim: every 7E-3 constituent passes, and the verdict is
+    // recomputed rather than read.
+    assert_eq!(report.recomputed_verdict(), report.verdict);
+    assert!(
+        node_7e3_blockers(report).is_empty(),
+        "no 7E-3 constituent may withhold: {:?}",
+        report.blockers()
+    );
+    // 7D's statistical constituent is also always present and always visible.
+    // On this fixture it refuses outright: 7E-2D reserves 8 holdout cohorts
+    // here, and 8 decisions cannot support a claim at any conventional level, so
+    // the refusal is a sample-size refusal and names the required n. That is the
+    // correct answer, not a threshold that happens to be strict, and it is
+    // exactly what `EvidenceFloors`'s presence floor could not say.
+    assert!(
+        !outcome.report().statistics.is_supported(),
+        "eight decisions must not be reported as support"
+    );
+    let refusal = outcome
+        .report()
+        .statistics
+        .refusal()
+        .expect("a partition of eight must be refused, not measured");
+    assert_eq!(refusal.code, "sample_too_small");
+    assert!(refusal.reason.contains("8 effective decisions"), "{}", refusal.reason);
+    assert_eq!(report.recomputed_verdict(), ReleaseVerdict::NotConsiderable);
+    println!("{}", report.headline());
 
     // Every constituent is visible on the report, so the verdict is auditable
     // rather than asserted.
@@ -1023,8 +1089,18 @@ fn the_release_verdict_is_a_pure_function_of_its_measurements() {
 
     // Mutating any single constituent must move the verdict, which is the test
     // that the verdict is recomputed rather than read.
-    let baseline = ReleaseVerdict::from_measurements(&report.measurements);
-    assert_eq!(baseline, ReleaseVerdict::Considerable);
+    assert_eq!(
+        ReleaseVerdict::from_measurements(&report.measurements),
+        report.verdict,
+        "the recorded verdict must be the recomputed one"
+    );
+    assert!(
+        ReleaseVerdict::blockers(&report.measurements)
+            .iter()
+            .all(|blocker| !NODE_7E3_BLOCKERS.contains(blocker)),
+        "no 7E-3 constituent may withhold: {:?}",
+        report.blockers()
+    );
 
     let mut broken = report.measurements.clone();
     broken.decisions_equivalent -= 1;
@@ -1032,7 +1108,20 @@ fn the_release_verdict_is_a_pure_function_of_its_measurements() {
         ReleaseVerdict::from_measurements(&broken),
         ReleaseVerdict::NotConsiderable
     );
-    assert_eq!(ReleaseVerdict::blockers(&broken).len(), 1);
+    // Exactly one **7E-3** blocker is added by this mutation. 7D's blockers are
+    // already withholding on this fixture and are counted separately, because
+    // counting the whole list would make this node's assertion depend on 7D's
+    // arithmetic.
+    let seven_e_three: Vec<&str> = ReleaseVerdict::blockers(&broken)
+        .into_iter()
+        .filter(|blocker| NODE_7E3_BLOCKERS.contains(blocker))
+        .collect();
+    assert_eq!(seven_e_three.len(), 1, "{seven_e_three:?}");
+    assert!(
+        seven_e_three[0].contains("bit-identical"),
+        "{}",
+        seven_e_three[0]
+    );
 
     let mut broken = report.measurements.clone();
     broken.retention = RetentionAblation {
