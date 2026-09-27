@@ -4,6 +4,7 @@
 //! scoring and ranking routing candidates, and the training dataset
 //! that collects samples for model training.
 
+pub mod activation;
 pub mod bandit;
 pub mod calibration;
 pub mod coordinator;
@@ -18,6 +19,18 @@ pub mod model_identity;
 pub mod reward;
 pub mod shadow;
 pub mod warmup;
+pub use activation::{
+    activation_applied_event_id, activation_plan_event_id, pointer_checksum, snapshot_checksum,
+    snapshot_id_for, ActivationAudit, ActivationEntry, ActivationError, ActivationKind,
+    ActivationOutcome, ActivationPointer, ActivationRequest, ActivationStage, ActivationStore,
+    ActivationTrace, ActiveSnapshot, CheckpointFile, CommitFile, JournalContext,
+    PendingActivation, PointerDisagreement, PointerEntryFile, PointerFile, PointerState, Snapshot,
+    SnapshotFile, SnapshotId, StateFile, ACTIVATION_LOCK_NAME, ACTIVATION_POINTER_NAME,
+    ACTIVATION_POINTER_SCHEMA_VERSION, ACTIVATION_POINTER_TMP_NAME, ACTIVATION_ROLE,
+    ACTIVATION_SNAPSHOT_SCHEMA_VERSION, ACTIVATION_SOURCE_PREFIX, DONE_EVENT_PREFIX,
+    JOURNAL_DIR_NAME, PLAN_EVENT_PREFIX, SNAPSHOTS_DIR_NAME, SNAPSHOT_FILE_SUFFIX,
+    SNAPSHOT_ID_HEX_DIGITS, SNAPSHOT_ID_PREFIX, SNAPSHOT_INCOMING_SUFFIX,
+};
 pub use bandit::{
     accepted_outcome_proxy_score, compare_outcome_proxy, percentile, policy_from_weights,
     run_bandit, weights_vector, ArmSafetyMetrics, ArmSelectionStatistics, BanditConfig, BanditError,
