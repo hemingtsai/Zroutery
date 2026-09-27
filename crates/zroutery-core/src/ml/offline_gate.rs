@@ -176,6 +176,15 @@ use crate::outcome::{FinalStatus, Outcome};
 ///
 /// Carried on the report and repeated in the verdict's own documentation,
 /// because a verdict is the one artifact a reader is most likely to over-read.
+///
+/// **Scope of this string.** It describes the INTEGRITY constituents, and it was
+/// written when those were the only ones. It is still true of them and its
+/// value is unchanged. It is no longer a complete description of the combined
+/// verdict, because node 7D added a statistical constituent that is exactly a
+/// claim about beating a baseline. [`crate::ml::statistics::STATISTICAL_SCOPE`]
+/// covers that part and the report carries both, so a reader can tell evidence
+/// of integrity from evidence of effect. Reading this string alone would now
+/// understate what the verdict says.
 pub const RELEASE_SCOPE: &str = "whether the recorded evidence for this model is intact, \
 replayable and sufficient to be worth looking at; it is NOT a statistical claim, NOT a claim \
 that the model is better than the baseline, and NOT a claim that the model can be served";
