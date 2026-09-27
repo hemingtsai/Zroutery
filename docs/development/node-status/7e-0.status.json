@@ -3,7 +3,7 @@
   "node_id": "7E-0",
   "display_name": "7E-0 — immutable model identity and replay",
   "status": "PARTIAL",
-  "implementation_state": "7E-1A repaired the in-memory identity, lineage, schema-envelope, predictor, and deterministic replay substrate. Durable model operations, durable LearningEvent journaling, and future schema migrations remain outside 7E-0 completion.",
+  "implementation_state": "7E-1A repaired the in-memory identity, lineage, schema-envelope, predictor, and deterministic replay substrate, and 7E-2E has now delivered the durable LearningEvent journal that 7E-0 explicitly delegated. Durable model operations and future schema migrations remain outside 7E-0 completion, so the node is still PARTIAL rather than DONE.",
   "dependencies": [
     "7C"
   ],
@@ -20,7 +20,7 @@
     "Corrupt artifact fail-closed tests"
   ],
   "blocked_by": [],
-  "unblock_condition": "7E-1A is accepted; 7E-0 remains PARTIAL until durable model operations and the 7E-2E LearningEvent journal are separately gated.",
+  "unblock_condition": "7E-1A is accepted, and the 7E-2E LearningEvent journal is now separately gated and accepted. 7E-0 remains PARTIAL for its other two items: durable model operations and future schema migrations.",
   "evidence": [
     "E-005",
     "E-006",

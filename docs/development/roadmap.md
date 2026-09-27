@@ -87,8 +87,8 @@ must be typed against now exists. Development continues on `dev`.
 | `7E-2B` | `DONE` | Offline supervised warmup: deterministic, verifiable lineage, disjoint holdout, honest verdict, and no activation path. |
 | `7E-2C` | `DONE` | The reward weights are fitted from data and a UCB1 rule is evaluated offline behind a safety gate that can refuse on tail grounds. |
 | `7E-2D` | `DONE` | A fitted calibrator emits a K-way distribution measured on the final vector; nothing consumes it. |
-| `7E-2E` | `BLOCKED` | Requires durable ordered `LearningEvent` and verified `ModelCommit`. |
-| `7E-2F` | `BLOCKED` | Requires verified immutable snapshots and atomic activation. |
+| `7E-2E` | `DONE` | A durable, ordered, idempotent journal with no auto-repair and no background writer. |
+| `7E-2F` | `READY` | The only remaining route to a live router; nothing is activated and automatic activation is unauthorized. |
 | `7E-3` | `BLOCKED` | Requires calibrated offline replay/evaluation gates. |
 | `7F` | `BLOCKED` | Requires an accepted commit, shipping reachability, and observability. |
 | `7G` | `BLOCKED` | Requires stable real-traffic shadow evidence and rollback. |
@@ -127,9 +127,16 @@ nothing installs or explores with it. `7E-2D` is `DONE` too: a calibrated K-way
 distribution now exists, measured on the vector actually emitted rather than on
 its inputs, and the independent route's near-perfect marginals lost 0.0667 ECE to
 normalization, which is the measured reason the joint parameterization is the
-claim. `7E-2E` is next and owns the durable ordered learning journal. `7D` is
-unblocked and may now consume the evaluation surface this node built.
-Two limitations are recorded
+claim. `7E-2E` is `DONE`: learning events are durably recorded in an ordered,
+idempotent journal that repairs nothing automatically, and `7E-0` is one
+delegated item closer to completion. `7E-2F` is `READY` and is the only remaining
+route from this work to a live router, so it is also the node where the
+production-safety stakes are highest. `7D` is unblocked and may consume the
+evaluation surface 7E-2D built.
+One matrix failure is recorded rather than smoothed over: a 7E-2C bandit test
+failed once under `cargo test --workspace --all-features` and could not be
+reproduced in eleven subsequent runs, with no mechanism identified. Two
+limitations are recorded
 rather than smoothed over: a sample's features currently come from a snapshot
 cloned at decision time rather than a re-read of the accepted record; and dataset
 collection follows `config.shadow.enabled` because no dataset-specific

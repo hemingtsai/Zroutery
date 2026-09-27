@@ -2,8 +2,8 @@
   "schema_version": 1,
   "node_id": "7E-2E",
   "display_name": "7E-2E — durable learning events and verified commits",
-  "status": "BLOCKED",
-  "implementation_state": "Learning events are not durably ordered or idempotent, and model commit lineage is not yet repaired.",
+  "status": "DONE",
+  "implementation_state": "The accepted LearningEvent is now durably recorded in an append-only frame log plus a completion anchor inside a caller-supplied directory, with a chained per-frame checksum, a sequence recovered from the file on every open and re-scanned on every append, content-exact idempotency, and commit verification re-run on read. A torn tail, a corrupt interior record, a lost suffix, a sequence conflict and a stale or foreign lock are all reported rather than repaired, and nothing is ever auto-repaired. Accepted on dev at 83659ee.",
   "dependencies": [
     "7E-2D",
     "7E-0"
@@ -17,13 +17,13 @@
     "Verified ModelCommit lineage",
     "Replay closure"
   ],
-  "blocked_by": [
-    "7E-2D",
-    "7E-0"
-  ],
-  "unblock_condition": "Close 7E-2D and 7E-0/7E-1A, then pass durable journal, idempotency, and verified-commit gates.",
+  "blocked_by": [],
+  "unblock_condition": "Accepted: durability across restart, a file-authoritative sequence, content-exact idempotency, commit re-verification on read, and typed refusal for every corruption shape with no auto-repair.",
   "evidence": [
-    "E-016"
+    "E-016",
+    "E-084",
+    "E-085",
+    "E-086"
   ],
   "source_references": [
     "docs/development/repository-audit-2026-09-25.md",
@@ -32,6 +32,15 @@
     "crates/zroutery-core/src/feedback.rs"
   ],
   "notes": [
-    "A type-level LearningEvent is not a durable journal."
+    "A type-level LearningEvent is no longer a process-local value. The accepted event type is journalled as-is and no second event type was introduced; model_identity.rs was not modified.",
+    "CONSTRAINT CARRIED FORWARD TO 7E-2F: the journal is append-only and last-write-wins is refused, so an event recorded before it was applied cannot be updated in place to add its result commit. An applied event is a NEW record, and activation must be designed around that rather than around mutation.",
+    "A prefix of a valid log is itself a valid log, so no per-record checksum can detect a suffix removed at a frame boundary. The completion anchor exists for that case alone: record count, next sequence, log length, whole-log checksum, tail frame checksum, and its own checksum, written after the log is flushed and renamed into place.",
+    "The frame checksum chains its predecessor, which is what makes a removed or reordered INTERIOR frame detectable independently of the sequence check. It is deliberately public, because a durable format only its own writer can verify is not a durable format.",
+    "FNV-1a-64 is an accidental-corruption checksum, not a MAC, and the module says so. The real integrity witness is the content-addressed CommitId.",
+    "The portable create_new lock can be left stale by a process that dies without unwinding, and the module does not claim otherwise. The format is the safety net: chained checksums plus a monotonic sequence turn interleaved or duplicate writes into a loud typed refusal rather than silent loss. Concurrent writers are refused, not merged, because choosing which of two records claiming one sequence came first IS last-write-wins.",
+    "Anti-degradation is an exact assertion, not a comment: every canonical sample is validated with the accepted validator, projected through into_legacy, and the projection must equal the event's samples exactly, on the way in and again on the way out. The lossy path still exists because the accepted event type is this node's subject, so it is labelled LegacyProjection, the label is derived rather than supplied, the degradation text lives in the log bytes, and JournalRecord::is_degraded() is on the record.",
+    "The process-local evt-<n> id form is refused as VolatileEventId, because a dedup key that restarts in every process is not a durable identity.",
+    "The anchor's post-rename directory flush is #[cfg(unix)] because std offers none on Windows. The documented consequence is that a lost anchor can only cause a NotAJournal refusal, never a silently accepted truncated log.",
+    "Opening this journal cannot train, activate, or schedule anything. read_records is the only way to obtain a record, it is an explicit call, and it returns records rather than a model, checkpoint, or update."
   ]
 }

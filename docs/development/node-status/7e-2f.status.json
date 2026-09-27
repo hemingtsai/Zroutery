@@ -2,8 +2,8 @@
   "schema_version": 1,
   "node_id": "7E-2F",
   "display_name": "7E-2F — immutable snapshot and atomic activation",
-  "status": "BLOCKED",
-  "implementation_state": "Immutable snapshot and atomic activation are not established behind a verified commit.",
+  "status": "READY",
+  "implementation_state": "Every upstream node is accepted, so activation is the only remaining route from this work to a live router and is dispatchable. Nothing is activated yet: no immutable snapshot, no rollback pointer, and no packaging reachability exist, and automatic activation remains unauthorized.",
   "dependencies": [
     "7E-2E"
   ],
@@ -16,12 +16,11 @@
     "Rollback pointer and fail-closed activation",
     "Packaging/reachability review"
   ],
-  "blocked_by": [
-    "7E-2E"
-  ],
-  "unblock_condition": "Close 7E-2E and pass activation, rollback, and packaging gates before any reachability claim.",
+  "blocked_by": [],
+  "unblock_condition": "Unblocked: pass the activation, rollback, and packaging gates before any reachability claim. The 7E-2E journal constrains this design, because an applied event is a new record rather than a mutation.",
   "evidence": [
-    "E-016"
+    "E-016",
+    "E-086"
   ],
   "source_references": [
     "docs/development/repository-audit-2026-09-25.md",
@@ -29,6 +28,8 @@
     "crates/zroutery-core/src/ml/shadow.rs"
   ],
   "notes": [
-    "Automatic activation is not authorized."
+    "Automatic activation is not authorized, and this node is READY rather than started.",
+    "The journal is append-only and refuses last-write-wins, so an event recorded before it was applied cannot be updated in place to carry its result commit. Activation must be designed around an applied event being a NEW record, not around mutating one.",
+    "Tauri does not enable the ml feature, so the shipped desktop app has no path to an activated model today. Any reachability claim must be earned by a packaging gate, not assumed from library code."
   ]
 }
