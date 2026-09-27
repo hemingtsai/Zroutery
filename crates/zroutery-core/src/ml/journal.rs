@@ -846,6 +846,15 @@ impl Anchor {
 struct FrameEntry {
     sequence: u64,
     body: JournalRecordBody,
+    /// The body exactly as it appears on disk.
+    ///
+    /// The duplicate check compares these bytes against a re-serialization of
+    /// the incoming record, never a parsed value against an in-memory one.
+    /// `serde_json` is used here WITHOUT its `float_roundtrip` feature, so its
+    /// float parsing is not correctly rounded: a value can come back one ULP
+    /// different from the bytes that produced it. Comparing parsed values would
+    /// therefore report a legitimate byte-identical retry as a conflict.
+    body_bytes: Vec<u8>,
     frame_checksum: u64,
 }
 
@@ -1042,6 +1051,9 @@ fn scan_log(path: &Path) -> Result<LogScan, JournalError> {
             });
         }
 
+        // Captured before the parse shadows the byte slice, because the duplicate
+        // check later needs the bytes as they are on disk.
+        let body_bytes = body.to_vec();
         let body: JournalRecordBody =
             serde_json::from_slice(body).map_err(|error| frame_body_error(offset, sequence, error))?;
         if body.schema_version != JOURNAL_SCHEMA_VERSION {
@@ -1061,6 +1073,7 @@ fn scan_log(path: &Path) -> Result<LogScan, JournalError> {
         scan.frames.push(FrameEntry {
             sequence,
             body,
+            body_bytes,
             frame_checksum: computed,
         });
         offset += frame_len;
@@ -1525,12 +1538,38 @@ impl LearningJournal {
             entry.body.try_into_record(entry.sequence)?;
         }
 
+        // Serialize once, up front: these are the bytes that will be written, and
+        // the duplicate check below compares against them.
+        let body_bytes = serde_json::to_vec(&body).map_err(|error| JournalError::Io {
+            path: log_path.clone(),
+            reason: format!("cannot serialize the record: {error}"),
+        })?;
+
         if let Some(existing) = frames
             .iter()
             .find(|frame| frame.body.event.event_id == body.event.event_id)
         {
             let sequence = existing.sequence;
-            if same_content(&existing.body, &body) {
+            // Compare the bytes this record WOULD have, with the stored
+            // record's own volatile timestamps substituted, against the bytes
+            // already on disk.
+            //
+            // Byte comparison is what makes this immune to the JSON float round
+            // trip: `serde_json` is used here without `float_roundtrip`, so the
+            // stored body's parsed floats can be one ULP off, and comparing
+            // parsed values would refuse a legitimate retry of an unchanged
+            // record. Substituting the stored timestamps keeps the other half
+            // of the contract, which is that a retry re-creating the same event
+            // at a different wall-clock instant is still the same event.
+            let mut comparable = body.clone();
+            comparable.recorded_at = existing.body.recorded_at;
+            comparable.event.created_at = existing.body.event.created_at;
+            let comparable_bytes =
+                serde_json::to_vec(&comparable).map_err(|error| JournalError::Io {
+                    path: log_path.clone(),
+                    reason: format!("cannot serialize the record: {error}"),
+                })?;
+            if existing.body_bytes == comparable_bytes {
                 return Ok(RecordOutcome::Duplicate { sequence });
             }
             return Err(JournalError::IdempotencyConflict {
@@ -1548,10 +1587,6 @@ impl LearningJournal {
         // Validate before a single byte is written.
         body.try_into_record(sequence)?;
 
-        let body_bytes = serde_json::to_vec(&body).map_err(|error| JournalError::Io {
-            path: log_path.clone(),
-            reason: format!("cannot serialize the record: {error}"),
-        })?;
         let previous = frames
             .last()
             .map_or(0, |frame: &FrameEntry| frame.frame_checksum);
@@ -1652,23 +1687,6 @@ fn verify_record_commits(record: &JournalRecord, store: &ModelStore) -> Result<(
         }
     }
     Ok(())
-}
-
-/// Content identity for idempotency.
-///
-/// Wall-clock `created_at` and `recorded_at` are excluded, exactly as the
-/// accepted `LearningEvent::payload_hash` excludes volatile metadata: a retry
-/// that re-creates the same event at a different instant is the same event. The
-/// comparison is exact rather than hashed, so there is no collision to reason
-/// about and no map-ordering to depend on.
-fn same_content(stored: &JournalRecordBody, incoming: &JournalRecordBody) -> bool {
-    stored.event.event_id == incoming.event.event_id
-        && stored.event.model_id == incoming.event.model_id
-        && stored.event.samples == incoming.event.samples
-        && stored.event.parent_commit == incoming.event.parent_commit
-        && stored.event.result_commit == incoming.event.result_commit
-        && stored.event.source == incoming.event.source
-        && stored.evidence == incoming.evidence
 }
 
 /// The process-local id form `LearningEvent::new` mints.

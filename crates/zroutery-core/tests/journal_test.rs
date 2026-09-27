@@ -550,6 +550,100 @@ fn an_identical_record_is_a_reported_no_op() {
     assert_eq!(records.len(), 1, "the retry did not create a second record");
 }
 
+/// A positive finite `f64` that does NOT survive a serde_json round trip.
+///
+/// The workspace uses serde_json WITHOUT its `float_roundtrip` feature, so its
+/// float parsing is not correctly rounded. This is the value class that made a
+/// byte-identical retry look like a conflict when the duplicate check compared
+/// the stored PARSED body against the caller's in-memory body.
+fn json_hostile_positive() -> f64 {
+    let mut seed: u64 = 0x9E37_79B9_7F4A_7C15;
+    for _ in 0..200_000 {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        let value = f64::from_bits(seed);
+        if !value.is_finite() || value <= 0.0 {
+            continue;
+        }
+        let text = serde_json::to_string(&value).expect("a float serializes");
+        let back: f64 = serde_json::from_str(&text).expect("a float parses");
+        if back.to_bits() != value.to_bits() {
+            return value;
+        }
+    }
+    panic!("no JSON-hostile positive f64 was found");
+}
+
+/// The canonical event of `a_retry_of_an_unchanged_record_is_a_duplicate`, with
+/// a float in it that the JSON round trip cannot preserve.
+fn json_hostile_event(event_id: &str) -> CanonicalEvent {
+    let hostile = json_hostile_positive();
+    let mut event = canonical_event(event_id, "jh", true);
+    for sample in &mut event.samples {
+        sample.targets.cost = Some(hostile);
+        sample.actual_cost = Some(hostile);
+    }
+    event
+}
+
+/// A byte-identical retry must be reported as a duplicate, even when the record
+/// carries a float whose value cannot survive the JSON round trip.
+///
+/// The duplicate check compares the bytes that WOULD be written against the
+/// bytes already on disk, never a re-parsed value against an in-memory one. A
+/// retry after an ambiguous write — a crash, a timeout — is the one scenario
+/// idempotency exists for, and this is the case that used to refuse it.
+#[test]
+fn a_retry_of_an_unchanged_record_is_a_duplicate_even_with_a_json_hostile_float() {
+    let root = scratch();
+    let dir = journal_dir(root.path());
+    let mut journal = LearningJournal::open(&dir, JournalMode::Append).expect("the journal opens");
+    let event = json_hostile_event("evt-json-hostile-1");
+
+    journal
+        .record_canonical(event.clone())
+        .expect("the first record is written");
+
+    match journal.record_canonical(event.clone()) {
+        Ok(RecordOutcome::Duplicate { sequence }) => {
+            assert_eq!(sequence, 1, "the duplicate names the stored sequence");
+        }
+        other => panic!("an unchanged retry must be a duplicate, got {other:?}"),
+    }
+
+    // A retry that re-creates the same event at a different wall-clock instant
+    // is still the same event, exactly as the accepted payload_hash treats
+    // volatile metadata.
+    let mut later = event.clone();
+    later.created_at = event.created_at + 3_600;
+    match journal.record_canonical(later) {
+        Ok(RecordOutcome::Duplicate { sequence }) => {
+            assert_eq!(sequence, 1, "a later instant is the same event");
+        }
+        other => panic!("a retry at a different instant must be a duplicate, got {other:?}"),
+    }
+
+    // And a genuinely different record is still refused, so the byte comparison
+    // did not turn into "everything matches".
+    let mut different = event.clone();
+    different.samples[0].targets.latency_ms = Some(999.0);
+    match journal.record_canonical(different) {
+        Err(JournalError::IdempotencyConflict { event_id, .. }) => {
+            assert_eq!(event_id, "evt-json-hostile-1");
+        }
+        other => panic!("a changed record must still conflict, got {other:?}"),
+    }
+
+    let log = fs::read(dir.join(JOURNAL_LOG_NAME)).expect("the log is readable");
+    let text = String::from_utf8_lossy(&log);
+    assert_eq!(
+        text.lines().filter(|line| !line.trim().is_empty()).count(),
+        1,
+        "exactly one record exists after a duplicate, a later-instant duplicate, and a conflict"
+    );
+}
+
 /// GATE 3, second part: the same event id with different content is a conflict,
 /// never a last-write-wins.
 #[test]
