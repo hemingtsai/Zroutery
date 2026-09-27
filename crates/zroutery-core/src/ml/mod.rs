@@ -16,6 +16,7 @@ pub mod features;
 pub mod journal;
 pub mod model;
 pub mod model_identity;
+pub mod offline_gate;
 pub mod reward;
 pub mod shadow;
 pub mod warmup;
@@ -68,8 +69,9 @@ pub use decision_contract::{
 };
 pub use decision_engine::{DecisionEngine, EngineCandidate, EngineInput, EngineOutput};
 pub use evaluation::{
-    ComparisonReport, EvaluationError, Evaluator, FrozenHoldout, PredictionMetrics, Recommendation,
-    RoutingDeltas, RoutingMetrics, temporal_split,
+    f32_identical, f64_identical, ulp_distance, ComparisonReport, Divergence, EvaluationError,
+    Evaluator, Exactness, FrozenHoldout, NonFiniteComponent, PredictionMetrics, Recommendation,
+    RoutingDeltas, RoutingMetrics, find_nonfinite_f64, temporal_split,
 };
 pub use features::{
     extract_features, FeatureContext, RoutingFeatures, FEATURE_DIMENSION, FEATURE_SCHEMA_VERSION,
@@ -88,6 +90,13 @@ pub use model::{
 pub use model_identity::{
     CommitId, CommitInfo, LearningEvent, ModelCheckpoint, ModelCommit, ModelEnsemble, ModelId,
     ModelRef, ModelStore, ReplayEngine, ReplayError,
+};
+pub use offline_gate::{
+    run_offline_gate, CommitTransport, EvidenceFloors, FailureAuthority, FloatDrift, GateConfig,
+    GateInput, GateOutcome, HoldoutSummary, JournalFloatFidelity, OfflineGateError,
+    RecordedDecision, ReleaseMeasurements, ReleaseReport, ReleaseVerdict, RetentionAblation,
+    RetentionProof, ReplayEvidence, ServedIdentity, TerminalAgreement, JOURNAL_FLOAT_NOTE,
+    RELEASE_SCOPE,
 };
 pub use reward::{
     Action, ActionGuard, AttemptReward, PredictionBundle, RequestReward, RewardComputer,

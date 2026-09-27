@@ -621,6 +621,304 @@ pub fn temporal_split(
 }
 
 // ---------------------------------------------------------------------------
+// Exact equality — what "the same" means when a claim must be exact
+// ---------------------------------------------------------------------------
+//
+// The metrics above answer "how far off". A release gate has to answer a
+// different question — "is this the same artifact's result, or a near miss" —
+// and for that question `==` is the wrong operator, in both directions:
+//
+//   * `f64` compares through [`f64::to_bits`], never through `==`. That is
+//     strictly stronger, not merely different: `0.0 == -0.0` is true under
+//     `==` and false in bits, and a signed zero reaching a decision is a fact
+//     about the value that `==` would silently discard.
+//   * A non-finite value never compares equal, in either direction. Under
+//     `to_bits`, two `NaN`s sharing a payload compare *equal*, so a broken
+//     model could be handed a match; under `==` they compare unequal and the
+//     break is hidden behind an innocuous-looking divergence.
+//     [`find_nonfinite_f64`] runs first and converts that into a refusal, which
+//     is what makes bit equality sound as a verdict rather than a comparison.
+//   * There is no tolerance, no rounding, and no relative epsilon in this
+//     section. A caller who wants "close enough" is asking a measurement
+//     question, and the answer to that belongs in a metric with a stated
+//     tolerance — never in a claim that two runs produced the same thing.
+
+/// The total-order image of an IEEE-754 `f64` bit pattern.
+///
+/// Maps the bit pattern to a signed integer that increases monotonically with
+/// the value, so the difference between two images is the number of
+/// representable doubles between them. `-0.0` and `+0.0` map to the same
+/// integer: they are the same number, and [`f64::to_bits`] is the comparison
+/// that tells them apart when that distinction is the one that matters.
+fn total_order(bits: u64) -> i128 {
+    let negative = bits >> 63 == 1;
+    let magnitude = (bits & !(1u64 << 63)) as i128;
+    if negative {
+        -magnitude
+    } else {
+        magnitude
+    }
+}
+
+/// How many representable `f64` values separate `left` from `right`.
+///
+/// Zero exactly when the two are the same number. Saturates at [`u64::MAX`]
+/// rather than wrapping, because the honest answer for "these are nowhere near
+/// each other" is a large number, not a small one. Two `NaN`s are reported as
+/// maximally distant unless they share a bit pattern, which is why a non-finite
+/// value must be refused before this is consulted.
+pub fn ulp_distance(left: f64, right: f64) -> u64 {
+    let distance = (total_order(left.to_bits()) - total_order(right.to_bits())).unsigned_abs();
+    u64::try_from(distance).unwrap_or(u64::MAX)
+}
+
+/// A `f64` is bit-identical to another `f64`.
+///
+/// The strict test, and the one the replay gate uses. It distinguishes `+0.0`
+/// from `-0.0`, which `==` does not.
+pub fn f64_identical(left: f64, right: f64) -> bool {
+    left.to_bits() == right.to_bits()
+}
+
+/// A `f32` is bit-identical to another `f32`.
+///
+/// The feature vectors the replay gate is driven by are `f32`, and they are
+/// compared the same way as everything else: in bits.
+pub fn f32_identical(left: f32, right: f32) -> bool {
+    left.to_bits() == right.to_bits()
+}
+
+/// A value that is not finite, named precisely enough to find in the source.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NonFiniteComponent {
+    /// Dotted path of the component, in the caller's comparison order.
+    pub component: String,
+    /// Index within a repeated component, when the component is repeated.
+    pub index: Option<usize>,
+    /// The value that refused.
+    pub value: f64,
+}
+
+impl std::fmt::Display for NonFiniteComponent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.index {
+            Some(index) => write!(
+                f,
+                "non-finite measurement at {}[{}]: {}",
+                self.component, index, self.value
+            ),
+            None => write!(f, "non-finite measurement at {}: {}", self.component, self.value),
+        }
+    }
+}
+
+impl std::error::Error for NonFiniteComponent {}
+
+/// The first non-finite value in a fixed, caller-declared component order.
+///
+/// The scan is deliberately ordered rather than parallel: a refusal that names
+/// *the first* non-finite component is reproducible, and a refusal that names
+/// whichever one a parallel scan happened to reach first is not. Passing the
+/// named values in a caller's documented order is how this stays deterministic
+/// without this function knowing anything about the shapes involved.
+pub fn find_nonfinite_f64(components: &[(&str, f64)]) -> Result<(), NonFiniteComponent> {
+    for (component, value) in components {
+        if !value.is_finite() {
+            return Err(NonFiniteComponent {
+                component: (*component).to_string(),
+                index: None,
+                value: *value,
+            });
+        }
+    }
+    Ok(())
+}
+
+/// The first place two structurally identical values differ.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Divergence {
+    /// Dotted path of the component that differs.
+    pub component: String,
+    /// Index within a repeated component, when the component is repeated.
+    pub index: Option<usize>,
+    /// The recorded value, in the lossless `{:?}` spelling.
+    pub expected: String,
+    /// The replayed value, in the lossless `{:?}` spelling.
+    pub actual: String,
+}
+
+impl std::fmt::Display for Divergence {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let index = self
+            .index
+            .map(|index| format!("[{index}]"))
+            .unwrap_or_default();
+        write!(
+            f,
+            "replay diverges at {}{}: recorded {} but replayed {}",
+            self.component, index, self.expected, self.actual
+        )
+    }
+}
+
+impl std::error::Error for Divergence {}
+
+/// A one-way cursor that records the **first** exact difference and then stops
+/// caring.
+///
+/// Short-circuiting is the point. A gate that reports every difference is
+/// reporting a diff; a gate that reports the first one, in a documented order,
+/// is reporting where the replay stopped being the recorded decision. The
+/// methods are called in that documented order by the caller, so the refusal is
+/// deterministic and does not depend on field layout.
+#[derive(Debug, Clone, Default)]
+pub struct Exactness {
+    divergence: Option<Divergence>,
+}
+
+impl Exactness {
+    /// A cursor that has found no divergence yet.
+    pub fn new() -> Self {
+        Self { divergence: None }
+    }
+
+    /// Whether every component compared so far was bit-identical.
+    pub fn is_exact(&self) -> bool {
+        self.divergence.is_none()
+    }
+
+    /// The first divergence, if any.
+    pub fn divergence(&self) -> Option<&Divergence> {
+        self.divergence.as_ref()
+    }
+
+    /// Consume the cursor, yielding the first divergence as a refusal.
+    pub fn into_divergence(self) -> Result<(), Divergence> {
+        match self.divergence {
+            Some(divergence) => Err(divergence),
+            None => Ok(()),
+        }
+    }
+
+    /// Record a divergence, keeping the first one recorded.
+    fn record(&mut self, component: &str, index: Option<usize>, expected: String, actual: String) {
+        if self.divergence.is_none() {
+            self.divergence = Some(Divergence {
+                component: component.to_string(),
+                index,
+                expected,
+                actual,
+            });
+        }
+    }
+
+    /// Compare a `f64` in bits.
+    pub fn expect_f64(&mut self, component: &str, index: Option<usize>, expected: f64, actual: f64) {
+        if !f64_identical(expected, actual) {
+            self.record(
+                component,
+                index,
+                format!("{expected:?}"),
+                format!("{actual:?}"),
+            );
+        }
+    }
+
+    /// Compare a `f32` in bits.
+    pub fn expect_f32(&mut self, component: &str, index: Option<usize>, expected: f32, actual: f32) {
+        if !f32_identical(expected, actual) {
+            self.record(
+                component,
+                index,
+                format!("{expected:?}"),
+                format!("{actual:?}"),
+            );
+        }
+    }
+
+    /// Compare a string exactly.
+    pub fn expect_str(&mut self, component: &str, index: Option<usize>, expected: &str, actual: &str) {
+        if expected != actual {
+            self.record(
+                component,
+                index,
+                format!("{expected:?}"),
+                format!("{actual:?}"),
+            );
+        }
+    }
+
+    /// Compare an optional string, discriminants included.
+    pub fn expect_opt_str(
+        &mut self,
+        component: &str,
+        index: Option<usize>,
+        expected: Option<&str>,
+        actual: Option<&str>,
+    ) {
+        if expected != actual {
+            self.record(
+                component,
+                index,
+                format!("{expected:?}"),
+                format!("{actual:?}"),
+            );
+        }
+    }
+
+    /// Compare a `bool`.
+    pub fn expect_bool(&mut self, component: &str, index: Option<usize>, expected: bool, actual: bool) {
+        if expected != actual {
+            self.record(
+                component,
+                index,
+                format!("{expected:?}"),
+                format!("{actual:?}"),
+            );
+        }
+    }
+
+    /// Compare a `u64` exactly.
+    pub fn expect_u64(&mut self, component: &str, index: Option<usize>, expected: u64, actual: u64) {
+        if expected != actual {
+            self.record(
+                component,
+                index,
+                format!("{expected}"),
+                format!("{actual}"),
+            );
+        }
+    }
+
+    /// Compare two counts exactly.
+    pub fn expect_len(&mut self, component: &str, expected: usize, actual: usize) {
+        if expected != actual {
+            self.record(
+                component,
+                None,
+                format!("{expected}"),
+                format!("{actual}"),
+            );
+        }
+    }
+
+    /// Compare any two `Eq` values, reporting them with `Debug`.
+    pub fn expect_debug_eq<T>(&mut self, component: &str, expected: &T, actual: &T)
+    where
+        T: PartialEq + std::fmt::Debug,
+    {
+        if expected != actual {
+            self.record(
+                component,
+                None,
+                format!("{expected:?}"),
+                format!("{actual:?}"),
+            );
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -1067,6 +1365,120 @@ mod tests {
         // Verify samples are preserved exactly.
         assert!(holdout.samples[0].targets.success);
         assert!(!holdout.samples[1].targets.success);
+    }
+
+    // -- exact equality primitives --
+
+    #[test]
+    fn ulp_distance_is_zero_only_for_identical_values() {
+        assert_eq!(ulp_distance(0.5, 0.5), 0);
+        assert_eq!(
+            ulp_distance(-0.0, 0.0),
+            0,
+            "the same number is zero ULP apart"
+        );
+        // Above 1.0 the spacing is 2^-52, so one `EPSILON` is one step.
+        assert_eq!(ulp_distance(1.0, 1.0 + f64::EPSILON), 1);
+        assert_eq!(ulp_distance(1.0, f64::from_bits(1.0f64.to_bits() + 1)), 1);
+        // Below 1.0 the spacing is 2^-53, so the *same* absolute `EPSILON` is
+        // two steps. The distance counts representable doubles, not absolute
+        // error, which is why it is the right unit to report a float
+        // round-trip in.
+        assert_eq!(ulp_distance(1.0, 1.0 - f64::EPSILON), 2);
+        assert_eq!(ulp_distance(1.0, f64::from_bits(1.0f64.to_bits() - 1)), 1);
+        assert_eq!(
+            ulp_distance(1.0, 2.0),
+            ulp_distance(2.0, 1.0),
+            "the distance is symmetric"
+        );
+        assert!(
+            ulp_distance(0.0, 1.0e300) > 1,
+            "distant values stay distant rather than saturating to a small number"
+        );
+        assert!(
+            ulp_distance(f64::NAN, f64::NAN) <= 1,
+            "two NaNs sharing a bit pattern are close, which is exactly why a \
+             non-finite value must be refused before this is consulted"
+        );
+    }
+
+    #[test]
+    fn f64_identical_separates_signed_zero_which_equality_does_not() {
+        // Bound first: clippy rightly refuses to be told that a constant is
+        // true, and the point of the test is the comparison, not the literal.
+        let zero: f64 = 0.0;
+        let negative_zero: f64 = -zero;
+        assert_eq!(zero, negative_zero, "numeric equality cannot tell these apart");
+        assert!(!f64_identical(zero, negative_zero), "bit identity must");
+        assert!(f64_identical(0.1, 0.1));
+        assert!(!f64_identical(0.1, 0.1 + f64::EPSILON));
+    }
+
+    #[test]
+    fn f32_identical_separates_signed_zero_and_one_ulp() {
+        assert!(!f32_identical(0.0f32, -0.0f32));
+        assert!(f32_identical(0.25f32, 0.25f32));
+        assert!(!f32_identical(0.25f32, 0.25f32 + f32::EPSILON));
+    }
+
+    #[test]
+    fn find_nonfinite_f64_refuses_the_first_in_declared_order() {
+        let ordered = [("a", 0.5f64), ("b", 1.0)];
+        assert!(find_nonfinite_f64(&ordered).is_ok());
+
+        let dirty = [("a", 0.5f64), ("b", f64::NAN), ("c", f64::INFINITY)];
+        let refusal = find_nonfinite_f64(&dirty).expect_err("b is not finite");
+        assert_eq!(refusal.component, "b", "the first offender is named");
+        assert!(refusal.value.is_nan());
+        assert!(refusal.to_string().contains("non-finite measurement at b"));
+    }
+
+    #[test]
+    fn exactness_keeps_the_first_divergence_and_short_circuits() {
+        let mut exactness = Exactness::new();
+        exactness.expect_f64("candidates[0].utility.total", Some(0), 1.5, 1.5);
+        exactness.expect_str("verdict.selected", None, "alpha", "alpha");
+        assert!(exactness.is_exact());
+
+        // A one-ULP difference is a divergence, never a "close enough".
+        exactness.expect_f64("candidates[0].utility.total", Some(0), 1.5, 1.5 + f64::EPSILON);
+        exactness.expect_str("verdict.selected", None, "alpha", "bravo");
+        let divergence = exactness.divergence().expect("divergence recorded").clone();
+        assert_eq!(divergence.component, "candidates[0].utility.total");
+        assert_eq!(divergence.index, Some(0));
+        assert!(
+            !exactness.is_exact(),
+            "a later component must not clear an earlier one"
+        );
+        assert!(divergence.to_string().contains("recorded 1.5 but replayed"));
+    }
+
+    #[test]
+    fn exactness_into_divergence_is_the_refusal() {
+        let mut exactness = Exactness::new();
+        exactness.expect_opt_str("candidate.rejection_reason", Some(2), Some("policy"), None);
+        let divergence = exactness.into_divergence().expect_err("optional discriminants differ");
+        assert_eq!(divergence.component, "candidate.rejection_reason");
+        assert_eq!(divergence.index, Some(2));
+        assert_eq!(divergence.expected, "Some(\"policy\")");
+        assert_eq!(divergence.actual, "None");
+
+        assert!(Exactness::new().into_divergence().is_ok());
+    }
+
+    #[test]
+    fn exactness_compares_counts_and_debug_values() {
+        let mut exactness = Exactness::new();
+        exactness.expect_len("candidates", 3, 3);
+        exactness.expect_u64("verdict.model_commit.hash", None, 42, 42);
+        exactness.expect_bool("candidate[1].eligible", Some(1), true, true);
+        exactness.expect_debug_eq("verdict.action", &"Keep", &"Keep");
+        assert!(exactness.is_exact());
+
+        exactness.expect_len("candidates", 3, 2);
+        let divergence = exactness.into_divergence().expect_err("length differs");
+        assert_eq!(divergence.component, "candidates");
+        assert_eq!(divergence.expected, "3");
     }
 
     #[test]
