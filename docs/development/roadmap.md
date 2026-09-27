@@ -89,7 +89,7 @@ must be typed against now exists. Development continues on `dev`.
 | `7E-2D` | `DONE` | A fitted calibrator emits a K-way distribution measured on the final vector; nothing consumes it. |
 | `7E-2E` | `DONE` | Durable, ordered, fail-closed journal; idempotency is byte-exact against the stored frame, so a retry survives a lossy float round trip. |
 | `7E-2F` | `DONE` | Immutable content-addressed snapshot, atomic pointer, journaled rollback, and a proven-unreachable mechanism. |
-| `7E-3` | `BLOCKED` | Requires calibrated offline replay/evaluation gates. |
+| `7E-3` | `DONE` | Bit-exact offline replay from the retained input, an outcome- and served-identity authority, and one recomputed release verdict that can refuse. |
 | `7F` | `BLOCKED` | Requires an accepted commit, shipping reachability, and observability. |
 | `7G` | `BLOCKED` | Requires stable real-traffic shadow evidence and rollback. |
 | `7H` | `BLOCKED` | Requires stable takeover, budget, monitoring, and rollback. |
@@ -145,6 +145,47 @@ was reverted, so the gate is proven rather than asserted. This mattered beyond t
 node itself: `7E-3` reads records back through the same parser, so a lossy round
 trip would have made its replay-equivalence gate unprovable. `7D` is unblocked and
 may consume the evaluation surface 7E-2D built.
+
+`7E-3` is `DONE`. The offline gate that decides whether a model may be considered
+at all exists, and the load-bearing part is that replay equivalence is
+**bit-identical with no tolerance anywhere**: every float goes through `to_bits`,
+never `==`, and any difference is a typed refusal naming the first differing
+component rather than a pass with a small delta. A non-finite recorded value is
+refused before any comparison, which closes the hole where two same-bit NaNs would
+score a match. The release verdict is recomputed from measurements with no stored
+boolean to disagree with, and its blockers are exposed so a reader sees which
+measurement refused.
+
+Three limitations are recorded here rather than in the node file alone, because
+they outlive the node.
+
+**A trained checkpoint does not survive plain JSON, and fails its own
+verification when it does not.** Four of 65 success parameters moved in the
+fixture, and verification hashes `f64::to_bits`, so the content address changes.
+This is arithmetic, not bad luck. The only bit-exact model persistence in the
+repository is `ml/activation.rs`, and the boundary test 7E-2F added refuses any
+other `ml` module naming it — so **no other node can persist a model in a form
+that re-verifies.** `7E-3` verifies in-memory commits and measures the hazard
+instead of hiding it, which is why it could still be accepted, but a model that
+must survive a process restart currently has no persistence path outside an inert
+module with no shipped caller. `7F` needs an accepted, serving, persisted model,
+so this is resolved before that node rather than discovered inside it. Enabling
+`serde_json`'s `float_roundtrip` workspace-wide would fix the transport for every
+node at once and remains the global change both 7E-2E and 7E-2F recorded as being
+outside any single node's ownership.
+
+**The `f32` survival claim is a measurement, not a proof.** A double-rounding
+counterexample is possible though very unlikely. Its consequence is a *refusal*,
+not a false pass, so it limits how often the gate can reach a verdict rather than
+whether a wrong verdict is safe.
+
+**Two wall-clock budgets in this project now fail only under concurrent load**,
+`shadow_overhead`'s p99 and `features::performance_10k_extractions`, neither
+attributed to any code change and neither closed. That is two of the three
+unreproduced intermittents on record. The gates need a quiet-machine precondition,
+a much looser budget with observed numbers recorded, or a deterministic proxy;
+otherwise they keep manufacturing false alarms that cost real audit time.
+
 Two limitations are recorded
 rather than smoothed over: a sample's features currently come from a snapshot
 cloned at decision time rather than a re-read of the accepted record; and dataset
