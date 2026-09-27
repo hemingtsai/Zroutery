@@ -12,6 +12,7 @@ pub mod decision_contract;
 pub mod decision_engine;
 pub mod evaluation;
 pub mod features;
+pub mod journal;
 pub mod model;
 pub mod model_identity;
 pub mod reward;
@@ -60,6 +61,13 @@ pub use evaluation::{
 pub use features::{
     extract_features, FeatureContext, RoutingFeatures, FEATURE_DIMENSION, FEATURE_SCHEMA_VERSION,
     UNKNOWN,
+};
+pub use journal::{
+    frame_checksum, CanonicalEvent, JournalError, JournalEvidence, JournalMode, JournalRecord,
+    JournalRecordBody, JournalReport, LearningJournal, RecordOutcome, SequenceFault,
+    ANCHOR_SCHEMA_VERSION, FIRST_SEQUENCE, JOURNAL_ANCHOR_NAME, JOURNAL_ANCHOR_TMP_NAME,
+    JOURNAL_LOCK_NAME, JOURNAL_LOG_NAME, JOURNAL_ROLE, JOURNAL_SCHEMA_VERSION, LEGACY_DEGRADATION,
+    MAX_FRAME_BYTES,
 };
 pub use model::{
     CostModel, LatencyModel, ModelState, Prediction, RoutingModel, SuccessModel, TtftModel,
