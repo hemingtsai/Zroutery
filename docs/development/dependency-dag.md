@@ -33,7 +33,7 @@ failed node. Historical tags are not graph edges.
 | `7A` | `PARTIAL` | `STAGE-4`, `STAGE-5` |
 | `7B` | `DONE` | `STAGE-6`, `7A` |
 | `7C` | `PARTIAL` | `7A` |
-| `7D` | `PARTIAL` | `7B`, `7C` |
+| `7D` | `DONE` | `7B`, `7C` |
 | `7E-0` | `PARTIAL` | `7C` |
 | `7E-1` | `DONE` | `7E-0`, `CORE-P1-REPAIR`, `STAGE-3`, `STAGE-4`, `STAGE-6` |
 | `7E-1A` | `DONE` | `7E-0`, `7A`, `7C` |

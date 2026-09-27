@@ -77,7 +77,7 @@ must be typed against now exists. Development continues on `dev`.
 | `7A` | `PARTIAL` | Deterministic feature extraction exists; identity/schema architecture memory is incomplete. |
 | `7B` | `DONE` | The store holds the canonical sample; production ingestion is once per request, validated, bounded by count and age, and refuses explicitly. |
 | `7C` | `PARTIAL` | Specialist baseline models work; the typed contract now exists in `ml/decision_contract.rs` but nothing produces a decision through it. |
-| `7D` | `PARTIAL` | The framework exists and its blocker is closed; holdout, calibration, and statistical gates are still unbuilt. |
+| `7D` | `DONE` | The decision is the unit of independence, the effect carries an interval, the comparator is the strongest fixed policy, and the family is corrected. |
 | `7E-0` | `PARTIAL` | 7E-1A repaired identity/replay; durable model operations and journal remain for later nodes. |
 | `7E-1` | `DONE` | All three children accepted: identity/lineage, the pure shadow seam, and the production integration that retains the decision-time input and correlates the served identity. |
 | `7E-1A` | `DONE` | Identity, lineage, schema-envelope, predictor-swap, and replay substrate accepted on main. |
@@ -185,6 +185,58 @@ attributed to any code change and neither closed. That is two of the three
 unreproduced intermittents on record. The gates need a quiet-machine precondition,
 a much looser budget with observed numbers recorded, or a deterministic proxy;
 otherwise they keep manufacturing false alarms that cost real audit time.
+
+`7D` is `DONE`, and the gap it closed is worth stating because it was about
+already-accepted work. The eleven `7E-3` blockers and every `7E-2D` calibration
+measurement are integrity, provenance and calibration checks; **not one of them
+asks whether the model ranks the winner first.** A constant predictor that is
+perfectly calibrated and replays bit-exactly therefore cleared all of `7E-2D`
+and all of `7E-3` with zero routing skill. That is not a defect in those nodes —
+`7E-3`'s own scope string said outright that its verdict was not a statistical
+claim, so it never claimed discrimination. The roadmap assigned discrimination
+to `7D`, and until now nothing implemented it.
+
+The load-bearing part is the **unit of independence**, and it is structural
+rather than documented. Within one decision the served candidate is `Option` and
+more than one served is refused, so each decision contributes one categorical
+draw, not `K` independent ones. The ledger increments the decision count once per
+decision and refuses when candidate-level totals stop reconciling, so a row-level
+analysis would break the type rather than quietly produce an interval that is too
+narrow. On the measured fixture the inflation is exactly `3.0`, and a row-level
+standard error would be narrower by exactly `root 3` — enough to certify a
+2.9-point effect as a 5-point one. Raw count, effective count and the ratio are
+all printed together, so the reader is never handed `n` without knowing which `n`
+it is.
+
+Three limitations are recorded here rather than in the node file alone, because
+they outlive the node.
+
+**A trained checkpoint does not survive plain JSON, and fails its own
+verification when it does not.** Four of 65 success parameters moved in the
+fixture, and verification hashes `f64::to_bits`, so the content address changes.
+This is arithmetic, not bad luck. The only bit-exact model persistence in the
+repository is `ml/activation.rs`, and the boundary test 7E-2F added refuses any
+other `ml` module naming it — so **no other node can persist a model in a form
+that re-verifies.** `7E-3` verifies in-memory commits and measures the hazard
+instead of hiding it, which is why it could still be accepted, but a model that
+must survive a process restart currently has no persistence path outside an inert
+module with no shipped caller. `7F` needs an accepted, serving, persisted model,
+so this is resolved before that node rather than discovered inside it. Enabling
+`serde_json`'s `float_roundtrip` workspace-wide would fix the transport for every
+node at once and remains the global change both 7E-2E and 7E-2F recorded as being
+outside any single node's ownership.
+
+**The `f32` survival claim is a measurement, not a proof.** A double-rounding
+counterexample is possible though very unlikely. Its consequence is a *refusal*,
+not a false pass, so it limits how often the gate can reach a verdict rather than
+whether a wrong verdict is safe.
+
+**Three wall-clock budgets in this project have now failed only under concurrent
+load** — the shadow p99, `features::performance_10k_extractions`, and this
+node's matrix hit the first of them again — none attributed to any code change
+and none closed. The gates need a quiet-machine precondition, a much looser
+budget with observed numbers recorded, or a deterministic proxy; otherwise they
+keep manufacturing false alarms that cost real audit time.
 
 Two limitations are recorded
 rather than smoothed over: a sample's features currently come from a snapshot

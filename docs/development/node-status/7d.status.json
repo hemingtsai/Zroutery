@@ -2,8 +2,8 @@
   "schema_version": 1,
   "node_id": "7D",
   "display_name": "7D — evaluation framework",
-  "status": "PARTIAL",
-  "implementation_state": "The evaluation framework exists, but required holdout, calibration, and statistical gates are incomplete.",
+  "status": "DONE",
+  "implementation_state": "The evaluation framework now closes the loop the roadmap left open. Statistical support is measured rather than floored: the decision is the unit of independence, the effect carries a stated-level interval, the comparator is the strongest fixed policy rather than a rate, the family is named and corrected, and the release verdict can be withheld on any of those. Attempt-level credit is attributed per candidate with the mutual exclusivity of a decision's candidates enforced by refusal.",
   "dependencies": [
     "7B",
     "7C"
@@ -17,19 +17,35 @@
     "Attempt-level attribution"
   ],
   "blocked_by": [],
-  "unblock_condition": "Unblocked: 7B is accepted, so the holdout, calibration, and statistical gates can be built and run against real collected samples.",
+  "unblock_condition": "Satisfied. All three required gates hold. The holdout and the calibration measurement were already met by accepted work and are consumed, not re-implemented; this node supplies the statistical gates and the attempt-level attribution that were explicitly deferred to it under E-092.",
   "evidence": [
     "E-005",
     "E-006",
     "E-007",
-    "E-016"
+    "E-016",
+    "E-092",
+    "E-098"
   ],
   "source_references": [
     "docs/development/repository-audit-2026-09-25.md",
+    "crates/zroutery-core/src/ml/attribution.rs",
+    "crates/zroutery-core/src/ml/statistics.rs",
     "crates/zroutery-core/src/ml/evaluation.rs",
-    "crates/zroutery-core/tests/evaluation_test.rs"
+    "crates/zroutery-core/tests/statistics_test.rs"
   ],
   "notes": [
-    "Partial local evaluation is not an accepted offline release gate."
+    "THE GAP THIS NODE FOUND, stated plainly because it is about accepted work: the eleven 7E-3 blockers and every 7E-2D calibration measurement are integrity, provenance and calibration checks. Not one of them asks whether the model ranks the winner first. A constant predictor that is perfectly calibrated and replays bit-exactly therefore clears all of 7E-2D and all of 7E-3 while having zero routing skill. This is not a defect in those nodes: 7E-3's own RELEASE_SCOPE said explicitly that its verdict was NOT a statistical claim, so it never claimed discrimination. The roadmap assigned discrimination here, and until now nothing implemented it.",
+    "THE UNIT OF INDEPENDENCE IS THE DECISION, and that is structural rather than documented. The ledger increments the decision count once per decision, and a selections_total_is_the_decision_count check refuses when the candidate-level totals stop reconciling, so an analysis that pushed one row per candidate would break the type rather than quietly produce a wrong interval. Within one decision the served candidate is Option, and more than one served is refused as MultipleServedInOneDecision.",
+    "THE INFLATION IS REPORTED, not just avoided. raw_axis_observations, effective_decisions and the ratio between them all appear in the output next to each other, and every accumulated quantity is a usize with each f64 a closed-form function of two integers, so there is no floating-point summation over a row axis at all and the 7E-2D ordering bug class is absent rather than sorted around. Measured on the accept fixture: raw 12000, effective 4000, inflation exactly 3.0. A row-level standard error would be 0.006455 against the decision-level 0.011180, narrower by exactly root 3, which would have certified a 2.9-point effect as a 5-point effect.",
+    "PROCEDURES, and why. Exact conditional McNemar on the paired decision-level hit indicator, because the two arms are scored on the same decisions so the design is paired and per-decision difficulty is common to both; an unpaired two-proportion test would discard the pairing and is anti-conservative under decision-level heterogeneity. Wald on the paired difference for the interval, with the approximation's weakness at small n stated in-source, which is why adequacy is evaluated first and refuses before the approximation can carry a decision. Wilson score on the two marginal rates, which does behave at small n. Holm-Bonferroni over a family that is named and printed, chosen because it is exact under arbitrary dependence and the per-candidate tests share decisions.",
+    "NO RESAMPLING ANYWHERE, therefore no seed. rand appears in neither new module. Every number is analytic, so nothing depends on StdRng's algorithm staying stable across crate versions, and resampling would have added Monte-Carlo error where a closed form exists.",
+    "THE GATE IS CALIBRATED, not merely strict, and both directions were measured rather than asserted. A real effect is accepted at effect 0.166500, interval [0.144587, 0.188413] at the 0.975 level, p below 1e-300, Holm-adjusted over a family of 4. A true null is refused at effect exactly 0.000000, interval [-0.017896, 0.017896], adjusted p 1.0, with the fixture balanced by construction so n10 equals n01. And a real, hugely significant, amply sampled effect is still refused when it is too small to release for: effect 0.036650 with interval upper bound 0.046015 against a 0.05 minimum, p below 1e-300 at 20000 effective decisions, refused on the interval alone.",
+    "A MODEL WITH NO SKILL CANNOT PASS, which is the direct answer to a strawman baseline. When the model IS the best fixed policy the gate picks that policy as its own comparator, the two arms become identical, and the result is interval_not_computable rather than a zero-width interval claiming the difference is known to be exactly nothing.",
+    "TWO ROBUSTNESS DEFECTS THE WORKER FOUND IN ITS OWN CODE AND FIXED are recorded because they are the kind that ship silently: a usize subtraction wrapped on a negative effect, so a no-skill model would have reported a spectacular positive effect instead of a negative one; and an alpha of 1e-30 made the two-sided level round to 1.0 and the z quantile infinite, which is now refused at the config boundary because an interval with no finite upper bound is not an interval.",
+    "NO CONFIGURATION CAN SWITCH THE GATE OFF. GateConfig::statistics is required and never defaulted to something permissive, there is no value of StatisticalConfig that disables the gate, and a vacuous claim is refused as invalid_claim. A test walks four values and shows each withholds MORE, never less.",
+    "THE ADDITIVE-ONLY BOUNDARY HELD and was checked by hand. offline_gate.rs is 187 insertions and 4 deletions, and the 4 are two import lines reflowed, one doc comment expanded and one format string rewrapped; the RELEASE_SCOPE value is byte-identical and every prior import survives. The preservation test is cumulative on purpose, because 7E-3's counts interact, and at every step it asserts that the constituent just broken withholds, that nothing which withheld a moment ago has stopped withholding, and that the healthy measurements never withheld at all.",
+    "TWO ASSERTIONS IN 7E-3's ACCEPTED SUITE WERE RE-SCOPED, and the parent reviewed the diff rather than the account. The no-stored-boolean claim is preserved and in one place strengthened. The positive path is now asserted per node against an explicit list of all eleven 7E-3 blockers by exact string, so any change to a 7E-3 blocker text fails loudly; a blocker-count assertion was upgraded to also check that the blocker added is the right one, which a count alone would not catch. Editing that fixture was mechanically necessary because it constructs GateConfig literally, and no escape hatch, bypass or pre-7D verdict accessor was added to make the old fixture pass.",
+    "A PARENT CORRECTION WAS APPLIED to RELEASE_SCOPE's documentation. Its value still says the verdict is not a statistical claim, which remains true of the integrity constituents but no longer describes the combined verdict now that a statistical constituent exists. A doc paragraph says which constituents it covers and points at STATISTICAL_SCOPE; the value is unchanged.",
+    "THREE WALL-CLOCK BUDGETS in this project have now failed only under concurrent load and none is closed. This node's matrix hit the same shadow p99 assertion that is already recorded as E-094 and the parent did not reproduce it."
   ]
 }
