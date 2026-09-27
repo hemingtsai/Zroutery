@@ -1,10 +1,12 @@
 //! Zroutery core: aggregate several LLM providers behind one endpoint that
-//! speaks both the Anthropic Messages API and the OpenAI Chat Completions API.
+//! speaks the Anthropic Messages API, the OpenAI Chat Completions and Responses
+//! APIs, and Gemini's `generateContent`.
 //!
 //! Layering:
 //!
 //! ```text
-//! ingress (anthropic | openai)  ->  IR  ->  router  ->  egress (anthropic | openai)
+//! ingress (anthropic | openai | responses | gemini)
+//!     -> IR -> router -> egress (anthropic | openai)
 //! ```
 //!
 //! * [`ir`] is the canonical representation every dialect is translated through.
@@ -17,7 +19,7 @@
 //!   [`registry`], which says which model it wants.
 //! * [`registry`] resolves a client model id (including `*-class` virtual ids).
 //! * [`router`] picks candidates, tracks health and drives failover.
-//! * [`protocol`] contains the two decoders and two encoders plus SSE handling.
+//! * [`protocol`] contains one decoder and encoder per dialect, plus SSE handling.
 //! * [`upstream`] talks HTTP to providers.
 //! * [`server`] exposes the axum app used by the desktop shell.
 

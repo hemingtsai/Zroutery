@@ -7,8 +7,8 @@ on:
     branches: [main]
 
 # The commit-message convention has its own workflow; this one is about the
-# code: lint and test the GUI-free core on Linux, and make sure the desktop
-# shell still compiles on the platform it ships for.
+# code: lint and test the GUI-free core on Linux, and on the platform the
+# desktop shell ships for, check that it compiles and run the proxy end to end.
 env:
   CARGO_TERM_COLOR: always
 
@@ -28,7 +28,7 @@ jobs:
         run: cargo test -p zroutery-core --all-features
 
   desktop:
-    name: desktop shell compiles
+    name: desktop shell and smoke
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -36,3 +36,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Check workspace
         run: cargo check --workspace
+      - name: Build the headless binary
+        run: cargo build -p zroutery --bin zroutery-headless
+      # The smoke suite starts a mock upstream and the real binary, so it needs
+      # the platform the desktop shell ships for; it is the only job that
+      # exercises the proxy end to end, which is why it lives here.
+      - name: End-to-end smoke
+        run: python3 scripts/smoke_test.py

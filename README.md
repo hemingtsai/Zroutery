@@ -1,14 +1,17 @@
 # Zroutery
 
-把多个 LLM provider 聚合成**一个**本地端点，同时提供 Anthropic Messages API 和 OpenAI Chat
-Completions API。除了真实模型 id，还额外暴露 `opus-class` / `sonnet-class` / `haiku-class`
-三个虚拟模型，后端按你**手动指定**的级别去选模型。
+把多个 LLM provider 聚合成**一个**本地端点，入口同时支持 Anthropic Messages、OpenAI Chat
+Completions、OpenAI Responses 三种方言，外加 Gemini 原生 `generateContent`。除了真实模型 id，
+还额外暴露 `fast-class` / `standard-class` / `reasoning-class` 三个虚拟模型（名字随设置里的
+**层级命名**变，见下），后端按你**手动指定**的级别去选模型。
 
 macOS 桌面应用：常驻菜单栏，无 Dock 图标，关窗不退出。
 
 ```
-客户端 ──┬─ POST /v1/messages          (Anthropic 方言)
-         └─ POST /v1/chat/completions  (OpenAI 方言)
+客户端 ──┬─ POST /v1/messages           (Anthropic 方言)
+         ├─ POST /v1/chat/completions   (OpenAI 方言)
+         ├─ POST /v1/responses          (OpenAI Responses 方言)
+         └─ POST /v1/generateContent    (Gemini 方言)
                     │
               统一 IR + 路由 + 失败转移
                     │
@@ -112,13 +115,17 @@ openrouter + deepseek/r1:free →  openrouter-deepseek-r1-free   （/ 和 : 会�
 
 从 0.1.x 升级：旧配置里手写的 `id` 会自动变成 alias，老客户端不用改；界面会提示一次新 id 是什么。
 
-按简报里的例子配完之后，对外可用的模型是：
+按简报里的例子配完之后，对外可用的模型是（第二行是同一个 class 的成员）：
 
 ```
-deepseek-deepseek-v4-flash (haiku)   deepseek-deepseek-v4-pro (sonnet)
-openai-gpt-5.3-sol (opus)
-opus-class          sonnet-class          haiku-class
+fast-class                    standard-class                 reasoning-class
+deepseek-deepseek-v4-flash    deepseek-deepseek-v4-pro       openai-gpt-5.3-sol
 ```
+
+虚拟模型的名字由设置里的**层级命名**（`routing.naming_style`）决定，默认 `internal` 就是上面这
+三个；换成 `anthropic` 是 `haiku-class` / `sonnet-class` / `opus-class`，换成 `openai` 是
+`luna-class` / `terra-class` / `sol-class`。另外两套名字**仍然能解析**（老配置、老客户端不用改），
+只是模型列表里只出现当前那套。
 
 ## 接客户端
 
@@ -127,7 +134,7 @@ Anthropic 风格（含 Claude Code）：
 ```sh
 export ANTHROPIC_BASE_URL=http://127.0.0.1:8787
 export ANTHROPIC_AUTH_TOKEN=zr-…        # 界面里 Copy token
-export ANTHROPIC_MODEL=sonnet-class
+export ANTHROPIC_MODEL=standard-class
 ```
 
 OpenAI 风格：
@@ -140,7 +147,7 @@ export OPENAI_API_KEY=zr-…
 ```sh
 curl http://127.0.0.1:8787/v1/messages -H "x-api-key: $TOKEN" \
   -H 'content-type: application/json' -d '{
-    "model": "opus-class", "max_tokens": 256, "stream": true,
+    "model": "reasoning-class", "max_tokens": 256, "stream": true,
     "messages": [{"role": "user", "content": "hi"}]
   }'
 ```
@@ -194,7 +201,7 @@ usage 算出每次请求的花费：
 被预算拦下的请求不重试、不失败转移、也不计入模型健康度——重试就等于把刚拒掉的钱花出去。
 
 ```
-$ curl ... -d '{"model":"sonnet-class",...}'
+$ curl ... -d '{"model":"standard-class",...}'
 {"error":{"type":"budget_exceeded",
           "message":"stopped by a budget: the today limit for everything (5.00 USD) is used up"}}
 ```
@@ -283,7 +290,7 @@ zroutery-headless --balances     # 逐个查、打印、退出，适合塞进 cr
 # deepseek: 48.75 CNY remaining
 
 zroutery-headless --elect        # 跑一次选举，打印每个 class 的排序然后退出
-# sonnet-class:
+# standard-class:
 #   deepseek-deepseek-v4-pro     primary: 640 ms, 0.0060 CNY per reference request
 #   openai-gpt-sonnet            fallback 1: 710 ms, 0.0600 CNY per reference request
 ```
@@ -295,7 +302,11 @@ zroutery-headless --elect        # 跑一次选举，打印每个 class 的排�
 | POST | `/v1/messages` | Anthropic Messages，支持 SSE |
 | POST | `/v1/messages/count_tokens` | 本地 token 估算 + 价格估算，不打上游 |
 | POST | `/v1/chat/completions` | OpenAI Chat Completions，支持 SSE |
-| GET | `/v1/models`、`/v1/models/{id}` | 同一份 JSON 同时满足两种客户端 |
+| POST | `/v1/responses` | OpenAI Responses，支持 SSE；答案会存进内存供取回 |
+| GET/DELETE | `/v1/responses/{id}` | 取回或删除已存响应 |
+| POST | `/v1/responses/{id}/cancel` | 取消一个响应，留下 `cancelled` 占位 |
+| POST | `/v1/generateContent` | Gemini 原生入口（非流式，见下） |
+| GET | `/v1/models`、`/v1/models/{id}` | 同一份 JSON 同时满足 Anthropic 和 OpenAI 两种客户端 |
 | GET | `/v1/status` | 版本、模型数、provider 数（需要 token） |
 | GET | `/health` | 只回 `{"status":"ok"}`，唯一免鉴权的路由 |
 
@@ -328,18 +339,20 @@ zroutery-headless --elect        # 跑一次选举，打印每个 class 的排�
 ## 项目结构
 
 ```
-crates/zroutery-core/     协议转换、模型注册表、路由、计费、预算、HTTP 服务（无 GUI 依赖，1166 个测试）
-  src/ir.rs               统一中间表示：2 个 decoder + 2 个 encoder，避免 N×M
-  src/protocol/           anthropic.rs / openai.rs，含两个方向的 SSE 状态机
+crates/zroutery-core/     协议转换、模型注册表、路由、计费、预算、HTTP 服务（无 GUI 依赖，879 个测试）
+  src/ir/                 统一中间表示：每个方言一套 decoder + encoder（4 套），避免 N×M
+  src/protocol/           anthropic.rs / openai.rs / responses.rs / gemini.rs + SSE 状态机
   src/billing.rs          价格计算（按币种分开）、余额 probe 与五个内置预设
   src/budget.rs           支出账本（落盘）与限额判定：拒绝或降级
   src/config.rs           provider、模型身份与 id 推导、路由策略、配置迁移
   src/registry.rs         模型 id 解析：id/别名走一次哈希，class 成员表预先算好
-  src/election.rs         按延迟+价格给类内成员打分排序（纯函数，15 个测试）
+  src/election.rs         按延迟+价格给类内成员打分排序（纯函数，17 个测试）
   src/router.rs           类内候选排序、健康度、熔断、失败转移
   src/server/mod.rs       axum 路由、鉴权、请求体上限、CORS、选举执行
   src/server/pipeline.rs  单次请求的候选轮询、计费记账、SSE 管道
   src/sync.rs             容忍中毒的锁封装（一个线程 panic 不该拖垮整个代理）
+  src/account/            可选账号子系统（feature = "account"）：额度/用量/限流状态与 provider trait
+    adapters/newapi.rs    NewAPI 面板适配器（feature = "newapi"）：登录态与令牌、额度、用量、签到、健康检查（尚未接入桌面外壳的配置与界面）
 src-tauri/                桌面外壳：菜单栏、钥匙串、配置持久化、Tauri 命令
 ui/                       React + TypeScript 仪表盘
 scripts/smoke_test.py     端到端冒烟测试（假 provider → 真二进制 → 真 HTTP）
@@ -348,9 +361,10 @@ scripts/ui_layout_test.py 无头 Chromium 量界面控件的高度和基线
 
 ## 协议转换支持情况
 
-已覆盖：文本、system prompt、多轮、工具调用（含流式增量 JSON）、工具结果、图片、
-extended thinking ↔ `reasoning_content`、停止原因、usage（含缓存命中和 reasoning tokens）、
-`stop_sequences` ↔ `stop`、`reasoning_effort` ↔ thinking budget。
+四个入口方言（Anthropic Messages、OpenAI Chat Completions、OpenAI Responses、Gemini
+`generateContent`）走同一套转换，已覆盖：文本、system prompt、多轮、工具调用（含流式增量 JSON）、
+工具结果、图片、extended thinking ↔ `reasoning_content`、停止原因、usage（含缓存命中和
+reasoning tokens）、`stop_sequences` ↔ `stop`、`reasoning_effort` ↔ thinking budget。
 
 已知限制：
 
@@ -359,11 +373,17 @@ extended thinking ↔ `reasoning_content`、停止原因、usage（含缓存命�
 - Anthropic 的 `signature` / `redacted_thinking` 在转成 OpenAI 方言时会丢失，反向没问题。
 - 流式一旦开始就不再转移：握手失败可以换下一个候选，中途断了只能把错误透传给客户端。
 - 音频、文件、server-side tools 这类块会被丢掉而不是报错。
+- Gemini 只接了 `generateContent`：它的流式接口是 `:streamGenerateContent`，本代理没有这个路径，
+  所以 Gemini 客户端拿不到 SSE（其他三种方言都有）。
+- `/v1/responses` 的存储是内存 + 有界（默认 1000 条，超出淘汰最早的），不是持久化；进程退出即
+  取不回。
 
 ## 开发提示
 
 - provider 的 “Compatibility” 开关用来对付 “OpenAI 兼容” 的方言差异：推理模型拒绝
   `max_tokens` / `temperature`，部分网关不认 `stream_options`。
-- `cargo test -p zroutery-core` 只跑纯逻辑，秒级；`pnpm smoke` 验证真实进程。
+- `cargo test -p zroutery-core` 只跑纯逻辑，879 个测试，秒级；加 `--all-features` 会把 `ml` /
+  `account` 一起编译测试，1294 个。`pnpm smoke` 验证真实进程。
+- 开发流程、历史处理记录和子系统设计记录都在 [docs/development/](docs/development/README.md)。
 - 想看请求细节：`ZROUTERY_LOG=debug`。
 - 价格是每百万 token，不是每 token；从目录里自动填的价格已经换算过了。
