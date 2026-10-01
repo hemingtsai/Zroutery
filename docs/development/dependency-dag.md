@@ -79,7 +79,7 @@ failed node. Historical tags are not graph edges.
 | `TEST-DIFF-CHECK` | `DONE` | none |
 | `CI-CORE` | `DONE` | none |
 | `CI-DESKTOP` | `DONE` | none |
-| `TEST-PACKAGING` | `QUEUED` | `CI-DESKTOP` |
+| `TEST-PACKAGING` | `DONE` | `CI-DESKTOP` |
 | `TEST-REAL-E2E` | `BLOCKED` | `NEWAPI` |
 | `TEST-COMMIT-CONTRACT` | `DONE` | `COMMIT-CONTRACT` |
 | `ORCH-INFRA` | `DONE` | none |
@@ -166,7 +166,8 @@ claimed until both ownership and migration inputs are real and conflict-safe.
   `TEST-CLIPPY`, `TEST-SMOKE`, and `TEST-LAYOUT-BROWSER`.
 - `CI-CORE` and `CI-DESKTOP` are external evidence nodes with no local
   dependency. Their scope is recorded in the evidence registry.
-- `TEST-PACKAGING` is `QUEUED`; `7F` cannot pass without it.
+- `TEST-PACKAGING` is `DONE`, so `7F`'s named blocker is cleared. `7F` stays
+  `BLOCKED` on `OBSERVABILITY`, which is `READY` and not started.
 - `TEST-REAL-E2E` is `BLOCKED` behind the NewAPI contract and external
   protocol/credential evidence.
 - `TEST-COMMIT-CONTRACT` is `QUEUED` behind the separate

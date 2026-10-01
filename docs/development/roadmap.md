@@ -247,6 +247,33 @@ small cost: the shadow p99 moved from 385.6µs to 406.4µs against a 3ms budget,
 so nothing is near a ceiling, but the load-fragile gates matter more now, not
 less.
 
+**`TEST-PACKAGING` is `DONE`, and what it closed was a real hole.**
+`CI-DESKTOP` had been marked done on the strength of a GitHub Actions run while
+recording, in its own note, that it was *not a Windows gate*; and this node's own
+note said an external workspace check is not packaging. Nobody had run
+`tauri build` to completion here, and nobody had looked at the binary it
+produces. The accepted 7E-2F boundary test is **source-level**: it proves nobody
+*wrote* a call into the shipped product, not that the capability is not *in* the
+binary. That stronger witness now exists — the built executable is scanned for
+the 32 forbidden activation symbols plus ml-module evidence in both ASCII and
+UTF-16LE — and the parent confirmed it is not vacuous by planting violations and
+watching each one get caught.
+
+Three limits are recorded rather than smoothed over, and the second matters for
+planning. The **MSI installer path is untested**: it returned 1603 for want of
+privileges, so install and reinstall are carried by the NSIS installer alone.
+The `app` and `dmg` bundle targets were never built, being macOS formats, and
+the committed configuration was deliberately left naming them rather than
+narrowed to look Windows-clean. And the scan is **string-level evidence, not a
+disassembly proof** — no symbol table was consulted, because the release profile
+strips.
+
+The limit that outlives the node: **both new gates are manual.** Nothing runs
+them automatically; CI only listens on `main` and does not build the desktop
+artifact. A gate nobody runs is a gate that rots, and these two protect nobody
+today without a human invoking them. Wiring them is larger work than this node
+and belongs with whoever owns CI.
+
 Two limitations are recorded
 rather than smoothed over: a sample's features currently come from a snapshot
 cloned at decision time rather than a re-read of the accepted record; and dataset
@@ -290,7 +317,7 @@ real-provider E2E, or automatic model activation is authorized by this roadmap.
 | `TEST-DIFF-CHECK` | `DONE` | `git diff --check` passed at the audited baseline. |
 | `CI-CORE` | `DONE` | External run `36014406507` passed Linux core all-feature clippy/tests only. |
 | `CI-DESKTOP` | `DONE` | External run `36014406507` passed a macOS workspace check only. |
-| `TEST-PACKAGING` | `QUEUED` | No packaging gate was run in the audit; it remains unverified. |
+| `TEST-PACKAGING` | `DONE` | The desktop product builds to installable Windows artifacts, and two repeatable gates record the shipped binary's contents and the install/reinstall/uninstall behaviour. |
 | `TEST-REAL-E2E` | `BLOCKED` | External protocol fixtures, credentials, and a real lifecycle contract are absent. |
 | `TEST-COMMIT-CONTRACT` | `DONE` | Deterministic validator, compatibility scopes, global statuses, and real Git range passed. |
 

@@ -2,8 +2,8 @@
   "schema_version": 1,
   "node_id": "TEST-PACKAGING",
   "display_name": "Desktop packaging gate",
-  "status": "QUEUED",
-  "implementation_state": "No packaging gate was run in the audit.",
+  "status": "DONE",
+  "implementation_state": "The desktop product builds to installable Windows artifacts on an exact revision, and two repeatable gates now record what the shipped binary does and does not contain and whether an install survives a reinstall. The artifact gate works at the binary level rather than the source level, which is the part that did not exist before: the accepted 7E-2F boundary test proves nobody wrote a call, and this proves the call is not in the shipped image.",
   "dependencies": [
     "CI-DESKTOP"
   ],
@@ -16,17 +16,34 @@
     "rollback/reinstall check"
   ],
   "blocked_by": [],
-  "unblock_condition": "Run and record a packaging/reachability/rollback gate on an exact revision.",
+  "unblock_condition": "Satisfied for the Windows artifact. All three gates ran on revision 170c580 and are recorded; two of the four configured bundle targets and the MSI installer path were not exercised and are named below rather than counted as passes.",
   "evidence": [
     "E-015",
-    "E-016"
+    "E-016",
+    "E-100"
   ],
   "source_references": [
     "docs/development/repository-audit-2026-09-25.md",
     "src-tauri/Cargo.toml",
-    "package.json"
+    "src-tauri/tauri.conf.json",
+    "package.json",
+    "scripts/desktop_artifact_test.py",
+    "scripts/desktop_installer_test.py",
+    "scripts/desktop_packaging_record.md"
   ],
   "notes": [
-    "External workspace check is not packaging."
+    "THE BUILD, on revision 170c580: pnpm install --frozen-lockfile, then tauri build restricted to the two Windows bundles, exit 0 in 739s. Artifacts: target/release/zroutery.exe at 17,675,264 bytes, Zroutery_0.8.0_x64_en-US.msi at 13,873,152 bytes, Zroutery_0.8.0_x64-setup.exe at 11,762,956 bytes, each with a recorded SHA-256. The restriction is structural rather than convenient: app and dmg are macOS bundle formats with no Windows producer, and the CLI's own accepted values on this platform are exactly msi and nsis.",
+    "The committed tauri.conf.json was deliberately NOT edited to look Windows-clean. Narrowing the configured targets would hide an untested platform, which is the thing this gate exists to catch, so app and dmg stay configured and stay recorded as untested.",
+    "REACHABILITY IS A BINARY-LEVEL NEGATIVE, and the parent verified it is not vacuous rather than believing the self-test. The gate scans the built executable for the 32 forbidden activation symbols plus 8 ml-module markers, in ASCII and UTF-16LE, reporting byte offsets. The parent planted a violation four ways and every one was caught with a non-zero exit: an ASCII ActivationStore at 0x10DB402, a UTF-16LE SnapshotId at 0x10DB404, an empty file, and a nonexistent path. It fails closed on an unreadable or missing artifact rather than passing.",
+    "The symbol list is cross-checked, not merely followed. The gate parses the let-symbols block out of the accepted Rust boundary test at run time AND compares it against its own copy, refusing on disagreement. The parent confirmed this by planting a probe symbol into the Rust test: the gate reported the drift and failed rather than silently absorbing it. That is stronger than the worker claimed, which was that the list cannot drift; the truth is that a drift is loud.",
+    "THE NEGATIVE IS REAL because the scanner proves itself before its verdict is believed. It first locates control strings the build is obliged to embed, and it was that control which caught the worker's own first draft: the draft asserted shortDescription was embedded, it is not, the gate returned INCONCLUSIVE and exited non-zero rather than certifying the negative, and the worker then measured the artifact directly instead of relaxing the check.",
+    "The artifact contains 582 embedded .rs source-path literals, 16 of them under crates/zroutery-core/src including server/mod.rs, and none with an ml segment; neither src/ml/ nor src\\ml\\ appears at all. Under strip = true, had the activation module been compiled in, its path, panic locations, Display and Debug strings and type names would be in .rdata.",
+    "HONEST LIMIT, stated by the worker and not overstated here: this is string-level evidence about the shipped image, not a disassembly proof that a type was never instantiated, and no .pdb symbol table was consulted because the release profile strips. The gate makes no claim that the ml feature is reachable, which is deliberately unwanted under 7E-2F.",
+    "THE BOUNDARY HELD and the parent checked it rather than taking the word for it. git blob hashes at the base and at HEAD are identical for the 7E-2F boundary test and for src-tauri/Cargo.toml, package.json, the root Cargo.toml and tauri.conf.json; the diff is three new files and zero deletions; nothing under docs, server, crates/zroutery-core/src, ui or src-tauri changed. The boundary test itself passes unmodified, 31 of 31 including nothing_in_the_shipped_product_can_name_this_module.",
+    "ROLLBACK: silent install exit 0, exactly one HKCU uninstall entry; the same installer run again over that install exit 0 with the installed bytes, the directory and the registry entry unchanged, no duplicate executable, no .tmp or .old residue and nothing left running; uninstall exit 0 with the executable, directory and registry entry all gone. All four conditions were required.",
+    "THE MSI PATH WAS ATTEMPTED AND IS RECORDED AS BLOCKED, NOT PASSED. msiexec returned 1603 with Error 1925, insufficient privileges, because it is a per-machine install and the shell is not elevated. The install and reinstall gate is carried by the NSIS installer alone. The machine was confirmed clean afterwards.",
+    "The gate failed twice before it passed, and both times the GATE was wrong rather than the product. It first asserted the installed executable hash-equals target/release; they differ in exactly three bytes, because tauri build patches the binary once per bundle with a __TAURI_BUNDLE_TYPE_VAR_ marker. The parent verified this independently by installing and comparing byte by byte: three bytes differ at exactly 0xA004EF, decoding as ASCII NSS in the installed copy against UNK in target/release. The gate also read the registry the instant the asynchronous uninstaller exited and reported a leftover that did not exist. Both defects are fixed and the invariant now asserted is the one that matters: every install of this installer writes the same bytes.",
+    "KNOWN GAP, stated because a gate nobody runs is a gate that rots: both scripts are repeatable but neither is wired into any pipeline, so they are manual gates today. CI only listens on main and does not build the desktop artifact. Until that changes, these two scripts protect nobody automatically, and that is a larger piece of work than this node.",
+    "One environment finding for whoever runs this next: pnpm build cannot carry the bundle restriction, because pnpm mangles --bundles=msi,nsis into a single invalid value. The Tauri CLI has to be invoked directly."
   ]
 }
