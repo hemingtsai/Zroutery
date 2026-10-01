@@ -212,31 +212,40 @@ Three limitations are recorded here rather than in the node file alone, because
 they outlive the node.
 
 **A trained checkpoint does not survive plain JSON, and fails its own
-verification when it does not.** Four of 65 success parameters moved in the
-fixture, and verification hashes `f64::to_bits`, so the content address changes.
-This is arithmetic, not bad luck. The only bit-exact model persistence in the
-repository is `ml/activation.rs`, and the boundary test 7E-2F added refuses any
-other `ml` module naming it — so **no other node can persist a model in a form
-that re-verifies.** `7E-3` verifies in-memory commits and measures the hazard
-instead of hiding it, which is why it could still be accepted, but a model that
-must survive a process restart currently has no persistence path outside an inert
-module with no shipped caller. `7F` needs an accepted, serving, persisted model,
-so this is resolved before that node rather than discovered inside it. Enabling
-`serde_json`'s `float_roundtrip` workspace-wide would fix the transport for every
-node at once and remains the global change both 7E-2E and 7E-2F recorded as being
-outside any single node's ownership.
+verification when it does not.** RESOLVED. Four of 65 success parameters moved
+in the fixture, and verification hashes `f64::to_bits`, so the content address
+changes. That was arithmetic, not bad luck. The owner authorised the global
+change that four separate nodes had recorded as outside their ownership:
+`serde_json`'s `float_roundtrip` is now enabled workspace-wide, so parsing is
+correctly rounded and the shortest-round-trip decimal parses back to the
+original bits. A plain JSON round trip of a trained commit now verifies, so the
+persistence path exists without touching the `activation` boundary, and `7F` is
+not blocked by it.
 
-**The `f32` survival claim is a measurement, not a proof.** A double-rounding
-counterexample is possible though very unlikely. Its consequence is a *refusal*,
-not a false pass, so it limits how often the gate can reach a verdict rather than
-whether a wrong verdict is safe.
+The consequences are recorded rather than tidied away. The `activation` wire
+form is now **redundancy rather than necessity** and is kept only because it is
+lossless by construction rather than by the current configuration of a
+dependency, and because it carries a schema envelope the bare commit lacks.
+The hazard can return, which is why the journal still compares bytes rather than
+parsed values, and why the release verdict still recomputes float fidelity on
+every run — that constituent now reports exact and would withhold the verdict if
+the transport regressed.
+
+**The `f32` survival claim is moot rather than confirmed.** It was recorded as a
+measurement and not a proof, because a double-rounding counterexample was
+possible on the old transport. That transport is gone, so the worry no longer
+applies either way.
 
 **Three wall-clock budgets in this project have now failed only under concurrent
 load** — the shadow p99, `features::performance_10k_extractions`, and this
 node's matrix hit the first of them again — none attributed to any code change
 and none closed. The gates need a quiet-machine precondition, a much looser
 budget with observed numbers recorded, or a deterministic proxy; otherwise they
-keep manufacturing false alarms that cost real audit time.
+keep manufacturing false alarms that cost real audit time. Correctly-rounded
+float parsing is also slower than the fast path it replaced, which is a real if
+small cost: the shadow p99 moved from 385.6µs to 406.4µs against a 3ms budget,
+so nothing is near a ceiling, but the load-fragile gates matter more now, not
+less.
 
 Two limitations are recorded
 rather than smoothed over: a sample's features currently come from a snapshot
