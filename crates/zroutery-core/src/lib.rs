@@ -38,6 +38,7 @@ pub mod media;
 pub mod migration;
 #[cfg(feature = "ml")]
 pub mod ml;
+pub mod observability;
 pub mod observation;
 pub mod outcome;
 pub mod policy;
