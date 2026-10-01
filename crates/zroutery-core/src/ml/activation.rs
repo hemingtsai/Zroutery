@@ -115,15 +115,25 @@
 //!
 //! # Why the snapshot has its own wire form
 //!
-//! A trained checkpoint **cannot** be written as ordinary JSON in this workspace
-//! and then verified again. `serde_json` is used here without its
-//! `float_roundtrip` feature, so its float *parsing* is a fast path that is not
-//! correctly rounded: a trained ensemble's `f64` parameters come back one or two
-//! ULP different after a round trip. The accepted `ModelState::verify_checksum`
-//! hashes `f64::to_bits` and the accepted commit identity hashes the
-//! checkpoint's content hash, so a round-tripped checkpoint fails both — a
-//! snapshot stored as plain JSON would refuse to load itself, and no amount of
-//! care in the surrounding mechanism would fix it.
+//! This section is a historical record, and it is kept because the reasoning is
+//! still worth having. It is NOT a statement about the current workspace.
+//!
+//! A trained checkpoint **could not** be written as ordinary JSON here and then
+//! verified again. `serde_json` was used without its `float_roundtrip` feature,
+//! so its float *parsing* was a fast path that is not correctly rounded: a
+//! trained ensemble's `f64` parameters came back one or two ULP different after a
+//! round trip. The accepted `ModelState::verify_checksum` hashes `f64::to_bits`
+//! and the accepted commit identity hashes the checkpoint's content hash, so a
+//! round-tripped checkpoint failed both — a snapshot stored as plain JSON refused
+//! to load itself, and no amount of care in the surrounding mechanism would have
+//! fixed it. That was measured, not assumed, and recorded as E-097.
+//!
+//! **The workspace now enables `float_roundtrip` workspace-wide, so plain JSON is
+//! lossless here too and this is no longer true.** The wire form below is
+//! therefore redundancy rather than necessity: it is still guaranteed lossless by
+//! construction, and it still carries the schema envelope and the snapshot
+//! identity binding that plain JSON of a bare commit would not. Keeping it is
+//! deliberate. Claiming it is still *necessary* would not be.
 //!
 //! So [`SnapshotFile`] carries the commit as [`CommitFile`], whose model
 //! parameters are 16 hex digits of their IEEE-754 bits. That is a transport
@@ -368,7 +378,8 @@ pub fn snapshot_id_for(commit: &ModelCommit) -> SnapshotId {
 ///
 /// The commit is carried as [`CommitFile`], not as a `ModelCommit`, because of
 /// the reason in that type's documentation: a plain JSON encoding of a
-/// checkpoint does not survive a round trip in this workspace.
+/// checkpoint did not survive a round trip when this module was written, and
+/// this form is guaranteed to rather than incidentally so.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SnapshotFile {
     /// The snapshot envelope version.
@@ -438,14 +449,21 @@ impl SnapshotFile {
 ///
 /// # Why this type exists at all
 ///
-/// A `ModelCheckpoint` cannot be written as ordinary JSON in this workspace and
-/// then verified again. `serde_json` is used without its `float_roundtrip`
-/// feature, so its float parsing is a fast path that is not correctly rounded:
-/// a trained ensemble's `f64` parameters come back **1–2 ULP different** after a
-/// round trip. The accepted `ModelState::verify_checksum` hashes
-/// `f64::to_bits`, and the accepted commit identity hashes the checkpoint's
-/// content hash, so a round-tripped checkpoint fails both — a snapshot stored as
-/// plain JSON would refuse to load itself.
+/// It existed because a `ModelCheckpoint` **could not** be written as ordinary
+/// JSON here and then verified again. `serde_json` was used without its
+/// `float_roundtrip` feature, so its float parsing was a fast path that is not
+/// correctly rounded: a trained ensemble's `f64` parameters came back **1–2 ULP
+/// different** after a round trip. The accepted `ModelState::verify_checksum`
+/// hashes `f64::to_bits`, and the accepted commit identity hashes the
+/// checkpoint's content hash, so a round-tripped checkpoint failed both — a
+/// snapshot stored as plain JSON refused to load itself.
+///
+/// **That is no longer true of this workspace.** `float_roundtrip` is enabled
+/// workspace-wide, so ordinary JSON is lossless here and this type is
+/// redundancy rather than necessity. It is kept because it is guaranteed
+/// lossless by construction rather than by the current configuration of a
+/// dependency, and because it carries the schema envelope the bare commit does
+/// not.
 ///
 /// Writing the parameters as 16 hex digits of their IEEE-754 bits removes the
 /// decimal round trip entirely, and it is a transport change only: the values are

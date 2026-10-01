@@ -1893,7 +1893,7 @@ fn a_lost_rename_after_a_first_activation_is_detected_not_silently_accepted() {
 }
 
 #[test]
-fn a_snapshot_survives_the_disk_bit_exactly_which_plain_json_would_not() {
+fn a_snapshot_survives_the_disk_bit_exactly_and_so_does_plain_json_now() {
     let temp = scratch();
     let root = store_root(temp.path());
     let mut store = ModelStore::with_model_id(ModelId::new(MODEL));
@@ -1904,11 +1904,21 @@ fn a_snapshot_survives_the_disk_bit_exactly_which_plain_json_would_not() {
         .write_snapshot(&commit)
         .expect("a verified commit is writable as a snapshot");
 
-    // The documented reason this module has its own wire form. `serde_json` is
-    // used here without its `float_roundtrip` feature, so a plain JSON encoding
-    // of the commit comes back with `f64` parameters one or two ULP different.
-    // The accepted checksum hashes `to_bits`, so such a checkpoint no longer
-    // verifies — a snapshot stored that way would refuse to load itself.
+    // The reason this module HAS its own wire form, restated because it changed.
+    //
+    // It used to be necessity. `serde_json` was used without its
+    // `float_roundtrip` feature, so its parsing was not correctly rounded, a
+    // plain JSON encoding of the commit came back with `f64` parameters one or
+    // two ULP different, the accepted checksum hashes `to_bits`, and such a
+    // checkpoint no longer verified: a snapshot stored that way refused to load
+    // itself. That was measured, not assumed, and it was E-097.
+    //
+    // `float_roundtrip` is now enabled workspace-wide, so that is no longer true
+    // and the assertion below has flipped with it. This test is kept, and kept
+    // honest in both directions: it now pins that the transport is exact AND
+    // that this module's own form is still exact, because the second is no
+    // longer implied by the first. The custom form is now redundancy rather
+    // than necessity, and saying otherwise would overstate what it buys.
     let plain = serde_json::to_vec(&commit).expect("serializable");
     let round_tripped: ModelCommit =
         serde_json::from_slice(&plain).expect("the accepted type still deserializes");
@@ -1916,14 +1926,17 @@ fn a_snapshot_survives_the_disk_bit_exactly_which_plain_json_would_not() {
         round_tripped.commit_id, commit_id,
         "the identity claim is copied verbatim"
     );
-    assert_ne!(
+    assert_eq!(
         round_tripped.checkpoint.content_hash(),
         commit.checkpoint.content_hash(),
-        "the parameters did not survive bit-for-bit"
+        "the parameters survive a plain JSON round trip now that parsing is \
+         correctly rounded; this assertion FAILED before `float_roundtrip` was \
+         enabled, and its failure is what proved the hazard was real"
     );
     assert!(
-        !round_tripped.verify(),
-        "which is exactly why the accepted identity and integrity checks reject it"
+        round_tripped.verify(),
+        "and a plain JSON round trip no longer produces a checkpoint that \
+         refuses to load itself"
     );
 
     // This module's form does survive, which is the gate: the name, the identity

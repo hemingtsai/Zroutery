@@ -55,51 +55,53 @@
 //!
 //! # Floats: what this workspace's JSON does, and what this gate does about it
 //!
-//! `serde_json` is used here **without** its `float_roundtrip` feature, so its
-//! float parsing is a multiply/divide-by-a-power-of-ten fast path rather than a
+//! **This section is a historical record and is kept for the reasoning. Read the
+//! next paragraph for what is true now.**
+//!
+//! `serde_json` WAS used here without its `float_roundtrip` feature, so its
+//! float parsing was a multiply/divide-by-a-power-of-ten fast path rather than a
 //! correctly-rounded parse. A canonical sample carries 32 `f32` features plus
 //! several `f64` targets (`Targets::{latency_ms, ttft_ms, cost}`, the per
 //! attempt `latency_ms`/`ttft_ms`, and the cost facts), and the `f64` targets
-//! can come back **one ULP different** after a round trip. The parent measured
-//! this and recorded it as E-089 against the journal node.
+//! could come back **one ULP different** after a round trip. The parent measured
+//! this and recorded it as E-089 against the journal node, then again as E-097
+//! against the artifact path.
 //!
-//! That hazard lands in three separate places here, and each gets its own
-//! answer rather than a single blanket tolerance:
+//! **The workspace now enables `float_roundtrip` workspace-wide.** The transport
+//! is exact, the hazard class is empty, and every claim below that depended on it
+//! being lossy has flipped. The three answers are all still correct and all still
+//! worth keeping, because each is defence in depth rather than a fix for a live
+//! bug:
 //!
-//! 1. **The model artifact.** A checkpoint cannot survive plain JSON, because
-//!    the accepted verification hashes `f64::to_bits`. 7E-2F already solved
-//!    the transport with a bit-exact wire form. This gate does **not** reach
-//!    into that module: an accepted boundary test requires that nothing else in
-//!    `ml` may name it, which is the right constraint, because the installer
-//!    must stay unreachable from the ML stack. What the gate does instead is
-//!    verify the commit with the accepted check and *measure*, on every run,
-//!    whether plain JSON would have carried it ([`CommitTransport`]). A trained
-//!    commit is expected to fail that measurement, and the report says so
-//!    rather than leaving the caller to discover it as an unexplainable
-//!    verification failure later. The gate does not enable `float_roundtrip` in
-//!    the workspace manifest either: 7E-2E and 7E-2F both recorded that as a
-//!    global change outside any single node's ownership.
+//! 1. **The model artifact.** A checkpoint could not survive plain JSON, because
+//!    the accepted verification hashes `f64::to_bits`. 7E-2F solved the transport
+//!    with a bit-exact wire form. This gate does **not** reach into that module:
+//!    an accepted boundary test requires that nothing else in `ml` may name it,
+//!    which is the right constraint, because the installer must stay unreachable
+//!    from the ML stack. What the gate does instead is verify the commit with the
+//!    accepted check and *measure*, on every run, whether plain JSON would have
+//!    carried it ([`CommitTransport`]). That measurement now reports exact, and it
+//!    is kept so that a future regression in the transport is caught by a
+//!    constituent of the verdict rather than discovered as an unexplainable
+//!    verification failure.
 //!
 //! 2. **The compared decision.** No journal-carried `f64` is ever a compared
 //!    component of replay equivalence. The compared floats are model *outputs*,
 //!    recomputed from the retained `f32` feature vector through the bit-exact
-//!    commit, and the `f32` round trip is a single correctly-rounded
-//!    `f64`->`f32` cast from a shortest-form decimal rather than the
-//!    multiple-rounding path that bites arbitrary `f64`. This exclusion is the
-//!    reason the gate stays decidable at all under E-089, and it is stated here
-//!    rather than left as an accident of which fields happen to be compared.
+//!    commit. This exclusion was the reason the gate stayed decidable at all
+//!    under E-089, and it is stated here rather than left as an accident of which
+//!    fields happen to be compared. It is now belt-and-braces.
 //!
 //! 3. **The measurements that do consume those targets.** The holdout and
-//!    calibration path reads exactly those drifted `f64`s as regression and
-//!    loss targets, so there the drift is genuine measurement error. The gate
-//!    does not absorb it. [`JournalFloatFidelity`] re-derives every `f64`
-//!    field's bits through the same `to_vec`/`from_slice` path the journal
-//!    uses, on every run, and reports how many fields moved and by how many
-//!    ULPs. It is a constituent of the release verdict, and a non-exact
-//!    fidelity is a refusal. Its honest limit is written on the constant
-//!    [`JOURNAL_FLOAT_NOTE`]: it measures the *transport*, so a value that
-//!    arrived already drifted is invisible to it and can only be prevented, not
-//!    detected, by sourcing it bit-exactly.
+//!    calibration path reads those `f64`s as regression and loss targets.
+//!    [`JournalFloatFidelity`] re-derives every `f64` field's bits through the
+//!    same `to_vec`/`from_slice` path the journal uses, on every run, and reports
+//!    how many fields moved and by how many ULPs. It now reports zero, and that
+//!    is a **positive** result: it is the regression test for the transport being
+//!    exact, and it fails loudly if `float_roundtrip` is ever removed. Its honest
+//!    limit is written on the constant [`JOURNAL_FLOAT_NOTE`]: it measures the
+//!    *transport*, so a value that arrived already drifted is invisible to it and
+//!    can only be prevented, not detected, by sourcing it bit-exactly.
 //!
 //! A consequence worth stating plainly: if a caller persists a
 //! [`ShadowDecision`] as plain JSON and hands the gate the re-parsed record,
@@ -517,10 +519,13 @@ pub struct GateInput {
 /// `f64` parameter in bits. This is a **reported** measurement, not a verdict
 /// constituent, and the reason is worth stating plainly:
 ///
-/// * a trained commit is *expected* to fail it. The accepted verification
+/// * a trained commit was *expected* to fail it. The accepted verification
 ///   hashes `f64::to_bits`, so a parameter that comes back one ULP different
 ///   makes the content hash disagree and the commit refuses to verify itself —
-///   7E-2F recorded exactly that finding;
+///   7E-2F recorded exactly that finding. It no longer does: the workspace
+///   enables `float_roundtrip`, so this measurement now reports exact. It is
+///   kept as a working safety net, because a transport that silently loses a bit
+///   again should withhold the verdict rather than pass;
 /// * the supported transport for such a commit is 7E-2F's bit-exact wire form,
 ///   which carries each parameter as 16 hex digits of its bits. This gate does
 ///   **not** reach for that module itself, because an accepted boundary test

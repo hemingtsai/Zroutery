@@ -850,10 +850,17 @@ struct FrameEntry {
     ///
     /// The duplicate check compares these bytes against a re-serialization of
     /// the incoming record, never a parsed value against an in-memory one.
-    /// `serde_json` is used here WITHOUT its `float_roundtrip` feature, so its
-    /// float parsing is not correctly rounded: a value can come back one ULP
-    /// different from the bytes that produced it. Comparing parsed values would
-    /// therefore report a legitimate byte-identical retry as a conflict.
+    ///
+    /// This was NECESSARY when it was written: `serde_json` was used here
+    /// WITHOUT its `float_roundtrip` feature, so its float parsing was not
+    /// correctly rounded and a value could come back one ULP different from the
+    /// bytes that produced it, which made a legitimate byte-identical retry
+    /// report as a conflict. That is E-089, and it was reproduced.
+    ///
+    /// It is now redundancy. The workspace enables `float_roundtrip`, so the
+    /// transport is exact and this comparison no longer has a known case it
+    /// rescues. It is kept deliberately: idempotency should not depend on the
+    /// fidelity of a serializer's float parsing, and this way it does not.
     body_bytes: Vec<u8>,
     frame_checksum: u64,
 }
@@ -1555,12 +1562,17 @@ impl LearningJournal {
             // already on disk.
             //
             // Byte comparison is what makes this immune to the JSON float round
-            // trip: `serde_json` is used here without `float_roundtrip`, so the
-            // stored body's parsed floats can be one ULP off, and comparing
-            // parsed values would refuse a legitimate retry of an unchanged
-            // record. Substituting the stored timestamps keeps the other half
-            // of the contract, which is that a retry re-creating the same event
-            // at a different wall-clock instant is still the same event.
+            // trip. It HAD to be: `serde_json` was used here without
+            // `float_roundtrip`, so the stored body's parsed floats could be one
+            // ULP off and comparing parsed values would refuse a legitimate retry
+            // of an unchanged record. The workspace now enables `float_roundtrip`,
+            // so there is no known drift for this to absorb, and it is kept as
+            // defence in depth: idempotency should not rest on how a serializer
+            // parses a float.
+            //
+            // Substituting the stored timestamps keeps the other half of the
+            // contract, which is that a retry re-creating the same event at a
+            // different wall-clock instant is still the same event.
             let mut comparable = body.clone();
             comparable.recorded_at = existing.body.recorded_at;
             comparable.event.created_at = existing.body.event.created_at;

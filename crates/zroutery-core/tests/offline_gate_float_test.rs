@@ -36,7 +36,7 @@ use zroutery_core::ml::dataset::{Targets, TrainingSample as DatasetTrainingSampl
 use zroutery_core::ml::evaluation::{f32_identical, f64_identical, ulp_distance};
 use zroutery_core::ml::features::{RoutingFeatures, FEATURE_DIMENSION, FEATURE_SCHEMA_VERSION};
 use zroutery_core::ml::shadow::ModelEnsemblePredictor;
-use zroutery_core::ml::offline_gate::{FloatDrift, JournalFloatFidelity};
+use zroutery_core::ml::offline_gate::JournalFloatFidelity;
 use zroutery_core::outcome::Attempt;
 
 // ---------------------------------------------------------------------------
@@ -142,7 +142,7 @@ fn arbitrary_f64(count: usize) -> Vec<f64> {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn arbitrary_f64_targets_do_not_all_survive_this_workspaces_read_path() {
+fn every_arbitrary_f64_target_survives_this_workspaces_read_path() {
     let values = arbitrary_f64(256);
     let samples: Vec<Outcome2> = values
         .iter()
@@ -154,44 +154,41 @@ fn arbitrary_f64_targets_do_not_all_survive_this_workspaces_read_path() {
 
     assert_eq!(fidelity.samples, samples.len());
     assert!(fidelity.f64_fields > 0, "there must be fields to measure");
-    assert!(
-        fidelity.moved_fields > 0,
-        "arbitrary f64 targets must be shown to move: this is the E-089 hazard, and a \
-         measurement that reported zero would mean the measurement is wrong, not that the \
-         transport is safe"
+    // This used to assert `moved_fields > 0`, on the reasoning that a
+    // measurement reporting zero would mean the measurement was wrong rather
+    // than that the transport was safe. That reasoning was right while
+    // `serde_json` parsed floats without `float_roundtrip`, and this test
+    // measured 367 of 1792 fields moving at one ULP.
+    //
+    // The workspace now enables `float_roundtrip`, so the hazard class is empty
+    // and the assertion has flipped with it. That makes this the regression test
+    // for the fix rather than for the bug: removing the feature makes
+    // `moved_fields` climb again and fails here, naming the cause.
+    assert_eq!(
+        fidelity.moved_fields, 0,
+        "arbitrary f64 targets must now survive bit for bit. If this fails, serde_json's \
+         `float_roundtrip` was removed or stopped applying to this workspace, and every \
+         byte-exactness claim in the ml tree is void until it is restored. Before it was \
+         enabled this same assertion read 367 of {} fields moving.",
+        fidelity.f64_fields
     );
     assert!(
-        !fidelity.round_trip_exact,
-        "a non-zero moved count must withhold the exact claim"
+        fidelity.round_trip_exact,
+        "a zero moved count is what makes the exact claim available"
     );
-    assert!(fidelity.max_ulp >= 1, "a moved bit is at least one ULP away");
+    assert_eq!(fidelity.max_ulp, 0);
+    assert!(
+        fidelity.worst.is_none(),
+        "there is no offending field to name, because nothing moved"
+    );
     assert!(
         fidelity.moved_fields <= fidelity.f64_fields,
         "a field cannot move twice"
     );
 
-    // The worst offender is named, so a non-zero count is actionable rather
-    // than just a number.
-    let worst: &FloatDrift = fidelity
-        .worst
-        .as_ref()
-        .expect("a moved field must be identified");
-    assert_eq!(worst.ulp, fidelity.max_ulp);
-    assert!(!worst.component.is_empty());
-    assert!(!worst.sample_id.is_empty());
-    assert!(
-        !f64_identical(worst.before, worst.after),
-        "a reported drift must actually be a bit difference"
-    );
-    assert_eq!(ulp_distance(worst.before, worst.after), worst.ulp);
-
     println!(
-        "arbitrary f64 round trip: {} of {} fields moved, max {} ulp, worst {} on {}",
-        fidelity.moved_fields,
-        fidelity.f64_fields,
-        fidelity.max_ulp,
-        worst.component,
-        worst.sample_id
+        "arbitrary f64 round trip: {} of {} fields moved, max {} ulp",
+        fidelity.moved_fields, fidelity.f64_fields, fidelity.max_ulp
     );
 }
 
@@ -477,7 +474,10 @@ fn a_checkpoint_carrying_arbitrary_parameters_is_what_the_wire_form_exists_for()
         .expect("the wire form always rebuilds");
     assert!(
         rebuilt.commit().verify(),
-        "the wire form is guaranteed lossless; plain JSON is not"
+        "the wire form is guaranteed lossless by construction. It used to be that plain \
+         JSON was NOT, which is why this module has its own form; `float_roundtrip` is now \
+         enabled workspace-wide, so plain JSON is lossless here too and this form is \
+         redundancy rather than necessity"
     );
     assert_eq!(
         rebuilt.commit().checkpoint.success.parameters,

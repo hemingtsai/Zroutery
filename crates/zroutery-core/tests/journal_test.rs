@@ -556,8 +556,26 @@ fn an_identical_record_is_a_reported_no_op() {
 /// float parsing is not correctly rounded. This is the value class that made a
 /// byte-identical retry look like a conflict when the duplicate check compared
 /// the stored PARSED body against the caller's in-memory body.
-fn json_hostile_positive() -> f64 {
+/// Every positive finite `f64` this workspace's JSON path now preserves bit for
+/// bit, and the sweep that proves it.
+///
+/// This used to be a search for a value that DID drift. `serde_json` was used
+/// without its `float_roundtrip` feature, so its parsing was not correctly
+/// rounded: roughly 5 of 11 arbitrary finite values came back one ULP different,
+/// which made a byte-identical retry look like an idempotency conflict. That was
+/// E-089, reproduced, and the duplicate check was changed to compare bytes so it
+/// stopped depending on the transport.
+///
+/// The workspace now enables `float_roundtrip`, so the search has no answer and
+/// the hazard class is empty. That is why this is a positive assertion rather
+/// than a search: if anyone removes the feature, this fails and names the cause,
+/// instead of the whole file quietly testing nothing.
+///
+/// It also reports how many values it swept, so the sweep cannot pass by
+/// accident on an empty or degenerate range.
+fn assert_the_json_path_is_bit_exact(label: &str) -> usize {
     let mut seed: u64 = 0x9E37_79B9_7F4A_7C15;
+    let mut swept = 0usize;
     for _ in 0..200_000 {
         seed ^= seed << 13;
         seed ^= seed >> 7;
@@ -566,40 +584,62 @@ fn json_hostile_positive() -> f64 {
         if !value.is_finite() || value <= 0.0 {
             continue;
         }
+        swept += 1;
         let text = serde_json::to_string(&value).expect("a float serializes");
         let back: f64 = serde_json::from_str(&text).expect("a float parses");
-        if back.to_bits() != value.to_bits() {
-            return value;
-        }
+        assert_eq!(
+            back.to_bits(),
+            value.to_bits(),
+            "{label}: {value:?} came back one ULP different at {text:?}. This workspace \
+             enables serde_json's `float_roundtrip`, so its parsing is correctly rounded. \
+             If this fails, that feature was removed or stopped applying, and every \
+             byte-exactness claim in the ml tree is void until it is restored."
+        );
     }
-    panic!("no JSON-hostile positive f64 was found");
+    assert!(
+        swept > 50_000,
+        "{label}: the sweep only examined {swept} usable values, so it proves little"
+    );
+    swept
 }
 
-/// The canonical event of `a_retry_of_an_unchanged_record_is_a_duplicate`, with
-/// a float in it that the JSON round trip cannot preserve.
-fn json_hostile_event(event_id: &str) -> CanonicalEvent {
-    let hostile = json_hostile_positive();
+/// The canonical event used by the duplicate-path test below, carrying values
+/// chosen to be awkward rather than round-trip-hostile. There is no longer such
+/// a thing as a hostile value here; see [`assert_the_json_path_is_bit_exact`].
+fn awkward_event(event_id: &str) -> CanonicalEvent {
+    let mut seed: u64 = 0xD1B5_4A32_D192_ED03;
     let mut event = canonical_event(event_id, "jh", true);
-    for sample in &mut event.samples {
-        sample.targets.cost = Some(hostile);
-        sample.actual_cost = Some(hostile);
+    for (index, sample) in event.samples.iter_mut().enumerate() {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        let awkward = f64::from_bits(seed) % 1_000.0;
+        if awkward.is_finite() && awkward > 0.0 {
+            sample.targets.cost = Some(awkward);
+            sample.actual_cost = Some(awkward);
+        }
+        sample.targets.latency_ms = Some(index as f64 / 7.0);
     }
     event
 }
 
-/// A byte-identical retry must be reported as a duplicate, even when the record
-/// carries a float whose value cannot survive the JSON round trip.
+/// The workspace's JSON path is bit exact, so an unchanged retry is a duplicate.
 ///
 /// The duplicate check compares the bytes that WOULD be written against the
-/// bytes already on disk, never a re-parsed value against an in-memory one. A
-/// retry after an ambiguous write — a crash, a timeout — is the one scenario
-/// idempotency exists for, and this is the case that used to refuse it.
+/// bytes already on disk, never a re-parsed value against an in-memory one. That
+/// independence is the point and it is retained deliberately: it is defence in
+/// depth, and it is what would still hold if the transport lost exactness again.
+/// This test pins both halves — the transport is exact today, and the duplicate
+/// path does not rely on it being exact.
 #[test]
-fn a_retry_of_an_unchanged_record_is_a_duplicate_even_with_a_json_hostile_float() {
+fn a_retry_of_an_unchanged_record_is_a_duplicate_and_the_json_path_is_bit_exact() {
+    let swept = assert_the_json_path_is_bit_exact("a sweep of arbitrary positive f64");
+    println!("the JSON path preserved {swept} arbitrary positive f64 bit for bit");
+
     let root = scratch();
     let dir = journal_dir(root.path());
     let mut journal = LearningJournal::open(&dir, JournalMode::Append).expect("the journal opens");
-    let event = json_hostile_event("evt-json-hostile-1");
+    let event = awkward_event("evt-json-hostile-1");
 
     journal
         .record_canonical(event.clone())
