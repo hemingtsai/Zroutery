@@ -13,6 +13,7 @@ from __future__ import annotations
 import http.client
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -172,6 +173,17 @@ def lower_headers(headers) -> dict:
     return {k.lower(): v for k, v in headers.items()}
 
 
+# CSI/OSC escape sequences. `tracing_subscriber::fmt` colourises field names, so
+# a log line reads `model_commit` + escape + `=` + escape rather than the plain
+# `model_commit=`. Matching the raw bytes would fail on formatting.
+_ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]|\x1b\][^\x07]*\x07")
+
+
+def strip_ansi(text: str) -> str:
+    """Remove terminal escape sequences from log output."""
+    return _ANSI.sub("", text)
+
+
 def check(name: str, condition: bool, detail: str = ""):
     if condition:
         print(f"  ok   {name}")
@@ -302,6 +314,197 @@ def write_config(path: str, upstream: str):
     }
     with open(os.path.join(path, "config.json"), "w") as fh:
         json.dump(config, fh, indent=2)
+
+
+def check_shadow_reachability(binary: str, upstream: str, base_env: dict) -> None:
+    """The ML shadow capability is reachable from the built binary.
+
+    Node 7F's claim is that the shadow is genuinely reachable: a real request
+    through the production serving path against this local fake upstream produces
+    the shadow's own output, and that output names the model commit the shadow
+    ran against. The check is therefore an *observation*, not a log-line grep for
+    its own sake — the request must have been served first, and the line has to
+    carry both the request id that was served and a commit id.
+
+    What is observed is a diagnostic line the request path emits after a shadow
+    record is accepted. There is deliberately no HTTP endpoint for it: adding one
+    would be a new capability rather than evidence about an existing one, and the
+    shadow's verdict must never be readable as a routing input.
+
+    Separate instance, separate port and ``ZROUTERY_LOG=debug``, because the main
+    run keeps its own verbosity and because this instance needs the shadow switch
+    on while the main run does not.
+
+    Nothing here claims the model is fit to serve. A recorded shadow record is
+    diagnostic evidence and nothing more; this block asserts that the capability
+    runs and is observable, not that its output is any good.
+    """
+    config_dir = tempfile.mkdtemp(prefix="zroutery-shadow-")
+    write_config(config_dir, upstream)
+    with open(os.path.join(config_dir, "config.json")) as fh:
+        config = json.load(fh)
+    config["server"]["port"] = 8793
+    # The master switch. Without it the serving path takes no decision-time
+    # snapshot and there is nothing for the shadow to record, which is what the
+    # first check below confirms.
+    config["shadow"] = {"enabled": True}
+    with open(os.path.join(config_dir, "config.json"), "w") as fh:
+        json.dump(config, fh)
+
+    env = dict(base_env)
+    env["ZROUTERY_CONFIG_DIR"] = config_dir
+    env["ZROUTERY_LOG"] = "debug"
+    # A file, not a pipe. `debug` verbosity on a proxy that serves a request is
+    # far more output than an OS pipe buffer holds, and nothing reads the pipe
+    # until after the proxy is stopped — so a pipe deadlocks the proxy mid-run
+    # and the request under test times out for a reason that has nothing to do
+    # with the capability being checked.
+    log_path = os.path.join(config_dir, "shadow.log")
+    with open(log_path, "w", encoding="utf-8", errors="replace") as log:
+        proxy = subprocess.Popen([binary], env=env, stdout=log, stderr=subprocess.STDOUT)
+        base = "http://127.0.0.1:8793"
+        try:
+            for _ in range(100):
+                try:
+                    if request(f"{base}/health", token=None)[0] == 200:
+                        break
+                except Exception:
+                    time.sleep(0.1)
+            else:
+                check("the shadow instance became healthy", False, "proxy never answered /health")
+                return
+
+            status, headers, body = request(
+                f"{base}/v1/messages",
+                {"model": "standard-class", "max_tokens": 16,
+                 "messages": [{"role": "user", "content": "reachability"}]},
+            )
+            check("the shadow instance serves the request", status == 200, f"got {status}: {body}")
+            check(
+                "and the served response is an ordinary one",
+                headers.get("x-zroutery-model") is not None,
+                str(headers),
+            )
+        finally:
+            proxy.terminate()
+            try:
+                proxy.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                proxy.kill()
+    with open(log_path, encoding="utf-8", errors="replace") as fh:
+        output = strip_ansi(fh.read())
+    shutil.rmtree(config_dir, ignore_errors=True)
+
+    recorded = [
+        line for line in output.splitlines()
+        if "shadow counterfactual recorded" in line
+    ]
+    check(
+        "a real request produced a shadow record",
+        len(recorded) > 0,
+        f"no shadow record in {len(output.splitlines())} log lines",
+    )
+    if not recorded:
+        return
+    line = recorded[-1]
+    check(
+        "the record names the commit the shadow ran against",
+        "model_commit=" in line and len(line.split("model_commit=")[1].split()[0]) >= 16,
+        line.strip()[:200],
+    )
+    check(
+        "and names the request it was taken for",
+        "request_id=req_" in line,
+        line.strip()[:200],
+    )
+    check(
+        "and records what the shadow would have chosen",
+        "selected=" in line,
+        line.strip()[:200],
+    )
+
+    # The strongest form of "reachable": the commit the running binary named is
+    # the commit the frozen artifact holds. Without this the check would pass on
+    # any commit id at all, including the cold-start root the shadow engine pins
+    # by default — which is reachable but is not this node's capability.
+    observed_commit = line.split("model_commit=")[1].split()[0]
+    artifact = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "crates", "zroutery-core", "src", "server", "shadow_candidate.json",
+    )
+    if os.path.isfile(artifact):
+        with open(artifact, encoding="utf-8") as fh:
+            frozen = json.load(fh)["commit"]["commit_id"]
+        check(
+            "and it is the commit the frozen artifact holds, not the cold-start root",
+            observed_commit == frozen,
+            f"binary named {observed_commit}, artifact holds {frozen}",
+        )
+    print(f"       shadow record: {line.strip()[:300]}")
+
+
+def check_shadow_absent(binary: str, upstream: str, base_env: dict) -> None:
+    """With the switch off, the shadow records nothing at all.
+
+    The negative control for the check above. Without it, "a shadow record
+    appeared" could be satisfied by a line that is emitted whether or not the
+    capability ran, which would make the positive check vacuous.
+    """
+    config_dir = tempfile.mkdtemp(prefix="zroutery-shadow-off-")
+    write_config(config_dir, upstream)
+    with open(os.path.join(config_dir, "config.json")) as fh:
+        config = json.load(fh)
+    config["server"]["port"] = 8794
+    config["shadow"] = {"enabled": False}
+    with open(os.path.join(config_dir, "config.json"), "w") as fh:
+        json.dump(config, fh)
+
+    env = dict(base_env)
+    env["ZROUTERY_CONFIG_DIR"] = config_dir
+    env["ZROUTERY_LOG"] = "debug"
+    log_path = os.path.join(config_dir, "shadow-off.log")
+    with open(log_path, "w", encoding="utf-8", errors="replace") as log:
+        proxy = subprocess.Popen([binary], env=env, stdout=log, stderr=subprocess.STDOUT)
+        base = "http://127.0.0.1:8794"
+        try:
+            for _ in range(100):
+                try:
+                    if request(f"{base}/health", token=None)[0] == 200:
+                        break
+                except Exception:
+                    time.sleep(0.1)
+            else:
+                check(
+                    "the shadow-off instance became healthy",
+                    False,
+                    "proxy never answered /health",
+                )
+                return
+            status, _, body = request(
+                f"{base}/v1/messages",
+                {"model": "standard-class", "max_tokens": 16,
+                 "messages": [{"role": "user", "content": "reachability"}]},
+            )
+            check(
+                "the shadow-off instance serves the request",
+                status == 200,
+                f"got {status}: {body}",
+            )
+        finally:
+            proxy.terminate()
+            try:
+                proxy.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                proxy.kill()
+    with open(log_path, encoding="utf-8", errors="replace") as fh:
+        output = strip_ansi(fh.read())
+    shutil.rmtree(config_dir, ignore_errors=True)
+
+    check(
+        "with the switch off, no shadow record is emitted",
+        "shadow counterfactual recorded" not in output,
+        "a shadow record appeared with shadow.enabled=false",
+    )
 
 
 def check_budgets(binary: str, upstream: str, base_env: dict) -> None:
@@ -716,6 +919,10 @@ def main() -> int:
 
         print("budgets")
         check_budgets(binary, upstream, env)
+
+        print("shadow reachability")
+        check_shadow_reachability(binary, upstream, env)
+        check_shadow_absent(binary, upstream, env)
 
         print("balance query")
         balances = subprocess.run(

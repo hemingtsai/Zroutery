@@ -1625,6 +1625,9 @@ struct RequestLifecycle {
     /// request", and a redundant guard is cheaper than discovering otherwise.
     #[cfg(feature = "ml")]
     ingested: bool,
+    /// The exactly-once guard for the observability projection, for the same
+    /// reason and on the same terms as `ingested`.
+    projected: bool,
 }
 
 impl RequestLifecycle {
@@ -1658,6 +1661,7 @@ impl RequestLifecycle {
             terminal: false,
             #[cfg(feature = "ml")]
             ingested: false,
+            projected: false,
         }
     }
 
@@ -1715,14 +1719,30 @@ impl RequestLifecycle {
     /// disabled engine, a fault, or a refused record all simply mean this
     /// request has no shadow record to correlate later. The verdict is never
     /// read back, and the snapshot is not retained here — the record holds it.
+    ///
+    /// Which predictor runs is the one question this hook now answers, and the
+    /// answer is recorded in the record itself: `ShadowVerdict::model_commit`
+    /// names the commit that produced it. When a verified candidate is
+    /// attached, every record therefore names that candidate; when the
+    /// candidate is withdrawn, every record names the engine's own cold-start
+    /// predictor, which is the pre-7F behaviour. Either way the return value is
+    /// discarded and nothing downstream of this line can reach a response.
     #[cfg(feature = "ml")]
     fn shadow_evaluated(&mut self, input: &ShadowInput) {
         if self.shadow_id.is_some() {
             return;
         }
-        let Some(decision) = self.state.shadow().evaluate(self.id(), input) else {
+        let decision = self.state.shadow_evaluated(self.id(), input);
+        let Some(decision) = decision else {
             return;
         };
+        tracing::debug!(
+            request_id = %self.id(),
+            shadow_id = %decision.shadow_id,
+            model_commit = %decision.shadow.model_commit,
+            selected = %decision.shadow.selected,
+            "shadow counterfactual recorded"
+        );
         // A returned record is the proof that the store accepted this input, so
         // the same snapshot can be handed to dataset ingestion later. Nothing is
         // re-derived here: these are the very values the record holds.
@@ -1808,6 +1828,70 @@ impl RequestLifecycle {
                     request_id = %self.id(),
                     reason,
                     "training sample refused at the dataset boundary"
+                );
+            }
+        }
+    }
+
+    /// Project this request's terminal outcome for correlation.
+    ///
+    /// The third consumer of the one terminal transition, and the last thing it
+    /// does with the outcome. It is invoked unconditionally — including for
+    /// requests that were never policy-routed and therefore have no decision id
+    /// at all — because that is the case the projection is built to report
+    /// rather than paper over: such a request projects as *refused, decision id
+    /// absent*, and this hook counts and logs the refusal instead of skipping
+    /// the request so the run looks clean. A refusal is a finding.
+    ///
+    /// Contained for the same reason the dataset hook is: it returns nothing,
+    /// propagates no error, and catches its own panics, so no projection
+    /// condition can fail a request. By this point the response, the spend, the
+    /// activity record and the outcome are all already decided.
+    fn observed(&mut self, outcome: &Outcome, validated: bool) {
+        if self.projected {
+            return;
+        }
+        self.projected = true;
+        // Only a validated outcome is worth projecting; the projection would
+        // refuse it anyway on its own schema check, and handing it unvalidated
+        // input would mean the refusal it reports is not the interesting one.
+        if !validated {
+            return;
+        }
+        let decision = self.decision.clone();
+        let projected =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                self.state
+                    .projections()
+                    .record(outcome.clone(), decision.clone());
+                crate::observability::project_request(outcome, decision.as_ref())
+            }));
+        match projected {
+            Ok(crate::observability::Projection::Projected(record)) => {
+                tracing::debug!(
+                    request_id = %self.id(),
+                    outcome_id = %record.outcome_id(),
+                    decision_id = %record.decision_id(),
+                    served = ?record.served_identity.as_ref().map(|label| (
+                        label.provider.as_str(),
+                        label.model.as_str()
+                    )),
+                    "request projected for correlation"
+                );
+            }
+            Ok(crate::observability::Projection::Refused(refusal)) => {
+                tracing::debug!(
+                    request_id = %self.id(),
+                    outcome_id = ?refusal.record.outcome_id,
+                    reason = ?refusal.reason(),
+                    consequence = refusal.consequence(),
+                    "request refused projection"
+                );
+            }
+            Err(_) => {
+                tracing::warn!(
+                    request_id = %self.id(),
+                    "the observability projection panicked; the request is unaffected"
                 );
             }
         }
@@ -2044,6 +2128,16 @@ impl RequestLifecycle {
         #[cfg(feature = "ml")]
         self.dataset_ingested(&outcome, validation.is_ok());
         // dataset-block-end
+        // projection-block-begin
+        // The observability projection runs last, on the same validated outcome,
+        // with the request's own decision supplied so the record can be joined
+        // on its decision id. It is invoked for every validated request,
+        // routed or not, and a refusal is counted and logged rather than
+        // skipped — the absence of a decision id is exactly the fact the
+        // projection exists to report accurately. One-way, returns nothing, and
+        // cannot fail a request.
+        self.observed(&outcome, validation.is_ok());
+        // projection-block-end
     }
 
     /// Build this request's outcome from the accepted schema.

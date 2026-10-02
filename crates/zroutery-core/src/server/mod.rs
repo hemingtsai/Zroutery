@@ -8,6 +8,8 @@
 //! that can reach this port can spend the configured API keys.
 
 mod pipeline;
+mod projection_log;
+mod shadow_candidate;
 
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -41,6 +43,15 @@ use crate::stats::{OutcomeLog, Stats};
 use crate::upstream::Upstream;
 
 use pipeline::handle_chat;
+use projection_log::ProjectionLog;
+
+pub use shadow_candidate::ShadowAttachment;
+
+#[cfg(feature = "ml")]
+pub use shadow_candidate::{
+    ShadowCandidate, ShadowCandidateArtifact, ShadowCandidateError, SHADOW_CANDIDATE_ARTIFACT,
+    SHADOW_CANDIDATE_ENVELOPE_VERSION,
+};
 
 /// Everything a request handler needs.
 ///
@@ -79,11 +90,68 @@ pub struct AppState {
     /// no second, independent dataset switch.
     #[cfg(feature = "ml")]
     dataset: crate::ml::DatasetStore,
+    /// The verified model commit the shadow evaluates against, if one is
+    /// attached. `None` is the state this node started in and the state a
+    /// rollback returns to; it is a real state with a real behaviour, not a
+    /// disabled code path, so before/during/after is an ordinary comparison.
+    ///
+    /// Behind a lock for one reason: withdrawal is a runtime operation, and a
+    /// rollback that needs a rebuild to demonstrate has not been demonstrated.
+    /// There is deliberately no setter that can *attach* — the candidate is a
+    /// program constant — so this lock can only ever move from attached to
+    /// withdrawn.
+    shadow_attachment: RwLock<ShadowAttachment>,
+    /// One terminal outcome per request, paired with the routing decision that
+    /// produced it, held so the observability projection is reachable from the
+    /// serving path rather than only from tests.
+    projections: ProjectionLog,
     pub response_store: ResponseStore,
 }
 
 impl AppState {
     pub fn new(config: AppConfig, secrets: Arc<dyn SecretStore>) -> Self {
+        #[cfg(feature = "ml")]
+        let attachment = match ShadowAttachment::embedded() {
+            Ok(attached) => attached,
+            Err(error) => {
+                // Fail closed to the previous behaviour and say so loudly: the
+                // shadow runs with no named candidate, which is exactly what it
+                // did before this node existed. It is never a panic and never a
+                // partially-attached predictor, because a diagnostic capability
+                // that cannot be verified is not a capability.
+                tracing::error!(
+                    error = %error,
+                    "the embedded shadow candidate artifact did not verify; running with the \
+                     shadow candidate withdrawn"
+                );
+                ShadowAttachment::withdrawn()
+            }
+        };
+        // Without the ML feature there is no shadow and no candidate to name, so
+        // the only state this build can be in is the withdrawn one. That is a
+        // real answer, not a stub: the desktop application compiles no ML stack
+        // and therefore has nothing to shadow.
+        #[cfg(not(feature = "ml"))]
+        let attachment = ShadowAttachment::withdrawn();
+        Self::with_shadow_attachment(config, secrets, attachment)
+    }
+
+    /// Build the state with an explicitly chosen shadow attachment.
+    ///
+    /// The production constructor is [`Self::new`], which attaches the embedded
+    /// candidate where the feature exists and withdraws it where it does not.
+    /// This one takes the attachment as a value so a test can state "no
+    /// candidate" and compare the served bytes against the attached case, which
+    /// is the whole of what proving the shadow changes nothing served means.
+    ///
+    /// Public without the `ml` feature too. A build with no ML stack still has a
+    /// shadow attachment — a withdrawn one — and keeping one constructor for
+    /// both builds is what stops the two from drifting apart.
+    pub fn with_shadow_attachment(
+        config: AppConfig,
+        secrets: Arc<dyn SecretStore>,
+        attachment: ShadowAttachment,
+    ) -> Self {
         let log_limit = config.server.log_limit;
         let stats = Arc::new(Stats::new(log_limit));
         let bypass_proxy = config.server.bypass_proxy;
@@ -114,6 +182,8 @@ impl AppState {
             ),
             #[cfg(feature = "ml")]
             dataset: crate::ml::DatasetStore::production(),
+            shadow_attachment: RwLock::new(attachment),
+            projections: ProjectionLog::new(log_limit),
             response_store: ResponseStore::default(),
         }
     }
@@ -191,6 +261,85 @@ impl AppState {
     #[cfg(feature = "ml")]
     pub fn dataset(&self) -> &crate::ml::DatasetStore {
         &self.dataset
+    }
+
+    /// Evaluate one request's shadow counterfactual, against whatever is attached.
+    ///
+    /// The predictor does not leave this struct. That is a deliberate boundary,
+    /// not an encapsulation convenience: an accepted gate asserts that
+    /// `AppState` never names a learning seam, and a method that handed out the
+    /// ensemble predictor would put one in reach of this module and of every
+    /// caller downstream of it. Exposing only the *evaluation* means the request
+    /// path cannot obtain the predictor at all, so the only thing it can do with
+    /// a candidate is record what it would have decided — which is the whole of
+    /// what a shadow is.
+    ///
+    /// `None` when the candidate is withdrawn, in which case the engine's own
+    /// cold-start predictor runs and the record names the engine's commit. That
+    /// is the behaviour this state had before a candidate existed, and it is an
+    /// ordinary outcome rather than an error.
+    #[cfg(feature = "ml")]
+    pub fn shadow_evaluated(
+        &self,
+        request_id: &str,
+        input: &crate::ml::ShadowInput,
+    ) -> Option<crate::ml::ShadowDecision> {
+        let shadow = &self.shadow;
+        let predictor = crate::sync::read(&self.shadow_attachment).predictor();
+        match predictor {
+            Some(predictor) => shadow.evaluate_with(request_id, input, predictor.as_ref()),
+            None => shadow.evaluate(request_id, input),
+        }
+    }
+
+    /// The commit id of the attached candidate, or `None` when withdrawn.
+    #[cfg(feature = "ml")]
+    pub fn shadow_candidate_commit_id(&self) -> Option<String> {
+        crate::sync::read(&self.shadow_attachment)
+            .attached_commit_id()
+            .map(str::to_string)
+    }
+
+    /// Whether a named candidate is currently attached.
+    ///
+    /// Answerable in every build. Without the ML feature it is always `false`,
+    /// and that is the honest answer rather than a missing method: the desktop
+    /// application compiles no shadow and therefore has no candidate.
+    pub fn shadow_candidate_attached(&self) -> bool {
+        crate::sync::read(&self.shadow_attachment).is_attached()
+    }
+
+    /// Withdraw the shadow candidate.
+    ///
+    /// This is the rollback lever and it is deliberately one-way: there is no
+    /// counterpart that can attach a candidate, because the candidate is a
+    /// program constant verified at construction and re-attaching it at runtime
+    /// would be a swap rather than a rollback. After this returns, every
+    /// subsequent evaluation names the engine's own cold-start predictor, which
+    /// is the behaviour this node started from.
+    ///
+    /// Returns whether anything was withdrawn, so a caller can tell a real
+    /// rollback from a no-op rather than assuming one.
+    #[cfg(feature = "ml")]
+    pub fn withdraw_shadow_candidate(&self) -> bool {
+        let mut attachment = crate::sync::write(&self.shadow_attachment);
+        if !attachment.is_attached() {
+            return false;
+        }
+        *attachment = ShadowAttachment::withdrawn();
+        tracing::warn!(
+            "the shadow model candidate was withdrawn; the shadow is back on its own predictor"
+        );
+        true
+    }
+
+    /// The retained outcomes paired with their routing decisions, so the
+    /// observability projection can be read back.
+    ///
+    /// Not a routing input and not a training source: a diagnostic view of the
+    /// same single accounting the request log records.
+    pub fn projections(&self) -> &ProjectionLog {
+        &self.projections
     }
 
     /// Rebuild the upstream HTTP client (e.g. when bypass_proxy changes).
