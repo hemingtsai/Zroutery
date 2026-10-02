@@ -94,10 +94,22 @@ jobs:
       # `--workspace` includes the Tauri package, which needs this platform's
       # system frameworks; `core` is deliberately GUI-free so that linting the
       # core never depends on them.
-      - name: Tests (default features)
+      # `cargo test --workspace` is NOT a default-features run any more, and a
+      # step called "default features" that quietly enables ml is worse than no
+      # step at all: it claims coverage it does not provide. The headless proxy
+      # package depends on zroutery-core with `features = ["ml"]` unconditionally,
+      # so merely being in the workspace graph turns ml on for the whole
+      # resolution. Measured: `cargo test --workspace` runs 1733 tests including
+      # all 22 of the ml-gated statistics suite, while excluding that one package
+      # runs 999 and compiles that suite to zero.
+      #
+      # So the default-features gate excludes it, and the ml-enabled run is the
+      # whole-workspace one. Those are the two distinct things worth asserting,
+      # and naming either of them the other would be a lie in a build log.
+      - name: Tests (default features, ml package excluded)
+        run: cargo test --workspace --exclude zroutery-headless
+      - name: Tests (whole workspace, ml enabled by the headless package)
         run: cargo test --workspace
-      - name: Tests (ml feature)
-        run: cargo test --workspace --features ml
       # The headless proxy is its own package now, and that package's bin target
       # is the only thing named zroutery-headless. The old
       # `-p zroutery --bin zroutery-headless` asks the desktop package for a
