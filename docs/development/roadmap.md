@@ -268,6 +268,25 @@ narrowed to look Windows-clean. And the scan is **string-level evidence, not a
 disassembly proof** — no symbol table was consulted, because the release profile
 strips.
 
+**A structural conflict surfaced while preparing `7F`, and it was not about care.**
+Cargo resolves features per package, not per binary, and the serving binary and the
+desktop app were two bin targets of ONE package declaring `zroutery-core` with no
+features. So enabling `ml` for the server — which `7F` needs — would necessarily have
+compiled it into the shipped desktop app, reversing the accepted 7E-2F property that
+the installer stay unreachable and falsifying the artifact-level negative in E-100.
+The owner ruled for a split, and `crates/zroutery-headless` is now its own package
+depending on the desktop package rather than the reverse, which is what makes the
+boundary hold: the headless binary carries `zroutery_core::ml`, the desktop binary
+carries neither ml nor any forbidden activation symbol.
+
+Two things about that split are recorded because the obvious reading is wrong. It
+brings **no dependency or size win** — the headless binary still links Tauri exactly
+as before, because it borrows the four modules it uses from the desktop library
+rather than duplicating them; the only thing it changes is that a desktop-only build
+no longer enables `ml`. And **the desktop application still has no `ml`**, so `7F`'s
+reachability is on the headless serving surface only. That is a product consequence,
+accepted for now and stated rather than buried.
+
 The limit that outlives the node: **both new gates are manual.** Nothing runs
 them automatically; CI only listens on `main` and does not build the desktop
 artifact. A gate nobody runs is a gate that rots, and these two protect nobody
