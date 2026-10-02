@@ -28,6 +28,12 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Clippy
         run: cargo clippy -p zroutery-core --all-features -- -D warnings
+      # Node TEST-FORMAT. This was red from the audit onward and was in no
+      # pipeline, so it was red without anyone acting on it. It is a fast,
+      # deterministic check with no reason to be expensive, so it runs on
+      # every push rather than on a schedule.
+      - name: Formatting
+        run: cargo fmt --all -- --check
       - name: Tests
         run: cargo test -p zroutery-core --all-features
 
