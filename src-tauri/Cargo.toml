@@ -11,10 +11,6 @@ default-run = "zroutery"
 name = "zroutery"
 path = "src/main.rs"
 
-[[bin]]
-name = "zroutery-headless"
-path = "src/bin/headless.rs"
-
 [lib]
 name = "zroutery_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]

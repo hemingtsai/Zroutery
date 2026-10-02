@@ -1,0 +1,27 @@
+[package]
+name = "zroutery-headless"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Headless proxy for Zroutery: the desktop shell's wiring without the GUI"
+
+# Cargo resolves features per package, not per binary, so the headless proxy used
+# to live in the desktop package and inherit its dependency declarations. That
+# made `ml` unreachable here without also compiling it into the shipped desktop
+# app. This package exists to give the headless surface its own dependency
+# declaration; the desktop package stays feature-free.
+[dependencies]
+# The same wiring as the desktop app, borrowed rather than duplicated: this
+# binary is the desktop library's four public modules plus a `main`. It already
+# linked Tauri before the split, so this is not a new dependency for it.
+zroutery = { path = "../../src-tauri" }
+
+# Declared for its feature, not for its API: nothing here names `zroutery_core`.
+# Enabling `ml` here is what node 7F needs, and it cannot reach the desktop app
+# because the desktop package is not a dependency of this one.
+zroutery-core = { path = "../zroutery-core", features = ["ml"] }
+
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }

@@ -5755,6 +5755,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "zroutery-headless"
+version = "0.8.0"
+dependencies = [
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "zroutery",
+ "zroutery-core",
+]
+
+[[package]]
 name = "zune-core"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
