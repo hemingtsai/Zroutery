@@ -1,26 +1,30 @@
 {
   "schema_version": 1,
   "node_id": "TEST-FORMAT",
-  "display_name": "Rust formatting check",
-  "status": "FAILED",
-  "implementation_state": "The audited formatting check found pre-existing drift.",
+  "display_name": "Rust formatting gate",
+  "status": "DONE",
+  "implementation_state": "The workspace is formatted and `cargo fmt --all -- --check` passes. The gate had been recorded FAILED from the audit onward and sat in no pipeline at all, so it was red for the whole project without anyone acting on it; it now runs on every push beside clippy.",
   "dependencies": [],
   "dependents": [],
   "required_gates": [
     "cargo fmt --all -- --check"
   ],
   "blocked_by": [],
-  "unblock_condition": "A separately authorized formatting repair must run and pass the full check.",
+  "unblock_condition": "Satisfied. Drift in 87 of 120 Rust files is removed and the check is wired into CI.",
   "evidence": [
-    "E-013"
+    "E-107"
   ],
   "source_references": [
     "docs/development/repository-audit-2026-09-25.md",
-    "Cargo.toml",
-    "crates/zroutery-core/Cargo.toml",
-    "src-tauri/Cargo.toml"
+    ".github/workflows/ci.yml"
   ],
   "notes": [
-    "ORCH-DOCS does not reformat source."
+    "87 files changed, 4225 insertions and 2700 deletions, as ONE formatting-only commit. No behaviour, assertion, expected value or comment text was changed.",
+    "THE SIZE LOOKED ALARMING AND WAS NOT. Measured before running anything, only 423 of the differing lines were MOVES rather than rewraps, and only 10 of those were `mod` or `use` declarations across three files. The 13860 figure quoted earlier counted context lines and was not the size of the change.",
+    "MODULE DECLARATION ORDER WAS THE ONE RISK WORTH CHECKING PROPERLY, because reordering declarations can reorder static initialisation. The `#[cfg(feature = \"ml\")]` and `pub mod ml;` adjacency the 7E-2F boundary test depends on survives at lines 39 and 40, the `pub use ml::{...}` block that same test parses is intact at line 91 with 574 characters and no forbidden activation symbol, and the boundary test passes 31 of 31.",
+    "TWO GATES DEPEND ON THE SHAPE OF SOURCE TEXT rather than on behaviour, and both were checked specifically because rewrapping could have broken them: the shadow-surface test counts occurrences of `.shadow()` and `shadow_evaluated(` in pipeline.rs and looks for the literal `shadow_evaluated(self.id(), input)`. It passes at 14 of 14.",
+    "THE PARENT FAILED FOUR TIMES TO PROVE THE COMMIT WAS FORMATTING-ONLY BY TEXTUAL COMPARISON, and each attempt was defeated by a legitimate rustfmt transformation rather than by a real problem: comparing line multisets flagged files where several lines merged into one; stripping all whitespace still flagged 76 files because rustfmt also sorts imports inside a brace group; extracting declaration blocks broke on multi-line `use` being merged; and comparing whole-file character multisets flagged 66 files because rustfmt adds and removes trailing commas when it wraps. None of those transformations changes meaning, and the verification that does hold is the behavioural one: 999 tests on default features with the ml package excluded, 1733 on the whole workspace, 1772 all-features on core, clippy clean, and the boundary test unmodified. Recording the four failures because the lesson is about method, not about rustfmt.",
+    "No `rustfmt.toml` was added and the formatter is still allowed to reorder declarations. That is a policy question this change does not settle; what it does settle is that the gate is now live and will turn red again if a later change does not format.",
+    "The `--check` form is wired, not `cargo fmt --all`, so CI reports and never rewrites a working tree."
   ]
 }

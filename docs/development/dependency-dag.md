@@ -75,7 +75,7 @@ failed node. Historical tags are not graph edges.
 | `TEST-SMOKE` | `DONE` | `TEST-CHECK` |
 | `TEST-LAYOUT-SELF` | `DONE` | `TEST-UI-BUILD` |
 | `TEST-LAYOUT-BROWSER` | `DONE` | `TEST-LAYOUT-SELF` |
-| `TEST-FORMAT` | `FAILED` | none |
+| `TEST-FORMAT` | `DONE` | none |
 | `TEST-DIFF-CHECK` | `DONE` | none |
 | `CI-CORE` | `DONE` | none |
 | `CI-DESKTOP` | `DONE` | none |
