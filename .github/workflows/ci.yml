@@ -34,8 +34,14 @@ jobs:
       # every push rather than on a schedule.
       - name: Formatting
         run: cargo fmt --all -- --check
+      # Every test step goes through scripts/test_gate.py. It runs the command
+      # unchanged and exits with the command's own exit code, so it alters
+      # nothing about what is gated; what it adds is that a failure is reported
+      # BY NAME. This project lost the name of a failing test four times to ad-hoc
+      # shell capture patterns, and each loss turned a real observation into an
+      # unreproducible rumour that cost another audit cycle.
       - name: Tests
-        run: cargo test -p zroutery-core --all-features
+        run: python3 -B scripts/test_gate.py --quiet -- cargo test -p zroutery-core --all-features
 
   contracts:
     name: commit contract and orchestration docs
@@ -113,9 +119,9 @@ jobs:
       # whole-workspace one. Those are the two distinct things worth asserting,
       # and naming either of them the other would be a lie in a build log.
       - name: Tests (default features, ml package excluded)
-        run: cargo test --workspace --exclude zroutery-headless
+        run: python3 -B scripts/test_gate.py --quiet -- cargo test --workspace --exclude zroutery-headless
       - name: Tests (whole workspace, ml enabled by the headless package)
-        run: cargo test --workspace
+        run: python3 -B scripts/test_gate.py --quiet -- cargo test --workspace
       # The headless proxy is its own package now, and that package's bin target
       # is the only thing named zroutery-headless. The old
       # `-p zroutery --bin zroutery-headless` asks the desktop package for a
@@ -128,7 +134,7 @@ jobs:
       # the platform the desktop shell ships for; it is the only job that
       # exercises the proxy end to end, which is why it lives here.
       - name: End-to-end smoke
-        run: python3 scripts/smoke_test.py
+        run: python3 -B scripts/test_gate.py --quiet -- python3 scripts/smoke_test.py
 
   reachability:
     name: shipped desktop binary reachability
