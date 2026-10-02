@@ -46,7 +46,7 @@ failed node. Historical tags are not graph edges.
 | `7E-2E` | `DONE` | `7E-2D`, `7E-0` |
 | `7E-2F` | `DONE` | `7E-2E` |
 | `7E-3` | `DONE` | `7E-2F`, `STAGE-3`, `STAGE-4`, `STAGE-6` |
-| `7F` | `READY` | `7E-3`, `TEST-PACKAGING`, `OBSERVABILITY` |
+| `7F` | `PARTIAL` | `7E-3`, `TEST-PACKAGING`, `OBSERVABILITY` |
 | `7G` | `BLOCKED` | `7F` |
 | `7H` | `BLOCKED` | `7G` |
 | `ACCOUNT` | `PARTIAL` | `STAGE-5` |

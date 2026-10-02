@@ -2,8 +2,8 @@
   "schema_version": 1,
   "node_id": "7F",
   "display_name": "7F — real-traffic shadow",
-  "status": "READY",
-  "implementation_state": "Every recorded blocker is cleared and the two capabilities 7F needs now exist: the offline gate that decides whether a model may be considered at all, and a read-only observability projection that joins a request's decision, failure and usage on UUID-derived identifiers. Desktop packaging is proven on Windows with a binary-level reachability gate. No accepted commit exists yet and nothing has run against real traffic, which is 7F's own work.",
+  "status": "PARTIAL",
+  "implementation_state": "The ml capability is genuinely reachable from the shipped headless binary, a named verified commit is attached on the serving path, and the observability projection now has a caller. Two of four gates did not pass and are named below rather than engineered around: the statistical constituent refused on a degenerate axis, and three accepted tests assumed the shadow stays pinned to the cold-start root.",
   "dependencies": [
     "7E-3",
     "TEST-PACKAGING",
@@ -19,26 +19,35 @@
     "Stable observability and rollback"
   ],
   "blocked_by": [],
-  "unblock_condition": "Unblocked. 7E-3, TEST-PACKAGING and OBSERVABILITY are all DONE, so the offline gate, the shipping reachability proof and the observability projection are all available. What remains is 7F's own work: produce an accepted commit, run a bounded shadow window against real traffic, and demonstrate rollback.",
+  "unblock_condition": "Partially met. Reachability, offline replay evidence, observability and rollback are delivered. Accepted ModelCommit is blocked on statistical support, which needs a holdout with a rankable candidate axis and more decisions than a bounded local window produces.",
   "evidence": [
     "E-015",
     "E-016",
     "E-097",
     "E-100",
-    "E-101"
+    "E-101",
+    "E-102",
+    "E-103"
   ],
   "source_references": [
     "docs/development/repository-audit-2026-09-25.md",
     "crates/zroutery-core/src/ml/shadow.rs",
+    "crates/zroutery-core/src/server/shadow_candidate.rs",
+    "crates/zroutery-core/src/server/pipeline.rs",
     "crates/zroutery-core/src/observability.rs",
-    "crates/zroutery-core/src/server/pipeline.rs"
+    "crates/zroutery-core/tests/real_request_shadow_test.rs"
   ],
   "notes": [
-    "Unblocked on 2026-10-02. The three capabilities this node was waiting on are now accepted: the offline release gate from 7E-3, the desktop packaging and artifact reachability gates from TEST-PACKAGING, and the read-only correlation projection from OBSERVABILITY.",
-    "The packaging work closed a real hole rather than a paperwork one. CI-DESKTOP had been marked done on the strength of a GitHub Actions run while recording in its own note that it was not a Windows gate, and nobody had run a desktop build to completion or looked at the binary it produces.",
-    "TWO KNOWN LIMITS CARRIED INTO THIS NODE. The MSI installer path is untested, returning 1603 for want of privileges, so install and reinstall are carried by the NSIS installer alone; and both packaging gates are MANUAL, since nothing runs them automatically and CI only listens on main. A gate nobody runs is a gate that rots.",
-    "THE OBSERVABILITY PROJECTION IS A LIBRARY CAPABILITY AND IS NOT REACHABLE from the shipped product. No caller in server, src-tauri or ui invokes it. Wiring it is 7F's work, and this node is where it becomes reachable, so the same scrutiny that was applied to the activation boundary applies here from the other direction.",
-    "The projection refuses rather than guessing where it matters. An absent decision id is reported as absent instead of being filled with the planned identity, an ambiguous decision id refuses rather than picking one, and batch accounting is asserted so nothing can be dropped silently. Any real-traffic use should preserve those refusals rather than route around them.",
-    "The float transport is exact as of E-097 being closed, so a trained commit survives a plain JSON round trip and re-verifies. A commit can therefore be persisted and re-read across a restart without depending on the activation module, which matters here because that module is deliberately unreachable from the rest of ml."
+    "TERMINAL STATE IS PARTIAL AND THE TWO UNMET GATES ARE NAMED. This is the outcome the parent predicted in the dispatch brief, and the node did not weaken anything to avoid it.",
+    "GATE 1, ACCEPTED ModelCommit, REFUSED BY THE STATISTICAL CONSTITUENT. The refusal is upstream of the predicted sample-size floor: holdout decisions that succeeded on their first attempt carry an axis of arity 1, which cannot be ranked, so 7D's attribution refused to build an axis at all and `degenerate_axis` was returned before the decision floor was ever reached. Observed 12 holdout cohorts against a required 30; the power-based n for a 5-point effect at 80% power is 314, 785 or 1570 depending on assumed discordance. NOTHING WAS LOWERED: no tolerance widened, no weaker minimum_effect chosen, no synthetic dataset built to size. A tripwire test asserts `StatisticalConfig::default()` verbatim, including that `GateConfig::default().statistics` equals it, so a future edit that loosens the claim to make a window sufficient fails there.",
+    "Everything else in gate 1 passed and is worth stating because it is real: replay 30 of 30 bit-identical, terminal agreements 30 of 30, retention load-bearing on 120 of 240 feature positions, 30 served identities, a 30-decision holdout with 0 overlap against the fit set, calibration calibrated, the commit's plain-JSON transport exact with 0 of 167 parameters moved, and the float round trip exact with 0 of 211 f64 fields at max 0 ulp.",
+    "THE SHADOW DOES NOT CHANGE WHAT IS SERVED, and this was measured rather than asserted. Four windows with a fresh AppState and a fresh fake upstream each, same 34-request sequence: one attached, and two candidate-withdrawn runs as a control. The differences between the attached run and the control are exactly the control's own differences, which is none. Bodies were compared byte for byte with 0 of 34 ids masked; the only field excluded anywhere is hyper's clock-derived Date header.",
+    "THE COMPARISON IS A MEASUREMENT AND NOT A TAUTOLOGY, which is what makes the point above worth anything: 30 of 30 shadow records changed their commit and decision checksum between the withdrawn and attached runs while 0 served bytes changed. A separate assertion fails the build if the candidate ever IS the cold-start commit, because that would make the whole comparison vacuous.",
+    "ROLLBACK is demonstrated before, during and after rather than described. Two servers in lockstep with separate fake upstreams, so the comparison never measures the router's own evolving latency state: window 1 before withdrawal was identical across both, the withdrawal is one-way and idempotent, and window 2 after was identical again. The worker reports that its first attempt DID report differences and that the cause was its own measurement error, not the shadow; comparing one server's window 1 against its own window 2 measures the router's latency drift. That correction is the useful part of the evidence.",
+    "NO PRODUCTION TRAFFIC EXISTS AND THE RECORDS SAY SO. Every artifact, comment and claim says real requests through the production serving path against a LOCAL FAKE UPSTREAM. The forbidden phrases real traffic, production traffic and live traffic appear nowhere except inside the negative assertion that forbids them.",
+    "THE WORKER REPORTED ONE FAILING TEST AND THERE WERE THREE. cargo test aborts at the first failing test binary, so the e2e failure masked two more that appeared only after it was fixed, and several gates the report described as passing had in fact never run to completion. The parent found them, fixed them as fixture corrections, and verified each still fails when it should; see E-103.",
+    "THE SERVING PATH IS REACHED THREE TIMES AND THE COUNT IS RECORDED DIFFERENTLY NOW. 7F moved the evaluation reach behind one AppState hop so the predictor never leaves AppState, which is why the source counts read 2, 4 and 2 rather than 3, 3 and 2. An exact source-text count is brittle by construction; the forbidden-token scan over the four marked shadow blocks is the load-bearing assertion in that test, and the counts are secondary.",
+    "A KNOWN IMPRECISION, recorded rather than left for someone to discover: the server passes the candidate to `evaluate_with` per call, so `ShadowEngine`'s own internally pinned predictor is still genesis. `predictor_commit()` therefore describes what that engine would use on its own, not what production used. Nothing depends on it being otherwise today, and the per-call design is what keeps the predictor from being reachable at all.",
+    "Reachability is proven by a diagnostic log line rather than an endpoint, on purpose: an endpoint would be a new capability rather than evidence about an existing one. No activation, no swap, no try_train, no takeover, no exploration, no runtime training, no new dependency, no endpoint, no UI change, and no claim that the model is safe to serve."
   ]
 }

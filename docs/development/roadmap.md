@@ -90,7 +90,7 @@ must be typed against now exists. Development continues on `dev`.
 | `7E-2E` | `DONE` | Durable, ordered, fail-closed journal; idempotency is byte-exact against the stored frame, so a retry survives a lossy float round trip. |
 | `7E-2F` | `DONE` | Immutable content-addressed snapshot, atomic pointer, journaled rollback, and a proven-unreachable mechanism. |
 | `7E-3` | `DONE` | Bit-exact offline replay from the retained input, an outcome- and served-identity authority, and one recomputed release verdict that can refuse. |
-| `7F` | `READY` | Every blocker is cleared; what is left is an accepted commit, a bounded real-traffic shadow window, and demonstrated rollback. |
+| `7F` | `PARTIAL` | Reachability, observability and rollback are delivered and the shadow provably does not change what is served; the statistical constituent refuses on a degenerate axis, so no commit is accepted yet. |
 | `7G` | `BLOCKED` | Requires stable real-traffic shadow evidence and rollback. |
 | `7H` | `BLOCKED` | Requires stable takeover, budget, monitoring, and rollback. |
 
