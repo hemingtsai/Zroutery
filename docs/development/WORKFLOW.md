@@ -196,6 +196,48 @@ trailers. A commit-level state cannot upgrade a Node without passing that
 Node's required gates. In particular, a successful lint or a commit hash is
 not a `DONE` claim for the implementation being described.
 
+## The Verification Matrix
+
+These are the gates a change is accepted against. They are written down here
+because they used to live only in dispatch briefs, and a contract that lives
+only in prose can change meaning without anyone noticing.
+
+**That already happened once.** `cargo test --workspace` was the default-features
+gate for the whole project, and it stopped being one when the headless proxy
+became its own package: that package depends on `zroutery-core` with
+`features = ["ml"]` unconditionally, so its presence in the workspace graph turns
+`ml` on for the entire resolution. The command kept passing, so nothing
+complained, while the gate it named was no longer being run.
+
+| Gate | Command | What it actually checks |
+|---|---|---|
+| check | `cargo check --workspace` | everything compiles |
+| clippy | `cargo clippy -p zroutery-core --all-targets --all-features -- -D warnings` | no lint debt |
+| **default features** | `cargo test --workspace --exclude zroutery-headless` | the build the desktop app ships, with `ml` genuinely off |
+| whole workspace | `cargo test --workspace` | everything, with `ml` on because the headless package forces it |
+| all features | `cargo test -p zroutery-core --all-features` | the `ml` surface on its own |
+| boundary | `cargo test -p zroutery-core --all-features --test activation_test` | the shipped product cannot name the installer |
+| docs | `python -B scripts/orch_docs_test.py` | node records, DAG and evidence registry agree |
+| contract | `python -B scripts/commit_contract_test.py --base <rev> --head <rev>` | commit subjects and trailers over the range |
+| whitespace | `git diff --check` | no trailing damage |
+
+The default-features row is spelled the way it is on purpose. `--workspace`
+without the exclusion runs 1733 tests; with the exclusion it runs 999, and the
+ml-gated `statistics_test` file compiles to zero instead of running 22. If the
+default-features row ever stops being a default-features run, the matrix itself
+is wrong and must be corrected in the same commit that changed it.
+
+CI runs the same set (`.github/workflows/ci.yml`, plus `packaging.yml` for the
+installer gate on a schedule), and no step in it may be made non-blocking. If a
+gate is too expensive for every push, limit **when** it runs, never **whether
+its result counts**.
+
+### Known unenforced claim
+
+The workspace declares `rust-version = "1.80"` and every CI job uses `stable`,
+so the declared minimum is never verified. It is recorded rather than silently
+fixed, because pinning it is a separate decision with its own blast radius.
+
 ## Fixtures and Enforcement
 
 The deterministic validator has no third-party dependencies:
