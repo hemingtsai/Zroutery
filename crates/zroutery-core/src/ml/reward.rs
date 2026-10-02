@@ -105,8 +105,7 @@ impl RewardComputer {
         } else {
             -self.policy.success_weight
         };
-        let latency_reward =
-            -self.policy.latency_weight * (latency_ms / 1000.0).min(1.0);
+        let latency_reward = -self.policy.latency_weight * (latency_ms / 1000.0).min(1.0);
         let cost_reward = -self.policy.cost_weight * (cost / 1.0).min(1.0);
         let fallback_penalty = if is_fallback {
             self.policy.fallback_penalty
@@ -137,8 +136,7 @@ impl RewardComputer {
     ) -> RequestReward {
         let attempt_total: f64 = attempts.iter().map(|a| a.total).sum();
         let switch_cost = self.policy.switch_cost * switch_count as f64;
-        let uncertainty_penalty =
-            -self.policy.uncertainty_weight * (1.0 - confidence);
+        let uncertainty_penalty = -self.policy.uncertainty_weight * (1.0 - confidence);
         let total = attempt_total + switch_cost + uncertainty_penalty;
         RequestReward {
             outcome_id: String::new(),
@@ -395,11 +393,7 @@ mod tests {
     #[test]
     fn sticky_low_confidence_keep() {
         let action = ActionGuard::decide("model-a", "model-b", SessionRoutingMode::Sticky, 0.5);
-        assert_eq!(
-            action,
-            Action::Keep,
-            "Sticky + low confidence should Keep"
-        );
+        assert_eq!(action, Action::Keep, "Sticky + low confidence should Keep");
     }
 
     #[test]
@@ -487,7 +481,13 @@ mod tests {
         }
     }
 
-    fn make_bundle(model: &str, success: f64, latency: f64, ttft: f64, cost: f64) -> PredictionBundle {
+    fn make_bundle(
+        model: &str,
+        success: f64,
+        latency: f64,
+        ttft: f64,
+        cost: f64,
+    ) -> PredictionBundle {
         PredictionBundle {
             candidate_model: model.to_string(),
             candidate_provider: "test-provider".to_string(),

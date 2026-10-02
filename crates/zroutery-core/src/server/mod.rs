@@ -1009,7 +1009,10 @@ async fn get_response(
 ) -> Response {
     match state.response_store.get(&response_id) {
         Some(resp) => Json(serde_json::to_value(&resp).unwrap()).into_response(),
-        None => error_response(Dialect::OpenAIResponses, &Error::invalid("response not found")),
+        None => error_response(
+            Dialect::OpenAIResponses,
+            &Error::invalid("response not found"),
+        ),
     }
 }
 
@@ -1020,7 +1023,10 @@ async fn delete_response(
     if state.response_store.delete(&response_id) {
         Json(json!({"id": response_id, "object": "response", "deleted": true})).into_response()
     } else {
-        error_response(Dialect::OpenAIResponses, &Error::invalid("response not found"))
+        error_response(
+            Dialect::OpenAIResponses,
+            &Error::invalid("response not found"),
+        )
     }
 }
 

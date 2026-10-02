@@ -234,8 +234,7 @@ pub fn extract_features(ctx: &FeatureContext) -> RoutingFeatures {
         f.values[F_STAT_TOTAL_REQUESTS] = normalize_log2(stats.total_requests);
         if stats.total_requests > 0 {
             let total = stats.total_requests as f32;
-            f.values[F_STAT_FAILURE_RATE] =
-                (stats.total_failures as f32 / total).clamp(0.0, 1.0);
+            f.values[F_STAT_FAILURE_RATE] = (stats.total_failures as f32 / total).clamp(0.0, 1.0);
             f.values[F_STAT_TIMEOUT_RATE] =
                 (stats.failures.count(FailureClass::Timeout) as f32 / total).clamp(0.0, 1.0);
             f.values[F_STAT_RATELIMIT_RATE] =
@@ -540,10 +539,7 @@ mod tests {
         };
         let f = extract_features(&ctx);
         for (i, &v) in f.values.iter().enumerate() {
-            assert!(
-                (-1.0..=1.0).contains(&v),
-                "feature {i} out of range: {v}"
-            );
+            assert!((-1.0..=1.0).contains(&v), "feature {i} out of range: {v}");
         }
     }
 
@@ -1066,7 +1062,10 @@ mod tests {
         let mut sorted = indices.to_vec();
         sorted.sort();
         let expected: Vec<usize> = (0..32).collect();
-        assert_eq!(sorted, expected, "feature indices must cover 0..31 exactly once");
+        assert_eq!(
+            sorted, expected,
+            "feature indices must cover 0..31 exactly once"
+        );
     }
 
     // -- Helpers --

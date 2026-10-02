@@ -94,7 +94,10 @@ fn transform_requires_a_replacement_and_drop_is_an_explicit_non_silent_outcome()
         evaluate_content_policy(UnsupportedContentPolicy::Placeholder, &block).unwrap(),
         ContentPolicyOutcome::Replacement(ContentBlock::Text { .. })
     ));
-    assert_eq!(UnsupportedContentPolicy::default(), UnsupportedContentPolicy::Reject);
+    assert_eq!(
+        UnsupportedContentPolicy::default(),
+        UnsupportedContentPolicy::Reject
+    );
 }
 
 #[test]
@@ -153,7 +156,8 @@ fn image_tool_results_cannot_be_stringified_silently() {
     assert!(openai::encode_request_with(&request, "m", &ProviderQuirks::default()).is_err());
     let mut placeholder = request;
     placeholder.unsupported_content_policy = UnsupportedContentPolicy::Placeholder;
-    let encoded = openai::encode_request_with(&placeholder, "m", &ProviderQuirks::default()).unwrap();
+    let encoded =
+        openai::encode_request_with(&placeholder, "m", &ProviderQuirks::default()).unwrap();
     assert!(encoded["messages"][0]["content"]
         .as_str()
         .unwrap()
@@ -167,7 +171,8 @@ fn unknown_stream_content_is_not_silently_ignored() {
         .push(&SseFrame {
             event: Some("content_block_start".into()),
             data: json!({"type": "content_block_start", "index": 0,
-                         "content_block": {"type": "server_tool"}}).to_string(),
+                         "content_block": {"type": "server_tool"}})
+            .to_string(),
         })
         .is_err());
 
@@ -177,7 +182,8 @@ fn unknown_stream_content_is_not_silently_ignored() {
             event: None,
             data: json!({"choices": [{"index": 0, "delta": {
                 "content": [{"type": "input_video", "secret": "hidden"}]
-            }}]}).to_string(),
+            }}]})
+            .to_string(),
         })
         .is_err());
 
@@ -186,7 +192,8 @@ fn unknown_stream_content_is_not_silently_ignored() {
         .push(&SseFrame {
             event: Some("response.content_part.added".into()),
             data: json!({"type": "response.content_part.added",
-                         "part": {"type": "input_video"}}).to_string(),
+                         "part": {"type": "input_video"}})
+            .to_string(),
         })
         .is_err());
 
@@ -196,7 +203,8 @@ fn unknown_stream_content_is_not_silently_ignored() {
             event: None,
             data: json!({"candidates": [{"content": {"parts": [
                 {"videoMetadata": {"secret": "hidden"}}
-            ]}}]}).to_string(),
+            ]}}]})
+            .to_string(),
         })
         .is_err());
 }

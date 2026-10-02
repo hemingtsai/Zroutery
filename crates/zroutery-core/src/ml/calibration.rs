@@ -382,7 +382,9 @@ pub enum CalibrationError {
     },
 
     /// A row's feature vector is not the width the models are built for.
-    #[error("calibration sample {index} carries a feature vector of width {found}, expected {expected}")]
+    #[error(
+        "calibration sample {index} carries a feature vector of width {found}, expected {expected}"
+    )]
     FeatureDimension {
         index: usize,
         found: usize,
@@ -495,12 +497,17 @@ pub enum CalibrationError {
 
     /// The metric layer refused the vectors handed to it.
     #[error("cannot measure {context}: {reason}")]
-    Measurement { context: &'static str, reason: String },
+    Measurement {
+        context: &'static str,
+        reason: String,
+    },
 
     /// The 7E-2A type refused a vector this module emitted. Unreachable by
     /// construction; surfaced rather than unwrapped so a future change to the
     /// parameterization cannot panic the product.
-    #[error("the decision distribution type refused the emitted vector for cohort {cohort}: {reason}")]
+    #[error(
+        "the decision distribution type refused the emitted vector for cohort {cohort}: {reason}"
+    )]
     DistributionRejected { cohort: String, reason: String },
 
     /// The calibrator was fitted on one regime and the holdout is another.
@@ -512,7 +519,6 @@ pub enum CalibrationError {
     },
 
     // -- configuration that would make the gate meaningless --
-
     /// Zero reliability bins is a curve with no bins.
     #[error("reliability bin count {bins} must be at least 1")]
     ZeroReliabilityBins { bins: usize },
@@ -586,7 +592,9 @@ pub enum CalibrationError {
     InvalidMinTemperature { value: f64 },
 
     /// A temperature ceiling that is not above the floor would pin the fit.
-    #[error("maximum temperature {value} must be finite and greater than the minimum temperature {min}")]
+    #[error(
+        "maximum temperature {value} must be finite and greater than the minimum temperature {min}"
+    )]
     InvalidMaxTemperature { value: f64, min: f64 },
 
     /// The log clamp must sit strictly inside the unit interval on both sides.
@@ -807,10 +815,7 @@ impl CalibrationConfig {
                 value: self.reliability.max_calibration_error,
             });
         }
-        if !self
-            .reliability
-            .max_candidate_calibration_error
-            .is_finite()
+        if !self.reliability.max_candidate_calibration_error.is_finite()
             || self.reliability.max_candidate_calibration_error < 0.0
         {
             return Err(CalibrationError::InvalidCandidateCeiling {
@@ -968,7 +973,11 @@ struct CohortOrderKey {
 }
 
 impl CohortOrderKey {
-    fn of(candidates: &[CandidateInput], served: Option<&CandidateIdentity>, context: CohortContext) -> Self {
+    fn of(
+        candidates: &[CandidateInput],
+        served: Option<&CandidateIdentity>,
+        context: CohortContext,
+    ) -> Self {
         Self {
             context,
             served: served.map(|identity| {
@@ -1070,10 +1079,13 @@ impl DecisionCohort {
         candidates: Vec<CandidateInput>,
         served: Option<CandidateIdentity>,
     ) -> Result<Self, CalibrationError> {
-        let fingerprint = CohortOrderKey::of(&candidates, served.as_ref(), context.clone()).fingerprint();
+        let fingerprint =
+            CohortOrderKey::of(&candidates, served.as_ref(), context.clone()).fingerprint();
 
         if candidates.is_empty() {
-            return Err(CalibrationError::CohortWithoutCandidates { cohort: fingerprint });
+            return Err(CalibrationError::CohortWithoutCandidates {
+                cohort: fingerprint,
+            });
         }
         let mut seen: Vec<&CandidateIdentity> = Vec::with_capacity(candidates.len());
         for input in &candidates {
@@ -1153,7 +1165,10 @@ impl DecisionCohort {
 
     /// How many candidates carry a prediction.
     pub fn ranked_count(&self) -> usize {
-        self.candidates.iter().filter(|input| input.is_ranked()).count()
+        self.candidates
+            .iter()
+            .filter(|input| input.is_ranked())
+            .count()
     }
 
     /// Whether this decision was served.
@@ -1458,7 +1473,8 @@ fn validate_calibration_sample(
             value: *value,
         });
     }
-    validate_outcome_sample(sample).map_err(|reason| CalibrationError::InvalidSample { index, reason })
+    validate_outcome_sample(sample)
+        .map_err(|reason| CalibrationError::InvalidSample { index, reason })
 }
 
 fn unordered_at(cohorts: &[DecisionCohort]) -> Option<usize> {
@@ -1542,7 +1558,9 @@ impl KWayCalibrator {
         let (indexed, attributed) = fit_index(cohorts)?;
         if attributed.is_empty() {
             return Err(CalibrationError::FitDiverged {
-                reason: "the fit partition holds no attributed decision, so there is no target to fit".to_string(),
+                reason:
+                    "the fit partition holds no attributed decision, so there is no target to fit"
+                        .to_string(),
             });
         }
 
@@ -1554,7 +1572,13 @@ impl KWayCalibrator {
             let mut gradient_temperature = 0.0_f64;
 
             for cohort in &attributed {
-                let scores = cohort_scores(cohort, &intercepts, &indexed, temperature, probability_floor);
+                let scores = cohort_scores(
+                    cohort,
+                    &intercepts,
+                    &indexed,
+                    temperature,
+                    probability_floor,
+                );
                 let Some(mass) = softmax(&scores.utility) else {
                     return Err(CalibrationError::FitDiverged {
                         reason: "the joint utility produced no finite mass".to_string(),
@@ -1586,10 +1610,8 @@ impl KWayCalibrator {
                 *value = value.clamp(-config.fit.max_abs_intercept, config.fit.max_abs_intercept);
             }
             project_to_zero_mean(&mut intercepts);
-            temperature = (temperature - config.fit.learning_rate * gradient_temperature).clamp(
-                config.fit.min_temperature,
-                config.fit.max_temperature,
-            );
+            temperature = (temperature - config.fit.learning_rate * gradient_temperature)
+                .clamp(config.fit.min_temperature, config.fit.max_temperature);
         }
 
         // Both losses are measured the same way, on the same partition, with
@@ -1597,13 +1619,7 @@ impl KWayCalibrator {
         // fitted one. Neither is read from the gradient loop, so neither can be
         // an artefact of when the accumulation stopped.
         let identity = vec![0.0_f64; indexed.len()];
-        let initial_loss = mean_log_loss(
-            &attributed,
-            &identity,
-            &indexed,
-            1.0,
-            probability_floor,
-        );
+        let initial_loss = mean_log_loss(&attributed, &identity, &indexed, 1.0, probability_floor);
         let final_loss = mean_log_loss(
             &attributed,
             &intercepts,
@@ -1725,8 +1741,8 @@ impl KWayCalibrator {
         let mut ranked_utility = Vec::with_capacity(cohort.ranked_count());
         for input in cohort.candidates() {
             if let Some(raw) = input.raw_success_probability() {
-                let shifted = log_probability(raw, probability_floor)?
-                    + self.intercept_of(input.candidate());
+                let shifted =
+                    log_probability(raw, probability_floor)? + self.intercept_of(input.candidate());
                 ranked_utility.push(shifted / self.temperature);
             }
         }
@@ -1768,10 +1784,12 @@ impl KWayCalibrator {
             .collect();
         let distribution =
             DecisionDistribution::try_new(cohort.subject().clone(), outcomes, probabilities)
-                .map_err(|error: DecisionContractError| CalibrationError::DistributionRejected {
-                    cohort: cohort.fingerprint().to_string(),
-                    reason: error.to_string(),
-                })?;
+                .map_err(
+                    |error: DecisionContractError| CalibrationError::DistributionRejected {
+                        cohort: cohort.fingerprint().to_string(),
+                        reason: error.to_string(),
+                    },
+                )?;
 
         Ok(EmittedDecision {
             cohort_fingerprint: cohort.fingerprint().to_string(),
@@ -1803,7 +1821,10 @@ fn fit_index(
             .cmp(right.provider())
             .then_with(|| left.model().cmp(right.model()))
     });
-    let attributed: Vec<&DecisionCohort> = cohorts.iter().filter(|cohort| cohort.is_attributed()).collect();
+    let attributed: Vec<&DecisionCohort> = cohorts
+        .iter()
+        .filter(|cohort| cohort.is_attributed())
+        .collect();
     Ok((vocabulary, attributed))
 }
 
@@ -1836,7 +1857,8 @@ fn cohort_scores(
             .position(|identity| identity == input.candidate())
             .unwrap_or(0);
         let shift = intercepts.get(global).copied().unwrap_or(0.0);
-        utility.push((log_probability(raw, probability_floor).unwrap_or(0.0) + shift) / temperature);
+        utility
+            .push((log_probability(raw, probability_floor).unwrap_or(0.0) + shift) / temperature);
         slot_to_global.push(Some(global));
         if cohort.served() == Some(input.candidate()) {
             winner = Some(utility.len() - 1);
@@ -1901,7 +1923,13 @@ fn mean_log_loss(
     }
     let mut total = 0.0;
     for cohort in attributed {
-        let scores = cohort_scores(cohort, intercepts, vocabulary, temperature, probability_floor);
+        let scores = cohort_scores(
+            cohort,
+            intercepts,
+            vocabulary,
+            temperature,
+            probability_floor,
+        );
         if let (Some(mass), Some(winner)) = (softmax(&scores.utility), scores.winner) {
             let probability = mass.get(winner).copied().unwrap_or(0.0).max(LOG_LOSS_CLAMP);
             total -= probability.ln();
@@ -2265,7 +2293,9 @@ pub fn measure_emitted(
             let Some(&mass) = distribution.probabilities().get(index) else {
                 return Err(CalibrationError::Measurement {
                     context: "the emitted distribution",
-                    reason: "the validated distribution has no probability for one of its own outcomes".to_string(),
+                    reason:
+                        "the validated distribution has no probability for one of its own outcomes"
+                            .to_string(),
                 });
             };
             predictions.push(mass);
@@ -2281,10 +2311,12 @@ pub fn measure_emitted(
         }
     }
 
-    let pooled = PredictionMetrics::try_compute_classification(&predictions, &actuals)
-        .map_err(|error| CalibrationError::Measurement {
-            context: "the emitted distribution",
-            reason: error.to_string(),
+    let pooled =
+        PredictionMetrics::try_compute_classification(&predictions, &actuals).map_err(|error| {
+            CalibrationError::Measurement {
+                context: "the emitted distribution",
+                reason: error.to_string(),
+            }
         })?;
 
     Ok(CalibrationMeasure {
@@ -2310,7 +2342,11 @@ fn build_candidate_rows(decisions: &[EmittedDecision]) -> Vec<CandidateCalibrati
     for decision in decisions {
         let distribution = decision.distribution();
         for (index, outcome) in distribution.outcomes().iter().enumerate() {
-            let mass = distribution.probabilities().get(index).copied().unwrap_or(0.0);
+            let mass = distribution
+                .probabilities()
+                .get(index)
+                .copied()
+                .unwrap_or(0.0);
             let served = decision.served() == Some(outcome);
             let slot = match order.iter().position(|known| known == outcome) {
                 Some(slot) => slot,
@@ -2738,11 +2774,16 @@ pub fn measure_marginal(
             MarginalView::Normalized => observation.normalized,
         })
         .collect();
-    let actuals: Vec<bool> = observations.iter().map(|observation| observation.served).collect();
-    let pooled = PredictionMetrics::try_compute_classification(&predictions, &actuals)
-        .map_err(|error| CalibrationError::Measurement {
-            context: "the marginal route",
-            reason: error.to_string(),
+    let actuals: Vec<bool> = observations
+        .iter()
+        .map(|observation| observation.served)
+        .collect();
+    let pooled =
+        PredictionMetrics::try_compute_classification(&predictions, &actuals).map_err(|error| {
+            CalibrationError::Measurement {
+                context: "the marginal route",
+                reason: error.to_string(),
+            }
         })?;
     Ok(MarginalCalibration {
         view,
@@ -2852,7 +2893,10 @@ impl NormalizationDamage {
     /// candidate's gap. Positive means normalization made some named candidate
     /// worse, which the binned `delta` can average away.
     pub fn candidate_delta(&self) -> Option<f64> {
-        match (self.maximum_candidate_error_before, self.maximum_candidate_error_after) {
+        match (
+            self.maximum_candidate_error_before,
+            self.maximum_candidate_error_after,
+        ) {
             (Some(before), Some(after)) => Some(after - before),
             _ => None,
         }
@@ -3018,7 +3062,11 @@ pub fn measure_drift(
     let holdout_bins = probability_histogram(holdout, config.bin_count);
     let mut index = 0.0_f64;
     for slot in 0..config.bin_count {
-        let f = fit_bins.get(slot).copied().unwrap_or(0.0).max(PSI_PROPORTION_FLOOR);
+        let f = fit_bins
+            .get(slot)
+            .copied()
+            .unwrap_or(0.0)
+            .max(PSI_PROPORTION_FLOOR);
         let h = holdout_bins
             .get(slot)
             .copied()
@@ -3087,7 +3135,10 @@ fn attributed_rate(cohorts: &[DecisionCohort]) -> f64 {
     if cohorts.is_empty() {
         return 0.0;
     }
-    let attributed = cohorts.iter().filter(|cohort| cohort.is_attributed()).count();
+    let attributed = cohorts
+        .iter()
+        .filter(|cohort| cohort.is_attributed())
+        .count();
     attributed as f64 / cohorts.len() as f64
 }
 
@@ -3313,7 +3364,10 @@ impl CalibrationOutcome {
 
     /// The emitted holdout distributions in the validating wire form.
     pub fn holdout_records(&self) -> Vec<DistributionRecord> {
-        self.holdout.iter().map(EmittedDecision::to_record).collect()
+        self.holdout
+            .iter()
+            .map(EmittedDecision::to_record)
+            .collect()
     }
 
     /// The honest report.
@@ -3384,8 +3438,11 @@ pub fn run_calibration(
     }
 
     let calibrator = KWayCalibrator::fit(fit, config, config.probability_floor)?;
-    let marginal_calibrator =
-        MarginalCalibrator::fit(&fit_marginal_pairs(fit, config.probability_floor)?, &config.marginal, config.probability_floor)?;
+    let marginal_calibrator = MarginalCalibrator::fit(
+        &fit_marginal_pairs(fit, config.probability_floor)?,
+        &config.marginal,
+        config.probability_floor,
+    )?;
 
     let mut emitted = Vec::with_capacity(holdout.len());
     for cohort in holdout {
@@ -3421,7 +3478,10 @@ pub fn run_calibration(
         fit_cohorts: fit.len(),
         holdout_cohorts: holdout.len(),
         fit_attributed_cohorts: fit.iter().filter(|cohort| cohort.is_attributed()).count(),
-        holdout_attributed_cohorts: holdout.iter().filter(|cohort| cohort.is_attributed()).count(),
+        holdout_attributed_cohorts: holdout
+            .iter()
+            .filter(|cohort| cohort.is_attributed())
+            .count(),
         ranked_observations: final_vector.observations,
         unranked_candidates_emitted: emitted
             .iter()

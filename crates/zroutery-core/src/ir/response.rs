@@ -155,16 +155,16 @@ impl ResponseStore {
 
     /// Delete a stored response. Returns true if it existed.
     pub fn delete(&self, id: &str) -> bool {
-        crate::sync::lock(&self.inner.responses).remove(id).is_some()
+        crate::sync::lock(&self.inner.responses)
+            .remove(id)
+            .is_some()
     }
 
     /// Register an in-flight response. Returns a cancel receiver.
     pub fn register_in_flight(&self, id: String) -> watch::Receiver<bool> {
         let (tx, rx) = watch::channel(false);
-        crate::sync::lock(&self.inner.in_flight).insert(
-            id.clone(),
-            InFlightResponse { cancel_tx: tx, id },
-        );
+        crate::sync::lock(&self.inner.in_flight)
+            .insert(id.clone(), InFlightResponse { cancel_tx: tx, id });
         rx
     }
 
@@ -235,9 +235,17 @@ mod tests {
         StoredResponse::completed(
             id.to_string(),
             "gpt-4".to_string(),
-            vec![json!({"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]})],
-            vec![json!({"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "hello"}]})],
-            Usage { input_tokens: 5, output_tokens: 3, ..Usage::default() },
+            vec![
+                json!({"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}),
+            ],
+            vec![
+                json!({"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "hello"}]}),
+            ],
+            Usage {
+                input_tokens: 5,
+                output_tokens: 3,
+                ..Usage::default()
+            },
             None,
             None,
         )

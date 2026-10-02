@@ -9,7 +9,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::reward::{
-    Action, ActionGuard, PredictionBundle, RewardPolicy, UtilityBreakdown, compute_utility,
+    compute_utility, Action, ActionGuard, PredictionBundle, RewardPolicy, UtilityBreakdown,
 };
 use crate::session::SessionRoutingMode;
 
@@ -182,7 +182,13 @@ mod tests {
         }
     }
 
-    fn make_bundle(model: &str, success: f64, latency: f64, ttft: f64, cost: f64) -> PredictionBundle {
+    fn make_bundle(
+        model: &str,
+        success: f64,
+        latency: f64,
+        ttft: f64,
+        cost: f64,
+    ) -> PredictionBundle {
         PredictionBundle {
             candidate_model: model.to_string(),
             candidate_provider: "test-provider".to_string(),
@@ -201,7 +207,8 @@ mod tests {
             make_bundle("model-b", 0.99, 100.0, 50.0, 0.005),
         ];
 
-        let decision = coordinator.decide("model-a", &candidates, SessionRoutingMode::Pinned, 0, false);
+        let decision =
+            coordinator.decide("model-a", &candidates, SessionRoutingMode::Pinned, 0, false);
         assert_eq!(decision.action, RoutingAction::Keep);
         assert_eq!(decision.selected_candidate, "model-a");
         assert!(decision.reason.contains("pinned"));
@@ -216,7 +223,8 @@ mod tests {
             make_bundle("model-a", 0.3, 4000.0, 1500.0, 0.9),
         ];
 
-        let decision = coordinator.decide("model-a", &candidates, SessionRoutingMode::Free, 0, false);
+        let decision =
+            coordinator.decide("model-a", &candidates, SessionRoutingMode::Free, 0, false);
         assert_eq!(decision.action, RoutingAction::Switch);
         assert_eq!(decision.selected_candidate, "model-b");
         assert!(decision.reason.contains("utility delta"));
@@ -232,7 +240,8 @@ mod tests {
             make_bundle("model-a", 0.9, 500.0, 200.0, 0.02),
         ];
 
-        let decision = coordinator.decide("model-a", &candidates, SessionRoutingMode::Free, 0, false);
+        let decision =
+            coordinator.decide("model-a", &candidates, SessionRoutingMode::Free, 0, false);
         assert_eq!(decision.action, RoutingAction::Keep);
         assert_eq!(decision.selected_candidate, "model-a");
         assert!(decision.reason.contains("below threshold"));
@@ -252,7 +261,8 @@ mod tests {
         ];
 
         // Already switched 3 times (at limit)
-        let decision = coordinator.decide("model-a", &candidates, SessionRoutingMode::Free, 3, false);
+        let decision =
+            coordinator.decide("model-a", &candidates, SessionRoutingMode::Free, 3, false);
         assert_eq!(decision.action, RoutingAction::Keep);
         assert_eq!(decision.selected_candidate, "model-a");
         assert!(decision.reason.contains("rate limit"));
@@ -263,7 +273,8 @@ mod tests {
         let coordinator = Coordinator::new(CoordinatorConfig::default());
         let candidates: Vec<PredictionBundle> = vec![];
 
-        let decision = coordinator.decide("model-a", &candidates, SessionRoutingMode::Free, 0, false);
+        let decision =
+            coordinator.decide("model-a", &candidates, SessionRoutingMode::Free, 0, false);
         assert_eq!(decision.action, RoutingAction::Keep);
         assert_eq!(decision.selected_candidate, "model-a");
         assert!(decision.reason.contains("no candidates"));
@@ -282,18 +293,17 @@ mod tests {
     fn sticky_low_confidence_forces_keep() {
         let coordinator = Coordinator::new(CoordinatorConfig::default());
         // High confidence predictions, but Sticky + low confidence on first candidate
-        let candidates = vec![
-            PredictionBundle {
-                candidate_model: "model-a".to_string(),
-                candidate_provider: "test".to_string(),
-                success: make_prediction(0.99, 0.3), // low confidence
-                latency: make_prediction(100.0, 0.3),
-                ttft: make_prediction(50.0, 0.3),
-                cost: make_prediction(0.01, 0.3),
-            },
-        ];
+        let candidates = vec![PredictionBundle {
+            candidate_model: "model-a".to_string(),
+            candidate_provider: "test".to_string(),
+            success: make_prediction(0.99, 0.3), // low confidence
+            latency: make_prediction(100.0, 0.3),
+            ttft: make_prediction(50.0, 0.3),
+            cost: make_prediction(0.01, 0.3),
+        }];
 
-        let decision = coordinator.decide("model-a", &candidates, SessionRoutingMode::Sticky, 0, false);
+        let decision =
+            coordinator.decide("model-a", &candidates, SessionRoutingMode::Sticky, 0, false);
         assert_eq!(decision.action, RoutingAction::Keep);
         assert!(decision.reason.contains("session constraint"));
     }

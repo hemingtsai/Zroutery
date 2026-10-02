@@ -30,8 +30,8 @@ use zroutery_core::ml::calibration::{
     AcceptanceTolerances, CalibrationConfig, CalibrationError, CalibrationMeasure,
     CalibrationVerdict, CandidateCalibration, CandidateInput, CohortContext, DecisionCohort,
     DegeneracyReason, DriftConfig, DriftVerdict, EmittedDecision, FitConfig, HoldoutConfig,
-    KWayCalibrator, MarginalView, PartitionKind, ReliabilityBin, ReliabilityConfig,
-    UnrankedReason, DEFAULT_PROBABILITY_FLOOR, DISTRIBUTION_ROLE,
+    KWayCalibrator, MarginalView, PartitionKind, ReliabilityBin, ReliabilityConfig, UnrankedReason,
+    DEFAULT_PROBABILITY_FLOOR, DISTRIBUTION_ROLE,
 };
 use zroutery_core::ml::dataset::{OutcomeTrainingSample, SampleScope, Targets};
 use zroutery_core::ml::decision_contract::{
@@ -39,7 +39,9 @@ use zroutery_core::ml::decision_contract::{
 };
 use zroutery_core::ml::features::{RoutingFeatures, FEATURE_DIMENSION, FEATURE_SCHEMA_VERSION};
 use zroutery_core::ml::model::{ModelState, Prediction, RoutingModel};
-use zroutery_core::outcome::{Attempt, CandidateIdentity, FailureFacts, FinalStatus, OutcomeIdentity};
+use zroutery_core::outcome::{
+    Attempt, CandidateIdentity, FailureFacts, FinalStatus, OutcomeIdentity,
+};
 
 // ---------------------------------------------------------------------------
 // Fixture: scripted success heads
@@ -141,7 +143,11 @@ impl RoutingModel for FeatureEchoModel {
 
     fn predict(&self, features: &RoutingFeatures) -> Prediction {
         let encoded = f64::from(features.values[SCRIPT_INDEX]);
-        Prediction::trained((encoded - 1000.0 * (encoded / 1000.0).trunc()).max(0.0) / 1000.0, 0.5, 1_000)
+        Prediction::trained(
+            (encoded - 1000.0 * (encoded / 1000.0).trunc()).max(0.0) / 1000.0,
+            0.5,
+            1_000,
+        )
     }
 
     fn update(&mut self, _features: &RoutingFeatures, _target: f64) {}
@@ -620,10 +626,7 @@ fn config() -> CalibrationConfig {
 /// calibrator is that what is under test is the *measurement*. A fitted
 /// calibrator would repair a broken head, and the test would then be about the
 /// fit rather than about whether the gate can see a confidently-wrong model.
-fn uncalibrated_measure(
-    snapshot: &[OutcomeTrainingSample],
-    table: &[u16],
-) -> CalibrationMeasure {
+fn uncalibrated_measure(snapshot: &[OutcomeTrainingSample], table: &[u16]) -> CalibrationMeasure {
     uncalibrated_measure_with(snapshot, &ScriptedModel::new(table))
 }
 
@@ -642,10 +645,7 @@ fn uncalibrated_measure_with(
     measure_emitted(&emitted, &ReliabilityConfig::default()).expect("measurement succeeds")
 }
 
-fn candidate_row<'a>(
-    measure: &'a CalibrationMeasure,
-    provider: &str,
-) -> &'a CandidateCalibration {
+fn candidate_row<'a>(measure: &'a CalibrationMeasure, provider: &str) -> &'a CandidateCalibration {
     measure
         .per_candidate
         .iter()
@@ -722,18 +722,13 @@ fn the_contract_type_refuses_every_vector_this_node_could_have_emitted() {
         Err(DecisionContractError::DistributionNotNormalized { .. })
     ));
 
-    let arity = DecisionDistribution::try_new(
-        alpha.clone(),
-        outcomes.clone(),
-        vec![0.5, 0.4, 0.1],
-    );
+    let arity = DecisionDistribution::try_new(alpha.clone(), outcomes.clone(), vec![0.5, 0.4, 0.1]);
     assert!(matches!(
         arity,
         Err(DecisionContractError::DistributionArity { .. })
     ));
 
-    let negative =
-        DecisionDistribution::try_new(alpha.clone(), outcomes.clone(), vec![1.2, -0.2]);
+    let negative = DecisionDistribution::try_new(alpha.clone(), outcomes.clone(), vec![1.2, -0.2]);
     assert!(matches!(
         negative,
         Err(DecisionContractError::NegativeProbability { .. })
@@ -767,12 +762,14 @@ fn the_contract_type_refuses_every_vector_this_node_could_have_emitted() {
     ));
 
     let empty = DecisionDistribution::try_new(alpha.clone(), Vec::new(), Vec::new());
-    assert!(matches!(empty, Err(DecisionContractError::EmptyDistribution)));
+    assert!(matches!(
+        empty,
+        Err(DecisionContractError::EmptyDistribution)
+    ));
 
     // Zero mass is legal, which is what makes an unranked candidate
     // representable at all rather than a special case.
-    let zero_mass =
-        DecisionDistribution::try_new(alpha.clone(), outcomes.clone(), vec![1.0, 0.0]);
+    let zero_mass = DecisionDistribution::try_new(alpha.clone(), outcomes.clone(), vec![1.0, 0.0]);
     assert!(
         zero_mass.is_ok(),
         "an exact zero must be a legal probability, not a refusal"
@@ -866,7 +863,9 @@ fn an_unranked_candidate_takes_exactly_zero_without_moving_the_ranked_ones() {
         padded_vector[2], bare_vector[1],
         "the second ranked candidate must keep its mass exactly"
     );
-    assert!((padded.distribution().total_mass() - 1.0).abs() <= DISTRIBUTION_NORMALIZATION_TOLERANCE);
+    assert!(
+        (padded.distribution().total_mass() - 1.0).abs() <= DISTRIBUTION_NORMALIZATION_TOLERANCE
+    );
 
     // Every unranked reason is representable and typed.
     for reason in [
@@ -931,7 +930,9 @@ fn the_final_vector_is_measured_and_is_close_to_the_hand_computed_truth() {
     }
     assert!((candidate_row(&report.final_vector, BRAVO.0).observed_frequency - 0.40).abs() < 1e-12);
     assert!((candidate_row(&report.final_vector, ALPHA.0).observed_frequency - 0.20).abs() < 1e-12);
-    assert!((candidate_row(&report.final_vector, CHARLIE.0).observed_frequency - 0.20).abs() < 1e-12);
+    assert!(
+        (candidate_row(&report.final_vector, CHARLIE.0).observed_frequency - 0.20).abs() < 1e-12
+    );
 
     // The emitted vector itself, axis for axis.
     let emitted = outcome.holdout_distributions()[0]
@@ -954,7 +955,10 @@ fn the_final_vector_is_measured_and_is_close_to_the_hand_computed_truth() {
 
     // The summary errors over the final vector.
     let ece = report.final_vector.expected_calibration_error();
-    assert!(ece < 0.07, "final vector ece {ece} is worse than the fit achieves");
+    assert!(
+        ece < 0.07,
+        "final vector ece {ece} is worse than the fit achieves"
+    );
     assert!(report.final_vector.maximum_calibration_error().is_some());
     assert!(report.final_vector.brier_score().is_some());
     assert!(report.final_vector.log_loss().is_some());
@@ -1002,13 +1006,19 @@ fn the_final_vector_is_measured_and_is_close_to_the_hand_computed_truth() {
         report.marginal_normalized.expected_calibration_error()
     );
     assert!(
-        report.final_vector.maximum_candidate_calibration_error().unwrap_or(1.0)
+        report
+            .final_vector
+            .maximum_candidate_calibration_error()
+            .unwrap_or(1.0)
             < report
                 .marginal_normalized
                 .maximum_candidate_calibration_error()
                 .unwrap_or(0.0),
         "and decisively better on the worst named candidate: {} vs {}",
-        report.final_vector.maximum_candidate_calibration_error().unwrap_or(f64::NAN),
+        report
+            .final_vector
+            .maximum_candidate_calibration_error()
+            .unwrap_or(f64::NAN),
         report
             .marginal_normalized
             .maximum_candidate_calibration_error()
@@ -1030,7 +1040,10 @@ fn a_confidently_wrong_head_is_detected_by_the_measurement() {
 
     // A head certain that alpha serves, when alpha serves a fifth of the time.
     let confident = uncalibrated_measure(&snapshot, &CONFIDENT_WRONG_MILLI);
-    assert!(!confident.passes(&ceilings), "a confident head must be refused");
+    assert!(
+        !confident.passes(&ceilings),
+        "a confident head must be refused"
+    );
     assert_eq!(
         CalibrationVerdict::from_measurements(&confident, &ceilings),
         CalibrationVerdict::Miscalibrated
@@ -1049,7 +1062,10 @@ fn a_confidently_wrong_head_is_detected_by_the_measurement() {
 
     // A head whose ranking is the exact reverse of the truth, and confident.
     let reversed = uncalibrated_measure(&snapshot, &REVERSED_MILLI);
-    assert!(!reversed.passes(&ceilings), "a reversed ranking must be refused");
+    assert!(
+        !reversed.passes(&ceilings),
+        "a reversed ranking must be refused"
+    );
     assert!(
         reversed.maximum_calibration_error().unwrap_or(0.0) > 0.3,
         "a reversed ranking must be caught: {:?}",
@@ -1111,13 +1127,14 @@ fn a_confidently_wrong_head_is_detected_by_the_measurement() {
         .map(|row| row.mean_predicted)
         .collect();
     assert!(
-        masses
-            .iter()
-            .all(|mass| (mass - 1.0 / 3.0).abs() < 1e-9),
+        masses.iter().all(|mass| (mass - 1.0 / 3.0).abs() < 1e-9),
         "a constant head must produce a uniform vector on a symmetric axis: {masses:?}"
     );
     assert!(
-        constant.maximum_candidate_calibration_error().unwrap_or(1.0) > 0.05,
+        constant
+            .maximum_candidate_calibration_error()
+            .unwrap_or(1.0)
+            > 0.05,
         "the per-candidate table still sees the uniform head's error: {:?}",
         constant.per_candidate
     );
@@ -1173,7 +1190,10 @@ fn the_bin_free_candidate_table_catches_what_the_bins_average_away() {
         .iter()
         .find(|row| row.candidate.provider() == BRAVO.0)
         .expect("bravo is on the axis");
-    assert!(bravo.gap < -0.10, "bravo is under-claimed by the shared map");
+    assert!(
+        bravo.gap < -0.10,
+        "bravo is under-claimed by the shared map"
+    );
 
     // And a ceiling on the bins alone would have accepted it. The
     // per-candidate ceiling is what refuses, under one shared rule.
@@ -1280,7 +1300,9 @@ fn the_joint_route_beats_the_normalized_independent_route_and_the_damage_is_a_nu
 
     // The head's three raw numbers sum to 1.85, so it is not a distribution and
     // has to be either calibrated or normalized before it can be compared to one.
-    assert!((HONEST_MILLI.iter().map(|m| f64::from(*m)).sum::<f64>() / 1000.0 - 1.85).abs() < 1e-12);
+    assert!(
+        (HONEST_MILLI.iter().map(|m| f64::from(*m)).sum::<f64>() / 1000.0 - 1.85).abs() < 1e-12
+    );
 
     // Normalizing the independently-calibrated vector degraded it. This is the
     // measured answer to "does normalizing make it worse", and the sign is the
@@ -1290,9 +1312,16 @@ fn the_joint_route_beats_the_normalized_independent_route_and_the_damage_is_a_nu
         "normalization must be reported as having degraded calibration: {:?}",
         report.normalization_damage
     );
-    assert!(report.normalization_damage.delta > 0.05, "{:?}", report.normalization_damage);
     assert!(
-        report.normalization_damage.expected_calibration_error_before < 0.01,
+        report.normalization_damage.delta > 0.05,
+        "{:?}",
+        report.normalization_damage
+    );
+    assert!(
+        report
+            .normalization_damage
+            .expected_calibration_error_before
+            < 0.01,
         "the independent route is well calibrated as three separate probabilities"
     );
     // And the bin-free view of the same question agrees.
@@ -1304,7 +1333,9 @@ fn the_joint_route_beats_the_normalized_independent_route_and_the_damage_is_a_nu
     assert_eq!(
         report.normalization_damage.delta,
         report.normalization_damage.expected_calibration_error_after
-            - report.normalization_damage.expected_calibration_error_before
+            - report
+                .normalization_damage
+                .expected_calibration_error_before
     );
 
     // The joint route, fitted on the same partition and measured on the same
@@ -1338,7 +1369,10 @@ fn the_joint_route_beats_the_normalized_independent_route_and_the_damage_is_a_nu
     // Every named candidate the joint emits is within a tenth of the truth,
     // while the normalized route is out by more than a sixth on one of them.
     assert!(joint_worst < 0.11, "joint worst {joint_worst}");
-    assert!(normalized_worst > 0.16, "normalized worst {normalized_worst}");
+    assert!(
+        normalized_worst > 0.16,
+        "normalized worst {normalized_worst}"
+    );
 
     // And it beats the same parameterization left unfitted, so the fit earned
     // its place.
@@ -1380,7 +1414,10 @@ fn the_joint_route_beats_the_normalized_independent_route_and_the_damage_is_a_nu
         mild_report.final_vector.expected_calibration_error()
     );
     assert!(
-        mild_report.marginal_calibrated.maximum_candidate_calibration_error().unwrap_or(1.0)
+        mild_report
+            .marginal_calibrated
+            .maximum_candidate_calibration_error()
+            .unwrap_or(1.0)
             < 0.05,
         "with a correctly ranked head the independent route really is close, which is the point"
     );
@@ -1549,7 +1586,10 @@ fn the_projected_cohorts_are_in_canonical_content_order() {
     // Every fixture decision has three candidates, so the arity is uniform and
     // the request-scope rows really were ignored.
     assert!(ordered.iter().all(|cohort| cohort.arity() == 3));
-    assert!(!canonical_order_holds(&[ordered[1].clone(), ordered[0].clone()]));
+    assert!(!canonical_order_holds(&[
+        ordered[1].clone(),
+        ordered[0].clone()
+    ]));
 }
 
 // ---------------------------------------------------------------------------
@@ -1602,8 +1642,14 @@ fn the_holdout_is_disjoint_from_the_partition_the_calibrator_was_fitted_on() {
         "the intercepts must be projected to sum to zero, got {intercept_sum}"
     );
     for record in outcome.calibrator().intercepts() {
-        assert_eq!(record.fit_cohorts, 160, "every candidate is in every decision");
-        assert!(record.fit_serving_cohorts > 0, "every candidate serves sometimes");
+        assert_eq!(
+            record.fit_cohorts, 160,
+            "every candidate is in every decision"
+        );
+        assert!(
+            record.fit_serving_cohorts > 0,
+            "every candidate serves sometimes"
+        );
     }
     assert!(outcome.calibrator().temperature() > 0.0);
 
@@ -1687,9 +1733,7 @@ fn an_unshifted_holdout_passes_the_drift_gate() {
         (drift.fit_bin_proportions.iter().sum::<f64>() - 1.0).abs() < 1e-9,
         "the drift histogram must be a distribution"
     );
-    assert!(
-        (drift.holdout_bin_proportions.iter().sum::<f64>() - 1.0).abs() < 1e-9
-    );
+    assert!((drift.holdout_bin_proportions.iter().sum::<f64>() - 1.0).abs() < 1e-9);
     // The head reports the same three numbers in both partitions, so the shift
     // is exactly zero. This asserts the measurement is sensitive to the input
     // rather than to the partition boundary.
@@ -1768,7 +1812,10 @@ fn a_sparsely_attributed_holdout_is_refused_by_name() {
                 DegeneracyReason::TooFewAttributedOutcomes,
                 "the floor is what must fire here"
             );
-            assert!(detail.contains('2'), "the refusal must carry its count: {detail}");
+            assert!(
+                detail.contains('2'),
+                "the refusal must carry its count: {detail}"
+            );
         }
         other => panic!("expected a holdout degeneracy, got {other:?}"),
     }
@@ -1780,12 +1827,8 @@ fn a_sparsely_attributed_holdout_is_refused_by_name() {
 /// even earlier.
 #[test]
 fn a_snapshot_too_small_to_hold_out_is_refused() {
-    let error = run_calibration(
-        &render(&main_fixture(12), 59),
-        &honest_model(),
-        &config(),
-    )
-    .expect_err("twelve decisions cannot fill a forty-decision holdout");
+    let error = run_calibration(&render(&main_fixture(12), 59), &honest_model(), &config())
+        .expect_err("twelve decisions cannot fill a forty-decision holdout");
     assert!(
         matches!(error, CalibrationError::SnapshotTooSmall { .. }),
         "expected a size refusal, got {error:?}"
@@ -1811,11 +1854,7 @@ fn a_snapshot_too_small_to_hold_out_is_refused() {
     );
 }
 
-fn assert_degenerate(
-    snapshot: &[OutcomeTrainingSample],
-    expected: DegeneracyReason,
-    why: &str,
-) {
+fn assert_degenerate(snapshot: &[OutcomeTrainingSample], expected: DegeneracyReason, why: &str) {
     match run_calibration(snapshot, &honest_model(), &config()) {
         Err(error) => {
             match &error {
@@ -1833,7 +1872,10 @@ fn assert_degenerate(
                 }
                 other => panic!("{why}: expected a degeneracy, got {other:?}"),
             }
-            assert!(!error.to_string().is_empty(), "a refusal must carry a reason");
+            assert!(
+                !error.to_string().is_empty(),
+                "a refusal must carry a reason"
+            );
         }
         Ok(outcome) => panic!(
             "{why}: expected a {expected:?} refusal, got a verdict of {:?}",
@@ -1860,9 +1902,7 @@ fn an_incoherent_decision_scope_is_refused_not_coalesced() {
     // now disagrees with itself.
     let victim = snapshot
         .iter()
-        .position(|row| {
-            matches!(row.scope, SampleScope::Attempt { index: 1, .. })
-        })
+        .position(|row| matches!(row.scope, SampleScope::Attempt { index: 1, .. }))
         .expect("the fixture has a second attempt");
     let request = snapshot[victim].outcome_id.clone();
     snapshot[victim].decision_id = None;
@@ -1999,7 +2039,10 @@ fn a_candidate_set_that_cannot_form_a_distribution_is_refused() {
         ],
         Some(CandidateIdentity::new(ALPHA.1, ALPHA.0)),
     );
-    assert!(two_providers.is_ok(), "one model on two providers is a set of two");
+    assert!(
+        two_providers.is_ok(),
+        "one model on two providers is a set of two"
+    );
 
     // A served candidate that is not on its own axis.
     let foreign = DecisionCohort::try_new(
@@ -2070,7 +2113,10 @@ fn a_malformed_row_is_a_typed_refusal() {
     // An empty snapshot.
     let error = run_calibration(&[], &honest_model(), &config())
         .expect_err("an empty snapshot must be refused");
-    assert!(matches!(error, CalibrationError::EmptySnapshot), "got {error:?}");
+    assert!(
+        matches!(error, CalibrationError::EmptySnapshot),
+        "got {error:?}"
+    );
 }
 
 /// GATE 5, fifth part: a non-finite or out-of-range prediction is refused, never
@@ -2084,8 +2130,7 @@ fn a_non_finite_or_out_of_range_prediction_is_refused() {
     let snapshot = render(&main_fixture(200), 101);
 
     for broken in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 1.4, -0.2] {
-        let error = run_calibration(&snapshot, &BrokenModel(broken), &config())
-            .unwrap_err();
+        let error = run_calibration(&snapshot, &BrokenModel(broken), &config()).unwrap_err();
         assert!(
             matches!(
                 error,
@@ -2098,9 +2143,12 @@ fn a_non_finite_or_out_of_range_prediction_is_refused() {
 
     // And the same refusal surfaces from the bare projection entry point, not
     // only through the full run.
-    let error = project_cohorts(&snapshot, &BrokenModel(f64::NAN), DEFAULT_PROBABILITY_FLOOR)
-        .unwrap_err();
-    assert!(matches!(error, CalibrationError::NonFinitePrediction { .. }));
+    let error =
+        project_cohorts(&snapshot, &BrokenModel(f64::NAN), DEFAULT_PROBABILITY_FLOOR).unwrap_err();
+    assert!(matches!(
+        error,
+        CalibrationError::NonFinitePrediction { .. }
+    ));
 }
 
 /// GATE 5, sixth part: every configuration that would make a gate meaningless is
@@ -2312,15 +2360,30 @@ fn a_meaningless_configuration_is_refused_before_anything_is_read() {
 fn measuring_nothing_is_a_refusal() {
     let error = measure_emitted(&[], &ReliabilityConfig::default())
         .expect_err("no observations is not a measurement");
-    assert!(matches!(error, CalibrationError::NoObservations { .. }), "got {error:?}");
+    assert!(
+        matches!(error, CalibrationError::NoObservations { .. }),
+        "got {error:?}"
+    );
 
-    let error = measure_emitted(&[], &ReliabilityConfig { bin_count: 0, ..ReliabilityConfig::default() })
-        .expect_err("zero bins is checked first");
-    assert!(matches!(error, CalibrationError::ZeroReliabilityBins { .. }), "got {error:?}");
+    let error = measure_emitted(
+        &[],
+        &ReliabilityConfig {
+            bin_count: 0,
+            ..ReliabilityConfig::default()
+        },
+    )
+    .expect_err("zero bins is checked first");
+    assert!(
+        matches!(error, CalibrationError::ZeroReliabilityBins { .. }),
+        "got {error:?}"
+    );
 
     let error = measure_marginal(&[], MarginalView::Calibrated, &ReliabilityConfig::default())
         .expect_err("no observations is not a measurement");
-    assert!(matches!(error, CalibrationError::NoObservations { .. }), "got {error:?}");
+    assert!(
+        matches!(error, CalibrationError::NoObservations { .. }),
+        "got {error:?}"
+    );
 }
 
 /// GATE 5, eighth part: the module holds no panic path.
@@ -2480,7 +2543,10 @@ fn the_wire_form_revalidates_on_the_way_back_in() {
     for (record, decision) in records.iter().zip(outcome.holdout_distributions()) {
         assert_eq!(record.cohort_fingerprint, decision.cohort_fingerprint());
         assert_eq!(record.outcomes, decision.distribution().outcomes());
-        assert_eq!(record.probabilities, decision.distribution().probabilities());
+        assert_eq!(
+            record.probabilities,
+            decision.distribution().probabilities()
+        );
         assert!((record.total_mass - 1.0).abs() <= DISTRIBUTION_NORMALIZATION_TOLERANCE);
         assert_eq!(record.unranked, decision.unranked());
 
@@ -2500,8 +2566,12 @@ fn the_wire_form_revalidates_on_the_way_back_in() {
         matches!(error, CalibrationError::DistributionRejected { .. }),
         "got {error:?}"
     );
-    assert!(error.to_string().contains(DISTRIBUTION_NORMALIZATION_TOLERANCE.to_string().as_str())
-        || error.to_string().contains("not normalized"));
+    assert!(
+        error
+            .to_string()
+            .contains(DISTRIBUTION_NORMALIZATION_TOLERANCE.to_string().as_str())
+            || error.to_string().contains("not normalized")
+    );
 
     let mut wrong_arity = records[0].clone();
     wrong_arity.probabilities.pop();
@@ -2515,7 +2585,10 @@ fn the_wire_form_revalidates_on_the_way_back_in() {
     let error = wrong_subject
         .try_into_distribution()
         .expect_err("a foreign subject must be refused");
-    assert!(matches!(error, CalibrationError::DistributionRejected { .. }));
+    assert!(matches!(
+        error,
+        CalibrationError::DistributionRejected { .. }
+    ));
 
     let mut negative = records[0].clone();
     negative.probabilities[0] = -0.1;

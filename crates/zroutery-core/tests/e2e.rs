@@ -14,7 +14,7 @@ use serde_json::{json, Value};
 use zroutery_core::billing::{BalanceConfig, BalancePreset, BalanceProbe, Pricing};
 use zroutery_core::budget::{Budget, BudgetPeriod, BudgetScope};
 use zroutery_core::config::{
-    AppConfig, MemorySecretStore, ModelTier, ModelEntry, ProviderConfig, ProviderKind,
+    AppConfig, MemorySecretStore, ModelEntry, ModelTier, ProviderConfig, ProviderKind,
     RoutingStrategy,
 };
 use zroutery_core::server::{AppState, ServerHandle};
@@ -442,13 +442,18 @@ async fn classifier_requests_route_to_the_classifier_pool() {
         .unwrap();
 
     assert_eq!(resp.status(), 200);
-    assert_eq!(resp.headers()["x-zroutery-model"], "deepseek-deepseek-v4-flash");
+    assert_eq!(
+        resp.headers()["x-zroutery-model"],
+        "deepseek-deepseek-v4-flash"
+    );
     assert_eq!(resp.headers()["x-zroutery-classifier"], "1");
     // The candidate's own model name went upstream.
     assert_eq!(h.mock.bodies()[0]["model"], "deepseek-v4-flash");
     // And it was recorded as classifier traffic, not main traffic.
     let kind = &h.state.stats().summary().per_kind;
-    assert!(kind.iter().any(|k| k.kind == "auto_mode" && k.requests == 1));
+    assert!(kind
+        .iter()
+        .any(|k| k.kind == "auto_mode" && k.requests == 1));
 
     h.shutdown().await;
 }
@@ -1901,7 +1906,10 @@ async fn rate_limit_triggers_failover() {
 
     // Should succeed via failover to the second model.
     assert_eq!(resp.status(), 200);
-    assert_eq!(resp.headers()["x-zroutery-model"], "deepseek-deepseek-v4-pro");
+    assert_eq!(
+        resp.headers()["x-zroutery-model"],
+        "deepseek-deepseek-v4-pro"
+    );
     // Two upstream calls: one 429, one success.
     assert_eq!(h.mock.bodies()[0]["model"], "limited-v4");
     assert_eq!(h.mock.bodies()[1]["model"], "deepseek-v4-pro");
@@ -1919,8 +1927,7 @@ async fn transport_error_returns_502() {
     cfg.server.port = 0;
     cfg.server.auth_token = TOKEN.into();
 
-    let mut provider =
-        ProviderConfig::new("dead", "DeadProvider", ProviderKind::OpenAICompatible);
+    let mut provider = ProviderConfig::new("dead", "DeadProvider", ProviderKind::OpenAICompatible);
     provider.base_url = format!("http://{addr}");
     provider.key_ref = "provider:dead".into();
     provider.timeout_secs = 2;
@@ -1932,9 +1939,7 @@ async fn transport_error_returns_502() {
     )];
 
     let _mock = Mock::default();
-    let secrets = Arc::new(
-        MemorySecretStore::new().with("provider:dead", "sk-dead"),
-    );
+    let secrets = Arc::new(MemorySecretStore::new().with("provider:dead", "sk-dead"));
     let state = Arc::new(AppState::new(cfg, secrets));
     let server = ServerHandle::start(Arc::clone(&state)).await.unwrap();
     let base = format!("http://{}", server.addr);
@@ -2032,10 +2037,8 @@ async fn per_provider_budget_blocks_only_that_provider() {
     // OpenAI (different provider) should still work.
     let resp = h
         .post("/v1/chat/completions")
-        .json(
-            &json!({"model": "openai-gpt-5.3-sol",
-                      "messages": [{"role": "user", "content": "hi"}]}),
-        )
+        .json(&json!({"model": "openai-gpt-5.3-sol",
+                      "messages": [{"role": "user", "content": "hi"}]}))
         .send()
         .await
         .unwrap();
@@ -2082,7 +2085,11 @@ async fn shadow_decisions_record_only_for_policy_routed_requests() {
     assert_eq!(resp.status(), 200);
 
     let store = h.state.shadow().store();
-    assert_eq!(store.len(), 1, "one shadow decision per policy-routed request");
+    assert_eq!(
+        store.len(),
+        1,
+        "one shadow decision per policy-routed request"
+    );
     let shadow = &store.decisions()[0];
 
     // Correlated with the request record: same request id, same decision id.
@@ -2103,7 +2110,10 @@ async fn shadow_decisions_record_only_for_policy_routed_requests() {
     // its hypothetical verdict keeps production's choice.
     assert_eq!(shadow.shadow.selected, "deepseek-deepseek-v4-pro");
     assert!(!shadow.candidates.is_empty());
-    assert_eq!(shadow.candidates[0].candidate_id, "deepseek-deepseek-v4-pro");
+    assert_eq!(
+        shadow.candidates[0].candidate_id,
+        "deepseek-deepseek-v4-pro"
+    );
     assert!(shadow.candidates[0].eligible);
     assert_eq!(h.state.shadow().fault_count(), 0);
 
@@ -2118,7 +2128,11 @@ async fn shadow_decisions_record_only_for_policy_routed_requests() {
         .await
         .unwrap();
     assert_eq!(resp.status(), 200);
-    assert_eq!(store.len(), 1, "direct-resolution requests are not recorded");
+    assert_eq!(
+        store.len(),
+        1,
+        "direct-resolution requests are not recorded"
+    );
 
     h.shutdown().await;
 }

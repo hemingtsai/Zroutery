@@ -29,14 +29,10 @@ use zroutery_core::ml::decision_contract::{
     DecisionState, ModelInput, OpenStep, SettledStep, DISTRIBUTION_NORMALIZATION_TOLERANCE,
 };
 use zroutery_core::ml::decision_engine::{DecisionEngine, EngineCandidate, EngineInput};
-use zroutery_core::ml::features::{
-    RoutingFeatures, FEATURE_DIMENSION, FEATURE_SCHEMA_VERSION,
-};
+use zroutery_core::ml::features::{RoutingFeatures, FEATURE_DIMENSION, FEATURE_SCHEMA_VERSION};
 use zroutery_core::ml::model_identity::CommitId;
 use zroutery_core::ml::reward::RewardPolicy;
-use zroutery_core::ml::shadow::{
-    ShadowCandidateInput, ShadowInput, ShadowObservation,
-};
+use zroutery_core::ml::shadow::{ShadowCandidateInput, ShadowInput, ShadowObservation};
 use zroutery_core::outcome::{CandidateIdentity, OutcomeIdentity};
 use zroutery_core::policy::{PolicyRevision, TaskProfileSummary};
 use zroutery_core::session::SessionRoutingMode;
@@ -372,8 +368,14 @@ fn two_builds_from_one_retained_snapshot_are_equal() {
     for (retained_candidate, pristine_candidate) in
         retained.candidates.iter().zip(pristine.candidates.iter())
     {
-        assert_eq!(retained_candidate.candidate_id, pristine_candidate.candidate_id);
-        assert_eq!(retained_candidate.provider_id, pristine_candidate.provider_id);
+        assert_eq!(
+            retained_candidate.candidate_id,
+            pristine_candidate.candidate_id
+        );
+        assert_eq!(
+            retained_candidate.provider_id,
+            pristine_candidate.provider_id
+        );
         assert_eq!(retained_candidate.eligible, pristine_candidate.eligible);
         assert_eq!(
             retained_candidate.rejection_reason,
@@ -441,8 +443,7 @@ fn decision_model_refuses_a_wrong_dimension_schema_or_commit() {
         Some(DecisionContractError::UnsupportedFeatureSchema { .. })
     ));
     assert!(matches!(
-        DecisionModel::try_cold(FEATURE_DIMENSION, FEATURE_SCHEMA_VERSION, CommitId::new(""))
-            .err(),
+        DecisionModel::try_cold(FEATURE_DIMENSION, FEATURE_SCHEMA_VERSION, CommitId::new("")).err(),
         Some(DecisionContractError::EmptyCommitId)
     ));
 }
@@ -483,8 +484,7 @@ fn decision_model_loads_only_verified_per_dimension_states() {
     // A state carrying a non-finite parameter is refused.
     let mut poisoned = DecisionModelStates::cold(FEATURE_DIMENSION).expect("cold states");
     let parameters = vec![0.0, f64::NAN];
-    poisoned.latency.checksum =
-        zroutery_core::ml::model::ModelState::compute_checksum(&parameters);
+    poisoned.latency.checksum = zroutery_core::ml::model::ModelState::compute_checksum(&parameters);
     poisoned.latency.parameters = parameters;
     assert!(matches!(
         DecisionModel::try_from_states(
@@ -515,7 +515,10 @@ fn decision_model_scores_every_candidate_over_its_exact_vector() {
         for dimension in DecisionDimension::ALL {
             let prediction = score.predictions.get(dimension);
             assert!(prediction.value.is_finite(), "{dimension:?} value");
-            assert!(prediction.confidence.is_finite(), "{dimension:?} confidence");
+            assert!(
+                prediction.confidence.is_finite(),
+                "{dimension:?} confidence"
+            );
         }
         // A cold contract still returns the frozen per-dimension cold biases.
         assert!((score.predictions.latency.value - 500.0).abs() < 1.0);
@@ -656,11 +659,13 @@ fn outcome_identities_that_contradict_or_were_never_observed_are_refused() {
     // A different plan is a different decision, not a newer plan.
     let mut input = model_input();
     assert!(matches!(
-        input.try_record_outcome_identities(&OutcomeIdentity {
-            planned: Some(identity("model-b", "provider-b")),
-            last_attempted: None,
-            served: None,
-        }).err(),
+        input
+            .try_record_outcome_identities(&OutcomeIdentity {
+                planned: Some(identity("model-b", "provider-b")),
+                last_attempted: None,
+                served: None,
+            })
+            .err(),
         Some(DecisionContractError::PlannedIdentityContradicts { .. })
     ));
     assert!(input.identities.planned == identity("model-a", "provider-a"));
@@ -668,11 +673,13 @@ fn outcome_identities_that_contradict_or_were_never_observed_are_refused() {
     // An identity the decision never observed cannot be attempted or served.
     let mut input = model_input();
     assert!(matches!(
-        input.try_record_outcome_identities(&OutcomeIdentity {
-            planned: None,
-            last_attempted: Some(identity("model-zz", "provider-zz")),
-            served: None,
-        }).err(),
+        input
+            .try_record_outcome_identities(&OutcomeIdentity {
+                planned: None,
+                last_attempted: Some(identity("model-zz", "provider-zz")),
+                served: None,
+            })
+            .err(),
         Some(DecisionContractError::UnobservedRoleIdentity {
             role: "last_attempted"
         })
@@ -688,11 +695,13 @@ fn outcome_identities_that_contradict_or_were_never_observed_are_refused() {
         })
         .expect("first record");
     assert!(matches!(
-        input.try_record_outcome_identities(&OutcomeIdentity {
-            planned: None,
-            last_attempted: Some(identity("model-c", "provider-c")),
-            served: None,
-        }).err(),
+        input
+            .try_record_outcome_identities(&OutcomeIdentity {
+                planned: None,
+                last_attempted: Some(identity("model-c", "provider-c")),
+                served: None,
+            })
+            .err(),
         Some(DecisionContractError::ContradictoryRoleIdentity {
             role: "last_attempted"
         })
@@ -757,10 +766,7 @@ fn the_only_legal_path_runs_input_scored_selected_committed() {
     assert!(state.open_steps().is_empty());
     assert!(state.allowed_transitions().is_empty());
     assert_eq!(state.settled_steps().len(), 4);
-    assert_eq!(
-        state.settled_steps().last(),
-        Some(&SettledStep::Committed)
-    );
+    assert_eq!(state.settled_steps().last(), Some(&SettledStep::Committed));
     // The state is bound to the input it began from.
     assert_eq!(state.input(), &input);
 }
@@ -793,10 +799,8 @@ fn every_illegal_decision_transition_is_rejected() {
             let outcome = state.advance(to, step_for(to, &input));
 
             if from == DecisionPhase::InputAccepted && to == DecisionPhase::CandidatesScored
-                || from == DecisionPhase::CandidatesScored
-                    && to == DecisionPhase::CandidateSelected
-                || from == DecisionPhase::CandidateSelected
-                    && to == DecisionPhase::Committed
+                || from == DecisionPhase::CandidatesScored && to == DecisionPhase::CandidateSelected
+                || from == DecisionPhase::CandidateSelected && to == DecisionPhase::Committed
             {
                 legal_pairs += 1;
                 assert!(outcome.is_ok(), "{from:?} -> {to:?} must be legal");
@@ -1058,12 +1062,12 @@ fn a_distribution_of_the_wrong_arity_is_rejected() {
 #[test]
 fn a_distribution_that_does_not_normalize_is_rejected() {
     for probabilities in [
-        vec![0.5, 0.25, 0.1],           // short of 1
-        vec![0.5, 0.25, 0.5],           // over 1
-        vec![0.0, 0.0, 0.0],            // no mass at all
-        vec![1.0 - 1e-6, 2e-6, 0.0],    // drift above the tolerance
-        vec![0.5, 0.5 + 1e-6, 0.0],     // drift above the tolerance
-        vec![0.3, 0.3, 0.3],            // short of 1 by a wide margin
+        vec![0.5, 0.25, 0.1],        // short of 1
+        vec![0.5, 0.25, 0.5],        // over 1
+        vec![0.0, 0.0, 0.0],         // no mass at all
+        vec![1.0 - 1e-6, 2e-6, 0.0], // drift above the tolerance
+        vec![0.5, 0.5 + 1e-6, 0.0],  // drift above the tolerance
+        vec![0.3, 0.3, 0.3],         // short of 1 by a wide margin
     ] {
         let error = DecisionDistribution::try_new(
             identity("model-a", "provider-a"),

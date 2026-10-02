@@ -373,16 +373,17 @@ impl fmt::Display for JournalError {
                 write!(f, "journal lock {} is {detail}", path.display())
             }
             JournalError::ReadOnlyJournal { path } => {
-                write!(f, "{} is open for reading and cannot be written", path.display())
+                write!(
+                    f,
+                    "{} is open for reading and cannot be written",
+                    path.display()
+                )
             }
             JournalError::SequenceConflict {
                 expected,
                 actual,
                 fault,
-            } => write!(
-                f,
-                "sequence {fault}: expected {expected}, found {actual}"
-            ),
+            } => write!(f, "sequence {fault}: expected {expected}, found {actual}"),
             JournalError::ChecksumMismatch {
                 offset,
                 sequence,
@@ -437,7 +438,10 @@ impl fmt::Display for JournalError {
                  restarts at one in every process and cannot be a durable identity"
             ),
             JournalError::IdempotencyConflict { event_id, reason } => {
-                write!(f, "event '{event_id}' conflicts with a stored record: {reason}")
+                write!(
+                    f,
+                    "event '{event_id}' conflicts with a stored record: {reason}"
+                )
             }
             JournalError::UnsupportedSchema {
                 component,
@@ -760,7 +764,11 @@ pub struct CanonicalEvent {
 
 impl CanonicalEvent {
     /// The common case: an event with samples and nothing else claimed.
-    pub fn new(event_id: impl Into<String>, model_id: ModelId, samples: Vec<OutcomeTrainingSample>) -> Self {
+    pub fn new(
+        event_id: impl Into<String>,
+        model_id: ModelId,
+        samples: Vec<OutcomeTrainingSample>,
+    ) -> Self {
         Self {
             event_id: event_id.into(),
             model_id,
@@ -936,10 +944,13 @@ impl<R: Read> FrameReader<R> {
                     })
                 };
             }
-            let read = self.inner.read(&mut scratch).map_err(|error| JournalError::Io {
-                path: PathBuf::from("<log frame>"),
-                reason: error.to_string(),
-            })?;
+            let read = self
+                .inner
+                .read(&mut scratch)
+                .map_err(|error| JournalError::Io {
+                    path: PathBuf::from("<log frame>"),
+                    reason: error.to_string(),
+                })?;
             if read == 0 {
                 self.eof = true;
                 continue;
@@ -1007,16 +1018,16 @@ fn scan_log(path: &Path) -> Result<LogScan, JournalError> {
         let expected_sequence = scan.next_sequence();
         let (sequence_text, checksum_text, body) = split_frame(offset, &frame)?;
 
-        let sequence_text = std::str::from_utf8(sequence_text).map_err(|_| {
-            JournalError::CorruptRecord {
+        let sequence_text =
+            std::str::from_utf8(sequence_text).map_err(|_| JournalError::CorruptRecord {
                 offset,
                 reason: "a frame sequence must be ASCII decimal digits".to_string(),
-            }
-        })?;
-        let sequence = parse_sequence(sequence_text).ok_or_else(|| JournalError::CorruptRecord {
-            offset,
-            reason: format!("'{sequence_text}' is not a canonical sequence number"),
-        })?;
+            })?;
+        let sequence =
+            parse_sequence(sequence_text).ok_or_else(|| JournalError::CorruptRecord {
+                offset,
+                reason: format!("'{sequence_text}' is not a canonical sequence number"),
+            })?;
         if sequence != expected_sequence {
             // A repeat of the sequence just read is a duplicate; anything below
             // the expected value is a rewind; anything above it is a gap. The
@@ -1036,18 +1047,16 @@ fn scan_log(path: &Path) -> Result<LogScan, JournalError> {
             });
         }
 
-        let checksum_text = std::str::from_utf8(checksum_text).map_err(|_| {
-            JournalError::CorruptRecord {
+        let checksum_text =
+            std::str::from_utf8(checksum_text).map_err(|_| JournalError::CorruptRecord {
                 offset,
                 reason: "a frame checksum must be 16 lowercase hex digits".to_string(),
-            }
-        })?;
-        let recorded = parse_checksum(checksum_text).ok_or_else(|| {
-            JournalError::CorruptRecord {
+            })?;
+        let recorded =
+            parse_checksum(checksum_text).ok_or_else(|| JournalError::CorruptRecord {
                 offset,
                 reason: format!("'{checksum_text}' is not a 16-digit lowercase checksum"),
-            }
-        })?;
+            })?;
         let computed = frame_checksum(scan.tail_frame_checksum, sequence, body);
         if recorded != computed {
             return Err(JournalError::ChecksumMismatch {
@@ -1061,8 +1070,8 @@ fn scan_log(path: &Path) -> Result<LogScan, JournalError> {
         // Captured before the parse shadows the byte slice, because the duplicate
         // check later needs the bytes as they are on disk.
         let body_bytes = body.to_vec();
-        let body: JournalRecordBody =
-            serde_json::from_slice(body).map_err(|error| frame_body_error(offset, sequence, error))?;
+        let body: JournalRecordBody = serde_json::from_slice(body)
+            .map_err(|error| frame_body_error(offset, sequence, error))?;
         if body.schema_version != JOURNAL_SCHEMA_VERSION {
             return Err(JournalError::UnsupportedSchema {
                 component: format!("journal record at sequence {sequence}"),
@@ -1092,13 +1101,12 @@ fn scan_log(path: &Path) -> Result<LogScan, JournalError> {
 ///
 /// The log's own structure has already been verified by the time this runs, so
 /// a disagreement here is about *completeness*, not corruption.
-fn reconcile_anchor(
-    anchor: &Anchor,
-    scan: &LogScan,
-    path: &Path,
-) -> Result<u64, JournalError> {
+fn reconcile_anchor(anchor: &Anchor, scan: &LogScan, path: &Path) -> Result<u64, JournalError> {
     use std::cmp::Ordering;
-    match (scan.records.cmp(&anchor.records), scan.log_bytes.cmp(&anchor.log_bytes)) {
+    match (
+        scan.records.cmp(&anchor.records),
+        scan.log_bytes.cmp(&anchor.log_bytes),
+    ) {
         (Ordering::Equal, Ordering::Equal) => {
             if scan.log_checksum != anchor.log_checksum
                 || scan.tail_frame_checksum != anchor.tail_frame_checksum
@@ -1138,11 +1146,7 @@ impl Drop for LockGuard {
 
 fn acquire_lock(dir: &Path) -> Result<LockGuard, JournalError> {
     let path = dir.join(JOURNAL_LOCK_NAME);
-    match OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&path)
-    {
+    match OpenOptions::new().write(true).create_new(true).open(&path) {
         Ok(mut file) => {
             let description = format!("pid {} opened it", std::process::id());
             let _ = writeln!(file, "{description}");
@@ -1309,11 +1313,7 @@ impl LearningJournal {
         Self::open_locked(dir, mode, lock)
     }
 
-    fn open_locked(
-        dir: &Path,
-        mode: JournalMode,
-        lock: LockGuard,
-    ) -> Result<Self, JournalError> {
+    fn open_locked(dir: &Path, mode: JournalMode, lock: LockGuard) -> Result<Self, JournalError> {
         let log_path = dir.join(JOURNAL_LOG_NAME);
         let anchor_path = dir.join(JOURNAL_ANCHOR_NAME);
         let log_exists = log_path.exists();
@@ -1456,7 +1456,10 @@ impl LearningJournal {
     /// `validate_outcome_sample` before anything is written, the projection is
     /// proved, and the accepted `LearningEvent::validate` is run on the result.
     /// Nothing is consumed: the event is written and forgotten.
-    pub fn record_canonical(&mut self, input: CanonicalEvent) -> Result<RecordOutcome, JournalError> {
+    pub fn record_canonical(
+        &mut self,
+        input: CanonicalEvent,
+    ) -> Result<RecordOutcome, JournalError> {
         let event_id = input.event_id.clone();
         if is_volatile_event_id(&event_id) {
             return Err(JournalError::VolatileEventId { event_id });
@@ -1659,20 +1662,20 @@ fn verify_record_commits(record: &JournalRecord, store: &ModelStore) -> Result<(
         record.event.result_commit.as_ref(),
     ];
     for commit_id in candidates.into_iter().flatten() {
-        store
-            .verify_lineage(commit_id)
-            .map_err(|error| JournalError::CommitVerificationFailed {
+        store.verify_lineage(commit_id).map_err(|error| {
+            JournalError::CommitVerificationFailed {
                 sequence: record.sequence,
                 commit_id: commit_id.clone(),
                 reason: format!("lineage does not verify: {error}"),
-            })?;
-        let commit = store
-            .checkout_commit(commit_id)
-            .map_err(|error| JournalError::CommitVerificationFailed {
+            }
+        })?;
+        let commit = store.checkout_commit(commit_id).map_err(|error| {
+            JournalError::CommitVerificationFailed {
                 sequence: record.sequence,
                 commit_id: commit_id.clone(),
                 reason: error.to_string(),
-            })?;
+            }
+        })?;
         if !commit.verify() {
             return Err(JournalError::CommitVerificationFailed {
                 sequence: record.sequence,

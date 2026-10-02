@@ -524,12 +524,18 @@ impl Criterion {
     /// wants: three distinct labels, so a list says *which* requirement failed.
     pub const fn blocker_label(&self) -> &'static str {
         match self {
-            Self::Adequacy { .. } => "the holdout holds too few decisions to support the \
-                                     statistical claim at the stated power and minimum effect",
-            Self::IntervalExcludesMinimum { .. } => "the effect's interval does not exclude the \
-                                                     null at the stated minimum effect",
-            Self::FamilyWiseSignificance { .. } => "the aggregate effect is not significant after \
-                                                   correcting the stated family of tests",
+            Self::Adequacy { .. } => {
+                "the holdout holds too few decisions to support the \
+                                     statistical claim at the stated power and minimum effect"
+            }
+            Self::IntervalExcludesMinimum { .. } => {
+                "the effect's interval does not exclude the \
+                                                     null at the stated minimum effect"
+            }
+            Self::FamilyWiseSignificance { .. } => {
+                "the aggregate effect is not significant after \
+                                                   correcting the stated family of tests"
+            }
         }
     }
 
@@ -760,13 +766,7 @@ impl EvidenceSupport {
         self.criteria()
             .iter()
             .filter(|criterion| !criterion.satisfied(&self.config))
-            .map(|criterion| {
-                format!(
-                    "{}: {}",
-                    criterion.name(),
-                    criterion.detail(&self.config)
-                )
-            })
+            .map(|criterion| format!("{}: {}", criterion.name(), criterion.detail(&self.config)))
             .collect()
     }
 
@@ -991,8 +991,11 @@ pub fn measure_release_evidence(
     }
 
     // -- the headline paired comparison, on decisions --
-    let mut comparisons: Vec<PairedComparison> =
-        vec![compare_on_decisions(credit.outcomes.as_slice(), &baseline.candidate, input.config)?];
+    let mut comparisons: Vec<PairedComparison> = vec![compare_on_decisions(
+        credit.outcomes.as_slice(),
+        &baseline.candidate,
+        input.config,
+    )?];
 
     // -- the family: the aggregate plus one test per candidate ranked first --
     let mut members: Vec<FamilyMemberKind> = vec![FamilyMemberKind::Aggregate];
@@ -1032,13 +1035,15 @@ pub fn measure_release_evidence(
     for (comparison, adjusted_p) in comparisons.iter_mut().zip(adjusted) {
         comparison.adjusted_p_value = adjusted_p;
     }
-    let aggregate = comparisons
-        .first()
-        .cloned()
-        .ok_or_else(|| StatisticsError::FamilyNotEnumerable {
-            reason: "the family enumerated to nothing, so the aggregate test cannot be corrected"
-                .to_string(),
-        })?;
+    let aggregate =
+        comparisons
+            .first()
+            .cloned()
+            .ok_or_else(|| StatisticsError::FamilyNotEnumerable {
+                reason:
+                    "the family enumerated to nothing, so the aggregate test cannot be corrected"
+                        .to_string(),
+            })?;
 
     // -- power, with the n it took and the n it needs --
     let z_two_sided = finite(
@@ -1156,7 +1161,10 @@ fn compare_on_decisions(
     let mut baseline_only = 0usize;
     let mut concordant = 0usize;
     for outcome in outcomes {
-        match (outcome.model_scored, outcome.served.as_ref() == Some(baseline)) {
+        match (
+            outcome.model_scored,
+            outcome.served.as_ref() == Some(baseline),
+        ) {
             (true, true) | (false, false) => concordant += 1,
             (true, false) => model_only += 1,
             (false, true) => baseline_only += 1,
@@ -1254,8 +1262,14 @@ fn build_comparison(
     // spectacular effect instead of a negative one.
     let difference = model_only as i64 - baseline_only as i64;
     let effect = finite("the paired risk difference", difference as f64 / n)?;
-    let standard_error = finite("the paired difference's standard error", (discordant as f64).sqrt() / n)?;
-    let z = finite("the two-sided normal quantile", normal_quantile(config.level()))?;
+    let standard_error = finite(
+        "the paired difference's standard error",
+        (discordant as f64).sqrt() / n,
+    )?;
+    let z = finite(
+        "the two-sided normal quantile",
+        normal_quantile(config.level()),
+    )?;
     let half_width = finite("the interval's half width", z * standard_error)?;
     let discordance_rate = finite("the discordance rate", discordant as f64 / n)?;
     let log_p_value = finite(
@@ -1296,7 +1310,9 @@ fn build_comparison(
 /// are Binomial(`m`, 1/2), and the concordant cells carry no information about
 /// the difference at all.
 pub fn mcnemar_exact_p(model_only: usize, baseline_only: usize) -> f64 {
-    mcnemar_exact_log_p(model_only, baseline_only).exp().min(1.0)
+    mcnemar_exact_log_p(model_only, baseline_only)
+        .exp()
+        .min(1.0)
 }
 
 /// The same p-value, in log space.
@@ -1558,7 +1574,8 @@ fn tail_ratio(numerator: &[f64; 6], denominator: &[f64; 4], q: f64) -> f64 {
         * q
         + numerator[5];
     let bottom =
-        (((denominator[0] * q + denominator[1]) * q + denominator[2]) * q + denominator[3]) * q + 1.0;
+        (((denominator[0] * q + denominator[1]) * q + denominator[2]) * q + denominator[3]) * q
+            + 1.0;
     top / bottom
 }
 
@@ -1647,7 +1664,11 @@ mod tests {
             log_p < -1380.0 && log_p > -1400.0,
             "the magnitude must survive: {log_p}"
         );
-        assert_eq!(mcnemar_exact_p(2000, 0), 0.0, "and the linear field admits it");
+        assert_eq!(
+            mcnemar_exact_p(2000, 0),
+            0.0,
+            "and the linear field admits it"
+        );
         // A split far from symmetric is still a real number in log space. The
         // dominant term alone is `ln C(2000,200) - 2000 ln 2 = -739.64`; the
         // 200 smaller terms lift it to about -738.8, and the lift is the sign
@@ -1702,7 +1723,14 @@ mod tests {
 
     #[test]
     fn the_wilson_interval_brackets_the_point_estimate_and_stays_inside_zero_to_one() {
-        for (successes, total) in [(0usize, 10usize), (10, 10), (1, 10), (5, 10), (0, 1), (3, 7)] {
+        for (successes, total) in [
+            (0usize, 10usize),
+            (10, 10),
+            (1, 10),
+            (5, 10),
+            (0, 1),
+            (3, 7),
+        ] {
             let (lower, upper) = wilson_interval(successes, total, 1.959_963_984_540_054);
             let p = successes as f64 / total as f64;
             // The tolerance is a few ulps, not a statistical one: at `p = 1`
@@ -1773,7 +1801,10 @@ mod tests {
         // required n to report.
         assert!(required_decisions(0.0, 0.05, z, power_z, 1).is_err());
         // The floor stops a caller from making the criterion vacuous.
-        assert_eq!(required_decisions(0.6, 0.9, z, power_z, 12_345).unwrap(), 12_345);
+        assert_eq!(
+            required_decisions(0.6, 0.9, z, power_z, 12_345).unwrap(),
+            12_345
+        );
     }
 
     #[test]

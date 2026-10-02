@@ -109,7 +109,9 @@ fn is_known_trace_token(token: &str) -> bool {
 // ----------------------------------------------------------- Profile
 
 /// Task complexity level, derived from request characteristics.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Default)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Default,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum Complexity {
     Simple,
@@ -424,12 +426,8 @@ impl RoutingPolicy {
 impl PolicyMatcher {
     fn matches(&self, ctx: &MatchContext) -> bool {
         match self {
-            PolicyMatcher::Client { value } => {
-                ctx.client_id.is_some_and(|id| id == value)
-            }
-            PolicyMatcher::Application { value } => {
-                ctx.application.is_some_and(|app| app == value)
-            }
+            PolicyMatcher::Client { value } => ctx.client_id.is_some_and(|id| id == value),
+            PolicyMatcher::Application { value } => ctx.application.is_some_and(|app| app == value),
             PolicyMatcher::ModelPrefix { value } => ctx.model.starts_with(value),
             PolicyMatcher::Streaming { value } => ctx.streaming == *value,
             PolicyMatcher::HasTools { value } => ctx.has_tools == *value,
@@ -437,9 +435,7 @@ impl PolicyMatcher {
             PolicyMatcher::MinComplexity { value } => {
                 ctx.task.is_some_and(|t| t.complexity >= *value)
             }
-            PolicyMatcher::TaskType { value } => {
-                ctx.task.is_some_and(|t| t.task_type == *value)
-            }
+            PolicyMatcher::TaskType { value } => ctx.task.is_some_and(|t| t.task_type == *value),
         }
     }
 }
@@ -522,14 +518,7 @@ impl PolicyRequirements {
         capabilities: &ModelCapabilities,
         circuit_open: bool,
     ) -> EligibilityCheck {
-        self.check_internal(
-            model_id,
-            provider_id,
-            tier,
-            capabilities,
-            circuit_open,
-            &[],
-        )
+        self.check_internal(model_id, provider_id, tier, capabilities, circuit_open, &[])
     }
 
     /// Check policy constraints plus hard request-derived capabilities.
@@ -650,25 +639,15 @@ impl PolicyRequirements {
         {
             reasons.push(RejectionReason::ProviderNotAllowed);
         }
-        if self
-            .forbidden_providers
-            .iter()
-            .any(|p| p == provider_id)
-        {
+        if self.forbidden_providers.iter().any(|p| p == provider_id) {
             reasons.push(RejectionReason::ProviderForbidden);
         }
 
         // Model constraints.
-        if !self.allowed_models.is_empty()
-            && !self.allowed_models.iter().any(|m| m == model_id)
-        {
+        if !self.allowed_models.is_empty() && !self.allowed_models.iter().any(|m| m == model_id) {
             reasons.push(RejectionReason::ModelNotAllowed);
         }
-        if self
-            .forbidden_models
-            .iter()
-            .any(|m| m == model_id)
-        {
+        if self.forbidden_models.iter().any(|m| m == model_id) {
             reasons.push(RejectionReason::ModelForbidden);
         }
 
@@ -766,7 +745,11 @@ pub fn score_candidate<'a>(pref: &PolicyPreference, ctx: &ScoringContext<'a>) ->
         (Some(inp), Some(out), None) => {
             // No task profile: fall back to average cost with baseline normalization.
             let avg = (inp + out) / 2.0;
-            if avg > 0.0 { (COST_BASELINE_MTOK / avg).min(1.0) } else { 0.5 }
+            if avg > 0.0 {
+                (COST_BASELINE_MTOK / avg).min(1.0)
+            } else {
+                0.5
+            }
         }
         _ => 0.5, // unknown cost = neutral
     };
@@ -925,16 +908,15 @@ impl ClientMatcher {
             ClientMatcher::UserAgent { value } => ctx
                 .user_agent
                 .is_some_and(|ua| ua.to_lowercase().contains(&value.to_lowercase())),
-            ClientMatcher::ApiKeyPrefix { value } => ctx
-                .api_key_prefix
-                .is_some_and(|key| key.starts_with(value)),
-            ClientMatcher::Header { name, value } => ctx.headers.iter().any(|(n, v)| {
-                n.eq_ignore_ascii_case(name) && v == value
-            }),
-            ClientMatcher::ModelPrefix { value } => ctx.model.starts_with(value),
-            ClientMatcher::ClientId { value } => {
-                ctx.client_id.is_some_and(|id| id == value)
+            ClientMatcher::ApiKeyPrefix { value } => {
+                ctx.api_key_prefix.is_some_and(|key| key.starts_with(value))
             }
+            ClientMatcher::Header { name, value } => ctx
+                .headers
+                .iter()
+                .any(|(n, v)| n.eq_ignore_ascii_case(name) && v == value),
+            ClientMatcher::ModelPrefix { value } => ctx.model.starts_with(value),
+            ClientMatcher::ClientId { value } => ctx.client_id.is_some_and(|id| id == value),
         }
     }
 }
@@ -1127,13 +1109,16 @@ impl RouteDecision {
     /// candidate evidence. This is not a last-attempted or served identity.
     pub fn planned_identity(&self) -> Option<PlannedIdentity> {
         let selected = self.selected.as_deref()?;
-        self.candidates.iter().find(|candidate| {
-            candidate.model_id == selected
-        }).map(|candidate| PlannedIdentity::new(
-            candidate.model_id.clone(),
-            candidate.provider_id.clone(),
-            candidate.tier.clone(),
-        ))
+        self.candidates
+            .iter()
+            .find(|candidate| candidate.model_id == selected)
+            .map(|candidate| {
+                PlannedIdentity::new(
+                    candidate.model_id.clone(),
+                    candidate.provider_id.clone(),
+                    candidate.tier.clone(),
+                )
+            })
     }
 
     /// Explicit alias for callers that need to document the lifecycle
@@ -1286,7 +1271,13 @@ mod tests {
         let caps = ModelCapabilities::default();
         let check = reqs.check("m", "bad-provider", Some(ModelTier::Standard), &caps, false);
         assert!(!check.eligible);
-        let check = reqs.check("m", "good-provider", Some(ModelTier::Standard), &caps, false);
+        let check = reqs.check(
+            "m",
+            "good-provider",
+            Some(ModelTier::Standard),
+            &caps,
+            false,
+        );
         assert!(check.eligible);
     }
 
@@ -1319,7 +1310,9 @@ mod tests {
     fn policy_matching_with_multiple_matchers() {
         let mut p = default_policy();
         p.matchers = vec![
-            PolicyMatcher::Client { value: "codex".into() },
+            PolicyMatcher::Client {
+                value: "codex".into(),
+            },
             PolicyMatcher::HasTools { value: true },
         ];
         let mut c = ctx("m");
@@ -1335,7 +1328,9 @@ mod tests {
     #[test]
     fn model_prefix_matcher() {
         let mut p = default_policy();
-        p.matchers = vec![PolicyMatcher::ModelPrefix { value: "gpt".into() }];
+        p.matchers = vec![PolicyMatcher::ModelPrefix {
+            value: "gpt".into(),
+        }];
         assert!(p.matches(&ctx("gpt-4")));
         assert!(p.matches(&ctx("gpt-5.3-sol")));
         assert!(!p.matches(&ctx("claude-3")));
@@ -1483,13 +1478,22 @@ mod tests {
 
         let mut c = ctx("m");
         c.task = Some(&profile_simple);
-        assert!(!p.matches(&c), "Simple should not match MinComplexity::Standard");
+        assert!(
+            !p.matches(&c),
+            "Simple should not match MinComplexity::Standard"
+        );
 
         c.task = Some(&profile_standard);
-        assert!(p.matches(&c), "Standard should match MinComplexity::Standard");
+        assert!(
+            p.matches(&c),
+            "Standard should match MinComplexity::Standard"
+        );
 
         c.task = Some(&profile_complex);
-        assert!(p.matches(&c), "Complex should match MinComplexity::Standard");
+        assert!(
+            p.matches(&c),
+            "Complex should match MinComplexity::Standard"
+        );
     }
 
     #[test]
@@ -1550,7 +1554,13 @@ mod tests {
 
     // ------------------------------------------------ Scoring
 
-    fn scoring_ctx<'a>(health: f64, latency: f64, cost: Option<f64>, priority: i32, tier: Option<ModelTier>) -> ScoringContext<'a> {
+    fn scoring_ctx<'a>(
+        health: f64,
+        latency: f64,
+        cost: Option<f64>,
+        priority: i32,
+        tier: Option<ModelTier>,
+    ) -> ScoringContext<'a> {
         ScoringContext {
             health,
             avg_latency_ms: latency,
@@ -1567,7 +1577,11 @@ mod tests {
         let pref = PolicyPreference::default();
         let ctx = scoring_ctx(1.0, 100.0, Some(1.0), 0, Some(ModelTier::Standard));
         let s = score_candidate(&pref, &ctx);
-        assert!(s.total_score >= 0.85, "expected >=0.85, got {}", s.total_score);
+        assert!(
+            s.total_score >= 0.85,
+            "expected >=0.85, got {}",
+            s.total_score
+        );
         assert_eq!(s.breakdown.health, 1.0);
         assert!((s.breakdown.latency - 1.0).abs() < 0.001);
         assert!((s.breakdown.cost - 1.0).abs() < 0.001);
@@ -1605,7 +1619,12 @@ mod tests {
         let slow = scoring_ctx(1.0, 2000.0, Some(1.0), 0, Some(ModelTier::Standard));
         let s_f = score_candidate(&pref, &fast);
         let s_s = score_candidate(&pref, &slow);
-        assert!(s_f.total_score > s_s.total_score, "fast {} > slow {}", s_f.total_score, s_s.total_score);
+        assert!(
+            s_f.total_score > s_s.total_score,
+            "fast {} > slow {}",
+            s_f.total_score,
+            s_s.total_score
+        );
         // 200ms → 1000/200 = 1.0 (clamped), 2000ms → 1000/2000 = 0.5
         assert!((s_f.breakdown.latency - 1.0).abs() < 0.001);
         assert!((s_s.breakdown.latency - 0.5).abs() < 0.001);
@@ -1677,7 +1696,11 @@ mod tests {
         };
         let unmeasured = scoring_ctx(1.0, 0.0, Some(1.0), 0, Some(ModelTier::Standard));
         let s = score_candidate(&pref, &unmeasured);
-        assert!((s.breakdown.latency - 1.0).abs() < 0.001, "unmeasured should get full latency score, got {}", s.breakdown.latency);
+        assert!(
+            (s.breakdown.latency - 1.0).abs() < 0.001,
+            "unmeasured should get full latency score, got {}",
+            s.breakdown.latency
+        );
     }
 
     #[test]
@@ -1708,7 +1731,11 @@ mod tests {
         };
         let ctx = scoring_ctx(0.5, 500.0, Some(5.0), 25, Some(ModelTier::Standard));
         let s = score_candidate(&pref, &ctx);
-        assert!(s.total_score >= 0.0 && s.total_score <= 1.0, "score out of range: {}", s.total_score);
+        assert!(
+            s.total_score >= 0.0 && s.total_score <= 1.0,
+            "score out of range: {}",
+            s.total_score
+        );
     }
 
     #[test]
@@ -1884,8 +1911,12 @@ mod tests {
             id: "multi".into(),
             name: "Multi".into(),
             matchers: vec![
-                ClientMatcher::ClientId { value: "codex".into() },
-                ClientMatcher::ModelPrefix { value: "gpt".into() },
+                ClientMatcher::ClientId {
+                    value: "codex".into(),
+                },
+                ClientMatcher::ModelPrefix {
+                    value: "gpt".into(),
+                },
             ],
             policy_id: "multi-policy".into(),
         };
@@ -1898,7 +1929,13 @@ mod tests {
     #[test]
     fn resolve_client_returns_first_match() {
         let profiles = vec![bot_profile(), codex_profile(), ua_profile()];
-        let ctx = client_ctx(Some("codex"), Some("curl/7.0"), Some("sk-bot-x"), &[], "gpt-4");
+        let ctx = client_ctx(
+            Some("codex"),
+            Some("curl/7.0"),
+            Some("sk-bot-x"),
+            &[],
+            "gpt-4",
+        );
         // bot_profile matches on ApiKeyPrefix, which comes first
         let resolved = resolve_client(&profiles, &ctx);
         assert!(resolved.is_some());
@@ -1974,7 +2011,9 @@ mod tests {
         assert!(summary.streaming);
         assert!(summary.has_tools);
         assert!(summary.has_vision);
-        assert!(summary.required_capabilities.contains(&"vision".to_string()));
+        assert!(summary
+            .required_capabilities
+            .contains(&"vision".to_string()));
         assert!(summary.required_capabilities.contains(&"tools".to_string()));
     }
 
@@ -2219,7 +2258,10 @@ mod tests {
             RejectionReason::ProviderNotAllowed.to_string(),
             "provider_not_allowed"
         );
-        assert_eq!(RejectionReason::ModelForbidden.to_string(), "model_forbidden");
+        assert_eq!(
+            RejectionReason::ModelForbidden.to_string(),
+            "model_forbidden"
+        );
         assert_eq!(
             RejectionReason::ModelNotAllowed.to_string(),
             "model_not_allowed"

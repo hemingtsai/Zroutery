@@ -156,17 +156,21 @@ use crate::ml::calibration::{
     CalibrationReport, CalibrationVerdict, DegeneracyReason, PartitionKind,
 };
 use crate::ml::coordinator::{CoordinatorConfig, RoutingAction};
-use crate::ml::dataset::{canonical_samples_from_decision_time, OutcomeTrainingSample, SampleScope};
+use crate::ml::dataset::{
+    canonical_samples_from_decision_time, OutcomeTrainingSample, SampleScope,
+};
 use crate::ml::decision_engine::DecisionEngine;
 use crate::ml::evaluation::{
     f32_identical, f64_identical, find_nonfinite_f64, ulp_distance, Divergence, Exactness,
     NonFiniteComponent,
 };
 use crate::ml::features::FEATURE_DIMENSION;
-use crate::ml::model_identity::{CommitId, ModelCheckpoint, ModelCommit, ModelEnsemble, ReplayError};
+use crate::ml::model_identity::{
+    CommitId, ModelCheckpoint, ModelCommit, ModelEnsemble, ReplayError,
+};
 use crate::ml::reward::RewardPolicy;
 use crate::ml::shadow::{
-    ModelEnsemblePredictor, ShadowCandidate, ShadowDecision, ShadowInput, ShadowEngine,
+    ModelEnsemblePredictor, ShadowCandidate, ShadowDecision, ShadowEngine, ShadowInput,
 };
 use crate::ml::statistics::{
     measure_release_evidence, StatisticalConfig, StatisticalInput, StatisticalRefusal,
@@ -224,14 +228,14 @@ detected here";
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum OfflineGateError {
     // -- nothing to decide --
-
     /// No recorded decision was supplied. A release verdict computed from no
     /// evidence is not a verdict.
-    #[error("no recorded decision to gate; a release verdict computed from nothing is not a verdict")]
+    #[error(
+        "no recorded decision to gate; a release verdict computed from nothing is not a verdict"
+    )]
     NothingToGate,
 
     // -- the artifact --
-
     /// The commit is absent, or absent in a form that cannot name itself.
     #[error("the model commit is missing or unusable: {reason}")]
     MissingCommit { reason: String },
@@ -248,7 +252,6 @@ pub enum OfflineGateError {
     LineageRejected { commit_id: String, reason: String },
 
     // -- the retained decision-time input --
-
     /// The recorded decision carries no retained input to replay from.
     #[error("decision {decision_id} has no retained decision-time input: {reason}")]
     RetainedInputAbsent { decision_id: String, reason: String },
@@ -273,7 +276,6 @@ pub enum OfflineGateError {
     RetainedInputIncomplete { decision_id: String, reason: String },
 
     // -- the replay --
-
     /// The replay produced no decision at all. The accepted seam answers `None`
     /// both when it is disabled and when it contained a fault, so the gate
     /// cannot tell those apart and will not guess which happened.
@@ -306,11 +308,12 @@ pub enum OfflineGateError {
     },
 
     // -- outcome authority --
-
     /// The replayed decision cannot be reconciled with the canonical Outcome:
     /// either the replay selected a candidate the request never attempted, or
     /// the recorded terminal state contradicts the replay.
-    #[error("the replayed decision for {decision_id} disagrees with the canonical Outcome: {detail}")]
+    #[error(
+        "the replayed decision for {decision_id} disagrees with the canonical Outcome: {detail}"
+    )]
     TerminalStateDisagreement { decision_id: String, detail: String },
 
     /// The Outcome records no identity that served. The evaluation must key on
@@ -328,7 +331,6 @@ pub enum OfflineGateError {
     },
 
     // -- the holdout --
-
     /// The holdout shares a sample or an Outcome with the set the model was
     /// fitted on. A holdout that overlaps the fit set measures the fit.
     #[error("holdout {holdout_index} shares {kind} '{sample_id}' with the model's fit set")]
@@ -340,7 +342,9 @@ pub enum OfflineGateError {
 
     /// The holdout cannot support a calibration claim. 7E-2D classifies this;
     /// the gate carries the classification without re-deriving it.
-    #[error("the holdout is degenerate: 7E-2D reports {reason} on the {partition} partition ({detail})")]
+    #[error(
+        "the holdout is degenerate: 7E-2D reports {reason} on the {partition} partition ({detail})"
+    )]
     DegenerateHoldout {
         partition: PartitionKind,
         reason: DegeneracyReason,
@@ -769,7 +773,10 @@ impl Serialize for FailureAuthority {
         let mut state = serializer.serialize_struct("FailureAuthority", 7)?;
         state.serialize_field("class", &self.class)?;
         let impact = self.impact;
-        state.serialize_field("affects_observation", &impact.map(|i| i.affects_observation))?;
+        state.serialize_field(
+            "affects_observation",
+            &impact.map(|i| i.affects_observation),
+        )?;
         state.serialize_field("affects_circuit", &impact.map(|i| i.affects_circuit))?;
         state.serialize_field("retryable", &impact.map(|i| i.retryable))?;
         state.serialize_field("fallbackable", &impact.map(|i| i.fallbackable))?;
@@ -1258,7 +1265,9 @@ fn measure_statistics(
     // numbers. If the two disagree, the partition 7D measured is not the one
     // 7E-2D's verdict was about, so it is refused rather than assumed.
     let report = calibration.report();
-    let split = cohorts.len().saturating_sub(calibration_config.holdout.holdout_cohorts);
+    let split = cohorts
+        .len()
+        .saturating_sub(calibration_config.holdout.holdout_cohorts);
     if report.holdout_cohorts != cohorts.len() - split
         || report.fit_cohorts != split
         || report.cohorts_total != cohorts.len()
@@ -1366,17 +1375,15 @@ pub fn run_offline_gate(input: &GateInput) -> Result<GateOutcome, OfflineGateErr
 
     // -- 3/4. per decision --
     let engine = ShadowEngine::new(
-        DecisionEngine::new(input.config.engine.clone(), input.config.reward_policy.clone()),
+        DecisionEngine::new(
+            input.config.engine.clone(),
+            input.config.reward_policy.clone(),
+        ),
         true,
     );
     let mut replay = Vec::with_capacity(input.recorded.len());
     for recorded in &input.recorded {
-        replay.push(replay_one(
-            &engine,
-            &predictor,
-            recorded,
-            &input.config,
-        )?);
+        replay.push(replay_one(&engine, &predictor, recorded, &input.config)?);
     }
 
     // -- 5. the holdout --
@@ -1473,7 +1480,8 @@ pub fn run_offline_gate(input: &GateInput) -> Result<GateOutcome, OfflineGateErr
         model_commit: commit.commit_id.clone(),
         model_id: commit.model_id.as_str().to_string(),
         feature_schema: input.recorded[0].input().feature_schema,
-        transport,        replay,
+        transport,
+        replay,
         holdout: measurements.holdout.clone(),
         calibration: calibration.report().clone(),
         float_fidelity,
@@ -1508,10 +1516,9 @@ fn measure_commit_transport(commit: &ModelCommit) -> Result<CommitTransport, Off
     let mut moved_parameters = 0usize;
     if let Ok(bytes) = serde_json::to_vec(commit) {
         if let Ok(reparsed) = serde_json::from_slice::<ModelCommit>(&bytes) {
-            for (original, round_tripped) in
-                checkpoint_states(&commit.checkpoint)
-                    .into_iter()
-                    .zip(checkpoint_states(&reparsed.checkpoint))
+            for (original, round_tripped) in checkpoint_states(&commit.checkpoint)
+                .into_iter()
+                .zip(checkpoint_states(&reparsed.checkpoint))
             {
                 for (before, after) in original.iter().zip(round_tripped.iter()) {
                     f64_parameters += 1;
@@ -1603,18 +1610,21 @@ fn replay_one(
 
     let exactness = compare_decisions(recorded_decision, &replayed);
     let components_compared = component_count(recorded_decision);
-    exactness.into_divergence().map_err(|divergence| {
-        OfflineGateError::ReplayDivergence {
+    exactness
+        .into_divergence()
+        .map_err(|divergence| OfflineGateError::ReplayDivergence {
             decision_id: decision_id.clone(),
             divergence: Box::new(divergence),
-        }
-    })?;
+        })?;
 
     // Retention completeness, through the accepted function, so the refusal
     // vocabulary for an incomplete retained input is 7E-2D's.
-    let complete_for_outcome =
-        canonical_samples_from_decision_time(&recorded.outcome, recorded.input(), DataOrigin::Native)
-            .is_ok();
+    let complete_for_outcome = canonical_samples_from_decision_time(
+        &recorded.outcome,
+        recorded.input(),
+        DataOrigin::Native,
+    )
+    .is_ok();
 
     let retention = RetentionProof {
         recorded_input_checksum: recorded_decision.decision_input_checksum,
@@ -1728,16 +1738,8 @@ fn compare_decisions(recorded: &ShadowDecision, replayed: &ShadowDecision) -> Ex
     }
 
     compare_candidate_evidence(&mut exactness, &recorded.candidates, &replayed.candidates);
-    compare_candidate_predictions(
-        &mut exactness,
-        &recorded.candidates,
-        &replayed.candidates,
-    );
-    compare_candidate_utilities(
-        &mut exactness,
-        &recorded.candidates,
-        &replayed.candidates,
-    );
+    compare_candidate_predictions(&mut exactness, &recorded.candidates, &replayed.candidates);
+    compare_candidate_utilities(&mut exactness, &recorded.candidates, &replayed.candidates);
 
     exactness.expect_u64(
         "decision_checksum",
@@ -1905,7 +1907,10 @@ fn require_finite_recorded(
     let mut owned: Vec<(String, f64)> = Vec::new();
     for (index, candidate) in decision.candidates.iter().enumerate() {
         for (name, value) in [
-            ("prediction.success.value", candidate.prediction.success.value),
+            (
+                "prediction.success.value",
+                candidate.prediction.success.value,
+            ),
             (
                 "prediction.success.confidence",
                 candidate.prediction.success.confidence,
@@ -2126,11 +2131,9 @@ fn ablate_retention(
         // A perturbation the accepted seam refuses is itself evidence that the
         // retained value was load-bearing: the value changed what the replay
         // was willing to decide.
-        let Some(replayed) = engine.evaluate_with(
-            &recorded.decision.actual.request_id,
-            &perturbed,
-            predictor,
-        ) else {
+        let Some(replayed) =
+            engine.evaluate_with(&recorded.decision.actual.request_id, &perturbed, predictor)
+        else {
             load_bearing += 1;
             continue;
         };
@@ -2201,12 +2204,12 @@ fn build_holdout(
                 outcome_id: entry.outcome.outcome_id.clone(),
             });
         }
-        let replay = evidence.get(index).ok_or_else(|| {
-            OfflineGateError::RetainedInputAbsent {
+        let replay = evidence
+            .get(index)
+            .ok_or_else(|| OfflineGateError::RetainedInputAbsent {
                 decision_id: decision_id.clone(),
                 reason: "the replay evidence for this decision is missing".to_string(),
-            }
-        })?;
+            })?;
         if replay.served.is_none() {
             return Err(OfflineGateError::ServedIdentityAbsent {
                 decision_id: decision_id.clone(),

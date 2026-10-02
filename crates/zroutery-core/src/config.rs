@@ -1115,12 +1115,7 @@ impl AppConfig {
                     subject: Some(p.id.clone()),
                 });
             }
-            let managed_headers = [
-                "content-type",
-                "authorization",
-                "x-api-key",
-                "accept",
-            ];
+            let managed_headers = ["content-type", "authorization", "x-api-key", "accept"];
             for key in p.extra_headers.keys() {
                 if managed_headers.contains(&key.to_lowercase().as_str()) {
                     issues.push(ConfigIssue {
@@ -1296,12 +1291,7 @@ impl AppConfig {
                     });
                 }
             }
-            if self
-                .classifier
-                .candidates
-                .iter()
-                .all(|c| !c.enabled)
-            {
+            if self.classifier.candidates.iter().all(|c| !c.enabled) {
                 issues.push(ConfigIssue {
                     severity: IssueSeverity::Warning,
                     code: "classifier.no_candidates".into(),
@@ -1410,10 +1400,7 @@ impl AppConfig {
                 }
             }
             if let crate::budget::OnExceeded::Degrade { to } = &budget.on_exceeded {
-                let reachable = self
-                    .models
-                    .iter()
-                    .any(|m| m.enabled && m.tier == Some(*to));
+                let reachable = self.models.iter().any(|m| m.enabled && m.tier == Some(*to));
                 if !reachable {
                     issues.push(ConfigIssue {
                         severity: IssueSeverity::Warning,
@@ -1553,15 +1540,39 @@ mod tests {
         }
         assert_eq!(ModelTier::from_virtual_id("gpt-5.3-sol"), None);
         // Anthropic aliases
-        assert_eq!(ModelTier::from_virtual_id("haiku-class"), Some(ModelTier::Fast));
-        assert_eq!(ModelTier::from_virtual_id("sonnet-class"), Some(ModelTier::Standard));
-        assert_eq!(ModelTier::from_virtual_id("opus-class"), Some(ModelTier::Reasoning));
-        assert_eq!(ModelTier::from_virtual_id("fable-class"), Some(ModelTier::Frontier));
+        assert_eq!(
+            ModelTier::from_virtual_id("haiku-class"),
+            Some(ModelTier::Fast)
+        );
+        assert_eq!(
+            ModelTier::from_virtual_id("sonnet-class"),
+            Some(ModelTier::Standard)
+        );
+        assert_eq!(
+            ModelTier::from_virtual_id("opus-class"),
+            Some(ModelTier::Reasoning)
+        );
+        assert_eq!(
+            ModelTier::from_virtual_id("fable-class"),
+            Some(ModelTier::Frontier)
+        );
         // OpenAI aliases
-        assert_eq!(ModelTier::from_virtual_id("luna-class"), Some(ModelTier::Fast));
-        assert_eq!(ModelTier::from_virtual_id("terra-class"), Some(ModelTier::Standard));
-        assert_eq!(ModelTier::from_virtual_id("sol-class"), Some(ModelTier::Reasoning));
-        assert_eq!(ModelTier::from_virtual_id("astra-class"), Some(ModelTier::Frontier));
+        assert_eq!(
+            ModelTier::from_virtual_id("luna-class"),
+            Some(ModelTier::Fast)
+        );
+        assert_eq!(
+            ModelTier::from_virtual_id("terra-class"),
+            Some(ModelTier::Standard)
+        );
+        assert_eq!(
+            ModelTier::from_virtual_id("sol-class"),
+            Some(ModelTier::Reasoning)
+        );
+        assert_eq!(
+            ModelTier::from_virtual_id("astra-class"),
+            Some(ModelTier::Frontier)
+        );
     }
 
     #[test]
@@ -1854,10 +1865,8 @@ mod tests {
         assert_eq!(cfg, back);
 
         // And a config that predates classifier routing loads without it.
-        let legacy: AppConfig = serde_json::from_str(
-            r#"{"server":{"auth_token":"zr-x"},"models":[]}"#,
-        )
-        .unwrap();
+        let legacy: AppConfig =
+            serde_json::from_str(r#"{"server":{"auth_token":"zr-x"},"models":[]}"#).unwrap();
         assert!(!legacy.classifier.enabled);
     }
 

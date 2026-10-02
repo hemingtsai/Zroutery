@@ -207,7 +207,11 @@ fn rectifiers_apply_in_config_order() {
     // Build the full rectifier set from config.
     let config = zroutery_core::config::RectifierConfig::default();
     let rectifiers = zroutery_core::rectifier::from_config(&config);
-    assert_eq!(rectifiers.len(), 3, "all three rectifiers should be enabled by default");
+    assert_eq!(
+        rectifiers.len(),
+        3,
+        "all three rectifiers should be enabled by default"
+    );
 
     // The expected order is: thinking_signature, media_fallback, thinking_budget.
     assert_eq!(rectifiers[0].name(), "thinking_signature");

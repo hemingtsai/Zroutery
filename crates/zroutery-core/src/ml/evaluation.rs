@@ -76,14 +76,21 @@ impl PredictionMetrics {
             actuals.len(),
             "predictions and actuals must have the same length"
         );
-        assert!(!predictions.is_empty(), "cannot compute metrics on empty data");
+        assert!(
+            !predictions.is_empty(),
+            "cannot compute metrics on empty data"
+        );
 
         let n = predictions.len();
         let log_loss = Some(compute_log_loss(predictions, actuals));
         let brier_score = Some(compute_brier_score(predictions, actuals));
 
         let mean_prediction = predictions.iter().sum::<f64>() / n as f64;
-        let mean_actual = actuals.iter().map(|&b| if b { 1.0 } else { 0.0 }).sum::<f64>() / n as f64;
+        let mean_actual = actuals
+            .iter()
+            .map(|&b| if b { 1.0 } else { 0.0 })
+            .sum::<f64>()
+            / n as f64;
 
         PredictionMetrics {
             sample_count: n,
@@ -136,7 +143,11 @@ impl PredictionMetrics {
         let log_loss = Some(compute_log_loss(predictions, actuals));
         let brier_score = Some(compute_brier_score(predictions, actuals));
         let mean_prediction = predictions.iter().sum::<f64>() / n as f64;
-        let mean_actual = actuals.iter().map(|&b| if b { 1.0 } else { 0.0 }).sum::<f64>() / n as f64;
+        let mean_actual = actuals
+            .iter()
+            .map(|&b| if b { 1.0 } else { 0.0 })
+            .sum::<f64>()
+            / n as f64;
 
         Ok(PredictionMetrics {
             sample_count: n,
@@ -208,7 +219,10 @@ impl PredictionMetrics {
             actuals.len(),
             "predictions and actuals must have the same length"
         );
-        assert!(!predictions.is_empty(), "cannot compute metrics on empty data");
+        assert!(
+            !predictions.is_empty(),
+            "cannot compute metrics on empty data"
+        );
 
         let n = predictions.len();
         let mut sum_abs_err = 0.0;
@@ -318,7 +332,10 @@ impl RoutingMetrics {
         };
 
         // Fallback rate: samples where fallback_count > 0
-        let fallbacks = samples.iter().filter(|s| s.targets.fallback_count > 0).count();
+        let fallbacks = samples
+            .iter()
+            .filter(|s| s.targets.fallback_count > 0)
+            .count();
         let fallback_rate = fallbacks as f64 / n as f64;
 
         // Escalation rate: samples where failure_class is Some (attempted and failed at least once)
@@ -443,7 +460,8 @@ impl Evaluator {
         let deltas = RoutingDeltas {
             success_rate_delta: candidate.success_rate - baseline.success_rate,
             p95_latency_delta_pct: if baseline.p95_latency_ms > 0.0 {
-                (candidate.p95_latency_ms - baseline.p95_latency_ms) / baseline.p95_latency_ms * 100.0
+                (candidate.p95_latency_ms - baseline.p95_latency_ms) / baseline.p95_latency_ms
+                    * 100.0
             } else {
                 0.0
             },
@@ -524,10 +542,7 @@ impl Evaluator {
             ));
         }
         if cost_improved {
-            reasons.push(format!(
-                "cost reduced by {:.1}%",
-                -deltas.cost_delta_pct
-            ));
+            reasons.push(format!("cost reduced by {:.1}%", -deltas.cost_delta_pct));
         }
 
         if success_improved || latency_improved || cost_improved {
@@ -707,7 +722,11 @@ impl std::fmt::Display for NonFiniteComponent {
                 "non-finite measurement at {}[{}]: {}",
                 self.component, index, self.value
             ),
-            None => write!(f, "non-finite measurement at {}: {}", self.component, self.value),
+            None => write!(
+                f,
+                "non-finite measurement at {}: {}",
+                self.component, self.value
+            ),
         }
     }
 }
@@ -813,7 +832,13 @@ impl Exactness {
     }
 
     /// Compare a `f64` in bits.
-    pub fn expect_f64(&mut self, component: &str, index: Option<usize>, expected: f64, actual: f64) {
+    pub fn expect_f64(
+        &mut self,
+        component: &str,
+        index: Option<usize>,
+        expected: f64,
+        actual: f64,
+    ) {
         if !f64_identical(expected, actual) {
             self.record(
                 component,
@@ -825,7 +850,13 @@ impl Exactness {
     }
 
     /// Compare a `f32` in bits.
-    pub fn expect_f32(&mut self, component: &str, index: Option<usize>, expected: f32, actual: f32) {
+    pub fn expect_f32(
+        &mut self,
+        component: &str,
+        index: Option<usize>,
+        expected: f32,
+        actual: f32,
+    ) {
         if !f32_identical(expected, actual) {
             self.record(
                 component,
@@ -837,7 +868,13 @@ impl Exactness {
     }
 
     /// Compare a string exactly.
-    pub fn expect_str(&mut self, component: &str, index: Option<usize>, expected: &str, actual: &str) {
+    pub fn expect_str(
+        &mut self,
+        component: &str,
+        index: Option<usize>,
+        expected: &str,
+        actual: &str,
+    ) {
         if expected != actual {
             self.record(
                 component,
@@ -867,7 +904,13 @@ impl Exactness {
     }
 
     /// Compare a `bool`.
-    pub fn expect_bool(&mut self, component: &str, index: Option<usize>, expected: bool, actual: bool) {
+    pub fn expect_bool(
+        &mut self,
+        component: &str,
+        index: Option<usize>,
+        expected: bool,
+        actual: bool,
+    ) {
         if expected != actual {
             self.record(
                 component,
@@ -879,26 +922,22 @@ impl Exactness {
     }
 
     /// Compare a `u64` exactly.
-    pub fn expect_u64(&mut self, component: &str, index: Option<usize>, expected: u64, actual: u64) {
+    pub fn expect_u64(
+        &mut self,
+        component: &str,
+        index: Option<usize>,
+        expected: u64,
+        actual: u64,
+    ) {
         if expected != actual {
-            self.record(
-                component,
-                index,
-                format!("{expected}"),
-                format!("{actual}"),
-            );
+            self.record(component, index, format!("{expected}"), format!("{actual}"));
         }
     }
 
     /// Compare two counts exactly.
     pub fn expect_len(&mut self, component: &str, expected: usize, actual: usize) {
         if expected != actual {
-            self.record(
-                component,
-                None,
-                format!("{expected}"),
-                format!("{actual}"),
-            );
+            self.record(component, None, format!("{expected}"), format!("{actual}"));
         }
     }
 
@@ -925,14 +964,19 @@ impl Exactness {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::feedback::DataOrigin;
     use crate::ml::dataset::{Targets, TrainingSample};
     use crate::ml::features::{RoutingFeatures, FEATURE_DIMENSION};
     use crate::ml::model::SuccessModel;
-    use crate::feedback::DataOrigin;
 
     // -- helpers --
 
-    fn make_sample(success: bool, latency_ms: Option<f64>, cost: Option<f64>, fallback_count: u32) -> TrainingSample {
+    fn make_sample(
+        success: bool,
+        latency_ms: Option<f64>,
+        cost: Option<f64>,
+        fallback_count: u32,
+    ) -> TrainingSample {
         TrainingSample {
             sample_id: format!("test-{}", uuid::Uuid::new_v4().simple()),
             schema_version: 1,
@@ -971,11 +1015,17 @@ mod tests {
 
         // Perfect predictions -> log loss should be near zero
         let ll = metrics.log_loss.unwrap();
-        assert!(ll < 0.01, "perfect predictions should have near-zero log loss, got {ll}");
+        assert!(
+            ll < 0.01,
+            "perfect predictions should have near-zero log loss, got {ll}"
+        );
 
         // Perfect predictions -> brier score should be near zero
         let bs = metrics.brier_score.unwrap();
-        assert!(bs < 0.01, "perfect predictions should have near-zero brier score, got {bs}");
+        assert!(
+            bs < 0.01,
+            "perfect predictions should have near-zero brier score, got {bs}"
+        );
 
         assert!((metrics.mean_prediction - 0.5).abs() < 1e-10);
         assert!((metrics.mean_actual - 0.5).abs() < 1e-10);
@@ -997,11 +1047,17 @@ mod tests {
 
         // MAE = (|10-12| + |20-18| + |30-33|) / 3 = (2+2+3)/3 = 7/3
         let mae = metrics.mae.unwrap();
-        assert!((mae - 7.0 / 3.0).abs() < 1e-10, "MAE should be 7/3, got {mae}");
+        assert!(
+            (mae - 7.0 / 3.0).abs() < 1e-10,
+            "MAE should be 7/3, got {mae}"
+        );
 
         // RMSE = sqrt((4+4+9)/3) = sqrt(17/3)
         let rmse = metrics.rmse.unwrap();
-        assert!((rmse - (17.0_f64 / 3.0).sqrt()).abs() < 1e-10, "RMSE should be sqrt(17/3), got {rmse}");
+        assert!(
+            (rmse - (17.0_f64 / 3.0).sqrt()).abs() < 1e-10,
+            "RMSE should be sqrt(17/3), got {rmse}"
+        );
 
         assert!((metrics.mean_prediction - 20.0).abs() < 1e-10);
         assert!((metrics.mean_actual - 21.0).abs() < 1e-10);
@@ -1174,7 +1230,10 @@ mod tests {
         let actuals = vec![true, false, true, false];
         let metrics = PredictionMetrics::compute_classification(&predictions, &actuals);
         let bs = metrics.brier_score.unwrap();
-        assert!(bs.abs() < 1e-10, "perfect predictions should have Brier=0, got {bs}");
+        assert!(
+            bs.abs() < 1e-10,
+            "perfect predictions should have Brier=0, got {bs}"
+        );
 
         // All predictions = 0.5, all actual = true
         // Brier = mean((0.5 - 1)^2) = 0.25
@@ -1408,7 +1467,10 @@ mod tests {
         // true, and the point of the test is the comparison, not the literal.
         let zero: f64 = 0.0;
         let negative_zero: f64 = -zero;
-        assert_eq!(zero, negative_zero, "numeric equality cannot tell these apart");
+        assert_eq!(
+            zero, negative_zero,
+            "numeric equality cannot tell these apart"
+        );
         assert!(!f64_identical(zero, negative_zero), "bit identity must");
         assert!(f64_identical(0.1, 0.1));
         assert!(!f64_identical(0.1, 0.1 + f64::EPSILON));
@@ -1441,7 +1503,12 @@ mod tests {
         assert!(exactness.is_exact());
 
         // A one-ULP difference is a divergence, never a "close enough".
-        exactness.expect_f64("candidates[0].utility.total", Some(0), 1.5, 1.5 + f64::EPSILON);
+        exactness.expect_f64(
+            "candidates[0].utility.total",
+            Some(0),
+            1.5,
+            1.5 + f64::EPSILON,
+        );
         exactness.expect_str("verdict.selected", None, "alpha", "bravo");
         let divergence = exactness.divergence().expect("divergence recorded").clone();
         assert_eq!(divergence.component, "candidates[0].utility.total");
@@ -1457,7 +1524,9 @@ mod tests {
     fn exactness_into_divergence_is_the_refusal() {
         let mut exactness = Exactness::new();
         exactness.expect_opt_str("candidate.rejection_reason", Some(2), Some("policy"), None);
-        let divergence = exactness.into_divergence().expect_err("optional discriminants differ");
+        let divergence = exactness
+            .into_divergence()
+            .expect_err("optional discriminants differ");
         assert_eq!(divergence.component, "candidate.rejection_reason");
         assert_eq!(divergence.index, Some(2));
         assert_eq!(divergence.expected, "Some(\"policy\")");

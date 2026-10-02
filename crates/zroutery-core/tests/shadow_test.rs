@@ -19,9 +19,7 @@ use zroutery_core::feedback::DataOrigin;
 use zroutery_core::ml::coordinator::{CoordinatorConfig, RoutingAction};
 use zroutery_core::ml::dataset::{Targets, TrainingSample as DatasetTrainingSample};
 use zroutery_core::ml::decision_engine::DecisionEngine;
-use zroutery_core::ml::features::{
-    RoutingFeatures, FEATURE_DIMENSION, FEATURE_SCHEMA_VERSION,
-};
+use zroutery_core::ml::features::{RoutingFeatures, FEATURE_DIMENSION, FEATURE_SCHEMA_VERSION};
 use zroutery_core::ml::model::ModelState;
 use zroutery_core::ml::model_identity::{
     CommitId, ModelCheckpoint, ModelCommit, ModelEnsemble, ModelId, ReplayError,
@@ -350,7 +348,10 @@ fn invalid_model_state_falls_back() {
     match &err {
         ReplayError::IncompatibleState { model, reason } => {
             assert_eq!(model.as_str(), "latency");
-            assert!(reason.contains("latency_linear"), "unexpected reason: {reason}");
+            assert!(
+                reason.contains("latency_linear"),
+                "unexpected reason: {reason}"
+            );
         }
         other => panic!("expected IncompatibleState, got: {other:?}"),
     }
@@ -548,8 +549,14 @@ fn same_commit_same_checksum_via_replay() {
         batched_decision.shadow.selected,
         chained_decision.shadow.selected
     );
-    assert_eq!(batched_decision.shadow.action, chained_decision.shadow.action);
-    assert_eq!(batched_decision.shadow.reason, chained_decision.shadow.reason);
+    assert_eq!(
+        batched_decision.shadow.action,
+        chained_decision.shadow.action
+    );
+    assert_eq!(
+        batched_decision.shadow.reason,
+        chained_decision.shadow.reason
+    );
 }
 
 /// GATE 7E-1 (determinism): training materially changes the commit and the
@@ -570,7 +577,10 @@ fn same_ordered_training_events_same_commit_and_decision_checksum() {
         first_decision.decision_input_checksum,
         second_decision.decision_input_checksum
     );
-    assert_eq!(first_decision.decision_checksum, second_decision.decision_checksum);
+    assert_eq!(
+        first_decision.decision_checksum,
+        second_decision.decision_checksum
+    );
 }
 
 #[test]
@@ -892,7 +902,10 @@ fn shadow_modules_reference_no_mutation_surface() {
     let shadow_src = include_str!("../src/ml/shadow.rs");
     let engine_src = include_str!("../src/ml/decision_engine.rs");
 
-    for (name, src) in [("shadow.rs", shadow_src), ("decision_engine.rs", engine_src)] {
+    for (name, src) in [
+        ("shadow.rs", shadow_src),
+        ("decision_engine.rs", engine_src),
+    ] {
         for forbidden in [
             // Ranking entry points.
             "plan_with_policy",
@@ -981,19 +994,11 @@ fn predictor_rejects_wrong_checkpoint_commit_pairing() {
     let mut other_ensemble = ModelEnsemble::new();
     other_ensemble.update_all(&training_samples(0..1)[0]);
     let other_checkpoint = other_ensemble.save_all();
-    let other_commit = ModelCommit::new(
-        ModelId::new("shadow"),
-        other_checkpoint.clone(),
-        None,
-        0,
-    );
+    let other_commit = ModelCommit::new(ModelId::new("shadow"), other_checkpoint.clone(), None, 0);
 
-    let error = ModelEnsemblePredictor::from_commit(
-        &other_checkpoint,
-        first.commit(),
-    )
-    .err()
-    .expect("a valid checkpoint paired with a foreign commit must fail");
+    let error = ModelEnsemblePredictor::from_commit(&other_checkpoint, first.commit())
+        .err()
+        .expect("a valid checkpoint paired with a foreign commit must fail");
     assert!(matches!(error, ReplayError::CommitMismatch { .. }));
 
     // The full-record constructor is the supported path for child commits.
@@ -1021,7 +1026,10 @@ fn predictor_train_and_swap_retain_verified_lineage() {
         .expect("the retained lineage must include the parent commit");
     assert!(parent.verify());
     assert_eq!(first.learning_event_count, 2);
-    assert_eq!(first.checkpoint.content_hash(), engine.predictor_checkpoint().content_hash());
+    assert_eq!(
+        first.checkpoint.content_hash(),
+        engine.predictor_checkpoint().content_hash()
+    );
 
     let mut lineage = engine.predictor_lineage();
     let predictor =
@@ -1031,7 +1039,10 @@ fn predictor_train_and_swap_retain_verified_lineage() {
     let replacement =
         ModelEnsemblePredictor::from_model_commit_with_lineage(&second, &lineage).unwrap();
     assert_eq!(replacement.parent(), Some(first.commit_id.clone()));
-    assert_eq!(replacement.checkpoint().content_hash(), ensemble.save_all().content_hash());
+    assert_eq!(
+        replacement.checkpoint().content_hash(),
+        ensemble.save_all().content_hash()
+    );
     assert_eq!(engine.swap(replacement).unwrap(), second.commit_id);
     assert_eq!(engine.predictor_commit().parent, Some(first.commit_id));
     assert!(engine.predictor_commit().verify());
@@ -1118,11 +1129,15 @@ fn shadow_swap_rejects_unrelated_lineage_and_model() {
         Some(root.commit_id.clone()),
         1,
     );
-    let branch_predictor =
-        ModelEnsemblePredictor::from_model_commit_with_lineage(&branch, &[root.clone(), branch.clone()])
-            .unwrap();
+    let branch_predictor = ModelEnsemblePredictor::from_model_commit_with_lineage(
+        &branch,
+        &[root.clone(), branch.clone()],
+    )
+    .unwrap();
     let error = match engine.swap(branch_predictor) {
-        Ok(_) => panic!("a branch that does not contain the active commit must not replace the predictor"),
+        Ok(_) => panic!(
+            "a branch that does not contain the active commit must not replace the predictor"
+        ),
         Err(error) => error,
     };
     assert!(matches!(error, ReplayError::LineageCorrupt { .. }));

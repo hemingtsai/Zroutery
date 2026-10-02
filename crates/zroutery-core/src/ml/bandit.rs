@@ -260,8 +260,8 @@ use super::evaluation::RoutingMetrics;
 use super::features::{FEATURE_DIMENSION, FEATURE_SCHEMA_VERSION};
 use super::reward::{RewardComputer, RewardPolicy};
 
-use super::dataset::TrainingSample as DatasetTrainingSample;
 use super::dataset::Targets;
+use super::dataset::TrainingSample as DatasetTrainingSample;
 
 // ---------------------------------------------------------------------------
 // Published constants — what is being fit, and toward what
@@ -490,11 +490,7 @@ impl RewardBasis {
         // `min(x, 1000.0) / 1000.0` is `min(x / 1000.0, 1.0)` for a latency
         // that is non-negative by the row validator, written this way so an
         // absurd latency cannot overflow the division.
-        values[B_LATENCY] = -targets
-            .latency_ms
-            .unwrap_or(0.0)
-            .clamp(0.0, 1000.0)
-            / 1000.0;
+        values[B_LATENCY] = -targets.latency_ms.unwrap_or(0.0).clamp(0.0, 1000.0) / 1000.0;
         values[B_COST] = -targets.cost.unwrap_or(0.0).clamp(0.0, 1.0);
         values[B_FALLBACK] = if targets.fallback_count > 0 { 1.0 } else { 0.0 };
         values[B_SWITCH] = f64::from(switch_count);
@@ -776,7 +772,9 @@ pub enum BanditError {
     },
 
     /// A row was encoded against a different schema than this build accepts.
-    #[error("bandit sample {index} carries {component} schema version {found}, expected {expected}")]
+    #[error(
+        "bandit sample {index} carries {component} schema version {found}, expected {expected}"
+    )]
     SchemaMismatch {
         index: usize,
         component: &'static str,
@@ -890,7 +888,9 @@ pub enum BanditError {
 
     /// A regression tolerance was not finite, which would make that gate
     /// vacuous — a gate that cannot fail is not a gate.
-    #[error("safety tolerance {name} = {value} must be finite; a gate that cannot fail is not a gate")]
+    #[error(
+        "safety tolerance {name} = {value} must be finite; a gate that cannot fail is not a gate"
+    )]
     MeaninglessTolerance { name: &'static str, value: f64 },
 
     /// A regression tolerance was negative, which is not a tolerance.
@@ -1135,7 +1135,12 @@ fn sigmoid(z: f64) -> f64 {
 }
 
 /// The ridge-regularized pairwise ranking objective.
-fn objective(pairs: &[Pair], weights: &[f64; BASIS_WIDTH], prior: &[f64; BASIS_WIDTH], lambda: f64) -> f64 {
+fn objective(
+    pairs: &[Pair],
+    weights: &[f64; BASIS_WIDTH],
+    prior: &[f64; BASIS_WIDTH],
+    lambda: f64,
+) -> f64 {
     let mut ranking = 0.0;
     for pair in pairs {
         ranking += softplus(-pair.label * dot(&pair.difference, weights));
@@ -1167,14 +1172,14 @@ fn solve_weights(
     for _ in 0..iterations {
         let mut gradient = [0.0f64; BASIS_WIDTH];
         for pair in pairs {
-            let coefficient =
-                -pair.label * sigmoid(-pair.label * dot(&pair.difference, &weights));
+            let coefficient = -pair.label * sigmoid(-pair.label * dot(&pair.difference, &weights));
             for (accumulated, basis) in gradient.iter_mut().zip(pair.difference) {
                 *accumulated += coefficient * basis;
             }
         }
         for index in 0..BASIS_WIDTH {
-            let slope = gradient[index] / count + 2.0 * ridge_lambda * (weights[index] - prior[index]);
+            let slope =
+                gradient[index] / count + 2.0 * ridge_lambda * (weights[index] - prior[index]);
             if !slope.is_finite() {
                 return Err(BanditError::NonFittedWeight {
                     component: WEIGHT_NAMES[index],
@@ -1199,17 +1204,11 @@ fn solve_weights(
 /// non-success weights were learned. `success_weight` alone explains all of its
 /// pairs, so a better score there is a fact about the base rate.
 fn holdout_pairs_only_differ_on_success(pairs: &[Pair]) -> bool {
-    !pairs.is_empty()
-        && pairs
-            .iter()
-            .all(|pair| pair.difference[B_SUCCESS] != 0.0)
+    !pairs.is_empty() && pairs.iter().all(|pair| pair.difference[B_SUCCESS] != 0.0)
 }
 
 /// Build every comparable pair within each cell, in canonical order.
-fn build_pairs(
-    rows: &[&Row],
-    max_pairs_per_cell: usize,
-) -> Result<Vec<Pair>, BanditError> {
+fn build_pairs(rows: &[&Row], max_pairs_per_cell: usize) -> Result<Vec<Pair>, BanditError> {
     let mut by_cell: BTreeMap<&str, Vec<&Row>> = BTreeMap::new();
     for row in rows {
         by_cell.entry(row.cell.as_str()).or_default().push(row);
@@ -1342,15 +1341,9 @@ pub enum SafetyViolation {
     /// The candidate added no mean outcome-proxy reward over the reference. An
     /// evaluation that cannot separate two arms is evidence of nothing, so this
     /// is a violation and not a pass.
-    NoRewardImprovement {
-        delta: f64,
-        required: f64,
-    },
+    NoRewardImprovement { delta: f64, required: f64 },
     /// The candidate failed more often.
-    FailureRateRegressed {
-        delta: f64,
-        allowed: f64,
-    },
+    FailureRateRegressed { delta: f64, allowed: f64 },
     /// The candidate cost more.
     CostRegressed { delta: f64, allowed: f64 },
     /// The candidate's tail latency got worse.
@@ -1707,10 +1700,7 @@ pub fn run_bandit(
             seed: config.selection.seed,
             exploration_c: config.selection.exploration_c,
             replay_rows: trace_rows,
-            total_observations: arm_statistics
-                .iter()
-                .map(|arm| arm.observations)
-                .sum(),
+            total_observations: arm_statistics.iter().map(|arm| arm.observations).sum(),
             selected: selection.selected.clone(),
             tied_arms: selection.tied_arms,
         },
@@ -1770,7 +1760,9 @@ impl BanditConfig {
 
         let safety = &self.safety;
         if !safety.min_reward_improvement.is_finite() || safety.min_reward_improvement <= 0.0 {
-            return Err(BanditError::MeaninglessSafetyFloor(safety.min_reward_improvement));
+            return Err(BanditError::MeaninglessSafetyFloor(
+                safety.min_reward_improvement,
+            ));
         }
         if safety.min_evaluation_samples < 2 {
             return Err(BanditError::MeaninglessEvaluationFloor(
@@ -2006,7 +1998,11 @@ fn split_cells<'a>(rows: &'a [Row], holdout_cells: usize) -> Result<Partition<'a
 // ---------------------------------------------------------------------------
 
 /// Fit the six weights on the fit partition and check them on the holdout.
-fn fit_reward(rows: &[Row], partition: &Partition<'_>, config: &RewardFitConfig) -> Result<RewardFitReport, BanditError> {
+fn fit_reward(
+    rows: &[Row],
+    partition: &Partition<'_>,
+    config: &RewardFitConfig,
+) -> Result<RewardFitReport, BanditError> {
     let (fit_rows, holdout_rows) = (&partition.fit_rows, &partition.holdout_rows);
     let fit_pairs = build_pairs(fit_rows, config.max_pairs_per_cell)?;
     if fit_pairs.len() < config.min_pair_count {
@@ -2107,7 +2103,9 @@ fn assemble_arms(
             return Err(BanditError::EmptyArmName { index });
         }
         if arm.name == FITTED_ARM_NAME {
-            return Err(BanditError::ReservedArmName { name: arm.name.clone() });
+            return Err(BanditError::ReservedArmName {
+                name: arm.name.clone(),
+            });
         }
     }
     arms.push(RewardArm::new(FITTED_ARM_NAME, fitted));
@@ -2122,10 +2120,7 @@ fn assemble_arms(
             });
         }
     }
-    if !arms
-        .iter()
-        .any(|arm| arm.name == safety.reference_arm)
-    {
+    if !arms.iter().any(|arm| arm.name == safety.reference_arm) {
         return Err(BanditError::ReferenceArmUnknown {
             name: safety.reference_arm.clone(),
         });
@@ -2263,7 +2258,10 @@ fn select_arm(
     });
     let selected = tied[0].arm.clone();
     let tied_arms = tied.iter().map(|arm| arm.arm.clone()).collect();
-    Ok(Selection { selected, tied_arms })
+    Ok(Selection {
+        selected,
+        tied_arms,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -2589,9 +2587,7 @@ mod tests {
         assert!((restored.cost_weight - original.cost_weight).abs() < f64::EPSILON);
         assert!((restored.fallback_penalty - original.fallback_penalty).abs() < f64::EPSILON);
         assert!((restored.switch_cost - original.switch_cost).abs() < f64::EPSILON);
-        assert!(
-            (restored.uncertainty_weight - original.uncertainty_weight).abs() < f64::EPSILON
-        );
+        assert!((restored.uncertainty_weight - original.uncertainty_weight).abs() < f64::EPSILON);
     }
 
     // -- The declared order --
@@ -2646,7 +2642,10 @@ mod tests {
     fn softplus_and_sigmoid_survive_extreme_inputs() {
         for z in [-1e12, -700.0, -1.0, 0.0, 1.0, 700.0, 1e12] {
             let value = softplus(z);
-            assert!(value.is_finite(), "softplus({z}) must be finite, got {value}");
+            assert!(
+                value.is_finite(),
+                "softplus({z}) must be finite, got {value}"
+            );
             let probability = sigmoid(z);
             assert!(
                 probability.is_finite() && (0.0..=1.0).contains(&probability),
@@ -2738,7 +2737,10 @@ mod tests {
 
         let mut config = base.clone();
         config.reward.holdout_cells = 0;
-        assert!(matches!(config.checked(), Err(BanditError::EmptyHoldoutCells)));
+        assert!(matches!(
+            config.checked(),
+            Err(BanditError::EmptyHoldoutCells)
+        ));
 
         let mut config = base.clone();
         config.reward.iterations = 0;
@@ -3060,7 +3062,11 @@ mod tests {
             Err(BanditError::NoArms)
         ));
         assert!(matches!(
-            assemble_arms(&[RewardArm::new("  ", fitted.clone())], fitted.clone(), &safety),
+            assemble_arms(
+                &[RewardArm::new("  ", fitted.clone())],
+                fitted.clone(),
+                &safety
+            ),
             Err(BanditError::EmptyArmName { index: 0 })
         ));
         assert!(matches!(

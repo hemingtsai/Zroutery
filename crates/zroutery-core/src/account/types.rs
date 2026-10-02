@@ -57,7 +57,11 @@ pub struct AccountQuota {
 
 impl AccountQuota {
     pub fn utilization(&self) -> f64 {
-        if self.total <= 0.0 { 0.0 } else { self.used / self.total }
+        if self.total <= 0.0 {
+            0.0
+        } else {
+            self.used / self.total
+        }
     }
 }
 

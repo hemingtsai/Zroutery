@@ -93,11 +93,7 @@ pub struct FailureFacts {
 }
 
 impl FailureFacts {
-    pub fn new(
-        class: FailureClass,
-        message: Option<String>,
-        http_status: Option<u16>,
-    ) -> Self {
+    pub fn new(class: FailureClass, message: Option<String>, http_status: Option<u16>) -> Self {
         Self {
             class,
             message,
@@ -231,11 +227,8 @@ impl Attempt {
 
     /// Return the captured failure facts without deriving a new class.
     pub fn failure_facts(&self) -> Option<FailureFacts> {
-        self.failure_class.map(|class| FailureFacts::new(
-            class,
-            self.failure_message.clone(),
-            self.http_status,
-        ))
+        self.failure_class
+            .map(|class| FailureFacts::new(class, self.failure_message.clone(), self.http_status))
     }
 
     /// Return the accepted classified failure context for this attempt.
@@ -438,14 +431,17 @@ impl Outcome {
 
     /// The candidate selected before attempts began.
     pub fn planned_identity(&self) -> Option<CandidateIdentity> {
-        identity_from_parts(self.planned_model.as_deref(), self.planned_provider.as_deref())
-            .or_else(|| legacy_identity(&self.initial_model, &self.initial_provider))
-            .or_else(|| {
-                self.attempts
-                    .first()
-                    .map(|attempt| CandidateIdentity::new(&attempt.candidate_model, &attempt.candidate_provider))
+        identity_from_parts(
+            self.planned_model.as_deref(),
+            self.planned_provider.as_deref(),
+        )
+        .or_else(|| legacy_identity(&self.initial_model, &self.initial_provider))
+        .or_else(|| {
+            self.attempts.first().map(|attempt| {
+                CandidateIdentity::new(&attempt.candidate_model, &attempt.candidate_provider)
             })
-            .or_else(|| legacy_identity(&self.final_model, &self.final_provider))
+        })
+        .or_else(|| legacy_identity(&self.final_model, &self.final_provider))
     }
 
     /// The identity of the final attempt made, if any.
@@ -467,16 +463,19 @@ impl Outcome {
         if self.final_status != FinalStatus::Success {
             return None;
         }
-        identity_from_parts(self.served_model.as_deref(), self.served_provider.as_deref())
-            .or_else(|| {
-                self.attempts
-                    .iter()
-                    .rev()
-                    .find(|attempt| attempt.is_terminal_success())
-                    .map(|attempt| {
-                        CandidateIdentity::new(&attempt.candidate_model, &attempt.candidate_provider)
-                    })
-            })
+        identity_from_parts(
+            self.served_model.as_deref(),
+            self.served_provider.as_deref(),
+        )
+        .or_else(|| {
+            self.attempts
+                .iter()
+                .rev()
+                .find(|attempt| attempt.is_terminal_success())
+                .map(|attempt| {
+                    CandidateIdentity::new(&attempt.candidate_model, &attempt.candidate_provider)
+                })
+        })
     }
 
     /// Alias using the ADR's explicit "final served" terminology.
@@ -511,30 +510,36 @@ impl Outcome {
     pub fn planned_model(&self) -> Option<&str> {
         self.planned_model
             .as_deref()
-            .or_else(|| (!self.initial_model.trim().is_empty()).then_some(self.initial_model.as_str()))
-            .or_else(|| self.attempts.first().map(|attempt| attempt.candidate_model.as_str()))
+            .or_else(|| {
+                (!self.initial_model.trim().is_empty()).then_some(self.initial_model.as_str())
+            })
+            .or_else(|| {
+                self.attempts
+                    .first()
+                    .map(|attempt| attempt.candidate_model.as_str())
+            })
             .or_else(|| (!self.final_model.trim().is_empty()).then_some(self.final_model.as_str()))
     }
 
     pub fn last_attempted_model(&self) -> Option<&str> {
-        self.last_attempted_model
-            .as_deref()
-            .or_else(|| self.attempts.last().map(|attempt| attempt.candidate_model.as_str()))
+        self.last_attempted_model.as_deref().or_else(|| {
+            self.attempts
+                .last()
+                .map(|attempt| attempt.candidate_model.as_str())
+        })
     }
 
     pub fn served_model(&self) -> Option<&str> {
         if self.final_status != FinalStatus::Success {
             return None;
         }
-        self.served_model
-            .as_deref()
-            .or_else(|| {
-                self.attempts
-                    .iter()
-                    .rev()
-                    .find(|attempt| attempt.is_terminal_success())
-                    .map(|attempt| attempt.candidate_model.as_str())
-            })
+        self.served_model.as_deref().or_else(|| {
+            self.attempts
+                .iter()
+                .rev()
+                .find(|attempt| attempt.is_terminal_success())
+                .map(|attempt| attempt.candidate_model.as_str())
+        })
     }
 
     pub fn planned_provider(&self) -> Option<&str> {
@@ -543,29 +548,35 @@ impl Outcome {
             .or_else(|| {
                 (!self.initial_provider.trim().is_empty()).then_some(self.initial_provider.as_str())
             })
-            .or_else(|| self.attempts.first().map(|attempt| attempt.candidate_provider.as_str()))
-            .or_else(|| (!self.final_provider.trim().is_empty()).then_some(self.final_provider.as_str()))
+            .or_else(|| {
+                self.attempts
+                    .first()
+                    .map(|attempt| attempt.candidate_provider.as_str())
+            })
+            .or_else(|| {
+                (!self.final_provider.trim().is_empty()).then_some(self.final_provider.as_str())
+            })
     }
 
     pub fn last_attempted_provider(&self) -> Option<&str> {
-        self.last_attempted_provider
-            .as_deref()
-            .or_else(|| self.attempts.last().map(|attempt| attempt.candidate_provider.as_str()))
+        self.last_attempted_provider.as_deref().or_else(|| {
+            self.attempts
+                .last()
+                .map(|attempt| attempt.candidate_provider.as_str())
+        })
     }
 
     pub fn served_provider(&self) -> Option<&str> {
         if self.final_status != FinalStatus::Success {
             return None;
         }
-        self.served_provider
-            .as_deref()
-            .or_else(|| {
-                self.attempts
-                    .iter()
-                    .rev()
-                    .find(|attempt| attempt.is_terminal_success())
-                    .map(|attempt| attempt.candidate_provider.as_str())
-            })
+        self.served_provider.as_deref().or_else(|| {
+            self.attempts
+                .iter()
+                .rev()
+                .find(|attempt| attempt.is_terminal_success())
+                .map(|attempt| attempt.candidate_provider.as_str())
+        })
     }
 
     pub fn final_served_model(&self) -> Option<&str> {
@@ -623,10 +634,18 @@ impl Outcome {
         if self.request_id.trim().is_empty() {
             return Err("request_id must not be empty".to_string());
         }
-        if self.decision_id.as_ref().is_some_and(|id| id.trim().is_empty()) {
+        if self
+            .decision_id
+            .as_ref()
+            .is_some_and(|id| id.trim().is_empty())
+        {
             return Err("decision_id must not be empty when present".to_string());
         }
-        if self.response_id.as_ref().is_some_and(|id| id.trim().is_empty()) {
+        if self
+            .response_id
+            .as_ref()
+            .is_some_and(|id| id.trim().is_empty())
+        {
             return Err("response_id must not be empty when present".to_string());
         }
         if self.success != (self.final_status == FinalStatus::Success) {
@@ -659,7 +678,9 @@ impl Outcome {
             && self.terminal_error.is_none()
             && self.planned_identity().is_none()
         {
-            return Err("failed outcome without attempts requires terminal_error facts".to_string());
+            return Err(
+                "failed outcome without attempts requires terminal_error facts".to_string(),
+            );
         }
         if self.attempts.is_empty()
             && (self.last_attempted_model.is_some() || self.last_attempted_provider.is_some())
@@ -681,7 +702,10 @@ impl Outcome {
                 &attempt.candidate_model,
                 &attempt.candidate_provider,
             )?;
-            validate_non_negative_finite(&format!("attempt[{index}].latency_ms"), attempt.latency_ms)?;
+            validate_non_negative_finite(
+                &format!("attempt[{index}].latency_ms"),
+                attempt.latency_ms,
+            )?;
             validate_optional_non_negative_finite(
                 &format!("attempt[{index}].ttft_ms"),
                 attempt.ttft_ms,
@@ -731,7 +755,11 @@ impl Outcome {
             if self.final_status == FinalStatus::Success {
                 return Err("successful outcome cannot carry terminal_error".to_string());
             }
-            if facts.message.as_ref().is_some_and(|message| message.is_empty()) {
+            if facts
+                .message
+                .as_ref()
+                .is_some_and(|message| message.is_empty())
+            {
                 return Err("terminal_error.message must not be empty when present".to_string());
             }
             if let Some(last) = self.attempts.last() {
@@ -745,7 +773,9 @@ impl Outcome {
                 .terminal_failure_facts()
                 .is_some_and(|facts| facts.class != FailureClass::ClientCancelled)
         {
-            return Err("cancelled outcome must carry ClientCancelled or no error facts".to_string());
+            return Err(
+                "cancelled outcome must carry ClientCancelled or no error facts".to_string(),
+            );
         }
         if self.final_status == FinalStatus::Interrupted
             && self
@@ -770,7 +800,8 @@ impl Outcome {
 
         if let Some(last) = self.attempts.last() {
             if let Some(identity) = self.last_attempted_identity() {
-                if identity.model != last.candidate_model || identity.provider != last.candidate_provider
+                if identity.model != last.candidate_model
+                    || identity.provider != last.candidate_provider
                 {
                     return Err("last_attempted identity does not match final attempt".to_string());
                 }
@@ -782,7 +813,9 @@ impl Outcome {
                         .iter()
                         .rev()
                         .find(|attempt| attempt.is_terminal_success())
-                        .ok_or_else(|| "successful outcome has no successful attempt".to_string())?;
+                        .ok_or_else(|| {
+                            "successful outcome has no successful attempt".to_string()
+                        })?;
                     if identity.model != served_attempt.candidate_model
                         || identity.provider != served_attempt.candidate_provider
                     {
@@ -794,7 +827,9 @@ impl Outcome {
                     self.served_identity(),
                 ) {
                     if legacy != served {
-                        return Err("final identity projection disagrees with served identity".to_string());
+                        return Err(
+                            "final identity projection disagrees with served identity".to_string()
+                        );
                     }
                 }
             }
@@ -802,7 +837,9 @@ impl Outcome {
         if let Some(identity) = self.planned_identity() {
             if let Some(initial) = legacy_identity(&self.initial_model, &self.initial_provider) {
                 if identity != initial {
-                    return Err("planned identity does not match legacy initial identity".to_string());
+                    return Err(
+                        "planned identity does not match legacy initial identity".to_string()
+                    );
                 }
             }
         }
@@ -849,10 +886,7 @@ impl Outcome {
         }
 
         if self.final_status != FinalStatus::Success && self.terminal_error.is_none() {
-            self.terminal_error = self
-                .attempts
-                .last()
-                .and_then(Attempt::failure_facts);
+            self.terminal_error = self.attempts.last().and_then(Attempt::failure_facts);
         }
 
         if self.final_status == FinalStatus::Success {
@@ -892,13 +926,7 @@ impl Outcome {
         source: crate::feedback::FeedbackSource,
         data_origin: crate::feedback::DataOrigin,
     ) -> Result<Option<crate::feedback::Feedback>, String> {
-        crate::feedback::try_feedback_from_outcome(
-            self,
-            signals,
-            timestamp,
-            source,
-            data_origin,
-        )
+        crate::feedback::try_feedback_from_outcome(self, signals, timestamp, source, data_origin)
     }
 
     /// Convenience form for a concrete signal list.
@@ -917,11 +945,7 @@ impl Outcome {
     /// For each attempt, records success or classified failure against the
     /// corresponding (model, provider) pair. This is the single fan-out point
     /// that keeps the two stores in sync.
-    pub fn record_to_observation(
-        &self,
-        obs_store: &ObservationStore,
-        stats_store: &StatsStore,
-    ) {
+    pub fn record_to_observation(&self, obs_store: &ObservationStore, stats_store: &StatsStore) {
         for attempt in &self.attempts {
             if attempt.is_terminal_success() {
                 obs_store.record_success(
@@ -944,10 +968,7 @@ impl Outcome {
                     &crate::failure::ClassifiedFailure {
                         class,
                         status: attempt.http_status,
-                        message: attempt
-                            .failure_message
-                            .clone()
-                            .unwrap_or_default(),
+                        message: attempt.failure_message.clone().unwrap_or_default(),
                         impact: class.impact(),
                     },
                 );
@@ -996,7 +1017,11 @@ impl OutcomeBuilder {
     }
 
     /// Set the final candidate (model/provider that served the response).
-    pub fn final_candidate(mut self, model: impl Into<String>, provider: impl Into<String>) -> Self {
+    pub fn final_candidate(
+        mut self,
+        model: impl Into<String>,
+        provider: impl Into<String>,
+    ) -> Self {
         self.outcome.final_model = model.into();
         self.outcome.final_provider = provider.into();
         self
@@ -1004,7 +1029,11 @@ impl OutcomeBuilder {
 
     /// Set the final served identity as explicit evidence.  The builder still
     /// refuses to retain it on a non-success terminal state.
-    pub fn served_candidate(mut self, model: impl Into<String>, provider: impl Into<String>) -> Self {
+    pub fn served_candidate(
+        mut self,
+        model: impl Into<String>,
+        provider: impl Into<String>,
+    ) -> Self {
         self.outcome.served_model = Some(model.into());
         self.outcome.served_provider = Some(provider.into());
         self
@@ -1023,11 +1052,8 @@ impl OutcomeBuilder {
         message: impl Into<String>,
         http_status: Option<u16>,
     ) -> Self {
-        self.outcome.terminal_error = Some(FailureFacts::new(
-            class,
-            Some(message.into()),
-            http_status,
-        ));
+        self.outcome.terminal_error =
+            Some(FailureFacts::new(class, Some(message.into()), http_status));
         self.terminal_override = Some(match class {
             FailureClass::ClientCancelled => FinalStatus::Cancelled,
             FailureClass::Interrupted => FinalStatus::Interrupted,
@@ -1085,7 +1111,11 @@ impl OutcomeBuilder {
     }
 
     /// Set both initial and final to the same candidate (no fallback).
-    pub fn single_candidate(mut self, model: impl Into<String>, provider: impl Into<String>) -> Self {
+    pub fn single_candidate(
+        mut self,
+        model: impl Into<String>,
+        provider: impl Into<String>,
+    ) -> Self {
         let model = model.into();
         let provider = provider.into();
         self.outcome.initial_model = model.clone();
@@ -1231,7 +1261,9 @@ fn legacy_identity(model: &str, provider: &str) -> Option<CandidateIdentity> {
 
 fn identity_from_parts(model: Option<&str>, provider: Option<&str>) -> Option<CandidateIdentity> {
     match (model, provider) {
-        (Some(model), Some(provider)) if !model.trim().is_empty() && !provider.trim().is_empty() => {
+        (Some(model), Some(provider))
+            if !model.trim().is_empty() && !provider.trim().is_empty() =>
+        {
             Some(CandidateIdentity::new(model, provider))
         }
         _ => None,
@@ -1240,7 +1272,9 @@ fn identity_from_parts(model: Option<&str>, provider: Option<&str>) -> Option<Ca
 
 fn validate_identity_pair(label: &str, model: &str, provider: &str) -> Result<(), String> {
     if model.trim().is_empty() != provider.trim().is_empty() {
-        return Err(format!("{label} model/provider must be both present or both absent"));
+        return Err(format!(
+            "{label} model/provider must be both present or both absent"
+        ));
     }
     Ok(())
 }
@@ -1251,7 +1285,9 @@ fn validate_optional_identity_pair(
     provider: Option<&str>,
 ) -> Result<(), String> {
     if model.is_some() != provider.is_some() {
-        return Err(format!("{label} model/provider must be both present or both absent"));
+        return Err(format!(
+            "{label} model/provider must be both present or both absent"
+        ));
     }
     if let (Some(model), Some(provider)) = (model, provider) {
         if model.trim().is_empty() || provider.trim().is_empty() {
@@ -1297,7 +1333,11 @@ mod tests {
             started_at: 1_700_000_000,
             completed_at: 1_700_000_001,
             latency_ms,
-            ttft_ms: if success { Some(latency_ms * 0.3) } else { None },
+            ttft_ms: if success {
+                Some(latency_ms * 0.3)
+            } else {
+                None
+            },
             success,
             failure_class,
             failure_message: if success {
@@ -1386,13 +1426,7 @@ mod tests {
                 200.0,
                 Some(FailureClass::ProviderUnavailable),
             ))
-            .attempt(make_attempt(
-                "claude-3",
-                "anthropic",
-                true,
-                400.0,
-                None,
-            ))
+            .attempt(make_attempt("claude-3", "anthropic", true, 400.0, None))
             .total_latency_ms(600.0)
             .ttft_ms(120.0)
             .usage(Usage {
@@ -1438,8 +1472,14 @@ mod tests {
         assert!(!outcome.success);
         assert_eq!(outcome.final_status, FinalStatus::Failed);
         assert_eq!(outcome.fallback_count, 1);
-        assert_eq!(outcome.attempts[0].failure_class, Some(FailureClass::Transport));
-        assert_eq!(outcome.attempts[1].failure_class, Some(FailureClass::Timeout));
+        assert_eq!(
+            outcome.attempts[0].failure_class,
+            Some(FailureClass::Transport)
+        );
+        assert_eq!(
+            outcome.attempts[1].failure_class,
+            Some(FailureClass::Timeout)
+        );
     }
 
     // -- FinalStatus classification --
@@ -1450,21 +1490,40 @@ mod tests {
             make_attempt("m", "p", false, 100.0, Some(FailureClass::Timeout)),
             make_attempt("m2", "p2", true, 200.0, None),
         ];
-        assert_eq!(Outcome::classify_final(&attempts, false), FinalStatus::Success);
+        assert_eq!(
+            Outcome::classify_final(&attempts, false),
+            FinalStatus::Success
+        );
     }
 
     #[test]
     fn classify_final_failed() {
-        let attempts = vec![
-            make_attempt("m", "p", false, 100.0, Some(FailureClass::Transport)),
-        ];
-        assert_eq!(Outcome::classify_final(&attempts, false), FinalStatus::Failed);
+        let attempts = vec![make_attempt(
+            "m",
+            "p",
+            false,
+            100.0,
+            Some(FailureClass::Transport),
+        )];
+        assert_eq!(
+            Outcome::classify_final(&attempts, false),
+            FinalStatus::Failed
+        );
     }
 
     #[test]
     fn classify_final_cancelled_flag() {
-        let attempts = vec![make_attempt("m", "p", false, 100.0, Some(FailureClass::Timeout))];
-        assert_eq!(Outcome::classify_final(&attempts, true), FinalStatus::Cancelled);
+        let attempts = vec![make_attempt(
+            "m",
+            "p",
+            false,
+            100.0,
+            Some(FailureClass::Timeout),
+        )];
+        assert_eq!(
+            Outcome::classify_final(&attempts, true),
+            FinalStatus::Cancelled
+        );
     }
 
     #[test]
@@ -1538,10 +1597,22 @@ mod tests {
             assert_eq!(*v, restored);
         }
         // Check wire format.
-        assert_eq!(serde_json::to_string(&FinalStatus::Success).unwrap(), "\"success\"");
-        assert_eq!(serde_json::to_string(&FinalStatus::Failed).unwrap(), "\"failed\"");
-        assert_eq!(serde_json::to_string(&FinalStatus::Cancelled).unwrap(), "\"cancelled\"");
-        assert_eq!(serde_json::to_string(&FinalStatus::Interrupted).unwrap(), "\"interrupted\"");
+        assert_eq!(
+            serde_json::to_string(&FinalStatus::Success).unwrap(),
+            "\"success\""
+        );
+        assert_eq!(
+            serde_json::to_string(&FinalStatus::Failed).unwrap(),
+            "\"failed\""
+        );
+        assert_eq!(
+            serde_json::to_string(&FinalStatus::Cancelled).unwrap(),
+            "\"cancelled\""
+        );
+        assert_eq!(
+            serde_json::to_string(&FinalStatus::Interrupted).unwrap(),
+            "\"interrupted\""
+        );
     }
 
     // -- record_to_observation writes to both stores --
@@ -1618,13 +1689,7 @@ mod tests {
                 200.0,
                 Some(FailureClass::ProviderUnavailable),
             ))
-            .attempt(make_attempt(
-                "claude-3",
-                "anthropic",
-                true,
-                400.0,
-                None,
-            ))
+            .attempt(make_attempt("claude-3", "anthropic", true, 400.0, None))
             .total_latency_ms(600.0)
             .build();
 
@@ -1685,11 +1750,20 @@ mod tests {
             .initial("m1", "p1")
             .final_candidate("m2", "p2")
             .dialect("openai")
-            .attempt(make_attempt("m1", "p1", false, 100.0, Some(FailureClass::Timeout)))
+            .attempt(make_attempt(
+                "m1",
+                "p1",
+                false,
+                100.0,
+                Some(FailureClass::Timeout),
+            ))
             .attempt(make_attempt("m2", "p2", true, 200.0, None))
             .fallback_count(5) // deliberately wrong, but explicit
             .build();
-        assert_eq!(outcome.fallback_count, 5, "explicit fallback_count must be preserved");
+        assert_eq!(
+            outcome.fallback_count, 5,
+            "explicit fallback_count must be preserved"
+        );
     }
 
     #[test]

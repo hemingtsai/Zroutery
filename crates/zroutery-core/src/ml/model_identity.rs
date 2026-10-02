@@ -13,9 +13,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use super::dataset::{validate_sample, TrainingSample as DatasetTrainingSample};
 use super::features::{FEATURE_DIMENSION, FEATURE_SCHEMA_VERSION};
-use super::model::{
-    CostModel, LatencyModel, ModelState, RoutingModel, SuccessModel, TtftModel,
-};
+use super::model::{CostModel, LatencyModel, ModelState, RoutingModel, SuccessModel, TtftModel};
 
 // ---------------------------------------------------------------------------
 // Versioned identity and deterministic hashing
@@ -258,7 +256,11 @@ impl ModelCheckpoint {
                     model: name.to_string(),
                 });
             }
-            if state.parameters.iter().any(|parameter| !parameter.is_finite()) {
+            if state
+                .parameters
+                .iter()
+                .any(|parameter| !parameter.is_finite())
+            {
                 return Err(ReplayError::IncompatibleState {
                     model: name.to_string(),
                     reason: "parameter is not finite".to_string(),
@@ -421,13 +423,7 @@ impl ModelCommit {
     ) -> Self {
         let mut metadata = HashMap::new();
         metadata.insert("lineage".to_string(), format!("{lineage:016x}"));
-        Self::new_with_metadata(
-            model_id,
-            checkpoint,
-            parent,
-            learning_event_count,
-            metadata,
-        )
+        Self::new_with_metadata(model_id, checkpoint, parent, learning_event_count, metadata)
     }
 
     fn algorithm_versions(checkpoint: &ModelCheckpoint) -> Vec<(String, String)> {
@@ -782,10 +778,7 @@ pub enum ReplayError {
     /// The store has no head commit.
     NoHead,
     /// A serialized artifact or envelope is structurally invalid.
-    InvalidCommit {
-        commit_id: CommitId,
-        reason: String,
-    },
+    InvalidCommit { commit_id: CommitId, reason: String },
     /// A checkpoint and the commit id supplied for it do not identify the
     /// same canonical commit.
     CommitMismatch {
@@ -811,10 +804,7 @@ pub enum ReplayError {
     /// A verified replay requires every event to carry its result.
     EventResultMissing { event_id: String },
     /// A parent chain is missing, cyclic, or otherwise unverifiable.
-    LineageCorrupt {
-        commit_id: CommitId,
-        reason: String,
-    },
+    LineageCorrupt { commit_id: CommitId, reason: String },
     /// A serialized schema is not supported by this implementation.
     UnsupportedSchema {
         component: String,
@@ -984,18 +974,16 @@ impl ModelEnsemble {
                 reason: e,
             }
         })?;
-        let ttft = TtftModel::load(&checkpoint.ttft).map_err(|e| {
-            ReplayError::IncompatibleState {
+        let ttft =
+            TtftModel::load(&checkpoint.ttft).map_err(|e| ReplayError::IncompatibleState {
                 model: "ttft".to_string(),
                 reason: e,
-            }
-        })?;
-        let cost = CostModel::load(&checkpoint.cost).map_err(|e| {
-            ReplayError::IncompatibleState {
+            })?;
+        let cost =
+            CostModel::load(&checkpoint.cost).map_err(|e| ReplayError::IncompatibleState {
                 model: "cost".to_string(),
                 reason: e,
-            }
-        })?;
+            })?;
         Ok(ModelEnsemble {
             success,
             latency,
@@ -1098,11 +1086,7 @@ impl ModelStore {
     /// This compatibility wrapper preserves the original infallible API. It
     /// panics before mutation when the artifact is invalid; operational code
     /// should use [`Self::try_commit`] and handle the error explicitly.
-    pub fn commit(
-        &mut self,
-        checkpoint: ModelCheckpoint,
-        message: String,
-    ) -> CommitId {
+    pub fn commit(&mut self, checkpoint: ModelCheckpoint, message: String) -> CommitId {
         self.try_commit(checkpoint, message)
             .expect("ModelStore::commit received an invalid checkpoint")
     }
@@ -1114,13 +1098,7 @@ impl ModelStore {
         message: String,
     ) -> Result<CommitId, ReplayError> {
         let parent = self.head.clone();
-        self.try_commit_from(
-            self.model_id.clone(),
-            checkpoint,
-            parent,
-            0,
-            message,
-        )
+        self.try_commit_from(self.model_id.clone(), checkpoint, parent, 0, message)
     }
 
     /// Commit a checkpoint with explicit lineage metadata.
@@ -1161,12 +1139,13 @@ impl ModelStore {
             });
         }
         if let Some(parent_id) = commit.parent.clone() {
-            let parent = self.commits.get(&parent_id).ok_or_else(|| {
-                ReplayError::LineageCorrupt {
-                    commit_id: commit.commit_id.clone(),
-                    reason: format!("parent '{}' is not present", parent_id),
-                }
-            })?;
+            let parent =
+                self.commits
+                    .get(&parent_id)
+                    .ok_or_else(|| ReplayError::LineageCorrupt {
+                        commit_id: commit.commit_id.clone(),
+                        reason: format!("parent '{}' is not present", parent_id),
+                    })?;
             if parent.commit.model_id != commit.model_id {
                 return Err(ReplayError::InvalidCommit {
                     commit_id: commit.commit_id,
@@ -1185,13 +1164,8 @@ impl ModelStore {
                 });
             }
         } else {
-            self.commits.insert(
-                commit_id.clone(),
-                StoredCommit {
-                    commit,
-                    message,
-                },
-            );
+            self.commits
+                .insert(commit_id.clone(), StoredCommit { commit, message });
         }
         self.head = Some(commit_id.clone());
         Ok(commit_id)
@@ -1228,10 +1202,13 @@ impl ModelStore {
                     reason: "cycle detected in parent chain".to_string(),
                 });
             }
-            let stored = self.commits.get(&id).ok_or_else(|| ReplayError::LineageCorrupt {
-                commit_id: id.clone(),
-                reason: "commit is not present in the store".to_string(),
-            })?;
+            let stored = self
+                .commits
+                .get(&id)
+                .ok_or_else(|| ReplayError::LineageCorrupt {
+                    commit_id: id.clone(),
+                    reason: "commit is not present in the store".to_string(),
+                })?;
             if !stored.commit.verify() {
                 return Err(ReplayError::LineageCorrupt {
                     commit_id: id,
@@ -1290,11 +1267,7 @@ impl ModelStore {
 
     /// Tag a commit with a name. Errors if the tag already exists or the
     /// target lineage is corrupt.
-    pub fn tag(
-        &mut self,
-        commit_id: &CommitId,
-        tag_name: &str,
-    ) -> Result<(), ReplayError> {
+    pub fn tag(&mut self, commit_id: &CommitId, tag_name: &str) -> Result<(), ReplayError> {
         if self.tags.contains_key(tag_name) {
             return Err(ReplayError::TagAlreadyExists(tag_name.to_string()));
         }
@@ -1405,7 +1378,12 @@ impl ReplayEngine {
                 if checkpoint.content_hash() != commit.checkpoint.content_hash() {
                     return Err(ReplayError::CommitMismatch {
                         expected: commit.commit_id.clone(),
-                        actual: Self::checkpoint_identity(checkpoint, &commit.model_id, commit.parent.as_ref(), commit.learning_event_count),
+                        actual: Self::checkpoint_identity(
+                            checkpoint,
+                            &commit.model_id,
+                            commit.parent.as_ref(),
+                            commit.learning_event_count,
+                        ),
                     });
                 }
             }
@@ -1434,7 +1412,9 @@ impl ReplayEngine {
                 });
             }
 
-            let expected_parent = current_commit.as_ref().map(|commit| commit.commit_id.clone());
+            let expected_parent = current_commit
+                .as_ref()
+                .map(|commit| commit.commit_id.clone());
             match event.parent_commit.clone() {
                 Some(actual) if expected_parent.as_ref() != Some(&actual) => {
                     return Err(ReplayError::EventParentMismatch {
@@ -1465,7 +1445,9 @@ impl ReplayEngine {
             let child = ModelCommit::new(
                 model_id.clone(),
                 ensemble.save_all(),
-                current_commit.as_ref().map(|commit| commit.commit_id.clone()),
+                current_commit
+                    .as_ref()
+                    .map(|commit| commit.commit_id.clone()),
                 learning_event_count,
             );
             if !child.verify() {
@@ -1550,9 +1532,9 @@ impl ReplayEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::feedback::DataOrigin;
     use crate::ml::dataset::{Targets, TrainingSample as DatasetTrainingSample};
     use crate::ml::features::{RoutingFeatures, FEATURE_SCHEMA_VERSION};
-    use crate::feedback::DataOrigin;
 
     // -----------------------------------------------------------------------
     // Helpers
@@ -1727,12 +1709,7 @@ mod tests {
     #[test]
     fn commit_creation() {
         let cp = ModelEnsemble::new().save_all();
-        let commit = ModelCommit::new(
-            ModelId::new("test"),
-            cp.clone(),
-            None,
-            0,
-        );
+        let commit = ModelCommit::new(ModelId::new("test"), cp.clone(), None, 0);
         assert_eq!(commit.commit_id, commit.canonical_identity());
         assert!(commit.verify());
     }
@@ -1756,12 +1733,7 @@ mod tests {
         let mut ensemble2 = ModelEnsemble::new();
         ensemble2.update_all(&test_sample(true, 0));
         let cp2 = ensemble2.save_all();
-        let c2 = ModelCommit::new(
-            ModelId::new("test"),
-            cp2,
-            Some(c1.commit_id.clone()),
-            1,
-        );
+        let c2 = ModelCommit::new(ModelId::new("test"), cp2, Some(c1.commit_id.clone()), 1);
 
         assert_eq!(c2.parent, Some(c1.commit_id));
     }
@@ -1825,7 +1797,11 @@ mod tests {
     fn learning_event_sample_count() {
         let event = LearningEvent::new(
             ModelId::new("test"),
-            vec![test_sample(true, 0), test_sample(true, 1), test_sample(false, 2)],
+            vec![
+                test_sample(true, 0),
+                test_sample(true, 1),
+                test_sample(false, 2),
+            ],
             None,
             None,
         );
@@ -1834,12 +1810,8 @@ mod tests {
 
     #[test]
     fn learning_event_is_applied() {
-        let mut event = LearningEvent::new(
-            ModelId::new("test"),
-            vec![test_sample(true, 0)],
-            None,
-            None,
-        );
+        let mut event =
+            LearningEvent::new(ModelId::new("test"), vec![test_sample(true, 0)], None, None);
         assert!(!event.is_applied());
         event.mark_applied(CommitId::from_hash(42));
         assert!(event.is_applied());
@@ -1847,18 +1819,8 @@ mod tests {
 
     #[test]
     fn learning_event_ids_unique() {
-        let e1 = LearningEvent::new(
-            ModelId::new("test"),
-            vec![test_sample(true, 0)],
-            None,
-            None,
-        );
-        let e2 = LearningEvent::new(
-            ModelId::new("test"),
-            vec![test_sample(true, 0)],
-            None,
-            None,
-        );
+        let e1 = LearningEvent::new(ModelId::new("test"), vec![test_sample(true, 0)], None, None);
+        let e2 = LearningEvent::new(ModelId::new("test"), vec![test_sample(true, 0)], None, None);
         assert_ne!(e1.event_id, e2.event_id);
     }
 

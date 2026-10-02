@@ -59,8 +59,8 @@ use std::collections::BTreeSet;
 use zroutery_core::ml::attribution::{attribute, AttributionError, CandidateCredit, Independence};
 use zroutery_core::ml::calibration::{
     collect_marginal_observations, measure_marginal, CandidateCalibration, CandidateInput,
-    CohortContext, DecisionCohort, EmittedDecision, MarginalCalibrator, MarginalView,
-    KWayCalibrator, ReliabilityConfig, DEFAULT_PROBABILITY_FLOOR,
+    CohortContext, DecisionCohort, EmittedDecision, KWayCalibrator, MarginalCalibrator,
+    MarginalView, ReliabilityConfig, DEFAULT_PROBABILITY_FLOOR,
 };
 use zroutery_core::ml::statistics::{
     measure_release_evidence, normal_quantile, EvidenceSupport, FamilyMemberKind, Interval,
@@ -69,7 +69,11 @@ use zroutery_core::ml::statistics::{
 use zroutery_core::outcome::CandidateIdentity;
 
 /// The three-candidate axis every fixture compares.
-const AXIS: [(&str, &str); 3] = [("alpha", "prov-a"), ("bravo", "prov-b"), ("charlie", "prov-c")];
+const AXIS: [(&str, &str); 3] = [
+    ("alpha", "prov-a"),
+    ("bravo", "prov-b"),
+    ("charlie", "prov-c"),
+];
 
 /// Probability given to the slot the model should rank first, and to the rest.
 ///
@@ -160,8 +164,13 @@ fn cohort(index: usize, boosted: usize, served: Option<usize>) -> DecisionCohort
         })
         .collect();
     let subject = identity(0);
-    DecisionCohort::try_new(context(index, served.is_some()), Some(&subject), candidates, served.map(identity))
-        .expect("the fixture cohort is well formed")
+    DecisionCohort::try_new(
+        context(index, served.is_some()),
+        Some(&subject),
+        candidates,
+        served.map(identity),
+    )
+    .expect("the fixture cohort is well formed")
 }
 
 /// A partition built by a model function, plus 7E-2D's emitted distributions and
@@ -197,9 +206,8 @@ fn emit(cohorts: &[DecisionCohort]) -> (Vec<DecisionCohort>, Emitted, Marginal) 
         );
     }
     let marginal = marginal_calibrator();
-    let observations =
-        collect_marginal_observations(cohorts, &marginal, DEFAULT_PROBABILITY_FLOOR)
-            .expect("the fixture's marginal observations collect");
+    let observations = collect_marginal_observations(cohorts, &marginal, DEFAULT_PROBABILITY_FLOOR)
+        .expect("the fixture's marginal observations collect");
     let rows = measure_marginal(
         &observations,
         MarginalView::Calibrated,
@@ -462,7 +470,10 @@ fn the_machinery_refuses_a_null_effect() {
     // The whole interval sits *below* the stated minimum, which is a stronger
     // refusal than straddling it: the effect is not merely uncertain, it is
     // confidently too small to release for.
-    assert!(interval.upper < support.config.minimum_effect, "{interval:?}");
+    assert!(
+        interval.upper < support.config.minimum_effect,
+        "{interval:?}"
+    );
     assert!(interval.lower <= support.config.minimum_effect);
     assert!(
         support
@@ -529,11 +540,15 @@ fn a_fixed_uninformed_policy_cannot_produce_a_difference_from_itself() {
     // credited with exactly as many wins as the comparator scores.
     let ledger = attribute(&cohorts, &emitted.distributions, &marginal.rows)
         .expect("the ledger is buildable");
-    let first: &CandidateCredit = ledger.credit_of(&identity(0)).expect("slot 0 is in the axis");
+    let first: &CandidateCredit = ledger
+        .credit_of(&identity(0))
+        .expect("slot 0 is in the axis");
     assert_eq!(first.ranked_first, n);
     assert_eq!(first.ranked_first_and_won, first.served);
-    assert!(ledger.outcomes.iter().all(|outcome| outcome.model_scored
-        == (outcome.selection == outcome.served)));
+    assert!(ledger
+        .outcomes
+        .iter()
+        .all(|outcome| outcome.model_scored == (outcome.selection == outcome.served)));
 }
 
 #[test]
@@ -557,7 +572,10 @@ fn a_thirty_eight_percent_accurate_model_is_refused_for_being_too_small() {
         !interval.excludes(support.config.minimum_effect),
         "and still too small: {interval:?}"
     );
-    assert!(interval.upper < support.config.minimum_effect, "{interval:?}");
+    assert!(
+        interval.upper < support.config.minimum_effect,
+        "{interval:?}"
+    );
     assert!(support.aggregate.p_value < 1e-8, "and significant");
     assert!(support.independence.effective_decisions >= support.required_decisions);
     assert!(
@@ -640,10 +658,15 @@ fn the_baseline_is_the_strongest_fixed_policy_and_not_a_rate_maximiser() {
         })
         .collect();
     let (cohorts, emitted, marginal) = emit(&cohorts);
-    let support = support_of(measure(&cohorts, &emitted, &marginal, StatisticalConfig {
+    let support = support_of(measure(
+        &cohorts,
+        &emitted,
+        &marginal,
+        StatisticalConfig {
             min_decisions: 1,
             ..StatisticalConfig::default()
-        }));
+        },
+    ));
     let leader: &CandidateCredit = support
         .credit
         .credit_of(&identity(1))
@@ -657,7 +680,10 @@ fn the_baseline_is_the_strongest_fixed_policy_and_not_a_rate_maximiser() {
 
     // 7E-2D's base rate is carried beside the hit count, and cross-checked
     // against the counts measured here.
-    assert_eq!(support.baseline.base_rate_observations, leader.ranked_decisions);
+    assert_eq!(
+        support.baseline.base_rate_observations,
+        leader.ranked_decisions
+    );
     assert_eq!(support.baseline.unconditional_base_rate, Some(0.75));
     assert!(support.baseline.interval.lower < 0.75);
     assert!(support.baseline.interval.upper > 0.75);
@@ -672,7 +698,12 @@ fn the_baseline_is_the_strongest_fixed_policy_and_not_a_rate_maximiser() {
 fn the_family_is_stated_and_the_correction_actually_binds() {
     let n = 4_000usize;
     let (cohorts, emitted, marginal) = sample_of(n);
-    let support = support_of(measure(&cohorts, &emitted, &marginal, StatisticalConfig::default()));
+    let support = support_of(measure(
+        &cohorts,
+        &emitted,
+        &marginal,
+        StatisticalConfig::default(),
+    ));
 
     // The family is the aggregate plus one test per candidate ranked first.
     assert_eq!(support.family.size, 1 + AXIS.len());
@@ -685,8 +716,7 @@ fn the_family_is_stated_and_the_correction_actually_binds() {
         FamilyMemberKind::Aggregate
     ));
     assert_eq!(
-        support.family.members[0].comparison.p_value,
-        support.aggregate.p_value,
+        support.family.members[0].comparison.p_value, support.aggregate.p_value,
         "the aggregate is the family's first member, not a copy of it"
     );
     assert_eq!(
@@ -704,7 +734,8 @@ fn the_family_is_stated_and_the_correction_actually_binds() {
         .fold(f64::INFINITY, f64::min);
     assert_eq!(support.aggregate.p_value, smallest);
     assert!(
-        (support.aggregate.adjusted_p_value - support.family.size as f64 * support.aggregate.p_value)
+        (support.aggregate.adjusted_p_value
+            - support.family.size as f64 * support.aggregate.p_value)
             .abs()
             < 1e-15,
         "the smallest p is Bonferroni-exact: {} against {}",
@@ -741,9 +772,9 @@ fn the_family_is_stated_and_the_correction_actually_binds() {
         error.to_string().contains("above the ceiling of 2"),
         "{error}"
     );
-    let refused = StatisticalRelease::Refused(zroutery_core::ml::statistics::StatisticalRefusal::from(
-        &error,
-    ));
+    let refused = StatisticalRelease::Refused(
+        zroutery_core::ml::statistics::StatisticalRefusal::from(&error),
+    );
     assert!(!refused.is_supported());
     assert_eq!(refused.blockers(), vec![UNMEASURABLE_LABEL]);
 }
@@ -883,9 +914,7 @@ fn a_misaligned_partition_is_refused() {
         &Emitted {
             distributions: Vec::new(),
         },
-        &Marginal {
-            rows: Vec::new(),
-        },
+        &Marginal { rows: Vec::new() },
         StatisticalConfig::default(),
     )
     .expect_err("an empty partition is refused");
@@ -909,13 +938,8 @@ fn an_axis_of_one_candidate_is_refused() {
     .expect("a one-candidate cohort is well formed for 7E-2D");
     let (cohorts, emitted, marginal) = emit(std::slice::from_ref(&singleton));
 
-    let error = try_measure(
-        &cohorts,
-        &emitted,
-        &marginal,
-        StatisticalConfig::default(),
-    )
-    .expect_err("an axis of one cannot be ranked");
+    let error = try_measure(&cohorts, &emitted, &marginal, StatisticalConfig::default())
+        .expect_err("an axis of one cannot be ranked");
     assert_eq!(error.code(), "degenerate_axis");
     assert!(error.to_string().contains("arity 1"), "{error}");
 
@@ -924,7 +948,10 @@ fn an_axis_of_one_candidate_is_refused() {
     let direct = attribute(&cohorts, &emitted.distributions, &marginal.rows)
         .expect_err("the ledger refuses a degenerate axis");
     assert_eq!(direct.code(), "degenerate_axis");
-    assert!(matches!(direct, AttributionError::DegenerateAxis { arity: 1, .. }));
+    assert!(matches!(
+        direct,
+        AttributionError::DegenerateAxis { arity: 1, .. }
+    ));
     assert!(direct.to_string().contains("axis of arity 1"), "{direct}");
 }
 
@@ -964,17 +991,10 @@ fn a_null_or_absent_baseline_is_refused() {
     // Nobody won anything, so every fixed policy scores zero and there is no
     // comparator to beat. This is the null-baseline case.
     let n = 60usize;
-    let cohorts: Vec<DecisionCohort> = (0..n)
-        .map(|index| cohort(index, 0, None))
-        .collect();
+    let cohorts: Vec<DecisionCohort> = (0..n).map(|index| cohort(index, 0, None)).collect();
     let (cohorts, emitted, marginal) = emit(&cohorts);
-    let error = try_measure(
-        &cohorts,
-        &emitted,
-        &marginal,
-        StatisticalConfig::default(),
-    )
-    .expect_err("an unattributed partition is refused");
+    let error = try_measure(&cohorts, &emitted, &marginal, StatisticalConfig::default())
+        .expect_err("an unattributed partition is refused");
     assert_eq!(error.code(), "sample_too_small");
     assert!(
         error
@@ -1035,7 +1055,10 @@ fn a_non_finite_measurement_is_refused() {
         let refused = StatisticalRelease::from(&error);
         assert!(!refused.is_supported());
         assert_eq!(refused.blockers(), vec![UNMEASURABLE_LABEL]);
-        assert_eq!(refused.reasons(), vec![format!("non_finite_measurement: {error}")]);
+        assert_eq!(
+            refused.reasons(),
+            vec![format!("non_finite_measurement: {error}")]
+        );
     }
 
     // Where a non-finite would actually come from is 7E-2D's own guard, and that
@@ -1076,8 +1099,10 @@ fn a_permuted_partition_produces_the_same_measurement() {
 
     let order: Vec<usize> = (0..cohorts.len()).rev().collect();
     let permuted: Vec<DecisionCohort> = order.iter().map(|i| cohorts[*i].clone()).collect();
-    let permuted_emitted: Vec<EmittedDecision> =
-        order.iter().map(|i| emitted.distributions[*i].clone()).collect();
+    let permuted_emitted: Vec<EmittedDecision> = order
+        .iter()
+        .map(|i| emitted.distributions[*i].clone())
+        .collect();
 
     let straight = measure(&cohorts, &emitted, &marginal, StatisticalConfig::default());
     let shuffled = measure(
@@ -1131,7 +1156,11 @@ fn the_ledger_is_emitted_in_content_order_and_reconciles_with_the_decisions() {
     let (cohorts, emitted, marginal) = sample_of(120);
     let ledger = attribute(&cohorts, &emitted.distributions, &marginal.rows)
         .expect("the ledger is buildable");
-    let labels: Vec<String> = ledger.candidates.iter().map(CandidateCredit::label).collect();
+    let labels: Vec<String> = ledger
+        .candidates
+        .iter()
+        .map(CandidateCredit::label)
+        .collect();
     assert_eq!(
         labels,
         vec!["prov-a/alpha", "prov-b/bravo", "prov-c/charlie"],
@@ -1140,7 +1169,10 @@ fn the_ledger_is_emitted_in_content_order_and_reconciles_with_the_decisions() {
     // The argmax identity: one selection per attributed decision.
     assert!(ledger.selections_total_is_the_decision_count());
     assert_eq!(ledger.selections_total(), ledger.decisions_with_a_selection);
-    assert_eq!(ledger.selections_total(), ledger.independence.effective_decisions);
+    assert_eq!(
+        ledger.selections_total(),
+        ledger.independence.effective_decisions
+    );
     assert_eq!(ledger.observed_arities, vec![3]);
     assert_eq!(ledger.axis().len(), AXIS.len());
     // The credit sums to the number of decisions the model got right, so the
@@ -1210,14 +1242,22 @@ fn the_tie_in_a_flat_distribution_is_broken_by_content_and_not_by_position() {
             "a total tie resolves to the content-first candidate"
         );
     }
-    let first: &CandidateCredit = ledger.credit_of(&identity(0)).expect("slot 0 is in the axis");
+    let first: &CandidateCredit = ledger
+        .credit_of(&identity(0))
+        .expect("slot 0 is in the axis");
     assert_eq!(first.ranked_first, n);
     assert_eq!(first.ranked_first_and_won, 0);
     assert_eq!(first.precision(), Some(0.0));
     assert_eq!(first.selection_rate(), 1.0);
-    let never = ledger.credit_of(&identity(1)).expect("slot 1 is in the axis");
+    let never = ledger
+        .credit_of(&identity(1))
+        .expect("slot 1 is in the axis");
     assert_eq!(never.ranked_first, 0);
-    assert_eq!(never.precision(), None, "never ranked first, so no precision");
+    assert_eq!(
+        never.precision(),
+        None,
+        "never ranked first, so no precision"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1265,7 +1305,10 @@ fn every_criterion_carries_numbers_and_no_boolean() {
     assert_eq!(support.family.size, support.family.members.len());
     assert_eq!(support.aggregate.interval.level, config.level());
     assert_eq!(support.baseline.interval.level, config.level());
-    assert!((config.level() - 0.975).abs() < 1e-15, "the level is two-sided");
+    assert!(
+        (config.level() - 0.975).abs() < 1e-15,
+        "the level is two-sided"
+    );
 
     // Demanding a stronger claim withholds, and demanding it of a withheld
     // verdict cannot resurrect it. Both a measured refusal and an outright
@@ -1309,10 +1352,7 @@ fn every_criterion_carries_numbers_and_no_boolean() {
     )
     .expect_err("a level that rounds to one is refused");
     assert_eq!(absurd.code(), "invalid_claim");
-    assert!(
-        absurd.to_string().contains("no upper bound"),
-        "{absurd}"
-    );
+    assert!(absurd.to_string().contains("no upper bound"), "{absurd}");
 }
 
 #[test]
@@ -1387,12 +1427,10 @@ fn a_refusal_is_never_reported_as_support() {
         ),
         (
             "multiple_served_in_one_decision",
-            StatisticsError::Attribution(Box::new(
-                AttributionError::MultipleServedInOneDecision {
-                    cohort: "a test".to_string(),
-                    winners: 2,
-                },
-            )),
+            StatisticsError::Attribution(Box::new(AttributionError::MultipleServedInOneDecision {
+                cohort: "a test".to_string(),
+                winners: 2,
+            })),
         ),
         (
             "partition_misaligned",
@@ -1421,7 +1459,11 @@ fn a_refusal_is_never_reported_as_support() {
         assert_eq!(refusal.code, code);
         assert_eq!(release.blockers(), vec![UNMEASURABLE_LABEL]);
         assert_eq!(release.reasons(), vec![format!("{code}: {error}")]);
-        assert!(release.headline().contains("refused"), "{}", release.headline());
+        assert!(
+            release.headline().contains("refused"),
+            "{}",
+            release.headline()
+        );
     }
 }
 
@@ -1478,10 +1520,15 @@ fn an_interval_that_cannot_be_computed_is_refused_not_defaulted() {
         assert_eq!(interval.excludes(0.0), !interval.straddles(0.0));
     }
     let (cohorts, emitted, marginal) = sample_of(200);
-    let support = support_of(measure(&cohorts, &emitted, &marginal, StatisticalConfig {
+    let support = support_of(measure(
+        &cohorts,
+        &emitted,
+        &marginal,
+        StatisticalConfig {
             min_decisions: 1,
             ..StatisticalConfig::default()
-        }));
+        },
+    ));
     for member in &support.family.members {
         let interval = member.comparison.interval;
         assert!(interval.lower.is_finite() && interval.upper.is_finite());
@@ -1497,10 +1544,15 @@ fn the_set_of_credited_candidates_matches_the_set_the_model_ranked_first() {
     // disagree: a candidate credited with a ranking appears in the family, and one
     // absent from the family was never ranked first.
     let (cohorts, emitted, marginal) = sample_of(200);
-    let support = support_of(measure(&cohorts, &emitted, &marginal, StatisticalConfig {
+    let support = support_of(measure(
+        &cohorts,
+        &emitted,
+        &marginal,
+        StatisticalConfig {
             min_decisions: 1,
             ..StatisticalConfig::default()
-        }));
+        },
+    ));
     let ranked: BTreeSet<String> = support
         .credit
         .candidates
@@ -1513,11 +1565,9 @@ fn the_set_of_credited_candidates_matches_the_set_the_model_ranked_first() {
         .members
         .iter()
         .filter_map(|member| match &member.member {
-            FamilyMemberKind::Candidate(identity) => Some(format!(
-                "{}/{}",
-                identity.provider(),
-                identity.model()
-            )),
+            FamilyMemberKind::Candidate(identity) => {
+                Some(format!("{}/{}", identity.provider(), identity.model()))
+            }
             FamilyMemberKind::Aggregate => None,
         })
         .collect();

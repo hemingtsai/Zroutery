@@ -467,15 +467,9 @@ mod tests {
         let p50 = est.percentile(0.5).unwrap();
         let p95 = est.percentile(0.95).unwrap();
         // p50 should be near 50
-        assert!(
-            (p50 - 50.0).abs() < 2.0,
-            "p50 should be ~50, got {p50}"
-        );
+        assert!((p50 - 50.0).abs() < 2.0, "p50 should be ~50, got {p50}");
         // p95 should be near 95
-        assert!(
-            (p95 - 95.0).abs() < 2.0,
-            "p95 should be ~95, got {p95}"
-        );
+        assert!((p95 - 95.0).abs() < 2.0, "p95 should be ~95, got {p95}");
     }
 
     #[test]
@@ -517,14 +511,8 @@ mod tests {
 
         let p50 = ls.p50().unwrap();
         let p95 = ls.p95().unwrap();
-        assert!(
-            (p50 - 200.0).abs() < 1.0,
-            "p50 should be ~200, got {p50}"
-        );
-        assert!(
-            (p95 - 300.0).abs() < 1.0,
-            "p95 should be ~300, got {p95}"
-        );
+        assert!((p50 - 200.0).abs() < 1.0, "p50 should be ~200, got {p50}");
+        assert!((p95 - 300.0).abs() < 1.0, "p95 should be ~300, got {p95}");
 
         assert_eq!(ls.min(), Some(100.0));
         assert_eq!(ls.max(), Some(300.0));

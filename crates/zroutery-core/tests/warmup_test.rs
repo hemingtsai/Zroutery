@@ -26,12 +26,10 @@ use zroutery_core::ml::coordinator::CoordinatorConfig;
 use zroutery_core::ml::dataset::{
     outcome_to_dataset_sample, OutcomeTrainingSample, TrainingSample as DatasetTrainingSample,
 };
-use zroutery_core::ml::decision_contract::{
-    DecisionDimension, DecisionModel, DecisionModelStates,
-};
+use zroutery_core::ml::decision_contract::{DecisionDimension, DecisionModel, DecisionModelStates};
 use zroutery_core::ml::decision_engine::DecisionEngine;
 use zroutery_core::ml::features::{
-    RoutingFeatures, F_CONTEXT_TOKENS, FEATURE_DIMENSION, FEATURE_SCHEMA_VERSION,
+    RoutingFeatures, FEATURE_DIMENSION, FEATURE_SCHEMA_VERSION, F_CONTEXT_TOKENS,
 };
 use zroutery_core::ml::model::RoutingModel;
 use zroutery_core::ml::model_identity::{ModelEnsemble, ReplayError};
@@ -323,7 +321,11 @@ fn a_warmup_run_leaves_the_live_predictor_unchanged() {
         before_verdict, after_verdict,
         "the live counterfactual answer must be untouched by a warmup"
     );
-    assert_eq!(engine.fault_count(), 0, "a warmup must not fault the engine");
+    assert_eq!(
+        engine.fault_count(),
+        0,
+        "a warmup must not fault the engine"
+    );
     // The warmed commit is a different artifact from the installed one; the
     // point is that it is installed nowhere.
     assert_ne!(after_commit.commit_id, outcome.commit_id());
@@ -377,8 +379,8 @@ fn a_different_dataset_produces_a_different_commit() {
     let first = run_warmup(&learnable_snapshot(40), &WarmupConfig::default())
         .expect("first snapshot warms up");
     let smaller = learnable_snapshot(40);
-    let second = run_warmup(&smaller[..20], &WarmupConfig::default())
-        .expect("smaller snapshot warms up");
+    let second =
+        run_warmup(&smaller[..20], &WarmupConfig::default()).expect("smaller snapshot warms up");
     assert_ne!(first.commit_id(), second.commit_id());
 }
 
@@ -535,7 +537,10 @@ fn a_warmup_beats_the_cold_baseline_on_a_learnable_dataset() {
     assert!((report.baseline.brier_score.expect("baseline brier") - 0.25).abs() < 1e-9);
 
     assert!(report.log_loss_delta < 0.0, "log loss must improve");
-    assert!(report.brier_delta <= 0.0, "the Brier score must not regress");
+    assert!(
+        report.brier_delta <= 0.0,
+        "the Brier score must not regress"
+    );
     assert_eq!(report.verdict, WarmupVerdict::Better);
     assert!(report.is_improvement());
     assert_eq!(report.coverage.success, report.train_samples);
@@ -572,9 +577,18 @@ fn a_deliberately_bad_model_is_reported_as_worse() {
     // it, so the model is confidently wrong on every holdout row.
     assert_eq!(report.train_samples, 30);
     assert_eq!(report.holdout_samples, 10);
-    assert!(!report.holdout_is_degenerate, "the holdout holds both classes");
-    assert!(report.log_loss_delta > 0.0, "the model must lose on log loss");
-    assert!(report.brier_delta > 0.0, "the model must lose on the Brier score");
+    assert!(
+        !report.holdout_is_degenerate,
+        "the holdout holds both classes"
+    );
+    assert!(
+        report.log_loss_delta > 0.0,
+        "the model must lose on log loss"
+    );
+    assert!(
+        report.brier_delta > 0.0,
+        "the model must lose on the Brier score"
+    );
     assert_eq!(report.verdict, WarmupVerdict::Worse);
     assert!(!report.is_improvement());
     assert!(!report.verdict.is_improvement());
@@ -651,13 +665,19 @@ fn a_single_class_holdout_cannot_carry_an_improvement_claim() {
 /// and it cannot report a win the numbers do not support.
 #[test]
 fn the_verdict_rule_is_two_sided_and_strict() {
-    assert_eq!(WarmupVerdict::from_deltas(-0.1, -0.01), WarmupVerdict::Better);
+    assert_eq!(
+        WarmupVerdict::from_deltas(-0.1, -0.01),
+        WarmupVerdict::Better
+    );
     assert_eq!(WarmupVerdict::from_deltas(-0.1, 0.0), WarmupVerdict::Better);
     // Better on average, worse per row: not an improvement.
     assert_eq!(WarmupVerdict::from_deltas(-0.1, 0.01), WarmupVerdict::Worse);
     // Worse on average, better per row: also not an improvement.
     assert_eq!(WarmupVerdict::from_deltas(0.1, -0.01), WarmupVerdict::Worse);
-    assert_eq!(WarmupVerdict::from_deltas(0.0, 0.0), WarmupVerdict::NotBetter);
+    assert_eq!(
+        WarmupVerdict::from_deltas(0.0, 0.0),
+        WarmupVerdict::NotBetter
+    );
     for verdict in [WarmupVerdict::Worse, WarmupVerdict::NotBetter] {
         assert!(!verdict.is_improvement());
     }
@@ -683,11 +703,13 @@ fn the_warmed_artifact_loads_into_the_typed_decision_contract() {
     assert_eq!(contract.dimension(), FEATURE_DIMENSION);
     assert_eq!(contract.feature_schema(), FEATURE_SCHEMA_VERSION);
     assert_eq!(
-        contract.sample_counts()[0] as usize, report.train_samples,
+        contract.sample_counts()[0] as usize,
+        report.train_samples,
         "the success head saw every training row"
     );
     assert_eq!(
-        contract.sample_counts()[1] as usize, report.coverage.latency_ms,
+        contract.sample_counts()[1] as usize,
+        report.coverage.latency_ms,
         "the latency head saw only the rows that carried a latency target"
     );
 
@@ -697,7 +719,10 @@ fn the_warmed_artifact_loads_into_the_typed_decision_contract() {
         .expect("the contract scores the warmed artifact");
     for dimension in DecisionDimension::ALL {
         let prediction = score.predictions.get(dimension);
-        assert!(prediction.value.is_finite(), "{dimension:?} value is not finite");
+        assert!(
+            prediction.value.is_finite(),
+            "{dimension:?} value is not finite"
+        );
         assert!(
             prediction.confidence.is_finite(),
             "{dimension:?} confidence is not finite"
@@ -808,22 +833,19 @@ fn a_non_success_terminal_state_cannot_become_a_positive_label() {
 /// success-positive training partition, however many of them there are.
 #[test]
 fn a_dataset_of_non_successes_trains_no_success_head() {
-    let snapshot: Vec<OutcomeTrainingSample> = [
-        Terminal::Failed,
-        Terminal::Cancelled,
-        Terminal::Interrupted,
-    ]
-    .into_iter()
-    .flat_map(|terminal| {
-        (0..15).map(move |index| {
-            sample(
-                if index % 2 == 0 { 0.15 } else { 0.85 },
-                terminal,
-                1_700_000_000 + index as i64,
-            )
-        })
-    })
-    .collect();
+    let snapshot: Vec<OutcomeTrainingSample> =
+        [Terminal::Failed, Terminal::Cancelled, Terminal::Interrupted]
+            .into_iter()
+            .flat_map(|terminal| {
+                (0..15).map(move |index| {
+                    sample(
+                        if index % 2 == 0 { 0.15 } else { 0.85 },
+                        terminal,
+                        1_700_000_000 + index as i64,
+                    )
+                })
+            })
+            .collect();
     let outcome = run_warmup(&snapshot, &WarmupConfig::default()).expect("the snapshot warms up");
 
     assert_eq!(outcome.report().train_success, 0);
@@ -842,10 +864,7 @@ fn a_promoted_non_success_row_is_refused() {
     promoted.success = true;
     promoted.targets.success = true;
 
-    let error = error_of(run_warmup(
-        &[promoted],
-        &WarmupConfig::new(0.5, 1),
-    ));
+    let error = error_of(run_warmup(&[promoted], &WarmupConfig::new(0.5, 1)));
     assert!(
         matches!(error, WarmupError::InvalidSample { .. }),
         "a promoted row must be refused, got {error:?}"
@@ -956,7 +975,11 @@ fn a_schema_version_mismatch_is_refused() {
 /// GATE 6: a non-finite feature value is a typed refusal naming its position.
 #[test]
 fn a_non_finite_feature_is_refused() {
-    for (position, value) in [(0usize, f32::NAN), (11, f32::INFINITY), (31, f32::NEG_INFINITY)] {
+    for (position, value) in [
+        (0usize, f32::NAN),
+        (11, f32::INFINITY),
+        (31, f32::NEG_INFINITY),
+    ] {
         let mut snapshot = learnable_snapshot(40);
         snapshot[5].features.values[position] = value;
         let error = error_of(run_warmup(&snapshot, &WarmupConfig::default()));

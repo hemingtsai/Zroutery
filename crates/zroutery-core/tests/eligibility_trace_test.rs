@@ -356,11 +356,7 @@ fn policy_revision_preserves_empty_hash_and_tracks_canonical_nonempty_capabiliti
     let requirements = PolicyRequirements::default();
 
     let empty = router
-        .plan_with_trace(
-            &reg,
-            &Resolution::Tier(ModelTier::Standard),
-            &[],
-        )
+        .plan_with_trace(&reg, &Resolution::Tier(ModelTier::Standard), &[])
         .unwrap()
         .1;
     assert_eq!(
@@ -400,8 +396,7 @@ fn policy_revision_preserves_empty_hash_and_tracks_canonical_nonempty_capabiliti
         "capability hashing must be canonical and deduplicated"
     );
     assert_ne!(
-        vision.policy_revision.requirements_hash,
-        tools.policy_revision.requirements_hash,
+        vision.policy_revision.requirements_hash, tools.policy_revision.requirements_hash,
         "different request capability vectors must have different revisions"
     );
     assert_ne!(

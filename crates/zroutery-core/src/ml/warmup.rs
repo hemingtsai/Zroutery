@@ -64,8 +64,7 @@ use super::dataset::{
     validate_outcome_sample, OutcomeTrainingSample, TrainingSample as DatasetTrainingSample,
 };
 use super::decision_contract::{
-    CandidateEligibility, DecisionCandidate, DecisionDimension, DecisionModel,
-    DecisionModelStates,
+    CandidateEligibility, DecisionCandidate, DecisionDimension, DecisionModel, DecisionModelStates,
 };
 use super::evaluation::{FrozenHoldout, PredictionMetrics};
 use super::features::{RoutingFeatures, FEATURE_DIMENSION, FEATURE_SCHEMA_VERSION};
@@ -168,7 +167,9 @@ pub enum WarmupError {
     },
 
     /// A sample's feature vector is not the width the models are built for.
-    #[error("warmup sample {index} carries a feature vector of width {found}, expected {expected}")]
+    #[error(
+        "warmup sample {index} carries a feature vector of width {found}, expected {expected}"
+    )]
     FeatureDimension {
         index: usize,
         found: usize,
@@ -228,10 +229,7 @@ pub enum WarmupError {
     /// The typed decision contract produced a non-finite prediction from the
     /// warmed artifact.
     #[error("the typed decision contract scored a non-finite {dimension}: {value}")]
-    ContractScoreNonFinite {
-        dimension: &'static str,
-        value: f64,
-    },
+    ContractScoreNonFinite { dimension: &'static str, value: f64 },
 
     /// The accepted training seam refused the payload.
     #[error("the accepted training seam refused the warmup payload: {0}")]
@@ -521,10 +519,11 @@ pub fn run_warmup(
 
     let holdout = FrozenHoldout::new(holdout_samples.to_vec(), config.holdout_description.clone());
     let (lineage, commit) = train_lineage(training)?;
-    let ensemble = ModelEnsemble::load_all(&commit.checkpoint)
-        .map_err(|error| WarmupError::ArtifactNotLoadable {
+    let ensemble = ModelEnsemble::load_all(&commit.checkpoint).map_err(|error| {
+        WarmupError::ArtifactNotLoadable {
             reason: error.to_string(),
-        })?;
+        }
+    })?;
     attest_contract(&commit, &ensemble)?;
 
     let cold = ModelEnsemble::new();
@@ -850,11 +849,11 @@ fn attest_contract(commit: &ModelCommit, ensemble: &ModelEnsemble) -> Result<(),
         CandidateEligibility::Eligible,
         probe,
     );
-    let score = contract
-        .try_score_candidate(&candidate)
-        .map_err(|reason| WarmupError::ContractNotLoadable {
+    let score = contract.try_score_candidate(&candidate).map_err(|reason| {
+        WarmupError::ContractNotLoadable {
             reason: reason.to_string(),
-        })?;
+        }
+    })?;
 
     for dimension in DecisionDimension::ALL {
         let prediction = score.predictions.get(dimension);
@@ -886,10 +885,7 @@ fn attest_contract(commit: &ModelCommit, ensemble: &ModelEnsemble) -> Result<(),
 /// A metric the evaluator declined to produce is reported as *not better* rather
 /// than as an improvement. The evaluator only declines for an empty holdout,
 /// which is refused earlier, so this branch is a fallback and not a path.
-fn compare(
-    baseline: &PredictionMetrics,
-    warmed: &PredictionMetrics,
-) -> (f64, f64, WarmupVerdict) {
+fn compare(baseline: &PredictionMetrics, warmed: &PredictionMetrics) -> (f64, f64, WarmupVerdict) {
     let (Some(baseline_log_loss), Some(warmed_log_loss)) = (baseline.log_loss, warmed.log_loss)
     else {
         return (0.0, 0.0, WarmupVerdict::NotBetter);

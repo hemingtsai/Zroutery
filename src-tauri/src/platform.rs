@@ -48,7 +48,9 @@ fn config_dir_from(env_override: Option<&str>) -> PathBuf {
                             .join(APP_ID)
                     })
                     .unwrap_or_else(|_| {
-                        tracing::warn!("APPDATA and USERPROFILE both unset; falling back to current directory");
+                        tracing::warn!(
+                            "APPDATA and USERPROFILE both unset; falling back to current directory"
+                        );
                         PathBuf::from(".").join(APP_ID)
                     })
             })
@@ -106,11 +108,7 @@ mod tests {
     #[test]
     fn the_platform_default_lands_under_the_app_directory() {
         let dir = config_dir_from(None);
-        assert!(
-            dir.ends_with(APP_ID),
-            "got {}",
-            dir.display()
-        );
+        assert!(dir.ends_with(APP_ID), "got {}", dir.display());
         // And it is never just the app id on its own: there is always a
         // parent directory from the platform.
         assert!(dir.parent().is_some_and(|p| !p.as_os_str().is_empty()));

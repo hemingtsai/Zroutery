@@ -186,10 +186,7 @@ mod tests {
             AccountOpResult::Failed("x".into()),
             AccountOpResult::Failed("x".into())
         );
-        assert_ne!(
-            AccountOpResult::Success,
-            AccountOpResult::NotSupported
-        );
+        assert_ne!(AccountOpResult::Success, AccountOpResult::NotSupported);
         assert_ne!(
             AccountOpResult::Failed("a".into()),
             AccountOpResult::Failed("b".into())

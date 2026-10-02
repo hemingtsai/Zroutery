@@ -12,14 +12,15 @@
 use serde_json::json;
 use std::sync::Arc;
 
-use zroutery_core::config::{AppConfig, ModelCapabilities, ModelEntry, ModelTier, ProviderConfig, ProviderKind};
+use zroutery_core::config::{
+    AppConfig, ModelCapabilities, ModelEntry, ModelTier, ProviderConfig, ProviderKind,
+};
 use zroutery_core::error::Error;
 use zroutery_core::ir::{Capability, ChatRequest, ContentBlock, Dialect, MediaSource, ToolDef};
 use zroutery_core::policy::{
-    self, ClientContext, ClientMatcher, ClientProfile, Complexity, DecisionReason, MatchContext,
-    PolicyConfig, PolicyFallback, PolicyMatcher, PolicyPreference, PolicyRequirements,
-    RejectionReason, RoutingPolicy, ScoringContext, TaskProfile, TaskType, resolve_client,
-    score_candidate,
+    self, resolve_client, score_candidate, ClientContext, ClientMatcher, ClientProfile, Complexity,
+    DecisionReason, MatchContext, PolicyConfig, PolicyFallback, PolicyMatcher, PolicyPreference,
+    PolicyRequirements, RejectionReason, RoutingPolicy, ScoringContext, TaskProfile, TaskType,
 };
 use zroutery_core::registry::{Registry, Resolution};
 use zroutery_core::router::Router;
@@ -430,7 +431,13 @@ fn eligibility_forbidden_provider_other_accepted() {
         ..Default::default()
     };
     let caps = ModelCapabilities::default();
-    let check = reqs.check("m", "good-provider", Some(ModelTier::Standard), &caps, false);
+    let check = reqs.check(
+        "m",
+        "good-provider",
+        Some(ModelTier::Standard),
+        &caps,
+        false,
+    );
     assert!(check.eligible);
 }
 
@@ -448,10 +455,10 @@ fn eligibility_missing_capability_rejected() {
     };
     let check = reqs.check("m", "p", Some(ModelTier::Standard), &caps, false);
     assert!(!check.eligible);
-    assert!(check.reasons.iter().any(|r| matches!(
-        r,
-        RejectionReason::MissingCapability(Capability::Vision)
-    )));
+    assert!(check
+        .reasons
+        .iter()
+        .any(|r| matches!(r, RejectionReason::MissingCapability(Capability::Vision))));
 }
 
 #[test]
@@ -469,10 +476,10 @@ fn eligibility_unknown_capability_is_not_a_soft_pass() {
     };
     let check = reqs.check("m", "p", Some(ModelTier::Standard), &caps, false);
     assert!(!check.eligible);
-    assert!(check
-        .reasons
-        .iter()
-        .any(|reason| matches!(reason, RejectionReason::UnknownCapability(Capability::Vision))));
+    assert!(check.reasons.iter().any(|reason| matches!(
+        reason,
+        RejectionReason::UnknownCapability(Capability::Vision)
+    )));
 }
 
 #[test]
@@ -525,12 +532,15 @@ fn eligibility_allowed_providers_restricts() {
         ..Default::default()
     };
     let caps = ModelCapabilities::default();
-    assert!(reqs
-        .check("m", "openai", Some(ModelTier::Standard), &caps, false)
-        .eligible);
-    assert!(!reqs
-        .check("m", "deepseek", Some(ModelTier::Standard), &caps, false)
-        .eligible);
+    assert!(
+        reqs.check("m", "openai", Some(ModelTier::Standard), &caps, false)
+            .eligible
+    );
+    assert!(
+        !reqs
+            .check("m", "deepseek", Some(ModelTier::Standard), &caps, false)
+            .eligible
+    );
 }
 
 #[test]
@@ -540,12 +550,15 @@ fn eligibility_forbidden_models_rejected() {
         ..Default::default()
     };
     let caps = ModelCapabilities::default();
-    assert!(!reqs
-        .check("bad-model", "p", Some(ModelTier::Standard), &caps, false)
-        .eligible);
-    assert!(reqs
-        .check("good-model", "p", Some(ModelTier::Standard), &caps, false)
-        .eligible);
+    assert!(
+        !reqs
+            .check("bad-model", "p", Some(ModelTier::Standard), &caps, false)
+            .eligible
+    );
+    assert!(
+        reqs.check("good-model", "p", Some(ModelTier::Standard), &caps, false)
+            .eligible
+    );
 }
 
 #[test]
@@ -555,12 +568,15 @@ fn eligibility_allowed_models_restricts() {
         ..Default::default()
     };
     let caps = ModelCapabilities::default();
-    assert!(reqs
-        .check("gpt-4", "p", Some(ModelTier::Standard), &caps, false)
-        .eligible);
-    assert!(!reqs
-        .check("claude-3", "p", Some(ModelTier::Standard), &caps, false)
-        .eligible);
+    assert!(
+        reqs.check("gpt-4", "p", Some(ModelTier::Standard), &caps, false)
+            .eligible
+    );
+    assert!(
+        !reqs
+            .check("claude-3", "p", Some(ModelTier::Standard), &caps, false)
+            .eligible
+    );
 }
 
 // ========================================================================
@@ -951,11 +967,7 @@ fn client_profile_multiple_matchers_all_must_pass() {
 
 #[test]
 fn resolve_client_returns_first_match() {
-    let profiles = vec![
-        bot_profile(),
-        codex_profile(),
-        ua_profile(),
-    ];
+    let profiles = vec![bot_profile(), codex_profile(), ua_profile()];
     let ctx = ClientContext {
         client_id: Some("codex"),
         user_agent: Some("curl/7.0"),
@@ -1074,15 +1086,11 @@ fn policy_config_serde_round_trip_all_matcher_types() {
             name: "All Matchers".into(),
             enabled: true,
             matchers: vec![
-                PolicyMatcher::Client {
-                    value: "c".into(),
-                },
+                PolicyMatcher::Client { value: "c".into() },
                 PolicyMatcher::Application {
                     value: "app".into(),
                 },
-                PolicyMatcher::ModelPrefix {
-                    value: "mp".into(),
-                },
+                PolicyMatcher::ModelPrefix { value: "mp".into() },
                 PolicyMatcher::Streaming { value: true },
                 PolicyMatcher::HasTools { value: true },
                 PolicyMatcher::HasVision { value: false },
@@ -1259,10 +1267,16 @@ fn ua_profile() -> ClientProfile {
 
 fn e2e_cfg_with(models: Vec<ModelEntry>) -> AppConfig {
     let mut cfg = AppConfig::default();
-    cfg.providers
-        .push(ProviderConfig::new("p1", "P1", ProviderKind::OpenAICompatible));
-    cfg.providers
-        .push(ProviderConfig::new("p2", "P2", ProviderKind::OpenAICompatible));
+    cfg.providers.push(ProviderConfig::new(
+        "p1",
+        "P1",
+        ProviderKind::OpenAICompatible,
+    ));
+    cfg.providers.push(ProviderConfig::new(
+        "p2",
+        "P2",
+        ProviderKind::OpenAICompatible,
+    ));
     cfg.models = models;
     cfg
 }
@@ -1626,7 +1640,10 @@ fn degradation_finds_lower_tier() {
         )
         .unwrap();
 
-    assert!(!candidates.is_empty(), "degradation should find a candidate");
+    assert!(
+        !candidates.is_empty(),
+        "degradation should find a candidate"
+    );
     assert_eq!(
         candidates[0].exposed_id, "p1-reas-m",
         "degradation should land on the Reasoning model"
@@ -1645,10 +1662,8 @@ fn degradation_finds_lower_tier() {
 #[test]
 fn matrix_coding_task_selects_reasoning_with_tools() {
     let cfg = e2e_cfg_with(vec![
-        ModelEntry::for_upstream("p1", "std-tools", Some(ModelTier::Standard))
-            .with_priority(0),
-        ModelEntry::for_upstream("p1", "reas-tools", Some(ModelTier::Reasoning))
-            .with_priority(10),
+        ModelEntry::for_upstream("p1", "std-tools", Some(ModelTier::Standard)).with_priority(0),
+        ModelEntry::for_upstream("p1", "reas-tools", Some(ModelTier::Reasoning)).with_priority(10),
     ]);
     let reg = e2e_reg(cfg);
     let router = Router::new();
@@ -1883,12 +1898,24 @@ fn ineligible_candidate_has_no_score() {
         .candidates
         .iter()
         .find(|c| c.model_id == "p1-no-caps");
-    assert!(rejected_decision.is_some(), "ineligible candidate must appear in decision trace");
+    assert!(
+        rejected_decision.is_some(),
+        "ineligible candidate must appear in decision trace"
+    );
     let rejected = rejected_decision.unwrap();
     assert!(!rejected.eligible);
-    assert!(rejected.score.is_none(), "ineligible candidate must have no score");
-    assert!(rejected.final_score.is_none(), "ineligible candidate must have no final_score");
-    assert!(rejected.rejection.is_some(), "ineligible candidate must have a rejection reason");
+    assert!(
+        rejected.score.is_none(),
+        "ineligible candidate must have no score"
+    );
+    assert!(
+        rejected.final_score.is_none(),
+        "ineligible candidate must have no final_score"
+    );
+    assert!(
+        rejected.rejection.is_some(),
+        "ineligible candidate must have a rejection reason"
+    );
 }
 
 /// When all candidates are eligible, all get scores in the decision trace.
@@ -1921,9 +1948,18 @@ fn all_eligible_candidates_get_scores() {
     assert_eq!(decision.candidates.len(), 3);
     for cd in &decision.candidates {
         assert!(cd.eligible, "all candidates should be eligible");
-        assert!(cd.score.is_some(), "eligible candidate must have a score breakdown");
-        assert!(cd.final_score.is_some(), "eligible candidate must have a final_score");
-        assert!(cd.rejection.is_none(), "eligible candidate must have no rejection");
+        assert!(
+            cd.score.is_some(),
+            "eligible candidate must have a score breakdown"
+        );
+        assert!(
+            cd.final_score.is_some(),
+            "eligible candidate must have a final_score"
+        );
+        assert!(
+            cd.rejection.is_none(),
+            "eligible candidate must have no rejection"
+        );
     }
 }
 
@@ -2006,7 +2042,10 @@ fn decision_trace_records_score_breakdown() {
 
     let scored = decision.candidates.first().unwrap();
     assert!(scored.eligible);
-    assert!(scored.score.is_some(), "eligible candidate must have score breakdown");
+    assert!(
+        scored.score.is_some(),
+        "eligible candidate must have score breakdown"
+    );
     let breakdown = scored.score.as_ref().unwrap();
     // All dimension scores should be in [0.0, 1.0].
     assert!(breakdown.health >= 0.0 && breakdown.health <= 1.0);
@@ -2067,7 +2106,9 @@ fn decision_trace_records_fallback_chain() {
         "fallback chain must record the escalation"
     );
     assert!(
-        decision.fallback_chain.contains(&"standard-class".to_string()),
+        decision
+            .fallback_chain
+            .contains(&"standard-class".to_string()),
         "fallback chain should mention the original tier"
     );
     // Reason should indicate escalation.
@@ -2159,7 +2200,10 @@ fn fallback_degradation_goes_lower() {
         )
         .unwrap();
 
-    assert!(!candidates.is_empty(), "degradation should find a candidate");
+    assert!(
+        !candidates.is_empty(),
+        "degradation should find a candidate"
+    );
     assert_eq!(candidates[0].exposed_id, "p1-reas-m");
     assert!(matches!(decision.reason, DecisionReason::Degraded { .. }));
 }

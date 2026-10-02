@@ -13,8 +13,15 @@ use crate::ir::{ChatRequest, ContentBlock, MediaSource, ToolResultPart};
 /// `ToolResult` additionally carries the part index inside that result.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ImageSlot {
-    Message { message_index: usize, block_index: usize },
-    ToolResult { message_index: usize, block_index: usize, part_index: usize },
+    Message {
+        message_index: usize,
+        block_index: usize,
+    },
+    ToolResult {
+        message_index: usize,
+        block_index: usize,
+        part_index: usize,
+    },
 }
 
 /// Every image slot in the request, in traversal order.
@@ -32,7 +39,10 @@ pub fn collect(req: &ChatRequest) -> Vec<(ImageSlot, MediaSource)> {
             match block {
                 ContentBlock::Image { source } => {
                     found.push((
-                        ImageSlot::Message { message_index, block_index },
+                        ImageSlot::Message {
+                            message_index,
+                            block_index,
+                        },
                         source.clone(),
                     ));
                 }
@@ -80,7 +90,9 @@ mod tests {
                 tool_use_id: "tu".into(),
                 name: String::new(),
                 content: vec![
-                    ToolResultPart::Text { text: "shot:".into() },
+                    ToolResultPart::Text {
+                        text: "shot:".into(),
+                    },
                     ToolResultPart::Image {
                         source: MediaSource::from_url("https://example.com/b.png"),
                     },
@@ -91,9 +103,20 @@ mod tests {
 
         let found = collect(&req);
         assert_eq!(found.len(), 2);
-        assert!(matches!(found[0].0, ImageSlot::Message { message_index: 0, block_index: 1 }));
-        assert!(
-            matches!(found[1].0, ImageSlot::ToolResult { message_index: 1, block_index: 0, part_index: 1 })
-        );
+        assert!(matches!(
+            found[0].0,
+            ImageSlot::Message {
+                message_index: 0,
+                block_index: 1
+            }
+        ));
+        assert!(matches!(
+            found[1].0,
+            ImageSlot::ToolResult {
+                message_index: 1,
+                block_index: 0,
+                part_index: 1
+            }
+        ));
     }
 }

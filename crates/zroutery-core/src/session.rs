@@ -164,8 +164,7 @@ impl SessionStore {
     /// Evict sessions older than `max_age_secs`.
     pub fn evict_stale(&self, max_age_secs: i64) {
         let now = chrono::Utc::now().timestamp();
-        crate::sync::lock(&self.sessions)
-            .retain(|_, s| now - s.last_request_at < max_age_secs);
+        crate::sync::lock(&self.sessions).retain(|_, s| now - s.last_request_at < max_age_secs);
     }
 }
 

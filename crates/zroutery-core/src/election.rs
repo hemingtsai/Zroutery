@@ -416,7 +416,11 @@ mod tests {
                 .answered(500)
                 .priced("USD", 0.01),
         ];
-        let election = rank(ModelTier::Standard, &measurements, &ScoringConfig::default());
+        let election = rank(
+            ModelTier::Standard,
+            &measurements,
+            &ScoringConfig::default(),
+        );
         assert!(election.priced);
         assert_eq!(election.winner(), Some("fast-cheap"));
         assert_eq!(election.order(), vec!["fast-cheap", "slow-dear"]);
@@ -453,7 +457,11 @@ mod tests {
                 .answered(2000)
                 .priced("USD", 0.0100),
         ];
-        let election = rank(ModelTier::Reasoning, &measurements, &ScoringConfig::default());
+        let election = rank(
+            ModelTier::Reasoning,
+            &measurements,
+            &ScoringConfig::default(),
+        );
         assert_eq!(election.winner(), Some("much-faster"));
     }
 
@@ -467,7 +475,11 @@ mod tests {
                 .answered(500)
                 .priced("USD", 0.0005),
         ];
-        let election = rank(ModelTier::Standard, &measurements, &ScoringConfig::default());
+        let election = rank(
+            ModelTier::Standard,
+            &measurements,
+            &ScoringConfig::default(),
+        );
         assert_eq!(election.winner(), Some("cheap"));
 
         // Widen the latency gap past the price gap and the answer flips, which is
@@ -478,7 +490,11 @@ mod tests {
                 .answered(20_000)
                 .priced("USD", 0.0005),
         ];
-        let election = rank(ModelTier::Standard, &measurements, &ScoringConfig::default());
+        let election = rank(
+            ModelTier::Standard,
+            &measurements,
+            &ScoringConfig::default(),
+        );
         assert_eq!(election.winner(), Some("dear"));
     }
 
@@ -494,7 +510,11 @@ mod tests {
                 .answered(300)
                 .priced("USD", 1.0),
         ];
-        let election = rank(ModelTier::Standard, &measurements, &ScoringConfig::default());
+        let election = rank(
+            ModelTier::Standard,
+            &measurements,
+            &ScoringConfig::default(),
+        );
         assert!(election
             .ranked
             .iter()
@@ -546,7 +566,11 @@ mod tests {
                 .priced("USD", 0.01),
             Measurement::new("in-cny").answered(300).priced("CNY", 0.05),
         ];
-        let election = rank(ModelTier::Standard, &measurements, &ScoringConfig::default());
+        let election = rank(
+            ModelTier::Standard,
+            &measurements,
+            &ScoringConfig::default(),
+        );
         assert!(!election.priced);
         assert_eq!(election.winner(), Some("in-cny"), "latency alone decides");
         let note = election.note.unwrap();
@@ -565,7 +589,11 @@ mod tests {
             Measurement::new("broken").failed("502 from upstream"),
             Measurement::new("works").answered(700).priced("USD", 0.02),
         ];
-        let election = rank(ModelTier::Reasoning, &measurements, &ScoringConfig::default());
+        let election = rank(
+            ModelTier::Reasoning,
+            &measurements,
+            &ScoringConfig::default(),
+        );
         assert_eq!(election.order(), vec!["works", "broken"]);
         let last = election.ranked.last().unwrap();
         assert!(last.score.is_none());

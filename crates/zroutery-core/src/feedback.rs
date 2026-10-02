@@ -189,7 +189,13 @@ impl Feedback {
         source: FeedbackSource,
         data_origin: DataOrigin,
     ) -> Result<Option<Self>, String> {
-        Self::try_from_outcome(outcome, signals.unwrap_or_default(), timestamp, source, data_origin)
+        Self::try_from_outcome(
+            outcome,
+            signals.unwrap_or_default(),
+            timestamp,
+            source,
+            data_origin,
+        )
     }
 }
 
@@ -202,7 +208,13 @@ pub fn feedback_from_outcome(
     source: FeedbackSource,
     data_origin: DataOrigin,
 ) -> Option<Feedback> {
-    Feedback::from_outcome(outcome, signals.unwrap_or_default(), timestamp, source, data_origin)
+    Feedback::from_outcome(
+        outcome,
+        signals.unwrap_or_default(),
+        timestamp,
+        source,
+        data_origin,
+    )
 }
 
 /// Checked variant for adapters that must distinguish an invalid outcome from
@@ -214,7 +226,13 @@ pub fn try_feedback_from_outcome(
     source: FeedbackSource,
     data_origin: DataOrigin,
 ) -> Result<Option<Feedback>, String> {
-    Feedback::try_from_outcome(outcome, signals.unwrap_or_default(), timestamp, source, data_origin)
+    Feedback::try_from_outcome(
+        outcome,
+        signals.unwrap_or_default(),
+        timestamp,
+        source,
+        data_origin,
+    )
 }
 
 pub fn outcome_to_feedback(
@@ -279,7 +297,10 @@ impl OutcomeSummary {
                 None
             },
             input_tokens: outcome.usage.as_ref().map_or(0, |usage| usage.input_tokens),
-            output_tokens: outcome.usage.as_ref().map_or(0, |usage| usage.output_tokens),
+            output_tokens: outcome
+                .usage
+                .as_ref()
+                .map_or(0, |usage| usage.output_tokens),
             failure_class: outcome
                 .terminal_failure_facts()
                 .map(|facts| failure_class_wire_name(facts.class).to_string()),
@@ -466,7 +487,11 @@ mod tests {
 
     #[test]
     fn data_origin_variants_round_trip() {
-        let variants = [DataOrigin::Native, DataOrigin::Imported, DataOrigin::Synthetic];
+        let variants = [
+            DataOrigin::Native,
+            DataOrigin::Imported,
+            DataOrigin::Synthetic,
+        ];
         for v in &variants {
             let json = serde_json::to_string(v).unwrap();
             let restored: DataOrigin = serde_json::from_str(&json).unwrap();
@@ -476,16 +501,29 @@ mod tests {
 
     #[test]
     fn data_origin_wire_format() {
-        assert_eq!(serde_json::to_string(&DataOrigin::Native).unwrap(), "\"native\"");
-        assert_eq!(serde_json::to_string(&DataOrigin::Imported).unwrap(), "\"imported\"");
-        assert_eq!(serde_json::to_string(&DataOrigin::Synthetic).unwrap(), "\"synthetic\"");
+        assert_eq!(
+            serde_json::to_string(&DataOrigin::Native).unwrap(),
+            "\"native\""
+        );
+        assert_eq!(
+            serde_json::to_string(&DataOrigin::Imported).unwrap(),
+            "\"imported\""
+        );
+        assert_eq!(
+            serde_json::to_string(&DataOrigin::Synthetic).unwrap(),
+            "\"synthetic\""
+        );
     }
 
     // -- FeedbackSource variants --
 
     #[test]
     fn feedback_source_variants_round_trip() {
-        let variants = [FeedbackSource::Client, FeedbackSource::System, FeedbackSource::Imported];
+        let variants = [
+            FeedbackSource::Client,
+            FeedbackSource::System,
+            FeedbackSource::Imported,
+        ];
         for v in &variants {
             let json = serde_json::to_string(v).unwrap();
             let restored: FeedbackSource = serde_json::from_str(&json).unwrap();
@@ -495,9 +533,18 @@ mod tests {
 
     #[test]
     fn feedback_source_wire_format() {
-        assert_eq!(serde_json::to_string(&FeedbackSource::Client).unwrap(), "\"client\"");
-        assert_eq!(serde_json::to_string(&FeedbackSource::System).unwrap(), "\"system\"");
-        assert_eq!(serde_json::to_string(&FeedbackSource::Imported).unwrap(), "\"imported\"");
+        assert_eq!(
+            serde_json::to_string(&FeedbackSource::Client).unwrap(),
+            "\"client\""
+        );
+        assert_eq!(
+            serde_json::to_string(&FeedbackSource::System).unwrap(),
+            "\"system\""
+        );
+        assert_eq!(
+            serde_json::to_string(&FeedbackSource::Imported).unwrap(),
+            "\"imported\""
+        );
     }
 
     // -- Feedback construction and round-trip --
@@ -596,7 +643,10 @@ mod tests {
         assert_eq!(restored.data_origin, DataOrigin::Imported);
         assert!(!restored.outcome_summary.success);
         assert_eq!(restored.outcome_summary.fallback_count, 1);
-        assert_eq!(restored.outcome_summary.failure_class, Some("provider_unavailable".to_string()));
+        assert_eq!(
+            restored.outcome_summary.failure_class,
+            Some("provider_unavailable".to_string())
+        );
         assert_eq!(restored.feedback.len(), 1);
         assert!(restored.features.is_some());
     }

@@ -284,9 +284,7 @@ pub struct CcSwitchPreview {
 }
 
 #[tauri::command]
-pub async fn ccswitch_preview(
-    desktop: State<'_, Arc<Desktop>>,
-) -> Cmd<CcSwitchPreview> {
+pub async fn ccswitch_preview(desktop: State<'_, Arc<Desktop>>) -> Cmd<CcSwitchPreview> {
     // SQLite and file reads block; keep them off the async worker thread.
     let found = tauri::async_runtime::spawn_blocking(ccswitch::read_providers)
         .await
@@ -356,7 +354,10 @@ pub async fn ccswitch_import(
 
     let mut config = (*desktop.core.config()).clone();
     let mut imported_keys: Vec<(String, String)> = Vec::new();
-    let mut batch: Vec<(zroutery_core::config::ProviderConfig, Vec<zroutery_core::config::ModelEntry>)> = Vec::new();
+    let mut batch: Vec<(
+        zroutery_core::config::ProviderConfig,
+        Vec<zroutery_core::config::ModelEntry>,
+    )> = Vec::new();
     let mut warnings: Vec<String> = Vec::new();
 
     // The current CC Switch provider becomes the class primary; the rest keep
@@ -375,7 +376,11 @@ pub async fn ccswitch_import(
         let (provider, models) = ccswitch::to_zroutery(
             draft,
             provider_id.clone(),
-            if draft.is_current { 0 } else { priority.max(10) },
+            if draft.is_current {
+                0
+            } else {
+                priority.max(10)
+            },
             None,
         );
         if let Some(key) = draft.api_key.clone() {
@@ -393,10 +398,7 @@ pub async fn ccswitch_import(
 
     if !batch_errors.is_empty() {
         // Errors in the batch are fatal — do not commit.
-        let msg = format!(
-            "CC Switch import aborted: {}",
-            batch_errors.join("; ")
-        );
+        let msg = format!("CC Switch import aborted: {}", batch_errors.join("; "));
         tracing::error!("{msg}");
         return Err(msg);
     }

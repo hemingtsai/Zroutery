@@ -27,6 +27,7 @@ use std::collections::BTreeSet;
 
 use zroutery_core::config::ModelTier;
 use zroutery_core::failure::FailureClass;
+use zroutery_core::ir::Usage;
 use zroutery_core::ml::calibration::{
     CalibrationConfig, CalibrationVerdict, DriftConfig, HoldoutConfig, ReliabilityConfig,
 };
@@ -35,10 +36,7 @@ use zroutery_core::ml::dataset::{
     canonical_samples_from_decision_time, Targets, TrainingSample as DatasetTrainingSample,
 };
 use zroutery_core::ml::decision_engine::DecisionEngine;
-use zroutery_core::ml::features::{
-    RoutingFeatures, FEATURE_DIMENSION, FEATURE_SCHEMA_VERSION,
-};
-use zroutery_core::ir::Usage;
+use zroutery_core::ml::features::{RoutingFeatures, FEATURE_DIMENSION, FEATURE_SCHEMA_VERSION};
 use zroutery_core::ml::model_identity::{CommitId, ModelCommit};
 use zroutery_core::ml::offline_gate::{
     run_offline_gate, EvidenceFloors, GateConfig, GateInput, OfflineGateError, RecordedDecision,
@@ -55,7 +53,11 @@ use zroutery_core::session::SessionRoutingMode;
 const BASE: i64 = 1_700_000_000;
 
 /// `(model, provider)` for the three candidates every decision compares.
-const AXIS: [(&str, &str); 3] = [("alpha", "prov-a"), ("bravo", "prov-b"), ("charlie", "prov-c")];
+const AXIS: [(&str, &str); 3] = [
+    ("alpha", "prov-a"),
+    ("bravo", "prov-b"),
+    ("charlie", "prov-c"),
+];
 
 /// Decisions in the main fixture. 7E-2D's default partition wants 20 cohorts,
 /// so anything under that could not be split at all.
@@ -223,9 +225,11 @@ fn trained() -> Trained {
     // predictor produces a *child* commit, so a single-record lineage is
     // correctly refused as "non-root commit is missing its parent record" —
     // which is exactly the lineage gate this node depends on.
-    let from_genesis =
-        ModelEnsemblePredictor::from_model_commit_with_lineage(&root_commit, std::slice::from_ref(&root_commit))
-            .expect("the genesis root lineage verifies");
+    let from_genesis = ModelEnsemblePredictor::from_model_commit_with_lineage(
+        &root_commit,
+        std::slice::from_ref(&root_commit),
+    )
+    .expect("the genesis root lineage verifies");
     let (_, first) = from_genesis
         .try_train(&training_samples(0..32))
         .expect("the fixture trains");
@@ -285,22 +289,14 @@ fn gate_config() -> GateConfig {
 
 /// A recorded decision paired with its Outcome, produced by the same accepted
 /// path the gate replays through.
-fn record(
-    trained: &Trained,
-    decision: usize,
-    winner: usize,
-) -> RecordedDecision {
+fn record(trained: &Trained, decision: usize, winner: usize) -> RecordedDecision {
     let engine = ShadowEngine::new(
         DecisionEngine::new(engine_config(), RewardPolicy::default()),
         true,
     );
     let input = shadow_input(decision);
     let recorded = engine
-        .evaluate_with(
-            &format!("req-{decision:04}"),
-            &input,
-            &trained.predictor,
-        )
+        .evaluate_with(&format!("req-{decision:04}"), &input, &trained.predictor)
         .expect("the fixture decision is recorded");
     RecordedDecision {
         decision: recorded,
@@ -316,10 +312,7 @@ fn fixture(trained: &Trained) -> Vec<RecordedDecision> {
         .collect()
 }
 
-fn gate_input(
-    trained: &Trained,
-    recorded: Vec<RecordedDecision>,
-) -> GateInput {
+fn gate_input(trained: &Trained, recorded: Vec<RecordedDecision>) -> GateInput {
     GateInput {
         commit: trained.commit.clone(),
         lineage: trained.lineage.clone(),
@@ -376,8 +369,7 @@ fn a_clean_run_reproduces_every_recorded_decision_bit_exactly() {
             evidence.components_compared
         );
         assert_eq!(
-            evidence.retention.recorded_input_checksum,
-            evidence.retention.replayed_input_checksum,
+            evidence.retention.recorded_input_checksum, evidence.retention.replayed_input_checksum,
             "the retained input must re-derive to the recorded input checksum"
         );
     }
@@ -388,8 +380,14 @@ fn one_ulp_of_drift_in_a_recorded_prediction_is_a_refusal_not_a_pass() {
     let trained = trained();
     let mut recorded = fixture(&trained);
     // The smallest possible disagreement: one representable double.
-    recorded[3].decision.candidates[0].prediction.success.value =
-        f64::from_bits(recorded[3].decision.candidates[0].prediction.success.value.to_bits() + 1);
+    recorded[3].decision.candidates[0].prediction.success.value = f64::from_bits(
+        recorded[3].decision.candidates[0]
+            .prediction
+            .success
+            .value
+            .to_bits()
+            + 1,
+    );
 
     let refusal = run_offline_gate(&gate_input(&trained, recorded))
         .expect_err("a one-ULP difference must never be tolerated");
@@ -411,8 +409,13 @@ fn one_ulp_of_drift_in_a_utility_term_is_refused_at_that_term() {
     let trained = trained();
     let mut recorded = fixture(&trained);
     let index = 5;
-    recorded[index].decision.candidates[1].utility.total =
-        f64::from_bits(recorded[index].decision.candidates[1].utility.total.to_bits() - 1);
+    recorded[index].decision.candidates[1].utility.total = f64::from_bits(
+        recorded[index].decision.candidates[1]
+            .utility
+            .total
+            .to_bits()
+            - 1,
+    );
 
     let refusal = run_offline_gate(&gate_input(&trained, recorded))
         .expect_err("a one-ULP difference must never be tolerated");
@@ -659,7 +662,10 @@ fn a_replay_that_selects_a_candidate_the_outcome_never_attempted_is_a_refusal() 
     let refusal = run_offline_gate(&GateInput {
         commit: trained.commit.clone(),
         lineage: trained.lineage.clone(),
-        recorded: vec![RecordedDecision { decision, outcome: built }],
+        recorded: vec![RecordedDecision {
+            decision,
+            outcome: built,
+        }],
         fit_sample_ids: BTreeSet::new(),
         config: gate_config(),
     })
@@ -693,7 +699,10 @@ fn a_terminal_success_whose_served_identity_is_erased_is_refused() {
     let refusal = run_offline_gate(&GateInput {
         commit: trained.commit.clone(),
         lineage: trained.lineage.clone(),
-        recorded: vec![RecordedDecision { decision, outcome: built }],
+        recorded: vec![RecordedDecision {
+            decision,
+            outcome: built,
+        }],
         fit_sample_ids: BTreeSet::new(),
         config: gate_config(),
     })
@@ -717,13 +726,10 @@ fn the_terminal_agreement_distinguishes_a_served_selection_from_a_failover() {
         .map(|evidence| evidence.terminal)
         .collect();
     assert!(
-        agreements
-            .iter()
-            .all(|agreement| matches!(
-                agreement,
-                TerminalAgreement::SelectionServed
-                    | TerminalAgreement::SelectionSupersededByFailover
-            )),
+        agreements.iter().all(|agreement| matches!(
+            agreement,
+            TerminalAgreement::SelectionServed | TerminalAgreement::SelectionSupersededByFailover
+        )),
         "a counterfactual that selected a candidate nobody served is a legitimate \
          failover disagreement, not an error: {agreements:?}"
     );
@@ -813,9 +819,15 @@ fn a_strict_ceiling_can_withhold_the_verdict_and_the_blocker_says_so() {
     // A ceiling no synthetic model can meet. The point is that a broken
     // constituent withholds the verdict and is named, not that this model is
     // badly calibrated.
-    config.calibration.reliability.max_expected_calibration_error = 0.0;
+    config
+        .calibration
+        .reliability
+        .max_expected_calibration_error = 0.0;
     config.calibration.reliability.max_calibration_error = 0.0;
-    config.calibration.reliability.max_candidate_calibration_error = 0.0;
+    config
+        .calibration
+        .reliability
+        .max_candidate_calibration_error = 0.0;
     let mut input = gate_input(&trained, recorded);
     input.config = config;
 
@@ -851,12 +863,10 @@ fn a_holdout_that_overlaps_the_fit_set_is_refused_with_the_offending_id() {
     let mut input = gate_input(&trained, recorded);
     input.fit_sample_ids.insert(offender.clone());
 
-    let refusal = run_offline_gate(&input)
-        .expect_err("a holdout that overlaps the fit set measures the fit");
+    let refusal =
+        run_offline_gate(&input).expect_err("a holdout that overlaps the fit set measures the fit");
     let OfflineGateError::HoldoutOverlap {
-        kind,
-        sample_id,
-        ..
+        kind, sample_id, ..
     } = refusal
     else {
         panic!("expected a holdout-overlap refusal");
@@ -877,15 +887,16 @@ fn a_holdout_nobody_served_would_be_degenerate_and_a_single_winner_is_refused() 
     let refusal = run_offline_gate(&gate_input(&trained, recorded))
         .expect_err("a one-candidate axis cannot support a calibration claim");
     let OfflineGateError::DegenerateHoldout {
-        partition,
-        reason,
-        ..
+        partition, reason, ..
     } = refusal
     else {
         panic!("expected a degenerate-holdout refusal");
     };
     assert_eq!(reason.label(), "single_served_candidate");
-    assert_eq!(partition, zroutery_core::ml::calibration::PartitionKind::Fit);
+    assert_eq!(
+        partition,
+        zroutery_core::ml::calibration::PartitionKind::Fit
+    );
 }
 
 #[test]
@@ -922,7 +933,10 @@ fn the_holdout_carries_the_candidate_axis_and_not_only_the_request_row() {
     // One request row plus one row per attempt, for every decision. A holdout
     // of request rows alone would give 7E-2D a one-candidate K axis and a
     // trivially perfect vector, and "calibrated" would mean nothing.
-    assert_eq!(outcome.report().holdout.samples, DECISIONS * (AXIS.len() + 1));
+    assert_eq!(
+        outcome.report().holdout.samples,
+        DECISIONS * (AXIS.len() + 1)
+    );
     assert_eq!(outcome.report().holdout.decisions, DECISIONS);
     assert_eq!(outcome.report().holdout.attributed, DECISIONS);
     assert_eq!(outcome.report().holdout.overlap_with_fit_set, 0);
@@ -1003,7 +1017,11 @@ fn the_positive_path_produces_a_considerable_verdict_with_no_stored_boolean() {
         .refusal()
         .expect("a partition of eight must be refused, not measured");
     assert_eq!(refusal.code, "sample_too_small");
-    assert!(refusal.reason.contains("8 effective decisions"), "{}", refusal.reason);
+    assert!(
+        refusal.reason.contains("8 effective decisions"),
+        "{}",
+        refusal.reason
+    );
     assert_eq!(report.recomputed_verdict(), ReleaseVerdict::NotConsiderable);
     println!("{}", report.headline());
 
@@ -1046,7 +1064,10 @@ fn the_verdict_states_what_it_is_not() {
     let recorded = fixture(&trained);
     let mut input = gate_input(&trained, recorded);
     input.config = permissive_config();
-    let report = run_offline_gate(&input).expect("the fixture replays").report().clone();
+    let report = run_offline_gate(&input)
+        .expect("the fixture replays")
+        .report()
+        .clone();
 
     assert_eq!(report.scope, RELEASE_SCOPE);
     assert!(RELEASE_SCOPE.contains("NOT a statistical claim"));
@@ -1085,7 +1106,10 @@ fn the_release_verdict_is_a_pure_function_of_its_measurements() {
     let recorded = fixture(&trained);
     let mut input = gate_input(&trained, recorded);
     input.config = permissive_config();
-    let report = run_offline_gate(&input).expect("the fixture replays").report().clone();
+    let report = run_offline_gate(&input)
+        .expect("the fixture replays")
+        .report()
+        .clone();
 
     // Mutating any single constituent must move the verdict, which is the test
     // that the verdict is recomputed rather than read.
@@ -1154,7 +1178,8 @@ fn a_commit_with_no_identity_is_refused_as_missing() {
     input.commit = ModelEnsemblePredictor::genesis().commit_record();
     input.commit.commit_id = CommitId::new("");
 
-    let refusal = run_offline_gate(&input).expect_err("a commit that cannot name itself is missing");
+    let refusal =
+        run_offline_gate(&input).expect_err("a commit that cannot name itself is missing");
     assert!(
         matches!(refusal, OfflineGateError::MissingCommit { .. }),
         "expected a missing-commit refusal, got {refusal}"
@@ -1169,8 +1194,7 @@ fn a_commit_whose_checkpoint_was_tampered_with_is_refused_as_unverifiable() {
     input.lineage = vec![input.commit.clone()];
     input.commit.checkpoint.success.parameters[0] += 0.5;
 
-    let refusal =
-        run_offline_gate(&input).expect_err("a tampered checkpoint must refuse to load");
+    let refusal = run_offline_gate(&input).expect_err("a tampered checkpoint must refuse to load");
     let OfflineGateError::UnverifiableCommit { commit_id, .. } = refusal else {
         panic!("expected an unverifiable-commit refusal");
     };

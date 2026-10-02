@@ -12,9 +12,7 @@
 use zroutery_core::failure::FailureClass;
 use zroutery_core::feedback::DataOrigin;
 use zroutery_core::ml::dataset::{samples_from_outcome, Targets, TrainingSample};
-use zroutery_core::ml::evaluation::{
-    Evaluator, PredictionMetrics, Recommendation, RoutingMetrics,
-};
+use zroutery_core::ml::evaluation::{Evaluator, PredictionMetrics, Recommendation, RoutingMetrics};
 use zroutery_core::ml::features::{RoutingFeatures, FEATURE_DIMENSION};
 use zroutery_core::ml::model::{RoutingModel, SuccessModel};
 use zroutery_core::outcome::{Attempt, Outcome};
@@ -37,7 +35,11 @@ fn make_attempt(
         started_at: 1_700_000_000,
         completed_at: 1_700_000_001,
         latency_ms,
-        ttft_ms: if success { Some(latency_ms * 0.3) } else { None },
+        ttft_ms: if success {
+            Some(latency_ms * 0.3)
+        } else {
+            None
+        },
         success,
         failure_class,
         failure_message: if success {
@@ -132,17 +134,9 @@ fn attempt_attribution_two_attempts_produces_three_samples() {
         f
     };
 
-    let samples = samples_from_outcome(
-        &outcome,
-        &[features_a, features_b],
-        DataOrigin::Native,
-    );
+    let samples = samples_from_outcome(&outcome, &[features_a, features_b], DataOrigin::Native);
 
-    assert_eq!(
-        samples.len(),
-        3,
-        "2 attempts + 1 request-level sample = 3"
-    );
+    assert_eq!(samples.len(), 3, "2 attempts + 1 request-level sample = 3");
 }
 
 // ---------------------------------------------------------------------------
@@ -377,7 +371,9 @@ fn prediction_metrics_perfect_predictions_log_loss_near_zero() {
 
     let metrics = PredictionMetrics::compute_classification(&predictions, &actuals);
 
-    let ll = metrics.log_loss.expect("log_loss should be Some for classification");
+    let ll = metrics
+        .log_loss
+        .expect("log_loss should be Some for classification");
     assert!(
         ll < 0.01,
         "perfect predictions should have log_loss near 0, got {ll}"
@@ -504,10 +500,7 @@ fn recommendation_reject_when_no_significant_improvement() {
         "no improvement should be rejected"
     );
     assert!(
-        report
-            .reasons
-            .iter()
-            .any(|r| r.contains("no significant")),
+        report.reasons.iter().any(|r| r.contains("no significant")),
         "should explain lack of significant difference"
     );
 }

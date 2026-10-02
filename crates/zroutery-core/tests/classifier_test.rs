@@ -21,7 +21,7 @@ use axum::routing::post;
 use axum::Json;
 use serde_json::{json, Value};
 use zroutery_core::config::{
-    AppConfig, ClassifierCandidate, ClassifierConfig, MemorySecretStore, ModelTier, ModelEntry,
+    AppConfig, ClassifierCandidate, ClassifierConfig, MemorySecretStore, ModelEntry, ModelTier,
     ProviderConfig, ProviderKind,
 };
 use zroutery_core::server::{AppState, ServerHandle};
@@ -54,10 +54,7 @@ impl Mock {
 /// * `refuse*`  -> HTTP 400 (non retryable protocol rejection)
 /// * `garbage*`  -> HTTP 200 with no verdict in the text
 /// * anything else -> a well-formed `<block>no</block>` answer
-async fn mock_openai_chat(
-    State(mock): State<Mock>,
-    Json(body): Json<Value>,
-) -> Response {
+async fn mock_openai_chat(State(mock): State<Mock>, Json(body): Json<Value>) -> Response {
     mock.inner.lock().unwrap().received.push(body.clone());
 
     let model = body["model"].as_str().unwrap_or("").to_string();
@@ -78,25 +75,25 @@ async fn mock_openai_chat(
     if model.starts_with("toolcall") {
         // Return tool_calls instead of text content — no verdict to parse.
         return Json(json!({
-            "id": "chatcmpl-mock",
-            "object": "chat.completion",
- "created": 1,
-            "model": model,
-            "choices": [{"index": 0, "message": {
-                "role": "assistant",
-                "content": null,
-                "tool_calls": [{
-                    "id": "call_1",
-                    "type": "function",
-                    "function": {
-                        "name": "get_weather",
-                        "arguments": "{\"city\": \"SH\"}"
-                    }
-                }]
-            },
-            "finish_reason": "tool_calls"}],
-            "usage": {"prompt_tokens": 11, "completion_tokens": 7}
-        }))
+                   "id": "chatcmpl-mock",
+                   "object": "chat.completion",
+        "created": 1,
+                   "model": model,
+                   "choices": [{"index": 0, "message": {
+                       "role": "assistant",
+                       "content": null,
+                       "tool_calls": [{
+                           "id": "call_1",
+                           "type": "function",
+                           "function": {
+                               "name": "get_weather",
+                               "arguments": "{\"city\": \"SH\"}"
+                           }
+                       }]
+                   },
+                   "finish_reason": "tool_calls"}],
+                   "usage": {"prompt_tokens": 11, "completion_tokens": 7}
+               }))
         .into_response();
     }
 
@@ -174,7 +171,8 @@ fn config_for(mock: SocketAddr, candidates: &[&str]) -> AppConfig {
 
     let mut classifier_candidates = Vec::new();
     for (i, name) in candidates.iter().enumerate() {
-        cfg.models.push(ModelEntry::for_upstream("zai", *name, None));
+        cfg.models
+            .push(ModelEntry::for_upstream("zai", *name, None));
         classifier_candidates.push(ClassifierCandidate {
             model: format!("zai-{name}"),
             priority: 10 * (i as i32 + 1),
@@ -271,7 +269,11 @@ async fn main_and_classifier_traffic_use_their_own_pools() {
     // And the stats split them by kind.
     let summary = h.state.stats().summary();
     let main = summary.per_kind.iter().find(|k| k.kind == "main").unwrap();
-    let auto = summary.per_kind.iter().find(|k| k.kind == "auto_mode").unwrap();
+    let auto = summary
+        .per_kind
+        .iter()
+        .find(|k| k.kind == "auto_mode")
+        .unwrap();
     assert_eq!(main.requests, 1);
     assert_eq!(auto.requests, 1);
 
@@ -396,7 +398,11 @@ async fn all_answers_without_verdicts_fail_closed() {
     let h = Harness::start(config_for(addr, &["garbage-glm", "garbage-backup"]), mock).await;
 
     let resp = h.post(classifier_body()).await;
-    assert_eq!(resp.status(), 502, "no verdict anywhere is an error, not a pass");
+    assert_eq!(
+        resp.status(),
+        502,
+        "no verdict anywhere is an error, not a pass"
+    );
     let body: Value = resp.json().await.unwrap();
     let message = body["error"]["message"].as_str().unwrap();
     // The wire message is sanitized: upstream payload details stay in the log,
@@ -430,7 +436,11 @@ async fn a_non_retryable_rejection_fails_closed() {
 
     let resp = h.post(classifier_body()).await;
     assert_eq!(resp.status(), 400);
-    assert_eq!(h.mock.count(), 1, "a 400 is not retried at the next candidate");
+    assert_eq!(
+        h.mock.count(),
+        1,
+        "a 400 is not retried at the next candidate"
+    );
 
     h.shutdown().await;
 }

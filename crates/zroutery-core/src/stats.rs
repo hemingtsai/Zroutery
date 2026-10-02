@@ -609,7 +609,11 @@ mod tests {
 
         let summary = stats.summary();
         let main = summary.per_kind.iter().find(|k| k.kind == "main").unwrap();
-        let auto = summary.per_kind.iter().find(|k| k.kind == "auto_mode").unwrap();
+        let auto = summary
+            .per_kind
+            .iter()
+            .find(|k| k.kind == "auto_mode")
+            .unwrap();
         assert_eq!(main.requests, 1);
         assert_eq!(main.input_tokens, 100);
         assert!((main.avg_latency_ms - 600.0).abs() < 0.001);
@@ -617,7 +621,11 @@ mod tests {
         assert_eq!(auto.input_tokens, 800);
         assert!((auto.avg_latency_ms - 100.0).abs() < 0.001);
         // Model totals stay whole: both kinds hit the same model row.
-        let model = summary.per_model.iter().find(|m| m.model_id == "zai-glm").unwrap();
+        let model = summary
+            .per_model
+            .iter()
+            .find(|m| m.model_id == "zai-glm")
+            .unwrap();
         assert_eq!(model.requests, 3);
 
         stats.clear();

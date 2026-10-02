@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-use crate::config::{AppConfig, ModelCapabilities, ModelTier, ModelEntry, ProviderConfig};
+use crate::config::{AppConfig, ModelCapabilities, ModelEntry, ModelTier, ProviderConfig};
 use crate::error::{Error, Result};
 
 /// Outcome of resolving a client model id.
