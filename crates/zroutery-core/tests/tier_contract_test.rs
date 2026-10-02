@@ -51,7 +51,11 @@ fn lower_goes_frontier_reasoning_standard_fast() {
 fn higher_then_lower_is_identity() {
     for tier in ModelTier::ALL {
         if let Some(up) = tier.higher() {
-            assert_eq!(up.lower(), Some(tier), "{tier:?} -> higher -> lower should round-trip");
+            assert_eq!(
+                up.lower(),
+                Some(tier),
+                "{tier:?} -> higher -> lower should round-trip"
+            );
         }
     }
 }
@@ -117,7 +121,10 @@ fn virtual_id_internal_style() {
 #[test]
 fn from_virtual_id_accepts_all_styles() {
     // Internal
-    assert_eq!(ModelTier::from_virtual_id("fast-class"), Some(ModelTier::Fast));
+    assert_eq!(
+        ModelTier::from_virtual_id("fast-class"),
+        Some(ModelTier::Fast)
+    );
     assert_eq!(
         ModelTier::from_virtual_id("standard-class"),
         Some(ModelTier::Standard)
@@ -148,7 +155,10 @@ fn from_virtual_id_accepts_all_styles() {
         Some(ModelTier::Frontier)
     );
     // OpenAI
-    assert_eq!(ModelTier::from_virtual_id("luna-class"), Some(ModelTier::Fast));
+    assert_eq!(
+        ModelTier::from_virtual_id("luna-class"),
+        Some(ModelTier::Fast)
+    );
     assert_eq!(
         ModelTier::from_virtual_id("terra-class"),
         Some(ModelTier::Standard)
@@ -173,7 +183,11 @@ fn from_virtual_id_rejects_unknown() {
 #[test]
 fn virtual_id_styled_matches_from_virtual_id() {
     for tier in ModelTier::ALL {
-        for style in [NamingStyle::Internal, NamingStyle::Anthropic, NamingStyle::OpenAI] {
+        for style in [
+            NamingStyle::Internal,
+            NamingStyle::Anthropic,
+            NamingStyle::OpenAI,
+        ] {
             let vid = tier.virtual_id_styled(style);
             assert_eq!(
                 ModelTier::from_virtual_id(vid),
@@ -205,7 +219,10 @@ fn display_name_internal() {
 
 #[test]
 fn display_name_anthropic() {
-    assert_eq!(ModelTier::Fast.display_name(NamingStyle::Anthropic), "Haiku");
+    assert_eq!(
+        ModelTier::Fast.display_name(NamingStyle::Anthropic),
+        "Haiku"
+    );
     assert_eq!(
         ModelTier::Standard.display_name(NamingStyle::Anthropic),
         "Sonnet"
@@ -223,9 +240,18 @@ fn display_name_anthropic() {
 #[test]
 fn display_name_openai() {
     assert_eq!(ModelTier::Fast.display_name(NamingStyle::OpenAI), "Luna");
-    assert_eq!(ModelTier::Standard.display_name(NamingStyle::OpenAI), "Terra");
-    assert_eq!(ModelTier::Reasoning.display_name(NamingStyle::OpenAI), "Sol");
-    assert_eq!(ModelTier::Frontier.display_name(NamingStyle::OpenAI), "Astra");
+    assert_eq!(
+        ModelTier::Standard.display_name(NamingStyle::OpenAI),
+        "Terra"
+    );
+    assert_eq!(
+        ModelTier::Reasoning.display_name(NamingStyle::OpenAI),
+        "Sol"
+    );
+    assert_eq!(
+        ModelTier::Frontier.display_name(NamingStyle::OpenAI),
+        "Astra"
+    );
 }
 
 // ----------------------------------------------------------- as_str
@@ -248,7 +274,11 @@ fn naming_style_default_is_internal() {
 
 #[test]
 fn naming_style_round_trip() {
-    for style in [NamingStyle::Internal, NamingStyle::Anthropic, NamingStyle::OpenAI] {
+    for style in [
+        NamingStyle::Internal,
+        NamingStyle::Anthropic,
+        NamingStyle::OpenAI,
+    ] {
         let json = serde_json::to_string(&style).unwrap();
         let back: NamingStyle = serde_json::from_str(&json).unwrap();
         assert_eq!(back, style);
@@ -329,40 +359,103 @@ fn from_virtual_id_fable_class_maps_to_frontier() {
 #[test]
 fn naming_style_display_vs_resolution_contract() {
     // Internal style displays fast-class, standard-class, reasoning-class, frontier-class
-    assert_eq!(ModelTier::Fast.virtual_id_styled(NamingStyle::Internal), "fast-class");
-    assert_eq!(ModelTier::Standard.virtual_id_styled(NamingStyle::Internal), "standard-class");
-    assert_eq!(ModelTier::Reasoning.virtual_id_styled(NamingStyle::Internal), "reasoning-class");
-    assert_eq!(ModelTier::Frontier.virtual_id_styled(NamingStyle::Internal), "frontier-class");
+    assert_eq!(
+        ModelTier::Fast.virtual_id_styled(NamingStyle::Internal),
+        "fast-class"
+    );
+    assert_eq!(
+        ModelTier::Standard.virtual_id_styled(NamingStyle::Internal),
+        "standard-class"
+    );
+    assert_eq!(
+        ModelTier::Reasoning.virtual_id_styled(NamingStyle::Internal),
+        "reasoning-class"
+    );
+    assert_eq!(
+        ModelTier::Frontier.virtual_id_styled(NamingStyle::Internal),
+        "frontier-class"
+    );
 
     // Anthropic style displays haiku-class, sonnet-class, opus-class, fable-class
-    assert_eq!(ModelTier::Fast.virtual_id_styled(NamingStyle::Anthropic), "haiku-class");
-    assert_eq!(ModelTier::Standard.virtual_id_styled(NamingStyle::Anthropic), "sonnet-class");
-    assert_eq!(ModelTier::Reasoning.virtual_id_styled(NamingStyle::Anthropic), "opus-class");
-    assert_eq!(ModelTier::Frontier.virtual_id_styled(NamingStyle::Anthropic), "fable-class");
+    assert_eq!(
+        ModelTier::Fast.virtual_id_styled(NamingStyle::Anthropic),
+        "haiku-class"
+    );
+    assert_eq!(
+        ModelTier::Standard.virtual_id_styled(NamingStyle::Anthropic),
+        "sonnet-class"
+    );
+    assert_eq!(
+        ModelTier::Reasoning.virtual_id_styled(NamingStyle::Anthropic),
+        "opus-class"
+    );
+    assert_eq!(
+        ModelTier::Frontier.virtual_id_styled(NamingStyle::Anthropic),
+        "fable-class"
+    );
 
     // OpenAI style displays luna-class, terra-class, sol-class, astra-class
-    assert_eq!(ModelTier::Fast.virtual_id_styled(NamingStyle::OpenAI), "luna-class");
-    assert_eq!(ModelTier::Standard.virtual_id_styled(NamingStyle::OpenAI), "terra-class");
-    assert_eq!(ModelTier::Reasoning.virtual_id_styled(NamingStyle::OpenAI), "sol-class");
-    assert_eq!(ModelTier::Frontier.virtual_id_styled(NamingStyle::OpenAI), "astra-class");
+    assert_eq!(
+        ModelTier::Fast.virtual_id_styled(NamingStyle::OpenAI),
+        "luna-class"
+    );
+    assert_eq!(
+        ModelTier::Standard.virtual_id_styled(NamingStyle::OpenAI),
+        "terra-class"
+    );
+    assert_eq!(
+        ModelTier::Reasoning.virtual_id_styled(NamingStyle::OpenAI),
+        "sol-class"
+    );
+    assert_eq!(
+        ModelTier::Frontier.virtual_id_styled(NamingStyle::OpenAI),
+        "astra-class"
+    );
 
     // But ALL of these resolve to the same tier, regardless of active style.
     // This is the backward-compat contract.
-    assert_eq!(ModelTier::from_virtual_id("reasoning-class"), Some(ModelTier::Reasoning));
-    assert_eq!(ModelTier::from_virtual_id("opus-class"), Some(ModelTier::Reasoning));
-    assert_eq!(ModelTier::from_virtual_id("sol-class"), Some(ModelTier::Reasoning));
+    assert_eq!(
+        ModelTier::from_virtual_id("reasoning-class"),
+        Some(ModelTier::Reasoning)
+    );
+    assert_eq!(
+        ModelTier::from_virtual_id("opus-class"),
+        Some(ModelTier::Reasoning)
+    );
+    assert_eq!(
+        ModelTier::from_virtual_id("sol-class"),
+        Some(ModelTier::Reasoning)
+    );
 
-    assert_eq!(ModelTier::from_virtual_id("frontier-class"), Some(ModelTier::Frontier));
-    assert_eq!(ModelTier::from_virtual_id("fable-class"), Some(ModelTier::Frontier));
-    assert_eq!(ModelTier::from_virtual_id("astra-class"), Some(ModelTier::Frontier));
+    assert_eq!(
+        ModelTier::from_virtual_id("frontier-class"),
+        Some(ModelTier::Frontier)
+    );
+    assert_eq!(
+        ModelTier::from_virtual_id("fable-class"),
+        Some(ModelTier::Frontier)
+    );
+    assert_eq!(
+        ModelTier::from_virtual_id("astra-class"),
+        Some(ModelTier::Frontier)
+    );
 }
 
 /// display_name follows the same style contract.
 #[test]
 fn display_name_matches_style() {
-    assert_eq!(ModelTier::Frontier.display_name(NamingStyle::Internal), "Frontier");
-    assert_eq!(ModelTier::Frontier.display_name(NamingStyle::Anthropic), "Fable");
-    assert_eq!(ModelTier::Frontier.display_name(NamingStyle::OpenAI), "Astra");
+    assert_eq!(
+        ModelTier::Frontier.display_name(NamingStyle::Internal),
+        "Frontier"
+    );
+    assert_eq!(
+        ModelTier::Frontier.display_name(NamingStyle::Anthropic),
+        "Fable"
+    );
+    assert_eq!(
+        ModelTier::Frontier.display_name(NamingStyle::OpenAI),
+        "Astra"
+    );
 }
 
 // ---------------------------------------- supports_* skip_serializing
@@ -401,9 +494,18 @@ fn legacy_supports_fields_not_written_to_json() {
 
     // After serialize, supports_* should NOT appear (skip_serializing).
     let out = serde_json::to_value(&entry).unwrap();
-    assert!(out.get("supports_tools").is_none(), "supports_tools should be skipped");
-    assert!(out.get("supports_vision").is_none(), "supports_vision should be skipped");
-    assert!(out.get("supports_thinking").is_none(), "supports_thinking should be skipped");
+    assert!(
+        out.get("supports_tools").is_none(),
+        "supports_tools should be skipped"
+    );
+    assert!(
+        out.get("supports_vision").is_none(),
+        "supports_vision should be skipped"
+    );
+    assert!(
+        out.get("supports_thinking").is_none(),
+        "supports_thinking should be skipped"
+    );
     // capabilities SHOULD appear.
     assert!(out.get("capabilities").is_some());
 }

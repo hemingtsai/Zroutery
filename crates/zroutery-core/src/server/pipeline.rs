@@ -24,14 +24,14 @@ use crate::config::{ModelTier, RoutingConfig};
 use crate::error::{Error, Result};
 use crate::failure::ClassifiedFailure;
 use crate::ir::{ChatRequest, Dialect, StoredResponse, StreamEvent, Usage};
+#[cfg(feature = "ml")]
+use crate::ml::ShadowInput;
 use crate::outcome::{Attempt as OutcomeAttempt, CandidateIdentity, Outcome};
 use crate::policy::{self, ClientContext, RouteDecision, RoutingPolicy};
 use crate::protocol::{self, openai, SseFrame, StreamEncoder};
 use crate::query::RequestKind;
-use crate::rectifier::{self, Rectifier};
 use crate::rectifier::media_fallback::MediaFallbackRectifier;
-#[cfg(feature = "ml")]
-use crate::ml::ShadowInput;
+use crate::rectifier::{self, Rectifier};
 use crate::registry::{Registry, Resolution};
 use crate::router::Candidate;
 use crate::stats::{RecordBuilder, RequestRecord};
@@ -129,18 +129,19 @@ pub(super) async fn handle_chat(
                     // Resolution::Tier uses policy-aware routing when a policy is
                     // resolved (via client profile, matchers, or default).
                     match &resolution {
-                        Resolution::Direct(_) => {
-                            state.router.plan(&registry, &resolution, &req.required_capabilities)
-                                .map(|plan| (plan, None))
-                        }
-                        Resolution::Tier(_) => {
-                            match &matched_policy {
-                                Some(policy) => {
-                                    tracing::debug!(
-                                        policy_id = %policy.id,
-                                        "using policy-aware routing"
-                                    );
-                                    state.router.plan_with_policy(
+                        Resolution::Direct(_) => state
+                            .router
+                            .plan(&registry, &resolution, &req.required_capabilities)
+                            .map(|plan| (plan, None)),
+                        Resolution::Tier(_) => match &matched_policy {
+                            Some(policy) => {
+                                tracing::debug!(
+                                    policy_id = %policy.id,
+                                    "using policy-aware routing"
+                                );
+                                state
+                                    .router
+                                    .plan_with_policy(
                                         &registry,
                                         &resolution,
                                         &req.required_capabilities,
@@ -148,19 +149,19 @@ pub(super) async fn handle_chat(
                                         &policy.preference,
                                         &policy.fallback,
                                         Some(&task_profile),
-                                    ).map(|(plan, mut decision)| {
+                                    )
+                                    .map(|(plan, mut decision)| {
                                         decision.policy_id = policy.id.clone();
                                         decision.policy_revision.policy_id = policy.id.clone();
                                         decision.policy_revision.policy_enabled = policy.enabled;
                                         (plan, Some(decision))
                                     })
-                                }
-                                None => {
-                                    state.router.plan(&registry, &resolution, &req.required_capabilities)
-                                        .map(|plan| (plan, None))
-                                }
                             }
-                        }
+                            None => state
+                                .router
+                                .plan(&registry, &resolution, &req.required_capabilities)
+                                .map(|plan| (plan, None)),
+                        },
                     }
                 });
             match result {
@@ -383,11 +384,7 @@ fn encode_mode_for(kind: RequestKind) -> crate::upstream::EncodeMode {
 /// The entire operation is bounded by a 30-second timeout to prevent
 /// unbounded latency when the vision model is slow. On timeout, any
 /// remaining images are replaced with the placeholder.
-async fn apply_vision_fallback(
-    state: &AppState,
-    req: &mut ChatRequest,
-    reason: &str,
-) {
+async fn apply_vision_fallback(state: &AppState, req: &mut ChatRequest, reason: &str) {
     let timeout = std::time::Duration::from_secs(30);
     if tokio::time::timeout(timeout, apply_vision_fallback_inner(state, req, reason))
         .await
@@ -417,11 +414,7 @@ async fn apply_vision_fallback(
 
 /// Inner implementation of the vision fallback, extracted so it can be
 /// wrapped in an aggregate timeout.
-async fn apply_vision_fallback_inner(
-    state: &AppState,
-    req: &mut ChatRequest,
-    reason: &str,
-) {
+async fn apply_vision_fallback_inner(state: &AppState, req: &mut ChatRequest, reason: &str) {
     let config = state.config();
     let images = crate::media::collect::collect(req);
     if images.is_empty() {
@@ -448,40 +441,33 @@ async fn apply_vision_fallback_inner(
         return;
     }
     let target = target.unwrap();
-    let key = state
-        .api_key(&target.provider)
-        .ok()
-        .flatten();
+    let key = state.api_key(&target.provider).ok().flatten();
 
     let mut described = 0;
     let mut placeholders = 0;
     for (slot, source) in &images {
-        let replacement = match crate::media::vision::describe(
-            &state.upstream,
-            &target,
-            key.as_deref(),
-            source,
-        )
-        .await
-        {
-            Ok(resp) => {
-                described += 1;
-                crate::media::transform::Replacement::Description(
-                    crate::media::vision::description_text(&resp),
-                )
-            }
-            Err(e) => {
-                placeholders += 1;
-                tracing::warn!(
-                    vision_model = target.entry.exposed_id(),
-                    error = %e,
-                    "vision description failed; using the placeholder for this image"
-                );
-                crate::media::transform::Replacement::Placeholder(
-                    config.vision.placeholder.clone(),
-                )
-            }
-        };
+        let replacement =
+            match crate::media::vision::describe(&state.upstream, &target, key.as_deref(), source)
+                .await
+            {
+                Ok(resp) => {
+                    described += 1;
+                    crate::media::transform::Replacement::Description(
+                        crate::media::vision::description_text(&resp),
+                    )
+                }
+                Err(e) => {
+                    placeholders += 1;
+                    tracing::warn!(
+                        vision_model = target.entry.exposed_id(),
+                        error = %e,
+                        "vision description failed; using the placeholder for this image"
+                    );
+                    crate::media::transform::Replacement::Placeholder(
+                        config.vision.placeholder.clone(),
+                    )
+                }
+            };
         crate::media::transform::replace(req, slot, &replacement);
     }
     tracing::info!(
@@ -969,8 +955,7 @@ async fn buffered_chat(
                             );
                             state.response_store.put(stored);
                         }
-                        let mut response =
-                            Json(wire).into_response();
+                        let mut response = Json(wire).into_response();
                         inject_routing_headers(response.headers_mut(), candidate, kind);
                         inject_cost_header(response.headers_mut(), cost.as_ref());
                         return response;
@@ -1363,7 +1348,11 @@ fn resolve_policy<'a>(
 ) -> Option<Cow<'a, RoutingPolicy>> {
     // Step 1: Try client profiles.
     if let Some(profile) = policy::resolve_client(&config.clients, client_ctx) {
-        if let Some(policy) = config.policies.iter().find(|p| p.id == profile.policy_id && p.enabled) {
+        if let Some(policy) = config
+            .policies
+            .iter()
+            .find(|p| p.id == profile.policy_id && p.enabled)
+        {
             tracing::debug!(
                 client_profile = %profile.id,
                 policy_id = %policy.id,
@@ -1395,7 +1384,11 @@ fn resolve_policy<'a>(
 
     // Step 3: Fall back to default policy.
     if let Some(ref default_id) = config.default_policy {
-        if let Some(policy) = config.policies.iter().find(|p| p.id == *default_id && p.enabled) {
+        if let Some(policy) = config
+            .policies
+            .iter()
+            .find(|p| p.id == *default_id && p.enabled)
+        {
             tracing::debug!(
                 policy_id = %policy.id,
                 "policy resolved via default_policy config"
@@ -1482,7 +1475,9 @@ impl TerminalKind {
             TerminalKind::ClientDisconnected { emitted: false } => {
                 Some(ClassifiedFailure::cancelled(DROPPED_BEFORE_OUTPUT))
             }
-            TerminalKind::ClientCancelled => Some(ClassifiedFailure::cancelled(CANCELLED_BY_CLIENT)),
+            TerminalKind::ClientCancelled => {
+                Some(ClassifiedFailure::cancelled(CANCELLED_BY_CLIENT))
+            }
         }
     }
 
@@ -1533,7 +1528,10 @@ fn planned_identity(
     plan: &[Candidate],
 ) -> Option<CandidateIdentity> {
     if let Some(planned) = decision.and_then(RouteDecision::planned_identity) {
-        return Some(CandidateIdentity::new(planned.model_id, planned.provider_id));
+        return Some(CandidateIdentity::new(
+            planned.model_id,
+            planned.provider_id,
+        ));
     }
     plan.first().map(identity_of)
 }
@@ -1859,13 +1857,12 @@ impl RequestLifecycle {
             return;
         }
         let decision = self.decision.clone();
-        let projected =
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                self.state
-                    .projections()
-                    .record(outcome.clone(), decision.clone());
-                crate::observability::project_request(outcome, decision.as_ref())
-            }));
+        let projected = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.state
+                .projections()
+                .record(outcome.clone(), decision.clone());
+            crate::observability::project_request(outcome, decision.as_ref())
+        }));
         match projected {
             Ok(crate::observability::Projection::Projected(record)) => {
                 tracing::debug!(
@@ -2376,18 +2373,18 @@ fn sse_body(
                 Some(Ok(event)) => {
                     // Override response ID with pre-generated one if the
                     // upstream did not supply one.
-                    let event =
-                        match (&st.response_id, &event) {
-                            (
-                                Some(ref pregen_id),
-                                StreamEvent::Start { id, model, usage },
-                            ) if id.is_empty() => StreamEvent::Start {
+                    let event = match (&st.response_id, &event) {
+                        (Some(ref pregen_id), StreamEvent::Start { id, model, usage })
+                            if id.is_empty() =>
+                        {
+                            StreamEvent::Start {
                                 id: pregen_id.clone(),
                                 model: model.clone(),
                                 usage: *usage,
-                            },
-                            _ => event,
-                        };
+                            }
+                        }
+                        _ => event,
+                    };
                     match &event {
                         StreamEvent::ThinkingDelta { .. } => {
                             let elapsed = st.elapsed_ms();

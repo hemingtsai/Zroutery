@@ -271,11 +271,7 @@ impl MediaSource {
 /// Dispatches by top-level category for `image/*`, `audio/*`, and `video/*`.
 /// Known document MIME types (text/*, PDF, Office XML, etc.) map to
 /// [`ContentBlock::Document`].  Everything else becomes [`ContentBlock::File`].
-pub fn classify_media(
-    media_type: &str,
-    source: MediaSource,
-    name: Option<String>,
-) -> ContentBlock {
+pub fn classify_media(media_type: &str, source: MediaSource, name: Option<String>) -> ContentBlock {
     let lower = media_type.to_ascii_lowercase();
     let category = lower.split('/').next().unwrap_or("");
     match category {
@@ -560,7 +556,11 @@ impl ChatRequest {
         if !self.tools.is_empty() || self.tool_choice.is_some() {
             required.insert(Capability::Tools);
         }
-        if self.thinking.as_ref().is_some_and(|thinking| thinking.enabled) {
+        if self
+            .thinking
+            .as_ref()
+            .is_some_and(|thinking| thinking.enabled)
+        {
             required.insert(Capability::Thinking);
         }
 
@@ -766,7 +766,11 @@ mod tests {
         let json = r#"{"Citation":{"text":"minimal"}}"#;
         let block: ContentBlock = serde_json::from_str(json).unwrap();
         match block {
-            ContentBlock::Citation { text, source, title } => {
+            ContentBlock::Citation {
+                text,
+                source,
+                title,
+            } => {
                 assert_eq!(text, "minimal");
                 assert!(source.is_none());
                 assert!(title.is_none());

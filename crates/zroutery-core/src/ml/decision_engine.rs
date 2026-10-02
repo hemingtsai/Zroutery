@@ -35,7 +35,7 @@ use serde::{Deserialize, Serialize};
 use super::coordinator::{CoordinatorConfig, RoutingAction, RoutingDecision};
 use super::model::Prediction;
 use super::reward::{
-    Action, ActionGuard, PredictionBundle, RewardPolicy, UtilityBreakdown, compute_utility,
+    compute_utility, Action, ActionGuard, PredictionBundle, RewardPolicy, UtilityBreakdown,
 };
 use crate::session::SessionRoutingMode;
 
@@ -268,9 +268,7 @@ impl DecisionEngine {
                     .find(|(candidate, _)| &candidate.candidate_id == candidate_id)
             })
         } else {
-            valid
-                .iter()
-                .max_by(|a, b| a.1.total.total_cmp(&b.1.total))
+            valid.iter().max_by(|a, b| a.1.total.total_cmp(&b.1.total))
         };
         let current_utility = valid
             .iter()
@@ -324,7 +322,11 @@ impl DecisionEngine {
 
     /// Classify one input candidate: rejected (ineligible / non-finite
     /// prediction / non-finite utility) or valid with its computed utility.
-    fn classify_candidate(&self, candidate: &EngineCandidate, input: &EngineInput) -> CandidateOutcome {
+    fn classify_candidate(
+        &self,
+        candidate: &EngineCandidate,
+        input: &EngineInput,
+    ) -> CandidateOutcome {
         let rejected = |eligible: bool, reason: &str| CandidateOutcome {
             candidate_id: candidate.candidate_id.clone(),
             eligible,
@@ -503,7 +505,10 @@ mod tests {
         if coordinator.reason == "no candidates available" {
             // The engine's terminal arm for an empty valid set is deliberately
             // more precise about *why* the set is empty.
-            assert_eq!(engine.reason, "no valid candidates", "{ctx}: terminal reason");
+            assert_eq!(
+                engine.reason, "no valid candidates",
+                "{ctx}: terminal reason"
+            );
         } else {
             assert_eq!(engine.reason, coordinator.reason, "{ctx}: reason mismatch");
         }
@@ -544,8 +549,14 @@ mod tests {
             .iter()
             .map(|(id, bundle)| engine_candidate(id, bundle.clone()))
             .collect();
-        let engine_output =
-            run_engine(&engine, current, &candidates, mode, switch_count, is_fallback);
+        let engine_output = run_engine(
+            &engine,
+            current,
+            &candidates,
+            mode,
+            switch_count,
+            is_fallback,
+        );
 
         let coordinator_bundles: Vec<PredictionBundle> =
             bundles.iter().map(|(_, bundle)| bundle.clone()).collect();
@@ -567,7 +578,10 @@ mod tests {
             "outcome count must match input count"
         );
         for (outcome, (id, _)) in engine_output.candidates.iter().zip(bundles.iter()) {
-            assert_eq!(outcome.candidate_id, *id, "outcome order must follow input order");
+            assert_eq!(
+                outcome.candidate_id, *id,
+                "outcome order must follow input order"
+            );
             assert!(outcome.eligible, "fixture candidate must be eligible");
             assert!(outcome.valid, "fixture candidate must be valid");
             assert!(
@@ -576,7 +590,11 @@ mod tests {
             );
         }
 
-        assert_decisions_match(&engine_output.decision, &coordinator_decision, "cross_check");
+        assert_decisions_match(
+            &engine_output.decision,
+            &coordinator_decision,
+            "cross_check",
+        );
         (engine_output, coordinator_decision)
     }
 
@@ -882,7 +900,10 @@ mod tests {
         );
         assert_eq!(custom_coordinator.action, RoutingAction::Keep);
         assert_eq!(custom_output.decision.action, RoutingAction::Keep);
-        assert_eq!(custom_output.decision.reason, "utility delta below threshold");
+        assert_eq!(
+            custom_output.decision.reason,
+            "utility delta below threshold"
+        );
     }
 
     #[test]
@@ -899,7 +920,14 @@ mod tests {
             "model-a",
             bundle("model-a", 0.9, 500.0, 200.0, 0.02),
         )];
-        let output = run_engine(&engine, "model-z", &candidates, SessionRoutingMode::Free, 0, false);
+        let output = run_engine(
+            &engine,
+            "model-z",
+            &candidates,
+            SessionRoutingMode::Free,
+            0,
+            false,
+        );
 
         // success component = 0.9 * 2.0 (engine policy), not 0.9 * 1.0.
         assert!(
@@ -1016,8 +1044,14 @@ mod tests {
             engine_candidate("model-a", bundle("model-a", 0.9, 500.0, 200.0, 0.02)),
             engine_candidate("model-c", bundle("model-c", 0.3, 4000.0, 1500.0, 0.9)),
         ];
-        let output =
-            run_engine(&engine, "model-z", &candidates, SessionRoutingMode::Free, 0, false);
+        let output = run_engine(
+            &engine,
+            "model-z",
+            &candidates,
+            SessionRoutingMode::Free,
+            0,
+            false,
+        );
 
         assert_eq!(output.candidates.len(), 3);
         let rejected = &output.candidates[0];
@@ -1037,10 +1071,7 @@ mod tests {
 
         // Decision runs over the survivors only and matches the Coordinator
         // over the same survivors.
-        let valid_bundles = vec![
-            candidates[1].bundle.clone(),
-            candidates[2].bundle.clone(),
-        ];
+        let valid_bundles = vec![candidates[1].bundle.clone(), candidates[2].bundle.clone()];
         let expected = run_coordinator(
             CoordinatorConfig::default(),
             RewardPolicy::default(),
@@ -1066,8 +1097,14 @@ mod tests {
             engine_candidate("model-a", nan_value),
             engine_candidate("model-b", nan_confidence),
         ];
-        let output =
-            run_engine(&engine, "model-a", &candidates, SessionRoutingMode::Free, 0, false);
+        let output = run_engine(
+            &engine,
+            "model-a",
+            &candidates,
+            SessionRoutingMode::Free,
+            0,
+            false,
+        );
 
         assert_eq!(output.decision.action, RoutingAction::Keep);
         assert_eq!(output.decision.selected_candidate, "model-a");
@@ -1093,10 +1130,9 @@ mod tests {
             ("success.value", |b| b.success.value = f64::NAN),
             ("success.confidence", |b| b.success.confidence = f64::NAN),
             ("latency.value", |b| b.latency.value = f64::INFINITY),
-            (
-                "latency.confidence",
-                |b| b.latency.confidence = f64::NEG_INFINITY,
-            ),
+            ("latency.confidence", |b| {
+                b.latency.confidence = f64::NEG_INFINITY
+            }),
             ("ttft.value", |b| b.ttft.value = f64::NAN),
             ("ttft.confidence", |b| b.ttft.confidence = f64::NAN),
             ("cost.value", |b| b.cost.value = f64::INFINITY),
@@ -1110,9 +1146,18 @@ mod tests {
                 engine_candidate("model-b", poisoned),
                 engine_candidate("model-a", bundle("model-a", 0.9, 500.0, 200.0, 0.02)),
             ];
-            let output =
-                run_engine(&engine, "model-z", &candidates, SessionRoutingMode::Free, 0, false);
-            assert!(!output.candidates[0].valid, "slot {slot} should be rejected");
+            let output = run_engine(
+                &engine,
+                "model-z",
+                &candidates,
+                SessionRoutingMode::Free,
+                0,
+                false,
+            );
+            assert!(
+                !output.candidates[0].valid,
+                "slot {slot} should be rejected"
+            );
             assert_eq!(
                 output.candidates[0].rejection_reason.as_deref(),
                 Some("non-finite prediction"),
@@ -1122,10 +1167,7 @@ mod tests {
                 output.candidates[1].valid,
                 "slot {slot} must not affect other candidates"
             );
-            assert_eq!(
-                output.decision.selected_candidate, "model-a",
-                "slot {slot}"
-            );
+            assert_eq!(output.decision.selected_candidate, "model-a", "slot {slot}");
         }
     }
 
@@ -1135,8 +1177,14 @@ mod tests {
         let mut poisoned = bundle("model-a", 0.9, 500.0, 200.0, 0.02);
         poisoned.latency.value = f64::INFINITY;
         let candidates = vec![engine_candidate("model-a", poisoned)];
-        let output =
-            run_engine(&engine, "model-a", &candidates, SessionRoutingMode::Free, 0, false);
+        let output = run_engine(
+            &engine,
+            "model-a",
+            &candidates,
+            SessionRoutingMode::Free,
+            0,
+            false,
+        );
 
         assert!(!output.candidates[0].valid);
         assert_eq!(
@@ -1156,8 +1204,14 @@ mod tests {
             engine_candidate("model-a", poisoned),
             engine_candidate("model-b", bundle("model-b", 0.95, 200.0, 100.0, 0.01)),
         ];
-        let output =
-            run_engine(&engine, "model-z", &candidates, SessionRoutingMode::Free, 0, false);
+        let output = run_engine(
+            &engine,
+            "model-z",
+            &candidates,
+            SessionRoutingMode::Free,
+            0,
+            false,
+        );
 
         assert!(!output.candidates[0].valid);
         assert_eq!(
@@ -1180,8 +1234,14 @@ mod tests {
             engine_candidate("model-c", bundle("model-c", 0.95, 200.0, 100.0, 0.01)),
             engine_candidate("model-a", bundle("model-a", 0.3, 4000.0, 1500.0, 0.9)),
         ];
-        let output =
-            run_engine(&engine, "model-z", &candidates, SessionRoutingMode::Free, 0, false);
+        let output = run_engine(
+            &engine,
+            "model-z",
+            &candidates,
+            SessionRoutingMode::Free,
+            0,
+            false,
+        );
 
         let rejected = &output.candidates[0];
         assert!(!rejected.eligible);
@@ -1197,10 +1257,7 @@ mod tests {
         assert_eq!(output.decision.action, RoutingAction::Switch);
         assert_eq!(output.decision.selected_candidate, "model-c");
 
-        let valid_bundles = vec![
-            candidates[1].bundle.clone(),
-            candidates[2].bundle.clone(),
-        ];
+        let valid_bundles = vec![candidates[1].bundle.clone(), candidates[2].bundle.clone()];
         let expected = run_coordinator(
             CoordinatorConfig::default(),
             RewardPolicy::default(),
@@ -1226,8 +1283,14 @@ mod tests {
             },
             engine_candidate("model-a", bundle("model-a", 0.9, 500.0, 200.0, 0.02)),
         ];
-        let output =
-            run_engine(&engine, "model-a", &candidates, SessionRoutingMode::Free, 0, false);
+        let output = run_engine(
+            &engine,
+            "model-a",
+            &candidates,
+            SessionRoutingMode::Free,
+            0,
+            false,
+        );
 
         assert_eq!(
             output.candidates[0].rejection_reason.as_deref(),
@@ -1251,8 +1314,14 @@ mod tests {
             engine_candidate("model-h", bundle("model-h", 1e300, 200.0, 100.0, 0.01)),
             engine_candidate("model-n", bundle("model-n", 0.9, 500.0, 200.0, 0.02)),
         ];
-        let output =
-            run_engine(&engine, "model-z", &candidates, SessionRoutingMode::Free, 0, false);
+        let output = run_engine(
+            &engine,
+            "model-z",
+            &candidates,
+            SessionRoutingMode::Free,
+            0,
+            false,
+        );
 
         let rejected = &output.candidates[0];
         assert!(rejected.eligible);
@@ -1294,8 +1363,14 @@ mod tests {
             engine_candidate("model-a", bundle("model-a", 0.9, 500.0, 200.0, 0.02)),
             engine_candidate("model-b", bundle("model-b", 0.95, 200.0, 100.0, 0.01)),
         ];
-        let output =
-            run_engine(&engine, "model-a", &candidates, SessionRoutingMode::Free, 0, false);
+        let output = run_engine(
+            &engine,
+            "model-a",
+            &candidates,
+            SessionRoutingMode::Free,
+            0,
+            false,
+        );
 
         for outcome in &output.candidates {
             assert!(!outcome.valid);
@@ -1361,8 +1436,14 @@ mod tests {
                 with_success_conf(bundle("model-b", 0.9, 500.0, 200.0, 0.02), 0.5),
             ),
         ];
-        let output =
-            run_engine(&engine, "model-z", &candidates, SessionRoutingMode::Sticky, 0, false);
+        let output = run_engine(
+            &engine,
+            "model-z",
+            &candidates,
+            SessionRoutingMode::Sticky,
+            0,
+            false,
+        );
 
         assert_eq!(output.decision.action, RoutingAction::Keep);
         assert_eq!(output.decision.selected_candidate, "model-z");
@@ -1396,8 +1477,14 @@ mod tests {
             engine_candidate("model-c", nan),
             engine_candidate("model-d", bundle("model-d", 0.3, 4000.0, 1500.0, 0.9)),
         ];
-        let output =
-            run_engine(&engine, "model-z", &candidates, SessionRoutingMode::Free, 0, false);
+        let output = run_engine(
+            &engine,
+            "model-z",
+            &candidates,
+            SessionRoutingMode::Free,
+            0,
+            false,
+        );
 
         let ids: Vec<&str> = output
             .candidates
@@ -1427,8 +1514,14 @@ mod tests {
             engine_candidate("model-b", bundle("model-b", 0.95, 200.0, 100.0, 0.01)),
             engine_candidate("model-a", bundle("model-a", 0.3, 4000.0, 1500.0, 0.9)),
         ];
-        let output =
-            run_engine(&engine, "model-a", &candidates, SessionRoutingMode::Free, 0, false);
+        let output = run_engine(
+            &engine,
+            "model-a",
+            &candidates,
+            SessionRoutingMode::Free,
+            0,
+            false,
+        );
         assert_eq!(output.decision.action, RoutingAction::Switch);
         assert_utility_identical(
             &output.decision.utility,
@@ -1441,7 +1534,14 @@ mod tests {
             engine_candidate("model-b", bundle("model-b", 0.9, 480.0, 190.0, 0.02)),
             engine_candidate("model-a", bundle("model-a", 0.9, 500.0, 200.0, 0.02)),
         ];
-        let output = run_engine(&engine, "model-a", &close, SessionRoutingMode::Free, 0, false);
+        let output = run_engine(
+            &engine,
+            "model-a",
+            &close,
+            SessionRoutingMode::Free,
+            0,
+            false,
+        );
         assert_eq!(output.decision.action, RoutingAction::Keep);
         assert_utility_identical(
             &output.decision.utility,
@@ -1461,13 +1561,22 @@ mod tests {
             engine_candidate("model-b", bundle("model-b", 0.95, 200.0, 100.0, 0.01)),
             engine_candidate("model-c", nan),
         ];
-        let output =
-            run_engine(&engine, "model-a", &candidates, SessionRoutingMode::Free, 0, false);
+        let output = run_engine(
+            &engine,
+            "model-a",
+            &candidates,
+            SessionRoutingMode::Free,
+            0,
+            false,
+        );
 
         let json = serde_json::to_string(&output).unwrap();
         let restored: EngineOutput = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.decision.action, output.decision.action);
-        assert_eq!(restored.decision.selected_candidate, output.decision.selected_candidate);
+        assert_eq!(
+            restored.decision.selected_candidate,
+            output.decision.selected_candidate
+        );
         assert_eq!(restored.decision.reason, output.decision.reason);
         assert_eq!(restored.candidates.len(), 2);
         assert!(restored.candidates[0].valid);

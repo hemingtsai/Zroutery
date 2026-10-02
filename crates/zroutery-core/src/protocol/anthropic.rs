@@ -103,9 +103,10 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
                 req.stop_sequences = values
                     .iter()
                     .map(|value| {
-                        value.as_str().map(str::to_string).ok_or_else(|| {
-                            Error::invalid("stop sequence entries must be strings")
-                        })
+                        value
+                            .as_str()
+                            .map(str::to_string)
+                            .ok_or_else(|| Error::invalid("stop sequence entries must be strings"))
                     })
                     .collect::<Result<Vec<_>>>()?;
             }
@@ -816,9 +817,7 @@ impl StreamParser for AnthropicStreamParser {
                         }
                     }
                     Some(_) => {
-                        return Err(unsupported_upstream_content(
-                            "Anthropic stream block",
-                        ));
+                        return Err(unsupported_upstream_content("Anthropic stream block"));
                     }
                     None => {
                         return Err(Error::BadUpstreamPayload(
@@ -863,9 +862,7 @@ impl StreamParser for AnthropicStreamParser {
                             .to_string(),
                     }],
                     Some(_) => {
-                        return Err(unsupported_upstream_content(
-                            "Anthropic stream delta",
-                        ));
+                        return Err(unsupported_upstream_content("Anthropic stream delta"));
                     }
                     None => {
                         return Err(Error::BadUpstreamPayload(

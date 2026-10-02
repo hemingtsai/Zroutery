@@ -216,7 +216,11 @@ pub async fn refresh(app: &AppHandle, desktop: &Desktop) {
     if let Some(handles) = app.try_state::<TrayHandles>() {
         let _ = handles.status.set_text(&label);
         let _ = handles.toggle.set_text(if running {
-            if zh { "停止网关" } else { "Stop gateway" }
+            if zh {
+                "停止网关"
+            } else {
+                "Stop gateway"
+            }
         } else if zh {
             "启动网关"
         } else {

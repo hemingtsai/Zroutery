@@ -71,7 +71,11 @@ fn held_open_stream(id: &str) -> axum::body::Body {
             json!({"role": "assistant", "content": ""}),
             Value::Null,
         ));
-        let _ = tx.send(openai_chunk(&second, json!({"content": "hel"}), Value::Null));
+        let _ = tx.send(openai_chunk(
+            &second,
+            json!({"content": "hel"}),
+            Value::Null,
+        ));
         std::future::pending::<()>().await;
     });
     let stream = futures_util::stream::unfold(rx, |mut rx| async move {
@@ -107,7 +111,11 @@ async fn mock_chat(State(mock): State<Mock>, Json(body): Json<Value>) -> Respons
             json!({"role": "assistant", "content": ""}),
             Value::Null,
         ));
-        sse.push_str(&openai_chunk("chatcmpl-mock", json!({"content": "hi"}), Value::Null));
+        sse.push_str(&openai_chunk(
+            "chatcmpl-mock",
+            json!({"content": "hi"}),
+            Value::Null,
+        ));
         sse.push_str(&openai_chunk("chatcmpl-mock", json!({}), json!("stop")));
         sse.push_str("data: [DONE]\n\n");
         return Response::builder()
@@ -156,7 +164,8 @@ fn provider(id: &str, name: &str, mock: SocketAddr) -> ProviderConfig {
 }
 
 fn model(provider: &str, upstream: &str, priority: i32, tier: ModelTier) -> ModelEntry {
-    let mut entry = ModelEntry::for_upstream(provider, upstream, Some(tier)).with_priority(priority);
+    let mut entry =
+        ModelEntry::for_upstream(provider, upstream, Some(tier)).with_priority(priority);
     entry.pricing = Some(Pricing::new("USD", 3.0, 15.0));
     entry
 }
@@ -395,7 +404,10 @@ async fn a_served_request_ingests_the_retained_decision_time_vectors() {
             "sample '{}' must carry the retained vector",
             sample.model_id
         );
-        assert_eq!(sample.features.schema_version, retained.features.schema_version);
+        assert_eq!(
+            sample.features.schema_version,
+            retained.features.schema_version
+        );
         assert_eq!(sample.request_id, outcome.request_id);
         assert_eq!(sample.outcome_id, outcome.outcome_id);
         assert!(sample.feedback.is_none(), "no user signal was supplied");
@@ -407,7 +419,11 @@ async fn a_served_request_ingests_the_retained_decision_time_vectors() {
     assert_eq!(request.model_id, served.model());
     assert_eq!(request.provider_id, served.provider());
     assert_eq!(
-        request.identity.served.as_ref().map(|identity| identity.model.as_str()),
+        request
+            .identity
+            .served
+            .as_ref()
+            .map(|identity| identity.model.as_str()),
         Some(served.model())
     );
     assert!(request.targets.latency_ms.is_some());
@@ -505,7 +521,8 @@ async fn a_failover_ingests_the_failed_attempt_as_a_negative_sample() {
     assert!(failed.targets.latency_ms.is_none());
     assert!(failed.targets.ttft_ms.is_none());
     assert_eq!(
-        failed.final_status, FinalStatus::Success,
+        failed.final_status,
+        FinalStatus::Success,
         "the request as a whole still succeeded"
     );
 
@@ -557,7 +574,10 @@ async fn a_failed_request_is_ingested_as_a_negative_sample() {
     assert!(request.targets.latency_ms.is_none());
     assert!(request.targets.ttft_ms.is_none());
     assert!(request.terminal_error.is_some());
-    assert_eq!(request.terminal_error.as_ref().map(|facts| facts.class), Some(failure_class));
+    assert_eq!(
+        request.terminal_error.as_ref().map(|facts| facts.class),
+        Some(failure_class)
+    );
 
     let attempt = h.attempt_sample(&outcome.request_id, 0);
     assert!(!attempt.success);
@@ -596,7 +616,10 @@ async fn an_abandoned_stream_is_ingested_as_an_interrupted_sample() {
     let request = h.request_sample(&outcome.request_id);
     assert!(!request.success, "an abandoned answer is not a success");
     assert_eq!(request.final_status, FinalStatus::Interrupted);
-    assert_eq!(request.targets.failure_class.as_deref(), Some("Interrupted"));
+    assert_eq!(
+        request.targets.failure_class.as_deref(),
+        Some("Interrupted")
+    );
     assert!(request.identity.served.is_none());
     assert!(request.targets.latency_ms.is_none());
     assert!(request.targets.ttft_ms.is_none());
@@ -619,7 +642,12 @@ async fn a_budget_refusal_ingests_nothing_and_reports_no_decision_time_input() {
     for entry in &mut cfg.models {
         entry.pricing = Some(Pricing::new("USD", 1000.0, 1000.0));
     }
-    cfg.budgets = vec![Budget::new(BudgetScope::Global, BudgetPeriod::Day, "USD", 0.01)];
+    cfg.budgets = vec![Budget::new(
+        BudgetScope::Global,
+        BudgetPeriod::Day,
+        "USD",
+        0.01,
+    )];
     let h = Harness::start(cfg, mock).await;
 
     // The first request fits and is ingested.
@@ -637,7 +665,10 @@ async fn a_budget_refusal_ingests_nothing_and_reports_no_decision_time_input() {
         .into_iter()
         .find(|outcome| outcome.request_id != first.request_id)
         .expect("the refused request still has an outcome");
-    assert!(refused_outcome.attempts.is_empty(), "no candidate was tried");
+    assert!(
+        refused_outcome.attempts.is_empty(),
+        "no candidate was tried"
+    );
     assert!(h
         .samples()
         .iter()
@@ -645,7 +676,10 @@ async fn a_budget_refusal_ingests_nothing_and_reports_no_decision_time_input() {
 
     let counters = h.state.dataset().counters();
     assert_eq!(counters.ingested, 1);
-    assert_eq!(counters.no_decision_time_input, 1, "the refusal is observable");
+    assert_eq!(
+        counters.no_decision_time_input, 1,
+        "the refusal is observable"
+    );
     assert_eq!(counters.rejected, 0, "it is not a rejected sample");
 
     h.shutdown().await;
@@ -658,7 +692,10 @@ async fn a_budget_refusal_ingests_nothing_and_reports_no_decision_time_input() {
 async fn without_a_retained_record_nothing_is_ingested_and_it_is_counted() {
     let (addr, mock) = start_mock().await;
     let h = Harness::start(config_for(addr, false), mock).await;
-    assert!(!h.state.shadow().enabled(), "shadow is off for this harness");
+    assert!(
+        !h.state.shadow().enabled(),
+        "shadow is off for this harness"
+    );
 
     assert_eq!(h.ask("standard-class").await.status(), 200);
     let outcome = h.outcome();
@@ -666,7 +703,10 @@ async fn without_a_retained_record_nothing_is_ingested_and_it_is_counted() {
     assert!(outcome.served_identity().is_some());
 
     assert!(h.state.shadow().store().decisions().is_empty());
-    assert!(h.samples().is_empty(), "no record means no features and no sample");
+    assert!(
+        h.samples().is_empty(),
+        "no record means no features and no sample"
+    );
     assert_eq!(h.state.dataset().len(), 0);
     let counters = h.state.dataset().counters();
     assert_eq!(counters.no_decision_time_input, 1);
@@ -700,7 +740,10 @@ async fn collecting_samples_influences_no_response() {
     let second_body: Value = second.json().await.unwrap();
 
     assert_eq!(first_model, second_model, "the same model served both");
-    assert_eq!(first_provider, second_provider, "the same provider served both");
+    assert_eq!(
+        first_provider, second_provider,
+        "the same provider served both"
+    );
     assert_eq!(first_body, second_body, "the answer is unchanged");
     assert_eq!(h.state.shadow().fault_count(), 0);
     assert_eq!(h.state.dataset().counters().faults, 0);

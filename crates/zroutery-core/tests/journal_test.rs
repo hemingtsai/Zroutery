@@ -53,7 +53,9 @@ use zroutery_core::ml::model_identity::{
     CommitId, LearningEvent, ModelCommit, ModelEnsemble, ModelId, ModelStore,
     LEARNING_EVENT_SCHEMA_VERSION,
 };
-use zroutery_core::outcome::{Attempt, CandidateIdentity, FailureFacts, FinalStatus, OutcomeIdentity};
+use zroutery_core::outcome::{
+    Attempt, CandidateIdentity, FailureFacts, FinalStatus, OutcomeIdentity,
+};
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -224,8 +226,11 @@ fn frame_offsets(bytes: &[u8]) -> Vec<usize> {
 /// function. The corruption tests need frames whose checksums are *correct*, so
 /// that a refusal can only come from the property under test.
 fn encode_frame(previous: u64, sequence: u64, body: &[u8]) -> Vec<u8> {
-    let mut frame = format!("{sequence}\t{:016x}\t", frame_checksum(previous, sequence, body))
-        .into_bytes();
+    let mut frame = format!(
+        "{sequence}\t{:016x}\t",
+        frame_checksum(previous, sequence, body)
+    )
+    .into_bytes();
     frame.extend_from_slice(body);
     frame.push(b'\n');
     frame
@@ -252,7 +257,9 @@ fn directory_listing(dir: &Path) -> Vec<String> {
 
 fn sequence_of(outcome: RecordOutcome) -> u64 {
     match outcome {
-        RecordOutcome::Appended { sequence, .. } | RecordOutcome::Duplicate { sequence } => sequence,
+        RecordOutcome::Appended { sequence, .. } | RecordOutcome::Duplicate { sequence } => {
+            sequence
+        }
     }
 }
 
@@ -329,7 +336,8 @@ fn a_record_written_before_a_restart_is_readable_after_it() {
 fn a_second_handle_on_a_live_journal_is_refused() {
     let root = scratch();
     let dir = journal_dir(root.path());
-    let mut first = LearningJournal::open(&dir, JournalMode::Append).expect("the first handle opens");
+    let mut first =
+        LearningJournal::open(&dir, JournalMode::Append).expect("the first handle opens");
     first
         .record_canonical(canonical_event("evt-lock-1", "l1", true))
         .expect("a record is written");
@@ -377,7 +385,11 @@ fn a_stale_lock_is_a_refusal_and_not_a_corruption() {
     let journal = LearningJournal::open(&dir, JournalMode::Append).expect("the journal reopens");
     let store = ModelStore::new();
     let records = journal.read_records(&store).expect("the record is intact");
-    assert_eq!(records.len(), 1, "clearing a lost lock did not lose a record");
+    assert_eq!(
+        records.len(),
+        1,
+        "clearing a lost lock did not lose a record"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -497,11 +509,13 @@ fn a_duplicated_frame_is_detected() {
     );
 
     match LearningJournal::open(&dir, JournalMode::Read) {
-        Err(JournalError::SequenceConflict {
-            fault, actual, ..
-        }) => {
+        Err(JournalError::SequenceConflict { fault, actual, .. }) => {
             assert_eq!(actual, 1, "the repeat is the sequence just read");
-            assert_eq!(fault, SequenceFault::Duplicate, "and it is named a duplicate");
+            assert_eq!(
+                fault,
+                SequenceFault::Duplicate,
+                "and it is named a duplicate"
+            );
         }
         other => panic!("a duplicated frame must be refused, got {other:?}"),
     }
@@ -536,7 +550,9 @@ fn an_identical_record_is_a_reported_no_op() {
     let mut retry = event;
     retry.created_at = 1_800_000_000;
     assert_eq!(
-        journal.record_canonical(retry).expect("the retry is accepted"),
+        journal
+            .record_canonical(retry)
+            .expect("the retry is accepted"),
         RecordOutcome::Duplicate { sequence: 1 },
         "the no-op is reported, with the sequence that was already there"
     );
@@ -546,7 +562,9 @@ fn an_identical_record_is_a_reported_no_op() {
         "a duplicate writes no bytes"
     );
 
-    let records = journal.read_records(&store).expect("the journal reads back");
+    let records = journal
+        .read_records(&store)
+        .expect("the journal reads back");
     assert_eq!(records.len(), 1, "the retry did not create a second record");
 }
 
@@ -695,7 +713,9 @@ fn a_conflicting_record_is_refused_and_never_overwrites() {
     journal
         .record_canonical(canonical_event("evt-conflict-1", "c1", true))
         .expect("the first record is written");
-    let original = journal.read_records(&store).expect("the journal reads back");
+    let original = journal
+        .read_records(&store)
+        .expect("the journal reads back");
 
     match journal.record_canonical(canonical_event("evt-conflict-1", "c2", false)) {
         Err(JournalError::IdempotencyConflict { event_id, reason }) => {
@@ -708,7 +728,9 @@ fn a_conflicting_record_is_refused_and_never_overwrites() {
         other => panic!("a conflicting record must be refused, got {other:?}"),
     }
 
-    let after = journal.read_records(&store).expect("the journal still reads back");
+    let after = journal
+        .read_records(&store)
+        .expect("the journal still reads back");
     assert_eq!(after.len(), 1, "the conflict added nothing");
     assert_eq!(
         after[0].event.samples, original[0].event.samples,
@@ -788,8 +810,15 @@ fn a_record_whose_commit_no_longer_verifies_is_refused() {
 
     let journal = LearningJournal::open(&dir, JournalMode::Read).expect("the journal reopens");
     let records = journal.read_records(&store).expect("the lineage verifies");
-    assert_eq!(records.len(), 1, "a record with a verified commit is present");
-    assert!(records[0].is_applied(), "the record says it carries a result");
+    assert_eq!(
+        records.len(),
+        1,
+        "a record with a verified commit is present"
+    );
+    assert!(
+        records[0].is_applied(),
+        "the record says it carries a result"
+    );
     assert_eq!(
         records[0].event.result_commit,
         records[0].event.result_commit.clone(),
@@ -1020,8 +1049,11 @@ fn a_torn_tail_and_a_lost_suffix_are_different_refusals() {
         let target = root.path().join(name);
         fs::create_dir_all(&target).expect("a directory");
         fs::write(target.join(JOURNAL_LOG_NAME), log).expect("the log is writable");
-        fs::copy(dir.join(JOURNAL_ANCHOR_NAME), target.join(JOURNAL_ANCHOR_NAME))
-            .expect("the anchor is copyable");
+        fs::copy(
+            dir.join(JOURNAL_ANCHOR_NAME),
+            target.join(JOURNAL_ANCHOR_NAME),
+        )
+        .expect("the anchor is copyable");
         target
     };
 
@@ -1307,8 +1339,11 @@ fn a_bad_path_is_refused_with_its_own_reason() {
     // unprovable, so it is refused rather than adopted.
     let unanchored = root.path().join("unanchored");
     fs::create_dir_all(&unanchored).expect("a directory");
-    fs::write(unanchored.join(JOURNAL_LOG_NAME), b"1\t0000000000000000\t{}\n")
-        .expect("the log is writable");
+    fs::write(
+        unanchored.join(JOURNAL_LOG_NAME),
+        b"1\t0000000000000000\t{}\n",
+    )
+    .expect("the log is writable");
     match LearningJournal::open(&unanchored, JournalMode::Append) {
         Err(JournalError::NotAJournal { reason, .. }) => assert!(
             reason.contains(JOURNAL_ANCHOR_NAME),
@@ -1454,7 +1489,10 @@ fn every_refusal_carries_a_reason() {
     ];
     for refusal in refusals {
         let text = refusal.to_string();
-        assert!(text.len() > 8, "a refusal must explain itself, got {text:?}");
+        assert!(
+            text.len() > 8,
+            "a refusal must explain itself, got {text:?}"
+        );
         let _: &dyn std::error::Error = &refusal;
     }
 }
@@ -1753,7 +1791,9 @@ fn writing_and_reading_a_record_trains_nothing() {
             .expect("a record is written");
     }
     let journal = LearningJournal::open(&dir, JournalMode::Read).expect("the journal reopens");
-    let records = journal.read_records(&store).expect("the journal reads back");
+    let records = journal
+        .read_records(&store)
+        .expect("the journal reads back");
     assert_eq!(records.len(), 1);
 
     assert_eq!(store.get_head(), head_before, "the head did not move");

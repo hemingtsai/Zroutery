@@ -25,7 +25,11 @@ pub struct Signal<T> {
 
 impl<T: Default + Copy> Default for Signal<T> {
     fn default() -> Self {
-        Signal { value: None, sample_count: 0, observed_at: None }
+        Signal {
+            value: None,
+            sample_count: 0,
+            observed_at: None,
+        }
     }
 }
 
@@ -254,7 +258,9 @@ pub struct ObservationStore {
 
 impl ObservationStore {
     pub fn new() -> Self {
-        Self { observations: Mutex::new(HashMap::new()) }
+        Self {
+            observations: Mutex::new(HashMap::new()),
+        }
     }
 
     fn key(model_id: &str, provider_id: &str) -> ProviderModelKey {
@@ -284,7 +290,9 @@ impl ObservationStore {
             .filter(|(k, _)| k.model_id == model_id)
             .map(|(_, v)| v.clone())
             .max_by(|a, b| {
-                a.health.score().partial_cmp(&b.health.score())
+                a.health
+                    .score()
+                    .partial_cmp(&b.health.score())
                     .unwrap_or(std::cmp::Ordering::Equal)
             })
     }
@@ -377,20 +385,44 @@ mod tests {
     #[test]
     fn signal_is_stale_within_threshold() {
         let s = Signal::new(1u32);
-        assert!(!s.is_stale(60), "freshly created signal should not be stale");
+        assert!(
+            !s.is_stale(60),
+            "freshly created signal should not be stale"
+        );
     }
 
     // -- ObservationFreshness -------------------------------------------------
 
     #[test]
     fn freshness_from_age_secs() {
-        assert_eq!(ObservationFreshness::from_age_secs(0), ObservationFreshness::Fresh);
-        assert_eq!(ObservationFreshness::from_age_secs(29), ObservationFreshness::Fresh);
-        assert_eq!(ObservationFreshness::from_age_secs(30), ObservationFreshness::Recent);
-        assert_eq!(ObservationFreshness::from_age_secs(299), ObservationFreshness::Recent);
-        assert_eq!(ObservationFreshness::from_age_secs(300), ObservationFreshness::Stale);
-        assert_eq!(ObservationFreshness::from_age_secs(1799), ObservationFreshness::Stale);
-        assert_eq!(ObservationFreshness::from_age_secs(1800), ObservationFreshness::Unknown);
+        assert_eq!(
+            ObservationFreshness::from_age_secs(0),
+            ObservationFreshness::Fresh
+        );
+        assert_eq!(
+            ObservationFreshness::from_age_secs(29),
+            ObservationFreshness::Fresh
+        );
+        assert_eq!(
+            ObservationFreshness::from_age_secs(30),
+            ObservationFreshness::Recent
+        );
+        assert_eq!(
+            ObservationFreshness::from_age_secs(299),
+            ObservationFreshness::Recent
+        );
+        assert_eq!(
+            ObservationFreshness::from_age_secs(300),
+            ObservationFreshness::Stale
+        );
+        assert_eq!(
+            ObservationFreshness::from_age_secs(1799),
+            ObservationFreshness::Stale
+        );
+        assert_eq!(
+            ObservationFreshness::from_age_secs(1800),
+            ObservationFreshness::Unknown
+        );
     }
 
     #[test]
@@ -418,7 +450,10 @@ mod tests {
     #[test]
     fn latency_score_streaming_no_ttft() {
         let obs = LatencyObservation::default();
-        assert!((obs.score(true) - 0.5).abs() < f64::EPSILON, "unknown = neutral 0.5");
+        assert!(
+            (obs.score(true) - 0.5).abs() < f64::EPSILON,
+            "unknown = neutral 0.5"
+        );
     }
 
     #[test]
@@ -446,7 +481,10 @@ mod tests {
             total_ms: Signal::default(),
             tokens_per_sec: Signal::default(),
         };
-        assert!((obs.score(true) - 0.0).abs() < f64::EPSILON, "huge TTFT clamps to 0.0");
+        assert!(
+            (obs.score(true) - 0.0).abs() < f64::EPSILON,
+            "huge TTFT clamps to 0.0"
+        );
     }
 
     // -- HealthObservation ----------------------------------------------------
@@ -920,6 +958,6 @@ mod tests {
         // Current behavior: each record_success replaces the Signal
         assert_eq!(obs.latency.total_ms.sample_count, 1); // NOT 2
         assert_eq!(obs.latency.total_ms.value, Some(200.0)); // latest value
-        // This documents that Signal tracks the latest observation, not a running average.
+                                                             // This documents that Signal tracks the latest observation, not a running average.
     }
 }

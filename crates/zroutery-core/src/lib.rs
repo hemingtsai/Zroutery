@@ -57,9 +57,7 @@ pub mod upstream;
 #[cfg(feature = "account")]
 pub mod account;
 
-pub use agent_takeover::{
-    ExternalModification, OwnershipManifest, OwnershipState, TakeoverStore,
-};
+pub use agent_takeover::{ExternalModification, OwnershipManifest, OwnershipState, TakeoverStore};
 pub use billing::{
     Balance, BalanceConfig, BalancePreset, BalanceProbe, BaseDepth, Cost, CostTotals, Pricing,
 };
@@ -74,19 +72,30 @@ pub use config::{
     ProviderKind, RectifierConfig, RoutingConfig, RoutingStrategy, SecretStore, ServerConfig,
     VisionConfig, WindowBehavior,
 };
-pub use election::{TierElection, Election, Measurement, Ranked, ScoringConfig};
+pub use election::{Election, Measurement, Ranked, ScoringConfig, TierElection};
 pub use error::{Error, Result};
 pub use failure::{ClassifiedFailure, FailureClass, FailureImpact};
 pub use feedback::{
     feedback_from_outcome, outcome_to_feedback, try_feedback_from_outcome, DataOrigin, Feedback,
-    FeedbackSignal, FeedbackSource, OutcomeSummary,
-    TrainingSample as FeedbackTrainingSample,
+    FeedbackSignal, FeedbackSource, OutcomeSummary, TrainingSample as FeedbackTrainingSample,
 };
+pub use ir::response::{ResponseStatus, ResponseStore, StoredResponse};
 pub use ir::{
     Capability, ChatRequest, ChatResponse, ContentBlock, Dialect, Message, Role, StopReason,
     StreamEvent, SystemPart, ToolChoice, Usage,
 };
-pub use ir::response::{ResponseStatus, ResponseStore, StoredResponse};
+pub use migration::{
+    MigrationAction, MigrationPlan, MigrationResult, MigrationState, MigrationStep, MigrationStore,
+};
+#[cfg(feature = "ml")]
+pub use ml::{
+    extract_features, outcome_to_dataset_sample, samples_from_outcome, temporal_split,
+    validate_outcome_sample, validate_sample, Action, ActionGuard, AttemptReward,
+    CanonicalTrainingSample, ComparisonReport, DatasetStore, DatasetTrainingSample, Evaluator,
+    FeatureContext, FrozenHoldout, OutcomeDatasetSample, OutcomeTrainingSample, PredictionMetrics,
+    Recommendation, RequestReward, RewardComputer, RewardPolicy, RoutingDeltas, RoutingFeatures,
+    RoutingMetrics, SampleBuilder, SampleScope, Targets, FEATURE_DIMENSION, FEATURE_SCHEMA_VERSION,
+};
 pub use observation::{
     HealthState, LatencyObservation, ObservationFreshness, ObservationStore, RuntimeObservation,
     Signal,
@@ -96,32 +105,18 @@ pub use outcome::{
     Outcome, OutcomeBuilder, OutcomeIdentity,
 };
 pub use policy::{
-    ClientContext, ClientMatcher, ClientProfile, EligibilityCheck, PolicyConfig, PolicyFallback,
-    PolicyMatcher, PolicyPreference, PolicyRequirements, RejectionReason, RoutingPolicy,
-    resolve_client,
+    resolve_client, ClientContext, ClientMatcher, ClientProfile, EligibilityCheck, PolicyConfig,
+    PolicyFallback, PolicyMatcher, PolicyPreference, PolicyRequirements, RejectionReason,
+    RoutingPolicy,
 };
 pub use query::{RequestKind, SideQueryKind};
 pub use registry::{Registry, Resolution};
 pub use router::{Candidate, Router};
-pub use session::{SessionRoutingMode, SessionState, SessionStore};
 pub use server::{build_app, AppState, ServerHandle};
+pub use session::{SessionRoutingMode, SessionState, SessionStore};
 pub use stats::{RequestRecord, Stats};
 pub use stats_ext::{
     Ewma, FailureStats, LatencyStats, PercentileEstimator, ProviderModelStats, StatsStore,
-};
-pub use migration::{
-    MigrationAction, MigrationPlan, MigrationResult, MigrationState, MigrationStep, MigrationStore,
-};
-#[cfg(feature = "ml")]
-pub use ml::{
-    Action, ActionGuard, AttemptReward, RequestReward, RewardComputer, RewardPolicy,
-    CanonicalTrainingSample, DatasetStore, DatasetTrainingSample, OutcomeDatasetSample,
-    outcome_to_dataset_sample,
-    OutcomeTrainingSample, SampleBuilder, SampleScope, Targets, samples_from_outcome,
-    validate_outcome_sample, validate_sample,
-    extract_features, FeatureContext, RoutingFeatures, FEATURE_DIMENSION, FEATURE_SCHEMA_VERSION,
-    ComparisonReport, Evaluator, FrozenHoldout, PredictionMetrics, Recommendation, RoutingDeltas,
-    RoutingMetrics, temporal_split,
 };
 pub use upstream::{DiscoveredModel, Upstream};
 

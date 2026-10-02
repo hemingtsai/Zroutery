@@ -32,14 +32,25 @@ impl Replacement {
 /// underneath), which the caller treats as "nothing replaced".
 pub fn replace(req: &mut ChatRequest, slot: &ImageSlot, replacement: &Replacement) -> bool {
     let (message_index, block_index) = match slot {
-        ImageSlot::Message { message_index, block_index }
-        | ImageSlot::ToolResult { message_index, block_index, .. } => (*message_index, *block_index),
+        ImageSlot::Message {
+            message_index,
+            block_index,
+        }
+        | ImageSlot::ToolResult {
+            message_index,
+            block_index,
+            ..
+        } => (*message_index, *block_index),
     };
-    let Some(message) = req.messages.get_mut(message_index) else { return false };
+    let Some(message) = req.messages.get_mut(message_index) else {
+        return false;
+    };
 
     let replaced = match slot {
         ImageSlot::Message { .. } => {
-            let Some(block) = message.content.get_mut(block_index) else { return false };
+            let Some(block) = message.content.get_mut(block_index) else {
+                return false;
+            };
             if !matches!(block, ContentBlock::Image { .. }) {
                 return false;
             }
@@ -47,9 +58,15 @@ pub fn replace(req: &mut ChatRequest, slot: &ImageSlot, replacement: &Replacemen
             true
         }
         ImageSlot::ToolResult { part_index, .. } => {
-            let Some(block) = message.content.get_mut(block_index) else { return false };
-            let ContentBlock::ToolResult { content, .. } = block else { return false };
-            let Some(part) = content.get_mut(*part_index) else { return false };
+            let Some(block) = message.content.get_mut(block_index) else {
+                return false;
+            };
+            let ContentBlock::ToolResult { content, .. } = block else {
+                return false;
+            };
+            let Some(part) = content.get_mut(*part_index) else {
+                return false;
+            };
             if !matches!(part, ToolResultPart::Image { .. }) {
                 return false;
             }
@@ -86,11 +103,24 @@ mod tests {
         });
         req.refresh_required_capabilities();
         assert!(req.required_capabilities.contains(&Capability::Vision));
-        let slot = ImageSlot::Message { message_index: 0, block_index: 0 };
-        assert!(replace(&mut req, &slot, &Replacement::Description("a cat".into())));
+        let slot = ImageSlot::Message {
+            message_index: 0,
+            block_index: 0,
+        };
+        assert!(replace(
+            &mut req,
+            &slot,
+            &Replacement::Description("a cat".into())
+        ));
         assert!(!req.required_capabilities.contains(&Capability::Vision));
-        assert_eq!(req.messages[0].content[0], ContentBlock::text("[Image description: a cat]"));
-        assert_eq!(req.messages[0].content[1], ContentBlock::text("what is this"));
+        assert_eq!(
+            req.messages[0].content[0],
+            ContentBlock::text("[Image description: a cat]")
+        );
+        assert_eq!(
+            req.messages[0].content[1],
+            ContentBlock::text("what is this")
+        );
     }
 
     #[test]
@@ -107,13 +137,23 @@ mod tests {
                 is_error: false,
             }],
         });
-        let slot = ImageSlot::ToolResult { message_index: 0, block_index: 0, part_index: 0 };
-        assert!(replace(&mut req, &slot, &Replacement::Placeholder("[Unsupported Image]".into())));
+        let slot = ImageSlot::ToolResult {
+            message_index: 0,
+            block_index: 0,
+            part_index: 0,
+        };
+        assert!(replace(
+            &mut req,
+            &slot,
+            &Replacement::Placeholder("[Unsupported Image]".into())
+        ));
         match &req.messages[0].content[0] {
             ContentBlock::ToolResult { content, .. } => {
                 assert_eq!(
                     content[0],
-                    ToolResultPart::Text { text: "[Unsupported Image]".into() }
+                    ToolResultPart::Text {
+                        text: "[Unsupported Image]".into()
+                    }
                 );
             }
             other => panic!("unexpected {other:?}"),
@@ -124,9 +164,19 @@ mod tests {
     fn a_slot_that_no_longer_matches_is_reported_not_patched() {
         let mut req = ChatRequest::new("m", Dialect::Anthropic);
         req.messages.push(Message::user_text("no image here"));
-        let slot = ImageSlot::Message { message_index: 0, block_index: 0 };
-        assert!(!replace(&mut req, &slot, &Replacement::Description("x".into())));
+        let slot = ImageSlot::Message {
+            message_index: 0,
+            block_index: 0,
+        };
+        assert!(!replace(
+            &mut req,
+            &slot,
+            &Replacement::Description("x".into())
+        ));
         // The text block is untouched, not replaced with a bogus description.
-        assert_eq!(req.messages[0].content[0], ContentBlock::text("no image here"));
+        assert_eq!(
+            req.messages[0].content[0],
+            ContentBlock::text("no image here")
+        );
     }
 }

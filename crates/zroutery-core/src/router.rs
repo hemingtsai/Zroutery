@@ -10,16 +10,18 @@ use rand::Rng;
 use serde::{Deserialize, Serialize};
 
 use crate::circuit_breaker::{CircuitBreaker, CircuitBreakerConfig, CircuitState};
-use crate::config::{ClassifierConfig, ModelTier, ModelEntry, ProviderConfig, RoutingConfig, RoutingStrategy};
-use crate::failure::ClassifiedFailure;
-use crate::observation::ObservationStore;
+use crate::config::{
+    ClassifierConfig, ModelEntry, ModelTier, ProviderConfig, RoutingConfig, RoutingStrategy,
+};
 use crate::election::Election;
 use crate::error::{Error, Result};
+use crate::failure::ClassifiedFailure;
 use crate::ir::Capability;
+use crate::observation::ObservationStore;
 use crate::policy::{
-    canonical_capabilities, capability_label, CandidateDecision, DecisionReason, PolicyFallback,
-    PolicyPreference, PolicyRequirements, PolicyRevision, PlannedIdentity, RouteDecision,
-    ScoringContext, TaskProfile, TaskProfileSummary, score_candidate, hash_to_u64,
+    canonical_capabilities, capability_label, hash_to_u64, score_candidate, CandidateDecision,
+    DecisionReason, PlannedIdentity, PolicyFallback, PolicyPreference, PolicyRequirements,
+    PolicyRevision, RouteDecision, ScoringContext, TaskProfile, TaskProfileSummary,
 };
 use crate::registry::{Registry, Resolution};
 use crate::stats_ext::StatsStore;
@@ -286,12 +288,8 @@ impl Router {
             );
         }
 
-        let filtered = self.filter_eligible(
-            registry,
-            &members,
-            requirements,
-            &request_capabilities,
-        );
+        let filtered =
+            self.filter_eligible(registry, &members, requirements, &request_capabilities);
         let mut fallback_chain: Vec<String> = Vec::new();
         let effective = if filtered.is_empty() {
             match fallback {
@@ -480,9 +478,7 @@ impl Router {
             preference_hash: hash_to_u64(preference),
         };
 
-        let mut task_summary = task
-            .map(TaskProfileSummary::from)
-            .unwrap_or_default();
+        let mut task_summary = task.map(TaskProfileSummary::from).unwrap_or_default();
         for capability in &request_capabilities {
             let label = capability_label(*capability).to_string();
             if !task_summary.required_capabilities.contains(&label) {
@@ -497,7 +493,9 @@ impl Router {
             policy_id: String::new(),
             client_id: None,
             candidates: decisions,
-            selected: candidates.first().map(|candidate| candidate.exposed_id.clone()),
+            selected: candidates
+                .first()
+                .map(|candidate| candidate.exposed_id.clone()),
             fallback_chain,
             reason,
             policy_revision,
@@ -605,9 +603,8 @@ impl Router {
             circuit_open,
             request_capabilities,
         );
-        let rejection = (!check.eligible).then(|| {
-            crate::policy::bounded_trace_text(&check.reason_strings().join(", "))
-        });
+        let rejection = (!check.eligible)
+            .then(|| crate::policy::bounded_trace_text(&check.reason_strings().join(", ")));
         decisions.push(CandidateDecision {
             model_id: member.exposed_id(),
             provider_id: member.provider_id.clone(),
@@ -633,12 +630,7 @@ impl Router {
             {
                 continue;
             }
-            self.push_candidate_decision(
-                decisions,
-                member,
-                requirements,
-                request_capabilities,
-            );
+            self.push_candidate_decision(decisions, member, requirements, request_capabilities);
         }
     }
 
@@ -664,25 +656,28 @@ impl Router {
         let mut current = start_tier;
         let mut seen: Vec<&ModelEntry> = Vec::new();
         for _ in 0..max_steps {
-            let Some(next) = (if up { current.higher() } else { current.lower() }) else {
+            let Some(next) = (if up {
+                current.higher()
+            } else {
+                current.lower()
+            }) else {
                 break;
             };
             current = next;
             let members = registry.tier_members(current);
             for member in &members {
-                if !seen.iter().any(|entry| entry.exposed_id() == member.exposed_id()) {
+                if !seen
+                    .iter()
+                    .any(|entry| entry.exposed_id() == member.exposed_id())
+                {
                     seen.push(*member);
                 }
             }
             if members.is_empty() {
                 continue;
             }
-            let filtered = self.filter_eligible(
-                registry,
-                &members,
-                requirements,
-                request_capabilities,
-            );
+            let filtered =
+                self.filter_eligible(registry, &members, requirements, request_capabilities);
             if !filtered.is_empty() {
                 tracing::info!(
                     from = %start_tier.virtual_id(),
@@ -716,7 +711,10 @@ impl Router {
         members: Vec<&'a ModelEntry>,
         preference: &PolicyPreference,
         task: Option<&TaskProfile>,
-    ) -> (Vec<&'a ModelEntry>, Vec<(String, crate::policy::ScoreBreakdown, f64)>) {
+    ) -> (
+        Vec<&'a ModelEntry>,
+        Vec<(String, crate::policy::ScoreBreakdown, f64)>,
+    ) {
         let mut scored: Vec<(&ModelEntry, f64, crate::policy::ScoreBreakdown)> = members
             .iter()
             .map(|m| {
@@ -731,11 +729,14 @@ impl Router {
                 let avg_latency_ms = if streaming {
                     // For streaming, TTFT is the primary signal; fall back to
                     // total latency when no TTFT observation exists.
-                    obs.latency.ttft_ms.value
+                    obs.latency
+                        .ttft_ms
+                        .value
                         .or(obs.latency.total_ms.value)
                         .unwrap_or_else(|| self.avg_latency(&m.exposed_id()))
                 } else {
-                    obs.latency.total_ms
+                    obs.latency
+                        .total_ms
                         .value
                         .unwrap_or_else(|| self.avg_latency(&m.exposed_id()))
                 };
@@ -1271,12 +1272,7 @@ impl Router {
         // Keep the legacy Error-shaped API, but make the canonical classified
         // result the sole input to every health decision.
         let failure = error.classified();
-        self.update_classified_health(
-            model_id,
-            &failure,
-            routing,
-            Some(error.safe_message()),
-        );
+        self.update_classified_health(model_id, &failure, routing, Some(error.safe_message()));
     }
 
     /// Whether a request may actually be sent to this model.
@@ -1467,8 +1463,7 @@ fn by_priority<'a>(members: &[&'a ModelEntry]) -> Vec<&'a ModelEntry> {
 /// is `Supported`, while false is `Unknown`, never an implicit pass.
 fn satisfies_capabilities(model: &ModelEntry, required: &[Capability]) -> bool {
     required.iter().all(|capability| {
-        model.capabilities.capability_state(*capability)
-            == crate::ir::CapabilityState::Supported
+        model.capabilities.capability_state(*capability) == crate::ir::CapabilityState::Supported
     })
 }
 
@@ -1505,7 +1500,9 @@ mod tests {
             ModelEntry::for_upstream("p2", "b", Some(ModelTier::Standard)),
         ]));
         let router = Router::new();
-        let plan = router.plan(&r, &Resolution::Direct("p1-a".into()), &[]).unwrap();
+        let plan = router
+            .plan(&r, &Resolution::Direct("p1-a".into()), &[])
+            .unwrap();
         assert_eq!(ids(&plan), vec!["p1-a"]);
     }
 
@@ -1831,7 +1828,9 @@ mod tests {
             ],
             &[("p2-deepseek", 20), ("p1-glm", 10)],
         ));
-        let plan = Router::new().plan_classifier(&r, &r.config().classifier).unwrap();
+        let plan = Router::new()
+            .plan_classifier(&r, &r.config().classifier)
+            .unwrap();
         assert_eq!(ids(&plan), vec!["p1-glm", "p2-deepseek"]);
     }
 
@@ -1842,7 +1841,9 @@ mod tests {
             vec![ModelEntry::for_upstream("p1", "glm", None)],
             &[("p1-glm", 10)],
         ));
-        let plan = Router::new().plan_classifier(&r, &r.config().classifier).unwrap();
+        let plan = Router::new()
+            .plan_classifier(&r, &r.config().classifier)
+            .unwrap();
         assert_eq!(ids(&plan), vec!["p1-glm"]);
     }
 
@@ -1858,7 +1859,9 @@ mod tests {
         );
         cfg.classifier.max_attempts = 2;
         let r = reg(cfg);
-        let plan = Router::new().plan_classifier(&r, &r.config().classifier).unwrap();
+        let plan = Router::new()
+            .plan_classifier(&r, &r.config().classifier)
+            .unwrap();
         assert_eq!(ids(&plan), vec!["p1-a", "p2-b"]);
     }
 
@@ -1873,7 +1876,9 @@ mod tests {
         );
         cfg.classifier.failover = false;
         let r = reg(cfg);
-        let plan = Router::new().plan_classifier(&r, &r.config().classifier).unwrap();
+        let plan = Router::new()
+            .plan_classifier(&r, &r.config().classifier)
+            .unwrap();
         assert_eq!(plan.len(), 1);
     }
 
@@ -1890,7 +1895,9 @@ mod tests {
         // A disabled candidate entry is skipped too.
         cfg.classifier.candidates[2].enabled = false;
         let r = reg(cfg);
-        let plan = Router::new().plan_classifier(&r, &r.config().classifier).unwrap();
+        let plan = Router::new()
+            .plan_classifier(&r, &r.config().classifier)
+            .unwrap();
         assert_eq!(ids(&plan), vec!["p1-a"]);
     }
 
@@ -1932,9 +1939,7 @@ mod tests {
         }
         // The classifier pool has nothing left: glm is cooling and it was the
         // only candidate.
-        assert!(router
-            .plan_classifier(&r, &r.config().classifier)
-            .is_err());
+        assert!(router.plan_classifier(&r, &r.config().classifier).is_err());
 
         // ...and the main tier plan demotes glm for main requests as well.
         let plan = router
@@ -1956,7 +1961,9 @@ mod tests {
         );
         cfg.classifier.strategy = RoutingStrategy::Balanced;
         let r = reg(cfg);
-        let plan = Router::new().plan_classifier(&r, &r.config().classifier).unwrap();
+        let plan = Router::new()
+            .plan_classifier(&r, &r.config().classifier)
+            .unwrap();
         assert_eq!(ids(&plan), vec!["p2-b", "p1-a"]);
     }
 
@@ -1972,10 +1979,10 @@ mod tests {
         cfg.classifier.strategy = RoutingStrategy::RoundRobin;
         let r = reg(cfg);
         let router = Router::new();
-        let first = ids(&router.plan_classifier(&r, &r.config().classifier).unwrap())[0]
-            .to_string();
-        let second = ids(&router.plan_classifier(&r, &r.config().classifier).unwrap())[0]
-            .to_string();
+        let first =
+            ids(&router.plan_classifier(&r, &r.config().classifier).unwrap())[0].to_string();
+        let second =
+            ids(&router.plan_classifier(&r, &r.config().classifier).unwrap())[0].to_string();
         assert_ne!(first, second);
     }
 
@@ -1986,16 +1993,18 @@ mod tests {
         // Both models lack vision; a request-derived vision requirement must
         // not be softened back into the unfiltered pool.
         let mut cfg = cfg_with(vec![
-            ModelEntry::for_upstream("p1", "text-only", Some(ModelTier::Standard))
-                .with_priority(0),
-            ModelEntry::for_upstream("p2", "also-text", Some(ModelTier::Standard))
-                .with_priority(1),
+            ModelEntry::for_upstream("p1", "text-only", Some(ModelTier::Standard)).with_priority(0),
+            ModelEntry::for_upstream("p2", "also-text", Some(ModelTier::Standard)).with_priority(1),
         ]);
         cfg.routing.rectifier.enabled = false;
         let r = reg(cfg);
         let router = Router::new();
         let err = router
-            .plan(&r, &Resolution::Tier(ModelTier::Standard), &[Capability::Vision])
+            .plan(
+                &r,
+                &Resolution::Tier(ModelTier::Standard),
+                &[Capability::Vision],
+            )
             .unwrap_err();
         assert!(matches!(err, Error::NoCandidate(_)));
     }
@@ -2011,7 +2020,11 @@ mod tests {
         let r = reg(cfg);
         let router = Router::new();
         let err = router
-            .plan(&r, &Resolution::Tier(ModelTier::Standard), &[Capability::Vision])
+            .plan(
+                &r,
+                &Resolution::Tier(ModelTier::Standard),
+                &[Capability::Vision],
+            )
             .unwrap_err();
         assert!(matches!(err, Error::NoCandidate(_)));
     }
@@ -2030,7 +2043,11 @@ mod tests {
         let r = reg(cfg);
         let router = Router::new();
         let plan = router
-            .plan(&r, &Resolution::Tier(ModelTier::Standard), &[Capability::Vision])
+            .plan(
+                &r,
+                &Resolution::Tier(ModelTier::Standard),
+                &[Capability::Vision],
+            )
             .unwrap();
         assert_eq!(ids(&plan), vec!["p1-vision"]);
     }
@@ -2047,7 +2064,11 @@ mod tests {
         let r = reg(cfg);
         let router = Router::new();
         let plan = router
-            .plan(&r, &Resolution::Tier(ModelTier::Standard), &[Capability::Vision])
+            .plan(
+                &r,
+                &Resolution::Tier(ModelTier::Standard),
+                &[Capability::Vision],
+            )
             .unwrap();
         // Only the vision-capable model should be returned.
         assert_eq!(ids(&plan), vec!["p1-vision"]);
@@ -2081,7 +2102,11 @@ mod tests {
         let r = reg(cfg);
         let router = Router::new();
         let err = router
-            .plan(&r, &Resolution::Tier(ModelTier::Standard), &[Capability::Vision])
+            .plan(
+                &r,
+                &Resolution::Tier(ModelTier::Standard),
+                &[Capability::Vision],
+            )
             .unwrap_err();
         assert!(matches!(err, Error::NoCandidate(_)));
     }
@@ -2108,7 +2133,11 @@ mod tests {
         };
 
         let (sorted, _) = router.score_and_sort(members, &pref, None);
-        assert_eq!(sorted[0].exposed_id(), "p1-a", "fast model should rank first");
+        assert_eq!(
+            sorted[0].exposed_id(),
+            "p1-a",
+            "fast model should rank first"
+        );
     }
 
     #[test]
@@ -2133,12 +2162,21 @@ mod tests {
         };
 
         let (sorted, breakdowns) = router.score_and_sort(members, &pref, None);
-        assert_eq!(sorted[0].exposed_id(), "p1-a", "healthy should rank above degraded");
+        assert_eq!(
+            sorted[0].exposed_id(),
+            "p1-a",
+            "healthy should rank above degraded"
+        );
 
         // Verify the health scores are actually different.
         let bd_a = breakdowns.iter().find(|(id, _, _)| id == "p1-a").unwrap();
         let bd_b = breakdowns.iter().find(|(id, _, _)| id == "p2-b").unwrap();
-        assert!(bd_a.1.health > bd_b.1.health, "healthy ({}) > degraded ({})", bd_a.1.health, bd_b.1.health);
+        assert!(
+            bd_a.1.health > bd_b.1.health,
+            "healthy ({}) > degraded ({})",
+            bd_a.1.health,
+            bd_b.1.health
+        );
     }
 
     #[test]
@@ -2175,7 +2213,8 @@ mod tests {
         assert!(
             (bd_a.1.health - bd_b.1.health).abs() < 0.001,
             "both should use legacy health; got {} vs {}",
-            bd_a.1.health, bd_b.1.health,
+            bd_a.1.health,
+            bd_b.1.health,
         );
     }
 
@@ -2367,17 +2406,19 @@ mod tests {
         };
         let m1 = ModelEntry::for_upstream("p1", "a", Some(ModelTier::Standard));
         let m2 = ModelEntry::for_upstream("p2", "b", Some(ModelTier::Standard));
-        let (sorted, _) =
-            router.score_and_sort(vec![&m1, &m2], &pref, Some(&task_streaming));
-        assert_eq!(sorted[0].exposed_id(), "p1-a", "streaming prefers fast TTFT");
+        let (sorted, _) = router.score_and_sort(vec![&m1, &m2], &pref, Some(&task_streaming));
+        assert_eq!(
+            sorted[0].exposed_id(),
+            "p1-a",
+            "streaming prefers fast TTFT"
+        );
 
         // For buffered (total matters), B should win
         let task_buffered = crate::policy::TaskProfile {
             streaming: false,
             ..Default::default()
         };
-        let (sorted, _) =
-            router.score_and_sort(vec![&m1, &m2], &pref, Some(&task_buffered));
+        let (sorted, _) = router.score_and_sort(vec![&m1, &m2], &pref, Some(&task_buffered));
         assert_eq!(
             sorted[0].exposed_id(),
             "p2-b",

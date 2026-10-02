@@ -69,7 +69,10 @@ impl RequestKind {
 }
 
 impl Serialize for RequestKind {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
         serializer.serialize_str(self.as_str())
     }
 }
@@ -84,7 +87,10 @@ impl<'de> Deserialize<'de> for RequestKind {
             fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 formatter.write_str("`main` or `auto_mode`")
             }
-            fn visit_str<E: serde::de::Error>(self, value: &str) -> std::result::Result<RequestKind, E> {
+            fn visit_str<E: serde::de::Error>(
+                self,
+                value: &str,
+            ) -> std::result::Result<RequestKind, E> {
                 match value {
                     "main" => Ok(RequestKind::Main),
                     "auto_mode" => Ok(RequestKind::Side(SideQueryKind::AutoMode)),
@@ -146,8 +152,14 @@ mod tests {
 
     #[test]
     fn strips_short_bracket_modifiers() {
-        assert_eq!(strip_client_model_modifier("claude-opus-4-8[1m]"), "claude-opus-4-8");
-        assert_eq!(strip_client_model_modifier("claude-sonnet-4-5[16m]"), "claude-sonnet-4-5");
+        assert_eq!(
+            strip_client_model_modifier("claude-opus-4-8[1m]"),
+            "claude-opus-4-8"
+        );
+        assert_eq!(
+            strip_client_model_modifier("claude-sonnet-4-5[16m]"),
+            "claude-sonnet-4-5"
+        );
         // A bare modifier with nothing before it stays whole rather than
         // collapsing to an empty string.
         assert_eq!(strip_client_model_modifier("[1m]"), "[1m]");
@@ -155,7 +167,10 @@ mod tests {
 
     #[test]
     fn leaves_real_ids_alone() {
-        assert_eq!(strip_client_model_modifier("claude-opus-4-8"), "claude-opus-4-8");
+        assert_eq!(
+            strip_client_model_modifier("claude-opus-4-8"),
+            "claude-opus-4-8"
+        );
         // Long or non-alphanumeric bracket content is treated as part of the id.
         assert_eq!(
             strip_client_model_modifier("model[not-a-modifier]"),
@@ -165,7 +180,10 @@ mod tests {
         // An unmatched bracket is nothing special.
         assert_eq!(strip_client_model_modifier("model[1m"), "model[1m");
         // Only the *trailing* bracket group counts.
-        assert_eq!(strip_client_model_modifier("model[1m]tail"), "model[1m]tail");
+        assert_eq!(
+            strip_client_model_modifier("model[1m]tail"),
+            "model[1m]tail"
+        );
     }
 
     #[test]
@@ -174,7 +192,10 @@ mod tests {
             serde_json::to_string(&RequestKind::Side(SideQueryKind::AutoMode)).unwrap(),
             "\"auto_mode\""
         );
-        assert_eq!(serde_json::to_string(&RequestKind::Main).unwrap(), "\"main\"");
+        assert_eq!(
+            serde_json::to_string(&RequestKind::Main).unwrap(),
+            "\"main\""
+        );
         assert_eq!(
             serde_json::from_str::<RequestKind>("\"main\"").unwrap(),
             RequestKind::Main

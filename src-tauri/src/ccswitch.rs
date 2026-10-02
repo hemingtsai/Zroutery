@@ -22,7 +22,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use zroutery_core::config::{ModelTier, ModelEntry, ProviderConfig, ProviderKind};
+use zroutery_core::config::{ModelEntry, ModelTier, ProviderConfig, ProviderKind};
 use zroutery_core::query::strip_client_model_modifier;
 
 /// Where CC Switch keeps its provider data, in the order we look.
@@ -300,8 +300,11 @@ fn collect_models(env: &Value) -> Vec<CcModel> {
             tier: Some(ModelTier::Standard),
         });
     } else {
-        for (model, tier) in [(opus, ModelTier::Reasoning), (sonnet, ModelTier::Standard), (haiku, ModelTier::Fast)]
-        {
+        for (model, tier) in [
+            (opus, ModelTier::Reasoning),
+            (sonnet, ModelTier::Standard),
+            (haiku, ModelTier::Fast),
+        ] {
             if let Some(upstream_model) = model {
                 if !models
                     .iter()
@@ -349,7 +352,11 @@ pub fn unique_provider_id(name: &str, taken: &dyn Fn(&str) -> bool) -> String {
         })
         .collect();
     let base = base.trim_matches('-').to_string();
-    let base = if base.is_empty() { "provider".to_string() } else { base };
+    let base = if base.is_empty() {
+        "provider".to_string()
+    } else {
+        base
+    };
 
     let mut candidate = base.clone();
     let mut n = 2;
@@ -373,7 +380,8 @@ pub fn to_zroutery(
     priority: i32,
     timeout_ms: Option<u64>,
 ) -> (ProviderConfig, Vec<ModelEntry>) {
-    let mut provider = ProviderConfig::new(provider_id, draft.name.clone(), ProviderKind::Anthropic);
+    let mut provider =
+        ProviderConfig::new(provider_id, draft.name.clone(), ProviderKind::Anthropic);
     provider.base_url = draft.base_url.trim_end_matches('/').to_string();
     // Claude Code relays expect the client fingerprint; that is Zroutery's
     // default for Anthropic providers, and an import that silently disabled
@@ -420,19 +428,13 @@ pub struct ImportReport {
 /// the good ones.
 pub fn validate_draft(draft: &CcProvider) -> Result<(), String> {
     if draft.base_url.trim().is_empty() {
-        return Err(format!(
-            "provider `{}` has no base url",
-            draft.name,
-        ));
+        return Err(format!("provider `{}` has no base url", draft.name,));
     }
     // A provider with no models is not necessarily invalid (the user might
     // add models later), but it is unusual enough to warn about rather than
     // silently import.
     if draft.models.is_empty() {
-        return Err(format!(
-            "provider `{}` has no model entries",
-            draft.name,
-        ));
+        return Err(format!("provider `{}` has no model entries", draft.name,));
     }
     for m in &draft.models {
         if m.upstream_model.trim().is_empty() {
@@ -461,22 +463,15 @@ pub fn validate_import_batch(
     let mut seen_model_ids = std::collections::BTreeMap::<String, usize>::new();
 
     for (provider, models) in providers {
-        *seen_provider_ids
-            .entry(provider.id.clone())
-            .or_insert(0) += 1;
+        *seen_provider_ids.entry(provider.id.clone()).or_insert(0) += 1;
 
         if provider.base_url.trim().is_empty() {
-            errors.push(format!(
-                "provider `{}` has an empty base url",
-                provider.id,
-            ));
+            errors.push(format!("provider `{}` has an empty base url", provider.id,));
         }
 
         for m in models {
             let exposed = m.exposed_id();
-            *seen_model_ids
-                .entry(exposed.clone())
-                .or_insert(0) += 1;
+            *seen_model_ids.entry(exposed.clone()).or_insert(0) += 1;
 
             if m.upstream_model.trim().is_empty() {
                 errors.push(format!(
@@ -593,8 +588,10 @@ mod tests {
         }));
         let p = provider_from_env("id".into(), "Relay".into(), &env, false).unwrap();
         assert_eq!(p.models.len(), 2);
-        assert!(p.models.iter().any(|m| m.upstream_model == "glm-5.3-air"
-            && m.tier.is_none()));
+        assert!(p
+            .models
+            .iter()
+            .any(|m| m.upstream_model == "glm-5.3-air" && m.tier.is_none()));
     }
 
     #[test]
@@ -794,7 +791,10 @@ mod tests {
             is_current: false,
         };
         let err = validate_draft(&draft).unwrap_err();
-        assert!(err.contains("no upstream model name"), "unexpected error: {err}");
+        assert!(
+            err.contains("no upstream model name"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
@@ -816,14 +816,17 @@ mod tests {
     #[test]
     fn import_batch_validation_catches_duplicate_providers() {
         let provider = ProviderConfig::new("same-id", "A", ProviderKind::Anthropic);
-        let models = vec![ModelEntry::for_upstream("same-id", "m1", Some(ModelTier::Standard))];
-        let batch = vec![
-            (provider.clone(), models.clone()),
-            (provider, models),
-        ];
+        let models = vec![ModelEntry::for_upstream(
+            "same-id",
+            "m1",
+            Some(ModelTier::Standard),
+        )];
+        let batch = vec![(provider.clone(), models.clone()), (provider, models)];
         let (warnings, errors) = validate_import_batch(&batch);
         assert!(
-            errors.iter().any(|e| e.contains("same-id") && e.contains("2 times")),
+            errors
+                .iter()
+                .any(|e| e.contains("same-id") && e.contains("2 times")),
             "expected duplicate provider error, got: {errors:?}"
         );
         let _ = warnings;
@@ -835,13 +838,12 @@ mod tests {
         let p2 = ProviderConfig::new("p2", "B", ProviderKind::Anthropic);
         let m1 = ModelEntry::for_upstream("p1", "m1", Some(ModelTier::Standard));
         let m2 = ModelEntry::for_upstream("p1", "m1", Some(ModelTier::Fast));
-        let batch = vec![
-            (p1.clone(), vec![m1]),
-            (p2, vec![m2]),
-        ];
+        let batch = vec![(p1.clone(), vec![m1]), (p2, vec![m2])];
         let (_warnings, errors) = validate_import_batch(&batch);
         assert!(
-            errors.iter().any(|e| e.contains("p1-m1") && e.contains("2 times")),
+            errors
+                .iter()
+                .any(|e| e.contains("p1-m1") && e.contains("2 times")),
             "expected duplicate model error, got: {errors:?}"
         );
     }
@@ -866,13 +868,12 @@ mod tests {
             ModelEntry::for_upstream("p1", "m1", Some(ModelTier::Standard)),
             ModelEntry::for_upstream("p1", "m2", Some(ModelTier::Fast)),
         ];
-        let models2 = vec![
-            ModelEntry::for_upstream("p2", "m3", Some(ModelTier::Reasoning)),
-        ];
-        let imported = vec![
-            (p1, models1),
-            (p2, models2),
-        ];
+        let models2 = vec![ModelEntry::for_upstream(
+            "p2",
+            "m3",
+            Some(ModelTier::Reasoning),
+        )];
+        let imported = vec![(p1, models1), (p2, models2)];
         let report = build_report("cc-switch.db", &imported, vec![], vec![]);
         assert_eq!(report.source, "cc-switch.db");
         assert_eq!(report.providers_imported, 2);
@@ -940,7 +941,11 @@ mod tests {
                 assert_eq!(a.0.base_url, b.0.base_url, "run {run}: base_url mismatch");
                 assert_eq!(a.1.len(), b.1.len(), "run {run}: model count mismatch");
                 for (ma, mb) in a.1.iter().zip(b.1.iter()) {
-                    assert_eq!(ma.exposed_id(), mb.exposed_id(), "run {run}: model id mismatch");
+                    assert_eq!(
+                        ma.exposed_id(),
+                        mb.exposed_id(),
+                        "run {run}: model id mismatch"
+                    );
                     assert_eq!(ma.tier, mb.tier, "run {run}: tier mismatch");
                 }
             }

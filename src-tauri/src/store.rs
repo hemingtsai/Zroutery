@@ -151,7 +151,7 @@ fn create_private(path: &Path) -> std::io::Result<std::fs::File> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use zroutery_core::config::{ModelTier, ModelEntry, ProviderConfig, ProviderKind};
+    use zroutery_core::config::{ModelEntry, ModelTier, ProviderConfig, ProviderKind};
 
     fn tmpdir() -> PathBuf {
         let dir = std::env::temp_dir().join(format!("zroutery-test-{}", uuid::Uuid::new_v4()));

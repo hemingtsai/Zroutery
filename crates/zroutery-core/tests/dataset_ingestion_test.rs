@@ -228,7 +228,10 @@ fn ingested_samples_carry_the_retained_decision_time_vectors() {
     assert_eq!(first.model_id, "model-a");
     assert_eq!(first.features.values[8], features(20).values[8]);
     assert_ne!(first.features.values[8], features(30).values[8]);
-    assert_ne!(first.features.values[8], RoutingFeatures::default().values[8]);
+    assert_ne!(
+        first.features.values[8],
+        RoutingFeatures::default().values[8]
+    );
 
     // The request-level sample carries the vector of the identity that served.
     let request = find(&samples, "-request");
@@ -276,7 +279,13 @@ fn no_decision_time_input_yields_no_sample_and_is_counted_apart() {
     assert!(store.training_slice().is_empty());
     assert!(store.legacy_training_slice().is_empty());
     let counters = store.counters();
-    assert_eq!(counters, IngestionCounters { no_decision_time_input: 1, ..no_counters() });
+    assert_eq!(
+        counters,
+        IngestionCounters {
+            no_decision_time_input: 1,
+            ..no_counters()
+        }
+    );
     assert_eq!(counters.rejected, 0, "this is not a refusal");
     assert_eq!(counters.samples, 0, "nothing was collected");
 }
@@ -325,7 +334,9 @@ fn an_unusable_retained_vector_is_refused_rather_than_repaired() {
     let mut foreign_input_schema = served_input();
     foreign_input_schema.feature_schema = FEATURE_SCHEMA_VERSION + 9;
     let result = store.ingest(&outcome.request_id, &outcome, Some(&foreign_input_schema));
-    assert!(matches!(&result, Ingestion::Rejected { reason } if reason.contains("schema mismatch")));
+    assert!(
+        matches!(&result, Ingestion::Rejected { reason } if reason.contains("schema mismatch"))
+    );
     assert!(store.is_empty());
 }
 
@@ -463,7 +474,10 @@ fn retention_evicts_by_count_and_reports_it() {
     );
     let counters = store.counters();
     assert_eq!(counters.ingested, 6);
-    assert_eq!(counters.samples, 12, "all six were collected before eviction");
+    assert_eq!(
+        counters.samples, 12,
+        "all six were collected before eviction"
+    );
     assert_eq!(counters.evicted_by_count, 8);
     assert_eq!(counters.evicted_by_age, 0);
 }
@@ -545,7 +559,10 @@ fn a_failed_request_is_retained_as_a_negative_sample() {
     assert!(!request.success);
     assert!(!request.targets.success);
     assert_eq!(request.final_status, FinalStatus::Failed);
-    assert_eq!(request.targets.failure_class.as_deref(), Some("ProviderUnavailable"));
+    assert_eq!(
+        request.targets.failure_class.as_deref(),
+        Some("ProviderUnavailable")
+    );
     assert!(request.identity.served.is_none(), "nothing served");
     assert!(request.targets.latency_ms.is_none());
     assert!(request.targets.ttft_ms.is_none());
@@ -585,7 +602,12 @@ fn a_failed_attempt_sample_cannot_carry_service_timing() {
     .expect("the failover outcome converts");
     let failed = samples
         .iter_mut()
-        .find(|sample| matches!(sample.scope, zroutery_core::ml::dataset::SampleScope::Attempt { .. }) && !sample.success)
+        .find(|sample| {
+            matches!(
+                sample.scope,
+                zroutery_core::ml::dataset::SampleScope::Attempt { .. }
+            ) && !sample.success
+        })
         .expect("the failover keeps a failed attempt sample");
     assert!(
         failed.targets.latency_ms.is_none() && failed.targets.ttft_ms.is_none(),
@@ -614,7 +636,9 @@ fn a_failed_attempt_sample_cannot_carry_service_timing() {
     failed.targets.cost = Some(0.004);
     zroutery_core::ml::dataset::validate_outcome_sample(failed)
         .expect("a failed attempt may still carry the cost it incurred");
-    store.push(failed.clone()).expect("and the store accepts it");
+    store
+        .push(failed.clone())
+        .expect("and the store accepts it");
     let stored = store
         .training_slice()
         .into_iter()
@@ -647,16 +671,23 @@ fn a_successful_attempt_still_carries_its_own_timing() {
 /// A failed attempt inside an otherwise successful request keeps its own label:
 /// the failover's first candidate stays a negative sample.
 #[test]
-fn a_failover_keeps_the_failed_attempt_as_its_own_negative_sample() {    let store = DatasetStore::new(10, 3600);
+fn a_failover_keeps_the_failed_attempt_as_its_own_negative_sample() {
+    let store = DatasetStore::new(10, 3600);
     let outcome = failover_outcome();
     ingest_ok(&store, &outcome, &failover_input());
 
     let samples = store.training_slice();
     let first = find(&samples, "attempt-0");
     let second = find(&samples, "attempt-1");
-    assert!(!first.success, "the rate-limited candidate is a negative sample");
+    assert!(
+        !first.success,
+        "the rate-limited candidate is a negative sample"
+    );
     assert_eq!(first.targets.failure_class.as_deref(), Some("RateLimit"));
-    assert!(second.success, "the answering candidate is a positive sample");
+    assert!(
+        second.success,
+        "the answering candidate is a positive sample"
+    );
     assert!(second.targets.failure_class.is_none());
     assert_eq!(first.final_status, FinalStatus::Success);
     assert_eq!(second.final_status, FinalStatus::Success);
@@ -781,7 +812,11 @@ fn the_count_bound_holds_even_for_one_oversized_request() {
     assert_eq!(sample_ids.len(), 1, "only the bound is kept");
     assert_eq!(store.len(), 1, "the store never exceeds its bound");
     assert_eq!(store.counters().evicted_by_count, 2);
-    assert_eq!(store.counters().samples, 1, "only what is stored is counted");
+    assert_eq!(
+        store.counters().samples,
+        1,
+        "only what is stored is counted"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -809,12 +844,15 @@ fn a_contained_ingestion_never_raises_and_never_throws_away_its_reason() {
 
     let ok = contained_ingest(&store, &outcome.request_id, &outcome, Some(&served_input()));
     assert!(ok.is_ingested());
-    let refused =
-        contained_ingest(&store, "req-other", &outcome, Some(&served_input()));
+    let refused = contained_ingest(&store, "req-other", &outcome, Some(&served_input()));
     assert!(matches!(refused, Ingestion::Rejected { .. }));
     let missing = contained_ingest(&store, &outcome.request_id, &outcome, None);
     assert!(missing.is_without_decision_time_input());
-    assert_eq!(store.counters().faults, 0, "an ordinary refusal is not a fault");
+    assert_eq!(
+        store.counters().faults,
+        0,
+        "an ordinary refusal is not a fault"
+    );
 }
 
 /// The dataset module cannot route: it holds no routing, egress, health or
@@ -900,8 +938,12 @@ fn the_pipeline_dataset_surface_is_ingestion_only() {
         before_finalize.contains("fn dataset_ingested("),
         "the ingestion is a lifecycle method, defined ahead of the transition"
     );
-    let record = after.find("outcomes().record(outcome").expect("record call");
-    let ingest = after.find("self.dataset_ingested(").expect("ingestion call");
+    let record = after
+        .find("outcomes().record(outcome")
+        .expect("record call");
+    let ingest = after
+        .find("self.dataset_ingested(")
+        .expect("ingestion call");
     assert!(record < ingest, "the outcome exists before it is ingested");
     // The store is reached only through AppState, never by a second path.
     assert_eq!(source.matches(".dataset()").count(), 1);

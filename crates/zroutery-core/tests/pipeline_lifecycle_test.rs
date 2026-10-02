@@ -71,7 +71,11 @@ fn held_open_stream(id: &str) -> axum::body::Body {
             json!({"role": "assistant", "content": ""}),
             Value::Null,
         ));
-        let _ = tx.send(openai_chunk(&second, json!({"content": "hel"}), Value::Null));
+        let _ = tx.send(openai_chunk(
+            &second,
+            json!({"content": "hel"}),
+            Value::Null,
+        ));
         let _ = tx.send(openai_chunk(&third, json!({"content": "lo"}), Value::Null));
         // The upstream never ends: the answer is still being written when the
         // client decides it has had enough.
@@ -125,7 +129,11 @@ async fn mock_chat(State(mock): State<Mock>, Json(body): Json<Value>) -> Respons
             json!({"role": "assistant", "content": ""}),
             Value::Null,
         ));
-        sse.push_str(&openai_chunk("chatcmpl-mock", json!({"content": "hi"}), Value::Null));
+        sse.push_str(&openai_chunk(
+            "chatcmpl-mock",
+            json!({"content": "hi"}),
+            Value::Null,
+        ));
         sse.push_str(&openai_chunk("chatcmpl-mock", json!({}), json!("stop")));
         sse.push_str(&format!(
             "data: {}\n\n",
@@ -179,7 +187,8 @@ fn provider(id: &str, name: &str, mock: SocketAddr) -> ProviderConfig {
 }
 
 fn model(provider: &str, upstream: &str, priority: i32, tier: ModelTier) -> ModelEntry {
-    let mut entry = ModelEntry::for_upstream(provider, upstream, Some(tier)).with_priority(priority);
+    let mut entry =
+        ModelEntry::for_upstream(provider, upstream, Some(tier)).with_priority(priority);
     entry.pricing = Some(Pricing::new("USD", 3.0, 15.0));
     entry
 }
@@ -394,7 +403,10 @@ async fn a_client_disconnect_is_never_recorded_as_success() {
     assert_eq!(identity.model(), "alpha-hold-model");
     assert_eq!(identity.provider(), "alpha");
     assert_eq!(outcome.planned_identity(), Some(identity.clone()));
-    assert!(outcome.served_identity().is_none(), "no answer was delivered");
+    assert!(
+        outcome.served_identity().is_none(),
+        "no answer was delivered"
+    );
     assert!(outcome.validate().is_ok(), "{:?}", outcome.validate());
 
     h.shutdown().await;
@@ -631,9 +643,7 @@ async fn planned_last_attempted_and_served_are_correlated() {
     let last = outcome
         .last_attempted_identity()
         .expect("the request made an attempt");
-    let served = outcome
-        .served_identity()
-        .expect("the request was served");
+    let served = outcome.served_identity().expect("the request was served");
 
     // Planned comes from the router's decision, not from what happened later.
     assert_eq!(planned.model(), "alpha-broken-model");
@@ -677,9 +687,7 @@ async fn planned_last_attempted_and_served_are_correlated() {
 async fn a_budget_denial_is_a_terminal_outcome_with_no_candidate() {
     let (addr, mock) = start_mock().await;
     let mut cfg = config_for(addr);
-    cfg.budgets = vec![
-        Budget::new(BudgetScope::Global, BudgetPeriod::Day, "USD", 0.0).rejecting()
-    ];
+    cfg.budgets = vec![Budget::new(BudgetScope::Global, BudgetPeriod::Day, "USD", 0.0).rejecting()];
     let h = Harness::start(cfg, mock).await;
 
     let response = h.ask("alpha-good-model").await;
@@ -883,14 +891,15 @@ async fn a_completed_stream_is_one_served_outcome() {
     assert_eq!(outcome.final_status, FinalStatus::Success);
     assert!(outcome.streaming);
     assert_eq!(outcome.dialect, "anthropic");
-    let served = outcome
-        .served_identity()
-        .expect("an answer was delivered");
+    let served = outcome.served_identity().expect("an answer was delivered");
     assert_eq!(served.model(), "alpha-good-model");
     assert_eq!(outcome.last_attempted_identity(), Some(served.clone()));
     assert_eq!(outcome.planned_identity(), Some(served));
     assert_eq!(outcome.usage.map(|usage| usage.output_tokens), Some(2));
-    assert_eq!(outcome.actual_cost, record.cost.as_ref().map(|cost| cost.amount));
+    assert_eq!(
+        outcome.actual_cost,
+        record.cost.as_ref().map(|cost| cost.amount)
+    );
     assert!(outcome.validate().is_ok(), "{:?}", outcome.validate());
 
     let health = h.state.router().health_snapshot();
@@ -924,7 +933,10 @@ async fn a_failed_stream_handshake_is_a_failed_outcome() {
     let outcome = h.outcome();
     assert_eq!(outcome.final_status, FinalStatus::Failed);
     assert_eq!(outcome.attempts.len(), 1);
-    assert_eq!(outcome.attempts[0].failure_class, Some(FailureClass::Unknown));
+    assert_eq!(
+        outcome.attempts[0].failure_class,
+        Some(FailureClass::Unknown)
+    );
     assert!(outcome.served_identity().is_none());
     assert!(outcome.validate().is_ok(), "{:?}", outcome.validate());
 
@@ -945,9 +957,7 @@ fn dropping_a_stream_is_not_a_success_in_the_source_either() {
     let (_, after) = source
         .split_once("impl Drop for SseState")
         .expect("the stream state still has a drop path");
-    let (drop_impl, _) = after
-        .split_once("\n}")
-        .expect("the drop impl is closed");
+    let (drop_impl, _) = after.split_once("\n}").expect("the drop impl is closed");
     assert!(
         drop_impl.contains("ClientDisconnected"),
         "a dropped stream finalizes as a client disconnect"

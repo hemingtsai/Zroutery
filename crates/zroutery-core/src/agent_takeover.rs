@@ -195,11 +195,7 @@ impl TakeoverStore {
         // Build snapshots from managed_fields only (ignore unmanaged keys).
         let field_snapshots: HashMap<String, serde_json::Value> = managed_fields
             .iter()
-            .filter_map(|f| {
-                current_values
-                    .get(f)
-                    .map(|v| (f.clone(), v.clone()))
-            })
+            .filter_map(|f| current_values.get(f).map(|v| (f.clone(), v.clone())))
             .collect();
 
         // Populate last_applied with the captured snapshots.
@@ -504,7 +500,10 @@ impl AgentAdapter for ClaudeAdapter {
                 .map_err(|e| format!("failed to parse {}: {e}", path.display()))?;
             (parsed, hash)
         } else {
-            (serde_json::Value::Object(serde_json::Map::new()), String::new())
+            (
+                serde_json::Value::Object(serde_json::Map::new()),
+                String::new(),
+            )
         };
         Ok(AgentConfigSnapshot {
             agent_type: AgentType::Claude,
@@ -523,14 +522,13 @@ impl AgentAdapter for ClaudeAdapter {
         for field in fields {
             set_nested(&mut raw, &field.path, field.value.clone());
         }
-        let json = serde_json::to_string_pretty(&raw)
-            .map_err(|e| format!("serialize failed: {e}"))?;
+        let json =
+            serde_json::to_string_pretty(&raw).map_err(|e| format!("serialize failed: {e}"))?;
         let hash = compute_hash(json.as_bytes());
         // Atomic write: write to temp file, then rename
         let path = &snapshot.config_path;
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("create dir failed: {e}"))?;
+            std::fs::create_dir_all(parent).map_err(|e| format!("create dir failed: {e}"))?;
         }
         let tmp = path.with_extension("json.tmp");
         std::fs::write(&tmp, &json).map_err(|e| format!("write failed: {e}"))?;
@@ -554,8 +552,8 @@ impl AgentAdapter for ClaudeAdapter {
                 set_nested(&mut raw, field_path, original_value.clone());
             }
         }
-        let json = serde_json::to_string_pretty(&raw)
-            .map_err(|e| format!("serialize failed: {e}"))?;
+        let json =
+            serde_json::to_string_pretty(&raw).map_err(|e| format!("serialize failed: {e}"))?;
         let hash = compute_hash(json.as_bytes());
         let restored = AgentConfigSnapshot {
             agent_type: snapshot.agent_type,
@@ -596,7 +594,10 @@ impl AgentAdapter for CodexAdapter {
                 .map_err(|e| format!("failed to parse {}: {e}", path.display()))?;
             (parsed, hash)
         } else {
-            (serde_json::Value::Object(serde_json::Map::new()), String::new())
+            (
+                serde_json::Value::Object(serde_json::Map::new()),
+                String::new(),
+            )
         };
         Ok(AgentConfigSnapshot {
             agent_type: AgentType::Codex,
@@ -615,13 +616,12 @@ impl AgentAdapter for CodexAdapter {
         for field in fields {
             set_nested(&mut raw, &field.path, field.value.clone());
         }
-        let json = serde_json::to_string_pretty(&raw)
-            .map_err(|e| format!("serialize failed: {e}"))?;
+        let json =
+            serde_json::to_string_pretty(&raw).map_err(|e| format!("serialize failed: {e}"))?;
         let hash = compute_hash(json.as_bytes());
         let path = &snapshot.config_path;
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("create dir failed: {e}"))?;
+            std::fs::create_dir_all(parent).map_err(|e| format!("create dir failed: {e}"))?;
         }
         let tmp = path.with_extension("json.tmp");
         std::fs::write(&tmp, &json).map_err(|e| format!("write failed: {e}"))?;
@@ -645,8 +645,8 @@ impl AgentAdapter for CodexAdapter {
                 set_nested(&mut raw, field_path, original_value.clone());
             }
         }
-        let json = serde_json::to_string_pretty(&raw)
-            .map_err(|e| format!("serialize failed: {e}"))?;
+        let json =
+            serde_json::to_string_pretty(&raw).map_err(|e| format!("serialize failed: {e}"))?;
         let hash = compute_hash(json.as_bytes());
         let restored = AgentConfigSnapshot {
             agent_type: snapshot.agent_type,
@@ -687,7 +687,10 @@ impl AgentAdapter for GeminiAdapter {
                 .map_err(|e| format!("failed to parse {}: {e}", path.display()))?;
             (parsed, hash)
         } else {
-            (serde_json::Value::Object(serde_json::Map::new()), String::new())
+            (
+                serde_json::Value::Object(serde_json::Map::new()),
+                String::new(),
+            )
         };
         Ok(AgentConfigSnapshot {
             agent_type: AgentType::Gemini,
@@ -706,13 +709,12 @@ impl AgentAdapter for GeminiAdapter {
         for field in fields {
             set_nested(&mut raw, &field.path, field.value.clone());
         }
-        let json = serde_json::to_string_pretty(&raw)
-            .map_err(|e| format!("serialize failed: {e}"))?;
+        let json =
+            serde_json::to_string_pretty(&raw).map_err(|e| format!("serialize failed: {e}"))?;
         let hash = compute_hash(json.as_bytes());
         let path = &snapshot.config_path;
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("create dir failed: {e}"))?;
+            std::fs::create_dir_all(parent).map_err(|e| format!("create dir failed: {e}"))?;
         }
         let tmp = path.with_extension("json.tmp");
         std::fs::write(&tmp, &json).map_err(|e| format!("write failed: {e}"))?;
@@ -736,8 +738,8 @@ impl AgentAdapter for GeminiAdapter {
                 set_nested(&mut raw, field_path, original_value.clone());
             }
         }
-        let json = serde_json::to_string_pretty(&raw)
-            .map_err(|e| format!("serialize failed: {e}"))?;
+        let json =
+            serde_json::to_string_pretty(&raw).map_err(|e| format!("serialize failed: {e}"))?;
         let hash = compute_hash(json.as_bytes());
         let restored = AgentConfigSnapshot {
             agent_type: snapshot.agent_type,
@@ -824,7 +826,10 @@ fn set_nested(root: &mut serde_json::Value, path: &str, value: serde_json::Value
         }
         let obj = current.as_object_mut().unwrap();
         if !obj.contains_key(*part) {
-            obj.insert(part.to_string(), serde_json::Value::Object(serde_json::Map::new()));
+            obj.insert(
+                part.to_string(),
+                serde_json::Value::Object(serde_json::Map::new()),
+            );
         }
         current = obj.get_mut(*part).unwrap();
     }
@@ -866,9 +871,7 @@ mod tests {
     fn adopt_sets_adopted_at() {
         let store = TakeoverStore::new();
         let values = field_map(&[("timeout", 30.into())]);
-        let manifest = store
-            .adopt(vec!["timeout".into()], &values)
-            .unwrap();
+        let manifest = store.adopt(vec!["timeout".into()], &values).unwrap();
 
         assert!(manifest.adopted_at.is_some());
         assert!(manifest.adopted_at.unwrap() > 0);
@@ -932,9 +935,7 @@ mod tests {
     fn detect_external_modification_no_change() {
         let store = TakeoverStore::new();
         let values = field_map(&[("a", 1.into()), ("b", 2.into())]);
-        store
-            .adopt(vec!["a".into(), "b".into()], &values)
-            .unwrap();
+        store.adopt(vec!["a".into(), "b".into()], &values).unwrap();
 
         let same = field_map(&[("a", 1.into()), ("b", 2.into())]);
         let mods = store.detect_external_modification(&same);
@@ -978,9 +979,7 @@ mod tests {
         ]);
 
         // Only "a" and "b" are managed.
-        let manifest = store
-            .adopt(vec!["a".into(), "b".into()], &values)
-            .unwrap();
+        let manifest = store.adopt(vec!["a".into(), "b".into()], &values).unwrap();
 
         assert_eq!(manifest.managed_fields.len(), 2);
         assert!(manifest.managed_fields.contains(&"a".into()));
@@ -999,9 +998,7 @@ mod tests {
 
         // Adopt with initial values.
         let initial = field_map(&[("a", 1.into()), ("b", 2.into())]);
-        store
-            .adopt(vec!["a".into(), "b".into()], &initial)
-            .unwrap();
+        store.adopt(vec!["a".into(), "b".into()], &initial).unwrap();
 
         // Externally change managed field "a".
         let current = field_map(&[("a", 42.into()), ("b", 2.into())]);
@@ -1052,7 +1049,10 @@ mod tests {
         assert_eq!(released.generation, 1);
         // Managed fields and snapshots persist through release.
         assert_eq!(released.managed_fields, vec!["model", "temp"]);
-        assert_eq!(released.field_snapshots["model"], serde_json::json!("gpt-4"));
+        assert_eq!(
+            released.field_snapshots["model"],
+            serde_json::json!("gpt-4")
+        );
     }
 
     #[test]
@@ -1065,10 +1065,7 @@ mod tests {
             ("debug", false.into()),
         ]);
         store
-            .adopt(
-                vec!["host".into(), "port".into(), "debug".into()],
-                &initial,
-            )
+            .adopt(vec!["host".into(), "port".into(), "debug".into()], &initial)
             .unwrap();
 
         // Simulate external modification: host changed, port removed, debug unchanged.
@@ -1093,9 +1090,7 @@ mod tests {
         let store = TakeoverStore::new();
 
         let initial = field_map(&[("x", 1.into()), ("y", 2.into())]);
-        store
-            .adopt(vec!["x".into(), "y".into()], &initial)
-            .unwrap();
+        store.adopt(vec!["x".into(), "y".into()], &initial).unwrap();
 
         // User externally modifies "x" while Adopted.
         let current = field_map(&[("x", 100.into()), ("y", 2.into())]);
@@ -1128,7 +1123,10 @@ mod tests {
 
         for cycle in 0..50u64 {
             let val = cycle * 3;
-            let values = field_map(&[("a", serde_json::json!(val)), ("b", serde_json::json!(val + 1))]);
+            let values = field_map(&[
+                ("a", serde_json::json!(val)),
+                ("b", serde_json::json!(val + 1)),
+            ]);
 
             let adopted = store.adopt(fields.clone(), &values).unwrap();
             assert_eq!(adopted.state, OwnershipState::Adopted);
@@ -1169,7 +1167,8 @@ mod tests {
         for i in 0..8 {
             let s = Arc::clone(&store);
             handles.push(thread::spawn(move || {
-                let current = field_map(&[("f1", serde_json::json!(i)), ("f2", serde_json::json!(i))]);
+                let current =
+                    field_map(&[("f1", serde_json::json!(i)), ("f2", serde_json::json!(i))]);
                 let mods = s.detect_external_modification(&current);
                 // Both fields differ from baseline (0) when i != 0.
                 if i != 0 {
@@ -1191,9 +1190,7 @@ mod tests {
     fn ownership_manifest_serde_round_trip() {
         let store = TakeoverStore::new();
         let values = field_map(&[("k", serde_json::json!("v")), ("n", serde_json::json!(42))]);
-        let original = store
-            .adopt(vec!["k".into(), "n".into()], &values)
-            .unwrap();
+        let original = store.adopt(vec!["k".into(), "n".into()], &values).unwrap();
 
         // Serialize to JSON.
         let json = serde_json::to_string(&original).expect("serialize");
@@ -1386,11 +1383,7 @@ mod tests {
     impl TestAdapter {
         fn new(dir: &std::path::Path, initial: serde_json::Value) -> Self {
             let path = dir.join("config.json");
-            std::fs::write(
-                &path,
-                serde_json::to_string_pretty(&initial).unwrap(),
-            )
-            .unwrap();
+            std::fs::write(&path, serde_json::to_string_pretty(&initial).unwrap()).unwrap();
             Self { path }
         }
     }
@@ -1406,14 +1399,17 @@ mod tests {
 
         fn read_config(&self) -> Result<AgentConfigSnapshot, String> {
             let (raw, hash) = if self.path.exists() {
-                let data = std::fs::read_to_string(&self.path)
-                    .map_err(|e| format!("read failed: {e}"))?;
+                let data =
+                    std::fs::read_to_string(&self.path).map_err(|e| format!("read failed: {e}"))?;
                 let hash = compute_hash(data.as_bytes());
-                let parsed: serde_json::Value = serde_json::from_str(&data)
-                    .map_err(|e| format!("parse failed: {e}"))?;
+                let parsed: serde_json::Value =
+                    serde_json::from_str(&data).map_err(|e| format!("parse failed: {e}"))?;
                 (parsed, hash)
             } else {
-                (serde_json::Value::Object(serde_json::Map::new()), String::new())
+                (
+                    serde_json::Value::Object(serde_json::Map::new()),
+                    String::new(),
+                )
             };
             Ok(AgentConfigSnapshot {
                 agent_type: AgentType::Claude,
@@ -1432,8 +1428,8 @@ mod tests {
             for field in fields {
                 set_nested(&mut raw, &field.path, field.value.clone());
             }
-            let json = serde_json::to_string_pretty(&raw)
-                .map_err(|e| format!("serialize failed: {e}"))?;
+            let json =
+                serde_json::to_string_pretty(&raw).map_err(|e| format!("serialize failed: {e}"))?;
             let hash = compute_hash(json.as_bytes());
             Ok(AgentConfigSnapshot {
                 agent_type: snapshot.agent_type,
@@ -1454,8 +1450,8 @@ mod tests {
                     set_nested(&mut raw, field_path, original_value.clone());
                 }
             }
-            let json = serde_json::to_string_pretty(&raw)
-                .map_err(|e| format!("serialize failed: {e}"))?;
+            let json =
+                serde_json::to_string_pretty(&raw).map_err(|e| format!("serialize failed: {e}"))?;
             let hash = compute_hash(json.as_bytes());
             let restored = AgentConfigSnapshot {
                 agent_type: snapshot.agent_type,
@@ -1537,10 +1533,7 @@ mod tests {
     #[test]
     fn release_with_restore_no_manifest_errors() {
         let tmp = tempfile::tempdir().unwrap();
-        let adapter = TestAdapter::new(
-            tmp.path(),
-            serde_json::json!({"x": 1}),
-        );
+        let adapter = TestAdapter::new(tmp.path(), serde_json::json!({"x": 1}));
 
         let store = TakeoverStore::new();
 
@@ -1630,8 +1623,7 @@ mod tests {
             current_external: serde_json::json!(999),
         }];
 
-        let resolved =
-            resolve_conflicts(&conflicts, ConflictResolution::OverwriteWithManaged);
+        let resolved = resolve_conflicts(&conflicts, ConflictResolution::OverwriteWithManaged);
         assert_eq!(resolved.len(), 1);
         assert_eq!(resolved[0], ("x".into(), Some(serde_json::json!(10))));
     }
@@ -1825,18 +1817,14 @@ mod tests {
 
         // First cycle.
         let v1 = field_map(&[("x", serde_json::json!(1)), ("y", serde_json::json!(2))]);
-        store
-            .adopt(vec!["x".into(), "y".into()], &v1)
-            .unwrap();
+        store.adopt(vec!["x".into(), "y".into()], &v1).unwrap();
         store.release_with_restore(&adapter).unwrap();
 
         assert_eq!(store.state(), OwnershipState::Released);
 
         // Re-adopt after release.
         let v2 = field_map(&[("x", serde_json::json!(1)), ("y", serde_json::json!(2))]);
-        let re_adopted = store
-            .adopt(vec!["x".into(), "y".into()], &v2)
-            .unwrap();
+        let re_adopted = store.adopt(vec!["x".into(), "y".into()], &v2).unwrap();
         assert_eq!(re_adopted.state, OwnershipState::Adopted);
         assert_eq!(re_adopted.generation, 1);
     }

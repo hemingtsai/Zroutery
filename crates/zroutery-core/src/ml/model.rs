@@ -411,10 +411,7 @@ impl RoutingModel for LatencyModel {
     fn load(state: &ModelState) -> Result<Self, String> {
         state.validate_basics()?;
         if state.algorithm != "latency_linear" {
-            return Err(format!(
-                "expected latency_linear, got {}",
-                state.algorithm
-            ));
+            return Err(format!("expected latency_linear, got {}", state.algorithm));
         }
         // Expected: 2 scalars (bias, residual_ewma) + n weights = n+2 (minimum 2)
         if state.parameters.len() < 2 {
@@ -531,10 +528,7 @@ impl RoutingModel for TtftModel {
     fn load(state: &ModelState) -> Result<Self, String> {
         state.validate_basics()?;
         if state.algorithm != "ttft_linear" {
-            return Err(format!(
-                "expected ttft_linear, got {}",
-                state.algorithm
-            ));
+            return Err(format!("expected ttft_linear, got {}", state.algorithm));
         }
         // Expected: 2 scalars (bias, residual_ewma) + n weights = n+2 (minimum 2)
         if state.parameters.len() < 2 {
@@ -651,10 +645,7 @@ impl RoutingModel for CostModel {
     fn load(state: &ModelState) -> Result<Self, String> {
         state.validate_basics()?;
         if state.algorithm != "cost_linear" {
-            return Err(format!(
-                "expected cost_linear, got {}",
-                state.algorithm
-            ));
+            return Err(format!("expected cost_linear, got {}", state.algorithm));
         }
         // Expected: 2 scalars (bias, residual_ewma) + n weights = n+2 (minimum 2)
         if state.parameters.len() < 2 {
@@ -1049,7 +1040,11 @@ mod tests {
         for i in 0..500 {
             model.update(&features, if i % 2 == 0 { 1.0 } else { 0.0 });
             let pred = model.predict(&features);
-            assert!(pred.value.is_finite(), "value is not finite: {}", pred.value);
+            assert!(
+                pred.value.is_finite(),
+                "value is not finite: {}",
+                pred.value
+            );
             assert!(
                 pred.confidence.is_finite(),
                 "confidence is not finite: {}",
@@ -1062,7 +1057,11 @@ mod tests {
         for i in 0..500 {
             latency.update(&features, 100.0 + i as f64);
             let pred = latency.predict(&features);
-            assert!(pred.value.is_finite(), "latency value not finite: {}", pred.value);
+            assert!(
+                pred.value.is_finite(),
+                "latency value not finite: {}",
+                pred.value
+            );
             assert!(
                 pred.confidence.is_finite(),
                 "latency confidence not finite: {}",
@@ -1319,8 +1318,14 @@ mod tests {
         // Record learned predictions from the live model
         let live_good = model.predict(&good_features).value;
         let live_bad = model.predict(&bad_features).value;
-        assert!(live_good > 0.6, "model should predict high success for good features, got {live_good}");
-        assert!(live_bad < 0.4, "model should predict low success for bad features, got {live_bad}");
+        assert!(
+            live_good > 0.6,
+            "model should predict high success for good features, got {live_good}"
+        );
+        assert!(
+            live_bad < 0.4,
+            "model should predict low success for bad features, got {live_bad}"
+        );
 
         // 2. Save to ModelState (simulates persistence to disk/database)
         let state = model.save();
@@ -1379,7 +1384,10 @@ mod tests {
         }
 
         let live_pred = model.predict(&features).value;
-        assert!(live_pred < 400.0, "should have learned lower latency, got {live_pred}");
+        assert!(
+            live_pred < 400.0,
+            "should have learned lower latency, got {live_pred}"
+        );
 
         let state = model.save();
         drop(model);
@@ -1387,7 +1395,10 @@ mod tests {
         // Cold model starts at 500ms default
         let cold = LatencyModel::new(FEATURE_DIMENSION);
         let cold_pred = cold.predict(&features).value;
-        assert!((cold_pred - 500.0).abs() < 1.0, "cold should be ~500ms, got {cold_pred}");
+        assert!(
+            (cold_pred - 500.0).abs() < 1.0,
+            "cold should be ~500ms, got {cold_pred}"
+        );
 
         // Warm model preserves learned behavior
         let warm = LatencyModel::load(&state).unwrap();
@@ -1468,9 +1479,7 @@ mod tests {
             f
         };
 
-        let samples: Vec<_> = (0..50)
-            .map(|_| (features.clone(), 1.0))
-            .collect();
+        let samples: Vec<_> = (0..50).map(|_| (features.clone(), 1.0)).collect();
 
         let result = train_batch(&mut model, &samples);
         assert_eq!(result.model_name, "success");
@@ -1485,9 +1494,7 @@ mod tests {
     fn train_batch_zero_duration_for_small_batch() {
         let mut model = LatencyModel::new(FEATURE_DIMENSION);
         let features = zero_features();
-        let samples: Vec<_> = (0..10)
-            .map(|_| (features.clone(), 200.0))
-            .collect();
+        let samples: Vec<_> = (0..10).map(|_| (features.clone(), 200.0)).collect();
 
         let result = train_batch(&mut model, &samples);
         // duration_ms may be 0 for very fast batches; just verify the field exists
@@ -1517,10 +1524,7 @@ mod tests {
         assert_eq!(restored.model_name, result.model_name);
         assert_eq!(restored.samples_trained, result.samples_trained);
         assert_eq!(restored.duration_ms, result.duration_ms);
-        assert_eq!(
-            restored.final_state.algorithm,
-            result.final_state.algorithm
-        );
+        assert_eq!(restored.final_state.algorithm, result.final_state.algorithm);
     }
 
     // -- T7C-H06: Learning direction tests --
@@ -1539,9 +1543,7 @@ mod tests {
             f
         };
 
-        let samples: Vec<_> = (0..200)
-            .map(|_| (features.clone(), 1.0))
-            .collect();
+        let samples: Vec<_> = (0..200).map(|_| (features.clone(), 1.0)).collect();
         train_batch(&mut model, &samples);
 
         let pred = model.predict(&features);
@@ -1564,9 +1566,7 @@ mod tests {
             f
         };
 
-        let samples: Vec<_> = (0..200)
-            .map(|_| (features.clone(), 100.0))
-            .collect();
+        let samples: Vec<_> = (0..200).map(|_| (features.clone(), 100.0)).collect();
         train_batch(&mut model, &samples);
 
         let pred = model.predict(&features);
@@ -1589,9 +1589,7 @@ mod tests {
             f
         };
 
-        let samples: Vec<_> = (0..200)
-            .map(|_| (features.clone(), 50.0))
-            .collect();
+        let samples: Vec<_> = (0..200).map(|_| (features.clone(), 50.0)).collect();
         train_batch(&mut model, &samples);
 
         let pred = model.predict(&features);
@@ -1614,9 +1612,7 @@ mod tests {
             f
         };
 
-        let samples: Vec<_> = (0..200)
-            .map(|_| (features.clone(), 0.01))
-            .collect();
+        let samples: Vec<_> = (0..200).map(|_| (features.clone(), 0.01)).collect();
         train_batch(&mut model, &samples);
 
         let pred = model.predict(&features);

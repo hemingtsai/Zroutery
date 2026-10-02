@@ -2,10 +2,10 @@
 
 #[cfg(feature = "account")]
 mod account_tests {
-    use zroutery_core::account::*;
     use std::collections::HashMap;
     use std::sync::Arc;
     use std::thread;
+    use zroutery_core::account::*;
 
     // Account identity
     #[test]
@@ -78,7 +78,9 @@ mod account_tests {
         // Removing from one provider does not affect the other
         assert!(store.remove("openai", &AccountId("shared".into())));
         assert!(store.get("openai", &AccountId("shared".into())).is_none());
-        assert!(store.get("anthropic", &AccountId("shared".into())).is_some());
+        assert!(store
+            .get("anthropic", &AccountId("shared".into()))
+            .is_some());
     }
 
     // Quota
@@ -178,7 +180,10 @@ mod account_tests {
             status: AccountStatus::RateLimited,
             ..Default::default()
         });
-        assert_eq!(store.get("openai", &id).unwrap().status, AccountStatus::RateLimited);
+        assert_eq!(
+            store.get("openai", &id).unwrap().status,
+            AccountStatus::RateLimited
+        );
 
         // Remove
         assert!(store.remove("openai", &id));

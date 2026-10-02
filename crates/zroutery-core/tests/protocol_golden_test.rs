@@ -111,20 +111,14 @@ fn openai_tool_call_round_trip() {
     let encoded = openai::encode_request(&req, "gpt-4").unwrap();
     let messages = encoded["messages"].as_array().unwrap();
     // The assistant message should have tool_calls.
-    let assistant_msg = messages
-        .iter()
-        .find(|m| m["role"] == "assistant")
-        .unwrap();
+    let assistant_msg = messages.iter().find(|m| m["role"] == "assistant").unwrap();
     let calls = assistant_msg["tool_calls"].as_array().unwrap();
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0]["id"], "call_abc123");
     assert_eq!(calls[0]["function"]["name"], "get_weather");
 
     // The tool result message should be role "tool".
-    let tool_msg = messages
-        .iter()
-        .find(|m| m["role"] == "tool")
-        .unwrap();
+    let tool_msg = messages.iter().find(|m| m["role"] == "tool").unwrap();
     assert_eq!(tool_msg["tool_call_id"], "call_abc123");
 }
 
@@ -411,7 +405,10 @@ fn anthropic_thinking_response() {
     let encoded = anthropic::encode_response(&resp);
     let content = encoded["content"].as_array().unwrap();
     assert_eq!(content[0]["type"], "thinking");
-    assert_eq!(content[0]["thinking"], "Let me think about this carefully...");
+    assert_eq!(
+        content[0]["thinking"],
+        "Let me think about this carefully..."
+    );
     assert_eq!(content[0]["signature"], "sig_abc");
     assert_eq!(content[1]["type"], "text");
 }
@@ -463,7 +460,9 @@ fn anthropic_tool_use_round_trip() {
 
     match &req.messages[2].content[0] {
         ContentBlock::ToolResult {
-            tool_use_id, content, ..
+            tool_use_id,
+            content,
+            ..
         } => {
             assert_eq!(tool_use_id, "toolu_123");
             match &content[0] {
@@ -514,7 +513,10 @@ fn gemini_text_request_round_trip() {
     assert_eq!(encoded["model"], "gemini-2.0-flash");
     assert_eq!(encoded["generationConfig"]["maxOutputTokens"], 128);
     assert_eq!(encoded["generationConfig"]["temperature"], 0.5);
-    assert_eq!(encoded["system_instruction"]["parts"][0]["text"], "be brief");
+    assert_eq!(
+        encoded["system_instruction"]["parts"][0]["text"],
+        "be brief"
+    );
 }
 
 #[test]
@@ -650,10 +652,7 @@ fn gemini_function_call_round_trip() {
     assert_eq!(model_parts[0]["functionCall"]["args"]["city"], "Tokyo");
 
     let resp_parts = contents[2]["parts"].as_array().unwrap();
-    assert_eq!(
-        resp_parts[0]["functionResponse"]["name"],
-        "get_weather"
-    );
+    assert_eq!(resp_parts[0]["functionResponse"]["name"], "get_weather");
 }
 
 #[test]
@@ -692,7 +691,9 @@ fn gemini_response_decode_encodes_round_trip() {
     }
 
     let encoded = gemini::encode_response(&resp);
-    let parts = encoded["candidates"][0]["content"]["parts"].as_array().unwrap();
+    let parts = encoded["candidates"][0]["content"]["parts"]
+        .as_array()
+        .unwrap();
     assert_eq!(parts[0]["text"], "The answer is 42.");
     assert_eq!(parts[1]["functionCall"]["name"], "f");
 }
@@ -817,10 +818,7 @@ fn responses_function_call_output() {
 
     let encoded = responses::encode_request(&req, "gpt-5").unwrap();
     let input = encoded["input"].as_array().unwrap();
-    let fc = input
-        .iter()
-        .find(|i| i["type"] == "function_call")
-        .unwrap();
+    let fc = input.iter().find(|i| i["type"] == "function_call").unwrap();
     assert_eq!(fc["call_id"], "call_1");
     assert_eq!(fc["name"], "get_weather");
 
@@ -1054,10 +1052,7 @@ fn cross_protocol_openai_tools_to_anthropic() {
     let messages = anthropic_req["messages"].as_array().unwrap();
 
     // Tool calls should be in the assistant message.
-    let assistant_msg = messages
-        .iter()
-        .find(|m| m["role"] == "assistant")
-        .unwrap();
+    let assistant_msg = messages.iter().find(|m| m["role"] == "assistant").unwrap();
     let tool_use = assistant_msg["content"]
         .as_array()
         .unwrap()
@@ -1070,7 +1065,12 @@ fn cross_protocol_openai_tools_to_anthropic() {
     // Tool result should be in a user message.
     let user_msg = messages
         .iter()
-        .find(|m| m["role"] == "user" && m["content"].as_array().is_some_and(|a| a.iter().any(|b| b["type"] == "tool_result")))
+        .find(|m| {
+            m["role"] == "user"
+                && m["content"]
+                    .as_array()
+                    .is_some_and(|a| a.iter().any(|b| b["type"] == "tool_result"))
+        })
         .expect("should have user message with tool_result");
     let tool_result = user_msg["content"]
         .as_array()
@@ -1112,19 +1112,13 @@ fn cross_protocol_gemini_tools_to_openai() {
 
     let messages = openai_req["messages"].as_array().unwrap();
     // Assistant message should have tool_calls.
-    let assistant = messages
-        .iter()
-        .find(|m| m["role"] == "assistant")
-        .unwrap();
+    let assistant = messages.iter().find(|m| m["role"] == "assistant").unwrap();
     let calls = assistant["tool_calls"].as_array().unwrap();
     assert_eq!(calls[0]["id"], "c1");
     assert_eq!(calls[0]["function"]["name"], "my_func");
 
     // Tool result should be a "tool" role message.
-    let tool = messages
-        .iter()
-        .find(|m| m["role"] == "tool")
-        .unwrap();
+    let tool = messages.iter().find(|m| m["role"] == "tool").unwrap();
     assert_eq!(tool["tool_call_id"], "c1");
 }
 
@@ -1237,10 +1231,7 @@ fn cross_protocol_anthropic_thinking_to_openai_reasoning() {
     placeholder.unsupported_content_policy = UnsupportedContentPolicy::Placeholder;
     let openai_req = openai::encode_request(&placeholder, "deepseek-r1").unwrap();
     let messages = openai_req["messages"].as_array().unwrap();
-    let assistant = messages
-        .iter()
-        .find(|m| m["role"] == "assistant")
-        .unwrap();
+    let assistant = messages.iter().find(|m| m["role"] == "assistant").unwrap();
     let content = assistant["content"].as_str().unwrap();
     assert!(content.contains("Unsupported"));
     assert!(content.contains("Final answer."));
@@ -1533,10 +1524,10 @@ fn cross_protocol_round_trip_preserves_audio_capability() {
 
     let ir = gemini::decode_request(gemini_req).unwrap();
     // Verify the IR contains Audio content.
-    assert!(ir
-        .messages
+    assert!(ir.messages.iter().any(|m| m
+        .content
         .iter()
-        .any(|m| m.content.iter().any(|c| matches!(c, ContentBlock::Audio { .. }))));
+        .any(|c| matches!(c, ContentBlock::Audio { .. }))));
 
     // Encode to Anthropic — audio is not natively supported, but should
     // not error if we set the policy to Drop or Placeholder.
@@ -1547,10 +1538,7 @@ fn cross_protocol_round_trip_preserves_audio_capability() {
     let content = anthropic_req["messages"][0]["content"].as_array().unwrap();
     // Should have a placeholder text instead of audio.
     assert_eq!(content[0]["type"], "text");
-    assert!(content[0]["text"]
-        .as_str()
-        .unwrap()
-        .contains("Unsupported"));
+    assert!(content[0]["text"].as_str().unwrap().contains("Unsupported"));
 
     // Encode to OpenAI — audio IS natively supported.
     let openai_req = openai::encode_request(&ir, "gpt-4-audio-preview").unwrap();
@@ -1563,9 +1551,9 @@ fn cross_protocol_round_trip_preserves_audio_capability() {
 // ResponsesStreamEncoder regression tests
 // ============================================================
 
-use zroutery_core::protocol::StreamEncoder;
-use zroutery_core::protocol::responses::ResponsesStreamEncoder;
 use zroutery_core::ir::{StreamEvent, Usage};
+use zroutery_core::protocol::responses::ResponsesStreamEncoder;
+use zroutery_core::protocol::StreamEncoder;
 
 /// Helper: collect all SSE frames from encoding a sequence of events.
 fn encode_events(events: &[StreamEvent]) -> Vec<String> {
@@ -1583,7 +1571,8 @@ fn encode_events(events: &[StreamEvent]) -> Vec<String> {
 }
 
 fn find_event(frames: &[String], event_type: &str) -> Vec<serde_json::Value> {
-    frames.iter()
+    frames
+        .iter()
         .filter(|f| f.starts_with(event_type))
         .map(|f| serde_json::from_str(f.lines().last().unwrap()).unwrap())
         .collect()
@@ -1592,23 +1581,48 @@ fn find_event(frames: &[String], event_type: &str) -> Vec<serde_json::Value> {
 #[test]
 fn stream_text_starts_at_output_index_0() {
     let events = encode_events(&[
-        StreamEvent::Start { id: "r1".into(), model: "m".into(), usage: Usage::default() },
-        StreamEvent::TextDelta { index: 0, text: "hello".into() },
+        StreamEvent::Start {
+            id: "r1".into(),
+            model: "m".into(),
+            usage: Usage::default(),
+        },
+        StreamEvent::TextDelta {
+            index: 0,
+            text: "hello".into(),
+        },
         StreamEvent::BlockStop { index: 0 },
-        StreamEvent::Stop { stop_reason: StopReason::EndTurn, stop_sequence: None, usage: Usage::default() },
+        StreamEvent::Stop {
+            stop_reason: StopReason::EndTurn,
+            stop_sequence: None,
+            usage: Usage::default(),
+        },
     ]);
     let added = find_event(&events, "response.output_item.added");
     assert!(!added.is_empty());
-    assert_eq!(added[0]["output_index"], 0, "first item should be at index 0");
+    assert_eq!(
+        added[0]["output_index"], 0,
+        "first item should be at index 0"
+    );
     assert_eq!(added[0]["item"]["type"], "message");
 }
 
 #[test]
 fn stream_text_emits_output_text_done() {
     let events = encode_events(&[
-        StreamEvent::Start { id: "r1".into(), model: "m".into(), usage: Usage::default() },
-        StreamEvent::TextDelta { index: 0, text: "hello".into() },
-        StreamEvent::Stop { stop_reason: StopReason::EndTurn, stop_sequence: None, usage: Usage::default() },
+        StreamEvent::Start {
+            id: "r1".into(),
+            model: "m".into(),
+            usage: Usage::default(),
+        },
+        StreamEvent::TextDelta {
+            index: 0,
+            text: "hello".into(),
+        },
+        StreamEvent::Stop {
+            stop_reason: StopReason::EndTurn,
+            stop_sequence: None,
+            usage: Usage::default(),
+        },
     ]);
     let done = find_event(&events, "response.output_text.done");
     assert!(!done.is_empty(), "should emit output_text.done");
@@ -1618,26 +1632,62 @@ fn stream_text_emits_output_text_done() {
 #[test]
 fn stream_content_part_has_item_id() {
     let events = encode_events(&[
-        StreamEvent::Start { id: "r1".into(), model: "m".into(), usage: Usage::default() },
-        StreamEvent::TextDelta { index: 0, text: "x".into() },
-        StreamEvent::Stop { stop_reason: StopReason::EndTurn, stop_sequence: None, usage: Usage::default() },
+        StreamEvent::Start {
+            id: "r1".into(),
+            model: "m".into(),
+            usage: Usage::default(),
+        },
+        StreamEvent::TextDelta {
+            index: 0,
+            text: "x".into(),
+        },
+        StreamEvent::Stop {
+            stop_reason: StopReason::EndTurn,
+            stop_sequence: None,
+            usage: Usage::default(),
+        },
     ]);
     let added = find_event(&events, "response.content_part.added");
     assert!(!added.is_empty());
-    assert!(added[0]["item_id"].as_str().is_some(), "content_part.added must have item_id");
+    assert!(
+        added[0]["item_id"].as_str().is_some(),
+        "content_part.added must have item_id"
+    );
 }
 
 #[test]
 fn stream_parallel_tools_no_interference() {
     let events = encode_events(&[
-        StreamEvent::Start { id: "r1".into(), model: "m".into(), usage: Usage::default() },
-        StreamEvent::ToolUseStart { index: 0, id: "call_a".into(), name: "fn_a".into() },
-        StreamEvent::ToolUseStart { index: 1, id: "call_b".into(), name: "fn_b".into() },
-        StreamEvent::ToolUseDelta { index: 0, partial_json: "{\"x\":1}".into() },
-        StreamEvent::ToolUseDelta { index: 1, partial_json: "{\"y\":2}".into() },
+        StreamEvent::Start {
+            id: "r1".into(),
+            model: "m".into(),
+            usage: Usage::default(),
+        },
+        StreamEvent::ToolUseStart {
+            index: 0,
+            id: "call_a".into(),
+            name: "fn_a".into(),
+        },
+        StreamEvent::ToolUseStart {
+            index: 1,
+            id: "call_b".into(),
+            name: "fn_b".into(),
+        },
+        StreamEvent::ToolUseDelta {
+            index: 0,
+            partial_json: "{\"x\":1}".into(),
+        },
+        StreamEvent::ToolUseDelta {
+            index: 1,
+            partial_json: "{\"y\":2}".into(),
+        },
         StreamEvent::BlockStop { index: 1 }, // B finishes first
         StreamEvent::BlockStop { index: 0 }, // A finishes second
-        StreamEvent::Stop { stop_reason: StopReason::EndTurn, stop_sequence: None, usage: Usage::default() },
+        StreamEvent::Stop {
+            stop_reason: StopReason::EndTurn,
+            stop_sequence: None,
+            usage: Usage::default(),
+        },
     ]);
     // Both tools should have added + done events.
     let added = find_event(&events, "response.output_item.added");
@@ -1654,8 +1704,14 @@ fn stream_parallel_tools_no_interference() {
     assert_eq!(output[0]["call_id"], "call_a");
     assert_eq!(output[1]["call_id"], "call_b");
     // Arguments should be strings, not parsed objects.
-    assert!(output[0]["arguments"].is_string(), "arguments must be JSON string");
-    assert!(output[1]["arguments"].is_string(), "arguments must be JSON string");
+    assert!(
+        output[0]["arguments"].is_string(),
+        "arguments must be JSON string"
+    );
+    assert!(
+        output[1]["arguments"].is_string(),
+        "arguments must be JSON string"
+    );
 }
 
 #[test]
@@ -1663,17 +1719,39 @@ fn stream_incomplete_tool_on_finish() {
     // Tool starts but never gets BlockStop — finish() should emit terminal events.
     let mut enc = ResponsesStreamEncoder::new("test-model");
     let mut frames = Vec::new();
-    frames.extend(enc.encode(&StreamEvent::Start { id: "r1".into(), model: "m".into(), usage: Usage::default() }));
-    frames.extend(enc.encode(&StreamEvent::ToolUseStart { index: 0, id: "call_a".into(), name: "fn".into() }));
-    frames.extend(enc.encode(&StreamEvent::ToolUseDelta { index: 0, partial_json: "{\"x\":".into() }));
+    frames.extend(enc.encode(&StreamEvent::Start {
+        id: "r1".into(),
+        model: "m".into(),
+        usage: Usage::default(),
+    }));
+    frames.extend(enc.encode(&StreamEvent::ToolUseStart {
+        index: 0,
+        id: "call_a".into(),
+        name: "fn".into(),
+    }));
+    frames.extend(enc.encode(&StreamEvent::ToolUseDelta {
+        index: 0,
+        partial_json: "{\"x\":".into(),
+    }));
     // No BlockStop — finish() called directly.
     frames.extend(enc.finish());
-    let wire: Vec<String> = frames.iter().map(|f| format!("{}\n{}", f.event.as_deref().unwrap_or(""), f.data)).collect();
+    let wire: Vec<String> = frames
+        .iter()
+        .map(|f| format!("{}\n{}", f.event.as_deref().unwrap_or(""), f.data))
+        .collect();
     // Should have arguments.done + output_item.done with status=incomplete.
     let args_done = find_event(&wire, "response.function_call_arguments.done");
-    assert_eq!(args_done.len(), 1, "should emit arguments.done for incomplete tool");
+    assert_eq!(
+        args_done.len(),
+        1,
+        "should emit arguments.done for incomplete tool"
+    );
     let item_done = find_event(&wire, "response.output_item.done");
-    assert_eq!(item_done.len(), 1, "should emit output_item.done for incomplete tool");
+    assert_eq!(
+        item_done.len(),
+        1,
+        "should emit output_item.done for incomplete tool"
+    );
     let completed = find_event(&wire, "response.completed");
     assert_eq!(completed[0]["response"]["status"], "incomplete");
     let output = completed[0]["response"]["output"].as_array().unwrap();
@@ -1686,13 +1764,26 @@ fn stream_incomplete_tool_on_finish() {
 fn stream_error_terminal_is_only_failed() {
     let mut enc = ResponsesStreamEncoder::new("test-model");
     let mut frames = Vec::new();
-    frames.extend(enc.encode(&StreamEvent::Start { id: "r1".into(), model: "m".into(), usage: Usage::default() }));
-    frames.extend(enc.encode(&StreamEvent::TextDelta { index: 0, text: "partial".into() }));
+    frames.extend(enc.encode(&StreamEvent::Start {
+        id: "r1".into(),
+        model: "m".into(),
+        usage: Usage::default(),
+    }));
+    frames.extend(enc.encode(&StreamEvent::TextDelta {
+        index: 0,
+        text: "partial".into(),
+    }));
     frames.extend(enc.error(&zroutery_core::Error::internal("test error")));
-    let wire: Vec<String> = frames.iter().map(|f| format!("{}\n{}", f.event.as_deref().unwrap_or(""), f.data)).collect();
+    let wire: Vec<String> = frames
+        .iter()
+        .map(|f| format!("{}\n{}", f.event.as_deref().unwrap_or(""), f.data))
+        .collect();
     // Should have response.failed but NO response.completed.
     let failed = find_event(&wire, "response.failed");
     assert_eq!(failed.len(), 1, "should have exactly one response.failed");
     let completed = find_event(&wire, "response.completed");
-    assert!(completed.is_empty(), "should NOT have response.completed after error");
+    assert!(
+        completed.is_empty(),
+        "should NOT have response.completed after error"
+    );
 }

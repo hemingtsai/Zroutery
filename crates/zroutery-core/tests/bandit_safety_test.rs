@@ -21,8 +21,8 @@
 //! 6. **fail-closed refusals**: every malformed input is a typed refusal with a
 //!    reason, never a panic and never a silently defaulted policy.
 
-use zroutery_core::feedback::DataOrigin;
 use zroutery_core::failure::FailureClass;
+use zroutery_core::feedback::DataOrigin;
 use zroutery_core::ml::bandit::{
     accepted_outcome_proxy_score, compare_outcome_proxy, run_bandit, ArmSafetyMetrics,
     ArmSelectionStatistics, BanditConfig, BanditError, BanditReport, OutcomeProxy, RewardArm,
@@ -35,7 +35,7 @@ use zroutery_core::ml::dataset::{
     outcome_to_dataset_sample, OutcomeTrainingSample, TrainingSample as DatasetTrainingSample,
 };
 use zroutery_core::ml::evaluation::RoutingMetrics;
-use zroutery_core::ml::features::{RoutingFeatures, F_CONTEXT_TOKENS, FEATURE_SCHEMA_VERSION};
+use zroutery_core::ml::features::{RoutingFeatures, FEATURE_SCHEMA_VERSION, F_CONTEXT_TOKENS};
 use zroutery_core::ml::reward::{Action, ActionGuard, RewardPolicy};
 use zroutery_core::outcome::{Attempt, Outcome};
 use zroutery_core::session::SessionRoutingMode;
@@ -115,7 +115,9 @@ fn sample(
     fallbacks: u32,
     timestamp: i64,
 ) -> OutcomeTrainingSample {
-    let outcome = fixture_outcome(model, provider, terminal, latency_ms, cost, fallbacks, timestamp);
+    let outcome = fixture_outcome(
+        model, provider, terminal, latency_ms, cost, fallbacks, timestamp,
+    );
     let mut features = RoutingFeatures::default();
     features.values[F_CONTEXT_TOKENS] = 0.5;
     outcome_to_dataset_sample(&outcome, features, DataOrigin::Native)
@@ -136,7 +138,9 @@ fn build_snapshot() -> Vec<OutcomeTrainingSample> {
     for (model, provider) in CELLS {
         for row in cell_rows() {
             timestamp += 1;
-            rows.push(sample(model, provider, row.0, row.1, row.2, row.3, timestamp));
+            rows.push(sample(
+                model, provider, row.0, row.1, row.2, row.3, timestamp,
+            ));
         }
     }
     rows
@@ -144,8 +148,7 @@ fn build_snapshot() -> Vec<OutcomeTrainingSample> {
 
 /// The shared snapshot. See [`build_snapshot`] for why it is built once.
 fn snapshot() -> &'static [OutcomeTrainingSample] {
-    static SNAPSHOT: std::sync::OnceLock<Vec<OutcomeTrainingSample>> =
-        std::sync::OnceLock::new();
+    static SNAPSHOT: std::sync::OnceLock<Vec<OutcomeTrainingSample>> = std::sync::OnceLock::new();
     SNAPSHOT.get_or_init(build_snapshot)
 }
 
@@ -242,8 +245,8 @@ fn declared_arms() -> Vec<RewardArm> {
 }
 
 fn report_json(snapshot: &[OutcomeTrainingSample], config: &BanditConfig) -> String {
-    let outcome = run_bandit(snapshot, &declared_arms(), config)
-        .expect("the fixture snapshot must run");
+    let outcome =
+        run_bandit(snapshot, &declared_arms(), config).expect("the fixture snapshot must run");
     serde_json::to_string(outcome.report()).expect("a report must serialize")
 }
 
@@ -457,7 +460,10 @@ fn the_reward_target_is_declared_as_an_outcome_proxy_not_a_preference() {
         .expect("the fixture snapshot must run");
     let report = outcome.report();
 
-    assert_eq!(report.reward_fit.outcome_proxy_not_preference, REWARD_FIT_TARGET_DESCRIPTION);
+    assert_eq!(
+        report.reward_fit.outcome_proxy_not_preference,
+        REWARD_FIT_TARGET_DESCRIPTION
+    );
     assert!(
         REWARD_FIT_TARGET_DESCRIPTION.contains("NOT a user preference"),
         "the published description must deny a preference reading in its own words"
@@ -469,7 +475,10 @@ fn the_reward_target_is_declared_as_an_outcome_proxy_not_a_preference() {
     // outcome targets with nothing else in scope.
     let row = &misordered_snapshot()[0];
     let proxy = zroutery_core::ml::bandit::OutcomeProxy::from_targets(&row.targets);
-    assert!(proxy.success || !proxy.success, "success is a plain outcome label");
+    assert!(
+        proxy.success || !proxy.success,
+        "success is a plain outcome label"
+    );
     assert_eq!(proxy.switch_count(), proxy.fallback_count);
     assert_eq!(proxy.is_fallback(), proxy.fallback_count > 0);
 
@@ -496,7 +505,8 @@ fn the_unidentifiable_weight_is_reported_rather_than_claimed() {
     let fit = &outcome.report().reward_fit;
 
     assert!(
-        fit.unidentifiable_weights.contains(&UNIDENTIFIABLE_WEIGHT.to_string()),
+        fit.unidentifiable_weights
+            .contains(&UNIDENTIFIABLE_WEIGHT.to_string()),
         "uncertainty_weight multiplies a decision-time confidence a dataset row does not \
          carry, and the report must say so"
     );
@@ -598,8 +608,14 @@ fn selection_picks_the_highest_ucb_score() {
         (selected.ucb_score - best).abs() < f64::EPSILON,
         "selection must be argmax over the reported UCB scores"
     );
-    assert_eq!(report.selection.seed, config.selection.seed, "the seed is recorded");
-    assert!(report.selection.tied_arms.contains(&report.selection.selected));
+    assert_eq!(
+        report.selection.seed, config.selection.seed,
+        "the seed is recorded"
+    );
+    assert!(report
+        .selection
+        .tied_arms
+        .contains(&report.selection.selected));
 }
 
 #[test]
@@ -772,7 +788,9 @@ fn the_safety_metrics_never_pass_through_the_reward_function() {
             "the tail percentile is published so the number is not read as a mean"
         );
         // And the accepted evaluator agrees about the same rows.
-        assert!((arm.accepted_metrics.success_rate - successes / (successes + failures)).abs() < 1e-12);
+        assert!(
+            (arm.accepted_metrics.success_rate - successes / (successes + failures)).abs() < 1e-12
+        );
     }
 }
 
@@ -792,7 +810,11 @@ fn acceptance_cannot_be_granted_by_writing_a_field_into_the_report() {
     // the serialized field and nothing else.
     report.safety_verdict = SafetyVerdict::Accept;
     assert_eq!(report.safety.verdict(), SafetyVerdict::Reject);
-    assert_eq!(report.accepted_arm(), None, "a forged verdict grants nothing");
+    assert_eq!(
+        report.accepted_arm(),
+        None,
+        "a forged verdict grants nothing"
+    );
     assert!(!report.is_acceptable());
 
     // Forge the deltas instead, and the gate does accept — which is exactly why
@@ -875,7 +897,9 @@ fn an_undecidable_comparison_is_reported_as_insufficient_not_accepted() {
             } else {
                 row.0
             };
-            rows.push(sample(model, provider, terminal, row.1, row.2, row.3, timestamp));
+            rows.push(sample(
+                model, provider, terminal, row.1, row.2, row.3, timestamp,
+            ));
         }
     }
 
@@ -928,11 +952,19 @@ fn a_reordered_snapshot_reproduces_the_same_report() {
     // the run a function of the contents, not of the caller's ordering.
     let mut reversed = ordered.clone();
     reversed.reverse();
-    assert_eq!(report_json(&reversed, &config), first, "reversed input changed the run");
+    assert_eq!(
+        report_json(&reversed, &config),
+        first,
+        "reversed input changed the run"
+    );
 
     let mut rotated = ordered.clone();
     rotated.rotate_left(5);
-    assert_eq!(report_json(&rotated, &config), first, "rotated input changed the run");
+    assert_eq!(
+        report_json(&rotated, &config),
+        first,
+        "rotated input changed the run"
+    );
 }
 
 #[test]
@@ -942,13 +974,25 @@ fn the_report_carries_no_wall_clock_or_run_counter() {
     let second = report_json(&misordered_snapshot(), &config);
     let value: serde_json::Value = serde_json::from_str(&first).expect("valid json");
 
-    for forbidden in ["created_at", "updated_at", "duration", "elapsed", "run_id", "timestamp", "started_at", "finished_at"] {
+    for forbidden in [
+        "created_at",
+        "updated_at",
+        "duration",
+        "elapsed",
+        "run_id",
+        "timestamp",
+        "started_at",
+        "finished_at",
+    ] {
         assert!(
             value.get(forbidden).is_none(),
             "the report must not carry a {forbidden} field"
         );
     }
-    assert_eq!(first, second, "no field may vary between two identical runs");
+    assert_eq!(
+        first, second,
+        "no field may vary between two identical runs"
+    );
 }
 
 #[test]
@@ -1081,10 +1125,7 @@ fn the_fitted_policy_is_produced_but_not_installed() {
     let _report = outcome.report();
     // The fitted arm is an arm, exactly like the declared ones, and it is
     // selected over like any other.
-    assert!(outcome
-        .arms()
-        .iter()
-        .any(|arm| arm.arm == FITTED_ARM_NAME));
+    assert!(outcome.arms().iter().any(|arm| arm.arm == FITTED_ARM_NAME));
 }
 
 // ---------------------------------------------------------------------------
@@ -1230,7 +1271,10 @@ fn an_inadequate_fit_partition_is_refused() {
     config.reward.holdout_cells = 4;
     assert!(matches!(
         run_bandit(&misordered_snapshot(), &declared_arms(), &config),
-        Err(BanditError::HoldoutTakesEveryCell { total: 4, holdout_cells: 4 })
+        Err(BanditError::HoldoutTakesEveryCell {
+            total: 4,
+            holdout_cells: 4
+        })
     ));
 }
 
@@ -1338,7 +1382,10 @@ fn a_refused_run_yields_no_policy_and_no_verdict() {
     // `BanditOutcome` exposes the fitted policy only on success, so there is no
     // value to read here at all: `result` is an `Err`, and that is the whole
     // answer.
-    assert!(matches!(result, Err(BanditError::MeaninglessTolerance { .. })));
+    assert!(matches!(
+        result,
+        Err(BanditError::MeaninglessTolerance { .. })
+    ));
 }
 
 // ---------------------------------------------------------------------------

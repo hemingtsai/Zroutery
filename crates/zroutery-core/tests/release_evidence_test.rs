@@ -36,8 +36,8 @@ use zroutery_core::failure::FailureClass;
 use zroutery_core::ir::Usage;
 use zroutery_core::ml::calibration::{
     collect_marginal_observations, measure_marginal, CalibrationConfig, CandidateInput,
-    CohortContext, DecisionCohort, EmittedDecision, MarginalCalibrator, MarginalView,
-    KWayCalibrator, ReliabilityConfig, DEFAULT_PROBABILITY_FLOOR,
+    CohortContext, DecisionCohort, EmittedDecision, KWayCalibrator, MarginalCalibrator,
+    MarginalView, ReliabilityConfig, DEFAULT_PROBABILITY_FLOOR,
 };
 use zroutery_core::ml::coordinator::{CoordinatorConfig, RoutingAction};
 use zroutery_core::ml::dataset::{
@@ -65,7 +65,11 @@ use zroutery_core::session::SessionRoutingMode;
 const BASE: i64 = 1_700_000_000;
 
 /// `(model, provider)` for the three candidates every decision compares.
-const AXIS: [(&str, &str); 3] = [("alpha", "prov-a"), ("bravo", "prov-b"), ("charlie", "prov-c")];
+const AXIS: [(&str, &str); 3] = [
+    ("alpha", "prov-a"),
+    ("bravo", "prov-b"),
+    ("charlie", "prov-c"),
+];
 
 const DECISIONS: usize = 24;
 
@@ -370,12 +374,9 @@ fn seven_e_three_breaks() -> Vec<Provocation> {
                 m.decisions_equivalent = 23;
             },
         ),
-        (
-            "at least one replay disagreed with its Outcome",
-            |m| {
-                m.terminal_agreements = 23;
-            },
-        ),
+        ("at least one replay disagreed with its Outcome", |m| {
+            m.terminal_agreements = 23;
+        }),
         (
             "no retained feature position was shown to be load-bearing for the replayed decision",
             |m| {
@@ -392,12 +393,9 @@ fn seven_e_three_breaks() -> Vec<Provocation> {
             m.holdout.overlap_with_fit_set = 1;
         }),
         ("the holdout is empty", |m| m.holdout.decisions = 0),
-        (
-            "7E-2D reports the emitted vector as miscalibrated",
-            |m| {
-                m.calibration = zroutery_core::ml::calibration::CalibrationVerdict::Miscalibrated;
-            },
-        ),
+        ("7E-2D reports the emitted vector as miscalibrated", |m| {
+            m.calibration = zroutery_core::ml::calibration::CalibrationVerdict::Miscalibrated;
+        }),
         (
             "canonical sample floats do not survive this workspace's JSON read path",
             |m| {
@@ -558,7 +556,11 @@ fn supported_constituent() -> StatisticalRelease {
     let cohorts: Vec<DecisionCohort> = (0..n)
         .map(|index| {
             let winner = index % 3;
-            let pick = if index % 2 == 0 { winner } else { (winner + 1) % 3 };
+            let pick = if index % 2 == 0 {
+                winner
+            } else {
+                (winner + 1) % 3
+            };
             let context = CohortContext {
                 timestamp: BASE + index as i64,
                 dialect: "openai".to_string(),
@@ -591,12 +593,9 @@ fn supported_constituent() -> StatisticalRelease {
                 .expect("the fixture cohort emits a distribution")
         })
         .collect();
-    let observations = collect_marginal_observations(
-        &cohorts,
-        &marginal_calibrator,
-        DEFAULT_PROBABILITY_FLOOR,
-    )
-    .expect("the fixture's marginal observations collect");
+    let observations =
+        collect_marginal_observations(&cohorts, &marginal_calibrator, DEFAULT_PROBABILITY_FLOOR)
+            .expect("the fixture's marginal observations collect");
     let marginal = measure_marginal(
         &observations,
         MarginalView::Calibrated,
@@ -618,9 +617,7 @@ fn supported_constituent() -> StatisticalRelease {
 fn every_constituent_passing_reaches_a_considerable_verdict() {
     let (_trained, report) = gated();
     let statistics = supported_constituent();
-    let support: &EvidenceSupport = statistics
-        .support()
-        .expect("a real effect is supported");
+    let support: &EvidenceSupport = statistics.support().expect("a real effect is supported");
     println!("SUPPORTED: {}", support.headline());
     assert!(statistics.is_supported());
     assert!(statistics.blockers().is_empty());
@@ -675,7 +672,10 @@ fn a_holdout_too_thin_to_test_still_produces_a_report() {
     let outcome = run_offline_gate(&input).expect("the gate still produces a report");
     let report = outcome.report();
     assert!(!report.is_considerable());
-    assert_eq!(report.statistics.refusal().expect("a refusal").code, "sample_too_small");
+    assert_eq!(
+        report.statistics.refusal().expect("a refusal").code,
+        "sample_too_small"
+    );
     // 7E-3's own report is intact and unaffected.
     assert_eq!(report.replay.len(), DECISIONS);
     assert_eq!(report.holdout.decisions, DECISIONS);
@@ -749,7 +749,9 @@ fn the_statistical_constituent_is_measured_over_the_reserved_holdout() {
     // snapshot of many more rows: the constituent measured the holdout and
     // nothing else.
     assert!(
-        refusal.reason.contains(&calibration.holdout_cohorts.to_string()),
+        refusal
+            .reason
+            .contains(&calibration.holdout_cohorts.to_string()),
         "{} against {}",
         refusal.reason,
         calibration.holdout_cohorts
@@ -863,8 +865,10 @@ fn the_verdict_needs_no_configuration_to_turn_the_statistical_gate_off() {
             !report.is_considerable(),
             "a thin holdout withholds under every claim: {config:?}"
         );
-        assert!(report.blockers().iter().any(|blocker| blocker
-            .contains("statistical claim could not be measured")));
+        assert!(report
+            .blockers()
+            .iter()
+            .any(|blocker| blocker.contains("statistical claim could not be measured")));
     }
     // A vacuous claim specification is refused rather than run, so a caller
     // cannot weaken the gate by making the claim meaningless.

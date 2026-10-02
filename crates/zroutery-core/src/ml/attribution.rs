@@ -150,9 +150,8 @@ pub struct Independence {
 
 impl Independence {
     fn of(raw_axis_observations: usize, effective_decisions: usize, unserved: usize) -> Self {
-        let inflation = (effective_decisions > 0).then(|| {
-            raw_axis_observations as f64 / effective_decisions as f64
-        });
+        let inflation = (effective_decisions > 0)
+            .then(|| raw_axis_observations as f64 / effective_decisions as f64);
         Self {
             raw_axis_observations,
             effective_decisions,
@@ -281,7 +280,9 @@ pub enum AttributionError {
     /// The K axis is a composition of unity, so this is the violation that
     /// makes a row-level analysis invalid rather than merely optimistic. It is
     /// refused, not averaged.
-    #[error("decision {cohort} has {winners} served candidates, but the axis is a composition of unity")]
+    #[error(
+        "decision {cohort} has {winners} served candidates, but the axis is a composition of unity"
+    )]
     MultipleServedInOneDecision {
         /// The content fingerprint of the decision.
         cohort: String,
@@ -437,11 +438,9 @@ pub fn attribute(
             expected: partition
                 .get(index)
                 .map_or_else(String::new, |cohort| cohort.fingerprint().to_string()),
-            emitted: emitted
-                .get(index)
-                .map_or_else(String::new, |decision| {
-                    decision.cohort_fingerprint().to_string()
-                }),
+            emitted: emitted.get(index).map_or_else(String::new, |decision| {
+                decision.cohort_fingerprint().to_string()
+            }),
         });
     }
 
@@ -505,13 +504,14 @@ pub fn attribute(
         };
 
         // -- the distribution must be this cohort's --
-        let distribution = emitted.get(index).ok_or_else(|| {
-            AttributionError::PartitionMisaligned {
-                index,
-                expected: cohort.fingerprint().to_string(),
-                emitted: String::from("<absent>"),
-            }
-        })?;
+        let distribution =
+            emitted
+                .get(index)
+                .ok_or_else(|| AttributionError::PartitionMisaligned {
+                    index,
+                    expected: cohort.fingerprint().to_string(),
+                    emitted: String::from("<absent>"),
+                })?;
         if distribution.cohort_fingerprint() != cohort.fingerprint() {
             return Err(AttributionError::PartitionMisaligned {
                 index,

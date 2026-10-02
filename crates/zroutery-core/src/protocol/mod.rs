@@ -11,7 +11,9 @@ pub mod reasoning_bridge;
 pub mod responses;
 
 use crate::error::{Error, Result};
-use crate::ir::{ChatRequest, ChatResponse, ContentBlock, Dialect, StreamEvent, UnsupportedContentPolicy};
+use crate::ir::{
+    ChatRequest, ChatResponse, ContentBlock, Dialect, StreamEvent, UnsupportedContentPolicy,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -35,10 +37,10 @@ pub enum ContentPolicyOutcome {
 /// type.  Only a short, sanitized type token is included in the client error;
 /// the original payload is never copied into it.
 pub(crate) fn unsupported_content(context: &str, kind: Option<&str>) -> Error {
-    let kind = kind.map(sanitize_type).unwrap_or_else(|| "unknown".to_string());
-    Error::invalid(format!(
-        "unsupported {context} content type `{kind}`"
-    ))
+    let kind = kind
+        .map(sanitize_type)
+        .unwrap_or_else(|| "unknown".to_string());
+    Error::invalid(format!("unsupported {context} content type `{kind}`"))
 }
 
 /// Fail-closed error for an unknown item received from an upstream response.
@@ -81,9 +83,9 @@ pub fn evaluate_content_policy(
                 "unsupported content type `{label}` for the target provider"
             )))
         }
-        UnsupportedContentPolicy::Placeholder => {
-            Ok(ContentPolicyOutcome::Replacement(explicit_placeholder(block)))
-        }
+        UnsupportedContentPolicy::Placeholder => Ok(ContentPolicyOutcome::Replacement(
+            explicit_placeholder(block),
+        )),
         UnsupportedContentPolicy::Transform => Err(Error::invalid(
             "content transform requires an explicit replacement",
         )),
@@ -403,7 +405,8 @@ mod tests {
             ]
         });
         let req = anthropic::decode_request(incoming).unwrap();
-        let body = openai::encode_request_with(&req, "glm-5.3", &ProviderQuirks::default()).unwrap();
+        let body =
+            openai::encode_request_with(&req, "glm-5.3", &ProviderQuirks::default()).unwrap();
 
         assert_eq!(body["model"], "glm-5.3");
         assert_eq!(body["max_tokens"], 64);
@@ -414,7 +417,10 @@ mod tests {
         // System becomes the first message; content and cache markers survive
         // in their OpenAI-appropriate places (system text, message text).
         assert_eq!(body["messages"][0]["role"], "system");
-        assert_eq!(body["messages"][0]["content"], "You are a security monitor.");
+        assert_eq!(
+            body["messages"][0]["content"],
+            "You are a security monitor."
+        );
         assert_eq!(body["messages"][1]["content"], "transcript");
 
         // And an Anthropic upstream keeps the same request in its own dialect.

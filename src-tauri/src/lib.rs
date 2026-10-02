@@ -3,8 +3,8 @@
 //! Runs the aggregating proxy in-process and exposes it through a menu bar
 //! item plus a dashboard window.
 
-mod commands;
 pub mod ccswitch;
+mod commands;
 mod logs;
 pub mod platform;
 pub mod secrets;
@@ -75,8 +75,10 @@ pub fn run() {
             #[cfg(desktop)]
             {
                 use tauri_plugin_autostart::MacosLauncher;
-                app.handle()
-                    .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, None))?;
+                app.handle().plugin(tauri_plugin_autostart::init(
+                    MacosLauncher::LaunchAgent,
+                    None,
+                ))?;
             }
 
             // ZROUTERY_CONFIG_DIR wins; otherwise Tauri's own resolution,

@@ -50,75 +50,75 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
         Some(_) => return Err(Error::invalid("`contents` must be an array")),
     };
     for content in contents {
-            let role = match content.get("role").and_then(Value::as_str) {
-                Some("model") => Role::Assistant,
-                Some("user") | None => Role::User,
-                Some(other) => return Err(unsupported_content("content role", Some(other))),
-            };
-            let mut blocks = Vec::new();
-            if let Some(parts) = content.get("parts").and_then(Value::as_array) {
-                for part in parts {
-                    if let Some(text) = part.get("text").and_then(Value::as_str) {
-                        blocks.push(ContentBlock::text(text));
-                    } else if let Some(call) = part.get("functionCall") {
-                        let id = call
-                            .get("id")
-                            .and_then(Value::as_str)
-                            .ok_or_else(|| Error::invalid("functionCall is missing `id`"))?;
-                        let name = call
-                            .get("name")
-                            .and_then(Value::as_str)
-                            .ok_or_else(|| Error::invalid("functionCall is missing `name`"))?;
-                        blocks.push(ContentBlock::ToolUse {
-                            id: id.to_string(),
-                            name: name.to_string(),
-                            input: call.get("args").cloned().unwrap_or_else(|| json!({})),
-                        });
-                    } else if let Some(response) = part.get("functionResponse") {
-                        let id = response
-                            .get("id")
-                            .and_then(Value::as_str)
-                            .ok_or_else(|| Error::invalid("functionResponse is missing `id`"))?;
-                        let name = response
-                            .get("name")
-                            .and_then(Value::as_str)
-                            .ok_or_else(|| Error::invalid("functionResponse is missing `name`"))?;
-                        blocks.push(ContentBlock::ToolResult {
-                            tool_use_id: id.to_string(),
-                            name: name.to_string(),
-                            content: vec![ToolResultPart::Text {
-                                text: response.get("response").unwrap_or(&Value::Null).to_string(),
-                            }],
-                            is_error: false,
-                        });
-                    } else if let Some(data) = part.get("inlineData") {
-                        let mime = data
-                            .get("mimeType")
-                            .and_then(Value::as_str)
-                            .filter(|value| !value.trim().is_empty())
-                            .ok_or_else(|| Error::invalid("inlineData is missing `mimeType`"))?;
-                        let payload = data
-                            .get("data")
-                            .and_then(Value::as_str)
-                            .ok_or_else(|| Error::invalid("inlineData is missing `data`"))?;
-                        blocks.push(classify_media(
-                            mime,
-                            MediaSource::Base64 {
-                                media_type: mime.to_string(),
-                                data: payload.to_string(),
-                            },
-                            None,
-                        ));
-                    } else {
-                        return Err(unsupported_content("message", Some("unknown part")));
-                    }
+        let role = match content.get("role").and_then(Value::as_str) {
+            Some("model") => Role::Assistant,
+            Some("user") | None => Role::User,
+            Some(other) => return Err(unsupported_content("content role", Some(other))),
+        };
+        let mut blocks = Vec::new();
+        if let Some(parts) = content.get("parts").and_then(Value::as_array) {
+            for part in parts {
+                if let Some(text) = part.get("text").and_then(Value::as_str) {
+                    blocks.push(ContentBlock::text(text));
+                } else if let Some(call) = part.get("functionCall") {
+                    let id = call
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| Error::invalid("functionCall is missing `id`"))?;
+                    let name = call
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| Error::invalid("functionCall is missing `name`"))?;
+                    blocks.push(ContentBlock::ToolUse {
+                        id: id.to_string(),
+                        name: name.to_string(),
+                        input: call.get("args").cloned().unwrap_or_else(|| json!({})),
+                    });
+                } else if let Some(response) = part.get("functionResponse") {
+                    let id = response
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| Error::invalid("functionResponse is missing `id`"))?;
+                    let name = response
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| Error::invalid("functionResponse is missing `name`"))?;
+                    blocks.push(ContentBlock::ToolResult {
+                        tool_use_id: id.to_string(),
+                        name: name.to_string(),
+                        content: vec![ToolResultPart::Text {
+                            text: response.get("response").unwrap_or(&Value::Null).to_string(),
+                        }],
+                        is_error: false,
+                    });
+                } else if let Some(data) = part.get("inlineData") {
+                    let mime = data
+                        .get("mimeType")
+                        .and_then(Value::as_str)
+                        .filter(|value| !value.trim().is_empty())
+                        .ok_or_else(|| Error::invalid("inlineData is missing `mimeType`"))?;
+                    let payload = data
+                        .get("data")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| Error::invalid("inlineData is missing `data`"))?;
+                    blocks.push(classify_media(
+                        mime,
+                        MediaSource::Base64 {
+                            media_type: mime.to_string(),
+                            data: payload.to_string(),
+                        },
+                        None,
+                    ));
+                } else {
+                    return Err(unsupported_content("message", Some("unknown part")));
                 }
             }
-            req.messages.push(Message {
-                role,
-                content: blocks,
-            });
         }
+        req.messages.push(Message {
+            role,
+            content: blocks,
+        });
+    }
 
     if let Some(gc) = obj.get("generationConfig") {
         req.max_tokens = gc
@@ -149,7 +149,9 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
                 let decls = tool
                     .get("functionDeclarations")
                     .and_then(Value::as_array)
-                    .ok_or_else(|| Error::invalid("Gemini tool is missing `functionDeclarations`"))?;
+                    .ok_or_else(|| {
+                        Error::invalid("Gemini tool is missing `functionDeclarations`")
+                    })?;
                 for decl in decls {
                     let name = decl
                         .get("name")
@@ -229,14 +231,18 @@ pub fn encode_request(req: &ChatRequest, upstream_model: &str) -> Result<Value> 
                         "inlineData": {"mimeType": media_type, "data": data}
                     })),
                     MediaSource::Url { .. } => {
-                        if let Some(replacement) = apply_content_policy(req.unsupported_content_policy, b)? {
+                        if let Some(replacement) =
+                            apply_content_policy(req.unsupported_content_policy, b)?
+                        {
                             if let Some(text) = replacement.as_text() {
                                 parts.push(json!({"text": text}));
                             }
                         }
                     }
                     MediaSource::Reference { .. } => {
-                        if let Some(replacement) = apply_content_policy(req.unsupported_content_policy, b)? {
+                        if let Some(replacement) =
+                            apply_content_policy(req.unsupported_content_policy, b)?
+                        {
                             if let Some(text) = replacement.as_text() {
                                 parts.push(json!({"text": text}));
                             }
@@ -274,8 +280,7 @@ pub fn encode_request(req: &ChatRequest, upstream_model: &str) -> Result<Value> 
                         "functionResponse": {"id": tool_use_id, "name": name, "response": {"text": text_parts.join("\n")}}
                     }));
                 }
-                ContentBlock::Thinking { .. }
-                | ContentBlock::RedactedThinking { .. } => {
+                ContentBlock::Thinking { .. } | ContentBlock::RedactedThinking { .. } => {
                     if let Some(replacement) =
                         apply_content_policy(req.unsupported_content_policy, b)?
                     {
@@ -286,21 +291,22 @@ pub fn encode_request(req: &ChatRequest, upstream_model: &str) -> Result<Value> 
                 }
                 // Gemini supports inlineData for any MIME type.
                 ContentBlock::Document { source } => match source {
-                    MediaSource::Base64 {
-                        media_type,
-                        data,
-                    } => parts.push(json!({
+                    MediaSource::Base64 { media_type, data } => parts.push(json!({
                         "inlineData": {"mimeType": media_type, "data": data}
                     })),
                     MediaSource::Url { .. } => {
-                        if let Some(replacement) = apply_content_policy(req.unsupported_content_policy, b)? {
+                        if let Some(replacement) =
+                            apply_content_policy(req.unsupported_content_policy, b)?
+                        {
                             if let Some(t) = replacement.as_text() {
                                 parts.push(json!({"text": t}));
                             }
                         }
                     }
                     MediaSource::Reference { .. } => {
-                        if let Some(replacement) = apply_content_policy(req.unsupported_content_policy, b)? {
+                        if let Some(replacement) =
+                            apply_content_policy(req.unsupported_content_policy, b)?
+                        {
                             if let Some(t) = replacement.as_text() {
                                 parts.push(json!({"text": t}));
                             }
@@ -320,14 +326,18 @@ pub fn encode_request(req: &ChatRequest, upstream_model: &str) -> Result<Value> 
                         "inlineData": {"mimeType": media_type, "data": data}
                     })),
                     MediaSource::Url { .. } => {
-                        if let Some(replacement) = apply_content_policy(req.unsupported_content_policy, b)? {
+                        if let Some(replacement) =
+                            apply_content_policy(req.unsupported_content_policy, b)?
+                        {
                             if let Some(t) = replacement.as_text() {
                                 parts.push(json!({"text": t}));
                             }
                         }
                     }
                     MediaSource::Reference { .. } => {
-                        if let Some(replacement) = apply_content_policy(req.unsupported_content_policy, b)? {
+                        if let Some(replacement) =
+                            apply_content_policy(req.unsupported_content_policy, b)?
+                        {
                             if let Some(t) = replacement.as_text() {
                                 parts.push(json!({"text": t}));
                             }
@@ -427,14 +437,12 @@ pub fn decode_response(body: Value) -> Result<ChatResponse> {
                 if let Some(text) = part.get("text").and_then(Value::as_str) {
                     content.push(ContentBlock::text(text));
                 } else if let Some(call) = part.get("functionCall") {
-                    let id = call
-                        .get("id")
-                        .and_then(Value::as_str)
-                        .ok_or_else(|| Error::BadUpstreamPayload("functionCall is missing `id`".into()))?;
-                    let name = call
-                        .get("name")
-                        .and_then(Value::as_str)
-                        .ok_or_else(|| Error::BadUpstreamPayload("functionCall is missing `name`".into()))?;
+                    let id = call.get("id").and_then(Value::as_str).ok_or_else(|| {
+                        Error::BadUpstreamPayload("functionCall is missing `id`".into())
+                    })?;
+                    let name = call.get("name").and_then(Value::as_str).ok_or_else(|| {
+                        Error::BadUpstreamPayload("functionCall is missing `name`".into())
+                    })?;
                     content.push(ContentBlock::ToolUse {
                         id: id.to_string(),
                         name: name.to_string(),
@@ -630,14 +638,14 @@ impl StreamParser for GeminiStreamParser {
                         }
                         let index = self.next_index;
                         self.next_index += 1;
-                        let id = call
-                            .get("id")
-                            .and_then(Value::as_str)
-                            .ok_or_else(|| Error::BadUpstreamPayload("stream functionCall is missing `id`".into()))?;
-                        let name = call
-                            .get("name")
-                            .and_then(Value::as_str)
-                            .ok_or_else(|| Error::BadUpstreamPayload("stream functionCall is missing `name`".into()))?;
+                        let id = call.get("id").and_then(Value::as_str).ok_or_else(|| {
+                            Error::BadUpstreamPayload("stream functionCall is missing `id`".into())
+                        })?;
+                        let name = call.get("name").and_then(Value::as_str).ok_or_else(|| {
+                            Error::BadUpstreamPayload(
+                                "stream functionCall is missing `name`".into(),
+                            )
+                        })?;
                         out.push(StreamEvent::ToolUseStart {
                             index,
                             id: id.to_string(),
@@ -757,10 +765,13 @@ impl StreamEncoder for GeminiStreamEncoder {
                 });
                 out
             }
-            StreamEvent::ToolUseStart { index, id, name, .. } => {
+            StreamEvent::ToolUseStart {
+                index, id, name, ..
+            } => {
                 // Flush any previously buffered tool calls.
                 let out = self.flush_tools();
-                self.tool_buffers.push((*index, id.clone(), name.clone(), String::new()));
+                self.tool_buffers
+                    .push((*index, id.clone(), name.clone(), String::new()));
                 out
             }
             StreamEvent::ToolUseDelta {
@@ -768,7 +779,11 @@ impl StreamEncoder for GeminiStreamEncoder {
                 index,
                 ..
             } => {
-                if let Some(buf) = self.tool_buffers.iter_mut().find(|(i, _, _, _)| *i == *index) {
+                if let Some(buf) = self
+                    .tool_buffers
+                    .iter_mut()
+                    .find(|(i, _, _, _)| *i == *index)
+                {
                     buf.3.push_str(partial_json);
                 }
                 Vec::new()
@@ -776,7 +791,11 @@ impl StreamEncoder for GeminiStreamEncoder {
             StreamEvent::BlockStop { index, .. } => {
                 // Flush the tool buffer for this index if it exists.
                 let mut out = Vec::new();
-                if let Some(pos) = self.tool_buffers.iter().position(|(i, _, _, _)| *i == *index) {
+                if let Some(pos) = self
+                    .tool_buffers
+                    .iter()
+                    .position(|(i, _, _, _)| *i == *index)
+                {
                     let (_, id, name, args) = self.tool_buffers.remove(pos);
                     let parsed_args: Value = if args.is_empty() {
                         json!({})

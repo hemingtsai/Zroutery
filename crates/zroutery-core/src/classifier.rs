@@ -195,18 +195,14 @@ impl DetectionConfig {
                 max_tokens: Some(64),
                 temperature: Some(0.0),
                 stop_sequence: Some("</block>".into()),
-                system_contains: vec![
-                    "security monitor for autonomous AI coding agents".into(),
-                ],
+                system_contains: vec!["security monitor for autonomous AI coding agents".into()],
             },
             ClassifierSignature {
                 name: "claude-auto-mode-stage-2".into(),
                 max_tokens: Some(4096),
                 temperature: Some(0.0),
                 stop_sequence: None,
-                system_contains: vec![
-                    "security monitor for autonomous AI coding agents".into(),
-                ],
+                system_contains: vec!["security monitor for autonomous AI coding agents".into()],
             },
         ]
     }
@@ -257,7 +253,8 @@ pub fn detect(headers: &HeaderMap, body: &Value, config: &DetectionConfig) -> De
             .map(|v| v.to_ascii_lowercase())
         {
             if beta.split(',').any(|flag| {
-                flag.trim().contains("auto-mode-classifier") || flag.trim().contains("auto_mode_classifier")
+                flag.trim().contains("auto-mode-classifier")
+                    || flag.trim().contains("auto_mode_classifier")
             }) {
                 consider(1.0, "anthropic-beta", vec!["beta_header"]);
             }
@@ -416,7 +413,10 @@ mod tests {
     #[test]
     fn stage_1_signature_is_detected() {
         let d = detect_with(stage_1_body());
-        assert_eq!(d.kind, RequestKind::Side(crate::query::SideQueryKind::AutoMode));
+        assert_eq!(
+            d.kind,
+            RequestKind::Side(crate::query::SideQueryKind::AutoMode)
+        );
         assert!(d.confidence >= 0.85);
         assert_eq!(d.matched.as_deref(), Some("claude-auto-mode-stage-1"));
     }
@@ -424,7 +424,10 @@ mod tests {
     #[test]
     fn stage_2_signature_is_detected() {
         let d = detect_with(stage_2_body());
-        assert_eq!(d.kind, RequestKind::Side(crate::query::SideQueryKind::AutoMode));
+        assert_eq!(
+            d.kind,
+            RequestKind::Side(crate::query::SideQueryKind::AutoMode)
+        );
         assert_eq!(d.matched.as_deref(), Some("claude-auto-mode-stage-2"));
     }
 
@@ -483,7 +486,10 @@ mod tests {
         let mut body = stage_1_body();
         body["model"] = json!("claude-opus-4-8[1m]");
         let d = detect_with(body);
-        assert_eq!(d.kind, RequestKind::Side(crate::query::SideQueryKind::AutoMode));
+        assert_eq!(
+            d.kind,
+            RequestKind::Side(crate::query::SideQueryKind::AutoMode)
+        );
         assert!(d.reasons.contains(&"model_modifier"));
     }
 
@@ -496,7 +502,10 @@ mod tests {
         );
         // Any body, even a main-shaped one.
         let d = detect(&headers, &main_body(), &DetectionConfig::default());
-        assert_eq!(d.kind, RequestKind::Side(crate::query::SideQueryKind::AutoMode));
+        assert_eq!(
+            d.kind,
+            RequestKind::Side(crate::query::SideQueryKind::AutoMode)
+        );
         assert_eq!(d.matched.as_deref(), Some("anthropic-beta"));
         assert_eq!(d.confidence, 1.0);
     }
@@ -535,7 +544,10 @@ mod tests {
             "messages": []
         });
         let d = detect(&HeaderMap::new(), &body, &config);
-        assert_eq!(d.kind, RequestKind::Side(crate::query::SideQueryKind::AutoMode));
+        assert_eq!(
+            d.kind,
+            RequestKind::Side(crate::query::SideQueryKind::AutoMode)
+        );
         assert_eq!(d.matched.as_deref(), Some("custom-v2"));
     }
 
@@ -555,18 +567,33 @@ mod tests {
         body["system"] =
             json!("You are a security monitor for autonomous AI coding agents. Answer in XML.");
         let d = detect_with(body);
-        assert_eq!(d.kind, RequestKind::Side(crate::query::SideQueryKind::AutoMode));
+        assert_eq!(
+            d.kind,
+            RequestKind::Side(crate::query::SideQueryKind::AutoMode)
+        );
     }
 
     #[test]
     fn verdicts() {
         assert_eq!(parse_verdict("<block>no</block>"), ClassifierVerdict::Allow);
-        assert_eq!(parse_verdict("<block>yes</block>"), ClassifierVerdict::Block);
+        assert_eq!(
+            parse_verdict("<block>yes</block>"),
+            ClassifierVerdict::Block
+        );
         // Case and surrounding prose are tolerated...
-        assert_eq!(parse_verdict("Sure! <block>NO</block> done"), ClassifierVerdict::Allow);
+        assert_eq!(
+            parse_verdict("Sure! <block>NO</block> done"),
+            ClassifierVerdict::Allow
+        );
         // ...but paraphrases never become verdicts.
-        assert_eq!(parse_verdict("this looks safe to me"), ClassifierVerdict::Unparseable);
-        assert_eq!(parse_verdict("<block>maybe</block>"), ClassifierVerdict::Unparseable);
+        assert_eq!(
+            parse_verdict("this looks safe to me"),
+            ClassifierVerdict::Unparseable
+        );
+        assert_eq!(
+            parse_verdict("<block>maybe</block>"),
+            ClassifierVerdict::Unparseable
+        );
         assert_eq!(parse_verdict(""), ClassifierVerdict::Unparseable);
         assert_eq!(parse_verdict("no"), ClassifierVerdict::Unparseable);
     }

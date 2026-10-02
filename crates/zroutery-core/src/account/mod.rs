@@ -4,13 +4,13 @@
 //! quota, usage, and rate-limit tracking. Account is always optional in
 //! routing — Provider+Model works without it.
 
-pub mod types;
-pub mod store;
-pub mod provider;
 pub mod adapters;
-pub use types::*;
-pub use store::AccountStore;
+pub mod provider;
+pub mod store;
+pub mod types;
 pub use provider::{AccountOpResult, AccountProvider};
+pub use store::AccountStore;
+pub use types::*;
 
 #[cfg(test)]
 mod tests {
@@ -83,7 +83,10 @@ mod tests {
             AccountStatus::Active,
         );
         assert_eq!(
-            store.get("anthropic", &AccountId("x".into())).unwrap().status,
+            store
+                .get("anthropic", &AccountId("x".into()))
+                .unwrap()
+                .status,
             AccountStatus::Suspended,
         );
     }
@@ -171,7 +174,10 @@ mod tests {
             status: AccountStatus::Suspended,
             ..rt.clone()
         });
-        assert_eq!(store.get("openai", &id).unwrap().status, AccountStatus::Suspended);
+        assert_eq!(
+            store.get("openai", &id).unwrap().status,
+            AccountStatus::Suspended
+        );
 
         // Remove
         assert!(store.remove("openai", &id));

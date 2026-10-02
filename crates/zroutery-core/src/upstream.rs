@@ -40,7 +40,11 @@ impl Default for Upstream {
 }
 
 fn build_http_client(bypass_proxy: bool, connect_timeout_secs: u64) -> reqwest::Client {
-    tracing::info!(bypass_proxy, connect_timeout_secs, "building upstream HTTP client");
+    tracing::info!(
+        bypass_proxy,
+        connect_timeout_secs,
+        "building upstream HTTP client"
+    );
     let mut builder = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(connect_timeout_secs))
         .pool_idle_timeout(Duration::from_secs(90))
@@ -70,7 +74,8 @@ impl Upstream {
 
     /// Rebuild the HTTP client (e.g. when bypass_proxy setting changes at runtime).
     pub fn rebuild_client(&self, bypass_proxy: bool) {
-        *crate::sync::write(&self.client) = build_http_client(bypass_proxy, self.connect_timeout_secs);
+        *crate::sync::write(&self.client) =
+            build_http_client(bypass_proxy, self.connect_timeout_secs);
     }
 
     fn client(&self) -> reqwest::Client {
@@ -674,7 +679,13 @@ pub fn encode_for(
     upstream_model: &str,
     max_output_tokens: Option<u32>,
 ) -> Result<Value> {
-    encode_for_mode(provider, req, upstream_model, max_output_tokens, EncodeMode::Normal)
+    encode_for_mode(
+        provider,
+        req,
+        upstream_model,
+        max_output_tokens,
+        EncodeMode::Normal,
+    )
 }
 
 /// Prepare the upstream body for a candidate, with an explicit fidelity mode.

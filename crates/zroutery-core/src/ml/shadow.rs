@@ -28,9 +28,7 @@ use serde::{Deserialize, Serialize};
 use super::coordinator::RoutingAction;
 use super::dataset::TrainingSample as DatasetTrainingSample;
 use super::decision_engine::{DecisionEngine, EngineCandidate, EngineInput};
-use super::features::{
-    FeatureContext, RoutingFeatures, extract_features, FEATURE_SCHEMA_VERSION,
-};
+use super::features::{extract_features, FeatureContext, RoutingFeatures, FEATURE_SCHEMA_VERSION};
 use super::model::{Prediction, RoutingModel};
 use super::model_identity::{
     validate_replay_sample, CommitId, ModelCheckpoint, ModelCommit, ModelEnsemble, ModelId,
@@ -133,7 +131,10 @@ fn fnv_mix_task_summary(hash: &mut u64, task: &TaskProfileSummary) {
     fnv_mix_u64(hash, &[u8::from(task.streaming)]);
     fnv_mix_u64(hash, &[u8::from(task.has_tools)]);
     fnv_mix_u64(hash, &[u8::from(task.has_vision)]);
-    fnv_mix_u64(hash, &(task.required_capabilities.len() as u64).to_le_bytes());
+    fnv_mix_u64(
+        hash,
+        &(task.required_capabilities.len() as u64).to_le_bytes(),
+    );
     for capability in &task.required_capabilities {
         fnv_mix_string(hash, capability);
     }
@@ -477,7 +478,8 @@ impl ShadowInput {
                     candidate_decision.model_id == candidate.exposed_id
                         && candidate_decision.provider_id == entry.provider_id
                 });
-                let eligible = evidence.is_some_and(|candidate_decision| candidate_decision.eligible);
+                let eligible =
+                    evidence.is_some_and(|candidate_decision| candidate_decision.eligible);
                 let rejection_reason = evidence
                     .and_then(|candidate_decision| candidate_decision.rejection.clone())
                     .or_else(|| {
@@ -530,10 +532,11 @@ impl ShadowInput {
             candidates.push(ShadowCandidateInput {
                 candidate_id: candidate_decision.model_id.clone(),
                 provider_id: candidate_decision.provider_id.clone(),
-                tier: candidate_decision
-                    .tier
-                    .as_deref()
-                    .and_then(|tier| ModelTier::ALL.into_iter().find(|known| known.as_str() == tier)),
+                tier: candidate_decision.tier.as_deref().and_then(|tier| {
+                    ModelTier::ALL
+                        .into_iter()
+                        .find(|known| known.as_str() == tier)
+                }),
                 eligible: false,
                 features: RoutingFeatures::default(),
                 rejection_reason: Some(
@@ -605,13 +608,8 @@ impl ModelEnsemblePredictor {
         let ensemble = ModelEnsemble::new();
         let checkpoint = ensemble.save_all();
         let commit = ModelCommit::new(ModelId::new("shadow"), checkpoint, None, 0);
-        Self::from_verified_parts(
-            ensemble,
-            commit.clone(),
-            Some(Vec::new()),
-            vec![commit],
-        )
-        .expect("the deterministic shadow genesis commit must verify")
+        Self::from_verified_parts(ensemble, commit.clone(), Some(Vec::new()), vec![commit])
+            .expect("the deterministic shadow genesis commit must verify")
     }
 
     /// Compatibility constructor for a root shadow commit.
@@ -620,28 +618,21 @@ impl ModelEnsemblePredictor {
     /// accepts only the canonical root `shadow` commit. New callers loading a
     /// child should use [`Self::from_model_commit`], which verifies the full
     /// model/schema/parent/lineage record.
-    pub fn from_commit(checkpoint: &ModelCheckpoint, commit: CommitId) -> Result<Self, ReplayError> {
+    pub fn from_commit(
+        checkpoint: &ModelCheckpoint,
+        commit: CommitId,
+    ) -> Result<Self, ReplayError> {
         // Load first so malformed state gets the detailed loader error rather
         // than being hidden behind a generic id mismatch.
         let ensemble = ModelEnsemble::load_all(checkpoint)?;
-        let expected = ModelCommit::new(
-            ModelId::new("shadow"),
-            checkpoint.clone(),
-            None,
-            0,
-        );
+        let expected = ModelCommit::new(ModelId::new("shadow"), checkpoint.clone(), None, 0);
         if expected.commit_id != commit {
             return Err(ReplayError::CommitMismatch {
                 expected: expected.commit_id,
                 actual: commit,
             });
         }
-        Self::from_verified_parts(
-            ensemble,
-            expected.clone(),
-            Some(Vec::new()),
-            vec![expected],
-        )
+        Self::from_verified_parts(ensemble, expected.clone(), Some(Vec::new()), vec![expected])
     }
 
     /// Build a predictor from a complete immutable commit record.
@@ -752,10 +743,7 @@ impl ModelEnsemblePredictor {
             if pair[1].parent.as_ref() != Some(&pair[0].commit_id) {
                 return Err(ReplayError::LineageCorrupt {
                     commit_id: pair[1].commit_id.clone(),
-                    reason: format!(
-                        "parent link does not point to '{}'",
-                        pair[0].commit_id
-                    ),
+                    reason: format!("parent link does not point to '{}'", pair[0].commit_id),
                 });
             }
         }
@@ -817,10 +805,7 @@ impl ModelEnsemblePredictor {
     /// by the predictor. `Some(history)` means the predictor owns a complete
     /// genesis-rebuildable lineage; `None` means the caller supplied only a
     /// child checkpoint and the current commit must remain the parent.
-    fn try_train_with_history(
-        &self,
-        samples: &[DatasetTrainingSample],
-    ) -> TrainingLineageResult {
+    fn try_train_with_history(&self, samples: &[DatasetTrainingSample]) -> TrainingLineageResult {
         for sample in samples {
             if sample.schema_version != FEATURE_SCHEMA_VERSION {
                 return Err(ReplayError::UnsupportedSchema {
@@ -836,14 +821,14 @@ impl ModelEnsemblePredictor {
         }
 
         if let Some(previous_history) = &self.history {
-            let expected_lineage_len = self
-                .commit
-                .learning_event_count
-                .checked_add(1)
-                .ok_or_else(|| ReplayError::InvalidCommit {
-                    commit_id: self.commit.commit_id.clone(),
-                    reason: "retained lineage count overflow".to_string(),
-                })?;
+            let expected_lineage_len =
+                self.commit
+                    .learning_event_count
+                    .checked_add(1)
+                    .ok_or_else(|| ReplayError::InvalidCommit {
+                        commit_id: self.commit.commit_id.clone(),
+                        reason: "retained lineage count overflow".to_string(),
+                    })?;
             if previous_history.len() as u64 != self.commit.learning_event_count
                 || self.lineage.len() as u64 != expected_lineage_len
             {
@@ -864,12 +849,8 @@ impl ModelEnsemblePredictor {
             }
 
             let mut ensemble = ModelEnsemble::new();
-            let mut commit = ModelCommit::new(
-                self.commit.model_id.clone(),
-                ensemble.save_all(),
-                None,
-                0,
-            );
+            let mut commit =
+                ModelCommit::new(self.commit.model_id.clone(), ensemble.save_all(), None, 0);
             let mut lineage = vec![commit.clone()];
             for sample in &history {
                 ensemble.update_all(sample);
@@ -1182,7 +1163,11 @@ impl ShadowStore {
                 ));
             }
             if input_candidate.features.schema_version != FEATURE_SCHEMA_VERSION
-                || input_candidate.features.values.iter().any(|value| !value.is_finite())
+                || input_candidate
+                    .features
+                    .values
+                    .iter()
+                    .any(|value| !value.is_finite())
             {
                 return Err(format!(
                     "candidate '{}' has an invalid feature snapshot",
@@ -1237,7 +1222,7 @@ impl ShadowStore {
             RoutingAction::Keep => {
                 if decision.shadow.selected != decision.actual.selected {
                     return Err(
-                        "Keep action must select the planned production identity".to_string(),
+                        "Keep action must select the planned production identity".to_string()
                     );
                 }
                 // Keep deliberately permits the planned identity to be invalid;
@@ -1276,8 +1261,10 @@ impl ShadowStore {
             return Err("ranked candidates do not match the valid evidence set".to_string());
         }
 
-        let expected_input_checksum =
-            shadow_input_checksum(&decision.observation.input, &decision.observation.model_commit);
+        let expected_input_checksum = shadow_input_checksum(
+            &decision.observation.input,
+            &decision.observation.model_commit,
+        );
         if expected_input_checksum != decision.decision_input_checksum {
             return Err("decision_input_checksum does not match retained observation".to_string());
         }
@@ -1326,7 +1313,10 @@ impl ShadowStore {
             return Err("empty served identity".to_string());
         }
         let mut decisions = crate::sync::lock(&self.decisions);
-        let Some(decision) = decisions.iter_mut().find(|entry| entry.shadow_id == shadow_id) else {
+        let Some(decision) = decisions
+            .iter_mut()
+            .find(|entry| entry.shadow_id == shadow_id)
+        else {
             return Ok(false);
         };
         // The served identity has to be one production actually chose from the
@@ -1472,12 +1462,8 @@ impl ShadowEngine {
     pub fn try_train(&self, samples: &[DatasetTrainingSample]) -> Result<CommitId, ReplayError> {
         let current = crate::sync::read(&self.predictor).clone();
         let (ensemble, commit, history, lineage) = current.try_train_with_history(samples)?;
-        let predictor = ModelEnsemblePredictor::from_trained_parts(
-            ensemble,
-            commit.clone(),
-            history,
-            lineage,
-        )?;
+        let predictor =
+            ModelEnsemblePredictor::from_trained_parts(ensemble, commit.clone(), history, lineage)?;
         let commit_id = predictor.commit();
         *crate::sync::write(&self.predictor) = Arc::new(predictor);
         Ok(commit_id)
@@ -1602,12 +1588,15 @@ impl ShadowEngine {
             if candidate.features.schema_version != input.feature_schema {
                 return Err(format!(
                     "candidate '{}' feature schema mismatch: {} != {}",
-                    candidate.candidate_id,
-                    candidate.features.schema_version,
-                    input.feature_schema
+                    candidate.candidate_id, candidate.features.schema_version, input.feature_schema
                 ));
             }
-            if candidate.features.values.iter().any(|value| !value.is_finite()) {
+            if candidate
+                .features
+                .values
+                .iter()
+                .any(|value| !value.is_finite())
+            {
                 return Err(format!(
                     "candidate '{}' has a non-finite feature snapshot",
                     candidate.candidate_id
@@ -2023,7 +2012,11 @@ mod tests {
         let mut decision = valid_decision();
         decision.candidates[0].prediction.success.value = f64::NAN;
         let err = store_push_err(decision);
-        assert!(err.contains("non-finite success prediction"), "got: {}", err);
+        assert!(
+            err.contains("non-finite success prediction"),
+            "got: {}",
+            err
+        );
     }
 
     #[test]
@@ -2128,7 +2121,10 @@ mod tests {
         assert_eq!(store.len(), 2);
         let all = store.decisions();
         assert_eq!(all.len(), 2);
-        assert_ne!(all[0].shadow_id, first_id, "oldest decision must be evicted");
+        assert_ne!(
+            all[0].shadow_id, first_id,
+            "oldest decision must be evicted"
+        );
     }
 
     #[test]
@@ -2139,7 +2135,11 @@ mod tests {
         store.push(stale).unwrap();
         store.push(valid_decision()).unwrap();
         assert_eq!(store.len(), 2, "len ignores age");
-        assert_eq!(store.decisions().len(), 1, "decisions() applies the age filter");
+        assert_eq!(
+            store.decisions().len(),
+            1,
+            "decisions() applies the age filter"
+        );
     }
 
     #[test]
@@ -2285,7 +2285,10 @@ mod tests {
         let first = engine.evaluate("req-1", &input).unwrap();
         let second = engine.evaluate("req-1", &input).unwrap();
         assert_ne!(first.shadow_id, second.shadow_id);
-        assert_eq!(first.decision_input_checksum, second.decision_input_checksum);
+        assert_eq!(
+            first.decision_input_checksum,
+            second.decision_input_checksum
+        );
         assert_eq!(first.decision_checksum, second.decision_checksum);
         assert_eq!(engine.store().len(), 2);
     }
@@ -2309,12 +2312,7 @@ mod tests {
             ensemble.update_all(sample);
         }
         let checkpoint = ensemble.save_all();
-        let commit = ModelCommit::new(
-            ModelId::new("shadow"),
-            checkpoint.clone(),
-            None,
-            0,
-        );
+        let commit = ModelCommit::new(ModelId::new("shadow"), checkpoint.clone(), None, 0);
         let predictor = ModelEnsemblePredictor::from_model_commit(&commit)
             .expect("round-trip commit must load");
         assert_eq!(predictor.commit(), commit.commit_id);
@@ -2354,7 +2352,9 @@ mod tests {
     fn evaluate_happy_path_records_full_decision() {
         let engine = engine();
         let input = shadow_input();
-        let decision = engine.evaluate("req-1", &input).expect("evaluation succeeds");
+        let decision = engine
+            .evaluate("req-1", &input)
+            .expect("evaluation succeeds");
         assert_eq!(decision.scope, ShadowScope::PolicyRouted);
         assert!(decision.shadow_id.starts_with("shadow-"));
         assert_eq!(decision.actual.request_id, "req-1");
@@ -2491,7 +2491,10 @@ mod tests {
         assert_eq!(after.shadow.model_commit, new_commit);
         assert_ne!(after.shadow.model_commit, before.shadow.model_commit);
         // Different commit -> different input checksum -> different decision.
-        assert_ne!(after.decision_input_checksum, before.decision_input_checksum);
+        assert_ne!(
+            after.decision_input_checksum,
+            before.decision_input_checksum
+        );
     }
 
     #[test]
@@ -2544,10 +2547,7 @@ mod tests {
         let restored: ShadowDecision = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.shadow_id, decision.shadow_id);
         assert_eq!(restored.decision_checksum, decision.decision_checksum);
-        assert_eq!(
-            restored.shadow.model_commit,
-            decision.shadow.model_commit
-        );
+        assert_eq!(restored.shadow.model_commit, decision.shadow.model_commit);
         assert_eq!(restored.candidates.len(), decision.candidates.len());
     }
 

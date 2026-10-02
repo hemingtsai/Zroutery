@@ -91,7 +91,9 @@ pub enum DecisionContractError {
     #[error("feature schema {found} is not the supported schema {expected}")]
     UnsupportedFeatureSchema { found: u32, expected: u32 },
 
-    #[error("candidate '{candidate}' feature schema {found} does not match the input schema {expected}")]
+    #[error(
+        "candidate '{candidate}' feature schema {found} does not match the input schema {expected}"
+    )]
     CandidateFeatureSchemaMismatch {
         candidate: String,
         found: u32,
@@ -126,7 +128,9 @@ pub enum DecisionContractError {
     #[error("planned identity '{0}' is not among the observed candidates")]
     PlannedIdentityNotObserved(String),
 
-    #[error("supplied planned identity '{supplied}' contradicts the decision-time plan '{recorded}'")]
+    #[error(
+        "supplied planned identity '{supplied}' contradicts the decision-time plan '{recorded}'"
+    )]
     PlannedIdentityContradicts { supplied: String, recorded: String },
 
     #[error("more than one candidate occupies the planned identity slot")]
@@ -154,7 +158,9 @@ pub enum DecisionContractError {
         value: f64,
     },
 
-    #[error("illegal decision transition {from:?} -> {to:?}: the only legal successor is {expected:?}")]
+    #[error(
+        "illegal decision transition {from:?} -> {to:?}: the only legal successor is {expected:?}"
+    )]
     IllegalTransition {
         from: DecisionPhase,
         to: DecisionPhase,
@@ -584,7 +590,8 @@ impl ModelInput {
         }
 
         let mut candidates = Vec::with_capacity(snapshot.candidates.len());
-        let mut seen: HashSet<CandidateIdentity> = HashSet::with_capacity(snapshot.candidates.len());
+        let mut seen: HashSet<CandidateIdentity> =
+            HashSet::with_capacity(snapshot.candidates.len());
         for candidate in &snapshot.candidates {
             let typed = decision_candidate_from_snapshot(candidate, snapshot.feature_schema)?;
             if !seen.insert(typed.identity.clone()) {
@@ -633,9 +640,7 @@ impl ModelInput {
     }
 
     /// Build a typed model input from a retained decision-time snapshot.
-    pub fn try_from_shadow_input(
-        snapshot: &ShadowInput,
-    ) -> Result<Self, DecisionContractError> {
+    pub fn try_from_shadow_input(snapshot: &ShadowInput) -> Result<Self, DecisionContractError> {
         Self::try_new(FEATURE_DIMENSION, snapshot.clone())
     }
 
@@ -727,9 +732,7 @@ impl ModelInput {
         };
         match established {
             Some(established) if established != identity => {
-                Err(DecisionContractError::ContradictoryRoleIdentity {
-                    role: slot.label(),
-                })
+                Err(DecisionContractError::ContradictoryRoleIdentity { role: slot.label() })
             }
             _ => Ok(()),
         }
@@ -747,9 +750,7 @@ impl ModelInput {
             .iter()
             .position(|candidate| &candidate.identity == identity)
         else {
-            return Err(DecisionContractError::UnobservedRoleIdentity {
-                role: slot.label(),
-            });
+            return Err(DecisionContractError::UnobservedRoleIdentity { role: slot.label() });
         };
         if slot == CandidateSlot::Planned
             && self
@@ -785,12 +786,7 @@ pub enum DecisionDimension {
 
 impl DecisionDimension {
     /// Every dimension, in the fixed order the models are stored.
-    pub const ALL: [DecisionDimension; 4] = [
-        Self::Success,
-        Self::Latency,
-        Self::Ttft,
-        Self::Cost,
-    ];
+    pub const ALL: [DecisionDimension; 4] = [Self::Success, Self::Latency, Self::Ttft, Self::Cost];
 
     /// The per-dimension model name, matching [`RoutingModel::name`].
     pub const fn model_name(self) -> &'static str {
@@ -1272,10 +1268,16 @@ const fn settled_step_name(phase: DecisionPhase) -> &'static str {
 fn settled_step_matches(phase: DecisionPhase, step: &SettledStep) -> bool {
     matches!(
         (phase, step),
-        (DecisionPhase::InputAccepted, SettledStep::InputAccepted { .. })
-            | (DecisionPhase::CandidatesScored, SettledStep::CandidatesScored { .. })
-            | (DecisionPhase::CandidateSelected, SettledStep::CandidateSelected { .. })
-            | (DecisionPhase::Committed, SettledStep::Committed)
+        (
+            DecisionPhase::InputAccepted,
+            SettledStep::InputAccepted { .. }
+        ) | (
+            DecisionPhase::CandidatesScored,
+            SettledStep::CandidatesScored { .. }
+        ) | (
+            DecisionPhase::CandidateSelected,
+            SettledStep::CandidateSelected { .. }
+        ) | (DecisionPhase::Committed, SettledStep::Committed)
     )
 }
 
@@ -1405,9 +1407,11 @@ impl DecisionState {
             }
             SettledStep::CandidateSelected { selected } => {
                 let Some(candidate) = self.input.candidate(selected) else {
-                    return Err(DecisionContractError::SelectedIdentityNotObserved(
-                        format!("{}/{}", selected.model(), selected.provider()),
-                    ));
+                    return Err(DecisionContractError::SelectedIdentityNotObserved(format!(
+                        "{}/{}",
+                        selected.model(),
+                        selected.provider()
+                    )));
                 };
                 if !candidate.is_eligible() {
                     return Err(DecisionContractError::SelectedIdentityIneligible(format!(
@@ -1478,11 +1482,9 @@ impl DecisionDistribution {
                 return Err(DecisionContractError::EmptyDistributionOutcome);
             }
             if !seen.insert(outcome) {
-                return Err(DecisionContractError::DuplicateDistributionOutcome(format!(
-                    "{}/{}",
-                    outcome.model(),
-                    outcome.provider()
-                )));
+                return Err(DecisionContractError::DuplicateDistributionOutcome(
+                    format!("{}/{}", outcome.model(), outcome.provider()),
+                ));
             }
         }
         for (index, probability) in probabilities.iter().enumerate() {

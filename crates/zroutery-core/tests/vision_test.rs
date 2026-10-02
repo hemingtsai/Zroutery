@@ -19,8 +19,7 @@ use axum::routing::post;
 use axum::Json;
 use serde_json::{json, Value};
 use zroutery_core::config::{
-    AppConfig, MemorySecretStore, ModelTier, ModelEntry, ProviderConfig, ProviderKind,
-    VisionConfig,
+    AppConfig, MemorySecretStore, ModelEntry, ModelTier, ProviderConfig, ProviderKind, VisionConfig,
 };
 use zroutery_core::server::{AppState, ServerHandle};
 
@@ -262,10 +261,16 @@ async fn an_unknown_capability_rejection_is_repaired_with_a_description() {
     assert_eq!(bodies[0]["model"], "blind-model");
     // First try: the image went out — content is the OpenAI block array, not a
     // joined string.
-    assert!(bodies[0]["messages"][0]["content"].as_array().is_some(), "first try sends the image");
+    assert!(
+        bodies[0]["messages"][0]["content"].as_array().is_some(),
+        "first try sends the image"
+    );
     assert_eq!(bodies[1]["model"], "eyes-model");
     let retry_prompt = bodies[2]["messages"][0]["content"].as_str().unwrap();
-    assert!(retry_prompt.contains("[Image description: A chart"), "retry: {retry_prompt}");
+    assert!(
+        retry_prompt.contains("[Image description: A chart"),
+        "retry: {retry_prompt}"
+    );
 
     h.shutdown().await;
 }
@@ -290,7 +295,10 @@ async fn without_a_vision_model_the_placeholder_is_used() {
     // The placeholder replaced the image block in place; the neighbouring
     // text block is untouched, and the encoder may keep both as blocks.
     let message = serde_json::to_string(&bodies[0]["messages"][0]).unwrap();
-    assert!(message.contains("[Unsupported Image]"), "message: {message}");
+    assert!(
+        message.contains("[Unsupported Image]"),
+        "message: {message}"
+    );
     assert!(
         message.contains("what does this chart show"),
         "the user's question survived: {message}"
@@ -363,7 +371,10 @@ async fn vision_model_failure_uses_placeholder() {
     let bodies = h.mock.bodies();
     // Should have: vision attempt (500), then blind-model with placeholder
     let message = serde_json::to_string(&bodies.last().unwrap()).unwrap();
-    assert!(message.contains("[Unsupported Image]"), "placeholder: {message}");
+    assert!(
+        message.contains("[Unsupported Image]"),
+        "placeholder: {message}"
+    );
     h.shutdown().await;
 }
 
@@ -384,6 +395,9 @@ async fn base64_image_gets_described_in_preflight() {
     assert_eq!(bodies[0]["model"], "eyes-model");
     assert_eq!(bodies[1]["model"], "blind-model");
     let blind_prompt = bodies[1]["messages"][0]["content"].as_str().unwrap();
-    assert!(blind_prompt.contains("[Image description:"), "got: {blind_prompt}");
+    assert!(
+        blind_prompt.contains("[Image description:"),
+        "got: {blind_prompt}"
+    );
     h.shutdown().await;
 }

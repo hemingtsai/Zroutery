@@ -26,9 +26,9 @@ pub use activation::{
     activation_applied_event_id, activation_plan_event_id, pointer_checksum, snapshot_checksum,
     snapshot_id_for, ActivationAudit, ActivationEntry, ActivationError, ActivationKind,
     ActivationOutcome, ActivationPointer, ActivationRequest, ActivationStage, ActivationStore,
-    ActivationTrace, ActiveSnapshot, CheckpointFile, CommitFile, JournalContext,
-    PendingActivation, PointerDisagreement, PointerEntryFile, PointerFile, PointerState, Snapshot,
-    SnapshotFile, SnapshotId, StateFile, ACTIVATION_LOCK_NAME, ACTIVATION_POINTER_NAME,
+    ActivationTrace, ActiveSnapshot, CheckpointFile, CommitFile, JournalContext, PendingActivation,
+    PointerDisagreement, PointerEntryFile, PointerFile, PointerState, Snapshot, SnapshotFile,
+    SnapshotId, StateFile, ACTIVATION_LOCK_NAME, ACTIVATION_POINTER_NAME,
     ACTIVATION_POINTER_SCHEMA_VERSION, ACTIVATION_POINTER_TMP_NAME, ACTIVATION_ROLE,
     ACTIVATION_SNAPSHOT_SCHEMA_VERSION, ACTIVATION_SOURCE_PREFIX, DONE_EVENT_PREFIX,
     JOURNAL_DIR_NAME, PLAN_EVENT_PREFIX, SNAPSHOTS_DIR_NAME, SNAPSHOT_FILE_SUFFIX,
@@ -39,44 +39,45 @@ pub use attribution::{
 };
 pub use bandit::{
     accepted_outcome_proxy_score, compare_outcome_proxy, percentile, policy_from_weights,
-    run_bandit, weights_vector, ArmSafetyMetrics, ArmSelectionStatistics, BanditConfig, BanditError,
-    BanditOutcome, BanditReport, OutcomeProxy, RewardArm, RewardBasis, RewardFitConfig,
-    RewardFitReport, RewardFitVerdict, SafetyConfig, SafetyEvaluation, SafetyEvidence, SafetyTolerances,
-    SafetyVerdict, SafetyViolation, SelectionConfig, SelectionTrace, ACCEPTED_PRIOR_ARM_NAME,
-    B_COST, B_FALLBACK, B_LATENCY, B_SUCCESS, B_SWITCH, B_UNCERTAINTY, BASIS_WIDTH, DEFAULT_SEED,
-    DEFAULT_TAIL_PERCENTILE, FITTED_ARM_NAME, OUTCOME_PROXY_FIT_TARGET, OUTCOME_PROXY_ORDER,
-    REWARD_FIT_TARGET_DESCRIPTION, UNIDENTIFIABLE_REASON, UNIDENTIFIABLE_WEIGHT, WEIGHT_NAMES,
+    run_bandit, weights_vector, ArmSafetyMetrics, ArmSelectionStatistics, BanditConfig,
+    BanditError, BanditOutcome, BanditReport, OutcomeProxy, RewardArm, RewardBasis,
+    RewardFitConfig, RewardFitReport, RewardFitVerdict, SafetyConfig, SafetyEvaluation,
+    SafetyEvidence, SafetyTolerances, SafetyVerdict, SafetyViolation, SelectionConfig,
+    SelectionTrace, ACCEPTED_PRIOR_ARM_NAME, BASIS_WIDTH, B_COST, B_FALLBACK, B_LATENCY, B_SUCCESS,
+    B_SWITCH, B_UNCERTAINTY, DEFAULT_SEED, DEFAULT_TAIL_PERCENTILE, FITTED_ARM_NAME,
+    OUTCOME_PROXY_FIT_TARGET, OUTCOME_PROXY_ORDER, REWARD_FIT_TARGET_DESCRIPTION,
+    UNIDENTIFIABLE_REASON, UNIDENTIFIABLE_WEIGHT, WEIGHT_NAMES,
 };
 pub use calibration::{
-    collect_marginal_observations, measure_drift, measure_emitted, measure_marginal, project_cohorts,
-    run_calibration, AcceptanceTolerances, CalibrationConfig, CalibrationError, CalibrationMeasure,
-    CalibrationOutcome, CalibrationReport, CalibrationVerdict, CandidateInput, CandidateIntercept,
-    CohortContext, DecisionCohort, DegeneracyReason, DistributionRecord, DriftConfig,
-    DriftMeasurement, DriftTolerances, DriftVerdict, EmittedDecision, FitConfig, HoldoutConfig,
-    KWayCalibrator, MarginalCalibration, MarginalCalibrator, MarginalFitConfig, MarginalObservation,
-    MarginalView, NormalizationDamage, PartitionKind, ReliabilityBin, ReliabilityConfig,
-    ReliabilityCurve, UnrankedReason, DEFAULT_DRIFT_BINS, DEFAULT_PROBABILITY_FLOOR,
-    DEFAULT_RELIABILITY_BINS, DISTRIBUTION_ROLE,
+    collect_marginal_observations, measure_drift, measure_emitted, measure_marginal,
+    project_cohorts, run_calibration, AcceptanceTolerances, CalibrationConfig, CalibrationError,
+    CalibrationMeasure, CalibrationOutcome, CalibrationReport, CalibrationVerdict, CandidateInput,
+    CandidateIntercept, CohortContext, DecisionCohort, DegeneracyReason, DistributionRecord,
+    DriftConfig, DriftMeasurement, DriftTolerances, DriftVerdict, EmittedDecision, FitConfig,
+    HoldoutConfig, KWayCalibrator, MarginalCalibration, MarginalCalibrator, MarginalFitConfig,
+    MarginalObservation, MarginalView, NormalizationDamage, PartitionKind, ReliabilityBin,
+    ReliabilityConfig, ReliabilityCurve, UnrankedReason, DEFAULT_DRIFT_BINS,
+    DEFAULT_PROBABILITY_FLOOR, DEFAULT_RELIABILITY_BINS, DISTRIBUTION_ROLE,
 };
 pub use coordinator::{Coordinator, CoordinatorConfig, RoutingAction, RoutingDecision};
 pub use dataset::{
-    canonical_samples_from_outcome, outcome_to_dataset_sample, sample_from_outcome, samples_from_outcome,
-    try_outcome_sample, try_samples_from_outcome, try_samples_from_outcome_with_feedback,
-    validate_outcome_sample, CanonicalTrainingSample, DatasetStore, OutcomeDatasetSample,
-    OutcomeTrainingSample, SampleBuilder, SampleScope, Targets, TrainingSample as DatasetTrainingSample,
-    validate_sample,
+    canonical_samples_from_outcome, outcome_to_dataset_sample, sample_from_outcome,
+    samples_from_outcome, try_outcome_sample, try_samples_from_outcome,
+    try_samples_from_outcome_with_feedback, validate_outcome_sample, validate_sample,
+    CanonicalTrainingSample, DatasetStore, OutcomeDatasetSample, OutcomeTrainingSample,
+    SampleBuilder, SampleScope, Targets, TrainingSample as DatasetTrainingSample,
 };
 pub use decision_contract::{
-    CandidateEligibility, CandidatePredictions, CandidateRoles, CandidateScore,
-    DecisionCandidate, DecisionContractError, DecisionDimension, DecisionDistribution,
-    DecisionIdentities, DecisionModel, DecisionModelStates, DecisionPhase, DecisionState,
-    ModelInput, OpenStep, SettledStep, DISTRIBUTION_NORMALIZATION_TOLERANCE,
+    CandidateEligibility, CandidatePredictions, CandidateRoles, CandidateScore, DecisionCandidate,
+    DecisionContractError, DecisionDimension, DecisionDistribution, DecisionIdentities,
+    DecisionModel, DecisionModelStates, DecisionPhase, DecisionState, ModelInput, OpenStep,
+    SettledStep, DISTRIBUTION_NORMALIZATION_TOLERANCE,
 };
 pub use decision_engine::{DecisionEngine, EngineCandidate, EngineInput, EngineOutput};
 pub use evaluation::{
-    f32_identical, f64_identical, ulp_distance, ComparisonReport, Divergence, EvaluationError,
-    Evaluator, Exactness, FrozenHoldout, NonFiniteComponent, PredictionMetrics, Recommendation,
-    RoutingDeltas, RoutingMetrics, find_nonfinite_f64, temporal_split,
+    f32_identical, f64_identical, find_nonfinite_f64, temporal_split, ulp_distance,
+    ComparisonReport, Divergence, EvaluationError, Evaluator, Exactness, FrozenHoldout,
+    NonFiniteComponent, PredictionMetrics, Recommendation, RoutingDeltas, RoutingMetrics,
 };
 pub use features::{
     extract_features, FeatureContext, RoutingFeatures, FEATURE_DIMENSION, FEATURE_SCHEMA_VERSION,
@@ -99,25 +100,25 @@ pub use model_identity::{
 pub use offline_gate::{
     run_offline_gate, CommitTransport, EvidenceFloors, FailureAuthority, FloatDrift, GateConfig,
     GateInput, GateOutcome, HoldoutSummary, JournalFloatFidelity, OfflineGateError,
-    RecordedDecision, ReleaseMeasurements, ReleaseReport, ReleaseVerdict, RetentionAblation,
-    RetentionProof, ReplayEvidence, ServedIdentity, TerminalAgreement, JOURNAL_FLOAT_NOTE,
+    RecordedDecision, ReleaseMeasurements, ReleaseReport, ReleaseVerdict, ReplayEvidence,
+    RetentionAblation, RetentionProof, ServedIdentity, TerminalAgreement, JOURNAL_FLOAT_NOTE,
     RELEASE_SCOPE,
 };
 pub use reward::{
-    Action, ActionGuard, AttemptReward, PredictionBundle, RequestReward, RewardComputer,
-    RewardPolicy, UtilityBreakdown, compute_utility,
+    compute_utility, Action, ActionGuard, AttemptReward, PredictionBundle, RequestReward,
+    RewardComputer, RewardPolicy, UtilityBreakdown,
 };
 pub use shadow::{
     EnsemblePredictor, ModelEnsemblePredictor, ProductionDecisionRef, ShadowCandidate,
-    ShadowCandidateInput, ShadowDecision, ShadowEngine, ShadowInput, ShadowObservation, ShadowScope,
-    ShadowStore, ShadowVerdict,
+    ShadowCandidateInput, ShadowDecision, ShadowEngine, ShadowInput, ShadowObservation,
+    ShadowScope, ShadowStore, ShadowVerdict,
 };
 pub use statistics::{
     holm_adjust, ln_gamma, mcnemar_exact_log_p, mcnemar_exact_p, measure_release_evidence,
-    normal_quantile, required_decisions, wilson_interval, BaselinePolicy, Criterion, EvidenceSupport,
-    Family, FamilyMember, FamilyMemberKind, Interval, PairedComparison, StatisticalConfig,
-    StatisticalInput, StatisticalRefusal, StatisticalRelease, StatisticsError, STATISTICAL_SCOPE,
-    UNMEASURABLE_LABEL,
+    normal_quantile, required_decisions, wilson_interval, BaselinePolicy, Criterion,
+    EvidenceSupport, Family, FamilyMember, FamilyMemberKind, Interval, PairedComparison,
+    StatisticalConfig, StatisticalInput, StatisticalRefusal, StatisticalRelease, StatisticsError,
+    STATISTICAL_SCOPE, UNMEASURABLE_LABEL,
 };
 pub use warmup::{
     run_warmup, LabelCoverage, WarmupConfig, WarmupError, WarmupOutcome, WarmupReport,

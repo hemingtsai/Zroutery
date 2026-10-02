@@ -1,10 +1,10 @@
 #![cfg(feature = "ml")]
 
-use zroutery_core::ml::model_identity::*;
+use zroutery_core::feedback::DataOrigin;
 use zroutery_core::ml::dataset::{Targets, TrainingSample as DatasetTrainingSample};
 use zroutery_core::ml::features::{RoutingFeatures, FEATURE_SCHEMA_VERSION};
 use zroutery_core::ml::model::RoutingModel;
-use zroutery_core::feedback::DataOrigin;
+use zroutery_core::ml::model_identity::*;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -25,8 +25,16 @@ fn test_sample(success: bool, seed: usize) -> DatasetTrainingSample {
         },
         targets: Targets {
             success,
-            latency_ms: if success { Some(200.0 + seed as f64) } else { None },
-            ttft_ms: if success { Some(50.0 + seed as f64) } else { None },
+            latency_ms: if success {
+                Some(200.0 + seed as f64)
+            } else {
+                None
+            },
+            ttft_ms: if success {
+                Some(50.0 + seed as f64)
+            } else {
+                None
+            },
             cost: Some(0.01 + seed as f64 * 0.001),
             failure_class: None,
             fallback_count: 0,
@@ -350,7 +358,10 @@ fn gate_7e1a_replay_composition_and_commit_determinism() {
     let first = ReplayEngine::replay_commit(&events[..3], None).unwrap();
     let staged = ReplayEngine::replay_commit(&events[3..], Some(&first)).unwrap();
     assert_eq!(full.commit_id, staged.commit_id);
-    assert_eq!(full.checkpoint.content_hash(), staged.checkpoint.content_hash());
+    assert_eq!(
+        full.checkpoint.content_hash(),
+        staged.checkpoint.content_hash()
+    );
 
     let repeated = ReplayEngine::replay_commit(&events, None).unwrap();
     assert_eq!(full.commit_id, repeated.commit_id);
@@ -376,7 +387,10 @@ fn gate_7e1a_replay_rejects_wrong_model_parent_result_and_order() {
     let mut wrong_result = make_events(1);
     let expected = ReplayEngine::replay_commit(&wrong_result, None).unwrap();
     wrong_result[0].result_commit = Some(CommitId::new("0123456789abcdef"));
-    assert_ne!(wrong_result[0].result_commit.as_ref(), Some(&expected.commit_id));
+    assert_ne!(
+        wrong_result[0].result_commit.as_ref(),
+        Some(&expected.commit_id)
+    );
     assert!(matches!(
         ReplayEngine::replay_commit(&wrong_result, None),
         Err(ReplayError::EventResultMismatch { .. })
@@ -425,7 +439,9 @@ fn gate_7e1a_corrupt_checkpoint_event_and_lineage_fail_closed() {
         0,
     );
     let mut store = ModelStore::new();
-    store.try_insert_commit(root.clone(), "root".into()).unwrap();
+    store
+        .try_insert_commit(root.clone(), "root".into())
+        .unwrap();
     let mut child = ModelCommit::new(
         ModelId::new("ensemble"),
         ModelEnsemble::new().save_all(),
@@ -496,7 +512,10 @@ fn gate_7e1a_volatile_event_metadata_does_not_change_commit() {
     let first = ReplayEngine::replay_commit(&make_events(4), None).unwrap();
     let second = ReplayEngine::replay_commit(&make_events(4), None).unwrap();
     assert_eq!(first.commit_id, second.commit_id);
-    assert_eq!(first.checkpoint.content_hash(), second.checkpoint.content_hash());
+    assert_eq!(
+        first.checkpoint.content_hash(),
+        second.checkpoint.content_hash()
+    );
 }
 
 #[test]
@@ -524,12 +543,7 @@ fn gate_7e1a_envelope_versions_are_explicit_and_legacy_is_explicitly_migrated() 
     unknown_checkpoint["schema_version"] = serde_json::Value::from(99_u32);
     assert!(serde_json::from_value::<ModelCheckpoint>(unknown_checkpoint).is_err());
 
-    let commit = ModelCommit::new(
-        ModelId::new("ensemble"),
-        checkpoint.clone(),
-        None,
-        0,
-    );
+    let commit = ModelCommit::new(ModelId::new("ensemble"), checkpoint.clone(), None, 0);
     let mut legacy_commit_json = serde_json::to_value(&commit).unwrap();
     legacy_commit_json
         .as_object_mut()
@@ -542,15 +556,15 @@ fn gate_7e1a_envelope_versions_are_explicit_and_legacy_is_explicitly_migrated() 
         .remove("schema_version");
     legacy_commit_json["checkpoint"] = legacy_checkpoint_json;
     let mut legacy_commit: ModelCommit = serde_json::from_value(legacy_commit_json).unwrap();
-    assert_eq!(legacy_commit.schema_version, LEGACY_UNVERSIONED_SCHEMA_VERSION);
+    assert_eq!(
+        legacy_commit.schema_version,
+        LEGACY_UNVERSIONED_SCHEMA_VERSION
+    );
     assert!(!legacy_commit.verify());
     legacy_commit.commit_id = CommitId::from_hash(legacy_commit.checkpoint.content_hash());
     let migrated_commit = legacy_commit.migrate_legacy().unwrap();
     assert!(migrated_commit.verify());
-    assert_eq!(
-        migrated_commit.schema_version,
-        MODEL_COMMIT_SCHEMA_VERSION
-    );
+    assert_eq!(migrated_commit.schema_version, MODEL_COMMIT_SCHEMA_VERSION);
 
     let mut unknown_commit = serde_json::to_value(&commit).unwrap();
     unknown_commit["schema_version"] = serde_json::Value::from(99_u32);

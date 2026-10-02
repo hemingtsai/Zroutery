@@ -263,12 +263,10 @@ impl MigrationExecutor {
                 let dest_path = std::path::Path::new(dest);
                 if dest_path.exists() {
                     let backup = format!("{}.bak", dest);
-                    std::fs::copy(dest_path, &backup)
-                        .map_err(|e| format!("backup failed: {e}"))?;
+                    std::fs::copy(dest_path, &backup).map_err(|e| format!("backup failed: {e}"))?;
                 }
                 // Copy
-                std::fs::copy(source_path, dest_path)
-                    .map_err(|e| format!("copy failed: {e}"))?;
+                std::fs::copy(source_path, dest_path).map_err(|e| format!("copy failed: {e}"))?;
                 Ok(vec![format!("copied {} -> {}", source, dest)])
             }
             MigrationAction::ValidateConfig => {
@@ -283,18 +281,12 @@ impl MigrationExecutor {
                 #[cfg(target_os = "windows")]
                 {
                     let output = std::process::Command::new("tasklist")
-                        .args([
-                            "/FI",
-                            &format!("IMAGENAME eq {}", process_name),
-                            "/NH",
-                        ])
+                        .args(["/FI", &format!("IMAGENAME eq {}", process_name), "/NH"])
                         .output()
                         .map_err(|e| format!("tasklist failed: {e}"))?;
                     let stdout = String::from_utf8_lossy(&output.stdout);
                     let found = !stdout.contains("No tasks are running")
-                        && stdout
-                            .to_lowercase()
-                            .contains(&process_name.to_lowercase());
+                        && stdout.to_lowercase().contains(&process_name.to_lowercase());
                     if found {
                         Ok(vec![format!(
                             "external process '{}' is running (should be stopped manually)",
@@ -423,9 +415,7 @@ impl MigrationExecutor {
     pub fn recover(&self) -> Result<MigrationResult, String> {
         let state = self.store.current_state();
         match state {
-            MigrationState::Prepared
-            | MigrationState::Verified
-            | MigrationState::Switched => {
+            MigrationState::Prepared | MigrationState::Verified | MigrationState::Switched => {
                 // Transition through Failed before rolling back.
                 let _ = self.store.transition(MigrationState::Failed);
                 Ok(self.rollback(None))
@@ -488,7 +478,10 @@ mod tests {
             if start != MigrationState::Detected {
                 store.transition(MigrationState::Prepared).unwrap();
             }
-            if start == MigrationState::Verified || start == MigrationState::Switched || start == MigrationState::Completed {
+            if start == MigrationState::Verified
+                || start == MigrationState::Switched
+                || start == MigrationState::Completed
+            {
                 store.transition(MigrationState::Verified).unwrap();
             }
             if start == MigrationState::Switched || start == MigrationState::Completed {
@@ -1312,9 +1305,7 @@ mod tests {
         let store = MigrationStore::new();
         let executor = MigrationExecutor::new(store);
 
-        let snapshot = executor
-            .create_snapshot(&[tmp.to_str().unwrap()])
-            .unwrap();
+        let snapshot = executor.create_snapshot(&[tmp.to_str().unwrap()]).unwrap();
         assert_eq!(snapshot.files.len(), 1);
         assert_eq!(snapshot.files[0].path, tmp.to_str().unwrap());
         assert_eq!(snapshot.files[0].content, b"snapshot_content\n");

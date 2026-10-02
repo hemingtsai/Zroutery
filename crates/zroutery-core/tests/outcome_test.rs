@@ -6,7 +6,9 @@
 use serde_json::json;
 
 use zroutery_core::failure::FailureClass;
-use zroutery_core::feedback::{DataOrigin, Feedback, FeedbackSignal, FeedbackSource, OutcomeSummary, TrainingSample};
+use zroutery_core::feedback::{
+    DataOrigin, Feedback, FeedbackSignal, FeedbackSource, OutcomeSummary, TrainingSample,
+};
 use zroutery_core::ir::Usage;
 use zroutery_core::outcome::{Attempt, FinalStatus, Outcome};
 use zroutery_core::policy::{
@@ -31,13 +33,22 @@ fn make_attempt(
         started_at: 1_700_000_000,
         completed_at: 1_700_000_001,
         latency_ms,
-        ttft_ms: if success { Some(latency_ms * 0.3) } else { None },
+        ttft_ms: if success {
+            Some(latency_ms * 0.3)
+        } else {
+            None
+        },
         success,
         failure_class,
         failure_message: if success {
             None
         } else {
-            Some(format!("{} failure", failure_class.map(|c| format!("{:?}", c)).unwrap_or_default()))
+            Some(format!(
+                "{} failure",
+                failure_class
+                    .map(|c| format!("{:?}", c))
+                    .unwrap_or_default()
+            ))
         },
         http_status: if success { Some(200) } else { Some(500) },
         rectified: false,
@@ -92,7 +103,9 @@ fn outcome_to_summary(outcome: &Outcome) -> OutcomeSummary {
         ttft_ms: outcome.ttft_ms,
         input_tokens: outcome.usage.as_ref().map(|u| u.input_tokens).unwrap_or(0),
         output_tokens: outcome.usage.as_ref().map(|u| u.output_tokens).unwrap_or(0),
-        failure_class: outcome.attempts.last()
+        failure_class: outcome
+            .attempts
+            .last()
             .and_then(|a| a.failure_class)
             .map(|c| format!("{:?}", c).to_lowercase()),
     }
@@ -368,14 +381,20 @@ fn decision_outcome_correlation() {
     assert_eq!(outcome.decision_id, Some("dec_abc123".to_string()));
 
     // The decision's selected model matches the outcome's final model.
-    assert_eq!(decision.selected.as_deref(), Some(outcome.final_model.as_str()));
+    assert_eq!(
+        decision.selected.as_deref(),
+        Some(outcome.final_model.as_str())
+    );
 
     // Both can be serialized and the correlation survives.
     let decision_json = serde_json::to_string(&decision).unwrap();
     let outcome_json = serde_json::to_string(&outcome).unwrap();
     let restored_decision: RouteDecision = serde_json::from_str(&decision_json).unwrap();
     let restored_outcome: Outcome = serde_json::from_str(&outcome_json).unwrap();
-    assert_eq!(restored_decision.decision_id, restored_outcome.decision_id.unwrap());
+    assert_eq!(
+        restored_decision.decision_id,
+        restored_outcome.decision_id.unwrap()
+    );
 }
 
 // ===========================================================================
@@ -676,7 +695,10 @@ fn training_sample_from_failed_outcome_with_fallback() {
     let json = serde_json::to_string(&sample).unwrap();
     let restored: TrainingSample = serde_json::from_str(&json).unwrap();
     assert!(!restored.outcome_summary.success);
-    assert_eq!(restored.outcome_summary.failure_class, Some("timeout".to_string()));
+    assert_eq!(
+        restored.outcome_summary.failure_class,
+        Some("timeout".to_string())
+    );
 }
 
 // ===========================================================================
@@ -767,5 +789,8 @@ fn invalid_request_not_provider_fault() {
     assert!(!impact.fallbackable);
 
     // Should NOT trigger fallback.
-    assert!(!impact.fallbackable, "same request will fail on every provider");
+    assert!(
+        !impact.fallbackable,
+        "same request will fail on every provider"
+    );
 }

@@ -51,14 +51,7 @@ fn fallback_success() -> Outcome {
             100.0,
             Some(FailureClass::ProviderUnavailable),
         ))
-        .attempt(attempt(
-            "att-b",
-            "model-b",
-            "provider-b",
-            true,
-            250.0,
-            None,
-        ))
+        .attempt(attempt("att-b", "model-b", "provider-b", true, 250.0, None))
         .total_latency_ms(350.0)
         .ttft_ms(60.0)
         .usage(Usage {
@@ -76,19 +69,25 @@ fn identities_keep_planned_last_attempted_and_served_distinct() {
 
     assert_eq!(
         outcome.planned_identity(),
-        Some(zroutery_core::CandidateIdentity::new("model-a", "provider-a"))
+        Some(zroutery_core::CandidateIdentity::new(
+            "model-a",
+            "provider-a"
+        ))
     );
     assert_eq!(
         outcome.last_attempted_identity(),
-        Some(zroutery_core::CandidateIdentity::new("model-b", "provider-b"))
+        Some(zroutery_core::CandidateIdentity::new(
+            "model-b",
+            "provider-b"
+        ))
     );
+    assert_eq!(outcome.served_identity(), outcome.final_served_identity());
     assert_eq!(
         outcome.served_identity(),
-        outcome.final_served_identity()
-    );
-    assert_eq!(
-        outcome.served_identity(),
-        Some(zroutery_core::CandidateIdentity::new("model-b", "provider-b"))
+        Some(zroutery_core::CandidateIdentity::new(
+            "model-b",
+            "provider-b"
+        ))
     );
     assert_eq!(outcome.identity().planned.unwrap().model, "model-a");
     assert_eq!(outcome.identity().last_attempted.unwrap().model, "model-b");
@@ -160,7 +159,9 @@ fn failure_cancellation_and_interruption_never_become_success() {
     assert_eq!(cancelled.final_status, FinalStatus::Cancelled);
     assert!(cancelled.served_identity().is_none());
     assert_eq!(
-        cancelled.classified_terminal_failure().map(|failure| failure.class),
+        cancelled
+            .classified_terminal_failure()
+            .map(|failure| failure.class),
         Some(FailureClass::ClientCancelled)
     );
 
@@ -218,8 +219,14 @@ fn local_and_capability_failures_remain_terminal_failure_evidence() {
             .build();
         assert!(!outcome.success, "{class:?} must not be success");
         assert_eq!(outcome.final_status, FinalStatus::Failed);
-        assert_eq!(outcome.terminal_failure_facts().map(|facts| facts.class), Some(class));
-        assert_eq!(outcome.terminal_error.as_ref().map(|facts| facts.class), Some(class));
+        assert_eq!(
+            outcome.terminal_failure_facts().map(|facts| facts.class),
+            Some(class)
+        );
+        assert_eq!(
+            outcome.terminal_error.as_ref().map(|facts| facts.class),
+            Some(class)
+        );
         assert!(outcome.served_identity().is_none());
         assert!(outcome.validate().is_ok(), "{class:?} should validate");
     }
@@ -249,18 +256,8 @@ fn malformed_outcomes_fail_closed_at_validation_and_conversion() {
     false_served.served_model = Some("model-a".to_string());
     false_served.served_provider = Some("provider-a".to_string());
     assert!(false_served.validate().is_err());
-    assert!(SampleBuilder::try_build(
-        &malformed,
-        Default::default(),
-        DataOrigin::Native,
-    )
-    .is_err());
-    assert!(canonical_samples_from_outcome(
-        &malformed,
-        &[],
-        DataOrigin::Native
-    )
-    .is_err());
+    assert!(SampleBuilder::try_build(&malformed, Default::default(), DataOrigin::Native,).is_err());
+    assert!(canonical_samples_from_outcome(&malformed, &[], DataOrigin::Native).is_err());
 }
 
 #[test]
@@ -324,7 +321,10 @@ fn outcome_summary_and_dataset_conversion_are_pure_and_deterministic() {
         serde_json::to_value(&first).unwrap(),
         serde_json::to_value(&second).unwrap()
     );
-    assert!(matches!(first[0].scope, SampleScope::Attempt { index: 0, .. }));
+    assert!(matches!(
+        first[0].scope,
+        SampleScope::Attempt { index: 0, .. }
+    ));
     assert!(matches!(first[2].scope, SampleScope::Request));
     assert_eq!(first[0].provider_id, "provider-a");
     assert_eq!(first[2].provider_id, "provider-b");
@@ -368,7 +368,9 @@ fn optional_feedback_reaches_samples_without_becoming_a_target() {
     )
     .expect("samples");
     assert!(samples.iter().all(|sample| sample.feedback.is_some()));
-    assert!(samples.iter().all(|sample| !sample.targets.success || sample.final_status == FinalStatus::Success));
+    assert!(samples
+        .iter()
+        .all(|sample| !sample.targets.success || sample.final_status == FinalStatus::Success));
     assert_eq!(samples[2].feedback.as_ref().unwrap().signals.len(), 1);
 
     let json = serde_json::to_string(&samples[2]).expect("serialize canonical sample");
@@ -406,21 +408,17 @@ fn serde_round_trip_preserves_identity_and_reads_legacy_identity_shapes() {
     }
     let legacy: Outcome = serde_json::from_value(legacy_json).expect("legacy deserialize");
     assert_eq!(legacy.planned_identity(), outcome.planned_identity());
-    assert_eq!(legacy.last_attempted_identity(), outcome.last_attempted_identity());
+    assert_eq!(
+        legacy.last_attempted_identity(),
+        outcome.last_attempted_identity()
+    );
     assert_eq!(legacy.served_identity(), outcome.served_identity());
     assert!(legacy.validate().is_ok());
 }
 
 #[test]
 fn rectifier_attempt_evidence_is_retained_in_the_canonical_sample() {
-    let mut rectified = attempt(
-        "att-rectified",
-        "model-a",
-        "provider-a",
-        true,
-        100.0,
-        None,
-    );
+    let mut rectified = attempt("att-rectified", "model-a", "provider-a", true, 100.0, None);
     rectified.rectified = true;
     let outcome = Outcome::builder("req-rectified")
         .single_candidate("model-a", "provider-a")

@@ -3,9 +3,7 @@
 use std::sync::Arc;
 
 use serde_json::json;
-use zroutery_core::config::{
-    AppConfig, ModelEntry, ModelTier, ProviderConfig, ProviderKind,
-};
+use zroutery_core::config::{AppConfig, ModelEntry, ModelTier, ProviderConfig, ProviderKind};
 use zroutery_core::ir::{
     Capability, ChatRequest, ContentBlock, Dialect, MediaSource, Message, Role, ThinkingConfig,
     ToolDef, ToolResultPart,
@@ -89,9 +87,13 @@ fn capability_derivation_is_exhaustive_deduplicated_and_canonically_ordered() {
         source: base64("image/jpeg"),
     });
     request.refresh_required_capabilities();
-    assert_eq!(request.compute_required_capabilities(), request.required_capabilities);
     assert_eq!(
-        request.compute_required_capabilities()
+        request.compute_required_capabilities(),
+        request.required_capabilities
+    );
+    assert_eq!(
+        request
+            .compute_required_capabilities()
             .iter()
             .filter(|cap| *cap == &Capability::Vision)
             .count(),
@@ -107,12 +109,16 @@ fn virtual_registry_capabilities_do_not_promote_unknown_members() {
         "P",
         ProviderKind::OpenAICompatible,
     ));
-    config.models.push(
-        ModelEntry::for_upstream("p", "audio", Some(ModelTier::Standard)),
-    );
-    config.models.push(
-        ModelEntry::for_upstream("p", "unknown", Some(ModelTier::Standard)),
-    );
+    config.models.push(ModelEntry::for_upstream(
+        "p",
+        "audio",
+        Some(ModelTier::Standard),
+    ));
+    config.models.push(ModelEntry::for_upstream(
+        "p",
+        "unknown",
+        Some(ModelTier::Standard),
+    ));
     config.models[0].capabilities.audio = true;
     let registry = zroutery_core::registry::Registry::new(Arc::new(config));
     let virtual_model = registry
@@ -139,7 +145,9 @@ fn every_decoder_records_the_same_canonical_requirements() {
     }))
     .unwrap();
     assert!(anthropic.required_capabilities.contains(&Capability::Files));
-    assert!(anthropic.required_capabilities.contains(&Capability::Vision));
+    assert!(anthropic
+        .required_capabilities
+        .contains(&Capability::Vision));
     assert!(anthropic.required_capabilities.contains(&Capability::Tools));
 
     let openai = openai::decode_request(json!({

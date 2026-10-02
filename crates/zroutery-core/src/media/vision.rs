@@ -61,7 +61,9 @@ pub async fn describe(
     req.messages.push(Message {
         role: crate::ir::Role::User,
         content: vec![
-            ContentBlock::Image { source: source.clone() },
+            ContentBlock::Image {
+                source: source.clone(),
+            },
             ContentBlock::text(DESCRIBE_PROMPT),
         ],
     });
@@ -140,7 +142,8 @@ mod tests {
             usage: Default::default(),
             passthrough: serde_json::Map::new(),
         };
-        resp.content.push(ContentBlock::text("  a picture of a cat.  "));
+        resp.content
+            .push(ContentBlock::text("  a picture of a cat.  "));
         assert_eq!(description_text(&resp), "a picture of a cat.");
     }
 }

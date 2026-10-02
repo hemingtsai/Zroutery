@@ -36,9 +36,7 @@ use zroutery_core::ml::decision_engine::DecisionEngine;
 use zroutery_core::ml::features::RoutingFeatures;
 use zroutery_core::ml::model_identity::CommitId;
 use zroutery_core::ml::reward::{PredictionBundle, RewardPolicy};
-use zroutery_core::ml::shadow::{
-    EnsemblePredictor, ShadowDecision, ShadowEngine, ShadowInput,
-};
+use zroutery_core::ml::shadow::{EnsemblePredictor, ShadowDecision, ShadowEngine, ShadowInput};
 use zroutery_core::ml::ShadowCandidateInput;
 use zroutery_core::outcome::{FinalStatus, Outcome};
 use zroutery_core::policy::{
@@ -85,7 +83,11 @@ fn held_open_stream(id: &str) -> axum::body::Body {
             json!({"role": "assistant", "content": ""}),
             Value::Null,
         ));
-        let _ = tx.send(openai_chunk(&second, json!({"content": "hel"}), Value::Null));
+        let _ = tx.send(openai_chunk(
+            &second,
+            json!({"content": "hel"}),
+            Value::Null,
+        ));
         std::future::pending::<()>().await;
     });
     let stream = futures_util::stream::unfold(rx, |mut rx| async move {
@@ -130,7 +132,11 @@ async fn mock_chat(State(mock): State<Mock>, Json(body): Json<Value>) -> Respons
             json!({"role": "assistant", "content": ""}),
             Value::Null,
         ));
-        sse.push_str(&openai_chunk("chatcmpl-mock", json!({"content": "hi"}), Value::Null));
+        sse.push_str(&openai_chunk(
+            "chatcmpl-mock",
+            json!({"content": "hi"}),
+            Value::Null,
+        ));
         sse.push_str(&openai_chunk("chatcmpl-mock", json!({}), json!("stop")));
         sse.push_str("data: [DONE]\n\n");
         return Response::builder()
@@ -179,7 +185,8 @@ fn provider(id: &str, name: &str, mock: SocketAddr) -> ProviderConfig {
 }
 
 fn model(provider: &str, upstream: &str, priority: i32, tier: ModelTier) -> ModelEntry {
-    let mut entry = ModelEntry::for_upstream(provider, upstream, Some(tier)).with_priority(priority);
+    let mut entry =
+        ModelEntry::for_upstream(provider, upstream, Some(tier)).with_priority(priority);
     entry.pricing = Some(Pricing::new("USD", 3.0, 15.0));
     entry
 }
@@ -368,7 +375,10 @@ async fn a_served_request_correlates_the_outcomes_served_identity() {
 
     // The planned identity is still the plan, not the answer: a record that
     // collapsed the two would be unable to say a failover happened at all.
-    assert_eq!(record.observation.input.production_selected, planned.model());
+    assert_eq!(
+        record.observation.input.production_selected,
+        planned.model()
+    );
 
     // The served identity is a real observed candidate, and it is the same
     // identity the outcome names.
@@ -429,12 +439,16 @@ async fn the_record_retains_the_exact_decision_time_input() {
             attached.predictor(),
         )
         .expect("the retained input still evaluates");
-    assert_eq!(replay.decision_input_checksum, record.decision_input_checksum);
+    assert_eq!(
+        replay.decision_input_checksum,
+        record.decision_input_checksum
+    );
     assert_eq!(replay.decision_checksum, record.decision_checksum);
     assert_eq!(replay.shadow.selected, record.shadow.selected);
     assert_eq!(replay.shadow.action, record.shadow.action);
     assert_eq!(
-        replay.shadow.ranked_candidates, record.shadow.ranked_candidates
+        replay.shadow.ranked_candidates,
+        record.shadow.ranked_candidates
     );
     assert_eq!(replay.observation.model_commit, record.shadow.model_commit);
 
@@ -532,7 +546,10 @@ async fn an_abandoned_stream_is_correlated_as_a_non_success() {
     assert!(outcome.served_identity().is_none());
 
     let record = h.shadow_record();
-    assert_eq!(record.actual.served, None, "an abandoned answer served nothing");
+    assert_eq!(
+        record.actual.served, None,
+        "an abandoned answer served nothing"
+    );
     assert_eq!(record.actual.planned_selected(), "alpha-hold-model");
     assert_eq!(record.actual.request_id, outcome.request_id);
     assert!(!record.input().candidates.is_empty());
@@ -581,7 +598,10 @@ async fn a_cancelled_stream_is_correlated_as_a_non_success() {
     assert!(outcome.served_identity().is_none());
 
     let record = h.shadow_record();
-    assert_eq!(record.actual.served, None, "a cancelled answer served nothing");
+    assert_eq!(
+        record.actual.served, None,
+        "a cancelled answer served nothing"
+    );
     assert_eq!(record.actual.planned_selected(), "alpha-cancel-model");
 
     h.shutdown().await;
@@ -595,7 +615,10 @@ async fn a_completed_stream_correlates_its_served_identity() {
 
     let response = h.ask_streaming("standard-class").await;
     let wire = response.text().await.unwrap();
-    assert!(wire.contains("\"text\":\"hi\""), "the client saw the answer");
+    assert!(
+        wire.contains("\"text\":\"hi\""),
+        "the client saw the answer"
+    );
 
     let outcome = h.outcome();
     assert_eq!(outcome.final_status, FinalStatus::Success);
@@ -709,11 +732,15 @@ async fn two_identical_requests_agree_on_the_shadow_checksums() {
     assert_eq!(a.shadow.action, b.shadow.action);
     assert_eq!(a.shadow.ranked_candidates, b.shadow.ranked_candidates);
     assert_eq!(
-        a.observation.input.candidates
+        a.observation
+            .input
+            .candidates
             .iter()
             .map(|candidate| candidate.candidate_id.clone())
             .collect::<Vec<_>>(),
-        b.observation.input.candidates
+        b.observation
+            .input
+            .candidates
             .iter()
             .map(|candidate| candidate.candidate_id.clone())
             .collect::<Vec<_>>()
@@ -760,7 +787,10 @@ async fn the_shadow_path_cannot_change_a_request() {
         shadowed_outcome.planned_identity(),
         plain_outcome.planned_identity()
     );
-    assert_eq!(shadowed_outcome.attempts.len(), plain_outcome.attempts.len());
+    assert_eq!(
+        shadowed_outcome.attempts.len(),
+        plain_outcome.attempts.len()
+    );
 
     // Only the shadowed server has evidence to correlate; the other one
     // recorded nothing at all.
@@ -897,7 +927,10 @@ fn the_served_identity_is_attached_without_changing_the_decision_identity() {
     let stored = engine.store().decisions();
     assert_eq!(stored.len(), 1);
     assert_eq!(stored[0].actual.served.as_deref(), Some("model-b"));
-    assert_eq!(stored[0].decision_input_checksum, before.decision_input_checksum);
+    assert_eq!(
+        stored[0].decision_input_checksum,
+        before.decision_input_checksum
+    );
     assert_eq!(stored[0].decision_checksum, before.decision_checksum);
     assert_eq!(
         serde_json::to_value(&stored[0].observation.input).unwrap(),

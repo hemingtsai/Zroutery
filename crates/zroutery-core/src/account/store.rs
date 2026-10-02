@@ -1,8 +1,8 @@
 //! Thread-safe account store.
 
+use super::types::*;
 use std::collections::HashMap;
 use std::sync::Mutex;
-use super::types::*;
 
 /// Composite key: provider + account.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -19,11 +19,16 @@ pub struct AccountStore {
 
 impl AccountStore {
     pub fn new() -> Self {
-        Self { accounts: Mutex::new(HashMap::new()) }
+        Self {
+            accounts: Mutex::new(HashMap::new()),
+        }
     }
 
     pub fn get(&self, provider_id: &str, account_id: &AccountId) -> Option<AccountRuntime> {
-        let key = AccountKey { provider_id: provider_id.into(), account_id: account_id.clone() };
+        let key = AccountKey {
+            provider_id: provider_id.into(),
+            account_id: account_id.clone(),
+        };
         crate::sync::lock(&self.accounts).get(&key).cloned()
     }
 
@@ -36,7 +41,10 @@ impl AccountStore {
     }
 
     pub fn remove(&self, provider_id: &str, account_id: &AccountId) -> bool {
-        let key = AccountKey { provider_id: provider_id.into(), account_id: account_id.clone() };
+        let key = AccountKey {
+            provider_id: provider_id.into(),
+            account_id: account_id.clone(),
+        };
         crate::sync::lock(&self.accounts).remove(&key).is_some()
     }
 
@@ -50,5 +58,7 @@ impl AccountStore {
 }
 
 impl Default for AccountStore {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }

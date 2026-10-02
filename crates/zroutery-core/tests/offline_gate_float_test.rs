@@ -35,8 +35,8 @@ use zroutery_core::ml::activation::{
 use zroutery_core::ml::dataset::{Targets, TrainingSample as DatasetTrainingSample};
 use zroutery_core::ml::evaluation::{f32_identical, f64_identical, ulp_distance};
 use zroutery_core::ml::features::{RoutingFeatures, FEATURE_DIMENSION, FEATURE_SCHEMA_VERSION};
-use zroutery_core::ml::shadow::ModelEnsemblePredictor;
 use zroutery_core::ml::offline_gate::JournalFloatFidelity;
+use zroutery_core::ml::shadow::ModelEnsemblePredictor;
 use zroutery_core::outcome::Attempt;
 
 // ---------------------------------------------------------------------------
@@ -198,7 +198,18 @@ fn safe_decimals_survive_this_workspaces_read_path_bit_exactly() {
     // recorded as surviving. This is the honest other half of the finding: the
     // transport is exact for these, which is why the gate measures rather than
     // assuming a universal failure.
-    let values = [0.1_f64, 1.3, 1.0 / 3.0, 120.0, 40.0, 0.009, 0.005, 0.000_1, 1.0, 0.5];
+    let values = [
+        0.1_f64,
+        1.3,
+        1.0 / 3.0,
+        120.0,
+        40.0,
+        0.009,
+        0.005,
+        0.000_1,
+        1.0,
+        0.5,
+    ];
     let samples: Vec<Outcome2> = values
         .iter()
         .enumerate()
@@ -211,8 +222,7 @@ fn safe_decimals_survive_this_workspaces_read_path_bit_exactly() {
     assert!(
         fidelity.round_trip_exact,
         "safe decimals must survive: {} of {} fields moved",
-        fidelity.moved_fields,
-        fidelity.f64_fields
+        fidelity.moved_fields, fidelity.f64_fields
     );
     assert_eq!(fidelity.moved_fields, 0);
     assert_eq!(fidelity.max_ulp, 0);
@@ -309,11 +319,9 @@ fn a_trained_checkpoint_survives_the_bit_exact_wire_form_and_still_verifies() {
     // any one node's ownership — both 7E-2E and 7E-2F recorded that — so this
     // node consumes the wire form instead of reaching for the manifest.
     let root = ModelEnsemblePredictor::genesis().commit_record();
-    let from_root = ModelEnsemblePredictor::from_model_commit_with_lineage(
-        &root,
-        std::slice::from_ref(&root),
-    )
-    .expect("the genesis root lineage verifies");
+    let from_root =
+        ModelEnsemblePredictor::from_model_commit_with_lineage(&root, std::slice::from_ref(&root))
+            .expect("the genesis root lineage verifies");
 
     let mut samples: Vec<DatasetTrainingSample> = (0..48)
         .map(|index| {
@@ -351,10 +359,11 @@ fn a_trained_checkpoint_survives_the_bit_exact_wire_form_and_still_verifies() {
         .collect();
     samples.shrink_to_fit();
 
-    let (_, trained) = from_root
-        .try_train(&samples)
-        .expect("the fixture trains");
-    assert!(trained.verify(), "the trained commit must verify before transport");
+    let (_, trained) = from_root.try_train(&samples).expect("the fixture trains");
+    assert!(
+        trained.verify(),
+        "the trained commit must verify before transport"
+    );
 
     // The bit-exact wire form: each f64 parameter as 16 hex digits of its bits.
     let snapshot_id = snapshot_id_for(&trained);
@@ -375,7 +384,10 @@ fn a_trained_checkpoint_survives_the_bit_exact_wire_form_and_still_verifies() {
         "a commit that came back through the bit-exact wire form must still verify"
     );
     assert_eq!(rebuilt.commit().commit_id, trained.commit_id);
-    assert_eq!(rebuilt.commit().checkpoint.content_hash(), trained.checkpoint.content_hash());
+    assert_eq!(
+        rebuilt.commit().checkpoint.content_hash(),
+        trained.checkpoint.content_hash()
+    );
     assert_eq!(
         rebuilt.commit().checkpoint.success.parameters,
         trained.checkpoint.success.parameters,
@@ -388,7 +400,10 @@ fn a_trained_checkpoint_survives_the_bit_exact_wire_form_and_still_verifies() {
         .iter()
         .zip(rebuilt.commit().checkpoint.success.parameters.iter())
     {
-        assert!(f64_identical(*before, *after), "a parameter moved: {before:?} -> {after:?}");
+        assert!(
+            f64_identical(*before, *after),
+            "a parameter moved: {before:?} -> {after:?}"
+        );
     }
 }
 

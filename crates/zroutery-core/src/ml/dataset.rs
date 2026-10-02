@@ -36,9 +36,7 @@ use crate::feedback::{DataOrigin, Feedback, FeedbackSignal};
 use crate::ir::Usage;
 use crate::ml::features::{RoutingFeatures, FEATURE_DIMENSION, FEATURE_SCHEMA_VERSION};
 use crate::ml::shadow::ShadowInput;
-use crate::outcome::{
-    Attempt, CandidateIdentity, FinalStatus, Outcome, OutcomeIdentity,
-};
+use crate::outcome::{Attempt, CandidateIdentity, FinalStatus, Outcome, OutcomeIdentity};
 
 // ---------------------------------------------------------------------------
 // TrainingSample — the core training unit
@@ -227,11 +225,7 @@ impl Targets {
             } else {
                 None
             },
-            ttft_ms: if success {
-                attempt.ttft_ms
-            } else {
-                None
-            },
+            ttft_ms: if success { attempt.ttft_ms } else { None },
             cost: None,
             failure_class: attempt.failure_class.map(|class| format!("{:?}", class)),
             fallback_count: 0,
@@ -343,10 +337,7 @@ impl TrainingSample {
 
     /// Attach only a validated, matching Feedback record.  `None` is an
     /// explicit absence and leaves the sample without fabricated signals.
-    pub fn with_optional_feedback(
-        mut self,
-        feedback: Option<&Feedback>,
-    ) -> Result<Self, String> {
+    pub fn with_optional_feedback(mut self, feedback: Option<&Feedback>) -> Result<Self, String> {
         if let Some(feedback) = feedback {
             feedback.validate()?;
             self.feedback = feedback.signals.clone();
@@ -535,17 +526,13 @@ pub fn canonical_samples_from_decision_time(
         .collect::<Result<Vec<_>, _>>()?;
 
     let ended_on = request_identity(&canonical);
-    let request_features = retained_features(
-        decision_time,
-        &ended_on.model,
-        &ended_on.provider,
-    )
-    .ok_or_else(|| {
-        format!(
-            "no usable retained features for the request's final candidate '{}/{}'",
-            ended_on.provider, ended_on.model
-        )
-    })?;
+    let request_features = retained_features(decision_time, &ended_on.model, &ended_on.provider)
+        .ok_or_else(|| {
+            format!(
+                "no usable retained features for the request's final candidate '{}/{}'",
+                ended_on.provider, ended_on.model
+            )
+        })?;
     samples_from_features(
         &canonical,
         &per_attempt,
@@ -570,7 +557,9 @@ fn retained_features(
     decision_time
         .candidates
         .iter()
-        .find(|candidate| candidate.candidate_id == model_id && candidate.provider_id == provider_id)
+        .find(|candidate| {
+            candidate.candidate_id == model_id && candidate.provider_id == provider_id
+        })
         .filter(|candidate| {
             candidate.eligible
                 && candidate.features.schema_version == FEATURE_SCHEMA_VERSION
@@ -603,7 +592,10 @@ fn samples_from_features(
         let features = resolve_features(
             per_attempt.get(index).cloned().flatten(),
             require_retained,
-            &format!("attempt {index} ({}/{})", attempt.candidate_provider, attempt.candidate_model),
+            &format!(
+                "attempt {index} ({}/{})",
+                attempt.candidate_provider, attempt.candidate_model
+            ),
         )?;
 
         let targets = Targets::from_attempt(attempt);
@@ -641,11 +633,8 @@ fn samples_from_features(
         validate_outcome_sample(&sample)?;
         samples.push(sample);
     }
-    let request_features = resolve_features(
-        request_features,
-        require_retained,
-        "the request as a whole",
-    )?;
+    let request_features =
+        resolve_features(request_features, require_retained, "the request as a whole")?;
     samples.push(request_sample(outcome, request_features, origin, feedback)?);
     Ok(samples)
 }
@@ -731,7 +720,10 @@ pub fn samples_from_outcome(
 // The canonical sample has already been validated; this helper only recovers
 // the old numeric suffix without retaining mutable/global state.
 fn sample_scope_from_id(sample_id: &str) -> SampleScope {
-    let Some(index) = sample_id.rsplit('-').next().and_then(|value| value.parse::<usize>().ok())
+    let Some(index) = sample_id
+        .rsplit('-')
+        .next()
+        .and_then(|value| value.parse::<usize>().ok())
     else {
         return SampleScope::Request;
     };
@@ -944,10 +936,7 @@ impl DatasetStore {
             validate_outcome_sample(sample)?;
         }
         let mut stored = crate::sync::lock(&self.samples);
-        if stored
-            .iter()
-            .any(|sample| sample.request_id == request_id)
-        {
+        if stored.iter().any(|sample| sample.request_id == request_id) {
             return Err(format!(
                 "request '{request_id}' is already represented in the dataset"
             ));
@@ -959,7 +948,8 @@ impl DatasetStore {
         let skipped = samples.len().saturating_sub(self.max_samples);
         let kept = &samples[skipped..];
         if skipped > 0 {
-            self.evicted_by_count.fetch_add(skipped as u64, Ordering::Relaxed);
+            self.evicted_by_count
+                .fetch_add(skipped as u64, Ordering::Relaxed);
         }
         while stored.len() + kept.len() > self.max_samples {
             if stored.pop_front().is_some() {
@@ -968,10 +958,7 @@ impl DatasetStore {
                 break;
             }
         }
-        let sample_ids = kept
-            .iter()
-            .map(|sample| sample.sample_id.clone())
-            .collect();
+        let sample_ids = kept.iter().map(|sample| sample.sample_id.clone()).collect();
         stored.extend(kept.iter().cloned());
         Ok(sample_ids)
     }
@@ -1017,12 +1004,17 @@ impl DatasetStore {
         self.evict_expired_locked(&mut samples, chrono::Utc::now().timestamp())
     }
 
-    fn evict_expired_locked(&self, samples: &mut VecDeque<OutcomeTrainingSample>, now: i64) -> usize {
+    fn evict_expired_locked(
+        &self,
+        samples: &mut VecDeque<OutcomeTrainingSample>,
+        now: i64,
+    ) -> usize {
         let before = samples.len();
         samples.retain(|sample| now - sample.timestamp < self.max_age_secs);
         let evicted = before - samples.len();
         if evicted > 0 {
-            self.evicted_by_age.fetch_add(evicted as u64, Ordering::Relaxed);
+            self.evicted_by_age
+                .fetch_add(evicted as u64, Ordering::Relaxed);
         }
         evicted
     }
@@ -1066,7 +1058,10 @@ impl Default for DatasetStore {
 /// A dataset problem is a dataset problem: the boundary reports it and the
 /// request continues. The closure form is what makes that testable, because the
 /// store's own failure modes are all ordinary refusals.
-pub fn contain_dataset_fault<T>(store: &DatasetStore, step: impl FnOnce() -> T) -> Result<T, String> {
+pub fn contain_dataset_fault<T>(
+    store: &DatasetStore,
+    step: impl FnOnce() -> T,
+) -> Result<T, String> {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(step)) {
         Ok(value) => Ok(value),
         Err(panic) => {
@@ -1133,8 +1128,14 @@ pub fn validate_outcome_sample(sample: &OutcomeTrainingSample) -> Result<(), Str
     if sample.outcome_id.trim().is_empty() || sample.request_id.trim().is_empty() {
         return Err("canonical sample request/outcome identity is incomplete".to_string());
     }
-    if sample.decision_id.as_ref().is_some_and(|id| id.trim().is_empty())
-        || sample.response_id.as_ref().is_some_and(|id| id.trim().is_empty())
+    if sample
+        .decision_id
+        .as_ref()
+        .is_some_and(|id| id.trim().is_empty())
+        || sample
+            .response_id
+            .as_ref()
+            .is_some_and(|id| id.trim().is_empty())
     {
         return Err("canonical sample correlation ids must not be empty".to_string());
     }
@@ -1147,7 +1148,12 @@ pub fn validate_outcome_sample(sample: &OutcomeTrainingSample) -> Result<(), Str
     if sample.features.values.len() != FEATURE_DIMENSION {
         return Err("canonical sample feature dimension mismatch".to_string());
     }
-    if sample.features.values.iter().any(|value| !value.is_finite()) {
+    if sample
+        .features
+        .values
+        .iter()
+        .any(|value| !value.is_finite())
+    {
         return Err("canonical sample features must be finite".to_string());
     }
     for (label, value) in [
@@ -1170,21 +1176,28 @@ pub fn validate_outcome_sample(sample: &OutcomeTrainingSample) -> Result<(), Str
                 return Err("request sample success disagrees with final_status".to_string());
             }
             if sample.targets.success != sample.success {
-                return Err("request sample target success disagrees with sample success".to_string());
+                return Err(
+                    "request sample target success disagrees with sample success".to_string(),
+                );
             }
             if sample.final_status == FinalStatus::Success {
                 let Some(served) = &sample.identity.served else {
                     return Err("successful request sample requires served identity".to_string());
                 };
                 if sample.provider_id != served.provider || sample.model_id != served.model {
-                    return Err("request sample provider/model does not match served identity".to_string());
+                    return Err(
+                        "request sample provider/model does not match served identity".to_string(),
+                    );
                 }
             } else {
                 if sample.identity.served.is_some() {
                     return Err("failed request sample cannot claim served identity".to_string());
                 }
                 if sample.targets.latency_ms.is_some() || sample.targets.ttft_ms.is_some() {
-                    return Err("non-success request sample cannot carry success timing targets".to_string());
+                    return Err(
+                        "non-success request sample cannot carry success timing targets"
+                            .to_string(),
+                    );
                 }
             }
         }
@@ -1208,7 +1221,9 @@ pub fn validate_outcome_sample(sample: &OutcomeTrainingSample) -> Result<(), Str
                 return Err("attempt sample success disagrees with attempt evidence".to_string());
             }
             if sample.targets.success != sample.success {
-                return Err("attempt sample target success disagrees with sample success".to_string());
+                return Err(
+                    "attempt sample target success disagrees with sample success".to_string(),
+                );
             }
             // The same discipline the request scope already enforces, and the
             // one `Targets::from_attempt` already follows: a candidate that
@@ -1249,9 +1264,11 @@ pub fn validate_outcome_sample(sample: &OutcomeTrainingSample) -> Result<(), Str
 mod tests {
     use super::*;
     use crate::failure::FailureClass;
-    use crate::ml::features::{RoutingFeatures, FEATURE_DIMENSION, FEATURE_SCHEMA_VERSION, UNKNOWN};
-    use crate::outcome::{Attempt, Outcome};
     use crate::feedback::{DataOrigin, FeedbackSignal};
+    use crate::ml::features::{
+        RoutingFeatures, FEATURE_DIMENSION, FEATURE_SCHEMA_VERSION, UNKNOWN,
+    };
+    use crate::outcome::{Attempt, Outcome};
 
     // -- helpers --
 
@@ -1269,7 +1286,11 @@ mod tests {
             started_at: 1_700_000_000,
             completed_at: 1_700_000_001,
             latency_ms,
-            ttft_ms: if success { Some(latency_ms * 0.3) } else { None },
+            ttft_ms: if success {
+                Some(latency_ms * 0.3)
+            } else {
+                None
+            },
             success,
             failure_class,
             failure_message: if success {
@@ -1322,13 +1343,7 @@ mod tests {
                 200.0,
                 Some(FailureClass::ProviderUnavailable),
             ))
-            .attempt(make_attempt(
-                "claude-3",
-                "anthropic",
-                true,
-                400.0,
-                None,
-            ))
+            .attempt(make_attempt("claude-3", "anthropic", true, 400.0, None))
             .total_latency_ms(600.0)
             .ttft_ms(120.0)
             .cost(Some(0.02), Some(0.018))
@@ -1388,10 +1403,7 @@ mod tests {
         assert!(targets.latency_ms.is_none());
         assert!(targets.ttft_ms.is_none());
         assert!(targets.cost.is_none());
-        assert_eq!(
-            targets.failure_class.as_deref(),
-            Some("RateLimit")
-        );
+        assert_eq!(targets.failure_class.as_deref(), Some("RateLimit"));
         assert_eq!(targets.fallback_count, 0);
     }
 
@@ -1447,7 +1459,6 @@ mod tests {
     fn canonical_sample(outcome: &Outcome) -> OutcomeTrainingSample {
         try_outcome_sample(outcome, sample_features(), DataOrigin::Native, None)
             .expect("canonical sample from a valid outcome")
-
     }
 
     #[test]
@@ -1519,7 +1530,10 @@ mod tests {
         assert_eq!(store.len(), 1);
 
         assert_eq!(store.evict_expired(), 1, "the stale sample left");
-        assert!(store.is_empty(), "age eviction is physical, not read-time only");
+        assert!(
+            store.is_empty(),
+            "age eviction is physical, not read-time only"
+        );
         assert_eq!(store.counters().evicted_by_age, 1);
         assert!(store.training_slice().is_empty());
     }
@@ -1548,7 +1562,10 @@ mod tests {
         let vals = json["features"]["values"].as_array_mut().unwrap();
         vals.pop();
         let result: Result<TrainingSample, _> = serde_json::from_value(json);
-        assert!(result.is_err(), "serde must reject wrong-dimension features");
+        assert!(
+            result.is_err(),
+            "serde must reject wrong-dimension features"
+        );
         let err_msg = result.unwrap_err().to_string();
         assert!(
             err_msg.contains("expected an array of length 32"),
@@ -1636,15 +1653,11 @@ mod tests {
     #[test]
     fn training_sample_serde_round_trip() {
         let outcome = success_outcome();
-        let sample = SampleBuilder::build(
-            &outcome,
-            sample_features(),
-            DataOrigin::Native,
-        )
-        .with_feedback(vec![
-            FeedbackSignal::ExplicitRating { score: 4.5 },
-            FeedbackSignal::ConversationContinued,
-        ]);
+        let sample = SampleBuilder::build(&outcome, sample_features(), DataOrigin::Native)
+            .with_feedback(vec![
+                FeedbackSignal::ExplicitRating { score: 4.5 },
+                FeedbackSignal::ConversationContinued,
+            ]);
 
         let json = serde_json::to_string(&sample).unwrap();
         let restored: TrainingSample = serde_json::from_str(&json).unwrap();
@@ -1742,8 +1755,20 @@ mod tests {
         let outcome = Outcome::builder("req_fc")
             .single_candidate("m", "p")
             .dialect("openai")
-            .attempt(make_attempt("m", "p", false, 100.0, Some(FailureClass::RateLimit)))
-            .attempt(make_attempt("m2", "p2", false, 100.0, Some(FailureClass::Timeout)))
+            .attempt(make_attempt(
+                "m",
+                "p",
+                false,
+                100.0,
+                Some(FailureClass::RateLimit),
+            ))
+            .attempt(make_attempt(
+                "m2",
+                "p2",
+                false,
+                100.0,
+                Some(FailureClass::Timeout),
+            ))
             .total_latency_ms(200.0)
             .build();
 
@@ -1765,10 +1790,18 @@ mod tests {
     fn samples_from_outcome_single_attempt() {
         let outcome = success_outcome();
         let features = sample_features();
-        let samples = samples_from_outcome(&outcome, std::slice::from_ref(&features), DataOrigin::Native);
+        let samples = samples_from_outcome(
+            &outcome,
+            std::slice::from_ref(&features),
+            DataOrigin::Native,
+        );
 
         // 1 attempt sample + 1 request-level sample
-        assert_eq!(samples.len(), 2, "single attempt: 1 attempt + 1 request sample");
+        assert_eq!(
+            samples.len(),
+            2,
+            "single attempt: 1 attempt + 1 request sample"
+        );
 
         // Attempt sample
         let attempt_sample = &samples[0];
@@ -1810,19 +1843,29 @@ mod tests {
         );
 
         // 2 attempt samples + 1 request-level sample
-        assert_eq!(samples.len(), 3, "two attempts: 2 attempt + 1 request sample");
+        assert_eq!(
+            samples.len(),
+            3,
+            "two attempts: 2 attempt + 1 request sample"
+        );
 
         // First attempt (failed)
         let first = &samples[0];
         assert_eq!(first.provider_id, "openai");
         assert_eq!(first.model_id, "gpt-4");
         assert!(!first.targets.success, "first attempt should be failure");
-        assert!(first.targets.latency_ms.is_none(), "failed attempt should have no latency");
+        assert!(
+            first.targets.latency_ms.is_none(),
+            "failed attempt should have no latency"
+        );
         assert_eq!(
             first.targets.failure_class.as_deref(),
             Some("ProviderUnavailable")
         );
-        assert_eq!(first.features.values[0], 1.0, "first attempt uses its own snapshot");
+        assert_eq!(
+            first.features.values[0], 1.0,
+            "first attempt uses its own snapshot"
+        );
 
         // Second attempt (succeeded)
         let second = &samples[1];
@@ -1831,7 +1874,10 @@ mod tests {
         assert!(second.targets.success, "second attempt should be success");
         assert_eq!(second.targets.latency_ms, Some(400.0));
         assert!(second.targets.failure_class.is_none());
-        assert_eq!(second.features.values[0], 0.5, "second attempt uses its own snapshot");
+        assert_eq!(
+            second.features.values[0], 0.5,
+            "second attempt uses its own snapshot"
+        );
 
         // Request-level sample
         let request = &samples[2];
@@ -1861,13 +1907,7 @@ mod tests {
                 150.0,
                 Some(FailureClass::Timeout),
             ))
-            .attempt(make_attempt(
-                "gemini-pro",
-                "google",
-                true,
-                200.0,
-                None,
-            ))
+            .attempt(make_attempt("gemini-pro", "google", true, 200.0, None))
             .total_latency_ms(450.0)
             .ttft_ms(60.0)
             .build();
@@ -1894,12 +1934,19 @@ mod tests {
         );
 
         // 3 attempt samples + 1 request-level sample
-        assert_eq!(samples.len(), 4, "three attempts: 3 attempt + 1 request sample");
+        assert_eq!(
+            samples.len(),
+            4,
+            "three attempts: 3 attempt + 1 request sample"
+        );
 
         // First attempt (failed)
         assert_eq!(samples[0].provider_id, "openai");
         assert!(!samples[0].targets.success);
-        assert_eq!(samples[0].targets.failure_class.as_deref(), Some("RateLimit"));
+        assert_eq!(
+            samples[0].targets.failure_class.as_deref(),
+            Some("RateLimit")
+        );
         assert_eq!(samples[0].features.values[0], 1.0);
 
         // Second attempt (failed)
@@ -1928,7 +1975,11 @@ mod tests {
         // 1 attempt sample (with default features) + 1 request-level sample
         // But wait — no feature_snapshots means the request-level sample is
         // also skipped (feature_snapshots.last() is None).
-        assert_eq!(samples.len(), 1, "no snapshots: only attempt sample, no request sample");
+        assert_eq!(
+            samples.len(),
+            1,
+            "no snapshots: only attempt sample, no request sample"
+        );
 
         let attempt = &samples[0];
         assert_eq!(attempt.provider_id, "openai");
