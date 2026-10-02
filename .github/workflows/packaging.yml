@@ -1,0 +1,88 @@
+name: packaging
+
+# The installer gate is not here because it is unimportant. It is here because
+# it is the only gate that answers "what happens when a user runs this installer
+# twice", and answering that means performing a real silent install, a real
+# reinstall over it, and a real uninstall on the machine it runs on. It installs
+# under %LOCALAPPDATA%\Zroutery and writes an HKCU uninstall entry; it cleans up
+# after itself, but it is not a read-only operation.
+#
+# It runs on a schedule and on manual dispatch rather than on every push, for
+# three reasons that are about cost and honesty rather than about wanting a pass:
+#
+#   1. Cost. It needs strictly more than the reachability gate in ci.yml: a full
+#      `tauri build`, which re-runs `pnpm ui:build` as its beforeBuildCommand
+#      and then runs the NSIS bundler on top of the release binary.
+#   2. Flake. It is the most timing-dependent gate in the repository. It waits
+#      out the uninstaller's asynchronous cleanup, and it fails if any
+#      zroutery.exe process is still alive afterwards. A wall-clock-sensitive
+#      check on every push is how a gate gets switched off, and a gate that has
+#      been switched off proves nothing at all.
+#   3. Subject. It gates installer *state* over time -- duplicate files, a stale
+#      uninstaller, an orphaned registry key -- not a property of the commit
+#      being pushed, which does not regress any more often than nightly.
+#
+# The consequence of this being skipped on a push, stated plainly: an
+# install/reinstall/uninstall regression can survive for up to a day, and no
+# push-time gate will catch it in that window. The reachability gate still runs
+# on every push, so what the shipped binary *contains* is never stale; only the
+# installer's behaviour is checked nightly. Re-run it by hand from the Actions
+# tab when the installer is about to change.
+on:
+  schedule:
+    # Nightly, off the hour so it does not queue behind everyone else's :00.
+    - cron: "23 4 * * *"
+  workflow_dispatch:
+
+jobs:
+  installer:
+    name: NSIS install, reinstall and uninstall
+    # Windows only. The evidence this repository holds about installers is
+    # Windows-only, and no macOS or Linux runner can say anything about it.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: pnpm/action-setup@v4
+        with:
+          version: '11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: pnpm install --frozen-lockfile
+      # `--bundles nsis` only. tauri.conf.json lists app and dmg, which are
+      # macOS bundle formats with no Windows producer, so asking for them here
+      # fails; and the MSI path is recorded untested, so this workflow does not
+      # pretend to cover it. The committed config is deliberately left alone.
+      # `tauri.js` is invoked directly because pnpm rejects
+      # `pnpm tauri build --bundles ...`.
+      - name: Build the NSIS installer
+        run: node node_modules/@tauri-apps/cli/tauri.js build --bundles nsis
+      # `tauri build` patches target/release/zroutery.exe with the bundle type
+      # before bundling, so the copy sitting there now is the exact bytes the
+      # installer embeds. The reachability gate in ci.yml scans the same file
+      # path, but from a plain `cargo build --release`, which is not patched and
+      # is measurably smaller. This runs the gate over the real artifact so the
+      # shipped bytes are certified too, and not only on an unpatched build.
+      - name: Reachability gate on the bundled binary
+        run: python -B scripts/desktop_artifact_test.py --exe target/release/zroutery.exe
+      # The installer file name carries the version, so it is discovered rather
+      # than hardcoded. Zero matches or more than one match is a failure, not a
+      # reason to skip: this job either certifies the installer or it fails.
+      - name: Install, reinstall and uninstall the real installer
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          installers=(target/release/bundle/nsis/*.exe)
+          if [ "${#installers[@]}" -ne 1 ]; then
+            echo "::error::expected exactly one NSIS installer under target/release/bundle/nsis, found ${#installers[@]}"
+            exit 1
+          fi
+          echo "installer: ${installers[0]}"
+          python -B scripts/desktop_installer_test.py \
+            --installer "${installers[0]}" \
+            --built-exe target/release/zroutery.exe

@@ -2,13 +2,17 @@ name: ci
 
 on:
   push:
-    branches: [main]
+    # `dev` is where the work actually lands. Watching only `main` is how a
+    # build command broken by the package split survived fourteen commits
+    # unnoticed, because `main` never saw the split.
+    branches: [main, dev]
   pull_request:
-    branches: [main]
+    branches: [main, dev]
 
 # The commit-message convention has its own workflow; this one is about the
-# code: lint and test the GUI-free core on Linux, and on the platform the
-# desktop shell ships for, check that it compiles and run the proxy end to end.
+# code: lint and test the GUI-free core on Linux, validate the repository's own
+# records, test and smoke the whole workspace on the platform the desktop shell
+# ships for, and gate the shipped Windows binary on what it may not name.
 env:
   CARGO_TERM_COLOR: always
 
@@ -27,8 +31,57 @@ jobs:
       - name: Tests
         run: cargo test -p zroutery-core --all-features
 
+  contracts:
+    name: commit contract and orchestration docs
+    runs-on: ubuntu-latest
+    steps:
+      # Full history: the commit contract is a range check and cannot see the
+      # base revision in a shallow clone.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Cheap, and it is what stops a validator from rotting into a rubber
+      # stamp: these prove each one still rejects what it is supposed to.
+      - name: Validator self-tests
+        run: |
+          set -euo pipefail
+          python3 scripts/commit_contract_test.py --self-test
+          python3 scripts/orch_docs_test.py --self-test
+
+      - name: Commit contract over the change range
+        env:
+          # Derived from the event, never hardcoded. On a pull request this is
+          # the base tip the PR was opened against; on a push it is the
+          # revision the branch sat at beforehand. `||` falls through to the
+          # push field because `github.event.pull_request` is null on a push.
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          set -euo pipefail
+          # A branch's first push reports an all-zero `before`: there is no
+          # prior revision and so no range to check. Say that and pass. Feeding
+          # the zeros to git instead is exactly the spurious failure this avoids
+          # -- the validator exits 1 on an unresolvable range.
+          if [ -z "$BASE_SHA" ] || [ "$BASE_SHA" = "0000000000000000000000000000000000000000" ]; then
+            echo "::notice title=commit contract::no prior revision in this event (first push of the branch); no change range to validate"
+            exit 0
+          fi
+          # With fetch-depth: 0 the base is present. If it is not, the checkout
+          # is wrong, and exiting 0 here would report a pass nobody earned.
+          if ! git rev-parse --verify --quiet "${BASE_SHA}^{commit}" >/dev/null; then
+            echo "::error title=commit contract::base $BASE_SHA is absent from this checkout; refusing to report a pass we did not earn"
+            exit 1
+          fi
+          echo "validating every non-merge commit in ${BASE_SHA}..HEAD"
+          python3 scripts/commit_contract_test.py --base "$BASE_SHA" --head HEAD
+
+      - name: Orchestration docs, DAG and evidence registry
+        run: |
+          set -euo pipefail
+          python3 scripts/orch_docs_test.py
+
   desktop:
-    name: desktop shell and smoke
+    name: workspace tests and end-to-end smoke
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -36,10 +89,68 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Check workspace
         run: cargo check --workspace
+      # The project's own mandatory gate, run as exactly the command
+      # package.json declares. It lives here and not in `core` because
+      # `--workspace` includes the Tauri package, which needs this platform's
+      # system frameworks; `core` is deliberately GUI-free so that linting the
+      # core never depends on them.
+      - name: Tests (default features)
+        run: cargo test --workspace
+      - name: Tests (ml feature)
+        run: cargo test --workspace --features ml
+      # The headless proxy is its own package now, and that package's bin target
+      # is the only thing named zroutery-headless. The old
+      # `-p zroutery --bin zroutery-headless` asks the desktop package for a
+      # target it no longer has and fails outright. This is the same build
+      # package.json's `smoke` script runs, and it writes the exact path
+      # smoke_test.py looks for by default: target/debug/zroutery-headless.
       - name: Build the headless binary
-        run: cargo build -p zroutery --bin zroutery-headless
+        run: cargo build -p zroutery-headless
       # The smoke suite starts a mock upstream and the real binary, so it needs
       # the platform the desktop shell ships for; it is the only job that
       # exercises the proxy end to end, which is why it lives here.
       - name: End-to-end smoke
         run: python3 scripts/smoke_test.py
+
+  reachability:
+    name: shipped desktop binary reachability
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # windows-latest does not guarantee a `python3` on PATH, and the validators
+      # are stdlib-only, so pin an interpreter instead of assuming one.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      # The desktop binary embeds the built frontend and tauri.conf.json points
+      # frontendDist at ../ui/dist, which is gitignored. Build it so the gate
+      # reads the binary that actually ships, not one built without assets.
+      - uses: pnpm/action-setup@v4
+        with:
+          version: '11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm ui:build
+      # Deliberately no build cache in this job. The gate's entire claim is
+      # about the bytes in one file, and a cache restoring target/ could hand it
+      # a zroutery.exe from an earlier commit. `cargo build` writes that file
+      # from this tree or the step fails, so the binary the gate reads is always
+      # the one this job produced.
+      - name: Build the shipped desktop binary
+        run: cargo build -p zroutery --release
+      # This gate fails the job on a violation and also on INCONCLUSIVE:
+      # main() returns 0 only when the positive control held AND no forbidden
+      # symbol and no ml marker was found, so a scan that could not prove its
+      # own control exits non-zero too. No `|| true` and no continue-on-error --
+      # an inconclusive reachability check has proven nothing, and this step is
+      # the whole point of the job.
+      #
+      # This scans the binary `cargo build --release` produces. The NSIS bundler
+      # patches a copy of it with the bundle type before packaging, so that
+      # variant is a different file; packaging.yml runs this same gate over that
+      # exact variant, so both are certified.
+      - name: Reachability gate
+        run: python -B scripts/desktop_artifact_test.py --exe target/release/zroutery.exe
