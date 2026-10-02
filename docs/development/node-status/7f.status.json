@@ -2,8 +2,8 @@
   "schema_version": 1,
   "node_id": "7F",
   "display_name": "7F — real-traffic shadow",
-  "status": "BLOCKED",
-  "implementation_state": "ML is not in the default desktop path and no accepted commit, shipping reachability, or stable real-traffic evidence exists.",
+  "status": "READY",
+  "implementation_state": "Every recorded blocker is cleared and the two capabilities 7F needs now exist: the offline gate that decides whether a model may be considered at all, and a read-only observability projection that joins a request's decision, failure and usage on UUID-derived identifiers. Desktop packaging is proven on Windows with a binary-level reachability gate. No accepted commit exists yet and nothing has run against real traffic, which is 7F's own work.",
   "dependencies": [
     "7E-3",
     "TEST-PACKAGING",
@@ -18,21 +18,27 @@
     "Packaging/reachability",
     "Stable observability and rollback"
   ],
-  "blocked_by": [
-    "7E-3",
-    "TEST-PACKAGING"
-  ],
-  "unblock_condition": "Pass 7E-3 and TEST-PACKAGING, expose a read-only observability projection, and run a bounded shadow window with rollback.",
+  "blocked_by": [],
+  "unblock_condition": "Unblocked. 7E-3, TEST-PACKAGING and OBSERVABILITY are all DONE, so the offline gate, the shipping reachability proof and the observability projection are all available. What remains is 7F's own work: produce an accepted commit, run a bounded shadow window against real traffic, and demonstrate rollback.",
   "evidence": [
     "E-015",
-    "E-016"
+    "E-016",
+    "E-097",
+    "E-100",
+    "E-101"
   ],
   "source_references": [
     "docs/development/repository-audit-2026-09-25.md",
     "crates/zroutery-core/src/ml/shadow.rs",
+    "crates/zroutery-core/src/observability.rs",
     "crates/zroutery-core/src/server/pipeline.rs"
   ],
   "notes": [
-    "External CI does not prove desktop packaging or real traffic."
+    "Unblocked on 2026-10-02. The three capabilities this node was waiting on are now accepted: the offline release gate from 7E-3, the desktop packaging and artifact reachability gates from TEST-PACKAGING, and the read-only correlation projection from OBSERVABILITY.",
+    "The packaging work closed a real hole rather than a paperwork one. CI-DESKTOP had been marked done on the strength of a GitHub Actions run while recording in its own note that it was not a Windows gate, and nobody had run a desktop build to completion or looked at the binary it produces.",
+    "TWO KNOWN LIMITS CARRIED INTO THIS NODE. The MSI installer path is untested, returning 1603 for want of privileges, so install and reinstall are carried by the NSIS installer alone; and both packaging gates are MANUAL, since nothing runs them automatically and CI only listens on main. A gate nobody runs is a gate that rots.",
+    "THE OBSERVABILITY PROJECTION IS A LIBRARY CAPABILITY AND IS NOT REACHABLE from the shipped product. No caller in server, src-tauri or ui invokes it. Wiring it is 7F's work, and this node is where it becomes reachable, so the same scrutiny that was applied to the activation boundary applies here from the other direction.",
+    "The projection refuses rather than guessing where it matters. An absent decision id is reported as absent instead of being filled with the planned identity, an ambiguous decision id refuses rather than picking one, and batch accounting is asserted so nothing can be dropped silently. Any real-traffic use should preserve those refusals rather than route around them.",
+    "The float transport is exact as of E-097 being closed, so a trained commit survives a plain JSON round trip and re-verifies. A commit can therefore be persisted and re-read across a restart without depending on the activation module, which matters here because that module is deliberately unreachable from the rest of ml."
   ]
 }

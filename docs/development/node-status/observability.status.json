@@ -2,8 +2,8 @@
   "schema_version": 1,
   "node_id": "OBSERVABILITY",
   "display_name": "Runtime observability projection",
-  "status": "READY",
-  "implementation_state": "A read-only runtime projection can be built from existing Core observations and activity data without changing ML schemas.",
+  "status": "DONE",
+  "implementation_state": "A read-only projection from the canonical Outcome into one addressable record per request, joining the decision, the failure classification and the usage, exists as a pure function with no state, no clock and no side effects. It refuses rather than guessing: an absent decision id, an unparsable identity, a duplicate identity, a non-finite or negative figure, or a failed outcome carrying no classification each produce a typed refusal that keeps the record addressable. The wall-clock correlation hazard is closed structurally rather than by convention.",
   "dependencies": [],
   "dependents": [
     "7F"
@@ -15,19 +15,33 @@
     "Projection tests"
   ],
   "blocked_by": [],
-  "unblock_condition": "Implement and test a read-only projection with explicit correlation and no routing or activation side effects.",
+  "unblock_condition": "Satisfied. All four gates hold. The projection is a library capability and is deliberately not reachable from the shipped product: no caller in server, src-tauri or ui invokes it, which is correct because node 7F owns real-traffic use.",
   "evidence": [
     "E-005",
     "E-009",
-    "E-016"
+    "E-016",
+    "E-101"
   ],
   "source_references": [
     "docs/development/repository-audit-2026-09-25.md",
+    "crates/zroutery-core/src/observability.rs",
     "crates/zroutery-core/src/observation.rs",
-    "crates/zroutery-core/src/stats_ext.rs",
-    "ui/src/pages/Activity.tsx"
+    "crates/zroutery-core/src/outcome.rs",
+    "crates/zroutery-core/tests/observability_projection_test.rs"
   ],
   "notes": [
-    "READY is an implementation opportunity, not a completion claim."
+    "THE WALL-CLOCK HAZARD IS CLOSED STRUCTURALLY, which is stronger than promising not to use it. Outcome::timestamp is documented in the source as Unix seconds, so it is second-granularity and cannot distinguish two events in the same second. The clock is carried in a newtype SecondGranularTimestamp that implements NO Ord and NO PartialOrd, so sorting by it fails to compile rather than silently producing a wrong order. The parent verified this by reading the module: zero Ord implementations exist.",
+    "The only comparator offered is RequestProjection::content_order, over outcome_id then request_id then decision_id. Two records stamped with the same second still order deterministically, and the parent confirmed the tests that prove it: changing only the timestamp leaves the record order unchanged, and every input permutation of an eight-record batch projects identical bytes.",
+    "CORRELATION IS ON UUID-DERIVED IDENTIFIERS ONLY, each validated against its documented minting shape, a prefix plus exactly 32 lowercase hex digits, matching Uuid::new_v4().simple() at all four minting sites. Refused as a key, as an ordering key and as a tiebreaker: Outcome::timestamp, Attempt::started_at, Attempt::completed_at, RouteDecision::timestamp and every observed_at. The batch index is a BTreeMap and refusals sort by their own canonical serialization, so two refusals sharing a locator cannot swap between runs.",
+    "AN ABSENT DECISION ID IS REPORTED AS ABSENT through RefusalReason::DecisionIdAbsent, with the consequence spelled out. No id is synthesised, no planned identity is substituted for a missing served one, and the record is not dropped: the refusal carries a RecordLocator holding whatever identifiers the record does have. Batch accounting is asserted as records plus refusals equal to inputs, so a silent drop is a failing test rather than a quiet bug.",
+    "THE UNIT IS ONE REQUEST, addressed by exactly one outcome_id. Attempts are deliberately nested rather than a second top-level unit, each keyed by its own attempt_id, because under a per-attempt unit the question of which decision an attempt belongs to would be unanswerable.",
+    "REDACTION IS STRUCTURAL AND VERIFIED BY READING, not only by its own test. FailureFacts::message and Attempt::failure_message are never read anywhere in the module; the parent confirmed the only occurrence of failure_message is inside a documentation comment stating that it is never projected. Only the closed FailureClass vocabulary, its impact bits and the HTTP status cross the boundary. The one free-text String in the module is IdentityError::raw, which carries a malformed IDENTIFIER as found, never a message. A declared field list is asserted against the serialized key set, so a future free-text field fails a test instead of leaking, and a test feeds a record carrying an API key, a bearer token, an auth header and a raw body echo and shows none appears.",
+    "NO ML SCHEMA MUTATION, verified by the parent rather than by assertion: the diff is one line added to lib.rs plus two new files, observation.rs was not changed, and the ml suite and the 7E-2F boundary test both pass unmodified at 31 of 31. No journal or dataset write, no shadow state touched, no feature enabled.",
+    "THE lib.rs EDIT AVOIDED A KNOWN HAZARD. The lines #[cfg(feature = \"ml\")] and pub mod ml; are adjacent, and the boundary test asserts the immediately preceding line of pub mod ml; is exactly the attribute. The parent verified the result: the attribute stays at line 39, pub mod ml; at 40, and the new declaration lands at 41, after the ml module and before observation, so the adjacency is intact.",
+    "THE MODULE IS NOT UNDER ml, on purpose, and that is what makes it observable. The desktop shell cannot enable the ml feature, so a projection behind that gate would be invisible to an operator looking at the application. It is a plain top-level module with no cfg attribute, which is why it compiles in the default build.",
+    "PURITY IS PROVABLE RATHER THAN ASSERTED. A test reads the module's own source, strips comments so the module may describe what it does not do, and fails if the code names a clock, environment, filesystem, process, network, thread, mutex, atomic, ml, journal, dataset, shadow or activation facility. The parent verified this control is not vacuous by planting a SystemTime::now() call into content_order; the test failed with the message that the module's code names \"systemtime\".",
+    "TEN REFUSAL KINDS, each reachable from a real input: IdentityAbsent, IdentityUnparsable, DecisionIdAbsent, DuplicateOutcomeId, DuplicateAttemptId, DuplicateDecisionId, DecisionIdentityMismatch, AmbiguousDecision, FigureNotFiniteOrNegative, FailureClassificationAbsent and InvalidOutcome. A zero figure still projects, because zero is a measurement rather than corruption, and a u32 token count cannot be negative or non-finite so the float money and latency figures are where that refusal can actually fire.",
+    "THE AMBIGUITY CASE IS REFUSED RATHER THAN RESOLVED. When one decision_id is claimed by more than one supplied decision, no decision is chosen and the record refuses, because picking one would be a silent guess.",
+    "What this node deliberately did NOT build: no ml-specific enrichment, no activation, no learning of any kind, no journal or dataset write, no thread, timer, scheduler, HTTP endpoint, UI change, new dependency or configuration flag. Nothing here is reachable from the shipped product; real-traffic use belongs to node 7F, which this node now unblocks."
   ]
 }

@@ -46,7 +46,7 @@ failed node. Historical tags are not graph edges.
 | `7E-2E` | `DONE` | `7E-2D`, `7E-0` |
 | `7E-2F` | `DONE` | `7E-2E` |
 | `7E-3` | `DONE` | `7E-2F`, `STAGE-3`, `STAGE-4`, `STAGE-6` |
-| `7F` | `BLOCKED` | `7E-3`, `TEST-PACKAGING`, `OBSERVABILITY` |
+| `7F` | `READY` | `7E-3`, `TEST-PACKAGING`, `OBSERVABILITY` |
 | `7G` | `BLOCKED` | `7F` |
 | `7H` | `BLOCKED` | `7G` |
 | `ACCOUNT` | `PARTIAL` | `STAGE-5` |
@@ -57,7 +57,7 @@ failed node. Historical tags are not graph edges.
 | `UI` | `DONE` | `STAGE-1` |
 | `UI-LAYOUT` | `DONE` | `UI` |
 | `UI-NEW-TRACKS` | `BLOCKED` | `UI`, `ACCOUNT`, `NEWAPI`, `I2`, `I3`, `I4` |
-| `OBSERVABILITY` | `READY` | none |
+| `OBSERVABILITY` | `DONE` | none |
 | `CORE-P1-REPAIR` | `DONE` | `CORE-P1-MEDIA-REQ`, `CORE-P1-FAILURE-AUTHORITY`, `CORE-P1-ELIGIBILITY-TRACE`, `CORE-P1-OUTCOME-FEEDBACK`, `CORE-P1-PIPELINE-LIFECYCLE` |
 | `BASELINE-GATE` | `DONE` | `TEST-CLIPPY`, `TEST-SMOKE`, `TEST-LAYOUT-BROWSER` |
 | `CORE-P1-MEDIA-REQ` | `DONE` | none |
@@ -166,8 +166,8 @@ claimed until both ownership and migration inputs are real and conflict-safe.
   `TEST-CLIPPY`, `TEST-SMOKE`, and `TEST-LAYOUT-BROWSER`.
 - `CI-CORE` and `CI-DESKTOP` are external evidence nodes with no local
   dependency. Their scope is recorded in the evidence registry.
-- `TEST-PACKAGING` is `DONE`, so `7F`'s named blocker is cleared. `7F` stays
-  `BLOCKED` on `OBSERVABILITY`, which is `READY` and not started.
+- `TEST-PACKAGING` and `OBSERVABILITY` are both `DONE`, so every recorded
+  blocker on `7F` is cleared.
 - `TEST-REAL-E2E` is `BLOCKED` behind the NewAPI contract and external
   protocol/credential evidence.
 - `TEST-COMMIT-CONTRACT` is `QUEUED` behind the separate
