@@ -332,7 +332,7 @@ real-provider E2E, or automatic model activation is authorized by this roadmap.
 | `TEST-SMOKE` | `DONE` | Windows native binary resolution and local mock-provider lifecycle passed. |
 | `TEST-LAYOUT-SELF` | `DONE` | Seven pure layout self-tests passed. |
 | `TEST-LAYOUT-BROWSER` | `DONE` | Real Chrome layout assertions passed; missing browser now fails closed. |
-| `TEST-FORMAT` | `FAILED` | `cargo fmt --all -- --check` found pre-existing formatting drift. |
+| `TEST-FORMAT` | `DONE` | `cargo fmt --all -- --check` found pre-existing formatting drift. |
 | `TEST-DIFF-CHECK` | `DONE` | `git diff --check` passed at the audited baseline. |
 | `CI-CORE` | `DONE` | External run `36014406507` passed Linux core all-feature clippy/tests only. |
 | `CI-DESKTOP` | `DONE` | External run `36014406507` passed a macOS workspace check only. |
