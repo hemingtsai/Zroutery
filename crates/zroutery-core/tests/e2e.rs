@@ -2322,6 +2322,7 @@ async fn shadow_disabled_by_default() {
 #[cfg(feature = "ml")]
 #[tokio::test]
 async fn shadow_model_commit_stable_across_traffic() {
+    use zroutery_core::ml::model_identity::CommitId;
     use zroutery_core::ml::ModelEnsemblePredictor;
 
     let (addr, mock) = start_mock().await;
@@ -2350,11 +2351,25 @@ async fn shadow_model_commit_stable_across_traffic() {
         "every decision must carry the same model commit"
     );
 
-    // ...and that commit is genesis: a fresh predictor's deterministic
-    // cold-start commit — the same one AppState wired at startup.
-    let genesis = ModelEnsemblePredictor::genesis().commit();
+    // ...and that commit is the one AppState wired at startup, unchanged.
+    //
+    // This witness used to be `ModelEnsemblePredictor::genesis().commit()`, which
+    // was correct only while the server always wired the cold-start root. Node
+    // 7F attaches a verified candidate at `AppState::new`, so the invariant this
+    // gate exists for — production traffic never trains the ensemble — is now
+    // witnessed against whatever was wired at startup: the candidate when one is
+    // attached, and genesis when none is.
+    //
+    // The comparison stays honest because that value is read from the server's
+    // configuration, not from the recorded decisions. Attachment is one-way and
+    // there is no setter that can attach, so this cannot drift toward the
+    // observed value and become a tautology.
+    let wired = h
+        .state
+        .shadow_candidate_commit_id()
+        .map_or_else(|| ModelEnsemblePredictor::genesis().commit(), CommitId::new);
     assert_eq!(
-        observed, genesis,
+        observed, wired,
         "production traffic must not advance the shadow model"
     );
 
