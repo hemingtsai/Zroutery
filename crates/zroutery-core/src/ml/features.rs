@@ -79,12 +79,24 @@ pub const F_PRIORITY: usize = 16;
 /// Health observation score [0, 1].
 pub const F_OBS_HEALTH: usize = 17;
 /// Inverse-normalized EWMA latency: `1.0 - (ewma_ms / 5000.0)`.
+///
+/// The EWMA of the accumulated latency history when that history exists, and
+/// the latest observation point value only as a fallback.
 pub const F_OBS_LATENCY_EWMA: usize = 18;
 /// Inverse-normalized P50 latency: `1.0 - (p50 / 5000.0)`.
+///
+/// The P50 of the accumulated latency history when that history exists, and the
+/// latest observation point value only as a fallback.
 pub const F_OBS_LATENCY_P50: usize = 19;
 /// Inverse-normalized P95 latency: `1.0 - (p95 / 10000.0)`.
+///
+/// The P95 of the accumulated latency history when that history exists, and the
+/// latest observation point value only as a fallback.
 pub const F_OBS_LATENCY_P95: usize = 20;
 /// Inverse-normalized TTFT EWMA: `1.0 - (ewma / 2000.0)`.
+///
+/// The EWMA of the accumulated TTFT history when that history exists, and the
+/// latest observation point value only as a fallback.
 pub const F_OBS_TTFT_EWMA: usize = 21;
 /// Success rate [0, 1].
 pub const F_OBS_SUCCESS_RATE: usize = 22;
@@ -208,17 +220,17 @@ pub fn extract_features(ctx: &FeatureContext) -> RoutingFeatures {
     f.values[F_PRIORITY] = (1.0 - (ctx.priority as f32 / 100.0)).clamp(0.0, 1.0);
 
     // --- Runtime observation features ---
+    //
+    // The observation layer keeps only the most recent point value per signal,
+    // so the values written here are the fallback. The accumulated statistics
+    // below override each latency feature individually when the history that
+    // feature claims to describe actually exists.
     if let Some(obs) = ctx.observation {
         f.values[F_OBS_HEALTH] = obs.health.score() as f32;
-        if let Some(ewma) = obs.latency.total_ms.value {
-            f.values[F_OBS_LATENCY_EWMA] = inverse_normalize(ewma, 5000.0);
-        }
-        // P50 and P95 from the observation's total_ms signal — the observation
-        // layer tracks a single point estimate (EWMA), so we use it for both
-        // when the detailed stats are unavailable.
-        if let Some(total) = obs.latency.total_ms.value {
-            f.values[F_OBS_LATENCY_P50] = inverse_normalize(total, 5000.0);
-            f.values[F_OBS_LATENCY_P95] = inverse_normalize(total, 10000.0);
+        if let Some(latest) = obs.latency.total_ms.value {
+            f.values[F_OBS_LATENCY_EWMA] = inverse_normalize(latest, 5000.0);
+            f.values[F_OBS_LATENCY_P50] = inverse_normalize(latest, 5000.0);
+            f.values[F_OBS_LATENCY_P95] = inverse_normalize(latest, 10000.0);
         }
         if let Some(ttft) = obs.latency.ttft_ms.value {
             f.values[F_OBS_TTFT_EWMA] = inverse_normalize(ttft, 2000.0);
@@ -239,6 +251,23 @@ pub fn extract_features(ctx: &FeatureContext) -> RoutingFeatures {
                 (stats.failures.count(FailureClass::Timeout) as f32 / total).clamp(0.0, 1.0);
             f.values[F_STAT_RATELIMIT_RATE] =
                 (stats.failures.count(FailureClass::RateLimit) as f32 / total).clamp(0.0, 1.0);
+        }
+
+        // Latency features describe accumulated history, so the real
+        // percentile/EWMA wins over the latest point value whenever it exists.
+        // A statistic that history has not produced yet leaves the observation
+        // fallback in place rather than blanking the feature.
+        if let Some(ewma) = stats.total_latency.ewma.value {
+            f.values[F_OBS_LATENCY_EWMA] = inverse_normalize(ewma, 5000.0);
+        }
+        if let Some(p50) = stats.total_latency.p50() {
+            f.values[F_OBS_LATENCY_P50] = inverse_normalize(p50, 5000.0);
+        }
+        if let Some(p95) = stats.total_latency.p95() {
+            f.values[F_OBS_LATENCY_P95] = inverse_normalize(p95, 10000.0);
+        }
+        if let Some(ttft) = stats.ttft.ewma.value {
+            f.values[F_OBS_TTFT_EWMA] = inverse_normalize(ttft, 2000.0);
         }
     }
 
@@ -348,9 +377,9 @@ fn account_status_to_f32(status: crate::account::AccountStatus) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::observation::{HealthState, ObservationFreshness, Signal};
+    use crate::observation::{HealthState, ObservationFreshness, ObservationStore, Signal};
     use crate::policy::{Complexity, TaskProfile, TaskType};
-    use crate::stats_ext::ProviderModelStats;
+    use crate::stats_ext::{ProviderModelStats, StatsStore};
 
     // -- Determinism: same input -> bit-exact same features --
 
@@ -1091,6 +1120,134 @@ mod tests {
         assert_eq!(
             sorted, expected,
             "feature indices must cover 0..31 exactly once"
+        );
+    }
+
+    // -- Accumulated latency statistics beat the latest point value --
+
+    /// The report's sequence: 90 samples at 100 ms, 10 at 9000 ms, then one more
+    /// at 100 ms, written to both the statistics store and the observation
+    /// store. The latest point value is 100 ms while P95 is 9000 ms and the
+    /// EWMA is 6154.017919873 ms, so a feature that tracks the point value
+    /// rather than the history is visibly wrong.
+    #[test]
+    fn latency_features_follow_accumulated_statistics_over_the_latest_sample() {
+        const MODEL: &str = "ml-feat-model";
+        const PROVIDER: &str = "ml-feat-provider";
+        let stats_store = StatsStore::new();
+        let observation_store = ObservationStore::new();
+        for latency_ms in [100.0; 90]
+            .into_iter()
+            .chain([9000.0; 10])
+            .chain([100.0])
+        {
+            stats_store.record_success(MODEL, PROVIDER, latency_ms, Some(40.0));
+            observation_store.record_success(MODEL, PROVIDER, latency_ms, Some(40.0));
+        }
+
+        let stats = stats_store.get(MODEL, PROVIDER);
+        let observation = observation_store.get(MODEL, PROVIDER);
+        assert_eq!(observation.latency.total_ms.value, Some(100.0));
+        assert_eq!(stats.total_latency.p50(), Some(100.0));
+        assert_eq!(stats.total_latency.p95(), Some(9000.0));
+        let ewma = stats.total_latency.ewma.value.expect("the history has an EWMA");
+        assert!(
+            (ewma - 6154.017919872998).abs() < 1e-9,
+            "unexpected EWMA {ewma}"
+        );
+
+        let mut ctx = minimal_ctx();
+        ctx.observation = Some(&observation);
+        ctx.stats = Some(&stats);
+        let f = extract_features(&ctx);
+
+        assert!(
+            (f.values[F_OBS_LATENCY_P50] - 1.0 + 100.0 / 5000.0).abs() < 1e-6,
+            "P50 must be the accumulated P50 (100 ms), got {}",
+            f.values[F_OBS_LATENCY_P50]
+        );
+        assert!(
+            (f.values[F_OBS_LATENCY_P95] - (1.0 - 9000.0 / 10000.0)).abs() < 1e-6,
+            "P95 must be the accumulated P95 (9000 ms), got {}",
+            f.values[F_OBS_LATENCY_P95]
+        );
+        assert_eq!(
+            f.values[F_OBS_LATENCY_EWMA], 0.0,
+            "the accumulated EWMA (6154 ms) clamps to 0.0, not the latest 100 ms"
+        );
+        assert!(
+            (f.values[F_OBS_TTFT_EWMA] - (1.0 - 40.0 / 2000.0)).abs() < 1e-6,
+            "TTFT must come from the accumulated TTFT EWMA, got {}",
+            f.values[F_OBS_TTFT_EWMA]
+        );
+    }
+
+    /// The same sequence without accumulated statistics keeps the observation
+    /// point value as the documented fallback.
+    #[test]
+    fn latency_features_fall_back_to_the_latest_sample_without_statistics() {
+        const MODEL: &str = "ml-feat-fallback-model";
+        const PROVIDER: &str = "ml-feat-fallback-provider";
+        let observation_store = ObservationStore::new();
+        observation_store.record_success(MODEL, PROVIDER, 100.0, Some(40.0));
+        let observation = observation_store.get(MODEL, PROVIDER);
+
+        let mut ctx = minimal_ctx();
+        ctx.observation = Some(&observation);
+        assert!(
+            ctx.stats.is_none(),
+            "the fallback case must have no statistics at all"
+        );
+        let f = extract_features(&ctx);
+        assert!((f.values[F_OBS_LATENCY_P50] - (1.0 - 100.0 / 5000.0)).abs() < 1e-6);
+        assert!((f.values[F_OBS_LATENCY_P95] - (1.0 - 100.0 / 10000.0)).abs() < 1e-6);
+        assert!((f.values[F_OBS_LATENCY_EWMA] - (1.0 - 100.0 / 5000.0)).abs() < 1e-6);
+    }
+
+    /// A history that has produced no latency sample yet leaves the observation
+    /// fallback in place rather than blanking the feature, so the fallback is
+    /// per statistic and not all-or-nothing.
+    #[test]
+    fn latency_features_fall_back_per_statistic_when_history_is_empty() {
+        const MODEL: &str = "ml-feat-empty-model";
+        const PROVIDER: &str = "ml-feat-empty-provider";
+        let mut stats = ProviderModelStats::new(MODEL.into(), PROVIDER.into());
+        stats.record_failure(FailureClass::Timeout);
+        assert!(stats.total_latency.is_empty());
+
+        let observation_store = ObservationStore::new();
+        observation_store.record_success(MODEL, PROVIDER, 250.0, Some(25.0));
+        let observation = observation_store.get(MODEL, PROVIDER);
+
+        let mut ctx = minimal_ctx();
+        ctx.observation = Some(&observation);
+        ctx.stats = Some(&stats);
+        let f = extract_features(&ctx);
+        assert!((f.values[F_OBS_LATENCY_P50] - (1.0 - 250.0 / 5000.0)).abs() < 1e-6);
+        assert!((f.values[F_OBS_LATENCY_P95] - (1.0 - 250.0 / 10000.0)).abs() < 1e-6);
+        assert!((f.values[F_OBS_LATENCY_EWMA] - (1.0 - 250.0 / 5000.0)).abs() < 1e-6);
+        assert!((f.values[F_OBS_TTFT_EWMA] - (1.0 - 25.0 / 2000.0)).abs() < 1e-6);
+    }
+
+    /// A statistics-only caller (no observation record) still gets the real
+    /// percentiles rather than `UNKNOWN`.
+    #[test]
+    fn latency_features_come_from_statistics_without_an_observation() {
+        let mut stats = ProviderModelStats::new("m".into(), "p".into());
+        for latency in [10.0, 20.0, 30.0, 40.0, 9000.0] {
+            stats.record_success(latency, None);
+        }
+        let p50 = stats.total_latency.p50().expect("history has a P50") as f32;
+        let p95 = stats.total_latency.p95().expect("history has a P95") as f32;
+
+        let mut ctx = minimal_ctx();
+        ctx.stats = Some(&stats);
+        let f = extract_features(&ctx);
+        assert!((f.values[F_OBS_LATENCY_P50] - (1.0 - p50 / 5000.0)).abs() < 1e-6);
+        assert!((f.values[F_OBS_LATENCY_P95] - (1.0 - p95 / 10000.0)).abs() < 1e-6);
+        assert!(
+            f.values[F_OBS_LATENCY_P95] < 0.5,
+            "the 9000 ms tail must dominate P95"
         );
     }
 
