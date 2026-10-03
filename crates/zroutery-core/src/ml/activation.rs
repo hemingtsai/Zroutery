@@ -409,16 +409,21 @@ impl SnapshotFile {
                 supported: ACTIVATION_SNAPSHOT_SCHEMA_VERSION,
             });
         }
-        if self.snapshot_id != claimed.as_str() {
+        // The content is the authority. The declared name *and* the name the
+        // caller asked for must both be the address the rebuilt content derives:
+        // comparing only the header against the requested name — which a
+        // rewritten header can be made to agree with — would let one legal
+        // snapshot's content load under another snapshot's name. This is a
+        // missing comparison, not a defence against a hash collision.
+        let commit = self.rebuilt_commit()?;
+        let derived = snapshot_id_for(&commit);
+        if self.snapshot_id != claimed.as_str() || derived != *claimed {
             return Err(ActivationError::IdentityMismatch {
                 snapshot: claimed.as_str().to_string(),
                 stored: self.snapshot_id.clone(),
-                derived: snapshot_id_for(&self.rebuilt_commit()?)
-                    .as_str()
-                    .to_string(),
+                derived: derived.as_str().to_string(),
             });
         }
-        let commit = self.rebuilt_commit()?;
         verify_commit(&commit)?;
         Ok(Snapshot {
             id: claimed.clone(),
