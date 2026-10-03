@@ -194,13 +194,8 @@ fn decodes_camel_case_system_instruction_into_the_upstream_request() {
 
     // The instruction must survive into the request actually sent upstream,
     // not merely be parsed into the IR.
-    let upstream = translate_request(
-        Dialect::OpenAI,
-        &req,
-        "gpt-4o",
-        &ProviderQuirks::default(),
-    )
-    .unwrap();
+    let upstream =
+        translate_request(Dialect::OpenAI, &req, "gpt-4o", &ProviderQuirks::default()).unwrap();
     assert_eq!(upstream["messages"][0]["role"], "system");
     assert_eq!(
         upstream["messages"][0]["content"],
@@ -264,13 +259,8 @@ fn mints_ids_for_history_without_function_call_ids() {
 
     // The same id has to survive into the forwarded OpenAI request, or the
     // upstream sees an assistant tool call with no matching tool result.
-    let upstream = translate_request(
-        Dialect::OpenAI,
-        &req,
-        "gpt-4o",
-        &ProviderQuirks::default(),
-    )
-    .unwrap();
+    let upstream =
+        translate_request(Dialect::OpenAI, &req, "gpt-4o", &ProviderQuirks::default()).unwrap();
     let messages = upstream["messages"].as_array().unwrap();
     assert_eq!(messages[1]["tool_calls"][0]["id"], call_id);
     assert_eq!(messages[2]["role"], "tool");
@@ -370,13 +360,8 @@ fn maps_a_single_allowed_function_to_a_specific_tool_choice() {
     assert_eq!(req.tools.len(), 1);
     assert_eq!(req.tools[0].name, "read");
 
-    let upstream = translate_request(
-        Dialect::OpenAI,
-        &req,
-        "gpt-4o",
-        &ProviderQuirks::default(),
-    )
-    .unwrap();
+    let upstream =
+        translate_request(Dialect::OpenAI, &req, "gpt-4o", &ProviderQuirks::default()).unwrap();
     assert_eq!(upstream["tool_choice"]["function"]["name"], "read");
     let tools = upstream["tools"].as_array().unwrap();
     assert_eq!(tools.len(), 1, "the excluded function must not be sent");
@@ -401,13 +386,8 @@ fn filters_declarations_when_several_allowed_functions_are_given() {
     let names: Vec<&str> = req.tools.iter().map(|tool| tool.name.as_str()).collect();
     assert_eq!(names, ["read", "list"]);
 
-    let upstream = translate_request(
-        Dialect::OpenAI,
-        &req,
-        "gpt-4o",
-        &ProviderQuirks::default(),
-    )
-    .unwrap();
+    let upstream =
+        translate_request(Dialect::OpenAI, &req, "gpt-4o", &ProviderQuirks::default()).unwrap();
     assert_eq!(upstream["tool_choice"], "required");
     let tools = upstream["tools"].as_array().unwrap();
     let sent: Vec<&str> = tools
@@ -463,13 +443,8 @@ fn decodes_parameters_json_schema_tool_declaration() {
 
     // The forwarded request must carry the declared schema rather than an
     // empty object schema with no properties or constraints.
-    let upstream = translate_request(
-        Dialect::OpenAI,
-        &req,
-        "gpt-4o",
-        &ProviderQuirks::default(),
-    )
-    .unwrap();
+    let upstream =
+        translate_request(Dialect::OpenAI, &req, "gpt-4o", &ProviderQuirks::default()).unwrap();
     let parameters = &upstream["tools"][0]["function"]["parameters"];
     assert_eq!(parameters["properties"]["city"]["type"], "string");
     assert_eq!(parameters["required"][0], "city");
@@ -490,4 +465,106 @@ fn rejects_a_declaration_with_both_schema_fields() {
 
     let error = decode_request(body).unwrap_err();
     assert!(error.to_string().contains("parametersJsonSchema"));
+}
+
+#[test]
+fn normalizes_gemini_schema_types_into_json_schema() {
+    let body = json!({
+        "model": "gemini-2.0-flash",
+        "contents": [{"role": "user", "parts": [{"text": "weather?"}]}],
+        "tools": [{"functionDeclarations": [{
+            "name": "get_weather",
+            "parameters": {
+                "type": "OBJECT",
+                "properties": {
+                    "city": {"type": "STRING"},
+                    "days": {"type": "INTEGER"},
+                    "ratio": {"type": "NUMBER"},
+                    "unit": {"type": "STRING", "enum": ["C", "F"]},
+                    "tags": {"type": "ARRAY", "items": {"type": "STRING"}},
+                    "place": {
+                        "type": "OBJECT",
+                        "properties": {"lat": {"type": "NUMBER"}}
+                    },
+                    "anything": {"type": "TYPE_UNSPECIFIED"}
+                },
+                "required": ["city"],
+                "additionalProperties": false
+            }
+        }]}]
+    });
+
+    let req = decode_request(body).unwrap();
+    let schema = &req.tools[0].input_schema;
+    assert_eq!(schema["type"], "object");
+    assert_eq!(schema["properties"]["city"]["type"], "string");
+    assert_eq!(schema["properties"]["days"]["type"], "integer");
+    assert_eq!(schema["properties"]["ratio"]["type"], "number");
+    assert_eq!(schema["properties"]["unit"]["type"], "string");
+    assert_eq!(schema["properties"]["tags"]["type"], "array");
+    assert_eq!(schema["properties"]["tags"]["items"]["type"], "string");
+    assert_eq!(
+        schema["properties"]["place"]["properties"]["lat"]["type"],
+        "number"
+    );
+    assert_eq!(schema["properties"]["anything"].get("type"), None);
+    assert_eq!(schema["required"][0], "city");
+    assert_eq!(schema["additionalProperties"], false);
+
+    // The upstream OpenAI request must carry lowercase JSON Schema types.
+    let upstream =
+        translate_request(Dialect::OpenAI, &req, "gpt-4o", &ProviderQuirks::default()).unwrap();
+    let parameters = &upstream["tools"][0]["function"]["parameters"];
+    assert_eq!(parameters["type"], "object");
+    assert_eq!(parameters["properties"]["tags"]["items"]["type"], "string");
+}
+
+#[test]
+fn does_not_rewrite_types_inside_schema_data() {
+    let body = json!({
+        "model": "gemini-2.0-flash",
+        "contents": [{"role": "user", "parts": [{"text": "x"}]}],
+        "tools": [{"functionDeclarations": [{
+            "name": "f",
+            "parameters": {
+                "type": "OBJECT",
+                "properties": {
+                    "payload": {
+                        "type": "OBJECT",
+                        "default": {"type": "CUSTOM", "value": 1}
+                    }
+                }
+            }
+        }]}]
+    });
+
+    let req = decode_request(body).unwrap();
+    let payload = &req.tools[0].input_schema["properties"]["payload"];
+    assert_eq!(payload["type"], "object");
+    assert_eq!(
+        payload["default"]["type"], "CUSTOM",
+        "data under `default` is not a schema"
+    );
+}
+
+#[test]
+fn keeps_parameters_json_schema_types_verbatim() {
+    let body = json!({
+        "model": "gemini-2.0-flash",
+        "contents": [{"role": "user", "parts": [{"text": "x"}]}],
+        "tools": [{"functionDeclarations": [{
+            "name": "f",
+            "parametersJsonSchema": {
+                "type": "object",
+                "properties": {"city": {"type": "string"}}
+            }
+        }]}]
+    });
+
+    let req = decode_request(body).unwrap();
+    assert_eq!(req.tools[0].input_schema["type"], "object");
+    assert_eq!(
+        req.tools[0].input_schema["properties"]["city"]["type"],
+        "string"
+    );
 }
