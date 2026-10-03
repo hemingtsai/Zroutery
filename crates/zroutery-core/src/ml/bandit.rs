@@ -1282,14 +1282,18 @@ pub struct ArmSelectionStatistics {
 
 /// The measured outcome profile of one arm over the whole evaluation partition.
 ///
-/// None of these pass through the reward function. They are the raw outcome
-/// measurements, which is exactly why a reward weighting cannot argue for its
-/// own approval.
+/// The four raw outcome rates are computed straight from the records, and the
+/// reward dimension is scored on one fixed evaluation scale shared by every arm
+/// rather than on the arm's own policy. A reward weighting therefore cannot
+/// argue for its own approval: when every arm is measured on the same rows the
+/// reward delta is identically zero and the gate has no improvement to accept.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ArmSafetyMetrics {
     /// The arm's name.
     pub arm: String,
-    /// Mean outcome-proxy reward over every evaluation row.
+    /// Mean outcome-proxy reward over every evaluation row, on the fixed
+    /// evaluation scale [`safety_evaluation_policy`] selects - never on this
+    /// arm's own weights.
     pub mean_outcome_proxy_reward: f64,
     /// `1 - success_rate`.
     pub failure_rate: f64,
@@ -2292,11 +2296,26 @@ pub fn percentile(sorted: &[f64], p: f64) -> f64 {
     }
 }
 
+/// The one reward scale every arm is measured on for the safety comparison.
+///
+/// The evaluation partition is the same recorded rows for every arm, so a
+/// per-arm scale would let a pure rescale of the arm's weights read as an
+/// improvement: the raw outcome metrics are identical and the only number that
+/// moved would be the arm's own units. Scoring every arm on one fixed,
+/// arm-independent policy keeps the reward dimension comparable. When the arms
+/// really did see the same rows the dimension is then identically zero, which
+/// is the honest report - there is no arm-dependent outcome evidence to claim
+/// an improvement from - and `NoRewardImprovement` withholds acceptance rather
+/// than manufacturing one.
+fn safety_evaluation_policy() -> RewardPolicy {
+    RewardPolicy::default()
+}
+
 /// Measure one arm over the whole evaluation partition.
 ///
-/// Every metric here is a raw outcome measurement. None of them passes through
-/// the reward function, which is what stops a reward weighting from grading its
-/// own homework.
+/// Every metric here is a raw outcome measurement, and the reward dimension is
+/// scored on [`safety_evaluation_policy`] rather than on `arm.policy`, so no
+/// metric can be moved by an arm's own weighting.
 fn arm_safety_metrics(
     arm: &RewardArm,
     rows: &[&Row],
@@ -2309,7 +2328,7 @@ fn arm_safety_metrics(
         });
     }
     let total = rows.len();
-    let reward = RewardComputer::new(arm.policy.clone());
+    let reward = RewardComputer::new(safety_evaluation_policy());
     let mut reward_total = 0.0;
     let mut failures = 0usize;
     let mut cost_total = 0.0;
