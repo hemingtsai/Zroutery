@@ -1061,11 +1061,12 @@ pub fn encode_response(resp: &ChatResponse) -> Value {
 
 // ---------------------------------------------------------------- stream in
 
+/// The kinds of block that stream as a single running block. Tool blocks are
+/// not part of this enum: several of them can be open at the same time.
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Block {
     Text,
     Thinking,
-    Tool,
 }
 
 /// Rebuilds Anthropic style block structure from OpenAI chunks.
@@ -1074,9 +1075,19 @@ pub struct OpenAiStreamParser {
     id: Option<String>,
     started: bool,
     next_index: u32,
+    /// The open text or thinking block, if any.  Tool calls are tracked apart
+    /// from it: OpenAI delivers every parallel call under its own
+    /// `tool_calls[].index` with no per-call end marker, so opening a second
+    /// call says nothing about whether the first one is still streaming.
     current: Option<(u32, Block)>,
     /// OpenAI `tool_calls[].index` -> canonical block index.
     tool_slots: Vec<(u64, u32)>,
+    /// Canonical indices of tool blocks that were started and not yet stopped.
+    open_tools: Vec<u32>,
+    /// Text/thinking deltas that arrived while a tool block was open.  An
+    /// Anthropic stream carries one block at a time, so these are replayed
+    /// after every tool block has stopped instead of being interleaved.
+    deferred: Vec<(Block, String)>,
     usage: Usage,
     pending_stop: Option<(StopReason, Option<String>)>,
     emitted_stop: bool,
@@ -1091,6 +1102,8 @@ impl OpenAiStreamParser {
             next_index: 0,
             current: None,
             tool_slots: Vec::new(),
+            open_tools: Vec::new(),
+            deferred: Vec::new(),
             usage: Usage::default(),
             pending_stop: None,
             emitted_stop: false,
@@ -1113,14 +1126,54 @@ impl OpenAiStreamParser {
         self.open_block(kind, out)
     }
 
-    /// Always start a fresh block. Each tool call is its own block, even though
-    /// consecutive tool calls share the same `kind`.
+    /// Start a fresh text/thinking block, closing whatever was open before.
     fn open_block(&mut self, kind: Block, out: &mut Vec<StreamEvent>) -> u32 {
         self.close_current(out);
         let index = self.next_index;
         self.next_index += 1;
         self.current = Some((index, kind));
         index
+    }
+
+    /// Start a fresh tool block.  It closes the open text/thinking block (an
+    /// Anthropic stream never interleaves them) but deliberately leaves every
+    /// other tool block open until the stream ends.
+    fn open_tool_block(&mut self, out: &mut Vec<StreamEvent>) -> u32 {
+        self.close_current(out);
+        let index = self.next_index;
+        self.next_index += 1;
+        self.open_tools.push(index);
+        index
+    }
+
+    /// Emit a text or thinking delta.  While a tool block is open the content
+    /// is buffered so the emitted lifecycle stays one-block-at-a-time.
+    fn push_text_delta(&mut self, kind: Block, text: String, out: &mut Vec<StreamEvent>) {
+        if self.open_tools.is_empty() {
+            let index = self.block_for(kind, out);
+            out.push(match kind {
+                Block::Thinking => StreamEvent::ThinkingDelta { index, text },
+                _ => StreamEvent::TextDelta { index, text },
+            });
+        } else {
+            match self.deferred.last_mut() {
+                Some((last, buffered)) if *last == kind => buffered.push_str(&text),
+                _ => self.deferred.push((kind, text)),
+            }
+        }
+    }
+
+    /// Replay the buffered text/thinking as complete blocks.  Called once every
+    /// tool block has stopped.
+    fn flush_deferred(&mut self, out: &mut Vec<StreamEvent>) {
+        for (kind, text) in std::mem::take(&mut self.deferred) {
+            let index = self.open_block(kind, out);
+            out.push(match kind {
+                Block::Thinking => StreamEvent::ThinkingDelta { index, text },
+                _ => StreamEvent::TextDelta { index, text },
+            });
+            self.close_current(out);
+        }
     }
 
     fn ensure_started(&mut self, chunk: &Value, out: &mut Vec<StreamEvent>) {
@@ -1155,6 +1208,12 @@ impl OpenAiStreamParser {
             .take()
             .unwrap_or((StopReason::Unknown, None));
         self.close_current(out);
+        // Parallel calls stay open until here: their argument deltas may
+        // arrive in any order, so no earlier point proves a call is finished.
+        for index in std::mem::take(&mut self.open_tools) {
+            out.push(StreamEvent::BlockStop { index });
+        }
+        self.flush_deferred(out);
         out.push(StreamEvent::Stop {
             stop_reason,
             stop_sequence,
@@ -1235,8 +1294,7 @@ impl StreamParser for OpenAiStreamParser {
                     }
                 };
                 if !text.is_empty() {
-                    let index = self.block_for(Block::Thinking, &mut out);
-                    out.push(StreamEvent::ThinkingDelta { index, text });
+                    self.push_text_delta(Block::Thinking, text, &mut out);
                 }
             }
 
@@ -1263,8 +1321,7 @@ impl StreamParser for OpenAiStreamParser {
                     }
                 };
                 if !text.is_empty() {
-                    let index = self.block_for(Block::Text, &mut out);
-                    out.push(StreamEvent::TextDelta { index, text });
+                    self.push_text_delta(Block::Text, text, &mut out);
                 }
             }
 
@@ -1294,7 +1351,7 @@ impl StreamParser for OpenAiStreamParser {
                                         "stream tool call is missing function `name`".into(),
                                     )
                                 })?;
-                            let i = self.open_block(Block::Tool, &mut out);
+                            let i = self.open_tool_block(&mut out);
                             self.tool_slots.push((slot, i));
                             out.push(StreamEvent::ToolUseStart {
                                 index: i,
@@ -1892,15 +1949,161 @@ mod tests {
                 partial_json: "ty\":1}".into()
             }
         );
-        assert_eq!(events[4], StreamEvent::BlockStop { index: 0 });
         assert_eq!(
-            events[5],
+            events[4],
             StreamEvent::ToolUseStart {
                 index: 1,
                 id: "call_2".into(),
                 name: "other".into()
             }
         );
+        assert_eq!(
+            events[5],
+            StreamEvent::ToolUseDelta {
+                index: 1,
+                partial_json: "{}".into()
+            }
+        );
+        // Both calls stay open until the stream ends, then stop in order.
+        assert_eq!(events[6], StreamEvent::BlockStop { index: 0 });
+        assert_eq!(events[7], StreamEvent::BlockStop { index: 1 });
+        assert!(matches!(events[8], StreamEvent::Stop { .. }));
+        assert_legal_lifecycle(&events);
+    }
+
+    /// Anthropic lifecycle rules the parser must honour: a block receives no
+    /// delta after it stopped, and blocks stop in the order they were opened.
+    fn assert_legal_lifecycle(events: &[StreamEvent]) {
+        let mut stopped: Vec<u32> = Vec::new();
+        for event in events {
+            match event {
+                StreamEvent::BlockStop { index } => {
+                    assert!(
+                        !stopped.contains(index),
+                        "block {index} stopped twice: {events:?}"
+                    );
+                    if let Some(last) = stopped.last() {
+                        assert!(
+                            index > last,
+                            "block {index} stopped before block {last}: {events:?}"
+                        );
+                    }
+                    stopped.push(*index);
+                }
+                StreamEvent::TextDelta { index, .. }
+                | StreamEvent::ThinkingDelta { index, .. }
+                | StreamEvent::ThinkingSignature { index, .. }
+                | StreamEvent::RedactedThinking { index, .. }
+                | StreamEvent::ToolUseDelta { index, .. } => assert!(
+                    !stopped.contains(index),
+                    "delta for block {index} after its stop: {events:?}"
+                ),
+                _ => {}
+            }
+        }
+    }
+
+    fn tool_arguments(events: &[StreamEvent], wanted: u32) -> String {
+        events
+            .iter()
+            .filter_map(|event| match event {
+                StreamEvent::ToolUseDelta {
+                    index,
+                    partial_json,
+                } if *index == wanted => Some(partial_json.as_str()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn interleaved_parallel_tool_calls_keep_every_block_open() {
+        // OpenAI delimits parallel calls by `tool_calls[].index`; their
+        // argument deltas may arrive in any order, so a new call index proves
+        // nothing about the calls already running.
+        let raw = format!(
+            "{}{}{}{}{}",
+            chunk(json!({"tool_calls": [
+                {"index": 0, "id": "call_a", "type": "function",
+                 "function": {"name": "fa", "arguments": "{\"x\":"}},
+                {"index": 1, "id": "call_b", "type": "function",
+                 "function": {"name": "fb", "arguments": "{\"y\":"}}
+            ]})),
+            chunk(json!({"tool_calls": [{"index": 0, "function": {"arguments": "1"}}]})),
+            chunk(json!({"tool_calls": [{"index": 1, "function": {"arguments": "2}"}}]})),
+            chunk(json!({"tool_calls": [{"index": 0, "function": {"arguments": "}"}}]})),
+            "data: [DONE]\n\n"
+        );
+        let events = parse(&raw);
+        assert_legal_lifecycle(&events);
+
+        let starts: Vec<u32> = events
+            .iter()
+            .filter_map(|event| match event {
+                StreamEvent::ToolUseStart { index, .. } => Some(*index),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(starts, vec![0, 1], "both calls must open: {events:?}");
+        assert_eq!(tool_arguments(&events, 0), "{\"x\":1}");
+        assert_eq!(tool_arguments(&events, 1), "{\"y\":2}");
+
+        let tail = events.len() - 3;
+        assert_eq!(events[tail], StreamEvent::BlockStop { index: 0 });
+        assert_eq!(events[tail + 1], StreamEvent::BlockStop { index: 1 });
+        assert!(matches!(events[tail + 2], StreamEvent::Stop { .. }));
+    }
+
+    #[test]
+    fn text_after_open_tools_is_replayed_in_order() {
+        // Text and reasoning that arrive while tool arguments are still
+        // streaming are replayed as their own blocks once the tools stopped,
+        // so no block ever receives a delta after its stop.
+        let raw = format!(
+            "{}{}{}{}{}{}",
+            chunk(json!({"reasoning_content": "plan"})),
+            chunk(json!({"content": "first"})),
+            chunk(json!({"tool_calls": [
+                {"index": 0, "id": "call_a", "type": "function",
+                 "function": {"name": "fa", "arguments": "{}"}},
+                {"index": 1, "id": "call_b", "type": "function",
+                 "function": {"name": "fb", "arguments": "{}"}}
+            ]})),
+            chunk(json!({"tool_calls": [{"index": 0, "function": {"arguments": "extra"}}]})),
+            chunk(json!({"content": "second"})),
+            "data: [DONE]\n\n"
+        );
+        let events = parse(&raw);
+        assert_legal_lifecycle(&events);
+
+        assert!(events.contains(&StreamEvent::ThinkingDelta {
+            index: 0,
+            text: "plan".into()
+        }));
+        assert!(events.contains(&StreamEvent::TextDelta {
+            index: 1,
+            text: "first".into()
+        }));
+        // The late text survives, in a block of its own after the tools.
+        let late = events
+            .iter()
+            .position(|event| {
+                matches!(event, StreamEvent::TextDelta { text, .. } if text == "second")
+            })
+            .expect("late text must not be dropped");
+        for index in [2u32, 3] {
+            let stop = events
+                .iter()
+                .position(
+                    |event| matches!(event, StreamEvent::BlockStop { index: i } if *i == index),
+                )
+                .expect("tool block must stop");
+            assert!(
+                late > stop,
+                "late text must follow the stop of block {index}: {events:?}"
+            );
+        }
+        assert_eq!(tool_arguments(&events, 2), "{}extra");
     }
 
     #[test]
