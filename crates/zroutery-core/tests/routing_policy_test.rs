@@ -1430,6 +1430,84 @@ fn e2e_escalates_tier_on_fallback() {
     );
 }
 
+/// A model whose breaker cooldown has elapsed stays eligible on the policy
+/// path.
+///
+/// The Open → HalfOpen transition happens inside `allow_request`, so eligibility
+/// filtering must not treat a probeable Open breaker as unavailable: doing so
+/// keeps the model out of every tier for the rest of the process lifetime, long
+/// after the upstream recovered. The single probe permit is still claimed
+/// atomically at the point of send.
+#[test]
+fn policy_path_admits_a_model_whose_cooldown_elapsed() {
+    let mut cfg = e2e_cfg_with(vec![ModelEntry::for_upstream(
+        "p1",
+        "std-m",
+        Some(ModelTier::Standard),
+    )]);
+    cfg.routing.circuit_breaker.failure_threshold = 1;
+    cfg.routing.circuit_breaker.timeout_secs = 0;
+    let routing = cfg.routing.clone();
+    let reg = e2e_reg(cfg);
+    let router = Router::new();
+
+    router.report_failure("p1-std-m", &Error::Timeout(5), &routing);
+    assert!(router.is_cooling("p1-std-m"), "one failure tripped it");
+    assert!(router.is_circuit_open("p1-std-m"), "breaker is Open");
+    assert!(
+        !router.is_circuit_blocked("p1-std-m"),
+        "the cooldown already elapsed, so it is probeable"
+    );
+
+    let (candidates, _decision) = router
+        .plan_with_policy(
+            &reg,
+            &Resolution::Tier(ModelTier::Standard),
+            &[],
+            &PolicyRequirements::default(),
+            &PolicyPreference::default(),
+            &PolicyFallback::Reject,
+            None,
+        )
+        .unwrap();
+    assert_eq!(candidates[0].exposed_id, "p1-std-m");
+
+    // Availability is not a reservation: exactly one probe permit is claimed
+    // at the point of send.
+    assert!(router.allow_request("p1-std-m"));
+    assert!(!router.allow_request("p1-std-m"));
+
+    // Control: while the cooldown is still running the policy path still
+    // rejects the model rather than planning an impossible send.
+    let mut cooling_cfg = e2e_cfg_with(vec![ModelEntry::for_upstream(
+        "p1",
+        "std-m",
+        Some(ModelTier::Standard),
+    )]);
+    cooling_cfg.routing.circuit_breaker.failure_threshold = 1;
+    cooling_cfg.routing.circuit_breaker.timeout_secs = 60;
+    let cooling_routing = cooling_cfg.routing.clone();
+    let cooling_reg = e2e_reg(cooling_cfg);
+    let cooling_router = Router::new();
+    cooling_router.report_failure("p1-std-m", &Error::Timeout(5), &cooling_routing);
+    assert!(cooling_router.is_circuit_blocked("p1-std-m"));
+    let err = cooling_router
+        .plan_with_policy(
+            &cooling_reg,
+            &Resolution::Tier(ModelTier::Standard),
+            &[],
+            &PolicyRequirements::default(),
+            &PolicyPreference::default(),
+            &PolicyFallback::Reject,
+            None,
+        )
+        .unwrap_err();
+    assert!(
+        matches!(err, Error::NoCandidate(_)),
+        "a breaker still serving its cooldown is not eligible, got: {err:?}"
+    );
+}
+
 /// Test 4: Forbidden provider is never selected.
 ///
 /// Two models in the Standard tier: one from the forbidden provider "p1"
