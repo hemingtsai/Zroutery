@@ -15,5 +15,15 @@ src-tauri/gen
 # Local overrides
 .env
 
+# ML runtime state: durable routing traces and the active-model pointer.
+# These are written by a running proxy and are data, not source. A relative
+# `ml_routing.state_dir` resolves against the process working directory, which
+# for a dev run is the crate root.
+/ml/
+**/ml/traces.jsonl
+**/ml/active-model.json
+**/ml/active-model-audit.jsonl
+**/ml/*.json.tmp
+
 # IDE
 .zcode/
