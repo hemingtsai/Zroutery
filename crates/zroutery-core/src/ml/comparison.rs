@@ -730,7 +730,11 @@ pub fn pair_against_baseline(
         success_rate_delta: if n == 0.0 {
             0.0
         } else {
-            (candidate_improvements - candidate_regressions) as f64 / n
+            // Signed on purpose. Regressions routinely exceed improvements — that
+            // is what a regression *is* — and subtracting two `usize` counts to
+            // express a signed difference overflows on exactly the data this
+            // module exists to detect.
+            (candidate_improvements as i64 - candidate_regressions as i64) as f64 / n
         },
         fallback_rate_delta: 0.0,
         mean_latency_delta_ms: if n == 0.0 {
@@ -913,7 +917,12 @@ pub fn run_comparison(
     }
 
     Ok(RoutingComparison {
-        dataset_fingerprint: DatasetFingerprint::of(&super::traces::samples_from(traces)),
+        // The fingerprint is of the *deduplicated* body, because that is the body
+        // the arms are evaluated over and therefore the body a training run over
+        // the same traces must name. Hashing the raw traces instead would make a
+        // model's provenance and its evidence differ by the number of duplicate
+        // sample ids, which is not a difference anyone could act on.
+        dataset_fingerprint: DatasetFingerprint::of(&super::traces::deduped_samples_from(traces)),
         traces: traces.len(),
         candidate_commit: candidate.commit_id(),
         arms,

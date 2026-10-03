@@ -887,6 +887,69 @@ impl Default for ShadowConfig {
     }
 }
 
+/// How the learned model participates in routing.
+///
+/// This is the switch that replaced the previous arrangement, in which the model
+/// could not affect a served request at all. It defaults to off, so an
+/// installation that has never promoted a model routes exactly as it did before
+/// any of this existed — turning it on is a decision made after a promotion, not
+/// a default.
+#[cfg(feature = "ml")]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MlRoutingConfig {
+    /// Whether a promoted model may re-order the provider plan.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Where the durable trace log and the active-model pointer live, relative
+    /// to the application state directory. One directory for both, because the
+    /// loop reads and writes the same body of data.
+    #[serde(default = "MlRoutingConfig::default_state_dir")]
+    pub state_dir: String,
+    /// Probability that a request deliberately tries an eligible candidate other
+    /// than the one the model would pick. Zero means no exploration.
+    #[serde(default)]
+    pub exploration_probability: f64,
+    /// Seed for exploration. Fixed by default so a replay of the same request
+    /// explores, or does not, identically.
+    #[serde(default = "MlRoutingConfig::default_exploration_seed")]
+    pub exploration_seed: u64,
+}
+
+#[cfg(feature = "ml")]
+impl Default for MlRoutingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            state_dir: Self::default_state_dir(),
+            exploration_probability: 0.0,
+            exploration_seed: Self::default_exploration_seed(),
+        }
+    }
+}
+
+#[cfg(feature = "ml")]
+impl MlRoutingConfig {
+    fn default_state_dir() -> String {
+        "ml".to_string()
+    }
+    fn default_exploration_seed() -> u64 {
+        crate::ml::learning::TRAINING_DEFAULT_SEED
+    }
+}
+
+#[cfg(feature = "ml")]
+impl AppConfig {
+    /// The utility weights the learned model is scored and ranked under.
+    ///
+    /// Shared with training, comparison and promotion on purpose: a predictor is
+    /// only meaningful relative to the utility it is meant to maximise, and four
+    /// components holding four different policies would make a promotion decision
+    /// unfalsifiable.
+    pub fn ml_routing_reward_policy(&self) -> crate::ml::RewardPolicy {
+        crate::ml::RewardPolicy::default()
+    }
+}
+
 /// How the desktop app behaves as a resident process: what autostart, the
 /// launch, and the close button do.
 ///
@@ -941,6 +1004,15 @@ pub struct AppConfig {
     #[cfg(feature = "ml")]
     #[serde(default)]
     pub shadow: ShadowConfig,
+    /// The learned model's role in routing. Only present in `ml` builds.
+    ///
+    /// `shadow` records what the model would have done; this decides whether it
+    /// actually does. They are separate switches on purpose — a deployment can
+    /// gather shadow evidence for weeks before letting a promoted model change a
+    /// single served request.
+    #[cfg(feature = "ml")]
+    #[serde(default)]
+    pub ml_routing: MlRoutingConfig,
     #[serde(default)]
     pub providers: Vec<ProviderConfig>,
     #[serde(default)]

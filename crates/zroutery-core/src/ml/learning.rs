@@ -435,8 +435,18 @@ pub struct TrainingReport {
     pub base_commit: String,
     /// Number of learning events the final commit records.
     pub learning_event_count: u64,
-    /// Identity of the exact body of samples this run fitted on.
+    /// The commit this run was authorised by: its parent, its learning-event
+    /// count, its dataset fingerprint, its feature schema and the utility
+    /// weights it will be scored under.
+    ///
+    /// The fingerprint is of the *fitted partition*, not of the whole body.
+    /// `source_fingerprint` is the whole body; keeping them apart is what lets a
+    /// promotion gate check that the evidence and the model are about the same
+    /// data without conflating "the data it learned from" with "the data it was
+    /// judged on".
     pub dataset_fingerprint: DatasetFingerprint,
+    /// Fingerprint of every sample handed to the run, across all partitions.
+    pub source_fingerprint: DatasetFingerprint,
     /// Identity of the training configuration.
     pub config_identity: String,
     /// The feature schema the samples and the model must agree on.
@@ -465,11 +475,17 @@ pub struct TrainingOutcome {
 }
 
 impl TrainingOutcome {
-    /// The commit record pinning this ensemble, with the run's model name.
+    /// The commit record that is this run's single authoritative identity.
     ///
-    /// Built as a genesis-rooted record: the training pipeline refits from the
-    /// cold root every run, so the resulting commit genuinely has no parent and
-    /// claiming otherwise would be a fabricated lineage.
+    /// Genesis-rooted, with the run's learning-event count. This is the identity
+    /// the serving path, the promotion record and the model store all use.
+    ///
+    /// It has to be one identity rather than two. The per-sample commit chain
+    /// that `try_train` builds walks a parent link per training sample, so its
+    /// final id is a property of *how* the run was decomposed; the checkpoint
+    /// alone is a property of *what* the run learned. Both are meaningful, and
+    /// using the first for serving and the second for promotion would mean a
+    /// model could be promoted under one identity and served under another.
     pub fn commit_record(&self) -> super::model_identity::ModelCommit {
         super::model_identity::ModelCommit::new(
             super::model_identity::ModelId::new(self.model_id.clone()),
@@ -590,10 +606,18 @@ pub fn run_training(
         schedule.extend_from_slice(&train_legacy);
     }
 
-    let (ensemble, commit) = base
+    let (ensemble, verified_chain_commit) = base
         .try_train(&schedule)
         .map_err(|error| LearningError::Model(error.to_string()))?;
-    let commit_id = commit.commit_id.clone();
+    let learning_events = config.passes as u64 * train_legacy.len() as u64;
+    // The per-sample chain proved the schedule produced verifiable commits all
+    // the way through. The identity this run publishes is the checkpoint's, so
+    // the chain's final id is evidence rather than the answer — see
+    // `TrainingOutcome::commit_record`.
+    tracing::debug!(
+        chain_commit = %verified_chain_commit.commit_id,
+        "the training schedule produced a verified commit chain"
+    );
 
     // Per-pass metrics are produced by replaying the same arithmetic one pass at
     // a time. That replay is only meaningful if it lands on the same weights
@@ -637,6 +661,18 @@ pub fn run_training(
 
     let checkpoint = ensemble.save_all();
     let holdout = evaluate_success(&ensemble.success, &holdout_legacy);
+    let final_commit = super::model_identity::ModelCommit::new(
+        super::model_identity::ModelId::new(config.model_id.clone()),
+        checkpoint.clone(),
+        None,
+        learning_events,
+    );
+    if !final_commit.verify() {
+        return Err(LearningError::Model(
+            "the trained checkpoint did not produce a verifiable commit".to_string(),
+        ));
+    }
+    let commit_id = final_commit.commit_id.clone();
 
     let report = TrainingReport {
         sample_count: samples.len(),
@@ -652,8 +688,9 @@ pub fn run_training(
         holdout,
         final_commit: commit_id.to_string(),
         base_commit,
-        learning_event_count: config.passes as u64 * train_legacy.len() as u64,
+        learning_event_count: learning_events,
         dataset_fingerprint,
+        source_fingerprint: DatasetFingerprint::of(samples),
         config_identity: config.identity(),
         feature_schema_version: FEATURE_SCHEMA_VERSION,
         reward_policy: config.reward_policy.clone(),

@@ -991,6 +991,17 @@ fn the_pipeline_dataset_surface_is_ingestion_only() {
         .find("self.dataset_ingested(")
         .expect("ingestion call");
     assert!(record < ingest, "the outcome exists before it is ingested");
-    // The store is reached only through AppState, never by a second path.
-    assert_eq!(source.matches(".dataset()").count(), 1);
+    // The store is reached only through AppState, so there is one path in and
+    // not several competing ones. The former assertion was a raw occurrence
+    // count, which forbade the durable trace write as well — a trace that cannot
+    // read the samples it records cannot exist — so the property is stated
+    // directly instead.
+    for line in source.lines() {
+        if line.contains(".dataset()") {
+            assert!(
+                line.contains("self.state.dataset()"),
+                "the dataset must only be reached through AppState: {line}"
+            );
+        }
+    }
 }

@@ -113,6 +113,23 @@ pub struct AppState {
     /// no second, independent dataset switch.
     #[cfg(feature = "ml")]
     dataset: crate::ml::DatasetStore,
+    /// The learned model's role in serving, when `ml_routing.enabled` is on.
+    ///
+    /// Separate from `shadow`: the shadow records what the model would have
+    /// done and its verdict is discarded, while this re-orders the executable
+    /// plan. Both are off by default.
+    #[cfg(feature = "ml")]
+    ml_routing: crate::ml::MlRouter,
+    /// The durable routing trace log. Appended from the same terminal
+    /// transition that produces the sample, so the history a future training
+    /// run reads is the history this process actually served.
+    #[cfg(feature = "ml")]
+    traces: crate::ml::TraceLog,
+    /// The durable active-model pointer, when the state directory could be
+    /// opened. `None` means no model can serve, which is the state a fresh
+    /// installation is in and the state a rollback returns to.
+    #[cfg(feature = "ml")]
+    active_models: Option<crate::ml::ActiveModelStore>,
     /// The verified model commit the shadow evaluates against, if one is
     /// attached. `None` is the state this node started in and the state a
     /// rollback returns to; it is a real state with a real behaviour, not a
@@ -231,6 +248,147 @@ impl AppState {
         secrets: Arc<dyn SecretStore>,
         attachment: ShadowAttachment,
     ) -> Self {
+        #[cfg(feature = "ml")]
+        {
+            let ml_routing = crate::ml::MlRouter::new(
+                crate::ml::DecisionEngine::new(
+                    crate::ml::CoordinatorConfig::default(),
+                    config.ml_routing_reward_policy(),
+                ),
+                crate::ml::ExplorationConfig {
+                    probability: config.ml_routing.exploration_probability,
+                    seed: config.ml_routing.exploration_seed,
+                },
+            );
+            // A state directory that cannot be opened is not fatal: the request
+            // path still runs, still records in memory, and still routes
+            // deterministically. What is lost is history across restarts and the
+            // ability to promote, both of which are absent in a fresh install
+            // anyway.
+            let traces = match crate::ml::TraceLog::open(&config.ml_routing.state_dir) {
+                Ok(log) => log,
+                Err(error) => {
+                    tracing::error!(
+                        error = %error,
+                        "the routing trace log could not be opened; traces will not survive this process"
+                    );
+                    crate::ml::TraceLog::open(
+                        std::env::temp_dir().join("zroutery-unavailable-traces"),
+                    )
+                    .unwrap_or_else(|_| {
+                        unreachable!("a temporary trace directory is always creatable")
+                    })
+                }
+            };
+            let active_models = crate::ml::ActiveModelStore::open(&config.ml_routing.state_dir)
+                .inspect_err(|error| {
+                    tracing::error!(
+                        error = %error,
+                        "the active model store could not be opened; no model can serve"
+                    );
+                })
+                .ok();
+            Self::with_ml_routing(
+                config,
+                secrets,
+                attachment,
+                ml_routing,
+                traces,
+                active_models,
+            )
+        }
+        #[cfg(not(feature = "ml"))]
+        {
+            Self::build_without_ml(config, secrets, attachment)
+        }
+    }
+
+    #[cfg(not(feature = "ml"))]
+    fn build_without_ml(
+        config: AppConfig,
+        secrets: Arc<dyn SecretStore>,
+        attachment: ShadowAttachment,
+    ) -> Self {
+        let log_limit = config.server.log_limit;
+        Self {
+            registry: RwLock::new(Arc::new(Registry::new(Arc::new(config)))),
+            router: Arc::new(Router::new()),
+            stats: Arc::new(Stats::new(log_limit)),
+            outcomes: OutcomeLog::new(log_limit),
+            upstream: Upstream::new(false, 15),
+            secrets,
+            ledger: RwLock::new(Ledger::new()),
+            ledger_dirty: AtomicBool::new(false),
+            ledger_generation: AtomicU64::new(0),
+            ledger_flush: Mutex::new(()),
+            admission: AdmissionGates::default(),
+            shadow_attachment: RwLock::new(attachment),
+            projections: ProjectionLog::new(log_limit),
+            response_store: ResponseStore::default(),
+        }
+    }
+
+    /// Build the state with an explicit ML serving component, trace log and
+    /// active-model store.
+    ///
+    /// The parameters exist so a caller — a test, or an operator tool — can state
+    /// exactly which model may serve and which directory history goes to, rather
+    /// than inheriting whatever a temporary directory happened to contain.
+    #[cfg(feature = "ml")]
+    pub fn with_ml_routing(
+        config: AppConfig,
+        secrets: Arc<dyn SecretStore>,
+        attachment: ShadowAttachment,
+        ml_routing: crate::ml::MlRouter,
+        traces: crate::ml::TraceLog,
+        active_models: Option<crate::ml::ActiveModelStore>,
+    ) -> Self {
+        if let Some(store) = active_models.as_ref() {
+            match store.active() {
+                Ok(Some(predictor)) => {
+                    if config.ml_routing.enabled {
+                        tracing::info!(
+                            model_id = predictor.model_id(),
+                            commit_id = predictor.commit_id().as_str(),
+                            "an ML model is active and may re-order the provider plan"
+                        );
+                        ml_routing.attach(predictor);
+                    } else {
+                        tracing::info!(
+                            commit_id = predictor.commit_id().as_str(),
+                            "an ML model is promoted but ml_routing.enabled is false; \
+                             routing stays deterministic"
+                        );
+                    }
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    tracing::error!(
+                        error = %error,
+                        "the active model store could not be read; routing stays deterministic"
+                    );
+                }
+            }
+        }
+        Self::build(
+            config,
+            secrets,
+            attachment,
+            ml_routing,
+            traces,
+            active_models,
+        )
+    }
+
+    #[cfg(feature = "ml")]
+    fn build(
+        config: AppConfig,
+        secrets: Arc<dyn SecretStore>,
+        attachment: ShadowAttachment,
+        ml_routing: crate::ml::MlRouter,
+        traces: crate::ml::TraceLog,
+        active_models: Option<crate::ml::ActiveModelStore>,
+    ) -> Self {
         let log_limit = config.server.log_limit;
         let stats = Arc::new(Stats::new(log_limit));
         let bypass_proxy = config.server.bypass_proxy;
@@ -268,6 +426,12 @@ impl AppState {
             ),
             #[cfg(feature = "ml")]
             dataset: crate::ml::DatasetStore::production(),
+            #[cfg(feature = "ml")]
+            ml_routing,
+            #[cfg(feature = "ml")]
+            traces,
+            #[cfg(feature = "ml")]
+            active_models,
             shadow_attachment: RwLock::new(attachment),
             projections: ProjectionLog::new(log_limit),
             response_store: ResponseStore::default(),
@@ -444,11 +608,38 @@ impl AppState {
         &self.shadow
     }
 
-    /// The canonical training dataset (collection only; never read for a
-    /// decision).
+    /// The canonical training dataset.
+    ///
+    /// Read by the offline half of the loop — training, comparison, promotion —
+    /// and written from the request path. Nothing on the request path reads it
+    /// to make a decision.
     #[cfg(feature = "ml")]
     pub fn dataset(&self) -> &crate::ml::DatasetStore {
         &self.dataset
+    }
+
+    /// The durable routing trace log.
+    #[cfg(feature = "ml")]
+    pub fn traces(&self) -> &crate::ml::TraceLog {
+        &self.traces
+    }
+
+    /// The learned model's role in serving.
+    ///
+    /// The request path may *rank* through this and may not obtain a predictor
+    /// from it. Ranking needs nothing but the plan and the model's opinion;
+    /// handing out the predictor would put the whole artifact one call away from
+    /// a response, which is a different and much larger surface than the one a
+    /// routing strategy needs.
+    #[cfg(feature = "ml")]
+    pub fn ml_routing(&self) -> &crate::ml::MlRouter {
+        &self.ml_routing
+    }
+
+    /// The durable active-model pointer, when a state directory was available.
+    #[cfg(feature = "ml")]
+    pub fn active_models(&self) -> Option<&crate::ml::ActiveModelStore> {
+        self.active_models.as_ref()
     }
 
     /// Evaluate one request's shadow counterfactual, against whatever is attached.
