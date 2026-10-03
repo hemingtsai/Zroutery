@@ -19,6 +19,12 @@ use super::{
 /// Anthropic requires `max_tokens`; used when the client omits it.
 pub const DEFAULT_MAX_TOKENS: u32 = 4096;
 
+/// Anthropic rejects a thinking budget below this many tokens.
+pub const MIN_THINKING_BUDGET: u32 = 1024;
+
+/// Budget used when thinking is enabled without naming one.
+const DEFAULT_THINKING_BUDGET: u32 = 2048;
+
 const KNOWN_KEYS: &[&str] = &[
     "model",
     "messages",
@@ -373,10 +379,8 @@ fn decode_source(source: Option<&Value>) -> Result<MediaSource> {
 pub fn encode_request(req: &ChatRequest, upstream_model: &str) -> Result<Value> {
     let mut body = Map::new();
     body.insert("model".into(), json!(upstream_model));
-    body.insert(
-        "max_tokens".into(),
-        json!(req.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS)),
-    );
+    let max_tokens = req.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS);
+    body.insert("max_tokens".into(), json!(max_tokens));
 
     if !req.system.is_empty() {
         body.insert(
@@ -471,13 +475,26 @@ pub fn encode_request(req: &ChatRequest, upstream_model: &str) -> Result<Value> 
     }
     if let Some(th) = &req.thinking {
         if th.enabled {
-            let mut m = Map::new();
-            m.insert("type".into(), json!("enabled"));
-            m.insert(
-                "budget_tokens".into(),
-                json!(th.budget_tokens.unwrap_or(2048)),
+            let mut budget = th.budget_tokens.unwrap_or(DEFAULT_THINKING_BUDGET);
+            if req.source_dialect != Dialect::Anthropic {
+                // This budget was derived from another dialect's reasoning
+                // knob, so it must obey the Anthropic constraint: at least
+                // 1024 and strictly below max_tokens.  The client's own
+                // max_tokens is the ceiling, so the budget is lowered rather
+                // than the cap raised; when even the floor does not fit, the
+                // request is refused instead of sent as an invalid body.
+                budget = budget.min(max_tokens.saturating_sub(1));
+                if budget < MIN_THINKING_BUDGET {
+                    return Err(Error::invalid(format!(
+                        "thinking budget cannot satisfy \
+                         1024 <= budget_tokens < max_tokens ({max_tokens})"
+                    )));
+                }
+            }
+            body.insert(
+                "thinking".into(),
+                json!({"type": "enabled", "budget_tokens": budget}),
             );
-            body.insert("thinking".into(), Value::Object(m));
         }
     }
     if let Some(u) = &req.metadata_user {
@@ -1420,6 +1437,77 @@ mod tests {
         .unwrap();
         let body = encode_request(&relaxed, "claude").unwrap();
         assert_eq!(body["tools"][0]["name"], "f");
+    }
+
+    #[test]
+    fn translated_reasoning_budget_fits_anthropic_limits() {
+        // An OpenAI `reasoning_effort` becomes an Anthropic thinking budget;
+        // whatever the effort and the output cap, the emitted body must honour
+        // 1024 <= budget_tokens < max_tokens.
+        for (effort, cap, expected) in [
+            ("low", None, 1024u32),
+            ("medium", None, 4095),
+            ("high", None, 4095),
+            ("low", Some(64_000u32), 1024),
+            ("medium", Some(64_000), 4096),
+            ("high", Some(64_000), 16384),
+            ("high", Some(2048), 2047),
+            ("high", Some(1025), 1024),
+        ] {
+            let mut body = json!({
+                "model": "m",
+                "messages": [{"role": "user", "content": "q"}],
+                "reasoning_effort": effort
+            });
+            if let Some(cap) = cap {
+                body["max_tokens"] = json!(cap);
+            }
+            let req = crate::protocol::openai::decode_request(body).unwrap();
+            let encoded = encode_request(&req, "claude").unwrap();
+            let budget = encoded["thinking"]["budget_tokens"].as_u64().unwrap();
+            let max_tokens = encoded["max_tokens"].as_u64().unwrap();
+            assert_eq!(budget, expected as u64, "effort={effort} cap={cap:?}");
+            assert!(
+                budget >= MIN_THINKING_BUDGET as u64 && budget < max_tokens,
+                "effort={effort} cap={cap:?} produced an invalid body: {encoded}"
+            );
+        }
+    }
+
+    #[test]
+    fn reasoning_budget_that_cannot_fit_the_cap_is_refused() {
+        // `1024 <= budget < max_tokens` has no solution at these caps, so the
+        // proxy must say so rather than emit an invalid body.
+        for cap in [1u32, 1024] {
+            let req = crate::protocol::openai::decode_request(json!({
+                "model": "m",
+                "messages": [{"role": "user", "content": "q"}],
+                "reasoning_effort": "high",
+                "max_tokens": cap
+            }))
+            .unwrap();
+            let err = encode_request(&req, "claude").unwrap_err();
+            assert!(
+                err.to_string().contains("thinking budget"),
+                "cap={cap} must be refused explicitly, got {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn native_anthropic_thinking_is_forwarded_verbatim() {
+        // A client that speaks Anthropic owns its thinking parameters; only a
+        // budget this proxy derived from another dialect is re-fitted.
+        let req = decode_request(json!({
+            "model": "m",
+            "max_tokens": 64,
+            "messages": [{"role": "user", "content": "q"}],
+            "thinking": {"type": "enabled", "budget_tokens": 2048}
+        }))
+        .unwrap();
+        let body = encode_request(&req, "claude").unwrap();
+        assert_eq!(body["max_tokens"], 64);
+        assert_eq!(body["thinking"]["budget_tokens"], 2048);
     }
 
     #[test]
