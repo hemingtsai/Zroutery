@@ -20,10 +20,12 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use axum::Json;
 use serde_json::{json, Value};
+use zroutery_core::budget::{Budget, BudgetPeriod, BudgetScope};
 use zroutery_core::config::{
     AppConfig, ClassifierCandidate, ClassifierConfig, MemorySecretStore, ModelEntry, ModelTier,
     ProviderConfig, ProviderKind,
 };
+use zroutery_core::failure::FailureClass;
 use zroutery_core::server::{AppState, ServerHandle};
 
 // ------------------------------------------------------------------ mock upstream
@@ -189,7 +191,61 @@ fn config_for(mock: SocketAddr, candidates: &[&str]) -> AppConfig {
 }
 
 fn secrets() -> Arc<MemorySecretStore> {
-    Arc::new(MemorySecretStore::new().with("provider:zai", "sk-zai"))
+    Arc::new(
+        MemorySecretStore::new()
+            .with("provider:zai", "sk-zai")
+            .with("provider:backup", "sk-backup"),
+    )
+}
+
+/// A classifier pool spanning two providers, with the budgets under test.
+///
+/// The plain [`config_for`] keeps one provider so the main routing assertions
+/// stay readable; this one exists so a budget can be aimed at a provider that
+/// is not the first candidate's.
+fn budget_config(mock: SocketAddr, candidates: &[(&str, &str)], budgets: Vec<Budget>) -> AppConfig {
+    let mut zai = ProviderConfig::new("zai", "Z.ai", ProviderKind::OpenAICompatible);
+    zai.base_url = format!("http://{mock}");
+    zai.key_ref = "provider:zai".into();
+    zai.timeout_secs = 10;
+
+    let mut backup = ProviderConfig::new("backup", "Backup", ProviderKind::OpenAICompatible);
+    backup.base_url = format!("http://{mock}");
+    backup.key_ref = "provider:backup".into();
+    backup.timeout_secs = 10;
+
+    let mut cfg = AppConfig::default();
+    cfg.server.host = "127.0.0.1".into();
+    cfg.server.port = 0;
+    cfg.server.auth_token = TOKEN.into();
+    cfg.providers = vec![zai, backup];
+    cfg.models = vec![ModelEntry::for_upstream(
+        "zai",
+        "main-model",
+        Some(ModelTier::Standard),
+    )];
+
+    let mut classifier_candidates = Vec::new();
+    for (i, (provider, name)) in candidates.iter().enumerate() {
+        cfg.models.push(ModelEntry::for_upstream(
+            *provider,
+            *name,
+            Some(ModelTier::Standard),
+        ));
+        classifier_candidates.push(ClassifierCandidate {
+            model: format!("{provider}-{name}"),
+            priority: 10 * (i as i32 + 1),
+            enabled: true,
+        });
+    }
+    cfg.classifier = ClassifierConfig {
+        enabled: true,
+        candidates: classifier_candidates,
+        max_attempts: 2,
+        ..ClassifierConfig::default()
+    };
+    cfg.budgets = budgets;
+    cfg
 }
 
 struct Harness {
@@ -485,5 +541,185 @@ async fn tool_calls_in_response_fail_closed() {
     assert_eq!(bodies[0]["model"], "toolcall-glm");
     assert_eq!(bodies[1]["model"], "backup-glm");
 
+    h.shutdown().await;
+}
+
+// --------------------------------------------------- classifier budget scope
+
+/// A spent global budget stops a classifier side request before the mock
+/// upstream sees it. The class-budget exception is for the class scope only;
+/// money is money.
+#[tokio::test]
+async fn an_exhausted_global_budget_stops_a_classifier_request() {
+    let (addr, mock) = start_mock().await;
+    let cfg = budget_config(
+        addr,
+        &[("zai", "glm-5.3")],
+        vec![Budget::new(BudgetScope::Global, BudgetPeriod::Day, "USD", 0.0).rejecting()],
+    );
+    let h = Harness::start(cfg, mock).await;
+
+    let resp = h.post(classifier_body()).await;
+    assert_eq!(
+        resp.status(),
+        402,
+        "the global budget stops the side request"
+    );
+    assert_eq!(h.mock.count(), 0, "no provider was contacted");
+    let outcome = h
+        .state
+        .outcomes()
+        .recent(10)
+        .into_iter()
+        .find(|outcome| outcome.failure_class() == Some(FailureClass::OverBudget))
+        .expect("the refusal is a recorded terminal outcome");
+    assert!(!outcome.is_terminal_success());
+
+    h.shutdown().await;
+}
+
+/// A spent provider budget stops the classifier candidate that would reach that
+/// provider.
+#[tokio::test]
+async fn an_exhausted_provider_budget_stops_a_classifier_request() {
+    let (addr, mock) = start_mock().await;
+    let cfg = budget_config(
+        addr,
+        &[("zai", "glm-5.3")],
+        vec![Budget::new(
+            BudgetScope::Provider {
+                id: "zai".to_string(),
+            },
+            BudgetPeriod::Day,
+            "USD",
+            0.0,
+        )
+        .rejecting()],
+    );
+    let h = Harness::start(cfg, mock).await;
+
+    let resp = h.post(classifier_body()).await;
+    assert_eq!(
+        resp.status(),
+        402,
+        "the provider budget stops the side request"
+    );
+    assert_eq!(h.mock.count(), 0, "no provider was contacted");
+
+    h.shutdown().await;
+}
+
+/// The documented exception: a *class* budget neither degrades nor rejects a
+/// classifier request, because the pool is not chosen by tier policy.
+#[tokio::test]
+async fn a_class_budget_does_not_stop_a_classifier_request() {
+    let (addr, mock) = start_mock().await;
+    let cfg = budget_config(
+        addr,
+        &[("zai", "glm-5.3")],
+        vec![Budget::new(
+            BudgetScope::Tier {
+                tier: ModelTier::Standard,
+            },
+            BudgetPeriod::Day,
+            "USD",
+            0.0,
+        )
+        .rejecting()],
+    );
+    let h = Harness::start(cfg, mock).await;
+
+    let resp = h.post(classifier_body()).await;
+    assert_eq!(resp.status(), 200, "the class exception still applies");
+    assert_eq!(resp.headers()["x-zroutery-model"], "zai-glm-5.3");
+    assert_eq!(h.mock.count(), 1, "the side request was served");
+
+    h.shutdown().await;
+}
+
+/// An exhausted primary candidate's provider does not take the whole pool down:
+/// the fallback provider's own budget is what decides whether it can serve.
+#[tokio::test]
+async fn an_exhausted_primary_provider_falls_through_to_the_fallback() {
+    let (addr, mock) = start_mock().await;
+    let cfg = budget_config(
+        addr,
+        &[("zai", "glm-5.3"), ("backup", "glm-backup")],
+        vec![Budget::new(
+            BudgetScope::Provider {
+                id: "zai".to_string(),
+            },
+            BudgetPeriod::Day,
+            "USD",
+            0.0,
+        )
+        .rejecting()],
+    );
+    let h = Harness::start(cfg, mock).await;
+
+    let resp = h.post(classifier_body()).await;
+    assert_eq!(resp.status(), 200);
+    assert_eq!(resp.headers()["x-zroutery-model"], "backup-glm-backup");
+    assert_eq!(resp.headers()["x-zroutery-provider"], "Backup");
+
+    let bodies = h.mock.bodies();
+    assert_eq!(bodies.len(), 1, "only the funded provider was asked");
+    assert_eq!(bodies[0]["model"], "glm-backup");
+
+    h.shutdown().await;
+}
+
+/// The fallback provider's budget is enforced too: with the fallback spent the
+/// primary still serves, and with both spent nothing is sent at all.
+#[tokio::test]
+async fn the_fallback_providers_budget_is_enforced() {
+    let fallback_spent = || {
+        Budget::new(
+            BudgetScope::Provider {
+                id: "backup".to_string(),
+            },
+            BudgetPeriod::Day,
+            "USD",
+            0.0,
+        )
+        .rejecting()
+    };
+
+    // Fallback spent, primary funded: the primary serves.
+    let (addr, mock) = start_mock().await;
+    let cfg = budget_config(
+        addr,
+        &[("zai", "glm-5.3"), ("backup", "glm-backup")],
+        vec![fallback_spent()],
+    );
+    let h = Harness::start(cfg, mock).await;
+    let resp = h.post(classifier_body()).await;
+    assert_eq!(resp.status(), 200);
+    assert_eq!(resp.headers()["x-zroutery-provider"], "Z.ai");
+    assert_eq!(h.mock.bodies()[0]["model"], "glm-5.3");
+    h.shutdown().await;
+
+    // Both providers spent: no candidate is left, so nothing leaves the proxy.
+    let (addr, mock) = start_mock().await;
+    let cfg = budget_config(
+        addr,
+        &[("zai", "glm-5.3"), ("backup", "glm-backup")],
+        vec![
+            fallback_spent(),
+            Budget::new(
+                BudgetScope::Provider {
+                    id: "zai".to_string(),
+                },
+                BudgetPeriod::Day,
+                "USD",
+                0.0,
+            )
+            .rejecting(),
+        ],
+    );
+    let h = Harness::start(cfg, mock).await;
+    let resp = h.post(classifier_body()).await;
+    assert_eq!(resp.status(), 402, "every candidate is over budget");
+    assert_eq!(h.mock.count(), 0, "no provider was contacted");
     h.shutdown().await;
 }
