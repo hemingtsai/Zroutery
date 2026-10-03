@@ -170,13 +170,28 @@ fn canonical_sample(suffix: &str, served: bool) -> OutcomeTrainingSample {
 
 /// A verified commit trained on `samples` real canonical samples, present in the
 /// store. Returns the commit itself so a snapshot can be written from it.
+///
+/// A chained fixture is the *actual* result of applying its samples on top of
+/// its parent: activation proves provenance by strict replay now, so a commit
+/// that merely points at a parent it never trained from would be refused.
 fn trained_commit(
     store: &mut ModelStore,
     parent: Option<CommitId>,
     suffix: &str,
     samples: usize,
 ) -> (ModelCommit, CommitId) {
-    let mut ensemble = ModelEnsemble::new();
+    let (mut ensemble, base_count) = match parent.as_ref() {
+        Some(id) => {
+            let base = store
+                .checkout_commit(id)
+                .expect("a fixture parent is present in the store");
+            (
+                ModelEnsemble::load_all(&base.checkpoint).expect("a fixture parent loads"),
+                base.learning_event_count,
+            )
+        }
+        None => (ModelEnsemble::new(), 0),
+    };
     for index in 0..samples {
         ensemble
             .update_all(&canonical_sample(&format!("{suffix}-train-{index}"), true).into_legacy());
@@ -185,7 +200,7 @@ fn trained_commit(
         ModelId::new(MODEL),
         ensemble.save_all(),
         parent,
-        samples as u64,
+        base_count + samples as u64,
     );
     assert!(commit.verify(), "the fixture commit must verify");
     let id = store
@@ -1604,6 +1619,89 @@ fn degraded_evidence_is_refused_rather_than_recorded() {
         "the training record still states its degradation on the record"
     );
     assert_eq!(records[0].event.event_id, "train-legacy");
+}
+
+/// ML-12: a record that merely *names* the target commit as its result is not
+/// proof that its samples produced it. The strict accepted replay engine is the
+/// authority, and a mismatch is an activation refusal, not a recorded fact.
+#[test]
+fn a_record_whose_samples_do_not_produce_the_commit_is_refused() {
+    let temp = scratch();
+    let root = store_root(temp.path());
+    let mut store = ModelStore::with_model_id(ModelId::new(MODEL));
+    let journal_dir = root.join(JOURNAL_DIR_NAME);
+
+    // A legitimate commit the store's lineage vouches for. It was trained on
+    // one sample batch, but the journal record that claims it carries a
+    // *different* batch — the shape a mis-filled `result_commit` produces.
+    let (victim, victim_id) = trained_commit(&mut store, None, "victim", 1);
+    let mut journal =
+        LearningJournal::open(&journal_dir, JournalMode::Append).expect("the journal is writable");
+    let mut impostor = CanonicalEvent::new(
+        "train-impostor".to_string(),
+        ModelId::new(MODEL),
+        vec![canonical_sample("impostor-train-0", true)],
+    );
+    impostor.created_at = 1_700_000_000;
+    impostor.parent_commit = None;
+    impostor.result_commit = Some(victim_id.clone());
+    impostor.source = Some("trainer".to_string());
+    journal
+        .record_canonical(impostor)
+        .expect("the journal accepts it: only replay can tell");
+    drop(journal);
+
+    // Independent witness: the strict engine refuses exactly this record, so
+    // the activation below must refuse it for the same reason.
+    let records = LearningJournal::open(&journal_dir, JournalMode::Read)
+        .expect("readable")
+        .read_records(&store)
+        .expect("re-verified");
+    assert_eq!(records.len(), 1);
+    assert!(
+        matches!(
+            zroutery_core::ml::model_identity::ReplayEngine::replay_verified(
+                std::slice::from_ref(&records[0].event),
+                None
+            ),
+            Err(zroutery_core::ml::model_identity::ReplayError::EventResultMismatch { .. })
+        ),
+        "the fixture must be the mismatch the fix is about"
+    );
+    drop(records);
+
+    let activation = ActivationStore::open(&root).expect("the store opens");
+    let snapshot = activation.write_snapshot(&victim).expect("written");
+    let pointer_before = pointer_bytes(&root);
+
+    match activation.activate(
+        &zroutery_core::ml::activation::ActivationRequest::new(snapshot.id().clone()),
+        &store,
+    ) {
+        Err(ActivationError::ProvenanceUnproven {
+            commit,
+            event_id,
+            reason,
+        }) => {
+            assert_eq!(commit, victim_id);
+            assert_eq!(event_id, "train-impostor");
+            assert!(!reason.is_empty(), "the refusal says what replay found");
+        }
+        other => panic!("expected a ProvenanceUnproven refusal, got {other:?}"),
+    }
+    assert_eq!(
+        pointer_bytes(&root),
+        pointer_before,
+        "a refused activation moves no pointer"
+    );
+    // Nothing was appended by the refused activation: the journal still holds
+    // only the impostor's own record.
+    let records = LearningJournal::open(&journal_dir, JournalMode::Read)
+        .expect("readable")
+        .read_records(&store)
+        .expect("re-verified");
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].event.event_id, "train-impostor");
 }
 
 #[test]
