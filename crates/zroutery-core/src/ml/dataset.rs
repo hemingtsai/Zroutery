@@ -1159,6 +1159,15 @@ pub fn validate_outcome_sample(sample: &OutcomeTrainingSample) -> Result<(), Str
             sample.schema_version, FEATURE_SCHEMA_VERSION
         ));
     }
+    // The outer envelope version is not the vector's own schema: a nested
+    // version this build does not understand must not pass on a matching outer
+    // one.
+    if sample.features.schema_version != FEATURE_SCHEMA_VERSION {
+        return Err(format!(
+            "feature schema version mismatch: {} vs {}",
+            sample.features.schema_version, FEATURE_SCHEMA_VERSION
+        ));
+    }
     if sample.features.values.len() != FEATURE_DIMENSION {
         return Err("canonical sample feature dimension mismatch".to_string());
     }

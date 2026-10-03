@@ -426,6 +426,25 @@ fn a_mutated_sample_is_refused_by_the_store_and_never_stored() {
     assert_eq!(store.len(), 1);
 }
 
+/// The nested feature schema is validated as well as the outer envelope: an
+/// unknown inner vector schema cannot ride in on a matching outer version.
+#[test]
+fn a_nested_feature_schema_mismatch_is_refused_by_the_store() {
+    let store = DatasetStore::new(10, 3600);
+    let outcome = served_outcome();
+    let mut sample = try_outcome_sample(&outcome, features(10), DataOrigin::Native, None)
+        .expect("a valid sample");
+    assert_eq!(sample.schema_version, FEATURE_SCHEMA_VERSION);
+    sample.features.schema_version = FEATURE_SCHEMA_VERSION + 999;
+
+    let error = store.push(sample).unwrap_err();
+    assert!(
+        error.contains("feature schema version mismatch"),
+        "got: {error}"
+    );
+    assert!(store.is_empty());
+}
+
 #[test]
 fn the_store_holds_the_canonical_sample_and_the_legacy_shape_is_one_way() {
     let store = DatasetStore::new(10, 3600);
