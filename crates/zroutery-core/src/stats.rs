@@ -118,6 +118,15 @@ pub struct Stats {
     inner: Mutex<Inner>,
 }
 
+/// The single `per_model` key every unresolved request shares.
+///
+/// A request whose model could not be resolved still has to be counted, but its
+/// name came from the caller and a caller can invent a new one on every call.
+/// Keeping those names as permanent dimensions would let the summary — which the
+/// dashboard polls and which is not bounded by the request log — grow without
+/// limit, so unresolved requests land in one bucket instead.
+const UNRESOLVED_MODEL_KEY: &str = "unresolved";
+
 #[derive(Debug)]
 struct Inner {
     limit: usize,
@@ -170,10 +179,14 @@ impl Stats {
             inner.cost.add(cost);
         }
 
+        // Only a model that actually resolved earns its own permanent
+        // dimension. An unresolved request still counts towards the totals and
+        // failures below, but it shares one bucket: the requested name is
+        // caller-chosen text, not a bounded set this table can grow into.
         let key = record
             .resolved_model
             .clone()
-            .unwrap_or_else(|| record.requested_model.clone());
+            .unwrap_or_else(|| UNRESOLVED_MODEL_KEY.to_string());
         let totals = inner
             .per_model
             .entry(key.clone())
@@ -503,6 +516,50 @@ mod tests {
             .unwrap();
         assert!(mystery.cost.is_empty());
         assert!(stats.recent(1)[0].cost.is_none());
+    }
+
+    #[test]
+    fn unresolved_model_names_share_one_bounded_dimension() {
+        // The request log holds one record, so nothing about the table may grow
+        // with the number of distinct names a caller invents.
+        let stats = Stats::new(1);
+        for i in 0..5_000 {
+            let mut b = RecordBuilder::new(
+                Dialect::OpenAI,
+                &format!("unknown-client-model-{i}"),
+                false,
+            );
+            b.fail(404, "no candidate for this model".into());
+            stats.record(b.finish(5));
+        }
+
+        let summary = stats.summary();
+        // The totals still count every request...
+        assert_eq!(summary.requests, 5_000);
+        assert_eq!(summary.failures, 5_000);
+        // ...but the dimensions are bounded, and the log limit still holds.
+        assert_eq!(
+            summary.per_model.len(),
+            1,
+            "unresolved names must not become 5000 permanent dimensions"
+        );
+        assert_eq!(summary.per_model[0].model_id, "unresolved");
+        assert_eq!(summary.per_model[0].requests, 5_000);
+        assert_eq!(summary.per_model[0].failures, 5_000);
+        assert_eq!(stats.recent(10).len(), 1);
+
+        // A model that did resolve keeps its own dimension.
+        stats.record(rec("resolved-model", true, 10, Usage::default()));
+        let summary = stats.summary();
+        assert_eq!(summary.per_model.len(), 2);
+        assert!(summary
+            .per_model
+            .iter()
+            .any(|m| m.model_id == "resolved-model"));
+        assert!(summary
+            .per_model
+            .iter()
+            .any(|m| m.model_id == "unresolved"));
     }
 
     #[test]
