@@ -93,6 +93,37 @@ async fn mock_chat(State(mock): State<Mock>, Json(body): Json<Value>) -> Respons
     let model = body["model"].as_str().unwrap_or_default().to_string();
     mock.record(&model);
 
+    // A model that cannot see rejects any request that still carries an image;
+    // the media rectifier then retries it with a text placeholder.
+    let has_image = body["messages"]
+        .as_array()
+        .map(|messages| {
+            messages.iter().any(|message| {
+                message
+                    .get("content")
+                    .and_then(Value::as_array)
+                    .map(|blocks| {
+                        blocks.iter().any(|block| {
+                            matches!(
+                                block.get("type").and_then(Value::as_str),
+                                Some("image_url") | Some("image")
+                            )
+                        })
+                    })
+                    .unwrap_or(false)
+            })
+        })
+        .unwrap_or(false);
+    if model.starts_with("blind") && has_image {
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(json!({"error": {"message":
+                "this model does not support image input; images are unsupported",
+                "type": "invalid_request_error"}})),
+        )
+            .into_response();
+    }
+
     if model.starts_with("broken") {
         return (
             axum::http::StatusCode::INTERNAL_SERVER_ERROR,
@@ -252,6 +283,7 @@ fn config_for(mock: SocketAddr) -> AppConfig {
         model("alpha", "truncate-model", 10, ModelTier::Fast),
         model("alpha", "truncate-usage-model", 10, ModelTier::Fast),
         model("alpha", "empty-stream-model", 10, ModelTier::Fast),
+        model("alpha", "blind-model", 10, ModelTier::Fast),
     ];
     cfg
 }
@@ -333,6 +365,33 @@ impl Harness {
             .send()
             .await
             .unwrap()
+    }
+
+    /// A Responses API request body for a buffered or streaming answer.
+    fn responses_request(
+        &self,
+        model: &str,
+        store: Option<bool>,
+        stream: bool,
+    ) -> reqwest::RequestBuilder {
+        let mut body = json!({
+            "model": model,
+            "input": [{"type": "message", "role": "user", "content": [
+                {"type": "input_text", "text": "DO_NOT_STORE_MARKER"}
+            ]}],
+        });
+        body["stream"] = json!(stream);
+        if let Some(store) = store {
+            body["store"] = json!(store);
+        }
+        self.post("/v1/responses").json(&body)
+    }
+
+    /// `GET /v1/responses/{id}`.
+    fn get_response(&self, id: &str) -> reqwest::RequestBuilder {
+        self.client
+            .get(format!("{}/v1/responses/{id}", self.base))
+            .header("x-api-key", TOKEN)
     }
 
     fn records(&self) -> Vec<RequestRecord> {
@@ -1164,6 +1223,215 @@ async fn a_truncated_responses_stream_fails_rather_than_completing() {
     assert_eq!(outcome.final_status, FinalStatus::Interrupted);
     assert!(outcome.served_identity().is_none());
     assert!(outcome.validate().is_ok(), "{:?}", outcome.validate());
+
+    h.shutdown().await;
+}
+
+// ------------------------------------------------------------------ PL-02 storage policy
+
+/// The id a streaming Responses request publishes, read from its first frame.
+///
+/// Borrows the response: dropping it would disconnect the client and cancel
+/// the very stream under test.
+async fn streaming_response_id(response: &mut reqwest::Response) -> String {
+    let first = response.chunk().await.unwrap().expect("some output");
+    let wire = String::from_utf8_lossy(&first).to_string();
+    wire.split("\"id\":\"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .expect("the first frame names the response")
+        .to_string()
+}
+
+/// `store: false` is a retention instruction: the buffered answer must not be
+/// retrievable, and its input and output must not be in the store at all.
+#[tokio::test]
+async fn store_false_never_retains_a_buffered_response() {
+    let h = Harness::new().await;
+
+    let response = h
+        .responses_request("alpha-good-model", Some(false), false)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let body: Value = response.json().await.unwrap();
+    let id = body["id"]
+        .as_str()
+        .expect("the answer names itself")
+        .to_string();
+
+    let get = h.get_response(&id).send().await.unwrap();
+    assert_eq!(get.status(), 400, "store:false must not be retrievable");
+    let text = get.text().await.unwrap();
+    assert!(
+        !text.contains("DO_NOT_STORE_MARKER"),
+        "the private input is not even echoed in the refusal: {text}"
+    );
+    assert_eq!(
+        h.state.response_store.len(),
+        0,
+        "nothing at all was written to the response store"
+    );
+
+    h.shutdown().await;
+}
+
+/// The API default and an explicit `store: true` keep working: the response is
+/// retrievable and carries the input and output it kept.
+#[tokio::test]
+async fn store_true_and_default_still_retain_a_buffered_response() {
+    let h = Harness::new().await;
+
+    for store in [Some(true), None] {
+        let response = h
+            .responses_request("alpha-good-model", store, false)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        let body: Value = response.json().await.unwrap();
+        let id = body["id"]
+            .as_str()
+            .expect("the answer names itself")
+            .to_string();
+
+        let get = h.get_response(&id).send().await.unwrap();
+        assert_eq!(get.status(), 200, "store: {store:?} keeps the response");
+        let stored: Value = get.json().await.unwrap();
+        assert_eq!(stored["status"], "completed");
+        assert_eq!(stored["id"], id);
+        assert!(
+            serde_json::to_string(&stored["input"])
+                .unwrap()
+                .contains("DO_NOT_STORE_MARKER"),
+            "the input is retrievable when retention was allowed"
+        );
+        assert!(
+            !stored["output"].as_array().unwrap().is_empty(),
+            "the output is retrievable when retention was allowed"
+        );
+    }
+
+    h.shutdown().await;
+}
+
+/// A repaired response takes the same decision as a direct one: the rectified
+/// retry must not resurrect `store: false`.
+#[tokio::test]
+async fn store_false_never_retains_a_repaired_response() {
+    for store in [Some(false), None] {
+        let h = Harness::new().await;
+
+        let mut body = json!({
+            "model": "alpha-blind-model",
+            "input": [{"type": "message", "role": "user", "content": [
+                {"type": "input_image", "image_url": "https://example.com/chart.png"},
+                {"type": "input_text", "text": "DO_NOT_STORE_MARKER"}
+            ]}],
+        });
+        if let Some(store) = store {
+            body["store"] = json!(store);
+        }
+        let response = h.post("/v1/responses").json(&body).send().await.unwrap();
+        assert_eq!(response.status(), 200, "the rectifier repaired the image");
+        let answer: Value = response.json().await.unwrap();
+        let id = answer["id"]
+            .as_str()
+            .expect("the answer names itself")
+            .to_string();
+
+        let get = h.get_response(&id).send().await.unwrap();
+        if store == Some(false) {
+            assert_eq!(
+                get.status(),
+                400,
+                "a repaired answer still honours store:false"
+            );
+            assert!(!get.text().await.unwrap().contains("DO_NOT_STORE_MARKER"));
+            assert_eq!(h.state.response_store.len(), 0);
+        } else {
+            assert_eq!(get.status(), 200, "the default keeps the repaired answer");
+            let stored: Value = get.json().await.unwrap();
+            assert_eq!(stored["status"], "completed");
+        }
+
+        h.shutdown().await;
+    }
+}
+
+/// Cancelling a stream leaves a content-free placeholder, never a copy of the
+/// input the client sent.
+#[tokio::test]
+async fn a_cancelled_stream_does_not_retain_the_request_content() {
+    let h = Harness::new().await;
+
+    let mut response = h
+        .responses_request("alpha-cancel-model", None, true)
+        .send()
+        .await
+        .unwrap();
+    let id = streaming_response_id(&mut response).await;
+
+    let cancelled = h
+        .post(&format!("/v1/responses/{id}/cancel"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(cancelled.status(), 200);
+    let cancel_body = cancelled.text().await.unwrap();
+    assert!(!cancel_body.contains("DO_NOT_STORE_MARKER"));
+
+    wait_for_outcomes(&h, 1).await;
+
+    let get = h.get_response(&id).send().await.unwrap();
+    assert_eq!(
+        get.status(),
+        200,
+        "the cancelled placeholder is retrievable"
+    );
+    let stored: Value = get.json().await.unwrap();
+    assert_eq!(stored["status"], "cancelled");
+    assert!(
+        stored["input"].as_array().unwrap().is_empty()
+            && stored["output"].as_array().unwrap().is_empty(),
+        "cancellation must not re-store the request content: {stored}"
+    );
+
+    h.shutdown().await;
+}
+
+/// A `store: false` stream that is cancelled keeps nothing, not even the
+/// placeholder: the client asked for the response to be discarded.
+#[tokio::test]
+async fn a_cancelled_store_false_stream_is_not_retained() {
+    let h = Harness::new().await;
+
+    let mut response = h
+        .responses_request("alpha-cancel-model", Some(false), true)
+        .send()
+        .await
+        .unwrap();
+    let id = streaming_response_id(&mut response).await;
+
+    let cancelled = h
+        .post(&format!("/v1/responses/{id}/cancel"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(cancelled.status(), 200, "the cancellation itself succeeds");
+    let cancel_body = cancelled.text().await.unwrap();
+    assert!(!cancel_body.contains("DO_NOT_STORE_MARKER"));
+
+    wait_for_outcomes(&h, 1).await;
+
+    let get = h.get_response(&id).send().await.unwrap();
+    assert_eq!(
+        get.status(),
+        400,
+        "store:false means there is nothing to retrieve"
+    );
+    assert_eq!(h.state.response_store.len(), 0);
 
     h.shutdown().await;
 }

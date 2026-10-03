@@ -25,6 +25,41 @@ use crate::ir::{
 
 // ---------------------------------------------------------------- request in
 
+/// What the client asked the proxy to retain for a completed response.
+///
+/// The Responses API `store` field is a retention instruction, not a
+/// passthrough: `false` means the proxy must not keep the request's input or
+/// the model's output anywhere a later `GET /v1/responses/{id}` could reach.
+/// Absent or `true` keeps the API default, which is to retain the response.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum StoragePolicy {
+    /// The default: a completed response is kept for retrieval and
+    /// continuation.
+    #[default]
+    Store,
+    /// `store: false`: nothing about this request or its answer is retained.
+    Discard,
+}
+
+impl StoragePolicy {
+    /// Read the policy from the decoded request.
+    ///
+    /// Every dialect may call this; only the Responses dialect carries `store`.
+    /// Anything other than an explicit `false` is the API default, so a
+    /// malformed value never silently turns retention off.
+    pub fn from_request(req: &ChatRequest) -> Self {
+        match req.passthrough.get("store") {
+            Some(Value::Bool(false)) => StoragePolicy::Discard,
+            _ => StoragePolicy::Store,
+        }
+    }
+
+    /// Whether a completed response may be written to the response store.
+    pub fn retains(self) -> bool {
+        matches!(self, StoragePolicy::Store)
+    }
+}
+
 pub fn decode_request(body: Value) -> Result<ChatRequest> {
     let obj = body
         .as_object()
