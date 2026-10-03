@@ -8,7 +8,9 @@ use zroutery_core::protocol::gemini::{
     decode_request, decode_response, encode_request, encode_response, GeminiStreamEncoder,
     GeminiStreamParser,
 };
-use zroutery_core::protocol::{SseDecoder, StreamEncoder, StreamParser};
+use zroutery_core::protocol::{
+    encode_request as translate_request, ProviderQuirks, SseDecoder, StreamEncoder, StreamParser,
+};
 
 #[test]
 fn request_decodes_system_contents_and_function_calls() {
@@ -175,4 +177,58 @@ fn stream_parser_handles_malformed_data_gracefully() {
     });
     // Should return error, not panic
     assert!(result.is_err());
+}
+
+#[test]
+fn decodes_camel_case_system_instruction_into_the_upstream_request() {
+    let body = json!({
+        "model": "gemini-2.0-flash",
+        "systemInstruction": {"parts": [{"text": "Always redact private data"}]},
+        "contents": [{"role": "user", "parts": [{"text": "hello"}]}]
+    });
+
+    let req = decode_request(body).unwrap();
+    assert_eq!(req.system.len(), 1);
+    assert_eq!(req.system[0].text, "Always redact private data");
+
+    // The instruction must survive into the request actually sent upstream,
+    // not merely be parsed into the IR.
+    let upstream = translate_request(
+        Dialect::OpenAI,
+        &req,
+        "gpt-4o",
+        &ProviderQuirks::default(),
+    )
+    .unwrap();
+    assert_eq!(upstream["messages"][0]["role"], "system");
+    assert_eq!(
+        upstream["messages"][0]["content"],
+        "Always redact private data"
+    );
+}
+
+#[test]
+fn decodes_snake_case_system_instruction_alias() {
+    let body = json!({
+        "model": "gemini-2.0-flash",
+        "system_instruction": {"parts": [{"text": "be brief"}]},
+        "contents": [{"role": "user", "parts": [{"text": "hello"}]}]
+    });
+
+    let req = decode_request(body).unwrap();
+    assert_eq!(req.system.len(), 1);
+    assert_eq!(req.system[0].text, "be brief");
+}
+
+#[test]
+fn rejects_two_system_instruction_spellings_at_once() {
+    let body = json!({
+        "model": "gemini-2.0-flash",
+        "systemInstruction": {"parts": [{"text": "canonical"}]},
+        "system_instruction": {"parts": [{"text": "alias"}]},
+        "contents": [{"role": "user", "parts": [{"text": "hello"}]}]
+    });
+
+    let error = decode_request(body).unwrap_err();
+    assert!(error.to_string().contains("systemInstruction"));
 }

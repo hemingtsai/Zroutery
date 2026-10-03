@@ -27,20 +27,32 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
         .to_string();
     let mut req = ChatRequest::new(model, Dialect::Gemini);
 
-    match obj.get("system_instruction") {
-        None | Some(Value::Null) => {}
-        Some(instruction) => {
-            let parts = instruction
-                .get("parts")
-                .and_then(Value::as_array)
-                .ok_or_else(|| Error::invalid("system_instruction is missing `parts`"))?;
-            for part in parts {
-                let text = part
-                    .get("text")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| unsupported_content("system", Some("non-text part")))?;
-                req.system.push(SystemPart::new(text));
-            }
+    // Google's canonical JSON spelling is camelCase `systemInstruction`; the
+    // snake_case form is accepted as a compatibility alias.  Reading only the
+    // alias silently discarded whatever the official SDKs sent.
+    let instruction = match (
+        obj.get("systemInstruction").filter(|value| !value.is_null()),
+        obj.get("system_instruction").filter(|value| !value.is_null()),
+    ) {
+        (Some(_), Some(_)) => {
+            return Err(Error::invalid(
+                "send either `systemInstruction` or `system_instruction`, not both",
+            ));
+        }
+        (Some(canonical), None) => Some(canonical),
+        (None, alias) => alias,
+    };
+    if let Some(instruction) = instruction {
+        let parts = instruction
+            .get("parts")
+            .and_then(Value::as_array)
+            .ok_or_else(|| Error::invalid("system instruction is missing `parts`"))?;
+        for part in parts {
+            let text = part
+                .get("text")
+                .and_then(Value::as_str)
+                .ok_or_else(|| unsupported_content("system", Some("non-text part")))?;
+            req.system.push(SystemPart::new(text));
         }
     }
 
