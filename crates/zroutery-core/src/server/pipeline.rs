@@ -608,12 +608,19 @@ async fn apply_vision_fallback_inner(state: &AppState, req: &mut ChatRequest, re
 /// a placeholder, the images get described by the vision model (falling back
 /// to the placeholder when it fails), and the repaired request retries the
 /// same provider — the upstream rejected the *image*, not the question.
+///
+/// Every actual upstream send opens its own attempt before it leaves and
+/// settles that attempt if it fails. A send that succeeds is left open
+/// deliberately: the caller owns the response that follows (a classifier
+/// verdict still has to be checked), so it settles the attempt with what the
+/// answer turned out to be. Nothing is reported to router health here.
 async fn try_rectify_buffered(
     state: &AppState,
     candidate: &Candidate,
     key: Option<&str>,
     req: &mut ChatRequest,
     error: &Error,
+    lifecycle: &mut RequestLifecycle,
 ) -> std::result::Result<Option<crate::ir::ChatResponse>, Error> {
     // The reactive vision path: only when the upstream said "no images" and
     // the request still carries them.
@@ -624,16 +631,21 @@ async fn try_rectify_buffered(
         apply_vision_fallback(state, req, "upstream rejected media").await;
         let key_owned = key.map(str::to_string);
         if let Some(body) = reencode(candidate, req) {
+            let started = Instant::now();
+            lifecycle.begin_attempt(candidate, true);
             match state
                 .upstream
                 .send(&candidate.provider, key_owned.as_deref(), &body)
                 .await
             {
                 Ok(resp) => return Ok(Some(resp)),
-                Err(e) => tracing::warn!(
-                    model = candidate.model_id(),
-                    "vision-repaired retry also failed: {e}"
-                ),
+                Err(e) => {
+                    lifecycle.failed_attempt(started, &e);
+                    tracing::warn!(
+                        model = candidate.model_id(),
+                        "vision-repaired retry also failed: {e}"
+                    );
+                }
             }
         }
     }
@@ -670,6 +682,8 @@ async fn try_rectify_buffered(
                 rectifier = rectifier.name(),
                 "request repaired, retrying same provider without health accounting"
             );
+            let started = Instant::now();
+            lifecycle.begin_attempt(candidate, true);
             match state
                 .upstream
                 .send(&candidate.provider, key, &modified)
@@ -677,6 +691,7 @@ async fn try_rectify_buffered(
             {
                 Ok(resp) => return Ok(Some(resp)),
                 Err(e) => {
+                    lifecycle.failed_attempt(started, &e);
                     tracing::warn!(
                         model = candidate.model_id(),
                         rectifier = rectifier.name(),
@@ -712,12 +727,21 @@ fn reencode(candidate: &Candidate, req: &ChatRequest) -> Option<Value> {
     .ok()
 }
 
+/// The streaming counterpart of [`try_rectify_buffered`].
+///
+/// Each repair send opens its own attempt before the handshake leaves. A
+/// handshake that fails settles that attempt here; a handshake that succeeds
+/// leaves it open, because for a stream the attempt's verdict is the stream's
+/// terminal state and only the body stream knows it. Nothing is reported to
+/// router health: the repair is the same provider and model, and the original
+/// failure was a fixable request shape rather than evidence about the model.
 async fn try_rectify_stream(
     state: &AppState,
     candidate: &Candidate,
     key: Option<&str>,
     req: &mut ChatRequest,
     error: &Error,
+    lifecycle: &mut RequestLifecycle,
 ) -> std::result::Result<Option<crate::upstream::EventStream>, Error> {
     // The reactive vision path: only when the upstream said "no images" and
     // the request still carries them.
@@ -728,6 +752,8 @@ async fn try_rectify_stream(
         apply_vision_fallback(state, req, "upstream rejected media").await;
         let key_owned = key.map(str::to_string);
         if let Some(body) = reencode(candidate, req) {
+            let started = Instant::now();
+            lifecycle.begin_attempt(candidate, true);
             match state
                 .upstream
                 .stream(
@@ -739,10 +765,13 @@ async fn try_rectify_stream(
                 .await
             {
                 Ok(events) => return Ok(Some(events)),
-                Err(e) => tracing::warn!(
-                    model = candidate.model_id(),
-                    "vision-repaired stream retry also failed: {e}"
-                ),
+                Err(e) => {
+                    lifecycle.failed_attempt(started, &e);
+                    tracing::warn!(
+                        model = candidate.model_id(),
+                        "vision-repaired stream retry also failed: {e}"
+                    );
+                }
             }
         }
     }
@@ -779,6 +808,8 @@ async fn try_rectify_stream(
                 rectifier = rectifier.name(),
                 "stream request repaired, retrying same provider without health accounting"
             );
+            let started = Instant::now();
+            lifecycle.begin_attempt(candidate, true);
             match state
                 .upstream
                 .stream(
@@ -791,6 +822,7 @@ async fn try_rectify_stream(
             {
                 Ok(events) => return Ok(Some(events)),
                 Err(e) => {
+                    lifecycle.failed_attempt(started, &e);
                     tracing::warn!(
                         model = candidate.model_id(),
                         rectifier = rectifier.name(),
@@ -1008,18 +1040,29 @@ async fn buffered_chat(
                 return response;
             }
             Err(e) => {
+                // The send that just failed is over: settle its attempt before
+                // any repair send opens one of its own, so the request's
+                // attempt list is exactly one complete entry per upstream
+                // send. The repair retry itself is not a fresh probe, so the
+                // half-open permit is given back and no health is recorded.
+                lifecycle.failed_attempt(attempt_start, &e);
                 // Rectifier cascade: try to repair the request and retry the
                 // same provider without touching circuit-breaker health.
                 let repair_start = Instant::now();
-                match try_rectify_buffered(&state, candidate, key.as_deref(), &mut req, &e).await {
+                match try_rectify_buffered(
+                    &state,
+                    candidate,
+                    key.as_deref(),
+                    &mut req,
+                    &e,
+                    &mut lifecycle,
+                )
+                .await
+                {
                     Ok(Some(mut resp)) => {
                         // The repaired retry is not a fresh probe: give the
                         // half-open permit back without recording health.
                         state.router.release_half_open_permit(candidate.model_id());
-                        // The repair is a second send in its own right, so it is
-                        // explicit attempt evidence rather than an invisible
-                        // retry inside the first attempt.
-                        lifecycle.begin_attempt(candidate, true);
                         // A repaired classifier answer still has to carry a
                         // verdict; the same fail-closed rule as the direct
                         // path applies, minus the health report (this was a
@@ -1082,7 +1125,8 @@ async fn buffered_chat(
                         return response;
                     }
                     Ok(None) => {
-                        lifecycle.failed_attempt(attempt_start, &e);
+                        // No repair was applied; the initial attempt is the
+                        // failure this candidate contributes.
                         let failure = e.classified();
                         state.router.record_classified_attempt(
                             candidate.model_id(),
@@ -1104,11 +1148,10 @@ async fn buffered_chat(
                         }
                     }
                     Err(rectified_err) => {
-                        // The repair was its own attempt and it failed; the
+                        // The repair was its own attempt and it failed; that
+                        // attempt was settled where the send happened. The
                         // canonical classification of that failure is what the
                         // router and the outcome both record.
-                        lifecycle.begin_attempt(candidate, true);
-                        lifecycle.failed_attempt(repair_start, &rectified_err);
                         let failure = rectified_err.classified();
                         state.router.record_classified_attempt(
                             candidate.model_id(),
@@ -1271,16 +1314,27 @@ async fn stream_chat(
                 );
             }
             Err(e) => {
+                // The handshake that just failed is over: settle its attempt
+                // before any repair handshake opens one of its own, so every
+                // upstream send has exactly one complete attempt entry.
+                lifecycle.failed_attempt(attempt_start, &e);
                 // Rectifier cascade for handshake failures. A successful repaired
                 // stream is served to the client without reporting health.
-                let repair_start = Instant::now();
-                match try_rectify_stream(&state, candidate, key.as_deref(), &mut req, &e).await {
+                match try_rectify_stream(
+                    &state,
+                    candidate,
+                    key.as_deref(),
+                    &mut req,
+                    &e,
+                    &mut lifecycle,
+                )
+                .await
+                {
                     Ok(Some(events)) => {
                         // The repaired stream is not a fresh half-open probe.
                         state.router.release_half_open_permit(candidate.model_id());
-                        // The repair is a second handshake, so it is explicit
-                        // attempt evidence rather than an invisible retry.
-                        lifecycle.begin_attempt(candidate, true);
+                        // The repair handshake opened its own attempt inside the
+                        // cascade; the stream's terminal state settles it.
                         let (response_id, cancel_rx) = register_in_flight(&state, dialect, storage);
                         return stream_response(
                             &state,
@@ -1298,7 +1352,8 @@ async fn stream_chat(
                         );
                     }
                     Ok(None) => {
-                        lifecycle.failed_attempt(attempt_start, &e);
+                        // No repair was applied; the settled attempt above is
+                        // this candidate's contribution.
                         let failure = e.classified();
                         state.router.record_classified_attempt(
                             candidate.model_id(),
@@ -1317,8 +1372,8 @@ async fn stream_chat(
                         }
                     }
                     Err(rectified_err) => {
-                        lifecycle.begin_attempt(candidate, true);
-                        lifecycle.failed_attempt(repair_start, &rectified_err);
+                        // Every repair handshake was its own attempt and each
+                        // failure was settled where the send happened.
                         let failure = rectified_err.classified();
                         state.router.record_classified_attempt(
                             candidate.model_id(),

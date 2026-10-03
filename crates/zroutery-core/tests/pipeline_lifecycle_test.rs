@@ -22,6 +22,7 @@ use zroutery_core::config::{
     AppConfig, MemorySecretStore, ModelEntry, ModelTier, ProviderConfig, ProviderKind,
 };
 use zroutery_core::failure::FailureClass;
+use zroutery_core::ir::{StoredResponse, Usage};
 use zroutery_core::outcome::{FinalStatus, Outcome};
 use zroutery_core::server::{AppState, ServerHandle};
 use zroutery_core::stats::RequestRecord;
@@ -31,6 +32,13 @@ use zroutery_core::stats::RequestRecord;
 #[derive(Clone, Default)]
 struct Mock {
     inner: Arc<Mutex<Vec<String>>>,
+    /// Every upstream chat body the mock received, in order, so a test can see
+    /// what the proxy actually asked the model — in particular the expanded
+    /// history of a `previous_response_id` continuation.
+    bodies: Arc<Mutex<Vec<Value>>>,
+    /// Hands out a distinct id per buffered answer, the way a real provider
+    /// does. A constant id would make every stored turn point at itself.
+    ids: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl Mock {
@@ -38,8 +46,21 @@ impl Mock {
         self.inner.lock().unwrap().push(model.to_string());
     }
 
+    fn record_body(&self, body: Value) {
+        self.bodies.lock().unwrap().push(body);
+    }
+
+    fn next_id(&self, prefix: &str) -> String {
+        let n = self.ids.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        format!("{prefix}-{n}")
+    }
+
     fn count(&self) -> usize {
         self.inner.lock().unwrap().len()
+    }
+
+    fn bodies(&self) -> Vec<Value> {
+        self.bodies.lock().unwrap().clone()
     }
 }
 
@@ -92,6 +113,7 @@ fn held_open_stream(id: &str) -> axum::body::Body {
 async fn mock_chat(State(mock): State<Mock>, Json(body): Json<Value>) -> Response {
     let model = body["model"].as_str().unwrap_or_default().to_string();
     mock.record(&model);
+    mock.record_body(body.clone());
 
     // A model that cannot see rejects any request that still carries an image;
     // the media rectifier then retries it with a text placeholder.
@@ -286,17 +308,108 @@ fn held_open_anthropic(id: &str) -> axum::body::Body {
     axum::body::Body::from_stream(stream)
 }
 
+/// An Anthropic stream that reaches a real normal terminal.
+fn completed_anthropic_stream(id: &str) -> axum::body::Body {
+    let mut sse = String::new();
+    sse.push_str(&anthropic_frame(
+        "message_start",
+        json!({"type": "message_start", "message": {
+            "id": id, "model": "claude-mock",
+            "usage": {"input_tokens": 11, "output_tokens": 0}}}),
+    ));
+    sse.push_str(&anthropic_frame(
+        "content_block_start",
+        json!({"type": "content_block_start", "index": 0,
+               "content_block": {"type": "text", "text": ""}}),
+    ));
+    sse.push_str(&anthropic_frame(
+        "content_block_delta",
+        json!({"type": "content_block_delta", "index": 0,
+               "delta": {"type": "text_delta", "text": "repaired"}}),
+    ));
+    sse.push_str(&anthropic_frame(
+        "content_block_stop",
+        json!({"type": "content_block_stop", "index": 0}),
+    ));
+    sse.push_str(&anthropic_frame(
+        "message_delta",
+        json!({"type": "message_delta", "delta": {"stop_reason": "end_turn"},
+               "usage": {"output_tokens": 3}}),
+    ));
+    sse.push_str(&anthropic_frame(
+        "message_stop",
+        json!({"type": "message_stop"}),
+    ));
+    axum::body::Body::from(sse)
+}
+
+/// Every content-block type present in an encoded Anthropic request body.
+fn anthropic_block_types(body: &Value) -> Vec<String> {
+    body["messages"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|message| message["content"].as_array())
+        .flatten()
+        .filter_map(|block| block["type"].as_str())
+        .map(str::to_string)
+        .collect()
+}
+
 /// The Anthropic-shaped upstream, so an upstream id with the other provider
 /// dialect's shape goes through the same identity rule.
 async fn mock_anthropic(State(mock): State<Mock>, Json(body): Json<Value>) -> Response {
     let model = body["model"].as_str().unwrap_or_default().to_string();
     mock.record(&model);
+    mock.record_body(body.clone());
 
     if body["stream"].as_bool().unwrap_or(false) && model.starts_with("hold") {
         return Response::builder()
             .header("content-type", "text/event-stream")
             .body(held_open_anthropic("msg_upstream"))
             .unwrap();
+    }
+
+    // A model family that rejects the request shape and accepts it after the
+    // pipeline's rectifiers repair it. `repair-once`/`repair-twice`/`repair-
+    // stream` only accept a thinking budget at or below 1024, so the thinking
+    // budget rectifier has to halve it (once, twice, or through a stream
+    // handshake); `repair-never` rejects every budget, so the cascade runs out
+    // of rounds; `repair-multi` asks for two different rectifiers in turn.
+    if model.starts_with("repair") {
+        let budget = body["thinking"]
+            .get("budget_tokens")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        let block_types = anthropic_block_types(&body);
+        let has_thinking_block = block_types.iter().any(|kind| kind == "thinking");
+        let has_image = block_types.iter().any(|kind| kind == "image");
+        let reject = |message: &str| {
+            (
+                axum::http::StatusCode::BAD_REQUEST,
+                Json(json!({"error": {"type": "invalid_request_error", "message": message}})),
+            )
+                .into_response()
+        };
+        if model.starts_with("repair-never") {
+            return reject("thinking budget too large");
+        }
+        if model.starts_with("repair-multi") {
+            if has_thinking_block {
+                return reject("invalid signature thinking block");
+            }
+            if has_image {
+                return reject("image unsupported");
+            }
+        } else if budget > 1024 {
+            return reject("thinking budget too large");
+        }
+        if model.starts_with("repair-stream") && body["stream"].as_bool().unwrap_or(false) {
+            return Response::builder()
+                .header("content-type", "text/event-stream")
+                .body(completed_anthropic_stream("msg_repaired"))
+                .unwrap();
+        }
     }
 
     Json(json!({
@@ -1765,3 +1878,276 @@ async fn a_deleted_streamed_response_cannot_be_fetched() {
 
     h.shutdown().await;
 }
+// --------------------------------------------------- per-send attempt accounting
+
+impl Harness {
+    /// An Anthropic request that enables extended thinking.
+    async fn ask_thinking(&self, model: &str, budget: u64, stream: bool) -> reqwest::Response {
+        self.post("/v1/messages")
+            .json(&json!({
+                "model": model,
+                "max_tokens": 4096,
+                "stream": stream,
+                "thinking": {"type": "enabled", "budget_tokens": budget},
+                "messages": [{"role": "user", "content": "hi"}]
+            }))
+            .send()
+            .await
+            .unwrap()
+    }
+}
+
+/// The Anthropic provider the rectifier scenarios talk to.
+fn repair_config(mock: SocketAddr) -> AppConfig {
+    let mut cfg = AppConfig::default();
+    cfg.server.host = "127.0.0.1".into();
+    cfg.server.port = 0;
+    cfg.server.auth_token = TOKEN.into();
+    cfg.providers = vec![anthropic_provider("delta", "Delta", mock)];
+    // The requests under test declare thinking (and one carries an image), and
+    // request-derived capabilities are a hard gate, so the candidates have to
+    // declare them.
+    let capable = |upstream: &str| {
+        let mut entry = model("delta", upstream, 10, ModelTier::Standard);
+        entry.capabilities.thinking = true;
+        entry.capabilities.vision = true;
+        entry
+    };
+    cfg.models = vec![
+        capable("repair-once-model"),
+        capable("repair-twice-model"),
+        capable("repair-never-model"),
+        capable("repair-multi-model"),
+        capable("repair-stream-model"),
+    ];
+    cfg
+}
+
+fn delta_secrets() -> Arc<MemorySecretStore> {
+    Arc::new(MemorySecretStore::new().with("provider:delta", "sk-delta"))
+}
+
+async fn repair_harness() -> Harness {
+    let (addr, mock) = start_mock().await;
+    Harness::start_with_secrets(repair_config(addr), mock, delta_secrets()).await
+}
+
+/// A repaired request tells the truth about every send: the first attempt is a
+/// complete classified failure, the repair is its own attempt, and the request's
+/// single Outcome passes the schema. A repairable request shape is not punished
+/// in provider health.
+#[tokio::test]
+async fn a_repaired_request_records_every_send_as_a_complete_attempt() {
+    let h = repair_harness().await;
+
+    let response = h.ask_thinking("delta-repair-once-model", 2048, false).await;
+    assert_eq!(response.status(), 200);
+    let _ = response.text().await.unwrap();
+    wait_for_outcomes(&h, 1).await;
+
+    let outcome = h.outcome();
+    assert_eq!(outcome.final_status, FinalStatus::Success);
+    assert_eq!(outcome.attempts.len(), 2, "one attempt per upstream send");
+    assert!(!outcome.attempts[0].success);
+    assert_eq!(
+        outcome.attempts[0].failure_class,
+        Some(FailureClass::InvalidRequest)
+    );
+    assert!(!outcome.attempts[0].rectified);
+    assert!(outcome.attempts[1].is_terminal_success());
+    assert!(
+        outcome.attempts[1].rectified,
+        "the repair is labelled as one"
+    );
+    assert!(outcome.validate().is_ok(), "{:?}", outcome.validate());
+    assert_eq!(h.mock.count(), 2, "both sends left the proxy");
+
+    // A fixable request shape is not evidence against the model.
+    let health = h.state.router().health_snapshot();
+    let delta = health
+        .iter()
+        .find(|m| m.model_id == "delta-repair-once-model");
+    assert_eq!(
+        delta.map(|row| row.total_failure).unwrap_or(0),
+        0,
+        "the repair is not punished"
+    );
+    assert!(!h.state.router().is_cooling("delta-repair-once-model"));
+
+    h.shutdown().await;
+}
+
+/// A repair that needs more than one round still produces one complete attempt
+/// per send, in order, and the final success settles the request.
+#[tokio::test]
+async fn a_multi_round_repair_records_each_round() {
+    let h = repair_harness().await;
+
+    let response = h
+        .ask_thinking("delta-repair-twice-model", 4096, false)
+        .await;
+    assert_eq!(response.status(), 200);
+    let _ = response.text().await.unwrap();
+    wait_for_outcomes(&h, 1).await;
+
+    let outcome = h.outcome();
+    assert_eq!(outcome.attempts.len(), 3, "initial send plus two repairs");
+    assert!(!outcome.attempts[0].success);
+    assert!(!outcome.attempts[1].success);
+    assert!(outcome.attempts[1].rectified);
+    assert!(outcome.attempts[2].is_terminal_success());
+    assert!(outcome.attempts[2].rectified);
+    assert!(outcome.validate().is_ok(), "{:?}", outcome.validate());
+    assert_eq!(h.mock.count(), 3);
+
+    h.shutdown().await;
+}
+
+/// When two different rectifiers each send, each send is its own attempt — the
+/// cascade is not collapsed into one invisible retry.
+#[tokio::test]
+async fn multiple_rectifier_candidates_each_record_their_own_attempt() {
+    let h = repair_harness().await;
+
+    let response = h
+        .post("/v1/messages")
+        .json(&json!({
+            "model": "delta-repair-multi-model",
+            "max_tokens": 4096,
+            "messages": [
+                {"role": "user", "content": [
+                    {"type": "image", "source": {"type": "base64",
+                     "media_type": "image/png", "data": "AAAA"}}
+                ]},
+                {"role": "assistant", "content": [
+                    {"type": "thinking", "thinking": "hmm", "signature": "sig"},
+                    {"type": "text", "text": "looking"}
+                ]},
+                {"role": "user", "content": "what is this"}
+            ]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let _ = response.text().await.unwrap();
+    wait_for_outcomes(&h, 1).await;
+
+    let outcome = h.outcome();
+    assert_eq!(outcome.attempts.len(), 3, "one attempt per cascade send");
+    assert_eq!(
+        outcome.attempts[0].failure_class,
+        Some(FailureClass::InvalidRequest)
+    );
+    assert_eq!(
+        outcome.attempts[1].failure_class,
+        Some(FailureClass::Capability),
+        "the media rejection is its own classified attempt"
+    );
+    assert!(outcome.attempts[2].is_terminal_success());
+    assert!(outcome.validate().is_ok(), "{:?}", outcome.validate());
+    assert_eq!(h.mock.count(), 3);
+
+    h.shutdown().await;
+}
+
+/// When every repair fails, every send is still a complete settled attempt and
+/// the request's Outcome is a valid failure.
+#[tokio::test]
+async fn every_failed_repair_is_a_complete_attempt() {
+    let h = repair_harness().await;
+
+    let response = h
+        .ask_thinking("delta-repair-never-model", 8192, false)
+        .await;
+    assert_eq!(response.status(), 400);
+    let _ = response.text().await.unwrap();
+    wait_for_outcomes(&h, 1).await;
+
+    let outcome = h.outcome();
+    assert_eq!(outcome.final_status, FinalStatus::Failed);
+    assert!(
+        outcome.attempts.len() >= 3,
+        "the initial send and each repair round: {}",
+        outcome.attempts.len()
+    );
+    assert!(
+        outcome
+            .attempts
+            .iter()
+            .all(|attempt| !attempt.success && attempt.failure_class.is_some()),
+        "no attempt is left unsuccessful and unclassified: {:?}",
+        outcome.attempts
+    );
+    assert!(outcome
+        .attempts
+        .iter()
+        .skip(1)
+        .all(|attempt| attempt.rectified));
+    assert!(outcome.validate().is_ok(), "{:?}", outcome.validate());
+    assert_eq!(h.mock.count(), outcome.attempts.len());
+
+    h.shutdown().await;
+}
+
+/// A streamed repair is a second handshake with its own attempt, and the stream
+/// terminal settles it.
+#[tokio::test]
+async fn a_streamed_repair_records_both_handshakes() {
+    let h = repair_harness().await;
+
+    let response = h
+        .ask_thinking("delta-repair-stream-model", 2048, true)
+        .await;
+    assert_eq!(response.status(), 200);
+    let body = response.text().await.unwrap();
+    assert!(body.contains("repaired"), "{body}");
+    wait_for_outcomes(&h, 1).await;
+
+    let outcome = h.outcome();
+    assert_eq!(outcome.final_status, FinalStatus::Success);
+    assert_eq!(
+        outcome.attempts.len(),
+        2,
+        "the failed handshake and the repair"
+    );
+    assert!(!outcome.attempts[0].success);
+    assert!(outcome.attempts[1].is_terminal_success());
+    assert!(outcome.attempts[1].rectified);
+    assert_eq!(
+        outcome.served_identity().map(|id| id.model().to_string()),
+        Some("delta-repair-stream-model".to_string())
+    );
+    assert!(outcome.validate().is_ok(), "{:?}", outcome.validate());
+    assert_eq!(h.mock.count(), 2);
+
+    h.shutdown().await;
+}
+
+/// A stream whose repairs all fail at the handshake is a valid failure with one
+/// complete attempt per send — no invisible retry, no unclassified attempt.
+#[tokio::test]
+async fn a_failed_streamed_repair_is_a_complete_attempt() {
+    let h = repair_harness().await;
+
+    let response = h.ask_thinking("delta-repair-never-model", 4096, true).await;
+    assert_eq!(response.status(), 400);
+    let _ = response.text().await.unwrap();
+    wait_for_outcomes(&h, 1).await;
+
+    let outcome = h.outcome();
+    assert_eq!(outcome.final_status, FinalStatus::Failed);
+    assert!(
+        outcome
+            .attempts
+            .iter()
+            .all(|attempt| !attempt.success && attempt.failure_class.is_some()),
+        "every send is settled: {:?}",
+        outcome.attempts
+    );
+    assert!(outcome.validate().is_ok(), "{:?}", outcome.validate());
+    assert_eq!(h.mock.count(), outcome.attempts.len());
+
+    h.shutdown().await;
+}
+
