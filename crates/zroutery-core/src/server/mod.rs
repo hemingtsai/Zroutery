@@ -31,7 +31,7 @@ use tokio::sync::oneshot;
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 
 use crate::billing::{Cost, Pricing};
-use crate::budget::{self, Ledger, Verdict};
+use crate::budget::{self, BudgetScope, Ledger, Verdict};
 use crate::config::{AppConfig, ModelTier, ProviderConfig, SecretStore, ServerConfig};
 use crate::election::{self, Election, Measurement};
 use crate::error::{Error, Result};
@@ -310,6 +310,36 @@ impl AppState {
             Local::now(),
             provider_ids,
             tier,
+        )
+    }
+
+    /// What the budgets say about a classifier side request.
+    ///
+    /// A classifier request is billed under the model that answers it, so the
+    /// global and provider scopes are not exempt: once either is used up, a
+    /// side request is real spend like any other and must not be sent. The one
+    /// deliberate exception is the *class* (tier) scope — the classifier pool
+    /// is chosen by the classifier config rather than by tier policy, so a
+    /// class budget neither degrades nor rejects a side request. Filtering the
+    /// tier budgets out here is how that single-scope exception is expressed,
+    /// instead of skipping the whole check.
+    pub fn classifier_budget_verdict(&self, provider_ids: &[String]) -> Verdict {
+        let config = self.config();
+        let spend_budgets: Vec<crate::budget::Budget> = config
+            .budgets
+            .iter()
+            .filter(|budget| !matches!(budget.scope, BudgetScope::Tier { .. }))
+            .cloned()
+            .collect();
+        if spend_budgets.is_empty() {
+            return Verdict::Allow;
+        }
+        budget::check(
+            &spend_budgets,
+            &crate::sync::read(&self.ledger),
+            Local::now(),
+            provider_ids,
+            None,
         )
     }
 

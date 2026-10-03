@@ -187,13 +187,59 @@ pub(super) async fn handle_chat(
         }
         // The classifier pool is resolved directly: the model the client named
         // (e.g. `claude-opus-4-8[1m]`) is irrelevant to *which model judges*,
-        // and may not even exist in the registry. Budgets are main-path
-        // policy; classifier requests are billed under the model that answers
-        // but are never degraded or rejected by a class budget.
+        // and may not even exist in the registry. The class (tier) budget is
+        // deliberately not applied: the pool is not chosen by tier policy, so a
+        // class budget neither degrades nor rejects a side request. That
+        // exception is only for the class scope. Global and per-provider limits
+        // are still spend limits, so every candidate whose provider (or the
+        // global scope) is already used up is dropped before it can be sent.
         RequestKind::Side(_) => {
             let classifier = config.classifier.clone();
             match state.router.plan_classifier(&registry, &classifier) {
-                Ok(plan) => (plan, None),
+                Ok(plan) => {
+                    let mut allowed = Vec::new();
+                    let mut refusal: Option<String> = None;
+                    for candidate in plan {
+                        let provider_ids = [candidate.provider.id.clone()];
+                        match state.classifier_budget_verdict(&provider_ids) {
+                            Verdict::Allow => allowed.push(candidate),
+                            Verdict::Reject { because } => {
+                                tracing::warn!(
+                                    requested_model = %req.model,
+                                    candidate_model = candidate.model_id(),
+                                    "classifier candidate skipped: {because}"
+                                );
+                                refusal.get_or_insert(because);
+                            }
+                            Verdict::Degrade { because, .. } => {
+                                // The classifier pool has no cheaper tier to
+                                // follow, so a degrade verdict can only mean
+                                // "not this candidate".
+                                tracing::warn!(
+                                    requested_model = %req.model,
+                                    candidate_model = candidate.model_id(),
+                                    "classifier candidate skipped: {because}"
+                                );
+                                refusal.get_or_insert(because);
+                            }
+                        }
+                    }
+                    if allowed.is_empty() {
+                        let e = Error::OverBudget(refusal.unwrap_or_else(|| {
+                            "the classifier budget has no candidate left".to_string()
+                        }));
+                        reject(
+                            Arc::clone(&state),
+                            dialect,
+                            req.stream,
+                            kind,
+                            &req.model,
+                            &e,
+                        );
+                        return error_response(dialect, &e);
+                    }
+                    (allowed, None)
+                }
                 Err(e) => {
                     reject(
                         Arc::clone(&state),
