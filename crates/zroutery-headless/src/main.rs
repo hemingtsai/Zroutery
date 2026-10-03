@@ -29,11 +29,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let dir = platform::default_config_dir();
     std::fs::create_dir_all(&dir)?;
-    let (config, warning) = store::load(&dir);
+    // The document is written back only when startup read it whole or created
+    // it: a corrupt file whose backup could not be made stays where it is.
+    let (config, warning) = match store::startup_load(&dir) {
+        Ok(startup) => {
+            if startup.token_to_write.is_some() {
+                store::save(&dir, &startup.config)?;
+            }
+            (startup.config, startup.warning)
+        }
+        Err(e) => {
+            tracing::error!("{e}");
+            (
+                store::with_defaults(zroutery_core::config::AppConfig::default()),
+                Some(e),
+            )
+        }
+    };
     if let Some(w) = &warning {
         tracing::warn!("{w}");
     }
-    store::save(&dir, &config)?;
 
     for issue in config.validate() {
         tracing::warn!("{}: {}", issue.code, issue.message);

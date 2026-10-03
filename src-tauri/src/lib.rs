@@ -87,9 +87,25 @@ pub fn run() {
             let config_dir = platform::default_config_dir();
             std::fs::create_dir_all(&config_dir)?;
 
-            let (config, warning) = store::load(&config_dir);
-            // Make sure a freshly generated token reaches disk.
-            store::save(&config_dir, &config)?;
+            // The document is written back only when startup read it whole or
+            // created it. A corrupt file whose backup could not be made is left
+            // alone: the app runs on defaults in memory, and the only copy of
+            // the user's provider list is still there to repair.
+            let (config, warning) = match store::startup_load(&config_dir) {
+                Ok(startup) => {
+                    if startup.token_to_write.is_some() {
+                        store::save(&config_dir, &startup.config)?;
+                    }
+                    (startup.config, startup.warning)
+                }
+                Err(e) => {
+                    tracing::error!("{e}");
+                    (
+                        store::with_defaults(zroutery_core::config::AppConfig::default()),
+                        Some(e),
+                    )
+                }
+            };
 
             // Sync the OS registration with the setting, so a manual config
             // edit (or an uninstaller that removed the entry) converges back
