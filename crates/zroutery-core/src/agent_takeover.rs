@@ -112,7 +112,17 @@ pub struct OwnershipManifest {
     /// List of field paths under Zroutery's management.
     pub managed_fields: Vec<String>,
     /// Snapshot of field values captured at adoption time.
+    ///
+    /// Only managed fields that already existed are recorded here; a managed
+    /// field that was absent before adoption is listed in `absent_fields`.
     pub field_snapshots: HashMap<String, serde_json::Value>,
+    /// Managed field paths that did not exist when ownership was adopted.
+    ///
+    /// Release must delete these instead of restoring a value, otherwise a
+    /// field Zroutery introduced (for example a local proxy `base_url`) would
+    /// survive the release and keep redirecting the client.
+    #[serde(default)]
+    pub absent_fields: Vec<String>,
     /// Unix timestamp (seconds) of when ownership was adopted, if ever.
     pub adopted_at: Option<i64>,
     /// Unix timestamp (seconds) of when ownership was released, if ever.
@@ -198,6 +208,13 @@ impl TakeoverStore {
             .filter_map(|f| current_values.get(f).map(|v| (f.clone(), v.clone())))
             .collect();
 
+        // Managed fields that did not exist yet must be removed on release.
+        let absent_fields: Vec<String> = managed_fields
+            .iter()
+            .filter(|f| !current_values.contains_key(*f))
+            .cloned()
+            .collect();
+
         // Populate last_applied with the captured snapshots.
         inner.last_applied = field_snapshots.clone();
 
@@ -205,6 +222,7 @@ impl TakeoverStore {
             state: OwnershipState::Adopted,
             managed_fields,
             field_snapshots,
+            absent_fields,
             adopted_at: Some(now),
             released_at: None,
             generation,
@@ -535,11 +553,7 @@ impl AgentAdapter for ClaudeAdapter {
         manifest: &OwnershipManifest,
     ) -> Result<(), String> {
         let mut raw = snapshot.raw.clone();
-        for field_path in &manifest.managed_fields {
-            if let Some(original_value) = manifest.field_snapshots.get(field_path) {
-                set_nested(&mut raw, field_path, original_value.clone());
-            }
-        }
+        restore_fields(&mut raw, manifest);
         let json =
             serde_json::to_string_pretty(&raw).map_err(|e| format!("serialize failed: {e}"))?;
         let hash = compute_hash(json.as_bytes());
@@ -622,11 +636,7 @@ impl AgentAdapter for CodexAdapter {
         manifest: &OwnershipManifest,
     ) -> Result<(), String> {
         let mut raw = snapshot.raw.clone();
-        for field_path in &manifest.managed_fields {
-            if let Some(original_value) = manifest.field_snapshots.get(field_path) {
-                set_nested(&mut raw, field_path, original_value.clone());
-            }
-        }
+        restore_fields(&mut raw, manifest);
         let json =
             serde_json::to_string_pretty(&raw).map_err(|e| format!("serialize failed: {e}"))?;
         let hash = compute_hash(json.as_bytes());
@@ -709,11 +719,7 @@ impl AgentAdapter for GeminiAdapter {
         manifest: &OwnershipManifest,
     ) -> Result<(), String> {
         let mut raw = snapshot.raw.clone();
-        for field_path in &manifest.managed_fields {
-            if let Some(original_value) = manifest.field_snapshots.get(field_path) {
-                set_nested(&mut raw, field_path, original_value.clone());
-            }
-        }
+        restore_fields(&mut raw, manifest);
         let json =
             serde_json::to_string_pretty(&raw).map_err(|e| format!("serialize failed: {e}"))?;
         let hash = compute_hash(json.as_bytes());
@@ -896,6 +902,41 @@ fn set_nested(root: &mut serde_json::Value, path: &str, value: serde_json::Value
     let leaf = parts.last().unwrap();
     if let Some(obj) = current.as_object_mut() {
         obj.insert(leaf.to_string(), value);
+    }
+}
+
+/// Restore a manifest's managed fields into `raw`.
+///
+/// Fields that already existed at adoption time are set back to their captured
+/// value; fields recorded in [`OwnershipManifest::absent_fields`] are removed
+/// so a value Zroutery introduced does not outlive the ownership.
+fn restore_fields(raw: &mut serde_json::Value, manifest: &OwnershipManifest) {
+    for field_path in &manifest.managed_fields {
+        if manifest.absent_fields.iter().any(|absent| absent == field_path) {
+            remove_nested(raw, field_path);
+        } else if let Some(original_value) = manifest.field_snapshots.get(field_path) {
+            set_nested(raw, field_path, original_value.clone());
+        }
+    }
+}
+
+/// Remove a nested JSON value by dotted path, leaving anything else untouched.
+fn remove_nested(root: &mut serde_json::Value, path: &str) {
+    let parts: Vec<&str> = path.split('.').collect();
+    if parts.is_empty() {
+        return;
+    }
+
+    let mut current = root;
+    for part in &parts[..parts.len() - 1] {
+        match current.get_mut(*part) {
+            Some(next) if next.is_object() => current = next,
+            _ => return,
+        }
+    }
+
+    if let Some(obj) = current.as_object_mut() {
+        obj.remove(*parts.last().unwrap());
     }
 }
 
@@ -1259,6 +1300,7 @@ mod tests {
         assert_eq!(restored.state, original.state);
         assert_eq!(restored.managed_fields, original.managed_fields);
         assert_eq!(restored.field_snapshots, original.field_snapshots);
+        assert_eq!(restored.absent_fields, original.absent_fields);
         assert_eq!(restored.adopted_at, original.adopted_at);
         assert_eq!(restored.released_at, original.released_at);
         assert_eq!(restored.generation, original.generation);
@@ -1503,11 +1545,7 @@ mod tests {
             manifest: &OwnershipManifest,
         ) -> Result<(), String> {
             let mut raw = snapshot.raw.clone();
-            for field_path in &manifest.managed_fields {
-                if let Some(original_value) = manifest.field_snapshots.get(field_path) {
-                    set_nested(&mut raw, field_path, original_value.clone());
-                }
-            }
+            restore_fields(&mut raw, manifest);
             let json =
                 serde_json::to_string_pretty(&raw).map_err(|e| format!("serialize failed: {e}"))?;
             let hash = compute_hash(json.as_bytes());
@@ -1634,10 +1672,62 @@ mod tests {
         assert_eq!(disk["unmanaged"], serde_json::json!("keep_me"));
     }
 
+    #[test]
+    fn release_removes_fields_absent_before_adoption() {
+        let tmp = tempfile::tempdir().unwrap();
+        let adapter = TestAdapter::new(tmp.path(), serde_json::json!({"model": "gpt-4"}));
+
+        let store = TakeoverStore::new();
+        // "base_url" is managed but does not exist in the config yet.
+        let current = field_map(&[("model", serde_json::json!("gpt-4"))]);
+        let manifest = store
+            .adopt(vec!["model".into(), "base_url".into()], &current)
+            .unwrap();
+        assert_eq!(manifest.absent_fields, vec!["base_url".to_string()]);
+
+        // Zroutery points the client at the local proxy.
+        let patched = serde_json::json!({
+            "model": "zroutery-proxy",
+            "base_url": "http://127.0.0.1:9999"
+        });
+        adapter
+            .write_config(&AgentConfigSnapshot {
+                agent_type: AgentType::Claude,
+                config_path: adapter.path.clone(),
+                raw: patched,
+                config_hash: String::new(),
+            })
+            .unwrap();
+
+        store.release_with_restore(&adapter).unwrap();
+
+        let disk = read_json_file(&adapter.path);
+        assert_eq!(disk["model"], serde_json::json!("gpt-4"));
+        assert!(
+            disk.get("base_url").is_none(),
+            "field absent before adoption survived release: {}",
+            disk["base_url"]
+        );
+    }
+
+    #[test]
+    fn manifest_without_absent_fields_deserializes() {
+        let json = r#"{
+            "state": "released",
+            "managed_fields": ["model"],
+            "field_snapshots": {"model": "gpt-4"},
+            "adopted_at": 1700000000,
+            "released_at": 1700000100,
+            "generation": 1
+        }"#;
+
+        let manifest: OwnershipManifest = serde_json::from_str(json).unwrap();
+        assert!(manifest.absent_fields.is_empty());
+    }
+
     // -----------------------------------------------------------------------
     // I4: resolve_conflicts
     // -----------------------------------------------------------------------
-
     #[test]
     fn resolve_conflicts_keep_external() {
         let conflicts = vec![
@@ -1996,6 +2086,7 @@ mod tests {
             field_snapshots: [("model".into(), serde_json::json!("gpt-4"))]
                 .into_iter()
                 .collect(),
+            absent_fields: Vec::new(),
             adopted_at: Some(1_700_000_000),
             released_at: None,
             generation: 0,
