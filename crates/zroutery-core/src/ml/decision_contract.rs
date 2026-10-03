@@ -688,6 +688,10 @@ impl ModelInput {
     ///
     /// This is validation and bookkeeping only. It performs no routing, stores
     /// nothing, and reads no runtime state.
+    ///
+    /// Every slot this call would write is validated before any of them is
+    /// written, so a refusal leaves the contract exactly as it was rather than
+    /// committing half of the record.
     pub fn try_record_outcome_identities(
         &mut self,
         outcome: &OutcomeIdentity,
@@ -704,14 +708,31 @@ impl ModelInput {
                 });
             }
         }
-        if let Some(attempted) = outcome.last_attempted.as_ref() {
-            self.check_slot_is_stable(CandidateSlot::LastAttempted, attempted)?;
-            self.mark_role(CandidateSlot::LastAttempted, attempted)?;
+        // Validate first: the same order the record used to be applied in, so
+        // every refusal is the same refusal, but nothing is committed yet.
+        let attempted = outcome.last_attempted.as_ref();
+        let served = outcome.served.as_ref();
+        let attempted_index = match attempted {
+            Some(attempted) => {
+                self.check_slot_is_stable(CandidateSlot::LastAttempted, attempted)?;
+                Some(self.check_role(CandidateSlot::LastAttempted, attempted)?)
+            }
+            None => None,
+        };
+        let served_index = match served {
+            Some(served) => {
+                self.check_slot_is_stable(CandidateSlot::Served, served)?;
+                Some(self.check_role(CandidateSlot::Served, served)?)
+            }
+            None => None,
+        };
+        // Every check passed: commit the whole record together.
+        if let (Some(attempted), Some(index)) = (attempted, attempted_index) {
+            CandidateSlot::LastAttempted.set(&mut self.candidates[index].roles);
             self.identities.last_attempted = Some(attempted.clone());
         }
-        if let Some(served) = outcome.served.as_ref() {
-            self.check_slot_is_stable(CandidateSlot::Served, served)?;
-            self.mark_role(CandidateSlot::Served, served)?;
+        if let (Some(served), Some(index)) = (served, served_index) {
+            CandidateSlot::Served.set(&mut self.candidates[index].roles);
             self.identities.served = Some(served.clone());
         }
         Ok(())
@@ -745,6 +766,18 @@ impl ModelInput {
         slot: CandidateSlot,
         identity: &CandidateIdentity,
     ) -> Result<(), DecisionContractError> {
+        let index = self.check_role(slot, identity)?;
+        slot.set(&mut self.candidates[index].roles);
+        Ok(())
+    }
+
+    /// Validate one candidate's identity slot without mutating anything, and
+    /// return the candidate's index on success.
+    fn check_role(
+        &self,
+        slot: CandidateSlot,
+        identity: &CandidateIdentity,
+    ) -> Result<usize, DecisionContractError> {
         let Some(index) = self
             .candidates
             .iter()
@@ -761,8 +794,7 @@ impl ModelInput {
         {
             return Err(DecisionContractError::MultiplePlannedIdentities);
         }
-        slot.set(&mut self.candidates[index].roles);
-        Ok(())
+        Ok(index)
     }
 }
 

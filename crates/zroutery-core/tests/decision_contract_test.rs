@@ -710,6 +710,52 @@ fn outcome_identities_that_contradict_or_were_never_observed_are_refused() {
     assert!(input.identities.served == Some(identity("model-b", "provider-b")));
 }
 
+/// A refused identity record commits nothing: the attempted slot must not be
+/// fixed before the served slot has been validated.
+#[test]
+fn a_refused_outcome_identity_record_leaves_no_partial_state() {
+    let mut input = model_input();
+    let before = input.clone();
+
+    // The attempted half is observed and legal; the served half was never
+    // observed, so the record is refused after that attempted half used to be
+    // committed.
+    let error = input
+        .try_record_outcome_identities(&OutcomeIdentity {
+            planned: None,
+            last_attempted: Some(identity("model-b", "provider-b")),
+            served: Some(identity("model-zz", "provider-zz")),
+        })
+        .expect_err("an unobserved served identity must be refused");
+    assert!(matches!(
+        error,
+        DecisionContractError::UnobservedRoleIdentity { role: "served" }
+    ));
+    assert_eq!(input, before, "a refusal left no partial state");
+    assert!(
+        !input
+            .candidate(&identity("model-b", "provider-b"))
+            .expect("an observed candidate")
+            .roles
+            .last_attempted,
+        "the refused attempted role was not marked either"
+    );
+
+    // Because nothing was fixed, the corrected record is accepted.
+    input
+        .try_record_outcome_identities(&OutcomeIdentity {
+            planned: None,
+            last_attempted: Some(identity("model-b", "provider-b")),
+            served: Some(identity("model-b", "provider-b")),
+        })
+        .expect("the corrected record is accepted");
+    let recorded = input
+        .candidate(&identity("model-b", "provider-b"))
+        .expect("an observed candidate");
+    assert!(recorded.roles.last_attempted);
+    assert!(recorded.roles.served);
+}
+
 // ---------------------------------------------------------------------------
 // DecisionState
 // ---------------------------------------------------------------------------
