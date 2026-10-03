@@ -9,8 +9,10 @@
 //!
 //! ```text
 //! Verified ──adopt()──▶ Adopted ──release()──▶ Released
-//!    ▲                                              │
-//!    └──────────────────────────────────────────────┘
+//!    ▲                     │                      │
+//!    └─────────────────────┘◀─────────────────────┘
+//!
+//! release_with_restore(): Adopted ──▶ Releasing ──(config restored)──▶ Released
 //! ```
 
 use std::collections::HashMap;
@@ -30,6 +32,9 @@ pub enum OwnershipState {
     Verified,
     /// Zroutery owns the managed fields.
     Adopted,
+    /// A release is in flight: the state transition has been claimed but the
+    /// config restore on disk has not committed yet.
+    Releasing,
     /// Ownership has been released back to the external agent.
     Released,
 }
@@ -326,41 +331,73 @@ impl TakeoverStore {
         &self,
         adapter: &dyn AgentAdapter,
     ) -> Result<OwnershipManifest, String> {
-        // 1. Validate state and snapshot the manifest.
-        let manifest_snapshot = {
-            let inner = crate::sync::lock(&self.inner);
+        // 1. Claim the transition while holding the lock. Marking the store as
+        //    `Releasing` means a competing adopt or release observes an
+        //    in-flight operation instead of the stale `Adopted` state, so it
+        //    cannot adopt a new generation or mark this manifest released
+        //    while the restore below is still writing the config.
+        let (manifest_snapshot, expected_generation) = {
+            let mut inner = crate::sync::lock(&self.inner);
             if inner.state != OwnershipState::Adopted {
                 return Err(format!(
                     "cannot release: current state is {:?}, expected Adopted",
                     inner.state
                 ));
             }
-            inner.manifest.as_ref().unwrap().clone()
+            let manifest = inner.manifest.as_ref().unwrap().clone();
+            inner.state = OwnershipState::Releasing;
+            (manifest, inner.generation)
         };
 
         // 2. Read current config from disk.
-        let current = adapter.read_config()?;
-
-        // 3. Restore original values and write to disk.
-        adapter.release(&current, &manifest_snapshot)?;
-
-        // 4. Update internal state only after successful disk write.
-        let result = {
-            let mut inner = crate::sync::lock(&self.inner);
-            inner.generation += 1;
-            let gen = inner.generation;
-
-            let manifest = inner.manifest.as_mut().unwrap();
-            manifest.state = OwnershipState::Released;
-            manifest.released_at = Some(chrono::Utc::now().timestamp());
-            manifest.generation = gen;
-
-            let result = manifest.clone();
-            inner.state = OwnershipState::Released;
-            result
+        let current = match adapter.read_config() {
+            Ok(current) => current,
+            Err(err) => {
+                self.abort_release();
+                return Err(err);
+            }
         };
 
+        // 3. Restore original values and write to disk.
+        if let Err(err) = adapter.release(&current, &manifest_snapshot) {
+            self.abort_release();
+            return Err(err);
+        }
+
+        // 4. Commit only if the claim is still the current one.
+        let mut inner = crate::sync::lock(&self.inner);
+        if inner.state != OwnershipState::Releasing || inner.generation != expected_generation {
+            let state = inner.state;
+            let generation = inner.generation;
+            if inner.state == OwnershipState::Releasing {
+                inner.state = OwnershipState::Adopted;
+            }
+            return Err(format!(
+                "cannot release: ownership changed while restoring the config \
+                 (state {state:?}, generation {generation}, expected generation {expected_generation})"
+            ));
+        }
+
+        inner.generation += 1;
+        let gen = inner.generation;
+
+        let manifest = inner.manifest.as_mut().unwrap();
+        manifest.state = OwnershipState::Released;
+        manifest.released_at = Some(chrono::Utc::now().timestamp());
+        manifest.generation = gen;
+
+        let result = manifest.clone();
+        inner.state = OwnershipState::Released;
+
         Ok(result)
+    }
+
+    /// Undo an in-flight release claim after the config write failed.
+    fn abort_release(&self) {
+        let mut inner = crate::sync::lock(&self.inner);
+        if inner.state == OwnershipState::Releasing {
+            inner.state = OwnershipState::Adopted;
+        }
     }
 
     // -- crash recovery -------------------------------------------------------
@@ -1724,6 +1761,142 @@ mod tests {
 
         let manifest: OwnershipManifest = serde_json::from_str(json).unwrap();
         assert!(manifest.absent_fields.is_empty());
+    }
+
+    /// Adapter that re-enters the store while a release is being restored, to
+    /// prove the in-flight transition is not observable as `Adopted`.
+    struct RacingAdapter {
+        path: std::path::PathBuf,
+        store: std::sync::Arc<TakeoverStore>,
+        competing_release: std::sync::Mutex<Option<Result<OwnershipManifest, String>>>,
+        competing_adopt: std::sync::Mutex<Option<Result<OwnershipManifest, String>>>,
+    }
+
+    impl RacingAdapter {
+        fn new(
+            dir: &std::path::Path,
+            initial: serde_json::Value,
+            store: std::sync::Arc<TakeoverStore>,
+        ) -> Self {
+            let path = dir.join("config.json");
+            std::fs::write(&path, serde_json::to_string_pretty(&initial).unwrap()).unwrap();
+            Self {
+                path,
+                store,
+                competing_release: std::sync::Mutex::new(None),
+                competing_adopt: std::sync::Mutex::new(None),
+            }
+        }
+    }
+
+    impl AgentAdapter for RacingAdapter {
+        fn agent_type(&self) -> AgentType {
+            AgentType::Claude
+        }
+
+        fn config_path(&self) -> Result<std::path::PathBuf, String> {
+            Ok(self.path.clone())
+        }
+
+        fn read_config(&self) -> Result<AgentConfigSnapshot, String> {
+            // A competing release must not observe the pre-transition state.
+            *self.competing_release.lock().unwrap() = Some(self.store.release());
+
+            let (raw, hash) = if self.path.exists() {
+                let data =
+                    std::fs::read_to_string(&self.path).map_err(|e| format!("read failed: {e}"))?;
+                let hash = compute_hash(data.as_bytes());
+                let parsed: serde_json::Value =
+                    serde_json::from_str(&data).map_err(|e| format!("parse failed: {e}"))?;
+                (parsed, hash)
+            } else {
+                (
+                    serde_json::Value::Object(serde_json::Map::new()),
+                    String::new(),
+                )
+            };
+
+            Ok(AgentConfigSnapshot {
+                agent_type: AgentType::Claude,
+                config_path: self.path.clone(),
+                raw,
+                config_hash: hash,
+            })
+        }
+
+        fn apply_patch(
+            &self,
+            snapshot: &AgentConfigSnapshot,
+            fields: &[ManagedField],
+        ) -> Result<AgentConfigSnapshot, String> {
+            apply_patch_to_disk(snapshot, fields)
+        }
+
+        fn release(
+            &self,
+            snapshot: &AgentConfigSnapshot,
+            manifest: &OwnershipManifest,
+        ) -> Result<(), String> {
+            // The second phase of the restore: an adopt must not be able to
+            // start from the stale `Adopted` state either.
+            let values = field_map(&[("model", serde_json::json!("gpt-4"))]);
+            *self.competing_adopt.lock().unwrap() =
+                Some(self.store.adopt(vec!["model".into()], &values));
+
+            release_to_disk(snapshot, manifest)
+        }
+    }
+
+    #[test]
+    fn release_with_restore_blocks_concurrent_transitions() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = std::sync::Arc::new(TakeoverStore::new());
+        let adapter = RacingAdapter::new(
+            tmp.path(),
+            serde_json::json!({"model": "gpt-4"}),
+            std::sync::Arc::clone(&store),
+        );
+
+        let values = field_map(&[("model", serde_json::json!("gpt-4"))]);
+        store.adopt(vec!["model".into()], &values).unwrap();
+
+        // Zroutery patched the config before releasing.
+        adapter
+            .write_config(&AgentConfigSnapshot {
+                agent_type: AgentType::Claude,
+                config_path: adapter.path.clone(),
+                raw: serde_json::json!({"model": "zroutery-proxy"}),
+                config_hash: String::new(),
+            })
+            .unwrap();
+
+        let manifest = store.release_with_restore(&adapter).unwrap();
+        assert_eq!(manifest.state, OwnershipState::Released);
+        assert_eq!(manifest.generation, 1);
+
+        let release_attempt = adapter
+            .competing_release
+            .lock()
+            .unwrap()
+            .take()
+            .expect("competing release was attempted");
+        let err = release_attempt.expect_err("a competing release must be rejected");
+        assert!(err.contains("Releasing"), "error: {err}");
+
+        let adopt_attempt = adapter
+            .competing_adopt
+            .lock()
+            .unwrap()
+            .take()
+            .expect("competing adopt was attempted");
+        let err = adopt_attempt.expect_err("a competing adopt must be rejected");
+        assert!(err.contains("Releasing"), "error: {err}");
+
+        // The in-flight release still committed and restored the original value.
+        assert_eq!(store.state(), OwnershipState::Released);
+        assert_eq!(store.manifest().unwrap().generation, 1);
+        let disk = read_json_file(&adapter.path);
+        assert_eq!(disk["model"], serde_json::json!("gpt-4"));
     }
 
     // -----------------------------------------------------------------------
