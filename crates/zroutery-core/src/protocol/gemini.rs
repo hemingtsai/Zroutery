@@ -201,16 +201,33 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
                         .get("name")
                         .and_then(Value::as_str)
                         .ok_or_else(|| Error::invalid("function declaration is missing `name`"))?;
+                    let parameters = decl.get("parameters").filter(|value| !value.is_null());
+                    let json_schema = decl
+                        .get("parametersJsonSchema")
+                        .filter(|value| !value.is_null());
+                    // The Gemini API defines the two schema fields as mutually
+                    // exclusive; accepting both would have to guess which one
+                    // the caller meant.
+                    let input_schema = match (parameters, json_schema) {
+                        (Some(_), Some(_)) => {
+                            return Err(Error::invalid(
+                                "function declaration sets both `parameters` and `parametersJsonSchema`",
+                            ));
+                        }
+                        // `parametersJsonSchema` already carries a standard JSON
+                        // Schema, so it is kept verbatim instead of being
+                        // replaced by an empty object schema.
+                        (Some(gemini_schema), None) => gemini_schema.clone(),
+                        (None, Some(schema)) => schema.clone(),
+                        (None, None) => json!({"type": "object"}),
+                    };
                     req.tools.push(ToolDef {
                         name: name.to_string(),
                         description: decl
                             .get("description")
                             .and_then(Value::as_str)
                             .map(str::to_string),
-                        input_schema: decl
-                            .get("parameters")
-                            .cloned()
-                            .unwrap_or_else(|| json!({"type": "object"})),
+                        input_schema,
                         cache_control: None,
                     });
                 }
