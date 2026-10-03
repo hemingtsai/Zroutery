@@ -385,6 +385,43 @@ fn optional_feedback_reaches_samples_without_becoming_a_target() {
 }
 
 #[test]
+fn optional_feedback_from_another_outcome_is_refused() {
+    let outcome = fallback_success();
+    let sample = SampleBuilder::try_build(&outcome, Default::default(), DataOrigin::Native)
+        .expect("legacy sample");
+    let feedback = Feedback::try_from_outcome(
+        &outcome,
+        vec![FeedbackSignal::ExplicitRating { score: 5.0 }],
+        outcome.timestamp,
+        FeedbackSource::Client,
+        DataOrigin::Native,
+    )
+    .expect("feedback")
+    .expect("signal");
+
+    // A well formed record for a different Outcome: its own validation passes,
+    // so only the correlation check can refuse it.
+    let mut foreign = feedback.clone();
+    foreign.outcome_id = "out-someone-else".to_string();
+    foreign
+        .validate()
+        .expect("a well formed feedback record for another outcome");
+    let error = sample
+        .clone()
+        .with_optional_feedback(Some(&foreign))
+        .expect_err("a foreign feedback must be refused");
+    assert!(error.contains("does not match"), "got: {error}");
+
+    // The matching record is still accepted, and it stays a signal rather than
+    // a target.
+    let accepted = sample
+        .with_optional_feedback(Some(&feedback))
+        .expect("matching feedback");
+    assert_eq!(accepted.outcome_id, outcome.outcome_id);
+    assert_eq!(accepted.feedback, feedback.signals);
+}
+
+#[test]
 fn serde_round_trip_preserves_identity_and_reads_legacy_identity_shapes() {
     let outcome = fallback_success();
     let json = serde_json::to_string(&outcome).expect("serialize outcome");

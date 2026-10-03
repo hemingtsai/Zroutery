@@ -340,6 +340,12 @@ impl TrainingSample {
     pub fn with_optional_feedback(mut self, feedback: Option<&Feedback>) -> Result<Self, String> {
         if let Some(feedback) = feedback {
             feedback.validate()?;
+            // The canonical path refuses a Feedback that belongs to another
+            // Outcome. Accepting one here would attach a foreign record and
+            // silently drop its correlation id.
+            if feedback.outcome_id != self.outcome_id {
+                return Err("feedback outcome_id does not match outcome".to_string());
+            }
             self.feedback = feedback.signals.clone();
         } else {
             self.feedback.clear();
