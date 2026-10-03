@@ -60,6 +60,40 @@ impl StoragePolicy {
     }
 }
 
+/// The request's `input` field normalized into Responses item form.
+///
+/// A bare string is one user message item — exactly the turn
+/// [`decode_request`] lifts into the IR. Keeping a string as an empty list when
+/// storing would silently drop that turn from every later
+/// `previous_response_id` continuation, so both shapes converge here before
+/// either storage or history expansion reads them.
+pub fn input_items(body: &Value) -> Vec<Value> {
+    match body.get("input") {
+        Some(Value::String(text)) => vec![json!({
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": text}],
+        })],
+        Some(Value::Array(items)) => items.clone(),
+        _ => Vec::new(),
+    }
+}
+
+/// Decode stored Responses items — a prior turn's input and output — into IR
+/// messages, for `previous_response_id` continuation.
+///
+/// This is the same item decoder the request path uses, so a continued
+/// conversation reconstructs what the earlier request meant: text, images,
+/// reasoning blocks and `function_call`/`function_call_output` pairings all
+/// survive the round trip through the store.
+pub fn decode_history(items: &[Value]) -> Result<Vec<Message>> {
+    let mut scratch = ChatRequest::new(String::new(), Dialect::OpenAIResponses);
+    for item in items {
+        decode_input_item(item, &mut scratch)?;
+    }
+    Ok(scratch.messages)
+}
+
 pub fn decode_request(body: Value) -> Result<ChatRequest> {
     let obj = body
         .as_object()
