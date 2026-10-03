@@ -273,9 +273,16 @@ impl SseFrame {
 }
 
 /// Incremental SSE parser that tolerates chunk boundaries anywhere.
+///
+/// Bytes are buffered undecoded until a frame's terminating blank line has
+/// arrived, so a chunk boundary inside a multi-byte UTF-8 sequence holds the
+/// unfinished bytes instead of replacing them. A frame that is complete but
+/// still carries invalid UTF-8 is decoded lossily, because SSE is a text
+/// protocol and a few upstreams emit raw bytes in error bodies; that keeps the
+/// parser alive without corrupting text that merely arrived in pieces.
 #[derive(Debug, Default)]
 pub struct SseDecoder {
-    buffer: String,
+    buffer: Vec<u8>,
 }
 
 impl SseDecoder {
@@ -285,16 +292,11 @@ impl SseDecoder {
 
     /// Feed raw bytes, returning every complete frame that became available.
     pub fn push(&mut self, chunk: &[u8]) -> Vec<SseFrame> {
-        // Lossy UTF-8 decoding is intentional: SSE is a text-based protocol and
-        // a few upstreams emit lone surrogates or raw bytes in error bodies.
-        // Replacing invalid sequences with the Unicode replacement character
-        // keeps the parser alive instead of failing the whole stream.
-        self.buffer.push_str(&String::from_utf8_lossy(chunk));
-        self.buffer = self.buffer.replace("\r\n", "\n");
+        self.buffer.extend_from_slice(chunk);
         let mut frames = Vec::new();
-        while let Some(pos) = self.buffer.find("\n\n") {
-            let raw: String = self.buffer.drain(..pos + 2).collect();
-            if let Some(frame) = parse_frame(&raw) {
+        while let Some(end) = frame_end(&self.buffer) {
+            let raw: Vec<u8> = self.buffer.drain(..end).collect();
+            if let Some(frame) = parse_frame(&String::from_utf8_lossy(&raw)) {
                 frames.push(frame);
             }
         }
@@ -304,8 +306,31 @@ impl SseDecoder {
     /// Flush a trailing frame that was not terminated by a blank line.
     pub fn finish(&mut self) -> Option<SseFrame> {
         let raw = std::mem::take(&mut self.buffer);
-        parse_frame(&raw)
+        parse_frame(&String::from_utf8_lossy(&raw))
     }
+}
+
+/// Index just past the first blank line that separates two frames.
+///
+/// A blank line is two line endings, and both `\n` and `\r\n` end in `\n`, so
+/// the separator is either `\n\n` (LF/LF, LF/CRLF and CRLF/LF) or `\n\r\n`
+/// (CRLF/CRLF). Matching on the raw bytes is safe: `\n` and `\r` are ASCII and
+/// never appear as UTF-8 continuation bytes, and a buffer ending in `\n\r`
+/// reports nothing so a CRLF split across chunks is not cut short.
+fn frame_end(buffer: &[u8]) -> Option<usize> {
+    let mut i = 0;
+    while i + 1 < buffer.len() {
+        if buffer[i] == b'\n' {
+            if buffer[i + 1] == b'\n' {
+                return Some(i + 2);
+            }
+            if buffer[i + 1] == b'\r' && buffer.get(i + 2) == Some(&b'\n') {
+                return Some(i + 3);
+            }
+        }
+        i += 1;
+    }
+    None
 }
 
 fn parse_frame(raw: &str) -> Option<SseFrame> {
@@ -460,6 +485,58 @@ mod tests {
         assert_eq!(frames[0].data, "[DONE]");
         let tail = d.finish().unwrap();
         assert_eq!(tail.json().unwrap()["trailing"], true);
+    }
+
+    #[test]
+    fn utf8_split_at_every_byte_boundary_survives() {
+        // A chunk boundary has no reason to respect UTF-8, so feed the frame one
+        // byte at a time: the CJK text and the emoji must come back unchanged.
+        let wire = "data: {\"text\":\"中文🙂 组合é\"}\n\n";
+        let mut d = SseDecoder::new();
+        let mut frames = Vec::new();
+        for byte in wire.as_bytes() {
+            frames.extend(d.push(std::slice::from_ref(byte)));
+        }
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].json().unwrap()["text"], "中文🙂 组合é");
+    }
+
+    #[test]
+    fn utf8_split_at_every_byte_boundary_keeps_tool_arguments() {
+        // Tool arguments carry file names and paths; a mangled byte here is not
+        // a display problem, it is an unusable function call.
+        let arguments = "{\"path\":\"项目/报告.txt\",\"note\":\"🙂\"}";
+        let wire = format!("data: {{\"arguments\":{}}}\n\n", serde_json::json!(arguments));
+        let mut d = SseDecoder::new();
+        let mut frames = Vec::new();
+        for byte in wire.as_bytes() {
+            frames.extend(d.push(std::slice::from_ref(byte)));
+        }
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].json().unwrap()["arguments"], arguments);
+    }
+
+    #[test]
+    fn crlf_frames_split_at_every_byte_boundary_are_still_frames() {
+        let wire = "event: ping\r\ndata: {\"text\":\"中文\"}\r\n\r\n";
+        let mut d = SseDecoder::new();
+        let mut frames = Vec::new();
+        for byte in wire.as_bytes() {
+            frames.extend(d.push(std::slice::from_ref(byte)));
+        }
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].event.as_deref(), Some("ping"));
+        assert_eq!(frames[0].json().unwrap()["text"], "中文");
+    }
+
+    #[test]
+    fn invalid_bytes_inside_a_complete_frame_are_still_tolerated() {
+        // The counterpart to the split-sequence case: bytes that are invalid in
+        // a frame that did arrive complete stay lossy rather than fatal.
+        let mut d = SseDecoder::new();
+        let frames = d.push(b"data: \xff\xfe\n\n");
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].data, "\u{fffd}\u{fffd}");
     }
 
     #[test]
