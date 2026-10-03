@@ -235,6 +235,37 @@ impl SuccessModel {
     }
 }
 
+/// Samples below which a success head is still cold.
+const SUCCESS_COLD_SAMPLES: u64 = 10;
+
+/// The evidence weight of a success head's own estimate.
+///
+/// A head that has seen only a handful of samples beyond the cold floor cannot
+/// be as sure of its output as one backed by hundreds, so the margin below is
+/// discounted by `samples / (samples + prior)`. The prior is small so the
+/// ten-sample cold floor already counts as real evidence.
+const SUCCESS_CONFIDENCE_PRIOR_SAMPLES: f64 = 2.0;
+
+/// How much a success head trusts its own prediction.
+///
+/// The predicted success probability and the model's confidence in it are
+/// different quantities, and the guard, the utility uncertainty penalty and
+/// the Sticky threshold all read the second. `4p(1-p)` is the Bernoulli
+/// variance of the outcome - maximal at `p = 0.5` and zero at the extremes -
+/// so reading it as confidence let the *least* decisive prediction clear the
+/// switch gate while blocking the most decisive one. Confidence here is the
+/// head's margin from a coin flip, `|2p - 1|`, discounted by how much evidence
+/// stands behind the estimate, so it grows as the prediction becomes both
+/// decisive and well sampled.
+fn success_confidence(probability: f64, samples: u64) -> f64 {
+    if samples < SUCCESS_COLD_SAMPLES {
+        return 0.1;
+    }
+    let decisiveness = (2.0 * probability - 1.0).abs();
+    let evidence = samples as f64 / (samples as f64 + SUCCESS_CONFIDENCE_PRIOR_SAMPLES);
+    (decisiveness * evidence).clamp(0.0, 1.0)
+}
+
 impl RoutingModel for SuccessModel {
     fn name(&self) -> &str {
         "success"
@@ -242,12 +273,7 @@ impl RoutingModel for SuccessModel {
 
     fn predict(&self, features: &RoutingFeatures) -> Prediction {
         let p = self.raw_predict(&features.values);
-        let confidence = if self.samples < 10 {
-            0.1
-        } else {
-            (p * (1.0 - p) * 4.0).min(1.0)
-        };
-        Prediction::clamped(p, confidence, self.samples)
+        Prediction::clamped(p, success_confidence(p, self.samples), self.samples)
     }
 
     fn update(&mut self, features: &RoutingFeatures, target: f64) {
@@ -724,6 +750,104 @@ mod tests {
         assert_eq!(pred.sample_count, 0);
         // Prediction::clamped sets cold=false, but sample_count=0 indicates cold start
         assert!(!pred.cold);
+    }
+
+    /// A success head loaded at a chosen prediction and sample count.
+    ///
+    /// The confidence direction must hold for the state, not for however a
+    /// particular training run happened to converge, so the state is built
+    /// through the same public load path a checkpoint takes.
+    fn success_model_at(probability: f64, samples: u64) -> SuccessModel {
+        let logit = (probability / (1.0 - probability)).ln();
+        let dimension = FEATURE_DIMENSION;
+        let mut parameters = vec![logit];
+        parameters.extend(std::iter::repeat(0.0).take(dimension));
+        parameters.extend(std::iter::repeat(1.0).take(dimension));
+        let mut state = ModelState::new("success_logistic_adagrad", parameters);
+        state.update_count = samples;
+        SuccessModel::load(&state).expect("a well-formed success checkpoint loads")
+    }
+
+    #[test]
+    fn success_confidence_grows_with_decisiveness_not_uncertainty() {
+        let uncertain = success_model_at(0.5, 100).predict(&zero_features());
+        let confident = success_model_at(0.99, 100).predict(&zero_features());
+
+        assert!(
+            (uncertain.value - 0.5).abs() < 1e-9,
+            "the coin-flip head predicts 0.5, got {}",
+            uncertain.value
+        );
+        assert!(
+            (confident.value - 0.99).abs() < 1e-9,
+            "the decisive head predicts 0.99, got {}",
+            confident.value
+        );
+
+        // The success probability and the confidence in it are different
+        // quantities. The old `4p(1-p)` gave the coin flip 1.0 and the
+        // near-certain head 0.04; the direction must be the other way round.
+        assert!(
+            uncertain.confidence < confident.confidence,
+            "confidence must grow with decisiveness: {} vs {}",
+            uncertain.confidence,
+            confident.confidence
+        );
+        assert!(
+            uncertain.confidence < 0.1,
+            "a coin flip is not a confident prediction, got {}",
+            uncertain.confidence
+        );
+        assert!(
+            confident.confidence > 0.8,
+            "a 0.99 prediction is a confident one, got {}",
+            confident.confidence
+        );
+
+        // Confidence also carries the evidence behind the estimate: the same
+        // prediction on ten samples is less trusted than on a hundred.
+        let thin = success_model_at(0.99, 10).predict(&zero_features());
+        assert!(
+            thin.confidence < confident.confidence,
+            "the same estimate on fewer samples must be less confident: {} vs {}",
+            thin.confidence,
+            confident.confidence
+        );
+        assert!(
+            thin.confidence > uncertain.confidence,
+            "it must still be more confident than a coin flip, got {}",
+            thin.confidence
+        );
+    }
+
+    #[test]
+    fn the_sticky_guard_reads_the_confidence_in_the_correct_direction() {
+        use crate::ml::reward::{Action, ActionGuard};
+        use crate::session::SessionRoutingMode;
+
+        let uncertain = success_model_at(0.5, 100).predict(&zero_features());
+        let confident = success_model_at(0.99, 100).predict(&zero_features());
+
+        assert_eq!(
+            ActionGuard::decide(
+                "current",
+                "better",
+                SessionRoutingMode::Sticky,
+                uncertain.confidence,
+            ),
+            Action::Keep,
+            "the least decisive prediction must not move a sticky session"
+        );
+        assert_eq!(
+            ActionGuard::decide(
+                "current",
+                "better",
+                SessionRoutingMode::Sticky,
+                confident.confidence,
+            ),
+            Action::Switch,
+            "a confident prediction about a different candidate may switch"
+        );
     }
 
     // -- 2. SuccessModel sigmoid correctness --
