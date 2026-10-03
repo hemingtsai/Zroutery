@@ -173,6 +173,16 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
                     .get("name")
                     .and_then(Value::as_str)
                     .ok_or_else(|| Error::invalid("tool definition is missing `name`"))?;
+                let strict = match f.get("strict") {
+                    None | Some(Value::Null) => None,
+                    Some(Value::Bool(strict)) => Some(*strict),
+                    Some(_) => {
+                        return Err(Error::invalid("tool `strict` must be a boolean"));
+                    }
+                };
+                if let Some(strict) = strict {
+                    req.tool_strict.insert(name.to_string(), strict);
+                }
                 req.tools.push(ToolDef {
                     name: name.to_string(),
                     description: f
@@ -627,14 +637,20 @@ pub fn encode_request_with(
                 req.tools
                     .iter()
                     .map(|t| {
-                        json!({
-                            "type": "function",
-                            "function": {
-                                "name": t.name,
-                                "description": t.description.clone().unwrap_or_default(),
-                                "parameters": t.input_schema,
-                            }
-                        })
+                        let mut function = Map::new();
+                        function.insert("name".into(), json!(t.name));
+                        function.insert(
+                            "description".into(),
+                            json!(t.description.clone().unwrap_or_default()),
+                        );
+                        function.insert("parameters".into(), t.input_schema.clone());
+                        // `strict` is part of the function definition, not a
+                        // vendor extension: dropping it would turn "obey this
+                        // schema exactly" into an ordinary tool.
+                        if let Some(strict) = req.tool_strict.get(&t.name) {
+                            function.insert("strict".into(), json!(strict));
+                        }
+                        json!({"type": "function", "function": Value::Object(function)})
                     })
                     .collect(),
             ),
@@ -2189,6 +2205,50 @@ mod tests {
                 "content {content} must be an upstream payload error, got {err:?}"
             );
         }
+    }
+
+    #[test]
+    fn tool_strict_flags_round_trip_through_openai() {
+        let original = json!({
+            "model": "m",
+            "messages": [{"role": "user", "content": "hi"}],
+            "tools": [
+                {"type": "function", "function": {"name": "exact", "strict": true,
+                 "parameters": {"type": "object"}}},
+                {"type": "function", "function": {"name": "loose", "strict": false,
+                 "parameters": {"type": "object"}}},
+                {"type": "function", "function": {"name": "silent",
+                 "parameters": {"type": "object"}}}
+            ]
+        });
+        let req = decode_request(original).unwrap();
+        assert_eq!(req.tool_strict.get("exact"), Some(&true));
+        assert_eq!(req.tool_strict.get("loose"), Some(&false));
+        assert_eq!(req.tool_strict.get("silent"), None);
+
+        let body = encode_request(&req, "up").unwrap();
+        let tools = body["tools"].as_array().unwrap();
+        assert_eq!(
+            tools[0]["function"]["strict"],
+            json!(true),
+            "an explicit strict request must survive: {body}"
+        );
+        assert_eq!(tools[1]["function"]["strict"], json!(false));
+        assert!(
+            tools[2]["function"].get("strict").is_none(),
+            "an absent flag must stay absent: {body}"
+        );
+
+        let again = decode_request(body).unwrap();
+        assert_eq!(again.tool_strict, req.tool_strict);
+
+        let err = decode_request(json!({
+            "model": "m",
+            "messages": [],
+            "tools": [{"type": "function", "function": {"name": "f", "strict": "yes"}}]
+        }))
+        .unwrap_err();
+        assert!(err.to_string().contains("`strict` must be a boolean"));
     }
 
     #[test]
