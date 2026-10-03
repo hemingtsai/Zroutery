@@ -315,16 +315,33 @@ const BREAKER_MIN_REQUESTS: u32 = 1000;
 ///
 /// Note what the roster size does *not* determine. The K axis is the number of
 /// **attempts a decision actually made**, not the number of models it could have
-/// chosen, so equal rosters buy a uniform plan and not a uniform axis. Before
-/// this node's repair the axis was uniformly 1; it is now deliberately not
-/// uniform, and `the_window_contains_a_rankable_axis_and_states_its_failover_rate`
-/// measures exactly what it is rather than asserting a shape.
+/// chosen, so equal rosters buy a uniform plan and not necessarily a uniform
+/// axis. Before this node's repair the axis was uniformly 1 and therefore
+/// unmeasurable; it is now uniformly 2. Both halves of that sentence are
+/// measurements, not intentions, and the irony is worth recording rather than
+/// smoothing over: this node's headline defect was a doc comment asserting a
+/// behaviour the code did not have, so a passing comment is not evidence and
+/// only the printed histogram is.
+/// `the_window_contains_a_rankable_axis_and_states_its_failover_rate` prints it
+/// — `arity 2: 30`, zero degenerate — rather than asserting a shape.
+///
+/// Uniformity is now **forced**, not incidental. `measure_release_evidence`
+/// returns `DegenerateAxis` on the first arity-1 decision it walks, so a cohort
+/// is measurable only if *every* decision in the holdout compares at least two
+/// candidates. Any arity-1 decision anywhere in the partition takes the whole
+/// measurement down, which is why an earlier odd/even iteration of this fixture
+/// measured 16 rankable and 14 degenerate and still refused before measuring
+/// anything.
 ///
 /// The breaker is configured so nothing is quarantined partway through the
 /// window, because a mid-window regime change is what 7E-2D's drift gate
 /// refuses. See the assignments below: getting this right took two corrections,
 /// and both are documented where they happen. No statistical or calibration
 /// default is touched anywhere in this file.
+///
+/// That choice has a representativeness cost, recorded at [`FAILOVER_FRACTION`]
+/// rather than left implicit: with every path to `Open` out of reach, this
+/// window's breaker can never open at all.
 fn config_for(upstream: SocketAddr) -> AppConfig {
     let mut cfg = AppConfig::default();
     cfg.server.host = "127.0.0.1".into();
@@ -786,6 +803,31 @@ fn gate_config() -> GateConfig {
 ///   to serve**, and the verdict printed by
 ///   `the_candidate_reaches_a_named_verdict_over_real_request_evidence` is
 ///   reported exactly as obtained.
+/// - **CANNOT** support, on a **second and independent axis**: anything about how
+///   the circuit breaker behaves under sustained failure. See below.
+///
+/// **The second axis: this window's breaker can never open.** `config_for` puts
+/// every path from `Closed` to `Open` out of reach — the consecutive-failure
+/// threshold at [`BREAKER_FAILURE_THRESHOLD`] and the request count the
+/// error-rate rule needs at [`BREAKER_MIN_REQUESTS`], both past anything this
+/// window produces. That is not incidental and it is not free. At a 100%
+/// first-choice failure rate a real breaker would open almost immediately, and
+/// the regime this window describes **cannot persist past a few dozen requests**
+/// in production: the first choice would be quarantined, routing would fall
+/// through to the healthy models, and every decision after that would have a
+/// different first choice and a different arity — exactly the mid-window regime
+/// change 7E-2D's drift gate refuses, which is what the raised thresholds exist
+/// to rule out here.
+///
+/// So the window is unrepresentative on two counts, not one: its failure rate,
+/// and a breaker that is disabled by configuration rather than by health. The
+/// trade is deliberate and worth making explicitly — 7E-2D requires a single
+/// regime, and a single regime is worth more than the representativeness it
+/// costs, because a cohort that changes shape partway through cannot be measured
+/// at all. But the cost belongs on the record next to the rate, not only in the
+/// comment that configures the breaker. The breaker thresholds are **not**
+/// therefore evidence about breaker behaviour, and no reading of this window
+/// should treat "the breaker never fired" as a finding about health tracking.
 const FAILOVER_FRACTION: &str =
     "30 of 30 routed decisions (100%), forced by the gate's all-or-nothing \
                                 arity requirement";
