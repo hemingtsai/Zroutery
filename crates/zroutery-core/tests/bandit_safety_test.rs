@@ -1094,6 +1094,95 @@ fn the_safety_metrics_never_pass_through_the_reward_function() {
 }
 
 #[test]
+fn rescaling_every_weight_cannot_manufacture_a_safety_acceptance() {
+    // Every arm is measured over the same recorded rows, so a comparison that
+    // scored each arm with that arm's own weights would see four zero deltas
+    // and one number - the arm's own scoring unit - that a pure rescale could
+    // move. Multiplying every weight by 100 preserves the ranking of any
+    // outcome and multiplies the arm's score by 100, which is exactly the
+    // change that used to read as a mean-reward improvement and win an
+    // acceptance.
+    let rows = misordered_snapshot();
+    let prior = RewardPolicy::default();
+    let scaled = RewardPolicy {
+        success_weight: prior.success_weight * 100.0,
+        latency_weight: prior.latency_weight * 100.0,
+        cost_weight: prior.cost_weight * 100.0,
+        fallback_penalty: prior.fallback_penalty * 100.0,
+        switch_cost: prior.switch_cost * 100.0,
+        uncertainty_weight: prior.uncertainty_weight * 100.0,
+    };
+
+    // Control: with no arm rescaled, the run is already rejected, because two
+    // arms scored over the same recorded rows have no identifiable improvement.
+    // The rescaled run below must not turn that rejection into an acceptance.
+    let control = run_bandit(
+        &rows,
+        &[
+            RewardArm::accepted_prior(),
+            RewardArm::new("identical-ranking", prior.clone()),
+        ],
+        &fixture_config(),
+    )
+    .expect("the fixture snapshot must run");
+    assert_eq!(
+        control.report().safety.mean_reward_delta,
+        0.0,
+        "arms over the same rows have no reward delta"
+    );
+    assert_eq!(
+        control.report().safety.verdict(),
+        SafetyVerdict::Reject,
+        "a comparison with no identifiable improvement cannot be accepted"
+    );
+    assert_eq!(control.accepted_arm(), None);
+
+    // The re-scaled arm still wins the UCB replay, because the replay scores
+    // each arm in that arm's own units. Safety must not follow it.
+    let outcome = run_bandit(
+        &rows,
+        &[
+            RewardArm::accepted_prior(),
+            RewardArm::new("scaled-identical-ranking", scaled),
+        ],
+        &fixture_config(),
+    )
+    .expect("the fixture snapshot must run");
+    let report = outcome.report();
+    assert_eq!(
+        report.selection.selected, "scaled-identical-ranking",
+        "the replay is expected to select the re-scaled arm on its own scale"
+    );
+
+    // The four raw metrics are the same rows for every arm, and the reward
+    // dimension is now scored on the one fixed evaluation scale, so it carries
+    // no information either.
+    let rewards: Vec<f64> = report
+        .safety_by_arm
+        .iter()
+        .map(|arm| arm.mean_outcome_proxy_reward)
+        .collect();
+    assert!(
+        rewards.windows(2).all(|pair| pair[0] == pair[1]),
+        "every arm must be scored on one shared scale, got {rewards:?}"
+    );
+    assert_eq!(
+        report.safety.mean_reward_delta, 0.0,
+        "a rescale of the candidate's weights must not move the compared reward"
+    );
+    assert_eq!(
+        report.safety.verdict(),
+        SafetyVerdict::Reject,
+        "multiplying every weight by 100 must not turn a rejection into an acceptance"
+    );
+    assert_eq!(
+        outcome.accepted_arm(),
+        None,
+        "a pure weight rescale grants no acceptance"
+    );
+}
+
+#[test]
 fn acceptance_cannot_be_granted_by_writing_a_field_into_the_report() {
     let reference = ArmProfile::new("reference", 0.50, 0.10, 0.02, 400.0, 0.05);
     let candidate = ArmProfile::new("candidate", 0.55, 0.30, 0.02, 400.0, 0.05);
