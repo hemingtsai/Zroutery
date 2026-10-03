@@ -285,18 +285,23 @@ fn collect_models(env: &Value) -> Vec<CcModel> {
     let sonnet = model_of("ANTHROPIC_DEFAULT_SONNET_MODEL");
     let haiku = model_of("ANTHROPIC_DEFAULT_HAIKU_MODEL");
 
-    let all_same = match (&opus, &sonnet, &haiku) {
-        (Some(o), Some(s), Some(h)) => o == s && s == h,
-        (Some(o), Some(s), None) | (Some(o), None, Some(s)) | (None, Some(o), Some(s)) => o == s,
-        _ => false,
+    // The shared model itself, not a boolean: when only two tiers are set there
+    // is no sonnet entry to read, and doing so anyway made a legal partial
+    // mapping panic the whole provider import.
+    let shared_model = match (&opus, &sonnet, &haiku) {
+        (Some(o), Some(s), Some(h)) if o == s && s == h => Some(s.clone()),
+        (Some(o), Some(s), None) if o == s => Some(s.clone()),
+        (Some(o), None, Some(h)) if o == h => Some(o.clone()),
+        (None, Some(s), Some(h)) if s == h => Some(s.clone()),
+        _ => None,
     };
 
     let mut models: Vec<CcModel> = Vec::new();
-    if all_same {
-        // Every tier is the same model: one entry, in the tier a conversation
-        // actually requests.
+    if let Some(upstream_model) = shared_model {
+        // Every tier names the same model: one entry, in the tier a
+        // conversation actually requests.
         models.push(CcModel {
-            upstream_model: sonnet.clone().unwrap(),
+            upstream_model,
             tier: Some(ModelTier::Standard),
         });
     } else {
@@ -577,6 +582,97 @@ mod tests {
         assert_eq!(p.models[0].upstream_model, "glm-5.3");
         // The class a conversation asks for, so sonnet-class works on day one.
         assert_eq!(p.models[0].tier, Some(ModelTier::Standard));
+    }
+
+    #[test]
+    fn a_two_tier_relay_collapses_without_inventing_a_sonnet_entry() {
+        // A relay may set any two of the three tier defaults naming the same
+        // model. All of these were read through `sonnet`, which panicked on the
+        // opus+haiku pair and aborted the entire provider import with it.
+        let cases: [(&str, Option<&str>, Option<&str>, Option<&str>); 3] = [
+            ("opus+sonnet", Some("relay-model"), Some("relay-model"), None),
+            ("opus+haiku", Some("relay-model"), None, Some("relay-model")),
+            ("sonnet+haiku", None, Some("relay-model"), Some("relay-model")),
+        ];
+        for (name, opus, sonnet, haiku) in cases {
+            let mut env = json!({
+                "ANTHROPIC_BASE_URL": "https://relay.example/v1",
+                "ANTHROPIC_AUTH_TOKEN": "sk-x",
+                "ANTHROPIC_DEFAULT_OPUS_MODEL": opus,
+                "ANTHROPIC_DEFAULT_SONNET_MODEL": sonnet,
+                "ANTHROPIC_DEFAULT_HAIKU_MODEL": haiku,
+            });
+            // json! would keep the None placeholders as null, which the reader
+            // already treats as unset; drop them so the shape matches a real
+            // partial mapping.
+            let obj = env.as_object_mut().unwrap();
+            obj.retain(|_, value| !value.is_null());
+            let p = provider_from_env("id".into(), "Relay".into(), &env, false)
+                .unwrap_or_else(|| panic!("{name} was rejected"));
+            assert_eq!(p.models.len(), 1, "{name}");
+            assert_eq!(p.models[0].upstream_model, "relay-model", "{name}");
+            assert_eq!(p.models[0].tier, Some(ModelTier::Standard), "{name}");
+        }
+    }
+
+    #[test]
+    fn distinct_two_tier_models_still_get_their_own_tiers() {
+        // The collapse must not swallow two genuinely different models.
+        let cases: [(
+            &str,
+            Option<&str>,
+            Option<&str>,
+            Option<&str>,
+            Vec<(&str, ModelTier)>,
+        ); 3] = [
+            (
+                "opus+sonnet",
+                Some("big-model"),
+                Some("mid-model"),
+                None,
+                vec![("big-model", ModelTier::Reasoning), ("mid-model", ModelTier::Standard)],
+            ),
+            (
+                "opus+haiku",
+                Some("big-model"),
+                None,
+                Some("small-model"),
+                vec![("big-model", ModelTier::Reasoning), ("small-model", ModelTier::Fast)],
+            ),
+            (
+                "sonnet+haiku",
+                None,
+                Some("mid-model"),
+                Some("small-model"),
+                vec![("mid-model", ModelTier::Standard), ("small-model", ModelTier::Fast)],
+            ),
+        ];
+        for (name, opus, sonnet, haiku, expected) in cases {
+            let mut env = json!({
+                "ANTHROPIC_BASE_URL": "https://relay.example/v1",
+                "ANTHROPIC_AUTH_TOKEN": "sk-x",
+                "ANTHROPIC_DEFAULT_OPUS_MODEL": opus,
+                "ANTHROPIC_DEFAULT_SONNET_MODEL": sonnet,
+                "ANTHROPIC_DEFAULT_HAIKU_MODEL": haiku,
+            });
+            let obj = env.as_object_mut().unwrap();
+            obj.retain(|_, value| !value.is_null());
+            let p = provider_from_env("id".into(), "Relay".into(), &env, false)
+                .unwrap_or_else(|| panic!("{name} was rejected"));
+            let tiers: Vec<(&str, Option<ModelTier>)> = p
+                .models
+                .iter()
+                .map(|m| (m.upstream_model.as_str(), m.tier))
+                .collect();
+            assert_eq!(
+                tiers,
+                expected
+                    .iter()
+                    .map(|(model, tier)| (*model, Some(*tier)))
+                    .collect::<Vec<_>>(),
+                "{name}"
+            );
+        }
     }
 
     #[test]
