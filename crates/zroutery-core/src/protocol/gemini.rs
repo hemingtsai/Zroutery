@@ -13,7 +13,8 @@ use super::{explicit_placeholder, unsupported_content, SseFrame, StreamEncoder, 
 use crate::error::{Error, Result};
 use crate::ir::{
     classify_media, ChatRequest, ChatResponse, ContentBlock, Dialect, MediaSource, Message, Role,
-    StopReason, StreamEvent, SystemPart, ToolChoice, ToolDef, ToolResultPart, Usage,
+    StopReason, StreamEvent, SystemPart, ThinkingConfig, ToolChoice, ToolDef, ToolResultPart,
+    Usage,
 };
 
 // ---------------------------------------------------------------- request in
@@ -186,6 +187,11 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
                 .collect::<Result<Vec<_>>>()?,
             Some(_) => return Err(Error::invalid("`stopSequences` must be an array")),
         };
+        // Thinking configuration was received and then discarded, so a caller
+        // that asked for a thinking budget silently got the provider default.
+        if let Some(thinking) = gc.get("thinkingConfig").filter(|value| !value.is_null()) {
+            req.thinking = Some(decode_thinking_config(thinking)?);
+        }
     }
 
     match obj.get("tools") {
@@ -382,6 +388,34 @@ fn normalize_gemini_schema_children(value: &mut Value) {
     }
 }
 
+/// Map `generationConfig.thinkingConfig` onto the IR thinking config.
+///
+/// Gemini expresses the budget in tokens and disables thinking with a budget
+/// of zero; an absent budget means the provider default. Gemini 3's
+/// `thinkingLevel` has no IR counterpart and is not mapped here, and neither
+/// is `includeThoughts`.
+fn decode_thinking_config(config: &Value) -> Result<ThinkingConfig> {
+    match config
+        .get("thinkingBudget")
+        .filter(|value| !value.is_null())
+    {
+        None => Ok(ThinkingConfig {
+            enabled: true,
+            budget_tokens: None,
+        }),
+        Some(budget) => {
+            let budget = budget
+                .as_u64()
+                .ok_or_else(|| Error::invalid("`thinkingBudget` must be a non-negative integer"))?;
+            let budget = budget.min(u32::MAX as u64) as u32;
+            Ok(ThinkingConfig {
+                enabled: budget > 0,
+                budget_tokens: (budget > 0).then_some(budget),
+            })
+        }
+    }
+}
+
 // --------------------------------------------------------------- request out
 
 pub fn encode_request(req: &ChatRequest, upstream_model: &str) -> Result<Value> {
@@ -551,6 +585,23 @@ pub fn encode_request(req: &ChatRequest, upstream_model: &str) -> Result<Value> 
     }
     if !req.stop_sequences.is_empty() {
         gc.insert("stopSequences".into(), json!(req.stop_sequences));
+    }
+    if let Some(thinking) = &req.thinking {
+        let mut config = Map::new();
+        match (thinking.enabled, thinking.budget_tokens) {
+            (true, Some(budget)) => {
+                config.insert("thinkingBudget".into(), json!(budget));
+            }
+            // A zero budget is how Gemini is told to think less than its
+            // default, including not at all.
+            (false, _) => {
+                config.insert("thinkingBudget".into(), json!(0));
+            }
+            // Enabled with no explicit budget asks for the provider default,
+            // which an empty thinking config expresses.
+            (true, None) => {}
+        }
+        gc.insert("thinkingConfig".into(), Value::Object(config));
     }
     if !gc.is_empty() {
         body.insert("generationConfig".into(), Value::Object(gc));

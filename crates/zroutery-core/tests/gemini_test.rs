@@ -2,8 +2,8 @@
 
 use serde_json::{json, Value};
 use zroutery_core::ir::{
-    ChatRequest, ChatResponse, ContentBlock, Dialect, Role, StopReason, StreamEvent, ToolChoice,
-    Usage,
+    Capability, ChatRequest, ChatResponse, ContentBlock, Dialect, Role, StopReason, StreamEvent,
+    ThinkingConfig, ToolChoice, Usage,
 };
 use zroutery_core::protocol::gemini::{
     decode_request, decode_response, encode_request, encode_response, GeminiStreamEncoder,
@@ -567,4 +567,77 @@ fn keeps_parameters_json_schema_types_verbatim() {
         req.tools[0].input_schema["properties"]["city"]["type"],
         "string"
     );
+}
+
+fn thinking_request(config: Value) -> Value {
+    json!({
+        "model": "gemini-2.5-flash",
+        "contents": [{"role": "user", "parts": [{"text": "solve it"}]}],
+        "generationConfig": {"maxOutputTokens": 512, "thinkingConfig": config}
+    })
+}
+
+#[test]
+fn carries_the_thinking_budget_into_the_ir() {
+    let body = thinking_request(json!({"thinkingBudget": 8192, "includeThoughts": true}));
+
+    let req = decode_request(body).unwrap();
+    assert_eq!(
+        req.thinking,
+        Some(ThinkingConfig {
+            enabled: true,
+            budget_tokens: Some(8192)
+        })
+    );
+    assert!(req.required_capabilities.contains(&Capability::Thinking));
+
+    // A reasoning-capable OpenAI upstream must receive the translated budget
+    // instead of no reasoning configuration at all.
+    let quirks = ProviderQuirks {
+        send_reasoning_effort: true,
+        ..ProviderQuirks::default()
+    };
+    let upstream = translate_request(Dialect::OpenAI, &req, "o3", &quirks).unwrap();
+    assert_eq!(upstream["reasoning_effort"], "medium");
+}
+
+#[test]
+fn a_zero_thinking_budget_disables_thinking() {
+    let body = thinking_request(json!({"thinkingBudget": 0}));
+
+    let req = decode_request(body).unwrap();
+    assert_eq!(
+        req.thinking,
+        Some(ThinkingConfig {
+            enabled: false,
+            budget_tokens: None
+        })
+    );
+    assert!(!req.required_capabilities.contains(&Capability::Thinking));
+
+    let quirks = ProviderQuirks {
+        send_reasoning_effort: true,
+        ..ProviderQuirks::default()
+    };
+    let upstream = translate_request(Dialect::OpenAI, &req, "o3", &quirks).unwrap();
+    assert_eq!(upstream["reasoning_effort"], "none");
+}
+
+#[test]
+fn thinking_config_round_trips_through_gemini() {
+    let req = decode_request(thinking_request(json!({"thinkingBudget": 4096}))).unwrap();
+    let wire = encode_request(&req, "gemini-2.5-flash").unwrap();
+    assert_eq!(
+        wire["generationConfig"]["thinkingConfig"]["thinkingBudget"],
+        4096
+    );
+
+    let round_tripped = decode_request(wire).unwrap();
+    assert_eq!(round_tripped.thinking, req.thinking);
+}
+
+#[test]
+fn rejects_a_negative_thinking_budget() {
+    let error = decode_request(thinking_request(json!({"thinkingBudget": -1}))).unwrap_err();
+    assert!(error.to_string().contains("thinkingBudget"));
 }
