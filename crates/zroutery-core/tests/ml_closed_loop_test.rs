@@ -553,6 +553,10 @@ async fn a_promotion_decision_is_explainable_and_a_promoted_model_becomes_the_ac
     );
     assert_eq!(
         decision.dataset_fingerprint.as_str(),
+        artefacts.training.report.source_fingerprint.as_str()
+    );
+    assert_eq!(
+        decision.fitted_partition_fingerprint.as_str(),
         artefacts.training.report.dataset_fingerprint.as_str()
     );
     assert!(!decision.gate_config_identity.is_empty());
@@ -879,8 +883,248 @@ async fn exploration_moves_real_requests_and_never_serves_an_ineligible_candidat
 }
 
 // ---------------------------------------------------------------------------
-// The comparison's own guard, on real data
+// Evidence
 // ---------------------------------------------------------------------------
+
+/// Print the whole loop's numbers, from a real run, in one place.
+///
+/// Ignored by default because it is a report, not an assertion: it exists so the
+/// figures in `docs/development/ml-closed-loop-report.md` can be regenerated
+/// rather than copied forward and trusted.
+///
+///     cargo test -p zroutery-core --features ml --test ml_closed_loop_test \
+///         -- --ignored --nocapture print_the_closed_loop_evidence
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "prints the evidence report; run it deliberately"]
+async fn print_the_closed_loop_evidence() {
+    let (upstream, addr) = start_upstream().await;
+    let state_dir = tempfile::tempdir().expect("tempdir");
+
+    // Phase 1 -- collect.
+    let harness = Harness::start(config_for(addr, state_dir.path(), false), upstream.clone()).await;
+    let costs = harness.drive(COLLECTION_REQUESTS).await;
+    let mean: f64 = costs.iter().sum::<usize>() as f64 / costs.len() as f64;
+    println!("== COLLECT ==");
+    println!("requests                 {COLLECTION_REQUESTS}");
+    println!(
+        "traces persisted         {}",
+        harness.state.traces().counters().appended
+    );
+    println!(
+        "samples ingested         {}",
+        harness.state.dataset().counters().samples
+    );
+    println!("upstream calls           {}", upstream.calls().len());
+    println!("attempts per request     {mean:.3}");
+    println!(
+        "fallback rate            {:.3}",
+        harness
+            .state
+            .dataset()
+            .legacy_training_slice()
+            .iter()
+            .filter(|s| !s.targets.success)
+            .count() as f64
+            / COLLECTION_REQUESTS as f64
+    );
+    drop(harness);
+
+    let artefacts = loop_over(state_dir);
+
+    // Phase 2 -- learn, compare, analyse.
+    let report = &artefacts.training.report;
+    println!();
+    println!("== TRAIN ==");
+    println!("samples                  {}", report.sample_count);
+    println!("requests                 {}", report.request_count);
+    println!(
+        "train / val / holdout    {} / {} / {}",
+        report.train_size, report.validation_size, report.holdout_size
+    );
+    println!(
+        "groups                   {} / {} / {}",
+        report.train_groups, report.validation_groups, report.holdout_groups
+    );
+    println!("passes                   {}", report.passes.len());
+    println!(
+        "holdout log loss         {:.4}  (uninformed = {:.4})",
+        report.holdout_loss,
+        std::f64::consts::LN_2
+    );
+    println!(
+        "holdout brier            {:.4}",
+        report.holdout.brier_score.unwrap_or(f64::NAN)
+    );
+    println!(
+        "features observed        {}/{}",
+        report.coverage.observed, report.coverage.dimension
+    );
+    println!("commit                   {}", report.final_commit);
+    println!("fitted partition         {}", report.dataset_fingerprint);
+    println!("source body              {}", report.source_fingerprint);
+    println!("config identity          {}", report.config_identity);
+
+    println!();
+    println!("== COMPARE (routing metrics) ==");
+    println!(
+        "{:<26} {:>7} {:>7} {:>9} {:>9} {:>9} {:>9} {:>7}",
+        "arm", "n", "cover", "success", "fallbk", "lat_ms", "cost", "provs"
+    );
+    for arm in &artefacts.comparison.arms {
+        println!(
+            "{:<26} {:>7} {:>7.3} {:>9.3} {:>9.3} {:>9.1} {:>9.5} {:>7}",
+            arm.policy,
+            arm.requests_measured,
+            arm.coverage,
+            arm.success_rate,
+            arm.fallback_rate,
+            arm.mean_latency_ms,
+            arm.mean_cost,
+            arm.distinct_providers
+        );
+    }
+
+    println!();
+    println!("== COMPARE (paired, candidate minus baseline) ==");
+    for pairing in &artefacts.comparison.paired {
+        println!(
+            "{:<26} paired={:<5} verdict={:<20} utility={:+.4} latency={:+.1}ms cost={:+.5} \
+succ={:+.3} regr={} impr={} both_fail={}",
+            pairing.baseline,
+            pairing.deltas.paired_requests,
+            match pairing.verdict {
+                zroutery_core::ml::RoutingVerdict::Improved => "Improved",
+                zroutery_core::ml::RoutingVerdict::Regressed => "Regressed",
+                zroutery_core::ml::RoutingVerdict::NoDifference => "NoDifference",
+                zroutery_core::ml::RoutingVerdict::InsufficientEvidence => "InsufficientEvidence",
+            },
+            pairing.deltas.mean_observed_utility_delta,
+            pairing.deltas.mean_latency_delta_ms,
+            pairing.deltas.mean_cost_delta,
+            pairing.deltas.success_rate_delta,
+            pairing.deltas.candidate_regressions,
+            pairing.deltas.candidate_improvements,
+            pairing.deltas.both_failed
+        );
+    }
+
+    println!();
+    println!("== SHADOW ==");
+    println!("records                  {}", artefacts.analysis.records);
+    println!(
+        "decision-shaped          {}",
+        artefacts.analysis.decision_records
+    );
+    println!(
+        "agreement rate           {:.3}",
+        artefacts.analysis.agreement_rate
+    );
+    println!(
+        "disagreements            {}",
+        artefacts.analysis.disagreements
+    );
+    println!(
+        "measured disagreements   {}",
+        artefacts.analysis.disagreements_measured
+    );
+    println!(
+        "measured alt rate        {:.3}",
+        artefacts.analysis.measured_alternative_rate
+    );
+    println!(
+        "observed utility delta   {:?}",
+        artefacts.analysis.mean_observed_utility_delta
+    );
+    println!(
+        "mean regret              {:?}",
+        artefacts.analysis.mean_regret
+    );
+    println!(
+        "helpful / harmful        {} / {}",
+        artefacts.analysis.helpful_alternatives, artefacts.analysis.harmful_alternatives
+    );
+    println!(
+        "evaluable                {}",
+        artefacts.analysis.is_evaluable()
+    );
+    for (reason, count) in &artefacts.analysis.gaps {
+        println!("  gap {reason:<24} {count}");
+    }
+
+    // Phase 3 -- gate.
+    let gate = PromotionGate::new(PromotionConfig::default());
+    let decision = gate.evaluate(report, &artefacts.comparison, Some("evidence-run".into()));
+    println!();
+    println!("== GATE ==");
+    println!("verdict                  {}", decision.verdict.as_str());
+    println!("gate identity            {}", decision.gate_config_identity);
+    println!("candidate commit         {}", decision.candidate_commit);
+    println!("judged over body         {}", decision.dataset_fingerprint);
+    println!(
+        "fitted partition         {}",
+        decision.fitted_partition_fingerprint
+    );
+    println!("paired requests          {}", decision.paired_requests);
+    for criterion in &decision.criteria {
+        println!(
+            "  [{}] {:<22} {}",
+            if criterion.held { "ok" } else { "--" },
+            criterion.name,
+            criterion.reason
+        );
+    }
+
+    // Phase 4 -- serve.
+    let store = ActiveModelStore::open(artefacts.state_dir.path()).expect("store");
+    store
+        .promote(
+            ActiveModel {
+                schema_version: ACTIVE_MODEL_SCHEMA_VERSION,
+                model_id: artefacts.training.model_id.clone(),
+                commit_id: artefacts.training.commit_record().commit_id.to_string(),
+                learning_event_count: artefacts.training.report.learning_event_count,
+                checkpoint: artefacts.training.checkpoint.clone(),
+                promotion_digest: "evidence-run".to_string(),
+                promoted_at: 0,
+            },
+            "evidence-run",
+            format!("gate said {}", decision.verdict.as_str()),
+        )
+        .expect("promote");
+    let path = artefacts.state_dir.path().to_path_buf();
+
+    let mut served_config = config_for(addr, &path, true);
+    served_config.ml_routing.exploration_probability = 0.0;
+    let served = Harness::start(served_config, upstream.clone()).await;
+    let served_costs = served.drive(COLLECTION_REQUESTS).await;
+    let served_mean: f64 = served_costs.iter().sum::<usize>() as f64 / served_costs.len() as f64;
+    let counts = served.state.ml_routing().counts();
+
+    println!();
+    println!("== SERVE (with the promoted model) ==");
+    println!("model attached           {}", counts.attached);
+    println!("rankings                 {}", counts.rankings);
+    println!("fallbacks                {}", counts.fallbacks);
+    println!("attempts per request     {served_mean:.3}");
+    println!("total upstream calls     {}", upstream.calls().len());
+    println!("attempt-cost histogram   {:?}", histogram(&served_costs));
+    println!("baseline cost histogram  {:?}", histogram(&costs));
+
+    drop(served);
+    drop(artefacts);
+}
+
+fn histogram(costs: &[usize]) -> String {
+    let mut counts: std::collections::BTreeMap<usize, usize> = std::collections::BTreeMap::new();
+    for cost in costs {
+        *counts.entry(*cost).or_insert(0) += 1;
+    }
+    counts
+        .into_iter()
+        .map(|(cost, count)| format!("{cost} attempt(s) x{count}"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_real_body_produces_a_directional_verdict_rather_than_a_framework_claim() {
