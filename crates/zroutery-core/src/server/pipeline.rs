@@ -2119,6 +2119,11 @@ impl RequestLifecycle {
     /// immediately; a stream's is settled by the terminal transition, because a
     /// handshake is all that is known once the body belongs to the client.
     fn begin_attempt(&mut self, candidate: &Candidate, rectified: bool) {
+        // The accounting dedup is per attempt, not per request: a new send has
+        // recorded nothing yet, so a failure observed while *this* attempt is
+        // open must still reach the router even when an earlier attempt on
+        // another candidate already settled one.
+        self.attempt_failure_accounted = false;
         let now = chrono::Utc::now().timestamp();
         self.attempts.push(OutcomeAttempt {
             attempt_id: format!("att_{}", uuid::Uuid::new_v4().simple()),
@@ -2167,13 +2172,15 @@ impl RequestLifecycle {
     ///
     /// A failure here is reported to the router adapters by the loop that owns
     /// the attempt, because that is where a routing decision can still act on
-    /// it. The terminal transition then leaves it alone.
+    /// it. The terminal transition then leaves it alone — but only for the
+    /// attempt that actually recorded this failure, which is why the dedup flag
+    /// is set here rather than at the request level.
     fn failed_attempt(&mut self, since: Instant, error: &Error) {
-        self.attempt_failure_accounted = true;
         let Some(index) = self.open_attempt() else {
             tracing::warn!(error = %error, "a failed attempt had no open attempt to settle");
             return;
         };
+        self.attempt_failure_accounted = true;
         let failure = error.classified();
         let Some(attempt) = self.attempts.get_mut(index) else {
             return;
