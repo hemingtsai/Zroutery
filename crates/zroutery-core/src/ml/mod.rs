@@ -8,6 +8,7 @@ pub mod activation;
 pub mod attribution;
 pub mod bandit;
 pub mod calibration;
+pub mod comparison;
 pub mod coordinator;
 pub mod dataset;
 pub mod decision_contract;
@@ -19,8 +20,10 @@ pub mod learning;
 pub mod model;
 pub mod model_identity;
 pub mod offline_gate;
+pub mod promotion;
 pub mod reward;
 pub mod shadow;
+pub mod shadow_analysis;
 pub mod statistics;
 pub mod traces;
 pub mod warmup;
@@ -60,6 +63,12 @@ pub use calibration::{
     MarginalObservation, MarginalView, NormalizationDamage, PartitionKind, ReliabilityBin,
     ReliabilityConfig, ReliabilityCurve, UnrankedReason, DEFAULT_DRIFT_BINS,
     DEFAULT_PROBABILITY_FLOOR, DEFAULT_RELIABILITY_BINS, DISTRIBUTION_ROLE,
+};
+pub use comparison::{
+    aggregate, observed_utility, pair_against_baseline, run_comparison, ArmMetrics, ArmRecord,
+    BaselinePairing, ComparisonError, MeasuredOutcome, MlPolicy, PairedDeltas, PolicyChoice,
+    ReplayBaseline, ReplayPolicy, ReplayState, RoutingComparison, RoutingVerdict,
+    MIN_PAIRED_REQUESTS, UTILITY_DELTA_THRESHOLD,
 };
 pub use coordinator::{Coordinator, CoordinatorConfig, RoutingAction, RoutingDecision};
 pub use dataset::{
@@ -111,6 +120,10 @@ pub use offline_gate::{
     RetentionAblation, RetentionProof, ServedIdentity, TerminalAgreement, JOURNAL_FLOAT_NOTE,
     RELEASE_SCOPE,
 };
+pub use promotion::{
+    comparison_was_improved, PromotionConfig, PromotionCriterion, PromotionDecision, PromotionGate,
+    PromotionVerdict,
+};
 pub use reward::{
     compute_utility, Action, ActionGuard, AttemptReward, PredictionBundle, RequestReward,
     RewardComputer, RewardPolicy, UtilityBreakdown,
@@ -119,6 +132,9 @@ pub use shadow::{
     EnsemblePredictor, ModelEnsemblePredictor, ProductionDecisionRef, ShadowCandidate,
     ShadowCandidateInput, ShadowDecision, ShadowEngine, ShadowInput, ShadowObservation,
     ShadowScope, ShadowStore, ShadowVerdict,
+};
+pub use shadow_analysis::{
+    analyse, ShadowAnalysis, ShadowEvidence, ShadowGap, ShadowKind, ShadowVerdictRecord,
 };
 pub use statistics::{
     holm_adjust, ln_gamma, mcnemar_exact_log_p, mcnemar_exact_p, measure_release_evidence,
