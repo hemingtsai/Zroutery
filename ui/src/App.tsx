@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, errorText, type AppConfig, type Snapshot } from "./api";
+import { api, errorText, gatewayAction, onGatewayStateChanged, type AppConfig, type Snapshot } from "./api";
 import { Banner, MenuItem, Popover, StatusDot, ToastProvider, useToast } from "./components";
 import { I18nProvider, useI18n } from "./i18n";
 import Overview from "./pages/Overview";
@@ -159,6 +159,65 @@ function Shell() {
     void run(api.snapshot);
   }, [run]);
 
+  /**
+   * Re-read the whole snapshot without touching the save queue.
+   *
+   * The server state is not part of the activity counters the live pages poll,
+   * so it only moves when something asks for a snapshot: the tray starting or
+   * stopping the gateway, or the window being shown again. Refreshes are
+   * coalesced, and a failure is reported like a failed save rather than
+   * leaving the page quietly out of date.
+   */
+  const refreshRef = useRef<Promise<void> | null>(null);
+  const refresh = useCallback((): Promise<void> => {
+    if (refreshRef.current) return refreshRef.current;
+    const pending = (async () => {
+      try {
+        const next = await api.snapshot();
+        configRef.current = next.config;
+        setSnapshot(next);
+        setPollError(null);
+      } catch (e) {
+        setError(errorText(e));
+      } finally {
+        refreshRef.current = null;
+      }
+    })();
+    refreshRef.current = pending;
+    return pending;
+  }, []);
+
+  // The tray can start or stop the gateway while this window sits on another
+  // page, so it announces the change and the window re-reads the state instead
+  // of trusting the snapshot it happened to load.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    void onGatewayStateChanged(() => {
+      void refresh();
+    })
+      .then((off) => {
+        if (cancelled) off();
+        else unlisten = off;
+      })
+      .catch(() => {
+        // No event bridge (a plain browser): visibility and focus below still
+        // refresh the snapshot.
+      });
+    const onFocus = () => void refresh();
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") void refresh();
+    };
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      cancelled = true;
+      unlisten?.();
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [refresh]);
+
   // Overview and Activity show live state; their pages poll the counters
   // only. A failure is reported rather than swallowed: silence would look
   // like an idle proxy.
@@ -182,6 +241,27 @@ function Shell() {
       clearInterval(timer);
     };
   }, [page]);
+
+  /**
+   * Start or stop the gateway from the state Rust reports right now.
+   *
+   * Deciding from the rendered `server.running` would run the wrong command
+   * whenever the tray changed the state first, so the current status is loaded
+   * and the command chosen from that.
+   */
+  const toggleGateway = useCallback(async () => {
+    if (busy) return;
+    let fresh: Snapshot;
+    try {
+      fresh = await api.snapshot();
+    } catch (e) {
+      setError(errorText(e));
+      return;
+    }
+    configRef.current = fresh.config;
+    setSnapshot(fresh);
+    void run(gatewayAction(fresh.server) === "start" ? api.start : api.stop);
+  }, [busy, run]);
 
   /**
    * Apply a mutation to the freshest committed config and save it. Pages hand
@@ -292,7 +372,7 @@ function Shell() {
                   <div className="menu-sep" />
                   <MenuItem
                     onClick={() => {
-                      void run(server.running ? api.stop : api.start);
+                      void toggleGateway();
                       close();
                     }}
                   >
