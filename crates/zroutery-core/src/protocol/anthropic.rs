@@ -782,6 +782,9 @@ pub struct AnthropicStreamParser {
     started: bool,
     open: Vec<u32>,
     stopped: bool,
+    /// Whether the upstream really ended the message (`stop_reason` or
+    /// `message_stop`). A body that just stops arriving is truncated.
+    normal_terminal: bool,
 }
 
 impl AnthropicStreamParser {
@@ -792,6 +795,7 @@ impl AnthropicStreamParser {
             started: false,
             open: Vec::new(),
             stopped: false,
+            normal_terminal: false,
         }
     }
 }
@@ -976,21 +980,32 @@ impl StreamParser for AnthropicStreamParser {
                         self.usage.input_tokens = total.min(u32::MAX as u64) as u32;
                     }
                 }
-                self.stopped = true;
-                vec![StreamEvent::Stop {
-                    stop_reason: delta
-                        .and_then(|d| d.get("stop_reason"))
-                        .and_then(Value::as_str)
-                        .map(stop_reason_from_str)
-                        .unwrap_or(StopReason::Unknown),
-                    stop_sequence: delta
-                        .and_then(|d| d.get("stop_sequence"))
-                        .and_then(Value::as_str)
-                        .map(str::to_string),
-                    usage: self.usage,
-                }]
+                match delta
+                    .and_then(|d| d.get("stop_reason"))
+                    .and_then(Value::as_str)
+                {
+                    Some(reason) => {
+                        self.normal_terminal = true;
+                        self.stopped = true;
+                        vec![StreamEvent::Stop {
+                            stop_reason: stop_reason_from_str(reason),
+                            stop_sequence: delta
+                                .and_then(|d| d.get("stop_sequence"))
+                                .and_then(Value::as_str)
+                                .map(str::to_string),
+                            usage: self.usage,
+                        }]
+                    }
+                    // A delta that only restates usage is not the end of the
+                    // message: `message_stop`, or a later delta carrying the
+                    // reason, is.
+                    None => Vec::new(),
+                }
             }
-            "message_stop" => Vec::new(),
+            "message_stop" => {
+                self.normal_terminal = true;
+                Vec::new()
+            }
             "ping" => vec![StreamEvent::Ping],
             "error" => {
                 let msg = v
@@ -1012,7 +1027,9 @@ impl StreamParser for AnthropicStreamParser {
         for index in std::mem::take(&mut self.open) {
             out.push(StreamEvent::BlockStop { index });
         }
-        if self.started && !self.stopped {
+        // Only a message that really ended gets the `Stop`; a body that stopped
+        // arriving closes its blocks but claims nothing.
+        if self.normal_terminal && !self.stopped {
             out.push(StreamEvent::Stop {
                 stop_reason: StopReason::Unknown,
                 stop_sequence: None,
@@ -1021,6 +1038,14 @@ impl StreamParser for AnthropicStreamParser {
             self.stopped = true;
         }
         out
+    }
+
+    fn saw_normal_terminal(&self) -> bool {
+        self.normal_terminal
+    }
+
+    fn reported_usage(&self) -> Usage {
+        self.usage
     }
 }
 
@@ -1819,16 +1844,80 @@ mod tests {
         );
         let events = frames_to_events(raw, "c");
         assert_eq!(
-            events[events.len() - 2],
-            StreamEvent::BlockStop { index: 0 }
+            events[events.len() - 1],
+            StreamEvent::BlockStop { index: 0 },
+            "the dangling block is still closed: {events:?}"
         );
-        assert!(matches!(
-            events.last().unwrap(),
-            StreamEvent::Stop {
-                stop_reason: StopReason::Unknown,
-                ..
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, StreamEvent::Stop { .. })),
+            "a body that merely stopped arriving is not a finished message: {events:?}"
+        );
+    }
+
+    #[test]
+    fn truncated_parser_reports_no_normal_terminal_and_keeps_usage() {
+        let mut parser = AnthropicStreamParser::new("c");
+        let raw = concat!(
+            "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"m\",\"model\":\"c\",\"usage\":{\"input_tokens\":42,\"output_tokens\":0}}}\n\n",
+            "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"tu\",\"name\":\"fn\"}}\n\n",
+            "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"a\\\":\"}}\n\n",
+        );
+        let mut events = Vec::new();
+        for frame in SseDecoder::new().push(raw.as_bytes()) {
+            events.extend(parser.push(&frame).unwrap());
+        }
+        events.extend(parser.finish());
+
+        assert!(!parser.saw_normal_terminal());
+        assert_eq!(parser.reported_usage().input_tokens, 42);
+        assert_eq!(events.last(), Some(&StreamEvent::BlockStop { index: 0 }));
+        assert!(!events
+            .iter()
+            .any(|event| matches!(event, StreamEvent::Stop { .. })));
+    }
+
+    #[test]
+    fn a_normal_message_terminal_is_a_real_terminal() {
+        for tail in [
+            concat!(
+                "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":5}}\n\n",
+                "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+            ),
+            // `message_stop` alone still names a genuine end.
+            "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+        ] {
+            let raw = format!(
+                "{}{tail}",
+                concat!(
+                    "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"m\",\"model\":\"c\"}}\n\n",
+                    "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+                    "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hi\"}}\n\n",
+                    "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+                )
+            );
+            let mut parser = AnthropicStreamParser::new("c");
+            let mut events = Vec::new();
+            for frame in SseDecoder::new().push(raw.as_bytes()) {
+                events.extend(parser.push(&frame).unwrap());
             }
-        ));
+            assert!(parser.saw_normal_terminal(), "tail: {tail}");
+            events.extend(parser.finish());
+            assert!(
+                events
+                    .iter()
+                    .any(|event| matches!(event, StreamEvent::Stop { .. })),
+                "a real terminal still yields a Stop: {events:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_empty_upstream_body_has_no_terminal_and_no_events() {
+        let mut parser = AnthropicStreamParser::new("c");
+        assert!(parser.finish().is_empty());
+        assert!(!parser.saw_normal_terminal());
     }
 
     #[test]

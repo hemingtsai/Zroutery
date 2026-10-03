@@ -1209,6 +1209,9 @@ pub struct OpenAiStreamParser {
     usage: Usage,
     pending_stop: Option<(StopReason, Option<String>)>,
     emitted_stop: bool,
+    /// Whether the upstream really ended the answer (`finish_reason` or
+    /// `[DONE]`). A body that just stops arriving is truncated, not finished.
+    normal_terminal: bool,
 }
 
 impl OpenAiStreamParser {
@@ -1225,6 +1228,7 @@ impl OpenAiStreamParser {
             usage: Usage::default(),
             pending_stop: None,
             emitted_stop: false,
+            normal_terminal: false,
         }
     }
 
@@ -1350,6 +1354,7 @@ impl StreamParser for OpenAiStreamParser {
         if data == "[DONE]" {
             let mut out = Vec::new();
             if self.started {
+                self.normal_terminal = true;
                 self.emit_stop(&mut out);
             }
             return Ok(out);
@@ -1500,6 +1505,7 @@ impl StreamParser for OpenAiStreamParser {
             {
                 // Defer the Stop event: a trailing usage chunk may still arrive.
                 self.pending_stop = Some((finish_reason_from_str(reason), None));
+                self.normal_terminal = true;
             }
         }
 
@@ -1508,10 +1514,28 @@ impl StreamParser for OpenAiStreamParser {
 
     fn finish(&mut self) -> Vec<StreamEvent> {
         let mut out = Vec::new();
-        if self.started {
+        if self.normal_terminal {
             self.emit_stop(&mut out);
+            return out;
         }
+        // The body ended without `finish_reason` or `[DONE]`: the answer was
+        // cut off. Close what is open so the client's block stream stays
+        // well-formed, but never synthesize the `Stop` that would claim the
+        // answer really finished.
+        self.close_current(&mut out);
+        for index in std::mem::take(&mut self.open_tools) {
+            out.push(StreamEvent::BlockStop { index });
+        }
+        self.flush_deferred(&mut out);
         out
+    }
+
+    fn saw_normal_terminal(&self) -> bool {
+        self.normal_terminal
+    }
+
+    fn reported_usage(&self) -> Usage {
+        self.usage
     }
 }
 
@@ -2276,8 +2300,18 @@ mod tests {
     }
 
     #[test]
-    fn truncated_stream_still_stops() {
-        let events = parse(&chunk(json!({"content": "partial"})));
+    fn truncated_stream_closes_blocks_without_claiming_completion() {
+        // Only a delta arrives and then the body ends. The parser still closes
+        // the open block so the client's block stream is well formed, but it
+        // must not synthesize the `Stop` that would present the cut as a
+        // finished answer.
+        let mut parser = OpenAiStreamParser::new("fallback");
+        let mut events = Vec::new();
+        for frame in SseDecoder::new().push(chunk(json!({"content": "partial"})).as_bytes()) {
+            events.extend(parser.push(&frame).unwrap());
+        }
+        events.extend(parser.finish());
+
         assert_eq!(
             events[1],
             StreamEvent::TextDelta {
@@ -2286,13 +2320,112 @@ mod tests {
             }
         );
         assert_eq!(events[2], StreamEvent::BlockStop { index: 0 });
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, StreamEvent::Stop { .. })),
+            "a truncated stream must not claim a normal stop: {events:?}"
+        );
+        assert!(
+            !parser.saw_normal_terminal(),
+            "no finish_reason and no [DONE] were observed"
+        );
+    }
+
+    #[test]
+    fn a_half_written_tool_argument_is_closed_but_not_completed() {
+        let mut parser = OpenAiStreamParser::new("fallback");
+        let mut events = Vec::new();
+        // The argument JSON is cut in half by the upstream body ending.
+        let partial = r#"{"ci"#;
+        let rest = r#"ty":"SH"#;
+        let raw = format!(
+            "{}{}",
+            chunk(
+                json!({"tool_calls": [{"index": 0, "id": "call_1", "type": "function",
+                                        "function": {"name": "get_weather", "arguments": partial}}]})
+            ),
+            chunk(json!({"tool_calls": [{"index": 0, "function": {"arguments": rest}}]})),
+        );
+        for frame in SseDecoder::new().push(raw.as_bytes()) {
+            events.extend(parser.push(&frame).unwrap());
+        }
+        events.extend(parser.finish());
+
+        assert_eq!(
+            events.last(),
+            Some(&StreamEvent::BlockStop { index: 0 }),
+            "the half-written tool block is closed"
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, StreamEvent::Stop { .. })),
+            "half a tool argument is not a finished answer: {events:?}"
+        );
+        assert!(!parser.saw_normal_terminal());
+    }
+
+    #[test]
+    fn a_normal_stop_before_eof_is_a_real_terminal() {
+        let mut parser = OpenAiStreamParser::new("fallback");
+        let mut events = Vec::new();
+        let stop = format!(
+            "data: {}\n\n",
+            json!({"id": "chatcmpl-1", "object": "chat.completion.chunk", "model": "m",
+                   "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]})
+        );
+        let raw = format!("{}{stop}", chunk(json!({"content": "hi"})));
+        for frame in SseDecoder::new().push(raw.as_bytes()) {
+            events.extend(parser.push(&frame).unwrap());
+        }
+        assert!(parser.saw_normal_terminal(), "finish_reason was observed");
+        events.extend(parser.finish());
         assert!(matches!(
-            events[3],
-            StreamEvent::Stop {
-                stop_reason: StopReason::Unknown,
+            events.last(),
+            Some(StreamEvent::Stop {
+                stop_reason: StopReason::EndTurn,
                 ..
-            }
+            })
         ));
+    }
+
+    #[test]
+    fn an_empty_upstream_body_has_no_terminal_and_no_events() {
+        let mut parser = OpenAiStreamParser::new("fallback");
+        assert!(
+            parser.finish().is_empty(),
+            "nothing arrived, nothing to close"
+        );
+        assert!(
+            !parser.saw_normal_terminal(),
+            "an empty 200 is not a completed answer"
+        );
+    }
+
+    #[test]
+    fn a_truncated_stream_still_reports_the_usage_it_saw() {
+        let mut parser = OpenAiStreamParser::new("fallback");
+        let raw = format!(
+            "{}{}",
+            chunk(json!({"content": "partial"})),
+            format!(
+                "data: {}\n\n",
+                json!({"id": "chatcmpl-1", "model": "m", "choices": [],
+                       "usage": {"prompt_tokens": 11, "completion_tokens": 7}})
+            )
+        );
+        let mut events = Vec::new();
+        for frame in SseDecoder::new().push(raw.as_bytes()) {
+            events.extend(parser.push(&frame).unwrap());
+        }
+        events.extend(parser.finish());
+        assert!(!parser.saw_normal_terminal());
+        assert_eq!(parser.reported_usage().input_tokens, 11);
+        assert_eq!(parser.reported_usage().output_tokens, 7);
+        assert!(!events
+            .iter()
+            .any(|event| matches!(event, StreamEvent::Stop { .. })));
     }
 
     #[test]
@@ -2312,8 +2445,15 @@ mod tests {
         let role_only = parse(&chunk(json!({"role": "assistant", "content": null})));
         assert_eq!(
             role_only.len(),
-            2,
-            "role-only delta must only start and stop the message: {role_only:?}"
+            1,
+            "a role-only delta opens the message and carries no text: {role_only:?}"
+        );
+        assert!(matches!(role_only[0], StreamEvent::Start { .. }));
+        assert!(
+            !role_only
+                .iter()
+                .any(|event| matches!(event, StreamEvent::TextDelta { .. })),
+            "an explicit null is not text: {role_only:?}"
         );
 
         let reasoning_only = parse(&chunk(

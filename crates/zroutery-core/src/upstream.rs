@@ -252,6 +252,7 @@ impl Upstream {
             provider: provider.name.clone(),
             idle: Duration::from_secs(provider.timeout_secs),
             done: false,
+            terminal_error: None,
         };
 
         Ok(Box::pin(futures_util::stream::unfold(
@@ -262,6 +263,12 @@ impl Upstream {
                         return Some((Ok(event), state));
                     }
                     if state.done {
+                        // A body that ended without a normal terminal still
+                        // hands the client the events its parser closed out;
+                        // the truncation follows as the stream's last word.
+                        if let Some(err) = state.terminal_error.take() {
+                            return Some((Err(err), state));
+                        }
                         return None;
                     }
                     match tokio::time::timeout(state.idle, state.body.next()).await {
@@ -271,7 +278,16 @@ impl Upstream {
                         }
                         Ok(None) => {
                             state.done = true;
+                            // `finish()` closes dangling blocks, but it is not
+                            // proof the answer finished: only a real terminal
+                            // event is, and its absence is reported as an
+                            // interruption rather than a success.
+                            let normal = state.parser.saw_normal_terminal();
+                            let usage = state.parser.reported_usage();
                             state.pending.extend(state.parser.finish());
+                            if !normal {
+                                state.terminal_error = Some(Error::InterruptedStream { usage });
+                            }
                         }
                         Ok(Some(Err(source))) => {
                             state.done = true;
@@ -528,6 +544,10 @@ struct StreamState {
     provider: String,
     idle: Duration,
     done: bool,
+    /// Set when the body ended without a normal terminal: the error is yielded
+    /// after the parser's closing events, so the client keeps everything it
+    /// already received before the cut is reported.
+    terminal_error: Option<Error>,
 }
 
 /// Claude Code client fingerprint (used for impersonation to pass a

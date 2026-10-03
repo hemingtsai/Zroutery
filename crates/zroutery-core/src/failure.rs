@@ -482,6 +482,12 @@ impl ClassifiedFailure {
                 };
                 (class, Some(error.status().as_u16()))
             }
+            // The body ended after partial output without ever naming a normal
+            // terminal: the partial answer is an interruption, never a success,
+            // and it is not evidence that more retrying would help.
+            crate::Error::InterruptedStream { .. } => {
+                (FailureClass::Interrupted, Some(error.status().as_u16()))
+            }
             crate::Error::Timeout(_) => (FailureClass::Timeout, Some(error.status().as_u16())),
             crate::Error::Internal(message) => {
                 let lower = message.to_ascii_lowercase();

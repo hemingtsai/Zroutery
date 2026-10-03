@@ -869,7 +869,9 @@ pub fn encode_response(resp: &ChatResponse) -> Value {
 pub struct GeminiStreamParser {
     model: String,
     started: bool,
-    stopped: bool,
+    /// Whether the upstream really ended the answer (`finishReason`). A body
+    /// that just stops arriving is truncated.
+    normal_terminal: bool,
     next_index: u32,
     text_index: Option<u32>,
     open_blocks: Vec<u32>,
@@ -881,7 +883,7 @@ impl GeminiStreamParser {
         Self {
             model: model.to_string(),
             started: false,
-            stopped: false,
+            normal_terminal: false,
             next_index: 0,
             text_index: None,
             open_blocks: Vec::new(),
@@ -974,7 +976,14 @@ impl StreamParser for GeminiStreamParser {
                 }
             }
             if let Some(finish_reason) = candidate.get("finishReason").and_then(Value::as_str) {
-                self.stopped = true;
+                self.normal_terminal = true;
+                // Close the running text block before the terminal event: a
+                // client's block stream must not see a block stop after the
+                // answer has already ended.
+                if let Some(text_idx) = self.text_index.take() {
+                    self.open_blocks.retain(|i| *i != text_idx);
+                    out.push(StreamEvent::BlockStop { index: text_idx });
+                }
                 out.push(StreamEvent::Stop {
                     stop_reason: match finish_reason {
                         "MAX_TOKENS" => StopReason::MaxTokens,
@@ -990,26 +999,31 @@ impl StreamParser for GeminiStreamParser {
     }
 
     fn finish(&mut self) -> Vec<StreamEvent> {
-        if self.started && !self.stopped {
-            self.stopped = true;
-            let mut out = Vec::new();
-            // Emit BlockStop for any remaining open blocks.
-            if let Some(text_idx) = self.text_index.take() {
-                self.open_blocks.retain(|i| *i != text_idx);
-                out.push(StreamEvent::BlockStop { index: text_idx });
-            }
-            for index in std::mem::take(&mut self.open_blocks) {
-                out.push(StreamEvent::BlockStop { index });
-            }
-            out.push(StreamEvent::Stop {
-                stop_reason: StopReason::EndTurn,
-                stop_sequence: None,
-                usage: self.usage,
-            });
-            out
-        } else {
-            Vec::new()
+        if self.normal_terminal {
+            // `finishReason` already closed every block before the terminal
+            // event, so nothing may follow `Stop`.
+            return Vec::new();
         }
+        let mut out = Vec::new();
+        // Close whatever is still open so the client's block stream stays well
+        // formed. A body that ended without a `finishReason` gets no `Stop`:
+        // that event is what marks the answer finished, and this one was not.
+        if let Some(text_idx) = self.text_index.take() {
+            self.open_blocks.retain(|i| *i != text_idx);
+            out.push(StreamEvent::BlockStop { index: text_idx });
+        }
+        for index in std::mem::take(&mut self.open_blocks) {
+            out.push(StreamEvent::BlockStop { index });
+        }
+        out
+    }
+
+    fn saw_normal_terminal(&self) -> bool {
+        self.normal_terminal
+    }
+
+    fn reported_usage(&self) -> Usage {
+        self.usage
     }
 }
 
