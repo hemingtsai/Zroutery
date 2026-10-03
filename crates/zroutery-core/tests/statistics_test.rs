@@ -100,7 +100,7 @@ fn winner(index: usize) -> usize {
 /// Right half the time against a one-in-three base rate, so its paired risk
 /// difference against the best uninformed policy is `1/2 - 1/3 = 1/6`.
 fn skill_pick(index: usize) -> usize {
-    if index % 2 == 0 {
+    if index.is_multiple_of(2) {
         winner(index)
     } else {
         (winner(index) + 1) % 3

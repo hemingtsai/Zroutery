@@ -319,7 +319,7 @@ impl RoutingModel for SuccessModel {
         if state.parameters.len() < 3 {
             return Err("too few parameters".into());
         }
-        if state.parameters.len() % 2 == 0 {
+        if state.parameters.len().is_multiple_of(2) {
             return Err(format!(
                 "parameter count must be odd (2n+1), got {}",
                 state.parameters.len()
@@ -347,7 +347,7 @@ impl RoutingModel for SuccessModel {
         if let Some((index, value)) = grad_sq
             .iter()
             .enumerate()
-            .find(|(_, value)| !(**value > 0.0))
+            .find(|(_, value)| (**value).partial_cmp(&0.0) != Some(std::cmp::Ordering::Greater))
         {
             return Err(format!(
                 "AdaGrad accumulator grad_sq[{index}] must be positive, got {value}"
@@ -793,8 +793,8 @@ mod tests {
         let logit = (probability / (1.0 - probability)).ln();
         let dimension = FEATURE_DIMENSION;
         let mut parameters = vec![logit];
-        parameters.extend(std::iter::repeat(0.0).take(dimension));
-        parameters.extend(std::iter::repeat(1.0).take(dimension));
+        parameters.extend(std::iter::repeat_n(0.0, dimension));
+        parameters.extend(std::iter::repeat_n(1.0, dimension));
         let mut state = ModelState::new("success_logistic_adagrad", parameters);
         state.update_count = samples;
         SuccessModel::load(&state).expect("a well-formed success checkpoint loads")

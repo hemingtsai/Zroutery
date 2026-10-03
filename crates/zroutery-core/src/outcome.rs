@@ -222,7 +222,7 @@ impl Attempt {
             && self.failure_message.is_none()
             && self
                 .http_status
-                .map_or(true, |status| (200..=299).contains(&status))
+                .is_none_or(|status| (200..=299).contains(&status))
     }
 
     /// Return the captured failure facts without deriving a new class.

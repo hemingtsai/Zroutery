@@ -783,12 +783,28 @@ mod tests {
         assert_eq!(p.models[0].tier, Some(ModelTier::Standard));
     }
 
+    /// Two tier defaults naming the same model.
+    type SharedTierCase = (
+        &'static str,
+        Option<&'static str>,
+        Option<&'static str>,
+        Option<&'static str>,
+    );
+    /// Two tier defaults naming different models, with the tiers they map to.
+    type DistinctTierCase = (
+        &'static str,
+        Option<&'static str>,
+        Option<&'static str>,
+        Option<&'static str>,
+        Vec<(&'static str, ModelTier)>,
+    );
+
     #[test]
     fn a_two_tier_relay_collapses_without_inventing_a_sonnet_entry() {
         // A relay may set any two of the three tier defaults naming the same
         // model. All of these were read through `sonnet`, which panicked on the
         // opus+haiku pair and aborted the entire provider import with it.
-        let cases: [(&str, Option<&str>, Option<&str>, Option<&str>); 3] = [
+        let cases: [SharedTierCase; 3] = [
             (
                 "opus+sonnet",
                 Some("relay-model"),
@@ -827,13 +843,7 @@ mod tests {
     #[test]
     fn distinct_two_tier_models_still_get_their_own_tiers() {
         // The collapse must not swallow two genuinely different models.
-        let cases: [(
-            &str,
-            Option<&str>,
-            Option<&str>,
-            Option<&str>,
-            Vec<(&str, ModelTier)>,
-        ); 3] = [
+        let cases: [DistinctTierCase; 3] = [
             (
                 "opus+sonnet",
                 Some("big-model"),

@@ -230,7 +230,7 @@ pub(super) async fn handle_chat(
                     // a side request is real spend, and its permits cover every
                     // provider the pool could fail over to.
                     let guard = state
-                        .admit(&classifier_admission_scopes(&config, &plan))
+                        .admit(&classifier_admission_scopes(config, &plan))
                         .await;
                     let mut allowed = Vec::new();
                     let mut refusal: Option<String> = None;
@@ -493,7 +493,7 @@ async fn apply_budgets(
 ) -> Result<(Resolution, AdmissionGuard)> {
     let admission = state
         .admit(&main_admission_scopes(
-            &registry.config(),
+            registry.config(),
             registry,
             &resolution,
         ))
@@ -3055,17 +3055,19 @@ mod tests {
     fn scope_registry(budgets: Vec<Budget>) -> Registry {
         use crate::config::{ModelEntry, ProviderConfig, ProviderKind};
 
-        let mut config = AppConfig::default();
-        config.providers = vec![
-            ProviderConfig::new("deepseek", "DeepSeek", ProviderKind::OpenAICompatible),
-            ProviderConfig::new("openai", "OpenAI", ProviderKind::OpenAICompatible),
-        ];
-        config.models = vec![
-            ModelEntry::for_upstream("deepseek", "flash", Some(ModelTier::Fast)),
-            ModelEntry::for_upstream("deepseek", "pro", Some(ModelTier::Standard)),
-            ModelEntry::for_upstream("openai", "sol", Some(ModelTier::Reasoning)),
-        ];
-        config.budgets = budgets;
+        let config = AppConfig {
+            providers: vec![
+                ProviderConfig::new("deepseek", "DeepSeek", ProviderKind::OpenAICompatible),
+                ProviderConfig::new("openai", "OpenAI", ProviderKind::OpenAICompatible),
+            ],
+            models: vec![
+                ModelEntry::for_upstream("deepseek", "flash", Some(ModelTier::Fast)),
+                ModelEntry::for_upstream("deepseek", "pro", Some(ModelTier::Standard)),
+                ModelEntry::for_upstream("openai", "sol", Some(ModelTier::Reasoning)),
+            ],
+            budgets,
+            ..Default::default()
+        };
         Registry::new(Arc::new(config))
     }
 
@@ -3080,7 +3082,7 @@ mod tests {
         let registry = scope_registry(Vec::new());
         assert!(
             main_admission_scopes(
-                &registry.config(),
+                registry.config(),
                 &registry,
                 &Resolution::Tier(ModelTier::Standard)
             )
@@ -3094,7 +3096,7 @@ mod tests {
             id: "openai".into(),
         })]);
         assert!(main_admission_scopes(
-            &registry.config(),
+            registry.config(),
             &registry,
             &Resolution::Tier(ModelTier::Standard)
         )
@@ -3105,7 +3107,7 @@ mod tests {
         disabled.enabled = false;
         let registry = scope_registry(vec![disabled]);
         assert!(main_admission_scopes(
-            &registry.config(),
+            registry.config(),
             &registry,
             &Resolution::Tier(ModelTier::Standard)
         )
@@ -3125,7 +3127,7 @@ mod tests {
             }),
         ]);
         let scopes = main_admission_scopes(
-            &registry.config(),
+            registry.config(),
             &registry,
             &Resolution::Tier(ModelTier::Standard),
         );
@@ -3146,7 +3148,7 @@ mod tests {
         // under, exactly as the check does — and neither is taken when the
         // configured limits do not cover them.
         let scopes = main_admission_scopes(
-            &registry.config(),
+            registry.config(),
             &registry,
             &Resolution::Direct("openai-sol".into()),
         );
@@ -3175,7 +3177,7 @@ mod tests {
             .degrading_to(ModelTier::Fast),
         ]);
         let scopes = main_admission_scopes(
-            &registry.config(),
+            registry.config(),
             &registry,
             &Resolution::Tier(ModelTier::Reasoning),
         );
@@ -3226,7 +3228,7 @@ mod tests {
         };
         let plan = vec![candidate("deepseek-flash"), candidate("openai-sol")];
         assert_eq!(
-            classifier_admission_scopes(&registry.config(), &plan),
+            classifier_admission_scopes(registry.config(), &plan),
             vec![
                 BudgetScope::Global,
                 BudgetScope::Provider {
@@ -3240,8 +3242,6 @@ mod tests {
         );
 
         // A pool that no budget covers takes no permits at all.
-        assert!(
-            classifier_admission_scopes(&scope_registry(Vec::new()).config(), &plan).is_empty()
-        );
+        assert!(classifier_admission_scopes(scope_registry(Vec::new()).config(), &plan).is_empty());
     }
 }

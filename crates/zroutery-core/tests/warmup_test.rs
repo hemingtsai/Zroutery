@@ -176,8 +176,8 @@ fn shifted_across_split_snapshot(rows: usize, split: usize) -> Vec<OutcomeTraini
 /// request id. `outcome_to_dataset_sample` emits a single request row, so the
 /// shared canonical generator is the only honest source of this shape.
 fn multi_row_request(index: usize) -> Vec<OutcomeTrainingSample> {
-    let quality = if index % 2 == 0 { 0.15 } else { 0.85 };
-    let terminal = if index % 2 == 0 {
+    let quality = if index.is_multiple_of(2) { 0.15 } else { 0.85 };
+    let terminal = if index.is_multiple_of(2) {
         Terminal::Failed
     } else {
         Terminal::Success
