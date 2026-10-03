@@ -640,6 +640,36 @@ fn try_compute_regression_refuses_a_non_finite_prediction_but_not_a_magnitude() 
 }
 
 #[test]
+fn try_compute_regression_refuses_a_non_finite_actual() {
+    // A non-finite actual enters every error term and every mean exactly as a
+    // non-finite prediction does. The fallible constructor used to validate only
+    // the predictions, so `actuals = [NaN]` returned `Ok` with `mae`, `rmse` and
+    // `mean_actual` all `NaN` — a result that reads like a measurement.
+    for non_finite in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        match PredictionMetrics::try_compute_regression(&[1.0, 2.0], &[1.0, non_finite])
+            .unwrap_err()
+        {
+            EvaluationError::NonFiniteRegressionActual { index, value } => {
+                assert_eq!(index, 1, "the refusal must name the offending index");
+                assert!(value.is_nan() == non_finite.is_nan());
+                assert_eq!(value.is_infinite(), non_finite.is_infinite());
+            }
+            other => panic!("expected a non-finite actual refusal, got {other:?}"),
+        }
+    }
+
+    // The exact reproduction from the finding: one NaN actual, one prediction.
+    assert!(matches!(
+        PredictionMetrics::try_compute_regression(&[1.0], &[f64::NAN]).unwrap_err(),
+        EvaluationError::NonFiniteRegressionActual { index: 0, .. }
+    ));
+
+    // Finiteness is the only check on either side: a large magnitude is a
+    // measurement, so it is still accepted.
+    assert!(PredictionMetrics::try_compute_regression(&[1e300], &[-1e300]).is_ok());
+}
+
+#[test]
 fn every_evaluation_error_carries_a_reason() {
     let cases = [
         EvaluationError::EmptyObservations,
@@ -658,6 +688,10 @@ fn every_evaluation_error_carries_a_reason() {
         EvaluationError::NonFiniteRegressionPrediction {
             index: 1,
             value: 1.0e300,
+        },
+        EvaluationError::NonFiniteRegressionActual {
+            index: 1,
+            value: f64::NAN,
         },
         EvaluationError::NonFiniteRoutingMetric {
             side: "candidate",
