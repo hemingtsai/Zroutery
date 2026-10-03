@@ -52,6 +52,7 @@
 //!   limits (its `pressure()` stays `0.0`).
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::RwLock;
 use std::time::{Duration, Instant};
 
@@ -389,13 +390,29 @@ struct LoginData {
     user: Option<SelfData>,
 }
 
+/// The credential installed in the adapter, and the generation it belongs to.
+///
+/// The generation is what makes a refresh safe under concurrency: a task that
+/// snapshotted generation *n* can tell whether it is still redeeming the current
+/// credential or has been overtaken by another refresh or a fresh login.
+#[derive(Debug, Clone)]
+struct InstalledSession {
+    session: Session,
+    generation: u64,
+}
+
 /// NewAPI account adapter.
 pub struct NewApiAdapter {
     config: NewApiConfig,
     client: reqwest::Client,
     /// API root, already normalised by [`normalize_base_url`].
     base: String,
-    session: RwLock<Option<Session>>,
+    session: RwLock<Option<InstalledSession>>,
+    /// Mints the generation for each installed session. Only ever moves forward.
+    session_generation: AtomicU64,
+    /// Single-flight guard for refresh: one task redeems the rotating cookie
+    /// while the others wait and then reuse the session it installed.
+    refresh: tokio::sync::Mutex<()>,
     status_cache: RwLock<Option<(Instant, NewApiStatus)>>,
 }
 
@@ -433,7 +450,12 @@ impl NewApiAdapter {
             config,
             client,
             base,
-            session: RwLock::new(session),
+            session: RwLock::new(session.map(|session| InstalledSession {
+                session,
+                generation: 0,
+            })),
+            session_generation: AtomicU64::new(0),
+            refresh: tokio::sync::Mutex::new(()),
             status_cache: RwLock::new(None),
         })
     }
@@ -481,13 +503,13 @@ impl NewApiAdapter {
         };
 
         let authenticated_at = chrono::Utc::now().timestamp();
-        let session = self.install_session(session);
+        let installed = self.install_session(session);
         Ok(AuthenticatedSession {
             auth,
-            user_id: session.user_id,
-            username: session.username,
+            user_id: installed.session.user_id,
+            username: installed.session.username,
             authenticated_at,
-            expires_at: session.expires_at,
+            expires_at: installed.session.expires_at,
         })
     }
 
@@ -718,19 +740,77 @@ impl NewApiAdapter {
         })
     }
 
-    fn install_session(&self, session: Session) -> Session {
-        *self
+    /// Install `session` as the current credential, at a new generation.
+    fn install_session(&self, session: Session) -> InstalledSession {
+        let mut guard = self
             .session
             .write()
-            .unwrap_or_else(|poison| poison.into_inner()) = Some(session.clone());
-        session
+            .unwrap_or_else(|poison| poison.into_inner());
+        let generation = self.session_generation.fetch_add(1, Ordering::AcqRel) + 1;
+        let installed = InstalledSession {
+            session,
+            generation,
+        };
+        *guard = Some(installed.clone());
+        installed
     }
 
-    fn session_snapshot(&self) -> Option<Session> {
+    /// Install a refreshed `session`, but only if the credential is still the
+    /// one the refresh started from.
+    ///
+    /// A refresh takes time, and during it another task may have installed a
+    /// newer session — a second refresh, or an explicit `authenticate` with a
+    /// credential the user just supplied. Overwriting that with the older
+    /// refresh result would log the user back out, so the newer session wins and
+    /// the stale result is dropped. Returns whatever is current afterwards.
+    fn install_session_if_current(&self, expected: u64, session: Session) -> InstalledSession {
+        let mut guard = self
+            .session
+            .write()
+            .unwrap_or_else(|poison| poison.into_inner());
+        if let Some(current) = guard.as_ref() {
+            if current.generation != expected {
+                return current.clone();
+            }
+        }
+        let generation = self.session_generation.fetch_add(1, Ordering::AcqRel) + 1;
+        let installed = InstalledSession {
+            session,
+            generation,
+        };
+        *guard = Some(installed.clone());
+        installed
+    }
+
+    fn session_snapshot(&self) -> Option<InstalledSession> {
         self.session
             .read()
             .unwrap_or_else(|poison| poison.into_inner())
             .clone()
+    }
+
+    /// Redeem the rotating refresh cookie once, whichever task asks first.
+    ///
+    /// NewAPI invalidates a refresh cookie as it is used, so two tasks that both
+    /// saw a 401 must not each redeem the same cookie: the second exchange would
+    /// fail while the credential the first installed is already good. The lock
+    /// serialises the exchange, and the generation check after acquiring it
+    /// sends a task that was overtaken straight to the session the winner
+    /// installed instead of redeeming a cookie that is no longer current.
+    async fn refresh_session(
+        &self,
+        stale: &InstalledSession,
+    ) -> std::result::Result<InstalledSession, NewApiError> {
+        let _single_flight = self.refresh.lock().await;
+        let Some(current) = self.session_snapshot() else {
+            return Err(NewApiError::NotAuthenticated);
+        };
+        if current.generation != stale.generation {
+            tracing::debug!("newapi credential was already renewed; reusing the newer session");
+            return Ok(current);
+        }
+        let renewed = self.renew_session(&current.session).await?;
+        Ok(self.install_session_if_current(stale.generation, renewed))
     }
 
     // ── HTTP ─────────────────────────────────────────────────────────────
@@ -747,15 +827,20 @@ impl NewApiAdapter {
             .session_snapshot()
             .ok_or(NewApiError::NotAuthenticated)?;
         match self
-            .attempt(method.clone(), path, query, Some(&session.bearer), None)
+            .attempt(
+                method.clone(),
+                path,
+                query,
+                Some(&session.session.bearer),
+                None,
+            )
             .await
         {
             Ok(attempt) => Ok(attempt.data),
-            Err(NewApiError::Unauthorized { .. }) if session.refresh_cookie.is_some() => {
+            Err(NewApiError::Unauthorized { .. }) if session.session.refresh_cookie.is_some() => {
                 tracing::debug!("newapi access token rejected; renewing from the refresh cookie");
-                let renewed = self.renew_session(&session).await?;
-                let renewed = self.install_session(renewed);
-                self.attempt(method, path, query, Some(&renewed.bearer), None)
+                let renewed = self.refresh_session(&session).await?;
+                self.attempt(method, path, query, Some(&renewed.session.bearer), None)
                     .await
                     .map(|attempt| attempt.data)
             }
@@ -1371,6 +1456,16 @@ mod tests {
         log_total_override: Mutex<Option<i64>>,
         refresh_body: Mutex<Value>,
         refresh_status: Mutex<u16>,
+        /// When set, only this refresh-cookie value is accepted, and a
+        /// successful exchange rotates it to `refresh_next_cookie`. Models a
+        /// panel that invalidates the cookie as it is redeemed.
+        refresh_cookie: Mutex<Option<String>>,
+        /// The cookie value accepted after one successful exchange.
+        refresh_next_cookie: Mutex<Option<String>>,
+        /// The bearer the panel requires after a successful exchange.
+        refresh_new_bearer: Mutex<Option<String>>,
+        /// The `Set-Cookie` header a refresh answers with, when not the default.
+        refresh_set_cookie: Mutex<Option<String>>,
         subscription_body: Mutex<Value>,
         subscription_status: Mutex<u16>,
         checkin_body: Mutex<Value>,
@@ -1407,6 +1502,10 @@ mod tests {
                     },
                 }))),
                 refresh_status: Mutex::new(200),
+                refresh_cookie: Mutex::new(None),
+                refresh_next_cookie: Mutex::new(None),
+                refresh_new_bearer: Mutex::new(None),
+                refresh_set_cookie: Mutex::new(None),
                 subscription_body: Mutex::new(envelope(json!({
                     "billing_preference": "wallet",
                     "subscriptions": [],
@@ -1549,13 +1648,36 @@ mod tests {
             )
                 .into_response();
         }
+        // Rotating-cookie semantics, when the test asks for them: a cookie that
+        // was already exchanged is dead, which is what makes a double redeem
+        // observable instead of harmless.
+        let expected = state.refresh_cookie.lock().unwrap().clone();
+        if let Some(expected) = expected {
+            let presented = headers
+                .get(COOKIE)
+                .and_then(|value| value.to_str().ok())
+                .map(cookie_value);
+            if presented.as_deref() != Some(expected.as_str()) {
+                return (
+                    StatusCode::UNAUTHORIZED,
+                    axum::Json(failure("AUTH_UNAUTHORIZED", "refresh cookie is no longer valid")),
+                )
+                    .into_response();
+            }
+            let next = state.refresh_next_cookie.lock().unwrap().clone();
+            *state.refresh_cookie.lock().unwrap() = next;
+        }
+        if let Some(bearer) = state.refresh_new_bearer.lock().unwrap().clone() {
+            *state.required_bearer.lock().unwrap() = bearer;
+        }
         let mut response = state.default_body(&state.refresh_body);
         // NewAPI rotates the refresh cookie on every refresh.
+        let set_cookie = state.refresh_set_cookie.lock().unwrap().clone().unwrap_or_else(|| {
+            format!("{REFRESH_COOKIE_NAME}=rotated-cookie; Path=/api/user/auth; HttpOnly")
+        });
         response.headers_mut().insert(
             SET_COOKIE,
-            HeaderValue::from_static(
-                "new_api_refresh=rotated-cookie; Path=/api/user/auth; HttpOnly",
-            ),
+            HeaderValue::from_str(&set_cookie).expect("a valid Set-Cookie header"),
         );
         response
     }
@@ -2105,6 +2227,102 @@ mod tests {
             panel.state.last().bearer.as_deref(),
             Some("Bearer jwt-from-cookie"),
             "the retry uses the renewed token"
+        );
+    }
+
+    #[tokio::test]
+    async fn concurrent_401s_redeem_the_rotating_cookie_once() {
+        let panel = MockPanel::start().await;
+        let adapter = panel.adapter_with(|config| config.api_key = String::new());
+        // The old credential authenticates, and is then retired.
+        panel.state.required_bearer.lock().unwrap().clear();
+        adapter
+            .authenticate(NewApiAuth::OAuth2 {
+                access_token: "access-old".into(),
+                refresh_token: Some("cookie0".into()),
+            })
+            .await
+            .unwrap();
+
+        // From here the panel accepts only the renewed bearer, and invalidates
+        // `cookie0` the moment it is exchanged for `cookie1`.
+        *panel.state.required_bearer.lock().unwrap() = "access-new".into();
+        *panel.state.refresh_body.lock().unwrap() = envelope(json!({
+            "access_token": "access-new",
+            "token_type": "Bearer",
+            "user": { "id": 7, "username": "alice", "display_name": "Alice", "status": 1 },
+        }));
+        *panel.state.refresh_cookie.lock().unwrap() = Some("cookie0".into());
+        *panel.state.refresh_next_cookie.lock().unwrap() = Some("cookie1".into());
+        *panel.state.refresh_new_bearer.lock().unwrap() = Some("access-new".into());
+        *panel.state.refresh_set_cookie.lock().unwrap() =
+            Some(format!("{REFRESH_COOKIE_NAME}=cookie1; Path=/api/user/auth; HttpOnly"));
+
+        // Both calls snapshot the same bearer and are both rejected before
+        // either can refresh.
+        let (first, second) = tokio::join!(
+            adapter.request_json(reqwest::Method::GET, "/api/user/self", &[]),
+            adapter.request_json(reqwest::Method::GET, "/api/user/self", &[]),
+        );
+
+        assert!(first.is_ok(), "first concurrent call failed: {first:?}");
+        assert!(second.is_ok(), "second concurrent call failed: {second:?}");
+        assert_eq!(
+            panel.state.hits("/api/user/auth/refresh"),
+            1,
+            "the rotating refresh cookie must be redeemed exactly once"
+        );
+        let refreshes: Vec<Recorded> = panel
+            .state
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|request| request.path == "/api/user/auth/refresh")
+            .cloned()
+            .collect();
+        assert_eq!(refreshes.len(), 1);
+        assert_eq!(
+            refreshes[0].cookie.as_deref(),
+            Some("new_api_refresh=cookie0"),
+            "the stale cookie is presented once, not once per waiter"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_refresh_result_never_overwrites_a_newer_login() {
+        let panel = MockPanel::start().await;
+        let adapter = panel.adapter_with(|config| config.api_key = String::new());
+        panel.state.required_bearer.lock().unwrap().clear();
+        adapter
+            .authenticate(NewApiAuth::OAuth2 {
+                access_token: "access-old".into(),
+                refresh_token: Some("cookie0".into()),
+            })
+            .await
+            .unwrap();
+
+        // A refresh that started from the old credential is in flight...
+        let stale = adapter.session_snapshot().expect("a session is installed");
+        let renewed = adapter.renew_session(&stale.session).await.unwrap();
+        // ...while an explicit re-login installs a newer credential.
+        let newer = Session {
+            bearer: "access-even-newer".into(),
+            refresh_cookie: Some("cookie-new".into()),
+            user_id: Some("7".into()),
+            username: Some("alice".into()),
+            expires_at: None,
+        };
+        let installed = adapter.install_session(newer.clone());
+        assert!(installed.generation > stale.generation);
+
+        // Committing the refresh must not roll the newer login back.
+        let after = adapter.install_session_if_current(stale.generation, renewed);
+        assert_eq!(after.generation, installed.generation);
+        assert_eq!(after.session.bearer, newer.bearer);
+        assert_eq!(
+            adapter.session_snapshot().unwrap().session.bearer,
+            newer.bearer
         );
     }
 
