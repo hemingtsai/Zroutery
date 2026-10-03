@@ -584,6 +584,62 @@ fn neutral_failure_returns_the_half_open_probe_permit() {
     );
 }
 
+/// A hot config update reaches breakers that already exist.
+///
+/// Breaker tunables used to be copied only when a model's health row was first
+/// created, so saving a new failure threshold left every previously seen model
+/// running with the old one.
+#[test]
+fn hot_swapped_breaker_config_reaches_existing_models() {
+    let mut cfg = config(vec![model("m", ModelTier::Standard)]);
+    cfg.routing.circuit_breaker.failure_threshold = 1;
+    let reg = registry(cfg);
+    let router = Router::new();
+    let routing = reg.config().routing.clone();
+
+    // Create the health row under the old threshold.
+    router.report_success("provider-a-m", 10, &routing);
+
+    // The saved routing config now allows 100 consecutive failures.
+    let mut next = routing.clone();
+    next.circuit_breaker.failure_threshold = 100;
+
+    // Applying it explicitly reaches the existing row...
+    router.apply_routing_config(&next);
+    router.report_failure("provider-a-m", &Error::Timeout(5), &next);
+    assert!(
+        !router.is_cooling("provider-a-m"),
+        "one failure must not trip a breaker whose threshold is now 100"
+    );
+    assert_eq!(router.health_snapshot()[0].consecutive_failures, 1);
+
+    // ...and so does the routing config carried by an ordinary report, which is
+    // the path a live request takes.
+    let mut seen = routing.clone();
+    seen.circuit_breaker.failure_threshold = 1;
+    router.report_success("provider-a-m", 10, &seen);
+    let mut updated = seen.clone();
+    updated.circuit_breaker.failure_threshold = 100;
+    router.report_failure("provider-a-m", &Error::Timeout(5), &updated);
+    assert!(
+        !router.is_cooling("provider-a-m"),
+        "the report's routing config must reach the existing breaker"
+    );
+
+    // Counts and state are preserved: a tripped breaker stays tripped after the
+    // swap instead of silently resetting.
+    let router = Router::new();
+    let mut trip = routing.clone();
+    trip.circuit_breaker.failure_threshold = 1;
+    router.report_failure("provider-a-m", &Error::Timeout(5), &trip);
+    assert!(router.is_cooling("provider-a-m"));
+    router.apply_routing_config(&next);
+    assert!(
+        router.is_cooling("provider-a-m"),
+        "a config change must not reset a tripped breaker"
+    );
+}
+
 #[test]
 fn unknown_model_and_empty_tier_keep_explicit_no_candidate_errors() {
     let reg = registry(config(vec![]));

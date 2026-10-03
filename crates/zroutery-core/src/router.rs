@@ -169,6 +169,7 @@ impl Router {
         required_capabilities: &[Capability],
     ) -> Result<Vec<Candidate>> {
         let routing = &registry.config().routing;
+        self.apply_routing_config(routing);
         match resolution {
             Resolution::Direct(id) => {
                 let entry = registry.entry(id)?;
@@ -258,6 +259,9 @@ impl Router {
         fallback: &PolicyFallback,
         task: Option<&TaskProfile>,
     ) -> Result<(Vec<Candidate>, RouteDecision)> {
+        // Eligibility reads breaker state (including the cooldown), so the
+        // current routing config is applied before any of it is consulted.
+        self.apply_routing_config(&registry.config().routing);
         let request_capabilities = canonical_capabilities(required_capabilities);
         let members: Vec<&ModelEntry> = match resolution {
             Resolution::Direct(id) => {
@@ -798,6 +802,7 @@ impl Router {
         registry: &Registry,
         config: &ClassifierConfig,
     ) -> Result<Vec<Candidate>> {
+        self.apply_routing_config(&registry.config().routing);
         let mut members: Vec<ModelEntry> = Vec::new();
         for candidate in &config.candidates {
             if !candidate.enabled {
@@ -1221,6 +1226,9 @@ impl Router {
         let h = health
             .entry(model_id.to_string())
             .or_insert_with(|| HealthState::new(routing.circuit_breaker.clone()));
+        // A configuration hot swap reaches a model that already has a health
+        // row through the routing config this report carries.
+        h.breaker.set_config(routing.circuit_breaker.clone());
         if failure.affects_circuit() {
             h.breaker.record_failure();
         } else {
@@ -1297,6 +1305,7 @@ impl Router {
         let h = health
             .entry(model_id.to_string())
             .or_insert_with(|| HealthState::new(routing.circuit_breaker.clone()));
+        h.breaker.set_config(routing.circuit_breaker.clone());
         h.breaker.record_success();
         h.total_success += 1;
         h.last_error = None;
@@ -1413,6 +1422,23 @@ impl Router {
         if let Some(h) = health.get_mut(model_id) {
             h.breaker.reset();
             h.last_error = None;
+        }
+    }
+
+    /// Push a routing config's circuit-breaker tunables onto every existing
+    /// health row.
+    ///
+    /// Health rows are keyed by model id and outlive a configuration reload, and
+    /// the breaker used to copy its parameters only when the row was first
+    /// created. A saved threshold, success threshold or cooldown therefore had no
+    /// effect on a model that had ever been seen. This makes the new parameters
+    /// take effect for those rows too. The recorded evidence is preserved:
+    /// counts, error-rate totals and the `Open`/`HalfOpen` state are kept, so a
+    /// config change never resets a tripped breaker behind the operator's back.
+    pub fn apply_routing_config(&self, routing: &RoutingConfig) {
+        let mut health = crate::sync::lock(&self.health);
+        for h in health.values_mut() {
+            h.breaker.set_config(routing.circuit_breaker.clone());
         }
     }
 
