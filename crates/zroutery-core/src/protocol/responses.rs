@@ -235,6 +235,46 @@ fn decode_tool_result_output(value: &Value) -> Result<Vec<ToolResultPart>> {
     }
 }
 
+/// Decode a Responses reasoning item into IR content blocks.
+///
+/// Our own bridge envelope unpacks to a single thinking block. A native
+/// reasoning item is kept as faithfully as the IR allows: every summary entry
+/// survives instead of only the first, and the opaque `encrypted_content` is
+/// carried through unchanged so a later turn can echo it back.
+fn decode_reasoning_blocks(item: &Value) -> Vec<ContentBlock> {
+    if let Some(block) = reasoning_bridge::decode_reasoning_item(item) {
+        return vec![block];
+    }
+    let mut blocks = Vec::new();
+    let summary = item
+        .get("summary")
+        .and_then(Value::as_array)
+        .map(|parts| {
+            parts
+                .iter()
+                .filter_map(|part| part.get("text").and_then(Value::as_str))
+                .collect::<Vec<_>>()
+                .join("\n\n")
+        })
+        .unwrap_or_default();
+    if !summary.is_empty() {
+        blocks.push(ContentBlock::Thinking {
+            text: summary,
+            signature: None,
+        });
+    }
+    if let Some(encrypted) = item
+        .get("encrypted_content")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+    {
+        blocks.push(ContentBlock::RedactedThinking {
+            data: encrypted.to_string(),
+        });
+    }
+    blocks
+}
+
 fn decode_input_item(item: &Value, req: &mut ChatRequest) -> Result<()> {
     // `type` is optional on the official EasyInputMessage: a bare object with
     // `role` and `content` is a normal chat message.
@@ -384,24 +424,16 @@ fn decode_input_item(item: &Value, req: &mut ChatRequest) -> Result<()> {
             }
         }
         "reasoning" => {
-            let block = reasoning_bridge::decode_reasoning_item(item)
-                .or_else(|| {
-                    item.get("summary")
-                        .and_then(Value::as_array)
-                        .and_then(|a| a.first())
-                        .and_then(|s| s.get("text"))
-                        .and_then(Value::as_str)
-                        .map(|text| ContentBlock::Thinking {
-                            text: text.to_string(),
-                            signature: None,
-                        })
-                })
-                .ok_or_else(|| {
-                    unsupported_content("reasoning", Some("unrecognized reasoning item"))
-                })?;
+            let blocks = decode_reasoning_blocks(item);
+            if blocks.is_empty() {
+                return Err(unsupported_content(
+                    "reasoning",
+                    Some("unrecognized reasoning item"),
+                ));
+            }
             req.messages.push(Message {
                 role: Role::Assistant,
-                content: vec![block],
+                content: blocks,
             });
         }
         "message" => {
@@ -641,19 +673,28 @@ pub fn encode_request(req: &ChatRequest, upstream_model: &str) -> Result<Value> 
                         return Err(Error::internal("thinking content could not be encoded"));
                     }
                 }
-                ContentBlock::RedactedThinking { .. } => {
-                    if let Some(item) = reasoning_bridge::encode_thinking_block(b) {
-                        separate_items.push(item);
-                    } else if let Some(replacement) =
-                        apply_content_policy(req.unsupported_content_policy, b)?
-                    {
-                        if let Some(text) = replacement.as_text() {
-                            parts.push(json!({"type": "input_text", "text": text}));
+                ContentBlock::RedactedThinking { data } => {
+                    if data.is_empty() {
+                        if let Some(replacement) =
+                            apply_content_policy(req.unsupported_content_policy, b)?
+                        {
+                            if let Some(text) = replacement.as_text() {
+                                parts.push(json!({"type": "input_text", "text": text}));
+                            }
+                        } else {
+                            return Err(Error::internal(
+                                "redacted thinking content could not be encoded",
+                            ));
                         }
                     } else {
-                        return Err(Error::internal(
-                            "redacted thinking content could not be encoded",
-                        ));
+                        // Already opaque: a native reasoning payload must go
+                        // back byte for byte instead of being re-wrapped in
+                        // this bridge's own envelope.
+                        separate_items.push(json!({
+                            "type": "reasoning",
+                            "encrypted_content": data,
+                            "summary": [],
+                        }));
                     }
                 }
                 ContentBlock::Audio { source, media_type } => {
@@ -893,22 +934,13 @@ pub fn decode_response(body: Value) -> Result<ChatResponse> {
                 });
             }
             "reasoning" => {
-                let block = reasoning_bridge::decode_reasoning_item(item)
-                    .or_else(|| {
-                        item.get("summary")
-                            .and_then(Value::as_array)
-                            .and_then(|a| a.first())
-                            .and_then(|s| s.get("text"))
-                            .and_then(Value::as_str)
-                            .map(|text| ContentBlock::Thinking {
-                                text: text.to_string(),
-                                signature: None,
-                            })
-                    })
-                    .ok_or_else(|| {
-                        Error::BadUpstreamPayload("unsupported or empty reasoning item".into())
-                    })?;
-                content.push(block);
+                let blocks = decode_reasoning_blocks(item);
+                if blocks.is_empty() {
+                    return Err(Error::BadUpstreamPayload(
+                        "unsupported or empty reasoning item".into(),
+                    ));
+                }
+                content.extend(blocks);
             }
             _ => {
                 return Err(unsupported_upstream_content("Responses response item"));
