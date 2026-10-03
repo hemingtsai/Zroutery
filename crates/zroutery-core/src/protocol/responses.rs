@@ -6,7 +6,7 @@
 //! lifecycle.
 
 use std::cell::Cell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde_json::{json, Map, Value};
 
@@ -962,6 +962,9 @@ pub fn decode_response(body: Value) -> Result<ChatResponse> {
         }
     }
 
+    let has_tool_call = content
+        .iter()
+        .any(|block| matches!(block, ContentBlock::ToolUse { .. }));
     Ok(ChatResponse {
         id: body
             .get("id")
@@ -976,6 +979,9 @@ pub fn decode_response(body: Value) -> Result<ChatResponse> {
         content,
         stop_reason: if body.get("status").and_then(Value::as_str) == Some("incomplete") {
             StopReason::MaxTokens
+        } else if has_tool_call {
+            // A response that carries function calls ended for a tool round.
+            StopReason::ToolUse
         } else {
             StopReason::EndTurn
         },
@@ -1124,6 +1130,8 @@ pub struct ResponsesStreamParser {
     text_index: Option<u32>,
     thinking_index: Option<u32>,
     tool_indices: HashMap<String, u32>,
+    /// Tool indices whose block stop has already been emitted.
+    stopped_tools: HashSet<u32>,
     usage: Usage,
 }
 
@@ -1138,8 +1146,31 @@ impl ResponsesStreamParser {
             text_index: None,
             thinking_index: None,
             tool_indices: HashMap::new(),
+            stopped_tools: HashSet::new(),
             usage: Usage::default(),
         }
+    }
+
+    /// Emit the block stop for a finished tool call exactly once.
+    fn close_tool(&mut self, index: u32, out: &mut Vec<StreamEvent>) {
+        if self.stopped_tools.insert(index) {
+            out.push(StreamEvent::BlockStop { index });
+        }
+    }
+
+    /// Resolve a tool index from an event that references it by item or call id.
+    fn tool_index(&self, event: &Value) -> Option<u32> {
+        let by_item = event
+            .get("item_id")
+            .or_else(|| event.get("id"))
+            .and_then(Value::as_str)
+            .and_then(|id| self.tool_indices.get(id).copied());
+        by_item.or_else(|| {
+            event
+                .get("call_id")
+                .and_then(Value::as_str)
+                .and_then(|id| self.tool_indices.get(id).copied())
+        })
     }
 
     fn open_index(&mut self, kind: &str) -> u32 {
@@ -1297,6 +1328,14 @@ impl StreamParser for ResponsesStreamParser {
             "response.output_item.done" => {
                 self.text_index = None;
                 self.thinking_index = None;
+                // A finished function_call item closes its tool block.
+                if let Some(item) = event.get("item") {
+                    if item.get("type").and_then(Value::as_str) == Some("function_call") {
+                        if let Some(index) = self.tool_index(item) {
+                            self.close_tool(index, &mut out);
+                        }
+                    }
+                }
             }
             "response.output_text.delta" => {
                 let index = self.open_index("text");
@@ -1365,6 +1404,10 @@ impl StreamParser for ResponsesStreamParser {
                         Some("content_filter") => StopReason::Refusal,
                         _ => StopReason::MaxTokens,
                     }
+                } else if response_has_tool_call(event.get("response")) {
+                    // A response that yielded function calls ended for a tool
+                    // round, not a natural turn end.
+                    StopReason::ToolUse
                 } else {
                     StopReason::EndTurn
                 };
@@ -1401,11 +1444,15 @@ impl StreamParser for ResponsesStreamParser {
                     }
                 }
             }
+            "response.function_call_arguments.done" => {
+                if let Some(index) = self.tool_index(&event) {
+                    self.close_tool(index, &mut out);
+                }
+            }
             "response.in_progress"
             | "response.queued"
             | "response.output_text.done"
-            | "response.reasoning_summary_text.done"
-            | "response.function_call_arguments.done" => {}
+            | "response.reasoning_summary_text.done" => {}
             _ => {
                 return Err(unsupported_upstream_content("Responses stream event"));
             }
@@ -1414,17 +1461,43 @@ impl StreamParser for ResponsesStreamParser {
     }
 
     fn finish(&mut self) -> Vec<StreamEvent> {
-        if self.started && !self.stopped {
-            self.stopped = true;
-            vec![StreamEvent::Stop {
-                stop_reason: StopReason::EndTurn,
-                stop_sequence: None,
-                usage: self.usage,
-            }]
-        } else {
-            Vec::new()
+        if !(self.started && !self.stopped) {
+            return Vec::new();
         }
+        self.stopped = true;
+        let mut out = Vec::new();
+        // A stream cut off after tool deltas still owes each open tool its
+        // block stop.
+        let mut indices: Vec<u32> = self.tool_indices.values().copied().collect();
+        indices.sort_unstable();
+        indices.dedup();
+        for index in indices {
+            self.close_tool(index, &mut out);
+        }
+        out.push(StreamEvent::Stop {
+            stop_reason: if self.tool_indices.is_empty() {
+                StopReason::EndTurn
+            } else {
+                StopReason::ToolUse
+            },
+            stop_sequence: None,
+            usage: self.usage,
+        });
+        out
     }
+}
+
+/// Whether a terminal Responses payload contains at least one function call.
+fn response_has_tool_call(response: Option<&Value>) -> bool {
+    response
+        .and_then(|response| response.get("output"))
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .any(|item| item.get("type").and_then(Value::as_str) == Some("function_call"))
+        })
+        .unwrap_or(false)
 }
 
 // --------------------------------------------------------------- stream out
