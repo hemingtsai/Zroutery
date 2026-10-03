@@ -1193,6 +1193,12 @@ impl Router {
         safe_message: Option<String>,
     ) {
         if !failure.affects_observation() && !failure.affects_circuit() {
+            // A local failure (for example a missing secret) carries no evidence
+            // about the model, so it must not create a health row. It is still a
+            // terminal outcome for the attempt, so any half-open probe permit it
+            // claimed is returned here. Otherwise the breaker stays HalfOpen with
+            // no permit and cannot send again.
+            self.release_half_open_permit(model_id);
             return;
         }
         let mut health = crate::sync::lock(&self.health);
@@ -1201,6 +1207,13 @@ impl Router {
             .or_insert_with(|| HealthState::new(routing.circuit_breaker.clone()));
         if failure.affects_circuit() {
             h.breaker.record_failure();
+        } else {
+            // A neutral failure (rate limit, authentication, bad request) does
+            // not change circuit health, but it does end the probe. Return the
+            // permit so a later request can probe again instead of the model
+            // being stuck at zero permits with no second cooldown. Turning the
+            // rate limit into a circuit failure would be the wrong fix.
+            h.breaker.release_half_open_permit();
         }
         if failure.affects_observation() || failure.affects_circuit() {
             h.total_failure += 1;
@@ -1241,12 +1254,21 @@ impl Router {
     /// Record a canonical failure in observation/statistics stores without
     /// touching the legacy circuit breaker. The caller can pair this with
     /// [`Self::report_classified_failure`] when it owns both health views.
+    ///
+    /// Circuit *health* is untouched, but a failure that does not affect the
+    /// circuit still terminates an in-flight attempt, so any half-open probe
+    /// permit that attempt claimed is returned. This is idempotent and is what
+    /// keeps a neutral failure from parking the model in `HalfOpen` with no
+    /// permit.
     pub fn record_classified_failure(
         &self,
         model_id: &str,
         provider_id: &str,
         failure: &ClassifiedFailure,
     ) {
+        if !failure.affects_circuit() {
+            self.release_half_open_permit(model_id);
+        }
         if failure.affects_observation() {
             self.observations.record_failure(model_id, provider_id);
         }

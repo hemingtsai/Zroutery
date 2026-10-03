@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use zroutery_core::circuit_breaker::CircuitState;
 use zroutery_core::config::{
     AppConfig, ModelCapabilities, ModelEntry, ModelTier, ProviderConfig, ProviderKind,
 };
@@ -529,6 +530,57 @@ fn classified_failure_adapter_preserves_fallback_and_health_authority() {
     assert_eq!(
         router.failure_disposition(&invalid),
         FailureDisposition::Stop
+    );
+}
+
+/// A neutral failure still settles the half-open probe it terminated.
+///
+/// A rate limit or a client error is not evidence about circuit health, but the
+/// attempt did claim the breaker's single probe permit. Returning it keeps the
+/// model probeable instead of stuck in `HalfOpen` with zero permits and no
+/// second cooldown.
+#[test]
+fn neutral_failure_returns_the_half_open_probe_permit() {
+    let mut cfg = config(vec![model("m", ModelTier::Standard)]);
+    cfg.routing.circuit_breaker.failure_threshold = 1;
+    cfg.routing.circuit_breaker.timeout_secs = 0;
+    let reg = registry(cfg);
+    let router = Router::new();
+    let routing = reg.config().routing.clone();
+
+    // Open the breaker, then claim its single probe permit.
+    router.report_failure("provider-a-m", &Error::Timeout(5), &routing);
+    assert!(router.allow_request("provider-a-m"));
+    assert!(
+        !router.allow_request("provider-a-m"),
+        "the probe permit is already in flight"
+    );
+    assert_eq!(router.health_snapshot()[0].state, CircuitState::HalfOpen);
+
+    // A 429 does not open the circuit, but it ends the probe.
+    let rate_limit = ClassifiedFailure::from_core_error(Error::Upstream {
+        provider: "provider-a".into(),
+        status: 429,
+        body: "slow down".into(),
+    });
+    router.record_classified_attempt("provider-a-m", "provider-a", &rate_limit, &routing);
+    assert_eq!(
+        router.health_snapshot()[0].state,
+        CircuitState::HalfOpen,
+        "a rate limit must not open the circuit"
+    );
+    assert!(
+        router.allow_request("provider-a-m"),
+        "the neutral failure must return the probe permit"
+    );
+    assert!(!router.allow_request("provider-a-m"));
+
+    // A failure that affects neither observation nor circuit is terminal too.
+    let invalid = ClassifiedFailure::from_core_error(Error::invalid("bad json"));
+    router.record_classified_attempt("provider-a-m", "provider-a", &invalid, &routing);
+    assert!(
+        router.allow_request("provider-a-m"),
+        "a client error must not park the breaker with no permit"
     );
 }
 
