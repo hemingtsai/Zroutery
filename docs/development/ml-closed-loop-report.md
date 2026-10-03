@@ -62,6 +62,7 @@ it.
 | `Evaluator::compare_routing`, unreachable | `ml::comparison`: four executable baselines replayed over real traces, routing metrics, paired deltas, coverage |
 | Shadow records with no reader | `ml::shadow_analysis`: agreement, alternative rate, estimated vs observed delta, regret, harm |
 | No promotion | `ml::promotion`: nine named criteria, PROMOTED / REJECTED / BLOCKED, fully reproducible |
+| Promotion not enforced | `ml::serving::promote` takes the gate's decision and refuses anything that is not PROMOTED |
 | Activation "unreachable by construction" | `ml::serving`: durable atomic pointer, audited promote and rollback |
 | ML unable to route | `apply_ml_ranking` in `server/pipeline.rs`, gated, with a deterministic fallback |
 | Exploration config unread | `ml::serving::explore`: deterministic, constrained to the eligible set, bounded |
@@ -92,10 +93,10 @@ Status vocabulary: `0 NOT_STARTED` · `1 SCAFFOLDED` · `2 IMPLEMENTED` ·
 | Baseline | **4** | `ml/comparison.rs::ReplayBaseline` × 4, executable, replayed over the same 120 traces |
 | ML decision | **3** | `pipeline.rs::apply_ml_ranking`; 120 rankings, 0 fallbacks, in the executable plan |
 | Shadow | **4** | `ml/shadow_analysis.rs`; 119 disagreements, 100% measured, mean observed utility delta +2.6999 |
-| Promotion | **3** | `ml/promotion.rs`; decision reproduced, 9 criteria, correctly **REJECTED** on this evidence |
+| Promotion | **4** | `ml/promotion.rs`; reproducible 9-criterion decision, **REJECTED** on the `DeadFlaky` body and **PROMOTED** on `HalfFlaky`; `promote()` refuses anything else |
 | Serving | **3** | attempts/request 2.000 → 1.008; failing provider called 1× at cold start instead of 120× |
 | Exploration | **3** | `ml/serving.rs::explore`; fires on real requests, never leaves the eligible set, ceiling enforced |
-| Retraining | **3** | durable traces + active-model store + rollback; not yet exercised across a *real* process restart with new outcomes |
+| Retraining | **4** | collect → process ends → retrain → gate → promote → new process serves → retrain again; round 2 body 120 requests, distinct fingerprint, distinct commit, re-promoted |
 | Model identity | **4** | one identity per model (`TrainingOutcome::commit_record`); commit `06f7da3409a14147` |
 | Coordinator convergence | **2** | `DecisionEngine` authoritative; `Coordinator` unreferenced by production, not deleted |
 
@@ -306,16 +307,78 @@ Only items that block `PRODUCTION_READY`.
 |---|---|---|
 | Desktop app compiles no ML | The serving path exists in `zroutery-core` and the headless proxy, but the product a user runs cannot reach it | Enable the `ml` feature in `src-tauri`; the work is a dependency declaration, not new code. Needs a decision, not engineering |
 | No operator surface for model state | Active model, commit, promotion history and shadow analysis are readable only from Rust. An operator cannot tell what is serving | Read-only HTTP endpoint or Tauri command over `ActiveModelStore::audit` and `MlRouter::counts` |
-| Promotion is decided, not authoritative | `PromotionVerdict::Promoted` is a value. Nothing refuses to attach a model whose gate said REJECTED — the test attaches one deliberately | `ActiveModelStore::promote` should require a `PromotionDecision` and refuse a non-promoted one |
-| No cross-restart retraining evidence | Retraining works from durable traces, and persistence is tested separately, but no run has collected → restarted → retrained → re-promoted | One end-to-end run across a real process boundary |
+| Durable ML state is opt-in and nothing opts in | `ml_routing.state_dir` defaults to empty, so a deployment gets no history and no promotion. That was deliberate — an OS-derived default had every process sharing one directory — but nothing sets it | The desktop and headless wiring should pass the app state directory through. One line each, once ML is enabled there |
+| No cross-restart retraining evidence | **Now closed.** `new_outcomes_from_a_new_process_reach_the_next_round_of_learning` runs collect → process ends → retrain → gate → promote → new process serves → retrain again, and asserts round two's body contains round two's requests | — |
 | One-candidate robustness unmeasured | Every arm selected 1 provider. Behaviour with an empty or single-candidate plan is asserted in unit tests only | Traffic with genuine multi-provider competition |
+| The cold-start window is unbounded in principle | Every new process begins with an empty observation store, so the first requests fall back until history accumulates. Measured at 1–2 requests; not characterised as a function of traffic rate | Carry the observation store across restarts, or persist it |
 
 Not blockers, deliberately excluded: `Coordinator` deletion, `train_batch`
-removal, latency and cost axis coverage, more baselines, GUI work.
+removal, cost axis coverage (the fixtures price ~20 tokens, which rounds to
+zero), more baselines, GUI work.
 
 ---
 
-## F. The ten questions
+## F. The online loop across a restart
+
+`new_outcomes_from_a_new_process_reach_the_next_round_of_learning` is the only
+test that exercises the whole lifecycle. Its subject is the boundary the earlier
+work was silent on: the durable trace log and the active-model pointer are the
+only things that cross a process boundary, so if either were in-memory-only the
+second round would retrain on the first round's data and be indistinguishable
+from doing nothing.
+
+It needs a fixture where a model is genuinely promotable, because a refused
+model serves nothing and the loop stops. That is `Profile::HalfFlaky`: the
+unreliable provider is also the *fast* one, failing three times in four with
+failures that are themselves fast. Every latency-reading baseline prefers it.
+
+```
+baseline                    paired  verdict        utility     succ     regr impr both_fail
+baseline.priority              80  Improved      +2.6088     +0.750      0   59        1
+baseline.lowest_latency        79  Improved      +2.6522     +0.743      0   59        1
+baseline.balanced              60  Improved      +2.4xx      ...
+baseline.round_robin           80  Improved      +0.8401     +0.250      1   20        0
+
+baseline.lowest_latency  success 0.241     <- fooled by the fast provider
+ml.candidate             success 0.984     <- routes around it
+```
+
+Round one: 80 requests → train → **PROMOTED** by the *shipped default* gate,
+commit `effb5c6fb9705c9e`. Round two: a fresh `AppState` picks the model up
+from the state directory, and:
+
+- every request after a 1–2 request cold start was served on the first attempt;
+- the unreliable provider was called ≤ 3 times for 40 requests, against 80 times
+  for round one's 80 requests;
+- retraining on the combined body produced a different model, commit
+  `23a8635a5b0eefd5`, and the gate said **PROMOTED** again;
+- round one's model was retained as the rollback target.
+
+```
+round 1:  80 requests, commit effb5c6fb9705c9e, verdict PROMOTED
+round 2: 120 requests, commit 23a8635a5b0eefd5, verdict PROMOTED
+```
+
+### Two fixture findings worth keeping
+
+**A coin flip is the wrong fixture.** The first attempt at this used a provider
+failing exactly half the time. The learned model then picked it on 100% of
+requests — identical to production — because at 50% the outcome is
+unpredictable from any slowly-moving observation, so the feature that identifies
+the bad provider carries no information about the next call. The holdout loss sat
+at 0.505 against 0.693 for an uninformed model: it had learned the base rate and
+nothing else. That is a real limit of the feature set, not a bug, and it is why
+the fixture fails three times in four instead.
+
+**A trace records production, not the model's choice.** `production_selected` in
+a trace is the deterministic plan's pick, always, in both rounds — that is what
+makes it a shadow record to compare against. Asserting it changed would be
+asserting the record stopped recording production. What changed is which
+provider the upstream actually received, and that is measured at the provider.
+
+---
+
+## G. The ten questions
 
 **1. Where is the real router's ML decision entry point?**
 `server/pipeline.rs::apply_ml_ranking`, invoked at the `ml-ranking-block` between
@@ -369,7 +432,18 @@ criteria, each carrying its own measurement and reason: baseline present, paired
 evidence floor, holdout quality against an uninformed predictor, routing utility,
 selection safety, success-regression budget, cost budget, latency budget, and
 dataset identity. Verdict is PROMOTED, REJECTED (evidence sufficient, candidate
-failed) or BLOCKED (evidence insufficient). On this body it returned **REJECTED**.
+failed) or BLOCKED (evidence insufficient).
+
+`ActiveModelStore::promote` requires that verdict. It takes a
+`PromotionDecision` and a `ModelCheckpoint`, refuses any decision that is not
+PROMOTED with the unmet criteria named, and **re-derives** the checkpoint's
+commit id from the decision's own inputs — so a stale decision cannot install a
+model it never saw. `PromotionCriterion`'s constructors are private, so a
+decision cannot be constructed outside the promotion module at all: the only way
+to obtain a PROMOTED verdict is to pass the gate.
+
+On the `DeadFlaky` body it returned **REJECTED**; on the `HalfFlaky` body it
+returned **PROMOTED** on both rounds.
 
 **9. How does the system fall back when ML misbehaves?**
 `MlRouter::rank` returns `Err(RankUnavailable)` for no attached model, no
@@ -382,7 +456,12 @@ requests there were 0 fallbacks and 120 successful responses.
 **10. How does a new outcome enter the next round of learning?**
 Every request's terminal transition writes a durable `RequestTrace`. The next
 `run_training` reads them, re-splits, retrains, re-compares, re-gates and
-re-promotes. The machinery is proven in both halves — collection and training are
-tested on one body, persistence across a reopen is tested — but no single run has
-yet gone collect → restart → retrain → re-promote, which is the one item on the
-blocker list above.
+re-promotes.
+
+This is demonstrated end to end rather than argued:
+`new_outcomes_from_a_new_process_reach_the_next_round_of_learning` collects 80
+requests, ends the process, retrains and promotes; a **new** `AppState` picks the
+model up from the state directory and serves 40 more; the second retraining sees
+a body of 120 requests whose fingerprint differs from round one's, contains 40
+request ids round one never saw, produces a different commit, and is promoted
+again. Round one's model is retained as the rollback target.

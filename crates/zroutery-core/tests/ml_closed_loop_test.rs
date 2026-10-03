@@ -47,29 +47,87 @@ use zroutery_core::ml::{
 };
 use zroutery_core::server::{AppState, ServerHandle};
 
-// ---------------------------------------------------------------------------
-// A local upstream that behaves like two different providers
-// ---------------------------------------------------------------------------
-
-/// Which upstream models fail, and how often.
-///
-/// The interesting property is that the answer is a *function of the upstream
-/// model name*, so a router that has learned anything at all can tell `flaky`
-/// from `steady` — and a router that has learned nothing will keep picking
-/// `flaky`, because that is what priority says.
+/// The upstream model name whose failures are injected.
 const FLAKY_UPSTREAM: &str = "flaky";
+
+/// How the two providers behave.
+///
+/// Two shapes, and the difference between them is why there are two fixtures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Profile {
+    /// `flaky` fails every call and `steady` always succeeds.
+    ///
+    /// The shipped default strategy spends two attempts on every request and the
+    /// model fixes that. But every latency-reading baseline fixes it too: a
+    /// provider that only ever fails records no latency at all, so they simply
+    /// prefer the one that works. Nothing is left for a learned router to add,
+    /// which is exactly what the first fixture demonstrated.
+    DeadFlaky,
+    /// `flaky` succeeds on one call in four and `steady` always succeeds, and
+    /// both record a latency — `flaky`'s fast, because its failures are fast too.
+    ///
+    /// Now no cheap deterministic signal is sufficient. Every baseline that reads
+    /// latency prefers `flaky`, because `flaky` genuinely does answer faster on
+    /// the calls where it answers. Only something that has learned the relation
+    /// between *observed success rate* and *outcome* can tell that the fast
+    /// provider is the unreliable one.
+    ///
+    /// This is the shape real providers have, and it is the only one in which a
+    /// learned router offers something a heuristic does not.
+    HalfFlaky,
+}
+
+impl Profile {
+    /// Whether the `index`-th call to a flaky model fails.
+    ///
+    /// Deterministic rather than random, so a replay of the same body is the
+    /// same body and a comparison is not confounded by luck.
+    fn flaky_fails(&self, index: usize) -> bool {
+        match self {
+            Profile::DeadFlaky => true,
+            // One success in four. A coin flip was tried first and is the wrong
+            // fixture: at exactly 50% the outcome is unpredictable from any
+            // slowly-moving observation, so the feature that identifies the bad
+            // provider carries no information about the next call. That measures
+            // the limit of the observation, not the value of the model.
+            Profile::HalfFlaky => !index.is_multiple_of(4),
+        }
+    }
+
+    /// Milliseconds the upstream waits, per provider.
+    ///
+    /// Paid on every attempt, including the ones that fail. That is what makes
+    /// `flaky` look fast: it is not slow and then broken, it is fast and
+    /// intermittently broken.
+    fn latency_ms(&self, model: &str) -> u64 {
+        let flaky = model.starts_with(FLAKY_UPSTREAM);
+        match self {
+            Profile::DeadFlaky if flaky => 1,
+            Profile::DeadFlaky => 40,
+            Profile::HalfFlaky if flaky => 2,
+            Profile::HalfFlaky => 40,
+        }
+    }
+}
 
 #[derive(Clone)]
 struct FakeUpstream {
     calls: Arc<Mutex<Vec<String>>>,
     flaky_calls: Arc<AtomicUsize>,
+    flaky_failures: Arc<AtomicUsize>,
+    profile: Profile,
+    /// Per-model call counter, so `HalfFlaky` alternates deterministically.
+    counters: Arc<Mutex<std::collections::BTreeMap<String, usize>>>,
 }
 
 impl FakeUpstream {
-    fn new() -> Self {
+    fn new(profile: Profile) -> Self {
         Self {
             calls: Arc::new(Mutex::new(Vec::new())),
             flaky_calls: Arc::new(AtomicUsize::new(0)),
+            flaky_failures: Arc::new(AtomicUsize::new(0)),
+            profile,
+            counters: Arc::new(Mutex::new(std::collections::BTreeMap::new())),
         }
     }
 
@@ -100,15 +158,29 @@ async fn fake_chat(
         .expect("calls")
         .push(format!("{method} {uri} {model}"));
 
+    let index = {
+        let mut counters = upstream.counters.lock().expect("counters");
+        let entry = counters.entry(model.clone()).or_insert(0);
+        let current = *entry;
+        *entry += 1;
+        current
+    };
+
+    let latency = upstream.profile.latency_ms(&model);
+    tokio::time::sleep(std::time::Duration::from_millis(latency)).await;
+
     if model.starts_with(FLAKY_UPSTREAM) {
         upstream.flaky_calls.fetch_add(1, Ordering::Relaxed);
-        return (
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({
-                "error": {"message": "this upstream is unhealthy", "type": "server_error"}
-            })),
-        )
-            .into_response();
+        if upstream.profile.flaky_fails(index) {
+            upstream.flaky_failures.fetch_add(1, Ordering::Relaxed);
+            return (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({
+                    "error": {"message": "this upstream is unhealthy", "type": "server_error"}
+                })),
+            )
+                .into_response();
+        }
     }
 
     Json(json!({
@@ -272,8 +344,8 @@ impl Harness {
 }
 
 /// Start the fake upstream and return its handle and address.
-async fn start_upstream() -> (FakeUpstream, SocketAddr) {
-    let upstream = FakeUpstream::new();
+async fn start_upstream(profile: Profile) -> (FakeUpstream, SocketAddr) {
+    let upstream = FakeUpstream::new(profile);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind");
@@ -294,12 +366,339 @@ async fn start_upstream() -> (FakeUpstream, SocketAddr) {
 }
 
 // ---------------------------------------------------------------------------
+// Gate ML-G: the online loop, across a real process boundary
+// ---------------------------------------------------------------------------
+
+/// Collect → shut down → retrain → gate → promote → serve → collect again →
+/// retrain again, with each "process" a separate `AppState` over the same state
+/// directory.
+///
+/// This is the only test that exercises the whole lifecycle, and the one thing
+/// it is built to prove is that **a new process's outcomes reach the next round
+/// of learning**. Everything else in this file proves one link; this proves the
+/// chain, including the boundary where the previous work was silent — the
+/// durable trace log and the active-model pointer are the only things that
+/// cross it, so if either were in-memory-only the second round would retrain on
+/// the first round's data and be indistinguishable from doing nothing.
+///
+/// `Profile::HalfFlaky` is required. Under `DeadFlaky` the gate correctly
+/// refuses the model against the strongest baseline, and a refused model serves
+/// nothing, so round two would collect the same deterministic traffic and there
+/// would be no new outcome to learn from. The loop has to be demonstrated on a
+/// body where the model is genuinely promotable, and on one where it is not the
+/// gate — not the harness — stops the loop.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn new_outcomes_from_a_new_process_reach_the_next_round_of_learning() {
+    let (upstream, addr) = start_upstream(Profile::HalfFlaky).await;
+    let state_dir = tempfile::tempdir().expect("tempdir");
+    let round_one_requests = 80;
+    let round_two_requests = 40;
+
+    // ================= round 1: collect, deterministically ==================
+    {
+        let harness =
+            Harness::start(config_for(addr, state_dir.path(), false), upstream.clone()).await;
+        // Priority puts `flaky` first and it fails three times in four, so most
+        // requests cost a second attempt.
+        let costs = harness.drive(round_one_requests).await;
+        let fallbacks = costs.iter().filter(|cost| **cost == 2).count();
+        assert!(
+            fallbacks > round_one_requests / 2,
+            "the deterministic plan should fall back on most requests, got \
+             {fallbacks} of {round_one_requests}"
+        );
+        assert_eq!(
+            harness
+                .state
+                .traces()
+                .expect("the fixture configures a state directory")
+                .counters()
+                .appended,
+            round_one_requests as u64,
+            "every round-one request must be durable"
+        );
+    }
+    let round_one_flaky_calls = upstream.flaky_calls();
+    assert_eq!(
+        round_one_flaky_calls, round_one_requests,
+        "every round-one request should have gone to the flaky model first"
+    );
+
+    // The first process is gone. Nothing survives in memory: the next
+    // `AppState` is built from the state directory and nothing else, which is
+    // the boundary under test.
+
+    // ================= round 1: learn and gate =============================
+    let round_one = loop_over(state_dir);
+    let round_one_traces = round_one.traces.len();
+    let round_one_body = round_one.training.report.source_fingerprint.clone();
+    let round_one_commit = round_one.training.report.final_commit.clone();
+
+    // Half-flaky is the shape where a learned router should win, and this is
+    // the assertion that justifies the rest of the test: every baseline that
+    // reads latency prefers the *fast* provider, and it fails three times in
+    // four. Only something that learned the relation between observed success
+    // rate and outcome can tell that the fast provider is the unreliable one.
+    let lowest = round_one
+        .comparison
+        .arm("baseline.lowest_latency")
+        .expect("the lowest-latency arm");
+    let candidate = round_one
+        .comparison
+        .arm("ml.candidate")
+        .expect("the candidate arm");
+    assert!(
+        lowest.success_rate < 0.5,
+        "the latency baseline should be fooled by the fast unreliable \
+         provider, got {}",
+        lowest.success_rate
+    );
+    assert!(
+        candidate.success_rate > 0.9,
+        "the learned candidate should route around it, got {}",
+        candidate.success_rate
+    );
+    let pairing = round_one
+        .comparison
+        .pairing("baseline.lowest_latency")
+        .expect("a pairing against the strongest baseline");
+    assert!(
+        pairing.deltas.mean_observed_utility_delta > 1.0,
+        "expected a decisive paired improvement, got {}",
+        pairing.deltas.mean_observed_utility_delta
+    );
+    assert_eq!(pairing.deltas.candidate_regressions, 0);
+
+    // The gate's shipped default names `baseline.lowest_latency`, so this run
+    // is promoted by the default configuration, not by a relaxed one.
+    let gate = PromotionGate::new(PromotionConfig::default());
+    let round_one_decision = gate.evaluate(
+        &round_one.training.report,
+        &round_one.comparison,
+        Some("round-1".into()),
+    );
+    assert_eq!(
+        round_one_decision.verdict,
+        PromotionVerdict::Promoted,
+        "round one should be promotable on its own evidence: {:?}",
+        round_one_decision
+            .blockers()
+            .into_iter()
+            .map(|c| format!("{} ({})", c.name, c.reason))
+            .collect::<Vec<_>>()
+    );
+
+    // ================= round 1: promote, durably ==========================
+    {
+        let store = ActiveModelStore::open(round_one.state_dir.path()).expect("store");
+        store
+            .promote(&round_one_decision, round_one.training.checkpoint.clone())
+            .expect("promote");
+    }
+
+    // ================= round 2: a NEW process, model attached =============
+    let costs = {
+        let mut config = config_for(addr, round_one.state_dir.path(), true);
+        config.ml_routing.exploration_probability = 0.0;
+        let harness = Harness::start(config, upstream.clone()).await;
+        assert!(
+            harness.state.ml_routing().is_attached(),
+            "a fresh AppState must pick up the promoted model up from the state \
+             directory; if this fails, promotion did not survive the restart"
+        );
+        assert_eq!(
+            harness.state.ml_routing().counts().fallbacks,
+            0,
+            "attaching a verified model should not fall back"
+        );
+
+        let costs = harness.drive(round_two_requests).await;
+        assert_eq!(
+            harness
+                .state
+                .traces()
+                .expect("the fixture configures a state directory")
+                .counters()
+                .appended,
+            round_two_requests as u64,
+            "round two's outcomes must be durable too"
+        );
+
+        // The learned plan avoids the unreliable provider, so round two costs
+        // about one attempt per request where round one cost two on most of
+        // them.
+        //
+        // A fresh process starts with an empty observation store, so the first
+        // request or two have no measured history to rank on and the
+        // DecisionEngine's switch threshold holds the model on the production
+        // pick. That is the cold-start cost of the mechanism. It is asserted as
+        // a bounded prefix rather than waved away, and bounded strictly: once
+        // the process has observations, nothing may fall back at all.
+        let mean: f64 = costs.iter().sum::<usize>() as f64 / costs.len() as f64;
+        assert!(
+            mean < 1.15,
+            "the learned plan averaged {mean} attempts per request over {costs:?}"
+        );
+        let late = costs
+            .iter()
+            .enumerate()
+            .skip(3)
+            .filter(|(_, cost)| **cost != 1)
+            .count();
+        assert_eq!(
+            late, 0,
+            "once the process has observations every request should answer \
+             first time; got {costs:?}"
+        );
+        costs
+    };
+
+    // ================= round 2: retrain on the combined body ==============
+    //
+    // This is the assertion the whole test exists for: the body round two trains
+    // on contains round two's requests, which only exist because the previous
+    // process served them.
+    let round_two_dir = round_one.state_dir.path().to_path_buf();
+    let round_two = loop_over_keep(round_two_dir);
+    assert_eq!(
+        round_two.traces.len(),
+        round_one_traces + round_two_requests,
+        "the durable log must hold both rounds"
+    );
+    assert_ne!(
+        round_two.training.report.source_fingerprint, round_one_body,
+        "round two must be fitted on a body round one never saw"
+    );
+    assert!(
+        round_two.training.report.sample_count > round_one.training.report.sample_count,
+        "the body grew, so the sample count must have grown with it"
+    );
+    assert!(
+        round_two.training.report.request_count > round_one.training.report.request_count,
+        "round two's own requests must be in the body"
+    );
+
+    // The new traces are genuinely new, not a replay of the first round.
+    let round_one_ids: std::collections::BTreeSet<String> = round_one
+        .traces
+        .iter()
+        .map(|trace| trace.request_id.clone())
+        .collect();
+    let fresh = round_two
+        .traces
+        .iter()
+        .filter(|trace| !round_one_ids.contains(&trace.request_id))
+        .count();
+    assert_eq!(
+        fresh, round_two_requests,
+        "every round-two trace must be new"
+    );
+
+    // A trace records the *production* decision as it was made, before any
+    // model consulted it. That is what makes it a shadow record: the shadow's
+    // choice is compared against exactly this. So `production_selected` is the
+    // deterministic plan's pick in both rounds, and asserting it changed would
+    // be asserting the shadow record stopped recording production.
+    assert!(
+        round_two
+            .traces
+            .iter()
+            .skip(round_one_traces)
+            .all(|trace| trace.input.production_selected == "alpha-flaky-std"),
+        "every trace should record the deterministic plan's pick"
+    );
+
+    // What changed is what the provider actually received, and that is measured
+    // at the provider rather than inferred from the router's own bookkeeping.
+    // In round one every request went to the flaky model first. In round two the
+    // promoted model routes around it, so it is barely called at all.
+    let flaky_in_round_two = upstream.flaky_calls() - round_one_flaky_calls;
+    assert!(
+        flaky_in_round_two <= 3,
+        "round two called the unreliable provider {flaky_in_round_two} times \
+         for {round_two_requests} requests; the promoted model did not change \
+         which provider served"
+    );
+    assert!(
+        costs.iter().skip(3).all(|cost| *cost == 1),
+        "and every request after cold start was served without a fallback"
+    );
+
+    // ================= round 2: gate again ================================
+    let round_two_decision = gate.evaluate(
+        &round_two.training.report,
+        &round_two.comparison,
+        Some("round-2".into()),
+    );
+    println!(
+        "round 1: {} requests, commit {}, verdict {}",
+        round_one.training.report.request_count,
+        round_one_commit,
+        round_one_decision.verdict.as_str()
+    );
+    println!(
+        "round 2: {} requests, commit {}, verdict {}",
+        round_two.training.report.request_count,
+        round_two.training.report.final_commit,
+        round_two_decision.verdict.as_str()
+    );
+
+    assert_eq!(
+        round_two_decision.verdict,
+        PromotionVerdict::Promoted,
+        "round two should still be promotable: {:?}",
+        round_two_decision
+            .blockers()
+            .into_iter()
+            .map(|c| format!("{} ({})", c.name, c.reason))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        round_two_decision.dataset_fingerprint.as_str(),
+        round_two.training.report.source_fingerprint.as_str(),
+        "the decision must name the body round two was judged on"
+    );
+    assert_ne!(
+        round_two.training.report.final_commit, round_one_commit,
+        "a larger body must produce a different model"
+    );
+
+    // ================= round 2: promote over round 1, then roll back ======
+    let store = ActiveModelStore::open(round_two.state_dir.path()).expect("store");
+    store
+        .promote(&round_two_decision, round_two.training.checkpoint.clone())
+        .expect("promote");
+    assert_eq!(
+        store.active_identity().expect("read").as_deref(),
+        Some(round_two.training.report.final_commit.as_str())
+    );
+    assert!(
+        store.rollback().expect("rollback"),
+        "round one's model is the rollback target"
+    );
+    assert_eq!(
+        store.active_identity().expect("read").as_deref(),
+        Some(round_one_commit.as_str()),
+        "rollback should return to round one's model"
+    );
+    let audit = store.audit().expect("audit");
+    assert_eq!(audit.len(), 3, "two promotions and one rollback");
+    assert!(audit
+        .iter()
+        .filter(|entry| entry.action == zroutery_core::ml::ActiveModelAction::Promote)
+        .all(|entry| entry.verdict == PromotionVerdict::Promoted));
+
+    drop(round_one);
+    drop(round_two);
+}
+
+// ---------------------------------------------------------------------------
 // Durable state is opt-in
 // ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn without_a_configured_state_directory_there_is_no_durable_ml_state() {
-    let (upstream, addr) = start_upstream().await;
+    let (upstream, addr) = start_upstream(Profile::DeadFlaky).await;
 
     // The default configuration: shadow on, ML routing off, no state directory.
     let mut config = config_for(addr, std::path::Path::new("unused"), false);
@@ -350,7 +749,7 @@ fn histogram(costs: &[usize]) -> String {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn real_requests_produce_outcomes_samples_and_durable_traces() {
-    let (upstream, addr) = start_upstream().await;
+    let (upstream, addr) = start_upstream(Profile::DeadFlaky).await;
 
     let state_dir = tempfile::tempdir().expect("tempdir");
     let harness = Harness::start(config_for(addr, state_dir.path(), false), upstream.clone()).await;
@@ -424,6 +823,37 @@ struct LoopArtefacts {
     training: zroutery_core::ml::TrainingOutcome,
     comparison: zroutery_core::ml::RoutingComparison,
     analysis: zroutery_core::ml::ShadowAnalysis,
+}
+
+/// The offline half of the loop over an existing state directory, leaving the
+/// directory in place.
+///
+/// [`loop_over`] takes ownership because most tests are done with it afterwards.
+/// This one is not: a second round has to read the same directory the first
+/// round wrote, and dropping the `TempDir` would delete it.
+fn loop_over_keep(state_dir: std::path::PathBuf) -> LoopArtefacts {
+    loop_over(copy_state_dir(&state_dir))
+}
+
+/// A private `TempDir` seeded from a directory that already exists.
+///
+/// `TempDir` deletes on drop, which is the right default and the wrong behaviour
+/// for a second round over the first round's output. Rather than reach for
+/// `TempDir::into_path` and leak the directory, the existing one is copied: the
+/// test keeps its own isolation and nothing is left behind.
+fn copy_state_dir(source: &std::path::Path) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().expect("tempdir");
+    for entry in std::fs::read_dir(source).expect("read state dir") {
+        let entry = entry.expect("entry");
+        let from = entry.path();
+        let to = dir.path().join(entry.file_name());
+        if from.is_dir() {
+            let _ = std::fs::create_dir_all(&to);
+        } else {
+            std::fs::copy(&from, &to).expect("copy state file");
+        }
+    }
+    dir
 }
 
 fn loop_over(state_dir: tempfile::TempDir) -> LoopArtefacts {
@@ -512,7 +942,7 @@ fn promote_trained(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn collected_traces_train_an_identified_model_that_beats_the_deterministic_plan() {
-    let (upstream, addr) = start_upstream().await;
+    let (upstream, addr) = start_upstream(Profile::DeadFlaky).await;
 
     let state_dir = tempfile::tempdir().expect("tempdir");
     let harness = Harness::start(config_for(addr, state_dir.path(), false), upstream.clone()).await;
@@ -644,7 +1074,7 @@ async fn collected_traces_train_an_identified_model_that_beats_the_deterministic
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_promotion_decision_is_explainable_and_a_promoted_model_becomes_the_active_one() {
-    let (upstream, addr) = start_upstream().await;
+    let (upstream, addr) = start_upstream(Profile::DeadFlaky).await;
 
     let state_dir = tempfile::tempdir().expect("tempdir");
     let harness = Harness::start(config_for(addr, state_dir.path(), false), upstream.clone()).await;
@@ -731,7 +1161,7 @@ async fn a_promotion_decision_is_explainable_and_a_promoted_model_becomes_the_ac
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_promoted_model_changes_which_provider_serves_and_rollback_restores_the_plan() {
-    let (upstream, addr) = start_upstream().await;
+    let (upstream, addr) = start_upstream(Profile::DeadFlaky).await;
 
     let state_dir = tempfile::tempdir().expect("tempdir");
 
@@ -900,7 +1330,7 @@ async fn a_promoted_model_changes_which_provider_serves_and_rollback_restores_th
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn exploration_moves_real_requests_and_never_serves_an_ineligible_candidate() {
-    let (upstream, addr) = start_upstream().await;
+    let (upstream, addr) = start_upstream(Profile::DeadFlaky).await;
 
     let state_dir = tempfile::tempdir().expect("tempdir");
     let harness = Harness::start(config_for(addr, state_dir.path(), false), upstream.clone()).await;
@@ -965,7 +1395,7 @@ async fn exploration_moves_real_requests_and_never_serves_an_ineligible_candidat
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "prints the evidence report; run it deliberately"]
 async fn print_the_closed_loop_evidence() {
-    let (upstream, addr) = start_upstream().await;
+    let (upstream, addr) = start_upstream(Profile::DeadFlaky).await;
     let state_dir = tempfile::tempdir().expect("tempdir");
 
     // Phase 1 -- collect.
