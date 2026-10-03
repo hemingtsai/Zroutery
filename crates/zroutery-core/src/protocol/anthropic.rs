@@ -139,6 +139,7 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
         Some(_) => return Err(Error::invalid("`tools` must be an array")),
     }
 
+    let mut parallel_tool_use = None;
     req.tool_choice = match obj.get("tool_choice") {
         None | Some(Value::Null) => None,
         Some(tc) => {
@@ -146,6 +147,15 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
                 .get("type")
                 .and_then(Value::as_str)
                 .ok_or_else(|| Error::invalid("tool_choice is missing `type`"))?;
+            match tc.get("disable_parallel_tool_use") {
+                None | Some(Value::Null) => {}
+                Some(Value::Bool(disabled)) => parallel_tool_use = Some(!disabled),
+                Some(_) => {
+                    return Err(Error::invalid(
+                        "`disable_parallel_tool_use` must be a boolean",
+                    ));
+                }
+            }
             match kind {
                 "auto" => Some(ToolChoice::Auto),
                 "any" => Some(ToolChoice::Any),
@@ -163,6 +173,7 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
             }
         }
     };
+    req.parallel_tool_use = parallel_tool_use;
 
     if let Some(th) = obj.get("thinking") {
         let kind = th
@@ -434,14 +445,28 @@ pub fn encode_request(req: &ChatRequest, upstream_model: &str) -> Result<Value> 
         );
     }
     if let Some(tc) = &req.tool_choice {
+        let mut choice = Map::new();
+        match tc {
+            ToolChoice::Auto => choice.insert("type".into(), json!("auto")),
+            ToolChoice::Any => choice.insert("type".into(), json!("any")),
+            ToolChoice::None => choice.insert("type".into(), json!("none")),
+            ToolChoice::Specific { name } => {
+                choice.insert("type".into(), json!("tool"));
+                choice.insert("name".into(), json!(name))
+            }
+        };
+        // Anthropic states the concurrency limit inside the tool choice, so it
+        // must be re-attached for every kind rather than dropped.
+        if let Some(allow) = req.parallel_tool_use {
+            choice.insert("disable_parallel_tool_use".into(), json!(!allow));
+        }
+        body.insert("tool_choice".into(), Value::Object(choice));
+    } else if req.parallel_tool_use == Some(false) && !req.tools.is_empty() {
+        // The restriction arrived without a tool choice (the OpenAI shape).
+        // Anthropic's default choice is `auto`; state it and the limit.
         body.insert(
             "tool_choice".into(),
-            match tc {
-                ToolChoice::Auto => json!({"type": "auto"}),
-                ToolChoice::Any => json!({"type": "any"}),
-                ToolChoice::None => json!({"type": "none"}),
-                ToolChoice::Specific { name } => json!({"type": "tool", "name": name}),
-            },
+            json!({"type": "auto", "disable_parallel_tool_use": true}),
         );
     }
     if let Some(th) = &req.thinking {
@@ -1270,6 +1295,66 @@ mod tests {
         assert_eq!(req.top_k, Some(40));
         assert_eq!(req.stop_sequences, vec!["STOP"]);
         assert_eq!(req.passthrough.get("beta_flag"), Some(&json!(true)));
+    }
+
+    #[test]
+    fn tool_choice_parallel_restriction_round_trips() {
+        for kind in ["auto", "any", "tool", "none"] {
+            for allow in [true, false] {
+                let mut choice = json!({"type": kind, "disable_parallel_tool_use": !allow});
+                if kind == "tool" {
+                    choice["name"] = json!("f");
+                }
+                let body = json!({
+                    "model": "m",
+                    "messages": [{"role": "user", "content": "q"}],
+                    "tools": [{"name": "f", "input_schema": {"type": "object"}}],
+                    "tool_choice": choice
+                });
+                let req = decode_request(body.clone()).unwrap();
+                assert_eq!(
+                    req.parallel_tool_use,
+                    Some(allow),
+                    "decode lost the restriction: {body}"
+                );
+                let encoded = encode_request(&req, "claude").unwrap();
+                assert_eq!(encoded["tool_choice"]["type"], kind);
+                assert_eq!(
+                    encoded["tool_choice"]["disable_parallel_tool_use"],
+                    json!(!allow),
+                    "encode lost the restriction: {encoded}"
+                );
+                assert_eq!(
+                    decode_request(encoded).unwrap().parallel_tool_use,
+                    Some(allow)
+                );
+            }
+        }
+
+        // No flag at all stays absent rather than becoming an explicit default.
+        let req = decode_request(json!({
+            "model": "m",
+            "messages": [{"role": "user", "content": "q"}],
+            "tool_choice": {"type": "auto"}
+        }))
+        .unwrap();
+        assert_eq!(req.parallel_tool_use, None);
+        let encoded = encode_request(&req, "claude").unwrap();
+        assert!(encoded["tool_choice"].get("disable_parallel_tool_use").is_none());
+    }
+
+    #[test]
+    fn openai_parallel_restriction_is_encoded_for_anthropic() {
+        let req = crate::protocol::openai::decode_request(json!({
+            "model": "m",
+            "messages": [{"role": "user", "content": "q"}],
+            "tools": [{"type": "function", "function": {"name": "f"}}],
+            "parallel_tool_calls": false
+        }))
+        .unwrap();
+        let body = encode_request(&req, "claude").unwrap();
+        assert_eq!(body["tool_choice"]["type"], "auto");
+        assert_eq!(body["tool_choice"]["disable_parallel_tool_use"], true);
     }
 
     #[test]

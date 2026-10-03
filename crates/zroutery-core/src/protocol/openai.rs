@@ -31,6 +31,7 @@ const KNOWN_KEYS: &[&str] = &[
     "stream_options",
     "tools",
     "tool_choice",
+    "parallel_tool_calls",
     "functions",
     "function_call",
     "reasoning_effort",
@@ -222,6 +223,16 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
             return Err(Error::invalid(
                 "`tool_choice` must be a string or an object",
             ))
+        }
+    };
+
+    // Whether the model may run tool calls concurrently sits next to the tool
+    // choice in OpenAI; in Anthropic it is a member of the tool choice itself.
+    req.parallel_tool_use = match obj.get("parallel_tool_calls") {
+        None | Some(Value::Null) => None,
+        Some(Value::Bool(allow)) => Some(*allow),
+        Some(_) => {
+            return Err(Error::invalid("`parallel_tool_calls` must be a boolean"));
         }
     };
 
@@ -668,6 +679,9 @@ pub fn encode_request_with(
                 }
             },
         );
+    }
+    if let Some(allow) = req.parallel_tool_use {
+        body.insert("parallel_tool_calls".into(), json!(allow));
     }
     if let Some(th) = &req.thinking {
         if quirks.send_reasoning_effort {
@@ -2249,6 +2263,72 @@ mod tests {
         }))
         .unwrap_err();
         assert!(err.to_string().contains("`strict` must be a boolean"));
+    }
+
+    #[test]
+    fn parallel_tool_calls_round_trips() {
+        let req = decode_request(json!({
+            "model": "m",
+            "messages": [{"role": "user", "content": "q"}],
+            "tools": [{"type": "function", "function": {"name": "f"}}],
+            "parallel_tool_calls": false
+        }))
+        .unwrap();
+        assert_eq!(req.parallel_tool_use, Some(false));
+        let body = encode_request(&req, "up").unwrap();
+        assert_eq!(body["parallel_tool_calls"], json!(false));
+        assert_eq!(decode_request(body).unwrap().parallel_tool_use, Some(false));
+
+        let absent = decode_request(json!({
+            "model": "m",
+            "messages": [{"role": "user", "content": "q"}]
+        }))
+        .unwrap();
+        assert_eq!(absent.parallel_tool_use, None);
+        assert!(encode_request(&absent, "up")
+            .unwrap()
+            .get("parallel_tool_calls")
+            .is_none());
+
+        let err = decode_request(json!({
+            "model": "m",
+            "messages": [],
+            "parallel_tool_calls": "no"
+        }))
+        .unwrap_err();
+        assert!(err.to_string().contains("`parallel_tool_calls` must be a boolean"));
+    }
+
+    #[test]
+    fn anthropic_parallel_restriction_maps_to_openai() {
+        let req = crate::protocol::anthropic::decode_request(json!({
+            "model": "m",
+            "max_tokens": 64,
+            "messages": [{"role": "user", "content": "q"}],
+            "tools": [{"name": "f", "input_schema": {"type": "object"}}],
+            "tool_choice": {"type": "any", "disable_parallel_tool_use": true}
+        }))
+        .unwrap();
+        let body = encode_request(&req, "up").unwrap();
+        assert_eq!(body["tool_choice"], json!("required"));
+        assert_eq!(
+            body["parallel_tool_calls"],
+            json!(false),
+            "the Anthropic restriction must reach OpenAI: {body}"
+        );
+
+        let allowed = crate::protocol::anthropic::decode_request(json!({
+            "model": "m",
+            "max_tokens": 64,
+            "messages": [{"role": "user", "content": "q"}],
+            "tools": [{"name": "f", "input_schema": {"type": "object"}}],
+            "tool_choice": {"type": "auto", "disable_parallel_tool_use": false}
+        }))
+        .unwrap();
+        assert_eq!(
+            encode_request(&allowed, "up").unwrap()["parallel_tool_calls"],
+            json!(true)
+        );
     }
 
     #[test]
