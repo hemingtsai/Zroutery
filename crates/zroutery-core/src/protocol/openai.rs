@@ -13,8 +13,8 @@ use super::{explicit_placeholder, unsupported_content, ProviderQuirks};
 use crate::error::{Error, Result};
 use crate::ir::{
     ChatRequest, ChatResponse, ContentBlock, Dialect, MediaSource, Message, Role, StopReason,
-    StreamEvent, SystemPart, ThinkingConfig, ToolChoice, ToolDef, ToolResultPart,
-    UnsupportedContentPolicy, Usage,
+    StreamEvent, StructuredOutput, SystemPart, ThinkingConfig, ToolChoice, ToolDef, ToolResultPart,
+    UnsupportedContentPolicy, Usage, DEFAULT_STRUCTURED_OUTPUT_SCHEMA_NAME,
 };
 
 use super::{SseFrame, StreamEncoder, StreamParser};
@@ -35,6 +35,7 @@ const KNOWN_KEYS: &[&str] = &[
     "functions",
     "function_call",
     "reasoning_effort",
+    "response_format",
     "user",
     "n",
 ];
@@ -265,6 +266,11 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
 
     req.metadata_user = obj.get("user").and_then(Value::as_str).map(str::to_string);
 
+    // Structured output is a request property, not a vendor extension: it is
+    // decoded here so it survives translation to another dialect and so the
+    // request requires `Capability::StructuredOutput`.
+    req.structured_output = decode_response_format(obj.get("response_format"))?;
+
     for (k, v) in obj {
         if !KNOWN_KEYS.contains(&k.as_str()) {
             req.passthrough.insert(k.clone(), v.clone());
@@ -273,6 +279,46 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
 
     req.refresh_required_capabilities();
     Ok(req)
+}
+
+/// Decode OpenAI `response_format` into the IR structured-output model.
+///
+/// `{"type": "text"}` is the default and states no constraint. Unknown types
+/// are refused rather than dropped, because a caller that asked for a
+/// constraint must not silently receive free-form text.
+fn decode_response_format(value: Option<&Value>) -> Result<Option<StructuredOutput>> {
+    let value = match value {
+        None | Some(Value::Null) => return Ok(None),
+        Some(value) => value,
+    };
+    let kind = value
+        .get("type")
+        .and_then(Value::as_str)
+        .ok_or_else(|| Error::invalid("`response_format` is missing `type`"))?;
+    match kind {
+        "text" => Ok(None),
+        "json_object" => Ok(Some(StructuredOutput::JsonObject)),
+        "json_schema" => {
+            let json_schema = value
+                .get("json_schema")
+                .ok_or_else(|| Error::invalid("`response_format.json_schema` is required"))?;
+            let schema = json_schema.get("schema").cloned().ok_or_else(|| {
+                Error::invalid("`response_format.json_schema.schema` is required")
+            })?;
+            Ok(Some(StructuredOutput::JsonSchema {
+                name: json_schema
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                schema,
+                strict: json_schema
+                    .get("strict")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+            }))
+        }
+        other => Err(unsupported_content("response_format", Some(other))),
+    }
 }
 
 /// True when the client asked for a usage chunk at the end of the stream.
@@ -585,6 +631,27 @@ fn system_text(system: &[SystemPart]) -> String {
         .join("\n\n")
 }
 
+/// Render an IR structured-output constraint as OpenAI `response_format`.
+fn encode_response_format(structured: &StructuredOutput) -> Value {
+    match structured {
+        StructuredOutput::JsonObject => json!({"type": "json_object"}),
+        StructuredOutput::JsonSchema {
+            name,
+            schema,
+            strict,
+        } => json!({
+            "type": "json_schema",
+            "json_schema": {
+                "name": name
+                    .as_deref()
+                    .unwrap_or(DEFAULT_STRUCTURED_OUTPUT_SCHEMA_NAME),
+                "schema": schema,
+                "strict": strict,
+            },
+        }),
+    }
+}
+
 pub fn encode_request(req: &ChatRequest, upstream_model: &str) -> Result<Value> {
     encode_request_with(req, upstream_model, &ProviderQuirks::default())
 }
@@ -696,6 +763,13 @@ pub fn encode_request_with(
     }
     if let Some(u) = &req.metadata_user {
         body.insert("user".into(), json!(u));
+    }
+
+    // Emit the structured-output constraint from the IR. This is what makes an
+    // OpenAI -> OpenAI round trip keep `response_format` even though it is no
+    // longer riding along in `passthrough`.
+    if let Some(structured) = &req.structured_output {
+        body.insert("response_format".into(), encode_response_format(structured));
     }
 
     if req.source_dialect == Dialect::OpenAI {

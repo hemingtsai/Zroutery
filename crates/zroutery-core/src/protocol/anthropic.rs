@@ -429,6 +429,17 @@ pub fn encode_request(req: &ChatRequest, upstream_model: &str) -> Result<Value> 
             "strict tool schemas are not representable in the anthropic dialect",
         ));
     }
+    if req.structured_output.is_some() {
+        // Anthropic Messages has no structured-output constraint: neither a
+        // JSON schema nor a plain json-object mode can be stated on the wire.
+        // The `StructuredOutput` requirement also keeps candidates that cannot
+        // honour the constraint out of the eligible set; this is the explicit
+        // refusal for any path that reaches the encoder anyway, so the caller
+        // never receives unconstrained prose as if the schema had been applied.
+        return Err(Error::invalid(
+            "structured output is not representable in the anthropic dialect",
+        ));
+    }
     if !req.tools.is_empty() {
         body.insert(
             "tools".into(),

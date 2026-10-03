@@ -385,6 +385,40 @@ pub struct ThinkingConfig {
     pub budget_tokens: Option<u32>,
 }
 
+/// A structured-output constraint the caller asked the model to honour.
+///
+/// This is a first-class request property, not an opaque passthrough blob: it
+/// is decoded from every dialect that can express it, re-encoded for a target
+/// dialect that can express it, and a request that carries one requires
+/// [`Capability::StructuredOutput`] so the candidate filter can exclude models
+/// that cannot honour the constraint.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "mode", rename_all = "snake_case")]
+pub enum StructuredOutput {
+    /// Plain JSON-object mode: the model must emit valid JSON, but no schema
+    /// constrains its shape. OpenAI/Responses `{"type": "json_object"}` and
+    /// Gemini `responseMimeType: "application/json"` with no schema.
+    JsonObject,
+    /// A JSON Schema the model's output must satisfy.
+    JsonSchema {
+        /// Schema name. A dialect that carries no name (Gemini
+        /// `responseSchema`) leaves it unset; a target that requires one falls
+        /// back to [`DEFAULT_STRUCTURED_OUTPUT_SCHEMA_NAME`].
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        /// The JSON Schema document.
+        schema: Value,
+        /// Whether the provider must enforce the schema exactly. A dialect
+        /// with no strictness flag records `false` rather than inventing one.
+        #[serde(default)]
+        strict: bool,
+    },
+}
+
+/// Schema name used when the target dialect requires one but the source
+/// dialect carried none.
+pub const DEFAULT_STRUCTURED_OUTPUT_SCHEMA_NAME: &str = "response";
+
 /// What to do with content types the target provider cannot represent.
 ///
 /// `Reject` is deliberately the default.  `Transform` and `Drop` are explicit
@@ -432,6 +466,9 @@ pub struct ChatRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parallel_tool_use: Option<bool>,
     pub thinking: Option<ThinkingConfig>,
+    /// Structured-output constraint the caller asked for, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub structured_output: Option<StructuredOutput>,
     pub metadata_user: Option<String>,
     /// Vendor specific fields we do not understand but pass through untouched.
     pub passthrough: Map<String, Value>,
@@ -463,6 +500,7 @@ impl ChatRequest {
             tool_choice: None,
             parallel_tool_use: None,
             thinking: None,
+            structured_output: None,
             metadata_user: None,
             passthrough: Map::new(),
             source_dialect: dialect,
@@ -575,6 +613,12 @@ impl ChatRequest {
             .is_some_and(|thinking| thinking.enabled)
         {
             required.insert(Capability::Thinking);
+        }
+        // A structured-output constraint is a hard requirement: a candidate
+        // that cannot honour it must be filtered out (or explicitly degraded)
+        // rather than silently served unconstrained text.
+        if self.structured_output.is_some() {
+            required.insert(Capability::StructuredOutput);
         }
 
         Capability::ALL
@@ -913,6 +957,28 @@ mod tests {
         });
         let caps = req.compute_required_capabilities();
         assert!(caps.contains(&Capability::Thinking));
+    }
+
+    #[test]
+    fn compute_required_capabilities_structured_output() {
+        let mut req = ChatRequest::new("m", Dialect::OpenAI);
+        req.messages.push(Message::user_text("hello"));
+        req.structured_output = Some(StructuredOutput::JsonObject);
+        let caps = req.compute_required_capabilities();
+        assert!(caps.contains(&Capability::StructuredOutput));
+        assert_eq!(caps, vec![Capability::StructuredOutput]);
+        assert!(!caps.contains(&Capability::Thinking));
+
+        req.structured_output = Some(StructuredOutput::JsonSchema {
+            name: Some("answer".into()),
+            schema: serde_json::json!({"type": "object"}),
+            strict: true,
+        });
+        req.refresh_required_capabilities();
+        assert!(!req.required_capabilities.is_empty());
+        assert!(req
+            .required_capabilities
+            .contains(&Capability::StructuredOutput));
     }
 
     #[test]
