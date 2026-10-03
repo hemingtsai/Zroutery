@@ -229,22 +229,62 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
                 .get("mode")
                 .and_then(Value::as_str)
                 .ok_or_else(|| Error::invalid("functionCallingConfig is missing `mode`"))?;
-            Some(match mode {
-                "NONE" => ToolChoice::None,
-                "ANY" | "AUTO" => {
-                    if mode == "ANY" {
-                        ToolChoice::Any
-                    } else {
-                        ToolChoice::Auto
+            match mode {
+                "NONE" => Some(ToolChoice::None),
+                // `allowedFunctionNames` is only meaningful for ANY mode, so
+                // AUTO keeps the full declaration set exactly as Gemini does.
+                "AUTO" => Some(ToolChoice::Auto),
+                "ANY" => match decode_allowed_function_names(config)? {
+                    None => Some(ToolChoice::Any),
+                    // The IR cannot name several allowed functions at once, so
+                    // narrow the declarations instead: silently dropping the
+                    // restriction made an excluded function selectable again.
+                    Some(allowed) => {
+                        req.tools
+                            .retain(|tool| allowed.iter().any(|name| *name == tool.name));
+                        if allowed.len() == 1 {
+                            Some(ToolChoice::Specific {
+                                name: allowed[0].clone(),
+                            })
+                        } else {
+                            Some(ToolChoice::Any)
+                        }
                     }
-                }
+                },
                 other => return Err(unsupported_content("function calling mode", Some(other))),
-            })
+            }
         }
     };
 
     req.refresh_required_capabilities();
     Ok(req)
+}
+
+/// Read `functionCallingConfig.allowedFunctionNames`.
+///
+/// `None` means the caller set no restriction. An explicitly empty list is
+/// rejected rather than read as "no restriction", because widening a caller's
+/// restriction back to the full tool set is the defect this guards against.
+fn decode_allowed_function_names(config: &Value) -> Result<Option<Vec<String>>> {
+    let names = match config.get("allowedFunctionNames") {
+        None | Some(Value::Null) => return Ok(None),
+        Some(Value::Array(names)) => names,
+        Some(_) => return Err(Error::invalid("`allowedFunctionNames` must be an array")),
+    };
+    let names = names
+        .iter()
+        .map(|name| {
+            name.as_str()
+                .map(str::to_string)
+                .ok_or_else(|| Error::invalid("allowedFunctionNames entries must be strings"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    if names.is_empty() {
+        return Err(Error::invalid(
+            "`allowedFunctionNames` cannot be empty when the mode is ANY",
+        ));
+    }
+    Ok(Some(names))
 }
 
 /// Mint an id for a Gemini function call or response whose optional `id` was

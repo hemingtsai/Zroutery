@@ -1,8 +1,9 @@
 //! Tests for the Gemini native API translation layer.
 
-use serde_json::json;
+use serde_json::{json, Value};
 use zroutery_core::ir::{
-    ChatRequest, ChatResponse, ContentBlock, Dialect, Role, StopReason, StreamEvent, Usage,
+    ChatRequest, ChatResponse, ContentBlock, Dialect, Role, StopReason, StreamEvent, ToolChoice,
+    Usage,
 };
 use zroutery_core::protocol::gemini::{
     decode_request, decode_response, encode_request, encode_response, GeminiStreamEncoder,
@@ -343,4 +344,95 @@ fn keeps_explicit_function_call_and_response_ids() {
         ContentBlock::ToolResult { tool_use_id, .. } => assert_eq!(tool_use_id, "def"),
         other => panic!("expected ToolResult, got {:?}", other),
     }
+}
+
+fn gated_tool_request(allowed: Value) -> Value {
+    json!({
+        "model": "gemini-2.0-flash",
+        "contents": [{"role": "user", "parts": [{"text": "run"}]}],
+        "tools": [{"functionDeclarations": [
+            {"name": "read", "parameters": {"type": "object"}},
+            {"name": "delete", "parameters": {"type": "object"}}
+        ]}],
+        "toolConfig": {"functionCallingConfig": {"mode": "ANY", "allowedFunctionNames": allowed}}
+    })
+}
+
+#[test]
+fn maps_a_single_allowed_function_to_a_specific_tool_choice() {
+    let req = decode_request(gated_tool_request(json!(["read"]))).unwrap();
+    assert_eq!(
+        req.tool_choice,
+        Some(ToolChoice::Specific {
+            name: "read".into()
+        })
+    );
+    assert_eq!(req.tools.len(), 1);
+    assert_eq!(req.tools[0].name, "read");
+
+    let upstream = translate_request(
+        Dialect::OpenAI,
+        &req,
+        "gpt-4o",
+        &ProviderQuirks::default(),
+    )
+    .unwrap();
+    assert_eq!(upstream["tool_choice"]["function"]["name"], "read");
+    let tools = upstream["tools"].as_array().unwrap();
+    assert_eq!(tools.len(), 1, "the excluded function must not be sent");
+    assert_eq!(tools[0]["function"]["name"], "read");
+}
+
+#[test]
+fn filters_declarations_when_several_allowed_functions_are_given() {
+    let body = json!({
+        "model": "gemini-2.0-flash",
+        "contents": [{"role": "user", "parts": [{"text": "run"}]}],
+        "tools": [{"functionDeclarations": [
+            {"name": "read", "parameters": {"type": "object"}},
+            {"name": "list", "parameters": {"type": "object"}},
+            {"name": "delete", "parameters": {"type": "object"}}
+        ]}],
+        "toolConfig": {"functionCallingConfig": {"mode": "ANY", "allowedFunctionNames": ["read", "list"]}}
+    });
+
+    let req = decode_request(body).unwrap();
+    assert_eq!(req.tool_choice, Some(ToolChoice::Any));
+    let names: Vec<&str> = req.tools.iter().map(|tool| tool.name.as_str()).collect();
+    assert_eq!(names, ["read", "list"]);
+
+    let upstream = translate_request(
+        Dialect::OpenAI,
+        &req,
+        "gpt-4o",
+        &ProviderQuirks::default(),
+    )
+    .unwrap();
+    assert_eq!(upstream["tool_choice"], "required");
+    let tools = upstream["tools"].as_array().unwrap();
+    let sent: Vec<&str> = tools
+        .iter()
+        .map(|tool| tool["function"]["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(sent, ["read", "list"]);
+}
+
+#[test]
+fn auto_mode_keeps_the_declared_tool_set() {
+    let body = json!({
+        "model": "gemini-2.0-flash",
+        "contents": [{"role": "user", "parts": [{"text": "run"}]}],
+        "tools": [{"functionDeclarations": [{"name": "read"}, {"name": "delete"}]}],
+        "toolConfig": {"functionCallingConfig": {"mode": "AUTO", "allowedFunctionNames": ["read"]}}
+    });
+
+    let req = decode_request(body).unwrap();
+    assert_eq!(req.tool_choice, Some(ToolChoice::Auto));
+    assert_eq!(req.tools.len(), 2);
+}
+
+#[test]
+fn rejects_an_empty_allowed_function_names_list() {
+    let error = decode_request(gated_tool_request(json!([]))).unwrap_err();
+    assert!(error.to_string().contains("allowedFunctionNames"));
 }
