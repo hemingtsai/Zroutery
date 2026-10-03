@@ -530,21 +530,7 @@ impl AgentAdapter for ClaudeAdapter {
         snapshot: &AgentConfigSnapshot,
         fields: &[ManagedField],
     ) -> Result<AgentConfigSnapshot, String> {
-        let mut raw = snapshot.raw.clone();
-        for field in fields {
-            set_nested(&mut raw, &field.path, field.value.clone());
-        }
-        let json =
-            serde_json::to_string_pretty(&raw).map_err(|e| format!("serialize failed: {e}"))?;
-        let hash = compute_hash(json.as_bytes());
-        // Atomic write: write to temp file, then rename
-        write_config_atomic(&snapshot.config_path, json.as_bytes())?;
-        Ok(AgentConfigSnapshot {
-            agent_type: snapshot.agent_type,
-            config_path: snapshot.config_path.clone(),
-            raw,
-            config_hash: hash,
-        })
+        apply_patch_to_disk(snapshot, fields)
     }
 
     fn release(
@@ -552,18 +538,7 @@ impl AgentAdapter for ClaudeAdapter {
         snapshot: &AgentConfigSnapshot,
         manifest: &OwnershipManifest,
     ) -> Result<(), String> {
-        let mut raw = snapshot.raw.clone();
-        restore_fields(&mut raw, manifest);
-        let json =
-            serde_json::to_string_pretty(&raw).map_err(|e| format!("serialize failed: {e}"))?;
-        let hash = compute_hash(json.as_bytes());
-        let restored = AgentConfigSnapshot {
-            agent_type: snapshot.agent_type,
-            config_path: snapshot.config_path.clone(),
-            raw,
-            config_hash: hash,
-        };
-        self.write_config(&restored)
+        release_to_disk(snapshot, manifest)
     }
 }
 
@@ -614,20 +589,7 @@ impl AgentAdapter for CodexAdapter {
         snapshot: &AgentConfigSnapshot,
         fields: &[ManagedField],
     ) -> Result<AgentConfigSnapshot, String> {
-        let mut raw = snapshot.raw.clone();
-        for field in fields {
-            set_nested(&mut raw, &field.path, field.value.clone());
-        }
-        let json =
-            serde_json::to_string_pretty(&raw).map_err(|e| format!("serialize failed: {e}"))?;
-        let hash = compute_hash(json.as_bytes());
-        write_config_atomic(&snapshot.config_path, json.as_bytes())?;
-        Ok(AgentConfigSnapshot {
-            agent_type: snapshot.agent_type,
-            config_path: snapshot.config_path.clone(),
-            raw,
-            config_hash: hash,
-        })
+        apply_patch_to_disk(snapshot, fields)
     }
 
     fn release(
@@ -635,18 +597,7 @@ impl AgentAdapter for CodexAdapter {
         snapshot: &AgentConfigSnapshot,
         manifest: &OwnershipManifest,
     ) -> Result<(), String> {
-        let mut raw = snapshot.raw.clone();
-        restore_fields(&mut raw, manifest);
-        let json =
-            serde_json::to_string_pretty(&raw).map_err(|e| format!("serialize failed: {e}"))?;
-        let hash = compute_hash(json.as_bytes());
-        let restored = AgentConfigSnapshot {
-            agent_type: snapshot.agent_type,
-            config_path: snapshot.config_path.clone(),
-            raw,
-            config_hash: hash,
-        };
-        self.write_config(&restored)
+        release_to_disk(snapshot, manifest)
     }
 }
 
@@ -697,20 +648,7 @@ impl AgentAdapter for GeminiAdapter {
         snapshot: &AgentConfigSnapshot,
         fields: &[ManagedField],
     ) -> Result<AgentConfigSnapshot, String> {
-        let mut raw = snapshot.raw.clone();
-        for field in fields {
-            set_nested(&mut raw, &field.path, field.value.clone());
-        }
-        let json =
-            serde_json::to_string_pretty(&raw).map_err(|e| format!("serialize failed: {e}"))?;
-        let hash = compute_hash(json.as_bytes());
-        write_config_atomic(&snapshot.config_path, json.as_bytes())?;
-        Ok(AgentConfigSnapshot {
-            agent_type: snapshot.agent_type,
-            config_path: snapshot.config_path.clone(),
-            raw,
-            config_hash: hash,
-        })
+        apply_patch_to_disk(snapshot, fields)
     }
 
     fn release(
@@ -718,18 +656,7 @@ impl AgentAdapter for GeminiAdapter {
         snapshot: &AgentConfigSnapshot,
         manifest: &OwnershipManifest,
     ) -> Result<(), String> {
-        let mut raw = snapshot.raw.clone();
-        restore_fields(&mut raw, manifest);
-        let json =
-            serde_json::to_string_pretty(&raw).map_err(|e| format!("serialize failed: {e}"))?;
-        let hash = compute_hash(json.as_bytes());
-        let restored = AgentConfigSnapshot {
-            agent_type: snapshot.agent_type,
-            config_path: snapshot.config_path.clone(),
-            raw,
-            config_hash: hash,
-        };
-        self.write_config(&restored)
+        release_to_disk(snapshot, manifest)
     }
 }
 
@@ -918,6 +845,80 @@ fn restore_fields(raw: &mut serde_json::Value, manifest: &OwnershipManifest) {
             set_nested(raw, field_path, original_value.clone());
         }
     }
+}
+
+/// Apply managed field patches to `raw`.
+fn apply_fields(raw: &mut serde_json::Value, fields: &[ManagedField]) {
+    for field in fields {
+        set_nested(raw, &field.path, field.value.clone());
+    }
+}
+
+/// Re-read the config a snapshot was taken from, refusing to touch a file that
+/// changed underneath the caller.
+///
+/// `apply_patch` used to serialize the patched *old* snapshot over the file, so
+/// an external edit to a field Zroutery does not manage (another tool, the user
+/// editing by hand) was silently reverted. The hash recorded by `read_config`
+/// is the version the caller based its patch on; when the file no longer
+/// matches, the write is refused and the caller has to re-read and retry.
+fn reread_raw(snapshot: &AgentConfigSnapshot) -> Result<serde_json::Value, String> {
+    let path = &snapshot.config_path;
+
+    if !path.exists() {
+        if snapshot.config_hash.is_empty() {
+            return Ok(serde_json::Value::Object(serde_json::Map::new()));
+        }
+        return Err(format!(
+            "config {} disappeared since it was read; refusing to write it",
+            path.display()
+        ));
+    }
+
+    let data = std::fs::read_to_string(path)
+        .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
+    if compute_hash(data.as_bytes()) != snapshot.config_hash {
+        return Err(format!(
+            "config {} changed on disk since it was read; refusing to overwrite it",
+            path.display()
+        ));
+    }
+
+    serde_json::from_str(&data).map_err(|e| format!("failed to parse {}: {e}", path.display()))
+}
+
+/// Patch managed fields into the current on-disk config and write it back.
+fn apply_patch_to_disk(
+    snapshot: &AgentConfigSnapshot,
+    fields: &[ManagedField],
+) -> Result<AgentConfigSnapshot, String> {
+    let mut raw = reread_raw(snapshot)?;
+    apply_fields(&mut raw, fields);
+
+    let json =
+        serde_json::to_string_pretty(&raw).map_err(|e| format!("serialize failed: {e}"))?;
+    let hash = compute_hash(json.as_bytes());
+    write_config_atomic(&snapshot.config_path, json.as_bytes())?;
+
+    Ok(AgentConfigSnapshot {
+        agent_type: snapshot.agent_type,
+        config_path: snapshot.config_path.clone(),
+        raw,
+        config_hash: hash,
+    })
+}
+
+/// Restore a manifest's original values into the current config and write it.
+fn release_to_disk(
+    snapshot: &AgentConfigSnapshot,
+    manifest: &OwnershipManifest,
+) -> Result<(), String> {
+    let mut raw = snapshot.raw.clone();
+    restore_fields(&mut raw, manifest);
+
+    let json =
+        serde_json::to_string_pretty(&raw).map_err(|e| format!("serialize failed: {e}"))?;
+    write_config_atomic(&snapshot.config_path, json.as_bytes())
 }
 
 /// Remove a nested JSON value by dotted path, leaving anything else untouched.
@@ -2179,6 +2180,69 @@ mod tests {
             .mode()
             & 0o777;
         assert_eq!(mode, 0o600, "new config mode was {mode:o}");
+    }
+
+    #[test]
+    fn apply_patch_refuses_stale_snapshot() {
+        super::isolate_agent_home();
+        let home = super::isolated_agent_home().expect("isolated agent home");
+        let path = home.join(".claude.json");
+        std::fs::write(
+            &path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "managed": "original",
+                "unmanaged": "original"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let adapter = ClaudeAdapter;
+        let snapshot = adapter.read_config().unwrap();
+
+        // Another tool edits a field Zroutery does not manage while the
+        // snapshot is held.
+        std::fs::write(
+            &path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "managed": "original",
+                "unmanaged": "user-new"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let err = adapter
+            .apply_patch(
+                &snapshot,
+                &[ManagedField {
+                    path: "managed".into(),
+                    value: serde_json::json!("zroutery"),
+                }],
+            )
+            .unwrap_err();
+        assert!(err.contains("changed on disk"), "error: {err}");
+
+        // The write was refused, so the external edit is still there.
+        let disk = read_json_file(&path);
+        assert_eq!(disk["unmanaged"], serde_json::json!("user-new"));
+        assert_eq!(disk["managed"], serde_json::json!("original"));
+
+        // Re-reading and retrying applies the patch on top of the current file.
+        let fresh = adapter.read_config().unwrap();
+        adapter
+            .apply_patch(
+                &fresh,
+                &[ManagedField {
+                    path: "managed".into(),
+                    value: serde_json::json!("zroutery"),
+                }],
+            )
+            .unwrap();
+
+        let disk = read_json_file(&path);
+        assert_eq!(disk["managed"], serde_json::json!("zroutery"));
+        assert_eq!(disk["unmanaged"], serde_json::json!("user-new"));
     }
 
     #[test]
