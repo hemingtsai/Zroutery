@@ -232,6 +232,38 @@ installer gate on a schedule), and no step in it may be made non-blocking. If a
 gate is too expensive for every push, limit **when** it runs, never **whether
 its result counts**.
 
+### The toolchain the matrix is run under
+
+Every row above is a claim about a **toolchain version**, and the version is not
+in the table. CI resolves the floating `dtolnay/rust-toolchain@stable`, which was
+`1.99.0` when run 6 executed, while this checkout's default `stable` was still
+`1.97.1` from July. That gap is not hypothetical: the first push of the shadow
+branch passed all eleven local gates and failed CI's clippy job, because 1.99
+added two lints 1.97.1 does not have (`eacbc55`; E-111). A green local matrix
+therefore implies nothing about CI until the local toolchain is the one CI
+resolves.
+
+Two consequences worth keeping:
+
+- To find out what CI actually resolved, read
+  `https://static.rust-lang.org/dist/channel-rust-stable.toml` and take
+  `[pkg.rust] version`, not the first `version` in the file, which is Cargo's.
+- `rustup update stable` can fail with `os error 32` when another project's
+  build holds a file inside the shared toolchain directory. Do not kill that
+  build. `rustup toolchain install <version> --profile minimal --component
+  clippy` writes a separate directory and leaves the running build alone. Note
+  that a minimal profile has **no `rustfmt`**, so `cargo fmt --check` under it
+  fails as a missing component rather than as a formatting violation; add
+  `--component rustfmt` before believing that result.
+
+Both `rustfmt` versions currently agree on every file in the workspace, so there
+is no formatting drift to reconcile.
+
+One honest asymmetry in the table: the clippy row uses `--all-targets` and CI's
+clippy step does not, so CI checks strictly less than this matrix does. The
+stricter local form is kept deliberately, and the gap is recorded rather than
+quietly narrowed in either direction.
+
 ### Known unenforced claim
 
 The workspace declares `rust-version = "1.80"` and every CI job uses `stable`,
