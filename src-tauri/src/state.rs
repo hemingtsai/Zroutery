@@ -356,11 +356,16 @@ impl Desktop {
     /// on every call, and rewriting the file each time buys nothing. The cost of that
     /// choice is losing the last few seconds of spend to a hard kill, which is a fair
     /// trade against constant disk writes.
+    ///
+    /// A write that fails leaves the spend pending, so the next timer tick (or the
+    /// shutdown flush) retries it once the disk is writable again, instead of the
+    /// old ledger surviving until the process restarts.
     pub fn flush_ledger(&self) {
-        if let Some(ledger) = self.core.take_dirty_ledger() {
-            if let Err(e) = store::save_ledger(&self.config_dir, &ledger) {
-                tracing::warn!("cannot write the spend ledger: {e}");
-            }
+        let result = self
+            .core
+            .flush_ledger(|ledger| store::save_ledger(&self.config_dir, ledger));
+        if let Err(e) = result {
+            tracing::warn!("cannot write the spend ledger, will retry: {e}");
         }
     }
 
@@ -616,6 +621,61 @@ mod tests {
         let problems = desktop.refresh_all_balances().await;
         assert_eq!(problems.len(), 1);
         assert!(problems[0].starts_with("probed:"));
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// A failed ledger write must not lose the spend: once the destination is
+    /// writable again the next flush has to persist it.
+    #[test]
+    fn a_failed_ledger_write_is_retried_after_the_disk_recovers() {
+        use zroutery_core::budget::Ledger;
+        use zroutery_core::config::ModelTier;
+
+        let global_day = |ledger: &Ledger| {
+            ledger
+                .totals_for(&BudgetScope::Global, chrono::Local::now())
+                .into_iter()
+                .find(|(period, _)| *period == BudgetPeriod::Day)
+                .map(|(_, cost)| cost.amount)
+                .unwrap_or(0.0)
+        };
+
+        let (desktop, dir) = desktop_with(config_with_token("zr-ledger"));
+        desktop.core.charge(
+            "provider",
+            Some(ModelTier::Standard),
+            &Cost {
+                currency: "USD".into(),
+                amount: 1.09,
+            },
+        );
+
+        // A directory where the temporary file goes makes the write fail the way
+        // a full or read-only destination does, without needing root.
+        let blocked = dir.join(format!("{}.tmp", store::LEDGER_FILE));
+        std::fs::create_dir(&blocked).unwrap();
+
+        desktop.flush_ledger();
+        assert!(
+            !dir.join(store::LEDGER_FILE).exists(),
+            "the blocked destination cannot have produced a ledger"
+        );
+        assert_eq!(
+            global_day(&store::load_ledger(&dir)),
+            0.0,
+            "nothing was written while the destination was blocked"
+        );
+
+        // The disk recovers. The pending spend must still be there to write.
+        std::fs::remove_dir(&blocked).unwrap();
+        desktop.flush_ledger();
+
+        assert_eq!(
+            global_day(&store::load_ledger(&dir)),
+            1.09,
+            "the retry after recovery must persist the spend charged before the failure"
+        );
 
         std::fs::remove_dir_all(dir).ok();
     }
