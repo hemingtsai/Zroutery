@@ -339,6 +339,20 @@ impl RoutingModel for SuccessModel {
         let bias = state.parameters[0];
         let weights = state.parameters[1..=n].to_vec();
         let grad_sq = state.parameters[n + 1..].to_vec();
+        // The AdaGrad accumulator is a sum of squared gradients seeded at 1, so
+        // its domain is strictly positive and a value outside it is corrupt
+        // state, not a finite parameter. Finiteness alone accepts a negative or
+        // zero accumulator, and the next update's `sqrt` then turns a validated
+        // checkpoint into NaN predictions.
+        if let Some((index, value)) = grad_sq
+            .iter()
+            .enumerate()
+            .find(|(_, value)| !(**value > 0.0))
+        {
+            return Err(format!(
+                "AdaGrad accumulator grad_sq[{index}] must be positive, got {value}"
+            ));
+        }
         Ok(SuccessModel {
             weights,
             bias,
@@ -456,6 +470,12 @@ impl RoutingModel for LatencyModel {
         }
         let bias = state.parameters[0];
         let residual_ewma = state.parameters[1];
+        // The residual EWMA averages absolute errors, so it cannot be negative.
+        if residual_ewma < 0.0 {
+            return Err(format!(
+                "residual_ewma must be non-negative, got {residual_ewma}"
+            ));
+        }
         let weights = state.parameters[2..].to_vec();
         Ok(LatencyModel {
             weights,
@@ -573,6 +593,12 @@ impl RoutingModel for TtftModel {
         }
         let bias = state.parameters[0];
         let residual_ewma = state.parameters[1];
+        // The residual EWMA averages absolute errors, so it cannot be negative.
+        if residual_ewma < 0.0 {
+            return Err(format!(
+                "residual_ewma must be non-negative, got {residual_ewma}"
+            ));
+        }
         let weights = state.parameters[2..].to_vec();
         Ok(TtftModel {
             weights,
@@ -690,6 +716,12 @@ impl RoutingModel for CostModel {
         }
         let bias = state.parameters[0];
         let residual_ewma = state.parameters[1];
+        // The residual EWMA averages absolute errors, so it cannot be negative.
+        if residual_ewma < 0.0 {
+            return Err(format!(
+                "residual_ewma must be non-negative, got {residual_ewma}"
+            ));
+        }
         let weights = state.parameters[2..].to_vec();
         Ok(CostModel {
             weights,
@@ -1076,6 +1108,92 @@ mod tests {
             pred_orig.value,
             pred_loaded.value
         );
+    }
+
+    /// A corrupt AdaGrad accumulator is refused at load, not accepted as a
+    /// finite parameter.
+    ///
+    /// The accumulator is seeded at 1 and only ever adds a square, so a zero or
+    /// negative value is outside its domain. Finiteness alone accepted one, and
+    /// the next update's `sqrt` then turned the validated checkpoint into NaN
+    /// predictions.
+    #[test]
+    fn success_load_rejects_an_invalid_adagrad_accumulator() {
+        let mut model = SuccessModel::new(FEATURE_DIMENSION);
+        for i in 0..20 {
+            model.update(
+                &random_like_features(i),
+                if i % 2 == 0 { 1.0 } else { 0.0 },
+            );
+        }
+        let valid = model.save();
+        let first_accumulator = 1 + FEATURE_DIMENSION;
+
+        for bad in [-1.0_f64, 0.0] {
+            let mut state = valid.clone();
+            state.parameters[first_accumulator] = bad;
+            state.checksum = ModelState::compute_checksum(&state.parameters);
+            // The checkpoint is well formed by every other measure: the schema,
+            // the length, the algorithm and the checksum all check out.
+            assert!(state.validate_basics().is_ok());
+            assert!(state.verify_checksum());
+            let error = SuccessModel::load(&state)
+                .expect_err("an accumulator outside its domain must be refused");
+            assert!(
+                error.contains("grad_sq"),
+                "the refusal must name the accumulator, got {error}"
+            );
+        }
+    }
+
+    /// A checkpoint that passes validation still loads and trains safely.
+    #[test]
+    fn a_valid_success_checkpoint_loads_and_keeps_training_finite() {
+        let mut model = SuccessModel::new(FEATURE_DIMENSION);
+        for i in 0..30 {
+            model.update(&random_like_features(i), 1.0);
+        }
+        let mut loaded = SuccessModel::load(&model.save()).expect("a valid checkpoint loads");
+        assert_eq!(loaded.sample_count(), 30);
+        assert!(loaded.predict(&zero_features()).value.is_finite());
+
+        // The update path the corrupt accumulator would have poisoned.
+        loaded.update(&zero_features(), 1.0);
+        let after = loaded.predict(&zero_features());
+        assert!(
+            after.value.is_finite() && after.confidence.is_finite(),
+            "a validated checkpoint must survive a normal update: {after:?}"
+        );
+
+        let reloaded = SuccessModel::load(&loaded.save()).expect("the updated state loads");
+        assert!(reloaded.predict(&zero_features()).value.is_finite());
+    }
+
+    /// The regression heads' residual EWMA has a non-negative domain too.
+    #[test]
+    fn regression_load_rejects_a_negative_residual_ewma() {
+        let mut latency = LatencyModel::new(FEATURE_DIMENSION);
+        latency.update(&zero_features(), 100.0);
+        let mut state = latency.save();
+        state.parameters[1] = -1.0;
+        state.checksum = ModelState::compute_checksum(&state.parameters);
+        assert!(state.validate_basics().is_ok());
+        assert!(state.verify_checksum());
+        assert!(LatencyModel::load(&state).is_err());
+
+        let mut ttft = TtftModel::new(FEATURE_DIMENSION);
+        ttft.update(&zero_features(), 100.0);
+        let mut state = ttft.save();
+        state.parameters[1] = -1.0;
+        state.checksum = ModelState::compute_checksum(&state.parameters);
+        assert!(TtftModel::load(&state).is_err());
+
+        let mut cost = CostModel::new(FEATURE_DIMENSION);
+        cost.update(&zero_features(), 0.01);
+        let mut state = cost.save();
+        state.parameters[1] = -0.5;
+        state.checksum = ModelState::compute_checksum(&state.parameters);
+        assert!(CostModel::load(&state).is_err());
     }
 
     // -- 13. LatencyModel save/load round-trip --
