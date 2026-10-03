@@ -335,6 +335,7 @@ export default function Providers({
 
       {open && (
         <ProviderDrawer
+          key={open.id}
           provider={open}
           snapshot={snapshot}
           busy={busy}
@@ -454,24 +455,46 @@ function ProviderDrawer({
   const [discovered, setDiscovered] = useState<DiscoveredModel[] | null>(null);
   const [discovering, setDiscovering] = useState(false);
   const [checkingBalance, setCheckingBalance] = useState(false);
+  // Which catalogue request is allowed to answer. Switching providers (or
+  // closing the drawer) bumps it, so a slow response for the provider that was
+  // open a moment ago cannot land in the current one's list.
+  const discoveryGeneration = useRef(0);
+  useEffect(
+    () => () => {
+      discoveryGeneration.current += 1;
+    },
+    [],
+  );
+
+  /**
+   * The provider this instance edits, frozen at mount.
+   *
+   * The parent keys the drawer by provider id, so a switch remounts it and the
+   * key draft never travels to the next provider; reading the id here in the
+   * same render keeps the two guarantees in one place.
+   */
+  const providerId = provider.id;
 
   const saveKey = async () => {
     const value = keyDraft.trim();
     if (!value) return;
-    const ok = await run(() => api.setKey(provider.id, value));
+    const ok = await run(() => api.setKey(providerId, value));
     if (ok) setKeyDraft("");
   };
 
   const discover = async () => {
+    const generation = ++discoveryGeneration.current;
     setDiscovering(true);
     try {
       const ids = await api.fetchModels(provider);
+      if (generation !== discoveryGeneration.current) return;
       setDiscovered(ids);
       if (ids.length === 0) notify("error", t("providers.empty_catalogue", { name: provider.name }));
     } catch (e) {
+      if (generation !== discoveryGeneration.current) return;
       notify("error", errorText(e));
     } finally {
-      setDiscovering(false);
+      if (generation === discoveryGeneration.current) setDiscovering(false);
     }
   };
 
@@ -580,7 +603,12 @@ function ProviderDrawer({
               ))}
             </span>
           )}
-          <Button kind="ghost" onClick={() => void discover()} disabled={busy || discovering}>
+          <Button
+            kind="ghost"
+            ariaLabel="Fetch models"
+            onClick={() => void discover()}
+            disabled={busy || discovering}
+          >
             {discovering ? t("providers.discovering") : t("providers.fetch")}
           </Button>
         </div>

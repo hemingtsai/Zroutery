@@ -1173,6 +1173,112 @@ def case_ui2_candidate_priority(devtools: DevTools) -> list[str]:
     return failures
 
 
+def case_ui3_drawer_isolation(devtools: DevTools) -> list[str]:
+    """A key typed for one provider must not be saved to another.
+
+    Neither provider has a key when the app loads, which is the state the case
+    needs and the state the app reads once at startup.
+    """
+    failures: list[str] = []
+    devtools.evaluate(
+        "window.__zrStub.setCatalogues({"
+        "'deepseek': [{id: 'deepseek-catalogue-only', pricing: null}],"
+        "'anthropic': [{id: 'claude-only', pricing: null}]})"
+    )
+    key_selector = ".drawer input[type='password']"
+
+    devtools.click_selector(".nav-item", 2)
+    devtools.wait_for("document.querySelector('.list-row') !== null", "providers list")
+
+    # Open provider A and type a key that only A should ever see.
+    devtools.click_selector(".list-row", 0)
+    devtools.wait_for("document.querySelector('.drawer') !== null", "provider A drawer")
+    if devtools.evaluate("document.querySelector(%s) === null" % json.dumps(key_selector)):
+        return ["the first provider rendered no key field to type into"]
+    devtools.click_selector(key_selector)
+    devtools.insert_text("DUMMY_PROVIDER_A_ONLY")
+    typed = devtools.evaluate("document.querySelector(%s).value" % json.dumps(key_selector))
+    if typed != "DUMMY_PROVIDER_A_ONLY":
+        failures.append("real typing did not reach the key field: %r" % typed)
+
+    # While the drawer is open the background must not be reachable at all.
+    escaped: list[str] = []
+    for _ in range(30):
+        devtools.press_tab(False)
+        active = devtools.evaluate("window.__zrActive()")
+        if not active or not active["inDrawer"]:
+            escaped.append(active)
+    if escaped:
+        failures.append("keyboard focus left the open drawer: %r" % escaped[:2])
+    # Focus landing behind the drawer — a click on the veil's edge, or a script
+    # that moves it — is pulled back instead of resting on a covered control.
+    landed = devtools.evaluate(
+        "(() => {"
+        "  const row = document.querySelectorAll('.list-row')[1];"
+        "  row.focus();"
+        "  return window.__zrActive();"
+        "})()"
+    )
+    if landed and not landed["inDrawer"]:
+        failures.append("focus stayed on the background row behind the drawer: %r" % landed)
+
+    # Switch providers the way a user can once the background is unreachable:
+    # close A (the veil) and open B. The drawer instance changes with it, and
+    # nothing of A may travel.
+    devtools.click_selector(".drawer-veil")
+    devtools.wait_for("document.querySelector('.drawer') === null", "provider A drawer to close")
+    devtools.click_selector(".list-row", 1)
+    devtools.wait_for("document.querySelector('.drawer') !== null", "provider B drawer")
+    # Now ask B for its catalogue, with A's request held up well past the
+    # switch. A's answer landing while B is on screen must not appear in B.
+    devtools.evaluate("window.__zrStub.setDelay('fetch_provider_models', 1500)")
+    devtools.click_selector("button[aria-label='Fetch models']")
+    devtools.wait_for(
+        "Boolean(window.__zrStub.last('fetch_provider_models'))", "the catalogue request", timeout=15.0
+    )
+    time.sleep(1.5)
+
+    title = devtools.evaluate("document.querySelector('.drawer-title').textContent.trim()")
+    if "Anthropic" not in title:
+        failures.append("expected the second provider's drawer, got %r" % title)
+    draft_after = devtools.evaluate(
+        "(() => { const el = document.querySelector(%s);"
+        " return el ? el.value : '<no key field>'; })()" % json.dumps(key_selector)
+    )
+    if draft_after != "":
+        failures.append("the previous provider's key draft survived the switch: %r" % draft_after)
+
+    leaked = devtools.evaluate(
+        "Boolean(document.querySelector('.drawer table.table') && "
+        "document.querySelector('.drawer table.table').textContent.includes('deepseek-catalogue-only'))"
+    )
+    if leaked:
+        failures.append("the catalogue A discovered was rendered in provider B's drawer")
+
+    # Saving a key for B must carry B's id and B's own draft.
+    if devtools.evaluate("document.querySelector(%s) === null" % json.dumps(key_selector)):
+        failures.append("the second provider rendered no key field")
+    else:
+        devtools.click_selector(key_selector)
+        devtools.insert_text("DUMMY_PROVIDER_B_ONLY")
+        devtools.press_key("Enter")
+        devtools.wait_for(
+            "window.__zrStub.log('set_provider_key').length >= 1",
+            "the key save",
+            timeout=15.0,
+        )
+        call = devtools.evaluate("window.__zrStub.last('set_provider_key')")
+        if call["args"]["providerId"] != "anthropic":
+            failures.append("the key was saved to %r" % call["args"]["providerId"])
+        if call["args"]["apiKey"] != "DUMMY_PROVIDER_B_ONLY":
+            failures.append(
+                "the key saved for the second provider was %r" % call["args"]["apiKey"]
+            )
+
+    devtools.evaluate("window.__zrStub.reset()")
+    return failures
+
+
 def connect(debugging_port: int, url: str) -> DevTools:
     """Attach to the page the browser opened, retrying while it starts."""
     deadline = time.monotonic() + 30.0
@@ -1187,6 +1293,11 @@ def connect(debugging_port: int, url: str) -> DevTools:
 CASES = (
     {"label": "UI-1 two nested edits in sequence (first save delayed)", "run": case_ui1_nested_rebase},
     {"label": "UI-2 moved candidate renumbers priority", "run": case_ui2_candidate_priority},
+    {
+        "label": "UI-3 provider drawer isolates key draft and background",
+        "run": case_ui3_drawer_isolation,
+        "query": {"keys": {}},
+    },
 )
 
 
