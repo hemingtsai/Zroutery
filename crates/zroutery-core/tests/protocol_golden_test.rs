@@ -12,11 +12,13 @@ use zroutery_core::ir::{
     StructuredOutput, UnsupportedContentPolicy,
 };
 use zroutery_core::protocol::anthropic;
+use zroutery_core::protocol::anthropic::AnthropicStreamEncoder;
 use zroutery_core::protocol::gemini;
 use zroutery_core::protocol::openai;
+use zroutery_core::protocol::openai::OpenAiStreamParser;
 use zroutery_core::protocol::responses;
 use zroutery_core::protocol::ProviderQuirks;
-use zroutery_core::protocol::{decode_request, encode_request};
+use zroutery_core::protocol::{decode_request, encode_request, SseDecoder, StreamParser};
 
 // ========================================================================
 // 1. OpenAI Chat Completions golden tests
@@ -1339,10 +1341,154 @@ fn cross_protocol_openai_to_responses_basic() {
     assert_eq!(input[0]["type"], "message");
 }
 
+#[test]
+fn cross_protocol_anthropic_cache_usage_becomes_an_openai_total() {
+    // The report's frame: 100 fresh input tokens, 10,000 cache reads, 200 cache
+    // writes, no output. Anthropic reports the first number cache-exclusively,
+    // so the IR total and therefore the OpenAI `prompt_tokens` is 10,300.
+    let anthropic_wire = json!({
+        "id": "msg_cache",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-3-5-sonnet-20241022",
+        "content": [{"type": "text", "text": "ok"}],
+        "stop_reason": "end_turn",
+        "usage": {
+            "input_tokens": 100,
+            "output_tokens": 0,
+            "cache_read_input_tokens": 10_000,
+            "cache_creation_input_tokens": 200
+        }
+    });
+
+    let ir = anthropic::decode_response(anthropic_wire).unwrap();
+    assert_eq!(ir.usage.input_tokens, 10_300);
+
+    let openai_wire = openai::encode_response(&ir);
+    let prompt = openai_wire["usage"]["prompt_tokens"].as_u64().unwrap();
+    let cached = openai_wire["usage"]["prompt_tokens_details"]["cached_tokens"]
+        .as_u64()
+        .unwrap();
+    assert_eq!(
+        prompt, 10_300,
+        "the prompt total must include the cache tokens"
+    );
+    assert_eq!(cached, 10_000);
+    assert!(
+        cached <= prompt,
+        "cached_tokens must never exceed the prompt total"
+    );
+
+    // Decoding it back keeps the same total: no cache token is lost or doubled.
+    let back = openai::decode_response(openai_wire).unwrap();
+    assert_eq!(back.usage.input_tokens, 10_300);
+    assert_eq!(back.usage.cache_read_tokens, 10_000);
+}
+
+#[test]
+fn cross_protocol_openai_cache_usage_round_trips_to_anthropic() {
+    // An OpenAI-form usage: a 10,100 token prompt of which 10,000 were served
+    // from cache. Re-encoded for Anthropic it must split back into the same
+    // cache-exclusive input plus its cache counter.
+    let openai_wire = json!({
+        "id": "chatcmpl-cache",
+        "model": "gpt-4",
+        "choices": [{
+            "index": 0,
+            "message": {"role": "assistant", "content": "ok"},
+            "finish_reason": "stop"
+        }],
+        "usage": {
+            "prompt_tokens": 10_100,
+            "completion_tokens": 7,
+            "total_tokens": 10_107,
+            "prompt_tokens_details": {"cached_tokens": 10_000}
+        }
+    });
+
+    let ir = openai::decode_response(openai_wire).unwrap();
+    assert_eq!(ir.usage.input_tokens, 10_100);
+    assert_eq!(ir.usage.cache_read_tokens, 10_000);
+
+    let anthropic_wire = anthropic::encode_response(&ir);
+    assert_eq!(anthropic_wire["usage"]["input_tokens"], 100);
+    assert_eq!(anthropic_wire["usage"]["cache_read_input_tokens"], 10_000);
+    assert_eq!(anthropic_wire["usage"]["cache_creation_input_tokens"], 0);
+    assert_eq!(anthropic_wire["usage"]["output_tokens"], 7);
+
+    let back = anthropic::decode_response(anthropic_wire).unwrap();
+    assert_eq!(back.usage.input_tokens, 10_100);
+    assert_eq!(back.usage.cache_read_tokens, 10_000);
+    assert_eq!(back.usage.output_tokens, 7);
+}
+
+#[test]
+fn cross_protocol_openai_stream_trailer_reaches_the_anthropic_final_usage() {
+    // OpenAI sends no usage until the trailer, so the Anthropic `message_start`
+    // frame necessarily carries zeros. The final `message_delta` must restate
+    // the complete normalized usage or a streamed client can never learn it.
+    let raw = concat!(
+        "data: {\"id\":\"chatcmpl-1\",\"model\":\"gpt-4\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"\"}}]}\n\n",
+        "data: {\"id\":\"chatcmpl-1\",\"model\":\"gpt-4\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"}}]}\n\n",
+        "data: {\"id\":\"chatcmpl-1\",\"model\":\"gpt-4\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+        "data: {\"id\":\"chatcmpl-1\",\"model\":\"gpt-4\",\"choices\":[],\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":10,\"prompt_tokens_details\":{\"cached_tokens\":40}}}\n\n",
+        "data: [DONE]\n\n",
+    );
+
+    let mut decoder = SseDecoder::new();
+    let mut parser = OpenAiStreamParser::new("gpt-4");
+    let mut events = Vec::new();
+    for frame in decoder.push(raw.as_bytes()) {
+        events.extend(parser.push(&frame).unwrap());
+    }
+    events.extend(parser.finish());
+
+    let mut encoder = AnthropicStreamEncoder::new("gpt-4");
+    let mut wire = String::new();
+    for event in &events {
+        for frame in encoder.encode(event) {
+            wire.push_str(&frame.to_wire());
+        }
+    }
+
+    // Aggregate what an Anthropic client sees: `message_start` first, then the
+    // final `message_delta` overriding it with the cache-exclusive numbers.
+    let mut visible_input = 0u64;
+    let mut visible_cache_read = 0u64;
+    let mut visible_output = 0u64;
+    for data in wire.lines().filter_map(|line| line.strip_prefix("data: ")) {
+        let value: serde_json::Value = match serde_json::from_str(data) {
+            Ok(value) => value,
+            Err(_) => continue,
+        };
+        let usage = match value["type"].as_str() {
+            Some("message_start") => value["message"]["usage"].clone(),
+            Some("message_delta") => value["usage"].clone(),
+            _ => continue,
+        };
+        if let Some(n) = usage["input_tokens"].as_u64() {
+            visible_input = n;
+        }
+        if let Some(n) = usage["cache_read_input_tokens"].as_u64() {
+            visible_cache_read = n;
+        }
+        if let Some(n) = usage["output_tokens"].as_u64() {
+            visible_output = n;
+        }
+    }
+    assert_eq!(visible_input, 60, "fresh input must reach the client");
+    assert_eq!(visible_cache_read, 40, "cache reads must reach the client");
+    assert_eq!(
+        visible_input + visible_cache_read,
+        100,
+        "the client can reconstruct the full prompt total"
+    );
+    assert_eq!(visible_output, 10);
+}
+
 // ========================================================================
 // 6. Edge cases and regression tests
 // ========================================================================
-
 #[test]
 fn openai_content_array_text_preserved_as_separate_blocks() {
     let input = json!({

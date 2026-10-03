@@ -28,7 +28,8 @@ pub struct Pricing {
     /// price when unset, which is the conservative direction.
     #[serde(default)]
     pub cache_read_per_mtok: Option<f64>,
-    /// Price per 1M tokens written to the prompt cache.
+    /// Price per 1M tokens written to the prompt cache. Unset bills cache
+    /// writes at zero rather than inventing a write premium.
     #[serde(default)]
     pub cache_write_per_mtok: Option<f64>,
 }
@@ -46,19 +47,22 @@ impl Pricing {
 
     /// What this usage costs.
     ///
-    /// Cached input tokens are billed at the cache read price and are *not* also
-    /// billed as fresh input: every provider that reports `cached_tokens` counts
-    /// them inside the prompt total. Reasoning tokens are already part of the
-    /// output count for the same reason.
+    /// [`Usage::input_tokens`] is the total prompt size and the cache counters
+    /// are subsets of it, so fresh input is
+    /// `input_tokens - cache_read_tokens - cache_write_tokens` (saturating).
+    /// Cache reads are billed at the cache read price and cache writes at the
+    /// cache write price; nothing is billed twice. An unset cache read price
+    /// falls back to the input price, which is the conservative direction, and
+    /// an unset cache write price bills writes at zero. Reasoning tokens are
+    /// already part of the output count, so they are not added again.
     pub fn cost_of(&self, usage: &Usage) -> Cost {
         let per_token = |price: f64, tokens: u32| price * tokens as f64 / 1_000_000.0;
-        let cached = usage.cache_read_tokens.min(usage.input_tokens);
-        let fresh_input = usage.input_tokens - cached;
+        let fresh_input = usage.fresh_input_tokens();
 
         let amount = per_token(self.input_per_mtok, fresh_input)
             + per_token(
                 self.cache_read_per_mtok.unwrap_or(self.input_per_mtok),
-                cached,
+                usage.cache_read_tokens,
             )
             + per_token(
                 self.cache_write_per_mtok.unwrap_or(0.0),
@@ -422,12 +426,15 @@ mod tests {
     fn cached_tokens_are_billed_at_the_cache_price_and_only_once() {
         let mut p = Pricing::new("CNY", 2.0, 8.0);
         p.cache_read_per_mtok = Some(0.5);
+        // The IR contract makes this a 1M-token prompt that was 200k fresh and
+        // 800k served from cache; the cache read is not billed as fresh too.
         let u = Usage {
             input_tokens: 1_000_000,
             output_tokens: 0,
             cache_read_tokens: 800_000,
             ..Usage::default()
         };
+        assert_eq!(u.fresh_input_tokens(), 200_000);
         // 200k fresh at 2.0 plus 800k cached at 0.5
         assert!((p.cost_of(&u).amount - (0.4 + 0.4)).abs() < 1e-9);
 
@@ -437,13 +444,66 @@ mod tests {
     }
 
     #[test]
+    fn an_anthropic_cache_hit_is_billed_at_the_cache_read_price() {
+        // A real Anthropic usage frame: 100 fresh input tokens, 10,000 cache
+        // reads, no cache write, no output. Anthropic's `input_tokens` is
+        // cache-exclusive, so the wire total is 10,100 and the bill at
+        // input $3/Mtok and cache read $0.3/Mtok is
+        // 100*3e-6 + 10_000*0.3e-6 = $0.0033 (not the $0.00003 a decoder that
+        // forgot the cache reads produced).
+        let mut p = Pricing::new("USD", 3.0, 15.0);
+        p.cache_read_per_mtok = Some(0.3);
+        let u = crate::protocol::anthropic::decode_usage(Some(&json!({
+            "input_tokens": 100,
+            "cache_read_input_tokens": 10_000,
+            "cache_creation_input_tokens": 0,
+            "output_tokens": 0,
+        })));
+        assert_eq!(u.input_tokens, 10_100);
+        assert_eq!(u.fresh_input_tokens(), 100);
+        assert!(
+            (p.cost_of(&u).amount - 0.0033).abs() < 1e-12,
+            "got {}",
+            p.cost_of(&u).amount
+        );
+    }
+
+    #[test]
+    fn cache_reads_and_writes_are_each_priced_once() {
+        // The other shape the report used: Anthropic fresh=100, cache_read=900,
+        // cache_creation=200, output=10 normalizes to a 1,200 token prompt. No
+        // bucket is charged twice: 100 fresh + 900 read + 200 write.
+        let mut p = Pricing::new("USD", 3.0, 15.0);
+        p.cache_read_per_mtok = Some(0.3);
+        p.cache_write_per_mtok = Some(3.75);
+        let u = crate::protocol::anthropic::decode_usage(Some(&json!({
+            "input_tokens": 100,
+            "cache_read_input_tokens": 900,
+            "cache_creation_input_tokens": 200,
+            "output_tokens": 10,
+        })));
+        assert_eq!(u.input_tokens, 1_200);
+        assert_eq!(u.fresh_input_tokens(), 100);
+        let expected = 100.0 * 3e-6 + 900.0 * 0.3e-6 + 200.0 * 3.75e-6 + 10.0 * 15e-6;
+        assert!(
+            (p.cost_of(&u).amount - expected).abs() < 1e-12,
+            "got {}",
+            p.cost_of(&u).amount
+        );
+    }
+
+    #[test]
     fn a_cache_read_count_larger_than_the_prompt_cannot_go_negative() {
+        // Decoders clamp the cache counters to the decoded total; a hand-built
+        // usage that still violates the invariant must saturate at zero fresh
+        // input rather than underflowing the fresh bucket.
         let p = Pricing::new("USD", 1.0, 1.0);
         let u = Usage {
             input_tokens: 100,
             cache_read_tokens: 5_000,
             ..Usage::default()
         };
+        assert_eq!(u.fresh_input_tokens(), 0);
         assert!(p.cost_of(&u).amount > 0.0);
     }
 
@@ -451,8 +511,10 @@ mod tests {
     fn cache_writes_are_added_when_priced() {
         let mut p = Pricing::new("USD", 3.0, 15.0);
         p.cache_write_per_mtok = Some(3.75);
+        // The whole 1M-token prompt was written to the cache, so it is billed at
+        // the write price only; the input price is not charged on top.
         let u = Usage {
-            input_tokens: 0,
+            input_tokens: 1_000_000,
             cache_write_tokens: 1_000_000,
             ..Usage::default()
         };

@@ -780,24 +780,7 @@ pub fn decode_response(body: Value) -> Result<ChatResponse> {
     }
     let usage = body
         .get("usageMetadata")
-        .map(|u| Usage {
-            input_tokens: u
-                .get("promptTokenCount")
-                .and_then(Value::as_u64)
-                .unwrap_or(0)
-                .min(u32::MAX as u64) as u32,
-            output_tokens: u
-                .get("candidatesTokenCount")
-                .and_then(Value::as_u64)
-                .unwrap_or(0)
-                .min(u32::MAX as u64) as u32,
-            reasoning_tokens: u
-                .get("thoughtsTokenCount")
-                .and_then(Value::as_u64)
-                .unwrap_or(0)
-                .min(u32::MAX as u64) as u32,
-            ..Usage::default()
-        })
+        .map(decode_usage_metadata)
         .unwrap_or_default();
 
     Ok(ChatResponse {
@@ -816,6 +799,40 @@ pub fn decode_response(body: Value) -> Result<ChatResponse> {
         stop_sequence: None,
         usage,
         passthrough: Map::new(),
+    })
+}
+
+/// Decode a Gemini `usageMetadata` object into the IR contract.
+///
+/// Gemini's `promptTokenCount` is the total effective prompt size and already
+/// includes `cachedContentTokenCount`, which is the cached (read) subset. The
+/// cached count is clamped to the total so the IR subset invariant holds even
+/// for a relay that reports the two inconsistently.
+pub(crate) fn decode_usage_metadata(u: &Value) -> Usage {
+    let counter = |key: &str| {
+        u.get(key)
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            .min(u32::MAX as u64) as u32
+    };
+    let input_tokens = counter("promptTokenCount");
+    Usage {
+        input_tokens,
+        output_tokens: counter("candidatesTokenCount"),
+        cache_read_tokens: counter("cachedContentTokenCount").min(input_tokens),
+        cache_write_tokens: 0,
+        reasoning_tokens: counter("thoughtsTokenCount"),
+    }
+}
+
+/// Encode the IR contract to Gemini's cache-inclusive `usageMetadata`.
+pub(crate) fn encode_usage(u: &Usage) -> Value {
+    json!({
+        "promptTokenCount": u.input_tokens,
+        "candidatesTokenCount": u.output_tokens,
+        "totalTokenCount": u.total(),
+        "cachedContentTokenCount": u.cache_read_tokens.min(u.input_tokens),
+        "thoughtsTokenCount": u.reasoning_tokens,
     })
 }
 
@@ -843,12 +860,7 @@ pub fn encode_response(resp: &ChatResponse) -> Value {
                 _ => "STOP",
             },
         }],
-        "usageMetadata": {
-            "promptTokenCount": resp.usage.input_tokens,
-            "candidatesTokenCount": resp.usage.output_tokens,
-            "totalTokenCount": resp.usage.total(),
-            "thoughtsTokenCount": resp.usage.reasoning_tokens,
-        },
+        "usageMetadata": encode_usage(&resp.usage),
     })
 }
 
@@ -896,24 +908,7 @@ impl StreamParser for GeminiStreamParser {
             });
         }
         if let Some(usage) = value.get("usageMetadata") {
-            self.usage = Usage {
-                input_tokens: usage
-                    .get("promptTokenCount")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(0)
-                    .min(u32::MAX as u64) as u32,
-                output_tokens: usage
-                    .get("candidatesTokenCount")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(0)
-                    .min(u32::MAX as u64) as u32,
-                reasoning_tokens: usage
-                    .get("thoughtsTokenCount")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(0)
-                    .min(u32::MAX as u64) as u32,
-                ..Usage::default()
-            };
+            self.usage = decode_usage_metadata(usage);
         }
 
         if let Some(candidate) = value
@@ -1143,12 +1138,7 @@ impl StreamEncoder for GeminiStreamEncoder {
                             "content": {"role": "model", "parts": []},
                             "finishReason": finish_reason
                         }],
-                        "usageMetadata": {
-                            "promptTokenCount": usage.input_tokens,
-                            "candidatesTokenCount": usage.output_tokens,
-                            "totalTokenCount": usage.total(),
-                            "thoughtsTokenCount": usage.reasoning_tokens,
-                        }
+                        "usageMetadata": encode_usage(usage),
                     })
                     .to_string(),
                 });

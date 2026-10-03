@@ -645,18 +645,60 @@ pub enum StopReason {
     Unknown,
 }
 
+/// Token accounting for one request or response.
+///
+/// `input_tokens` is the **total** prompt size: fresh input plus
+/// [`cache_read_tokens`](Usage::cache_read_tokens) plus
+/// [`cache_write_tokens`](Usage::cache_write_tokens). The two cache counters are
+/// *subsets* of `input_tokens`, never additions to it, so every usage this
+/// workspace produces satisfies
+/// `input_tokens >= cache_read_tokens + cache_write_tokens`. Use
+/// [`fresh_input_tokens`](Usage::fresh_input_tokens) for the part that was
+/// neither read from nor written to the prompt cache.
+///
+/// The wire dialects disagree about that total and the decoders are responsible
+/// for reconciling them:
+///
+/// * Anthropic's `input_tokens` is cache-**exclusive** and reports
+///   `cache_read_input_tokens` / `cache_creation_input_tokens` separately, so
+///   the decoder sums all three into the IR total.
+/// * OpenAI Chat Completions `prompt_tokens` and Responses `input_tokens` are
+///   cache-**inclusive** totals whose `cached_tokens` detail is the read part.
+/// * Gemini's `promptTokenCount` is the total effective prompt size and
+///   includes `cachedContentTokenCount`.
+///
+/// Encoders reverse the conversion, so an Anthropic egress frame is
+/// cache-exclusive again while an OpenAI or Gemini egress frame carries the
+/// total with the cache read as a detail.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Usage {
+    /// Total prompt tokens: fresh + cache reads + cache writes.
     pub input_tokens: u32,
+    /// Completion tokens. Reasoning tokens are already counted here.
     pub output_tokens: u32,
+    /// Prompt tokens served from the prompt cache; a subset of `input_tokens`.
     pub cache_read_tokens: u32,
+    /// Prompt tokens written to the prompt cache; a subset of `input_tokens`.
     pub cache_write_tokens: u32,
+    /// Reasoning tokens, already counted inside `output_tokens`.
     pub reasoning_tokens: u32,
 }
 
 impl Usage {
+    /// Prompt + completion tokens, for dialects that report a grand total.
     pub fn total(&self) -> u32 {
         self.input_tokens.saturating_add(self.output_tokens)
+    }
+
+    /// Prompt tokens that were neither cache reads nor cache writes.
+    ///
+    /// Saturates at zero so a usage that violates the subset invariant (a
+    /// hand-built value, or a relay reporting a cache count larger than its own
+    /// prompt total) can never produce a negative or wrapped count.
+    pub fn fresh_input_tokens(&self) -> u32 {
+        self.input_tokens
+            .saturating_sub(self.cache_read_tokens)
+            .saturating_sub(self.cache_write_tokens)
     }
 }
 
@@ -763,6 +805,28 @@ mod tests {
         b.messages
             .push(Message::assistant_text("a much longer reply than before"));
         assert!(b.estimate_tokens() > a.estimate_tokens());
+    }
+
+    #[test]
+    fn usage_input_tokens_is_a_cache_inclusive_total() {
+        let u = Usage {
+            input_tokens: 1_200,
+            output_tokens: 10,
+            cache_read_tokens: 900,
+            cache_write_tokens: 200,
+            reasoning_tokens: 0,
+        };
+        assert_eq!(u.fresh_input_tokens(), 100);
+        assert_eq!(u.total(), 1_210);
+
+        // A usage that violates the subset invariant saturates at zero fresh
+        // input instead of underflowing.
+        let impossible = Usage {
+            input_tokens: 5,
+            cache_read_tokens: 50,
+            ..Usage::default()
+        };
+        assert_eq!(impossible.fresh_input_tokens(), 0);
     }
 
     #[test]
