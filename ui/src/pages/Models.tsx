@@ -63,14 +63,23 @@ export default function Models({
     health.filter((h) => h.cooldown_remaining_secs > 0).map((h) => h.model_id),
   );
 
-  const update = (id: string, patch: Partial<ModelEntry>) => {
+  /**
+   * Apply an edit to the model the save is actually about.
+   *
+   * `mutate` receives the model from the config being committed, not one
+   * captured when the control was rendered: a save queued behind an in-flight
+   * one must merge into that save's result. A callback that spread the
+   * rendered model would otherwise carry the whole nested `capabilities` or
+   * `pricing` object back and undo the edit that just landed.
+   */
+  const update = (id: string, mutate: (model: ModelEntry) => void) => {
     void save((cfg) => {
       const next = structuredClone(cfg);
       const model = next.models.find(
         (m) => previewId(m.provider_id, m.upstream_model) === id,
       );
       if (!model) return null;
-      Object.assign(model, patch);
+      mutate(model);
       return next;
     });
   };
@@ -199,7 +208,6 @@ export default function Models({
       <Section title={t("models.add_section")} hint={t("models.add_hint")}>
         <div className="controls">
           <Select
-            ariaLabel={t("field.provider")}
             value={draft.provider_id || null}
             onChange={(provider_id) => setDraft({ ...draft, provider_id })}
             placeholder={t("field.provider")}
@@ -232,7 +240,7 @@ export default function Models({
           busy={busy}
           namingStyle={config.routing.naming_style}
           onClose={() => setOpenId(null)}
-          onUpdate={(patch) => update(open.id, patch)}
+          onUpdate={(mutate) => update(open.id, mutate)}
           onRemove={() =>
             setConfirm({
               title: t("confirm.remove_model"),
@@ -268,7 +276,9 @@ function ModelDrawer({
   busy: boolean;
   namingStyle: NamingStyle;
   onClose: () => void;
-  onUpdate: (patch: Partial<ModelEntry>) => void;
+  /** Receives the model being committed, so a nested object is merged onto
+   *  the latest one rather than a copy captured at render time. */
+  onUpdate: (mutate: (model: ModelEntry) => void) => void;
   onRemove: () => void;
 }) {
   const m = row.model;
@@ -284,17 +294,31 @@ function ModelDrawer({
           [
             t("models.tier"),
             <Select<ModelTier | "none">
-              ariaLabel={t("models.tier")}
               value={m.tier ?? "none"}
               disabled={busy}
-              onChange={(next) => onUpdate({ tier: next === "none" ? null : next })}
+              onChange={(next) =>
+                onUpdate((model) => {
+                  model.tier = next === "none" ? null : next;
+                })
+              }
               options={[
                 { value: "none", label: "—" },
                 ...TIERS.map((c) => ({ value: c, label: virtualId(c, namingStyle) })),
               ]}
             />,
           ],
-          [t("common.enabled"), <Toggle label="" checked={m.enabled} onChange={(enabled) => onUpdate({ enabled })} />],
+          [
+            t("common.enabled"),
+            <Toggle
+              label=""
+              checked={m.enabled}
+              onChange={(enabled) =>
+                onUpdate((model) => {
+                  model.enabled = enabled;
+                })
+              }
+            />,
+          ],
           [t("models.aliases"), m.aliases.length ? <span className="mono">{m.aliases.join(", ")}</span> : t("common.dash")],
         ]}
       />
@@ -327,14 +351,23 @@ function ModelDrawer({
             label={t("field.model_name")}
             hint={t("models.f_model_name_hint")}
             value={m.upstream_model}
-            onCommit={(v) => v.trim() && onUpdate({ upstream_model: v })}
+            onCommit={(v) =>
+              v.trim() &&
+              onUpdate((model) => {
+                model.upstream_model = v;
+              })
+            }
           />
           <TextField
             label={t("models.f_display")}
             hint={t("models.f_display_hint")}
             value={m.display_name ?? ""}
             placeholder={m.upstream_model}
-            onCommit={(v) => onUpdate({ display_name: v || null })}
+            onCommit={(v) =>
+              onUpdate((model) => {
+                model.display_name = v || null;
+              })
+            }
           />
           <NumberField
             label={t("models.f_priority")}
@@ -342,7 +375,11 @@ function ModelDrawer({
             min={0}
             integer
             value={m.priority}
-            onCommit={(priority) => onUpdate({ priority: priority ?? 0 })}
+            onCommit={(priority) =>
+              onUpdate((model) => {
+                model.priority = priority ?? 0;
+              })
+            }
           />
           <NumberField
             label={t("models.f_weight")}
@@ -350,7 +387,11 @@ function ModelDrawer({
             min={1}
             integer
             value={m.weight}
-            onCommit={(weight) => onUpdate({ weight: weight ?? 1 })}
+            onCommit={(weight) =>
+              onUpdate((model) => {
+                model.weight = weight ?? 1;
+              })
+            }
           />
           <NumberField
             label={t("models.f_max_tokens")}
@@ -359,33 +400,63 @@ function ModelDrawer({
             placeholder="unlimited"
             integer
             value={m.max_output_tokens}
-            onCommit={(max_output_tokens) => onUpdate({ max_output_tokens })}
+            onCommit={(max_output_tokens) =>
+              onUpdate((model) => {
+                model.max_output_tokens = max_output_tokens;
+              })
+            }
           />
           <TextField
             label={t("models.aliases")}
             hint={t("models.f_aliases_hint")}
             value={m.aliases.join(", ")}
             onCommit={(v) =>
-              onUpdate({
-                aliases: v.split(",").map((a) => a.trim()).filter(Boolean),
+              onUpdate((model) => {
+                model.aliases = v
+                  .split(",")
+                  .map((a) => a.trim())
+                  .filter(Boolean);
               })
             }
             wide
           />
         </div>
         <div className="grid-two">
-          <Toggle label={t("models.tool_use")} checked={m.capabilities.tools} onChange={(v) => onUpdate({ capabilities: { ...m.capabilities, tools: v } })} />
-          <Toggle label={t("models.vision")} checked={m.capabilities.vision} onChange={(v) => onUpdate({ capabilities: { ...m.capabilities, vision: v } })} />
+          <Toggle
+            label={t("models.tool_use")}
+            checked={m.capabilities.tools}
+            onChange={(v) =>
+              onUpdate((model) => {
+                model.capabilities.tools = v;
+              })
+            }
+          />
+          <Toggle
+            label={t("models.vision")}
+            checked={m.capabilities.vision}
+            onChange={(v) =>
+              onUpdate((model) => {
+                model.capabilities.vision = v;
+              })
+            }
+          />
           <Toggle
             label={t("models.thinking")}
             checked={m.capabilities.thinking}
-            onChange={(v) => onUpdate({ capabilities: { ...m.capabilities, thinking: v } })}
+            onChange={(v) =>
+              onUpdate((model) => {
+                model.capabilities.thinking = v;
+              })
+            }
           />
         </div>
       </Section>
 
       <Section title={t("models.price")} hint={t("models.price_hint")}>
-        <PriceFields pricing={m.pricing} onChange={(pricing) => onUpdate({ pricing })} />
+        <PriceFields
+          pricing={m.pricing}
+          onChange={(mutate) => onUpdate(mutate)}
+        />
       </Section>
 
       <div>
@@ -406,19 +477,27 @@ function PriceFields({
   onChange,
 }: {
   pricing: Pricing | null;
-  onChange: (pricing: Pricing | null) => void;
+  /** Mutates the model being committed; see `Models.update`. */
+  onChange: (mutate: (model: ModelEntry) => void) => void;
 }) {
   const { t } = useI18n();
   const current = pricing ?? emptyPricing();
 
+  /**
+   * One field of the price, applied to the price as it is in the config being
+   * committed. Rebuilding the object from the rendered `current` would bring
+   * back the other three fields as they were before an in-flight save.
+   */
   const patch = (change: Partial<Pricing>) => {
-    const next = { ...current, ...change };
-    const priced =
-      next.input_per_mtok > 0 ||
-      next.output_per_mtok > 0 ||
-      next.cache_read_per_mtok !== null ||
-      next.cache_write_per_mtok !== null;
-    onChange(priced ? next : null);
+    onChange((model) => {
+      const previous = model.pricing;
+      const next = { ...(previous ?? emptyPricing()), ...change };
+      // Naming a currency on its own does not make a model priced; the price
+      // exists once one of the numbers does.
+      model.pricing = change.currency !== undefined
+        ? isPriced(next) ? next : previous
+        : isPriced(next) ? next : null;
+    });
   };
 
   return (
@@ -461,11 +540,28 @@ function PriceFields({
       />
       {pricing && (
         <div className="field-actions">
-          <Button kind="ghost" onClick={() => onChange(null)}>
+          <Button
+            kind="ghost"
+            onClick={() =>
+              onChange((model) => {
+                model.pricing = null;
+              })
+            }
+          >
             {t("models.clear_price")}
           </Button>
         </div>
       )}
     </div>
+  );
+}
+
+/** Whether these numbers mean the model is priced at all. */
+function isPriced(pricing: Pricing): boolean {
+  return (
+    pricing.input_per_mtok > 0 ||
+    pricing.output_per_mtok > 0 ||
+    pricing.cache_read_per_mtok !== null ||
+    pricing.cache_write_per_mtok !== null
   );
 }

@@ -79,12 +79,20 @@ export default function Providers({
   const isMounted = useRef(true);
   useEffect(() => () => { isMounted.current = false; }, []);
 
-  const update = (id: string, patch: Partial<Provider>) => {
+  /**
+   * Apply an edit to the provider the save is actually about.
+   *
+   * `mutate` receives the provider from the config being committed rather
+   * than one captured at render time, so a save queued behind an in-flight
+   * save merges into that save's result instead of carrying a whole stale
+   * `quirks`/`balance` object back over it.
+   */
+  const update = (id: string, mutate: (provider: Provider) => void) => {
     void save((cfg) => {
       const next = structuredClone(cfg);
       const provider = next.providers.find((p) => p.id === id);
       if (!provider) return null;
-      Object.assign(provider, patch);
+      mutate(provider);
       return next;
     });
   };
@@ -333,7 +341,7 @@ export default function Providers({
           save={save}
           run={run}
           onClose={() => setOpenId(null)}
-          onUpdate={(patch) => update(open.id, patch)}
+          onUpdate={(mutate) => update(open.id, mutate)}
           onRemove={() =>
             setConfirm({
               title: t("confirm.remove_provider"),
@@ -434,7 +442,8 @@ function ProviderDrawer({
   save: (mutate: (config: AppConfig) => AppConfig | null) => Promise<boolean>;
   run: (task: () => Promise<Snapshot>) => Promise<boolean>;
   onClose: () => void;
-  onUpdate: (patch: Partial<Provider>) => void;
+  /** Mutates the provider being committed; see `Providers.update`. */
+  onUpdate: (mutate: (provider: Provider) => void) => void;
   onRemove: () => void;
 }) {
   const models = snapshot.config.models.filter((m) => m.provider_id === provider.id);
@@ -614,20 +623,34 @@ function ProviderDrawer({
           <TextField
             label={t("field.name")}
             value={provider.name}
-            onCommit={(name) => name.trim() && onUpdate({ name })}
+            onCommit={(name) =>
+              name.trim() &&
+              onUpdate((p) => {
+                p.name = name;
+              })
+            }
           />
           <TextField
             label={t("field.base_url")}
             hint={t("field.base_url_hint")}
             value={provider.base_url}
-            onCommit={(base_url) => base_url.trim() && onUpdate({ base_url })}
+            onCommit={(base_url) =>
+              base_url.trim() &&
+              onUpdate((p) => {
+                p.base_url = base_url;
+              })
+            }
             wide
           />
           <Field label={t("field.api_dialect")}>
             <Segment
               ariaLabel={t("field.api_dialect")}
               value={provider.kind}
-              onChange={(kind) => onUpdate({ kind })}
+              onChange={(kind) =>
+                onUpdate((p) => {
+                  p.kind = kind;
+                })
+              }
               options={KINDS.map((k) => ({ value: k.id, label: t(k.labelKey) }))}
             />
           </Field>
@@ -637,7 +660,11 @@ function ProviderDrawer({
             min={1}
             integer
             value={provider.timeout_secs}
-            onCommit={(timeout_secs) => onUpdate({ timeout_secs: timeout_secs ?? 600 })}
+            onCommit={(timeout_secs) =>
+              onUpdate((p) => {
+                p.timeout_secs = timeout_secs ?? 600;
+              })
+            }
           />
           <NumberField
             label={t("field.connect_timeout")}
@@ -645,7 +672,9 @@ function ProviderDrawer({
             integer
             value={provider.connect_timeout_secs}
             onCommit={(connect_timeout_secs) =>
-              onUpdate({ connect_timeout_secs: connect_timeout_secs ?? 15 })
+              onUpdate((p) => {
+                p.connect_timeout_secs = connect_timeout_secs ?? 15;
+              })
             }
           />
           {provider.kind === "anthropic" && (
@@ -654,7 +683,11 @@ function ProviderDrawer({
               hint={t("providers.f_version_hint")}
               value={provider.anthropic_version ?? ""}
               placeholder="2023-06-01"
-              onCommit={(v) => onUpdate({ anthropic_version: v || null })}
+              onCommit={(v) =>
+                onUpdate((p) => {
+                  p.anthropic_version = v || null;
+                })
+              }
             />
           )}
         </div>
@@ -662,20 +695,32 @@ function ProviderDrawer({
           <Toggle
             label={t("common.enabled")}
             checked={provider.enabled}
-            onChange={(enabled) => onUpdate({ enabled })}
+            onChange={(enabled) =>
+              onUpdate((p) => {
+                p.enabled = enabled;
+              })
+            }
           />
           <Toggle
             label={t("providers.impersonate")}
             hint={t("providers.impersonate_hint")}
             checked={provider.impersonate_claude_code}
-            onChange={(impersonate_claude_code) => onUpdate({ impersonate_claude_code })}
+            onChange={(impersonate_claude_code) =>
+              onUpdate((p) => {
+                p.impersonate_claude_code = impersonate_claude_code;
+              })
+            }
           />
           {provider.kind === "anthropic" && (
             <Toggle
               label={t("providers.bearer_auth")}
               hint={t("providers.bearer_auth_hint")}
               checked={provider.bearer_auth}
-              onChange={(bearer_auth) => onUpdate({ bearer_auth })}
+              onChange={(bearer_auth) =>
+                onUpdate((p) => {
+                  p.bearer_auth = bearer_auth;
+                })
+              }
             />
           )}
         </div>
@@ -688,12 +733,12 @@ function ProviderDrawer({
               ariaLabel={t("field.probe")}
               value={provider.balance.preset}
               onChange={(preset) =>
-                onUpdate({
-                  balance: {
+                onUpdate((p) => {
+                  p.balance = {
                     preset,
                     custom:
-                      preset === "custom" ? provider.balance.custom ?? defaultProbe() : null,
-                  },
+                      preset === "custom" ? p.balance.custom ?? defaultProbe() : null,
+                  };
                 })
               }
               options={BALANCE_PRESETS.map((p) => ({ value: p.id, label: p.label }))}
@@ -724,33 +769,57 @@ function ProviderDrawer({
           <Toggle
             label={t("quirk.max_completion_tokens")}
             checked={provider.quirks.use_max_completion_tokens}
-            onChange={(v) => onUpdate({ quirks: { ...provider.quirks, use_max_completion_tokens: v } })}
+            onChange={(v) =>
+              onUpdate((p) => {
+                p.quirks.use_max_completion_tokens = v;
+              })
+            }
           />
           <Toggle
             label={t("quirk.drop_temperature")}
             checked={provider.quirks.drop_temperature}
-            onChange={(v) => onUpdate({ quirks: { ...provider.quirks, drop_temperature: v } })}
+            onChange={(v) =>
+              onUpdate((p) => {
+                p.quirks.drop_temperature = v;
+              })
+            }
           />
           <Toggle
             label={t("quirk.drop_top_p")}
             checked={provider.quirks.drop_top_p}
-            onChange={(v) => onUpdate({ quirks: { ...provider.quirks, drop_top_p: v } })}
+            onChange={(v) =>
+              onUpdate((p) => {
+                p.quirks.drop_top_p = v;
+              })
+            }
           />
           <Toggle
             label={t("quirk.drop_stop")}
             hint={t("quirk.drop_stop_hint")}
             checked={provider.quirks.drop_stop}
-            onChange={(v) => onUpdate({ quirks: { ...provider.quirks, drop_stop: v } })}
+            onChange={(v) =>
+              onUpdate((p) => {
+                p.quirks.drop_stop = v;
+              })
+            }
           />
           <Toggle
             label={t("quirk.system_as_developer")}
             checked={provider.quirks.system_as_developer}
-            onChange={(v) => onUpdate({ quirks: { ...provider.quirks, system_as_developer: v } })}
+            onChange={(v) =>
+              onUpdate((p) => {
+                p.quirks.system_as_developer = v;
+              })
+            }
           />
           <Toggle
             label={t("quirk.reasoning_effort")}
             checked={provider.quirks.send_reasoning_effort}
-            onChange={(v) => onUpdate({ quirks: { ...provider.quirks, send_reasoning_effort: v } })}
+            onChange={(v) =>
+              onUpdate((p) => {
+                p.quirks.send_reasoning_effort = v;
+              })
+            }
           />
         </div>
       </Section>
