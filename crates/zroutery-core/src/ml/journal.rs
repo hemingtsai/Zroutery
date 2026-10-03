@@ -1538,6 +1538,14 @@ impl LearningJournal {
                 path: self.dir.clone(),
             });
         }
+        // The shared append boundary enforces the durable-identity rule itself,
+        // so a caller that reaches it directly cannot write the process-local
+        // `evt-<n>` form that the named entry points already refuse.
+        if is_volatile_event_id(&body.event.event_id) {
+            return Err(JournalError::VolatileEventId {
+                event_id: body.event.event_id.clone(),
+            });
+        }
         let log_path = self.dir.join(JOURNAL_LOG_NAME);
         let anchor_path = self.dir.join(JOURNAL_ANCHOR_NAME);
         let (report, frames) = self_scan(&log_path, &anchor_path)?;
