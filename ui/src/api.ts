@@ -3,6 +3,7 @@
  * `zroutery-core` and `src-tauri`, so field names stay snake_case.
  */
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 export type ModelTier = "fast" | "standard" | "reasoning" | "frontier";
 /** @deprecated Use ModelTier. */
@@ -557,6 +558,31 @@ export const api = {
   ccswitchImport: (ids: string[]) =>
     invoke<Snapshot>("ccswitch_import", { ids }),
 };
+
+/**
+ * Tray actions that change the gateway state. The tray has no snapshot to
+ * return and the window is very likely hidden when it is used, so the new
+ * state is announced and every window re-reads it; without this the page
+ * keeps drawing the state it loaded when it first opened. The name mirrors
+ * `GATEWAY_STATE_EVENT` in `src-tauri/src/tray.rs`.
+ */
+export const GATEWAY_STATE_EVENT = "zroutery://gateway-state-changed";
+
+export function onGatewayStateChanged(handler: () => void): Promise<UnlistenFn> {
+  return listen(GATEWAY_STATE_EVENT, () => handler());
+}
+
+/**
+ * Which gateway command the *current* state calls for.
+ *
+ * Reading this from a rendered snapshot misreads the state whenever the
+ * gateway was started or stopped elsewhere — a stopped gateway would be
+ * "stopped" again instead of started. Callers load the server status first and
+ * ask this what to do with it.
+ */
+export function gatewayAction(status: Pick<ServerStatus, "running">): "start" | "stop" {
+  return status.running ? "stop" : "start";
+}
 
 /**
  * Readable text for anything thrown across the IPC boundary.

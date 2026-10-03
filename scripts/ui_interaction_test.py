@@ -1279,6 +1279,91 @@ def case_ui3_drawer_isolation(devtools: DevTools) -> list[str]:
     return failures
 
 
+def case_ui4_tray_state(devtools: DevTools) -> list[str]:
+    """A tray state change reaches the page, and the button issues the right command."""
+    seed(devtools, server={**SERVER_STATUS, "running": True})
+    failures: list[str] = []
+
+    # The page must be listening for the tray's announcement.
+    listeners = devtools.evaluate(
+        "window.__zrListenerCount('zroutery://gateway-state-changed')"
+    )
+    if not listeners:
+        failures.append("the page never subscribed to the tray's state-change event")
+
+    devtools.click_selector(".bar-action", 0)
+    devtools.wait_for("document.querySelector('.popover') !== null", "gateway menu")
+    if not devtools.evaluate("document.querySelectorAll('.popover .menu-item').length >= 3"):
+        failures.append("the gateway menu did not render its actions")
+    if not devtools.evaluate("Boolean(document.querySelector('.popover .dot-ok'))"):
+        failures.append("the running gateway did not render a running dot")
+
+    # The tray stops the gateway behind the page's back and announces it. The
+    # dot is painted from `server.running`, so its class is the language
+    # independent view of the state the page is showing.
+    devtools.evaluate("window.__zrStub.setServer({running: false})")
+    delivered = devtools.evaluate("window.__zrEmit('zroutery://gateway-state-changed', null)")
+    if not delivered:
+        failures.append("the announcement reached no listener")
+    try:
+        devtools.wait_for(
+            "Boolean(document.querySelector('.popover .dot-danger'))",
+            "the open menu to follow the tray",
+            timeout=10.0,
+        )
+    except ProtocolError:
+        failures.append(
+            "the page kept the old gateway state: the menu still shows %r"
+            % devtools.evaluate("document.querySelector('.popover').textContent")[:80]
+        )
+
+    # The button must now start, not stop.
+    devtools.click_selector(".popover .menu-item", 2)
+    devtools.wait_for(
+        "window.__zrStub.log('start_proxy').length + window.__zrStub.log('stop_proxy').length >= 1",
+        "a gateway command",
+        timeout=15.0,
+    )
+    time.sleep(0.3)
+    starts = devtools.evaluate("window.__zrStub.log('start_proxy').length")
+    stops = devtools.evaluate("window.__zrStub.log('stop_proxy').length")
+    if starts != 1 or stops != 0:
+        failures.append(
+            "after the tray stopped the gateway the toggle issued start=%d stop=%d" % (starts, stops)
+        )
+    devtools.wait_for(
+        "Boolean(document.querySelector('.bar-action .dot-ok'))",
+        "the main bar to follow the command",
+        timeout=10.0,
+    )
+
+    # The command is chosen from the state Rust reports, not from the boolean
+    # the page happens to be drawing: the menu is opened while the page still
+    # believes the gateway runs, and the backend has already stopped it. No
+    # event announces this one.
+    seed(devtools, server={**SERVER_STATUS, "running": True}, restart=True)
+    devtools.evaluate("window.__zrStub.reset(); window.__zrStub.setServer({running: false})")
+    devtools.click_selector(".bar-action", 0)
+    devtools.wait_for("document.querySelector('.popover') !== null", "gateway menu")
+    if not devtools.evaluate("Boolean(document.querySelector('.popover .dot-ok'))"):
+        failures.append("the popover did not render the state the page was holding")
+    devtools.click_selector(".popover .menu-item", 2)
+    devtools.wait_for(
+        "window.__zrStub.log('start_proxy').length + window.__zrStub.log('stop_proxy').length >= 1",
+        "a gateway command from a changed backend",
+        timeout=15.0,
+    )
+    starts = devtools.evaluate("window.__zrStub.log('start_proxy').length")
+    stops = devtools.evaluate("window.__zrStub.log('stop_proxy').length")
+    if starts != 1 or stops != 0:
+        failures.append(
+            "with the backend already stopped the toggle issued start=%d stop=%d" % (starts, stops)
+        )
+
+    devtools.evaluate("window.__zrStub.reset()")
+    return failures
+
+
 def connect(debugging_port: int, url: str) -> DevTools:
     """Attach to the page the browser opened, retrying while it starts."""
     deadline = time.monotonic() + 30.0
@@ -1298,6 +1383,7 @@ CASES = (
         "run": case_ui3_drawer_isolation,
         "query": {"keys": {}},
     },
+    {"label": "UI-4 tray state change updates page and command", "run": case_ui4_tray_state},
 )
 
 

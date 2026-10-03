@@ -9,12 +9,20 @@ use std::sync::Arc;
 
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Manager, Wry};
+use tauri::{AppHandle, Emitter, Manager, Wry};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 
 use crate::state::Desktop;
 
 pub const TRAY_ID: &str = "zroutery-tray";
+
+/// Announced after the tray starts or stops the gateway.
+///
+/// The tray has no snapshot to return, and the window that owns the status
+/// display is usually hidden while the tray is used. The window listens for
+/// this and re-reads the state instead of showing the one it loaded at
+/// startup.
+pub const GATEWAY_STATE_EVENT: &str = "zroutery://gateway-state-changed";
 
 /// Menu labels, in the OS language. The webview has its own locale machinery;
 /// the tray is drawn by the OS before any webview exists, so it follows the
@@ -148,6 +156,11 @@ fn on_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
                     tracing::error!("cannot start proxy from tray: {e}");
                 }
                 refresh(&app, &desktop).await;
+                // The window owns the status display and did not run this
+                // command, so tell it the state it is drawing is stale.
+                if let Err(e) = app.emit(GATEWAY_STATE_EVENT, ()) {
+                    tracing::warn!("cannot announce the tray gateway change: {e}");
+                }
             });
         }
         "copy_url" | "copy_token" => {
