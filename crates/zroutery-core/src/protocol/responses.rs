@@ -1380,6 +1380,8 @@ pub struct ResponsesStreamEncoder {
     next_output_index: u32,
     /// Monotonic SSE `sequence_number`, stamped on every emitted frame.
     next_sequence: Cell<u64>,
+    /// True once the upstream reported a token-limit stop.
+    truncated: bool,
     // --- Text/Thinking state (sequential, one at a time) ---
     current_output_index: u32,
     content_index: u32,
@@ -1404,6 +1406,7 @@ impl ResponsesStreamEncoder {
             done: false,
             next_output_index: 0,
             next_sequence: Cell::new(0),
+            truncated: false,
             current_output_index: 0,
             content_index: 0,
             current_kind: None,
@@ -1476,6 +1479,11 @@ impl ResponsesStreamEncoder {
 
     /// Finalize the current Text/Thinking output item into output_items.
     fn finalize_output_item(&mut self) {
+        let status = if self.truncated {
+            "incomplete"
+        } else {
+            "completed"
+        };
         match self.current_kind {
             Some(OutputItemKind::Text) => {
                 if !self.current_text.is_empty() {
@@ -1483,7 +1491,7 @@ impl ResponsesStreamEncoder {
                         "id": self.current_item_id,
                         "type": "message",
                         "role": "assistant",
-                        "status": "completed",
+                        "status": status,
                         "content": [{"type": "output_text", "text": self.current_text, "annotations": []}],
                     }));
                     self.current_text.clear();
@@ -1798,7 +1806,10 @@ impl StreamEncoder for ResponsesStreamEncoder {
                     // Does NOT touch global current_* state.
                 }
             }
-            StreamEvent::Stop { usage, .. } => {
+            StreamEvent::Stop {
+                stop_reason, usage, ..
+            } => {
+                self.truncated = *stop_reason == StopReason::MaxTokens;
                 out.extend(self.close_output_item());
                 // Flush incomplete tool calls with full terminal events.
                 let incomplete_tools: Vec<_> = self.tool_states.drain().map(|(_, v)| v).collect();
@@ -1832,8 +1843,23 @@ impl StreamEncoder for ResponsesStreamEncoder {
                     ));
                 }
                 let output = self.sorted_output();
-                out.push(self.frame(
-                    "response.completed",
+                // A stream cut off by the output token limit is not a success:
+                // report the terminal status the non-streaming encoder reports.
+                let terminal = if self.truncated {
+                    json!({
+                        "type": "response.incomplete",
+                        "response": {
+                            "id": self.id,
+                            "object": "response",
+                            "created_at": self.created_at,
+                            "status": "incomplete",
+                            "model": self.model,
+                            "output": output,
+                            "incomplete_details": {"reason": "max_output_tokens"},
+                            "usage": encode_usage(usage),
+                        }
+                    })
+                } else {
                     json!({
                         "type": "response.completed",
                         "response": {
@@ -1845,8 +1871,13 @@ impl StreamEncoder for ResponsesStreamEncoder {
                             "output": output,
                             "usage": encode_usage(usage),
                         }
-                    }),
-                ));
+                    })
+                };
+                let event_type = terminal["type"]
+                    .as_str()
+                    .expect("terminal frame carries a type")
+                    .to_string();
+                out.push(self.frame(&event_type, terminal));
                 self.done = true;
             }
             _ => {}

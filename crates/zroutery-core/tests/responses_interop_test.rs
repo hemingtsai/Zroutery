@@ -224,3 +224,66 @@ fn text_content_part_starts_with_empty_text() {
         }
     }
 }
+
+// --------------------------------------------------------------- RSP-04
+
+#[test]
+fn max_tokens_stream_stop_reports_incomplete() {
+    let frames = frames_for(&[
+        StreamEvent::Start {
+            id: "resp_1".into(),
+            model: "m".into(),
+            usage: Usage::default(),
+        },
+        StreamEvent::TextDelta {
+            index: 0,
+            text: "truncated".into(),
+        },
+        StreamEvent::Stop {
+            stop_reason: StopReason::MaxTokens,
+            stop_sequence: None,
+            usage: Usage::default(),
+        },
+    ]);
+
+    let last = frames.last().expect("terminal frame");
+    assert_eq!(last.event.as_deref(), Some("response.incomplete"));
+    let payload = frame_payload(last);
+    assert_eq!(payload["response"]["status"], "incomplete");
+    assert_eq!(
+        payload["response"]["incomplete_details"]["reason"],
+        "max_output_tokens"
+    );
+    assert_eq!(payload["response"]["output"][0]["status"], "incomplete");
+    assert_eq!(
+        payload["response"]["output"][0]["content"][0]["text"],
+        "truncated"
+    );
+}
+
+#[test]
+fn normal_stream_stop_still_reports_completed() {
+    let frames = frames_for(&[
+        StreamEvent::Start {
+            id: "resp_1".into(),
+            model: "m".into(),
+            usage: Usage::default(),
+        },
+        StreamEvent::TextDelta {
+            index: 0,
+            text: "done".into(),
+        },
+        StreamEvent::Stop {
+            stop_reason: StopReason::EndTurn,
+            stop_sequence: None,
+            usage: Usage::default(),
+        },
+    ]);
+
+    let last = frames.last().expect("terminal frame");
+    assert_eq!(last.event.as_deref(), Some("response.completed"));
+    let payload = frame_payload(last);
+    assert_eq!(payload["response"]["status"], "completed");
+    assert!(payload["response"]["incomplete_details"].is_null());
+    assert_eq!(payload["response"]["output"][0]["status"], "completed");
+}
