@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 use zroutery_core::ir::{
     ContentBlock, Dialect, Role, StopReason, StreamEvent, ToolResultPart, Usage,
 };
-use zroutery_core::protocol::responses::{decode_request, ResponsesStreamEncoder};
+use zroutery_core::protocol::responses::{decode_request, decode_response, ResponsesStreamEncoder};
 use zroutery_core::protocol::{SseFrame, StreamEncoder};
 
 #[test]
@@ -393,4 +393,26 @@ fn streamed_redacted_thinking_survives_replay() {
         ContentBlock::RedactedThinking { data } => assert_eq!(data, "opaque-blob"),
         other => panic!("expected redacted thinking block, got {other:?}"),
     }
+}
+
+// --------------------------------------------------------------- LD1
+
+#[test]
+fn null_response_error_decodes() {
+    let body = json!({"id": "resp_1", "status": "completed", "error": null, "output": []});
+    let resp = decode_response(body).unwrap();
+    assert_eq!(resp.id, "resp_1");
+    assert!(resp.content.is_empty());
+}
+
+#[test]
+fn non_null_response_error_still_fails() {
+    let body = json!({
+        "id": "resp_1",
+        "status": "failed",
+        "error": {"code": "server_error", "message": "boom"},
+        "output": [],
+    });
+    let err = decode_response(body).unwrap_err();
+    assert!(err.to_string().contains("boom"), "got {err}");
 }

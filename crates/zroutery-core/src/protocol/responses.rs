@@ -820,7 +820,9 @@ pub fn encode_request(req: &ChatRequest, upstream_model: &str) -> Result<Value> 
 // ---------------------------------------------------------------- responses
 
 pub fn decode_response(body: Value) -> Result<ChatResponse> {
-    if let Some(err) = body.get("error") {
+    // `error` is nullable on a normal Response: only a non-null error object
+    // means the upstream failed.
+    if let Some(err) = body.get("error").filter(|err| !err.is_null()) {
         let msg = err
             .get("message")
             .and_then(Value::as_str)
