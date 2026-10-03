@@ -1391,6 +1391,10 @@ pub struct ResponsesStreamEncoder {
     current_item_id: String,
     current_text: String,
     current_thinking: String,
+    /// Upstream block index of the thinking item currently open.
+    current_thinking_source: Option<u32>,
+    /// Anthropic thinking signatures awaiting the end of their block.
+    thinking_signatures: HashMap<u32, String>,
     // --- Tool state (parallel, per-index) ---
     tool_states: HashMap<u32, ToolOutputState>,
     // --- Output accumulator (indexed by output_index) ---
@@ -1415,6 +1419,8 @@ impl ResponsesStreamEncoder {
             current_item_id: String::new(),
             current_text: String::new(),
             current_thinking: String::new(),
+            current_thinking_source: None,
+            thinking_signatures: HashMap::new(),
             tool_states: HashMap::new(),
             output_items: HashMap::new(),
         }
@@ -1497,16 +1503,36 @@ impl ResponsesStreamEncoder {
                     self.current_text.clear();
                 }
             }
-            Some(OutputItemKind::Thinking) if !self.current_thinking.is_empty() => {
-                self.output_items.insert(
-                    self.current_output_index,
-                    json!({
+            Some(OutputItemKind::Thinking) => {
+                // A streamed thinking block is only replayable when its
+                // signature travels with the reasoning item, so pack it into
+                // the same opaque envelope the non-streaming encoder uses.
+                let signature = self
+                    .current_thinking_source
+                    .and_then(|index| self.thinking_signatures.remove(&index));
+                let block = ContentBlock::Thinking {
+                    text: self.current_thinking.clone(),
+                    signature,
+                };
+                let encrypted = reasoning_bridge::encode_thinking_block(&block)
+                    .and_then(|item| item.get("encrypted_content").cloned());
+                if !self.current_thinking.is_empty() || encrypted.is_some() {
+                    let summary = if self.current_thinking.is_empty() {
+                        json!([])
+                    } else {
+                        json!([{"type": "summary_text", "text": self.current_thinking}])
+                    };
+                    let mut item = json!({
                         "id": self.current_item_id,
                         "type": "reasoning",
-                        "summary": [{"type": "summary_text", "text": self.current_thinking}],
-                    }),
-                );
-                self.current_thinking.clear();
+                        "summary": summary,
+                    });
+                    if let Some(encrypted) = encrypted {
+                        item["encrypted_content"] = encrypted;
+                    }
+                    self.output_items.insert(self.current_output_index, item);
+                    self.current_thinking.clear();
+                }
             }
             _ => {}
         }
@@ -1581,6 +1607,7 @@ impl ResponsesStreamEncoder {
             }),
         ));
         self.current_kind = None;
+        self.current_thinking_source = None;
         out
     }
 
@@ -1594,6 +1621,29 @@ impl ResponsesStreamEncoder {
                 "item": item,
             }),
         )
+    }
+
+    /// Open a reasoning output item unless one is already open.
+    fn ensure_thinking_item(&mut self) -> Vec<SseFrame> {
+        let mut out = Vec::new();
+        if self.current_kind != Some(OutputItemKind::Thinking) {
+            out.extend(self.close_output_item());
+            self.current_output_index = self.alloc_output_index();
+            self.content_index = 0;
+            self.current_kind = Some(OutputItemKind::Thinking);
+            self.output_item_open = true;
+            self.current_thinking.clear();
+            self.current_item_id = format!("rs_{}", self.current_output_index);
+            out.push(self.emit_output_item_added(
+                self.current_output_index,
+                json!({
+                    "id": self.current_item_id,
+                    "type": "reasoning",
+                    "summary": [],
+                }),
+            ));
+        }
+        out
     }
 }
 
@@ -1674,24 +1724,9 @@ impl StreamEncoder for ResponsesStreamEncoder {
                 ));
                 self.current_text.push_str(text);
             }
-            StreamEvent::ThinkingDelta { text, .. } => {
-                if self.current_kind != Some(OutputItemKind::Thinking) {
-                    out.extend(self.close_output_item());
-                    self.current_output_index = self.alloc_output_index();
-                    self.content_index = 0;
-                    self.current_kind = Some(OutputItemKind::Thinking);
-                    self.output_item_open = true;
-                    self.current_thinking.clear();
-                    self.current_item_id = format!("rs_{}", self.current_output_index);
-                    out.push(self.emit_output_item_added(
-                        self.current_output_index,
-                        json!({
-                            "id": self.current_item_id,
-                            "type": "reasoning",
-                            "summary": [],
-                        }),
-                    ));
-                }
+            StreamEvent::ThinkingDelta { text, index } => {
+                out.extend(self.ensure_thinking_item());
+                self.current_thinking_source = Some(*index);
                 if !self.content_part_open {
                     self.content_part_open = true;
                     out.push(self.frame(
@@ -1716,6 +1751,42 @@ impl StreamEncoder for ResponsesStreamEncoder {
                     }),
                 ));
                 self.current_thinking.push_str(text);
+            }
+            StreamEvent::ThinkingSignature { index, signature } => {
+                // The signature arrives after its block's deltas and is only
+                // useful when it travels with the reasoning item.
+                if !signature.is_empty() {
+                    out.extend(self.ensure_thinking_item());
+                    self.current_thinking_source = Some(*index);
+                    self.thinking_signatures.insert(*index, signature.clone());
+                }
+            }
+            StreamEvent::RedactedThinking { data, .. } => {
+                // Redacted thinking is already opaque: echo it verbatim as its
+                // own reasoning item, exactly like the non-streaming encoder.
+                if let Some(item) =
+                    reasoning_bridge::encode_thinking_block(&ContentBlock::RedactedThinking {
+                        data: data.clone(),
+                    })
+                {
+                    let output_index = self.alloc_output_index();
+                    let item_id = format!("rs_{output_index}");
+                    let mut done = item;
+                    done["id"] = json!(item_id);
+                    self.output_items.insert(output_index, done.clone());
+                    out.push(self.emit_output_item_added(
+                        output_index,
+                        json!({"id": item_id, "type": "reasoning", "summary": []}),
+                    ));
+                    out.push(self.frame(
+                        "response.output_item.done",
+                        json!({
+                            "type": "response.output_item.done",
+                            "output_index": output_index,
+                            "item": done,
+                        }),
+                    ));
+                }
             }
             StreamEvent::ToolUseStart {
                 index, id, name, ..
