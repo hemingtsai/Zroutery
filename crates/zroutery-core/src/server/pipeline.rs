@@ -260,6 +260,8 @@ pub(super) async fn handle_chat(
             plan,
             kind,
             include_usage,
+            input_items,
+            previous_response_id,
             storage,
             routing_decision,
             #[cfg(feature = "ml")]
@@ -1096,6 +1098,8 @@ async fn stream_chat(
     plan: Vec<Candidate>,
     kind: RequestKind,
     include_usage: bool,
+    input_items: Vec<Value>,
+    previous_response_id: Option<String>,
     storage: protocol::responses::StoragePolicy,
     routing_decision: Option<RouteDecision>,
     #[cfg(feature = "ml")] shadow_input: Option<ShadowInput>,
@@ -1216,6 +1220,8 @@ async fn stream_chat(
                     storage,
                     response_id,
                     cancel_rx,
+                    input_items.clone(),
+                    previous_response_id.clone(),
                 );
             }
             Err(e) => {
@@ -1241,6 +1247,8 @@ async fn stream_chat(
                             storage,
                             response_id,
                             cancel_rx,
+                            input_items,
+                            previous_response_id,
                         );
                     }
                     Ok(None) => {
@@ -1325,6 +1333,10 @@ fn stream_response(
     storage: protocol::responses::StoragePolicy,
     response_id: Option<String>,
     cancel_rx: Option<watch::Receiver<bool>>,
+    // The Responses input items, stored verbatim so a completed stream can be
+    // retrieved and continued exactly like a buffered answer.
+    input_items: Vec<Value>,
+    previous_response_id: Option<String>,
 ) -> Response {
     let mut encoder = protocol::stream_encoder(dialect, &candidate.exposed_id, include_usage);
     if let Some(ref id) = response_id {
@@ -1348,6 +1360,8 @@ fn stream_response(
             storage,
             response_id,
             cancel_rx,
+            input_items,
+            previous_response_id,
         },
     ));
     // Built from a plain body and static headers, so nothing here can fail and
@@ -2327,12 +2341,46 @@ struct SseState {
     cancel_rx: Option<watch::Receiver<bool>>,
     /// What the client asked the proxy to retain for this response.
     storage: protocol::responses::StoragePolicy,
+    /// The Responses input items, kept so a completed stream can be retrieved
+    /// and continued exactly like a buffered answer.
+    input_items: Vec<Value>,
+    /// The response this stream continues, when the client sent one.
+    previous_response_id: Option<String>,
 }
 
 impl SseState {
     /// How long this stream has been running, for the record's own fields.
     fn elapsed_ms(&self) -> u64 {
         self.lifecycle.elapsed_ms()
+    }
+
+    /// Keep the finished stream, so its id answers a later `GET`.
+    ///
+    /// Only a confirmed normal terminal is stored, and only when the client
+    /// asked for retention: a truncated, failed, cancelled or `store: false`
+    /// stream has nothing to replay, and a truncated one must never be handed
+    /// back as a completed answer. The in-flight entry is gone by the time this
+    /// runs, so a cancellation arriving now finds the stored response instead
+    /// of overwriting it with a placeholder.
+    fn store_completed(&self) {
+        if !self.storage.retains() {
+            return;
+        }
+        let Some(ref id) = self.response_id else {
+            return;
+        };
+        let Some(output) = self.encoder.response_output() else {
+            return;
+        };
+        self.state.response_store.put(StoredResponse::completed(
+            id.clone(),
+            self.lifecycle.served_model(),
+            self.input_items.clone(),
+            output,
+            self.usage,
+            self.previous_response_id.clone(),
+            self.lifecycle.decision(),
+        ));
     }
 
     /// The stream's one terminal transition.
@@ -2346,6 +2394,9 @@ impl SseState {
         // Clean up in-flight tracking for Responses API streams.
         if let Some(ref id) = self.response_id {
             self.state.response_store.complete_in_flight(id);
+        }
+        if let StreamTerminal::Completed = terminal {
+            self.store_completed();
         }
         // A classifier stream that reached its end without producing a verdict
         // is worth a warning. The bytes have already gone out, so there is
@@ -2406,6 +2457,10 @@ struct StreamContext {
     cancel_rx: Option<watch::Receiver<bool>>,
     /// What the client asked the proxy to retain for this response.
     storage: protocol::responses::StoragePolicy,
+    /// The Responses input items, replayed by a later `GET`.
+    input_items: Vec<Value>,
+    /// The response this stream continues, when the client sent one.
+    previous_response_id: Option<String>,
 }
 
 /// Pipe canonical events through the egress encoder into an SSE byte stream.
@@ -2434,6 +2489,8 @@ fn sse_body(
         response_id: context.response_id,
         cancel_rx: context.cancel_rx,
         storage: context.storage,
+        input_items: context.input_items,
+        previous_response_id: context.previous_response_id,
     };
 
     futures_util::stream::unfold(state, |mut st| async move {

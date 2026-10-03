@@ -396,6 +396,15 @@ pub trait StreamEncoder: Send {
     /// an id the client cannot use against `cancel` or `GET` is not an
     /// identity. Dialects without a response-level id ignore this.
     fn set_response_id(&mut self, _id: &str) {}
+    /// The output items this stream published, once it has ended.
+    ///
+    /// A stored response has to replay exactly what the client was shown, so
+    /// the accumulator that built the terminal frame's `output` is the source
+    /// of truth for it, not a second reconstruction from canonical events.
+    /// `None` for dialects with no response-level output.
+    fn response_output(&self) -> Option<Vec<Value>> {
+        None
+    }
     fn encode(&mut self, event: &StreamEvent) -> Vec<SseFrame>;
     /// Trailing frames, e.g. OpenAI's `[DONE]`.
     fn finish(&mut self) -> Vec<SseFrame>;
