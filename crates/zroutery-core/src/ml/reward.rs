@@ -50,7 +50,7 @@ pub struct RequestReward {
 // ---------------------------------------------------------------------------
 
 /// How rewards are computed.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RewardPolicy {
     pub success_weight: f64,
     pub latency_weight: f64,

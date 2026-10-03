@@ -15,12 +15,14 @@ pub mod decision_engine;
 pub mod evaluation;
 pub mod features;
 pub mod journal;
+pub mod learning;
 pub mod model;
 pub mod model_identity;
 pub mod offline_gate;
 pub mod reward;
 pub mod shadow;
 pub mod statistics;
+pub mod traces;
 pub mod warmup;
 pub use activation::{
     activation_applied_event_id, activation_plan_event_id, pointer_checksum, snapshot_checksum,
@@ -90,6 +92,11 @@ pub use journal::{
     JOURNAL_LOCK_NAME, JOURNAL_LOG_NAME, JOURNAL_ROLE, JOURNAL_SCHEMA_VERSION, LEGACY_DEGRADATION,
     MAX_FRAME_BYTES,
 };
+pub use learning::{
+    evaluate_success, predict_bundle, prediction_is_finite, run_training, split_samples,
+    success_log_loss, FeatureCoverage, LearningError, PassReport, Split, TrainingConfig,
+    TrainingOutcome, TrainingReport, TRAINING_DEFAULT_SEED,
+};
 pub use model::{
     CostModel, LatencyModel, ModelState, Prediction, RoutingModel, SuccessModel, TtftModel,
 };
@@ -119,6 +126,10 @@ pub use statistics::{
     EvidenceSupport, Family, FamilyMember, FamilyMemberKind, Interval, PairedComparison,
     StatisticalConfig, StatisticalInput, StatisticalRefusal, StatisticalRelease, StatisticsError,
     STATISTICAL_SCOPE, UNMEASURABLE_LABEL,
+};
+pub use traces::{
+    contained_append, deduped_samples_from, samples_from, DatasetFingerprint, RequestTrace,
+    TraceCounters, TraceError, TraceIngestion, TraceLog, TRACES_FILE_NAME, TRACE_SCHEMA_VERSION,
 };
 pub use warmup::{
     run_warmup, LabelCoverage, WarmupConfig, WarmupError, WarmupOutcome, WarmupReport,
