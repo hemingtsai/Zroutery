@@ -48,6 +48,7 @@ pub fn startup_load(dir: &Path) -> Result<StartupConfig, String> {
         .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
     match serde_json::from_str::<AppConfig>(&text) {
         Ok(cfg) => {
+            let had_token = !cfg.server.auth_token.trim().is_empty();
             let mut cfg = with_defaults(cfg);
             // Configurations written before ids were derived from the
             // provider keep working: their old ids become aliases.
@@ -60,9 +61,17 @@ pub fn startup_load(dir: &Path) -> Result<StartupConfig, String> {
                     notes.join(" ")
                 ))
             };
+            // A folded-in legacy id and a freshly generated token both have to
+            // reach disk, so the normalised document is written back; an
+            // untouched document has nothing to rewrite.
+            let token_to_write = if had_token && notes.is_empty() {
+                None
+            } else {
+                Some(cfg.server.auth_token.clone())
+            };
             Ok(StartupConfig {
                 config: cfg,
-                token_to_write: None,
+                token_to_write,
                 warning,
             })
         }
@@ -470,6 +479,51 @@ mod tests {
         assert_eq!(
             startup.token_to_write.as_deref(),
             Some(startup.config.server.auth_token.as_str()),
+        );
+    }
+
+    #[test]
+    fn a_normalised_document_is_written_back_at_startup() {
+        let dir = tmpdir();
+        // A configuration written before ids were derived: the free-form `id`
+        // is folded into `aliases` and the file has a token already.
+        std::fs::write(
+            dir.join(FILE_NAME),
+            r#"{"server": {"auth_token": "zr-existing"},
+                "models": [{"id": "legacy-name", "provider_id": "p",
+                            "upstream_model": "gpt-legacy"}]}"#,
+        )
+        .unwrap();
+        let startup = startup_load(&dir).unwrap();
+        assert_eq!(
+            startup.token_to_write.as_deref(),
+            Some(startup.config.server.auth_token.as_str()),
+            "the migrated aliases must reach disk"
+        );
+        save(&dir, &startup.config).unwrap();
+        let written: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join(FILE_NAME)).unwrap()).unwrap();
+        let model = &written["models"][0];
+        assert_eq!(model["aliases"], serde_json::json!(["legacy-name"]));
+        assert!(model.get("id").is_none(), "{model}");
+
+        // Nothing changed since the last write, so nothing is rewritten.
+        let again = startup_load(&dir).unwrap();
+        assert!(
+            again.token_to_write.is_none(),
+            "an already-normalised document needs no write"
+        );
+    }
+
+    #[test]
+    fn a_generated_token_is_written_back_at_startup() {
+        let dir = tmpdir();
+        std::fs::write(dir.join(FILE_NAME), r#"{"models": []}"#).unwrap();
+        let startup = startup_load(&dir).unwrap();
+        assert_eq!(
+            startup.token_to_write.as_deref(),
+            Some(startup.config.server.auth_token.as_str()),
+            "a token generated at startup must reach disk"
         );
     }
 
