@@ -4,7 +4,7 @@
 //! and consumes, rather than only the frames this repository generates.
 
 use serde_json::json;
-use zroutery_core::ir::{Dialect, Role};
+use zroutery_core::ir::{ContentBlock, Dialect, Role, ToolResultPart};
 use zroutery_core::protocol::responses::decode_request;
 
 #[test]
@@ -54,4 +54,71 @@ fn unsupported_input_items_still_error() {
     let body =
         json!({"model": "m", "input": [{"type": "message", "role": "tool", "content": "x"}]});
     assert!(decode_request(body).is_err());
+}
+
+#[test]
+fn message_image_url_string_decodes() {
+    let body = json!({"model": "m", "input": [{
+        "type": "message",
+        "role": "user",
+        "content": [{"type": "input_image", "image_url": "https://example.com/photo.png"}],
+    }]});
+    let req = decode_request(body).unwrap();
+    match &req.messages[0].content[0] {
+        ContentBlock::Image { source } => {
+            assert_eq!(source.to_data_url(), "https://example.com/photo.png");
+        }
+        other => panic!("expected image, got {other:?}"),
+    }
+}
+
+#[test]
+fn image_url_data_url_decodes() {
+    let data_url = "data:image/png;base64,AAAA";
+    let body = json!({"model": "m", "input": [
+        {"type": "input_image", "image_url": data_url},
+        {"type": "message", "role": "user", "content": [
+            {"type": "input_image", "image_url": data_url},
+        ]},
+    ]});
+    let req = decode_request(body).unwrap();
+    for message in &req.messages {
+        match &message.content[0] {
+            ContentBlock::Image { source } => assert_eq!(source.to_data_url(), data_url),
+            other => panic!("expected image, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn tool_result_image_url_string_decodes() {
+    let body = json!({"model": "m", "input": [{
+        "type": "function_call_output",
+        "call_id": "call_1",
+        "output": [{"type": "input_image", "image_url": "https://example.com/tool.png"}],
+    }]});
+    let req = decode_request(body).unwrap();
+    let ContentBlock::ToolResult { content, .. } = &req.messages[0].content[0] else {
+        panic!("expected tool result");
+    };
+    let ToolResultPart::Image { source } = &content[0] else {
+        panic!("expected image part");
+    };
+    assert_eq!(source.to_data_url(), "https://example.com/tool.png");
+}
+
+#[test]
+fn legacy_nested_image_url_still_decodes() {
+    let body = json!({"model": "m", "input": [{
+        "type": "message",
+        "role": "user",
+        "content": [{"type": "input_image", "image_url": {"url": "https://example.com/a.png"}}],
+    }]});
+    let req = decode_request(body).unwrap();
+    match &req.messages[0].content[0] {
+        ContentBlock::Image { source } => {
+            assert_eq!(source.to_data_url(), "https://example.com/a.png");
+        }
+        other => panic!("expected image, got {other:?}"),
+    }
 }

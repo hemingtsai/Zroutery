@@ -180,6 +180,26 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
     Ok(req)
 }
 
+/// Decode a Responses `input_image` style object into a media source.
+///
+/// The Responses schema stores the URL or data URL directly in the
+/// `image_url` string field. The nested `{"image_url": {"url": ...}}` shape
+/// belongs to Chat Completions and is only kept as a compatibility branch.
+fn decode_image_source(value: &Value, context: &str) -> Result<MediaSource> {
+    if let Some(url) = value.get("image_url").and_then(Value::as_str) {
+        return Ok(MediaSource::from_url(url));
+    }
+    if let Some(url) = value.pointer("/image_url/url").and_then(Value::as_str) {
+        return Ok(MediaSource::from_url(url));
+    }
+    if let Some(id) = value.get("file_id").and_then(Value::as_str) {
+        return Ok(MediaSource::Reference { id: id.to_string() });
+    }
+    Err(Error::invalid(format!(
+        "{context} is missing a string `image_url` or `file_id`"
+    )))
+}
+
 fn decode_tool_result_output(value: &Value) -> Result<Vec<ToolResultPart>> {
     match value {
         Value::String(text) => Ok(vec![ToolResultPart::Text { text: text.clone() }]),
@@ -201,17 +221,7 @@ fn decode_tool_result_output(value: &Value) -> Result<Vec<ToolResultPart>> {
                             .to_string(),
                     }),
                     "input_image" | "image" | "image_url" => {
-                        let source = if let Some(url) =
-                            part.pointer("/image_url/url").and_then(Value::as_str)
-                        {
-                            MediaSource::from_url(url)
-                        } else if let Some(id) = part.get("file_id").and_then(Value::as_str) {
-                            MediaSource::Reference { id: id.to_string() }
-                        } else {
-                            return Err(Error::invalid(
-                                "tool result image is missing `image_url.url` or `file_id`",
-                            ));
-                        };
+                        let source = decode_image_source(part, "tool result image")?;
                         Ok(ToolResultPart::Image { source })
                     }
                     other => Err(unsupported_content("tool result", Some(other))),
@@ -283,17 +293,7 @@ fn decode_input_item(item: &Value, req: &mut ChatRequest) -> Result<()> {
             req.messages.push(Message::user_text(text));
         }
         "input_image" => {
-            let source = if let Some(url) = item.pointer("/image_url/url").and_then(Value::as_str) {
-                MediaSource::from_url(url)
-            } else if let Some(file_id) = item.get("file_id").and_then(Value::as_str) {
-                MediaSource::Reference {
-                    id: file_id.to_string(),
-                }
-            } else {
-                return Err(Error::invalid(
-                    "input_image is missing `image_url.url` or `file_id`",
-                ));
-            };
+            let source = decode_image_source(item, "input_image")?;
             req.messages.push(Message {
                 role: Role::User,
                 content: vec![ContentBlock::Image { source }],
@@ -422,23 +422,7 @@ fn decode_input_item(item: &Value, req: &mut ChatRequest) -> Result<()> {
                                 content.push(ContentBlock::text(text));
                             }
                             "input_image" => {
-                                let source = if let Some(url) = part
-                                    .get("image_url")
-                                    .and_then(|image| image.get("url"))
-                                    .and_then(Value::as_str)
-                                {
-                                    MediaSource::from_url(url)
-                                } else if let Some(file_id) =
-                                    part.get("file_id").and_then(Value::as_str)
-                                {
-                                    MediaSource::Reference {
-                                        id: file_id.to_string(),
-                                    }
-                                } else {
-                                    return Err(Error::invalid(
-                                        "input_image part is missing `image_url.url` or `file_id`",
-                                    ));
-                                };
+                                let source = decode_image_source(part, "input_image part")?;
                                 content.push(ContentBlock::Image { source });
                             }
                             "input_audio" => {
