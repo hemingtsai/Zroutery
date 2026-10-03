@@ -232,3 +232,115 @@ fn rejects_two_system_instruction_spellings_at_once() {
     let error = decode_request(body).unwrap_err();
     assert!(error.to_string().contains("systemInstruction"));
 }
+
+#[test]
+fn mints_ids_for_history_without_function_call_ids() {
+    let body = json!({
+        "model": "gemini-2.0-flash",
+        "contents": [
+            {"role": "user", "parts": [{"text": "weather in Beijing?"}]},
+            {"role": "model", "parts": [{"functionCall": {"name": "weather", "args": {"city": "Beijing"}}}]},
+            {"role": "user", "parts": [{"functionResponse": {"name": "weather", "response": {"temperature": 25}}}]}
+        ]
+    });
+
+    let req = decode_request(body).unwrap();
+    let call_id = match &req.messages[1].content[0] {
+        ContentBlock::ToolUse { id, name, input } => {
+            assert_eq!(name, "weather");
+            assert_eq!(input["city"], "Beijing");
+            assert!(!id.is_empty(), "a missing call id must be minted");
+            id.clone()
+        }
+        other => panic!("expected ToolUse, got {:?}", other),
+    };
+    match &req.messages[2].content[0] {
+        ContentBlock::ToolResult { tool_use_id, .. } => {
+            assert_eq!(tool_use_id, &call_id, "response must pair with the call");
+        }
+        other => panic!("expected ToolResult, got {:?}", other),
+    }
+
+    // The same id has to survive into the forwarded OpenAI request, or the
+    // upstream sees an assistant tool call with no matching tool result.
+    let upstream = translate_request(
+        Dialect::OpenAI,
+        &req,
+        "gpt-4o",
+        &ProviderQuirks::default(),
+    )
+    .unwrap();
+    let messages = upstream["messages"].as_array().unwrap();
+    assert_eq!(messages[1]["tool_calls"][0]["id"], call_id);
+    assert_eq!(messages[2]["role"], "tool");
+    assert_eq!(messages[2]["tool_call_id"], call_id);
+}
+
+#[test]
+fn pairs_duplicate_function_names_in_history_order() {
+    let body = json!({
+        "model": "gemini-2.0-flash",
+        "contents": [
+            {"role": "user", "parts": [{"text": "compare"}]},
+            {"role": "model", "parts": [
+                {"functionCall": {"name": "read", "args": {"path": "a"}}},
+                {"functionCall": {"name": "read", "args": {"path": "b"}}}
+            ]},
+            {"role": "user", "parts": [
+                {"functionResponse": {"name": "read", "response": {"text": "A"}}},
+                {"functionResponse": {"name": "read", "response": {"text": "B"}}}
+            ]}
+        ]
+    });
+
+    let req = decode_request(body).unwrap();
+    let ids: Vec<String> = req.messages[1]
+        .content
+        .iter()
+        .map(|block| match block {
+            ContentBlock::ToolUse { id, .. } => id.clone(),
+            other => panic!("expected ToolUse, got {:?}", other),
+        })
+        .collect();
+    assert_eq!(ids.len(), 2);
+    assert_ne!(ids[0], ids[1]);
+
+    let responses: Vec<String> = req.messages[2]
+        .content
+        .iter()
+        .map(|block| match block {
+            ContentBlock::ToolResult { tool_use_id, .. } => tool_use_id.clone(),
+            other => panic!("expected ToolResult, got {:?}", other),
+        })
+        .collect();
+    assert_eq!(responses, ids, "each response pairs with its own call");
+}
+
+#[test]
+fn keeps_explicit_function_call_and_response_ids() {
+    let body = json!({
+        "model": "gemini-2.0-flash",
+        "contents": [
+            {"role": "user", "parts": [{"text": "hello"}]},
+            {"role": "model", "parts": [{"functionCall": {"id": "abc", "name": "f"}}]},
+            {"role": "user", "parts": [{"functionResponse": {"id": "abc", "name": "f", "response": {"ok": true}}}]},
+            {"role": "model", "parts": [{"functionCall": {"id": "def", "name": "g"}}]},
+            {"role": "user", "parts": [{"functionResponse": {"name": "g", "response": {"ok": true}}}]}
+        ]
+    });
+
+    let req = decode_request(body).unwrap();
+    match &req.messages[1].content[0] {
+        ContentBlock::ToolUse { id, .. } => assert_eq!(id, "abc"),
+        other => panic!("expected ToolUse, got {:?}", other),
+    }
+    match &req.messages[2].content[0] {
+        ContentBlock::ToolResult { tool_use_id, .. } => assert_eq!(tool_use_id, "abc"),
+        other => panic!("expected ToolResult, got {:?}", other),
+    }
+    // A response without an id still pairs with the call it answers.
+    match &req.messages[4].content[0] {
+        ContentBlock::ToolResult { tool_use_id, .. } => assert_eq!(tool_use_id, "def"),
+        other => panic!("expected ToolResult, got {:?}", other),
+    }
+}

@@ -4,6 +4,8 @@
 //! instructions, multi-part contents, function declarations/calls, image parts,
 //! and a snapshot-style SSE parser/encoder.
 
+use std::collections::HashSet;
+
 use serde_json::{json, Map, Value};
 
 use super::apply_content_policy;
@@ -61,6 +63,14 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
         Some(Value::Array(contents)) => contents.as_slice(),
         Some(_) => return Err(Error::invalid("`contents` must be an array")),
     };
+    // Gemini leaves `functionCall.id` and `functionResponse.id` optional, but
+    // the IR requires both. A call without an id is minted one; a response
+    // without an id is paired with the oldest unanswered call of the same name,
+    // since a history lists responses in the order of the calls they answer.
+    // Any explicit id is kept as sent.
+    let mut used_call_ids: HashSet<String> = HashSet::new();
+    let mut unanswered_calls: Vec<(String, String)> = Vec::new();
+    let mut minted_call_ids: u32 = 0;
     for content in contents {
         let role = match content.get("role").and_then(Value::as_str) {
             Some("model") => Role::Assistant,
@@ -73,30 +83,52 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
                 if let Some(text) = part.get("text").and_then(Value::as_str) {
                     blocks.push(ContentBlock::text(text));
                 } else if let Some(call) = part.get("functionCall") {
-                    let id = call
-                        .get("id")
-                        .and_then(Value::as_str)
-                        .ok_or_else(|| Error::invalid("functionCall is missing `id`"))?;
                     let name = call
                         .get("name")
                         .and_then(Value::as_str)
                         .ok_or_else(|| Error::invalid("functionCall is missing `name`"))?;
+                    let id = match call
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .filter(|id| !id.is_empty())
+                    {
+                        Some(id) => id.to_string(),
+                        None => mint_call_id(&mut minted_call_ids, &used_call_ids),
+                    };
+                    used_call_ids.insert(id.clone());
+                    unanswered_calls.push((name.to_string(), id.clone()));
                     blocks.push(ContentBlock::ToolUse {
-                        id: id.to_string(),
+                        id,
                         name: name.to_string(),
                         input: call.get("args").cloned().unwrap_or_else(|| json!({})),
                     });
                 } else if let Some(response) = part.get("functionResponse") {
-                    let id = response
-                        .get("id")
-                        .and_then(Value::as_str)
-                        .ok_or_else(|| Error::invalid("functionResponse is missing `id`"))?;
                     let name = response
                         .get("name")
                         .and_then(Value::as_str)
                         .ok_or_else(|| Error::invalid("functionResponse is missing `name`"))?;
+                    let id = match response
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .filter(|id| !id.is_empty())
+                    {
+                        Some(id) => {
+                            unanswered_calls.retain(|(_, call_id)| call_id != id);
+                            id.to_string()
+                        }
+                        None => {
+                            match unanswered_calls
+                                .iter()
+                                .position(|(call_name, _)| call_name == name)
+                            {
+                                Some(position) => unanswered_calls.remove(position).1,
+                                None => mint_call_id(&mut minted_call_ids, &used_call_ids),
+                            }
+                        }
+                    };
+                    used_call_ids.insert(id.clone());
                     blocks.push(ContentBlock::ToolResult {
-                        tool_use_id: id.to_string(),
+                        tool_use_id: id,
                         name: name.to_string(),
                         content: vec![ToolResultPart::Text {
                             text: response.get("response").unwrap_or(&Value::Null).to_string(),
@@ -213,6 +245,19 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
 
     req.refresh_required_capabilities();
     Ok(req)
+}
+
+/// Mint an id for a Gemini function call or response whose optional `id` was
+/// omitted. The counter form keeps decoding deterministic, and `used` keeps a
+/// minted id from colliding with one the client explicitly sent.
+fn mint_call_id(counter: &mut u32, used: &HashSet<String>) -> String {
+    loop {
+        *counter += 1;
+        let candidate = format!("gemini_call_{counter}");
+        if !used.contains(&candidate) {
+            return candidate;
+        }
+    }
 }
 
 // --------------------------------------------------------------- request out
