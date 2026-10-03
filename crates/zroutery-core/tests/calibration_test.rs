@@ -122,9 +122,7 @@ impl RoutingModel for ScriptedModel {
     }
 
     fn reset(&mut self) {
-        for milli in &mut self.table {
-            *milli = 500;
-        }
+        self.table.fill(500);
     }
 }
 

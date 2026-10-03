@@ -3313,10 +3313,10 @@ impl CalibrationReport {
             self.final_vector.expected_calibration_error(),
             self.final_vector
                 .maximum_calibration_error()
-                .map_or(f64::NAN, |worst| worst),
+                .unwrap_or(f64::NAN),
             self.final_vector
                 .maximum_candidate_calibration_error()
-                .map_or(f64::NAN, |worst| worst),
+                .unwrap_or(f64::NAN),
             self.recomputed_verdict(),
             self.uncalibrated_joint.expected_calibration_error(),
             self.normalization_damage.delta,
