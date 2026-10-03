@@ -3,6 +3,9 @@ import {
   TIERS,
   tierMembers,
   modelRows,
+  moveCandidatePriority,
+  nextCandidatePriority,
+  orderCandidatesByPriority,
   virtualId,
   type AppConfig,
   type ClassifierCandidate,
@@ -64,11 +67,19 @@ export default function Routing({
   const tierRoutes = TIERS
     .map((tier) => ({ tier, members: tierMembers(rows, config.providers, tier) }));
 
+  // The pool in the order the router would try it. Every strategy pool is
+  // ranked by priority, so the page follows the numbers rather than the array.
   const classifierCandidates = config.classifier.enabled
-    ? config.classifier.candidates
-        .filter((c) => c.enabled)
-        .map((c) => rows.find((r) => r.id === c.model || r.model.aliases.includes(c.model)))
-        .filter((r): r is ModelRow => Boolean(r))
+    ? orderCandidatesByPriority(
+        config.classifier.candidates
+          .filter((c) => c.enabled)
+          .map((c) => ({
+            priority: c.priority,
+            model: c.model,
+            row: rows.find((r) => r.id === c.model || r.model.aliases.includes(c.model)),
+          }))
+          .filter((c): c is typeof c & { row: ModelRow } => Boolean(c.row)),
+      )
     : [];
 
   return (
@@ -148,10 +159,14 @@ export default function Routing({
               <div className="flow-routes">
                 {config.classifier.enabled ? (
                   classifierCandidates.length > 0 ? (
-                    classifierCandidates.map((r, i) => (
+                    classifierCandidates.map(({ row: r }, i) => (
                       <span className="flow-route" key={r.id}>
                         {i === 0 ? (
-                          <span className="flow-src">{t("routing.verdict")}</span>
+                          <span className="flow-src">
+                            {config.classifier.strategy === "priority"
+                              ? t("routing.verdict")
+                              : t("routing.next")}
+                          </span>
                         ) : (
                           <span className="flow-src muted">{t("routing.fallback_n", { n: i })}</span>
                         )}
@@ -407,12 +422,10 @@ function AutoModeDrawer({
 
   const moveCandidate = (model: string, delta: -1 | 1) => {
     void onSave((cfg) => {
+      const moved = moveCandidatePriority(cfg.classifier.candidates, model, delta);
+      if (!moved) return null;
       const next = structuredClone(cfg);
-      const candidates = next.classifier.candidates;
-      const index = candidates.findIndex((c) => c.model === model);
-      const swap = index + delta;
-      if (index < 0 || swap < 0 || swap >= candidates.length) return null;
-      [candidates[index], candidates[swap]] = [candidates[swap], candidates[index]];
+      next.classifier.candidates = moved;
       return next;
     });
   };
@@ -424,7 +437,7 @@ function AutoModeDrawer({
       const next = structuredClone(cfg);
       next.classifier.candidates.push({
         model,
-        priority: next.classifier.candidates.reduce((max, c) => Math.max(max, c.priority), 0) + 10,
+        priority: nextCandidatePriority(next.classifier.candidates),
         enabled: true,
       });
       return next;
@@ -432,6 +445,13 @@ function AutoModeDrawer({
   };
 
   const available = rows.filter((r) => !classifier.candidates.some((c) => c.model === r.id));
+  const knownModel = (c: ClassifierCandidate) =>
+    rows.some((r) => r.id === c.model || r.model.aliases.includes(c.model));
+  const canMove = (model: string, delta: -1 | 1) => {
+    const index = classifier.candidates.findIndex((c) => c.model === model);
+    const swap = index + delta;
+    return index >= 0 && swap >= 0 && swap < classifier.candidates.length;
+  };
 
   return (
     <Drawer title={t("route.auto_review")} onClose={onClose}>
@@ -479,58 +499,61 @@ function AutoModeDrawer({
         ) : (
           <table className="table">
             <tbody>
-              {classifier.candidates.map((c, i) => {
-                const known = rows.some((r) => r.id === c.model || r.model.aliases.includes(c.model));
-                return (
-                  <tr key={c.model} className={known ? "" : "row-warn"}>
-                    <td className="mono">
-                      {c.model}
-                      {!known && (
-                        <>
-                          {" "}
-                          <Badge tone="warn">{t("routing.not_configured")}</Badge>
-                        </>
-                      )}
-                    </td>
-                    <td>
-                      <CompactNumber
-                        ariaLabel={`Priority for ${c.model}`}
-                        value={c.priority}
-                        min={0}
-                        integer
-                        onCommit={(v) =>
-                          patchCandidate(c.model, { priority: v ?? 0 })
-                        }
-                      />
-                    </td>
-                    <td>
-                      <input
-                        type="checkbox"
-                        aria-label={`Enable ${c.model}`}
-                        checked={c.enabled}
-                        onChange={(e) => patchCandidate(c.model, { enabled: e.currentTarget.checked })}
-                      />
-                    </td>
-                    <td>
-                      <div className="row gap">
-                        <Button kind="ghost" disabled={i === 0} onClick={() => moveCandidate(c.model, -1)}>
-                          ↑
-                        </Button>
-                        <Button
-                          kind="ghost"
-                          disabled={i === classifier.candidates.length - 1}
-                          onClick={() => moveCandidate(c.model, 1)}
-                        >
-                          ↓
-                        </Button>
-                        <Button kind="ghost" onClick={() => removeCandidate(c.model)}>
-                          {t("common.remove")}
-                        </Button>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
+              {orderCandidatesByPriority(classifier.candidates).map((c) => (
+                <tr key={c.model} className={knownModel(c) ? "" : "row-warn"}>
+                  <td className="mono">
+                    {c.model}
+                    {!knownModel(c) && (
+                      <>
+                        {" "}
+                        <Badge tone="warn">{t("routing.not_configured")}</Badge>
+                      </>
+                    )}
+                  </td>
+                  <td>
+                    <CompactNumber
+                      ariaLabel={`Priority for ${c.model}`}
+                      value={c.priority}
+                      min={0}
+                      integer
+                      onCommit={(v) => patchCandidate(c.model, { priority: v ?? 0 })}
+                    />
+                  </td>
+                  <td>
+                    <input
+                      type="checkbox"
+                      aria-label={`Enable ${c.model}`}
+                      checked={c.enabled}
+                      onChange={(e) =>
+                        patchCandidate(c.model, { enabled: e.currentTarget.checked })
+                      }
+                    />
+                  </td>
+                  <td>
+                    <div className="row gap">
+                      <Button
+                        kind="ghost"
+                        ariaLabel={`Move ${c.model} up`}
+                        disabled={!canMove(c.model, -1)}
+                        onClick={() => moveCandidate(c.model, -1)}
+                      >
+                        ↑
+                      </Button>
+                      <Button
+                        kind="ghost"
+                        ariaLabel={`Move ${c.model} down`}
+                        disabled={!canMove(c.model, 1)}
+                        onClick={() => moveCandidate(c.model, 1)}
+                      >
+                        ↓
+                      </Button>
+                      <Button kind="ghost" onClick={() => removeCandidate(c.model)}>
+                        {t("common.remove")}
+                      </Button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
             </tbody>
           </table>
         )}
