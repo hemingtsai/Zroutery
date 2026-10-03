@@ -219,6 +219,7 @@ complained, while the gate it named was no longer being run.
 | boundary | `cargo test -p zroutery-core --all-features --test activation_test` | the shipped product cannot name the installer |
 | docs | `python -B scripts/orch_docs_test.py` | node records, DAG and evidence registry agree |
 | contract | `python -B scripts/commit_contract_test.py --base <rev> --head <rev>` | commit subjects and trailers over the range |
+| toolchain | `python -B scripts/toolchain_gate.py` | the local toolchain is the build CI resolves, so a green matrix speaks to CI |
 | whitespace | `git diff --check` | no trailing damage |
 
 The default-features row is spelled the way it is on purpose. `--workspace`
@@ -263,6 +264,40 @@ One honest asymmetry in the table: the clippy row uses `--all-targets` and CI's
 clippy step does not, so CI checks strictly less than this matrix does. The
 stricter local form is kept deliberately, and the gap is recorded rather than
 quietly narrowed in either direction.
+
+### The toolchain row is deliberately not a CI step
+
+`scripts/toolchain_gate.py` fails when the local toolchain is not the build the
+floating `stable` channel resolves to. It is in the **local** matrix and it is
+**not** wired into `ci.yml`, and the reason is worth stating rather than leaving
+as an omission: inside CI the toolchain is by definition the one CI installed, so
+the gate could not fail there. A step that cannot fail is not a gate, and wiring
+it would be theatre that costs a network fetch on every push. Its whole job is to
+stop a *local* green matrix from being read as a claim about CI.
+
+It resolves the manifest over the network, so when that fetch fails it reports
+`INCONCLUSIVE` and exits non-zero rather than quietly passing; `--accept-unresolved`
+is the documented offline opt-out and CI does not pass it. That path was not
+designed and then checked — a real timeout during development exercised it.
+
+Two traps in the manifest are closed by `--self-test`, which is why that mode
+exists rather than a comment:
+
+- `[pkg.cargo]` sits at byte 44 and `[pkg.rust]` at byte 80035, so reading the
+  first `version =` in the file yields **Cargo's** number and calls it the
+  compiler's. The parser is anchored on the section header.
+- The manifest and the binary number the same Cargo build differently —
+  `0.100.0` versus `1.99.0` — so a release-number comparison reports DRIFT for
+  a toolchain that is exactly CI's. The manifest also carries a
+  `git_commit_hash` beside the version that, for cargo, holds the **rustc**
+  commit. The comparison key is therefore the hash inside the version's
+  parentheses, which both sides state identically; release numbers are printed
+  for the reader and never used as the verdict.
+
+The gate was proven in both directions before being recorded: `DRIFT` and exit 1
+against the real 1.97.1-versus-1.99.0 gap, and `MATCH` and exit 0 with the
+1.99.0 toolchain placed ahead on `PATH`, where the output deliberately shows two
+different cargo version numbers agreeing on the hash.
 
 ### Known unenforced claim
 
