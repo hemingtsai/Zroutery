@@ -21,7 +21,7 @@ macOS 桌面应用：常驻菜单栏，无 Dock 图标，关窗不退出。
 
 ## 快速开始
 
-前置：Rust 1.80+、Node 20+、pnpm、Xcode Command Line Tools。
+前置：Rust 1.89+、Node 20.19+（或 22.12+）、pnpm、Xcode Command Line Tools。
 
 ```sh
 pnpm install                # 装 tauri CLI 和前端依赖

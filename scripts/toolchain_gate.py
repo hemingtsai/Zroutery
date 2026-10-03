@@ -21,9 +21,11 @@ What it deliberately does **not** claim
 --------------------------------------
 That the toolchain is *correct*, only that it *matches*.  It says nothing about
 whether 1.99.0 is a good idea; floating is a deliberate choice.  It also does
-not enforce the workspace's declared ``rust-version``, which remains an
-unenforced claim; that pin is a separate decision with its own blast radius and
-is REPORTED here rather than quietly turned into a gate.
+not enforce the workspace's declared ``rust-version``; that claim has its own
+pinned job in ``ci.yml`` (``msrv``), which builds the locked workspace with
+exactly the declared minimum.  What this gate covers is the *other* half of the
+toolchain question: the floating channel every other job follows.  The declared
+version is REPORTED here so a reader can see both sides at once.
 
 Two traps this file exists to close
 -----------------------------------
@@ -172,7 +174,7 @@ def fetch_channel_text() -> str:
 
 
 def declared_msrv() -> str:
-    """Read the workspace's declared minimum. Reported, never enforced."""
+    """Read the workspace's declared minimum. Reported here, enforced by ``msrv``."""
     workspace = Path(__file__).resolve().parent.parent / "Cargo.toml"
     try:
         text = workspace.read_text(encoding="utf-8")
@@ -347,8 +349,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         % "  ".join("%s %s" % (name, remote) for name, (remote, _) in pairs.items())
     )
     print(
-        "toolchain-gate: declared MSRV rust-version = %s (reported, not enforced)"
-        % declared_msrv()
+        "toolchain-gate: declared MSRV rust-version = %s (enforced by the "
+        "ci.yml msrv job, not here)" % declared_msrv()
     )
 
     drift = []

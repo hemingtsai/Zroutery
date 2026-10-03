@@ -220,6 +220,7 @@ complained, while the gate it named was no longer being run.
 | docs | `python -B scripts/orch_docs_test.py` | node records, DAG and evidence registry agree |
 | contract | `python -B scripts/commit_contract_test.py --base <rev> --head <rev>` | commit subjects and trailers over the range |
 | toolchain | `python -B scripts/toolchain_gate.py` | the local toolchain is the build CI resolves, so a green matrix speaks to CI |
+| minimum toolchain | `cargo +1.89.0 check --workspace --locked --all-targets`, the version `Cargo.toml` declares | the declared minimum really builds the locked tree, test targets included |
 | whitespace | `git diff --check` | no trailing damage |
 
 The default-features row is spelled the way it is on purpose. `--workspace`
@@ -299,11 +300,29 @@ against the real 1.97.1-versus-1.99.0 gap, and `MATCH` and exit 0 with the
 1.99.0 toolchain placed ahead on `PATH`, where the output deliberately shows two
 different cargo version numbers agreeing on the hash.
 
-### Known unenforced claim
+### The declared minimum is verified
 
-The workspace declares `rust-version = "1.80"` and every CI job uses `stable`,
-so the declared minimum is never verified. It is recorded rather than silently
-fixed, because pinning it is a separate decision with its own blast radius.
+The workspace declares `rust-version = "1.89"`, and CI's `msrv` job pins exactly
+that compiler and runs `cargo check --workspace --locked --all-targets`. The
+declaration is therefore a claim a red job can contradict, instead of a sentence
+in a manifest that no job reads.
+
+The number is the union of two floors read off the tree rather than chosen:
+
+- the locked dependencies need 1.88 — `icu_normalizer` 2.3.0, `time` 0.3.55,
+  `darling` 0.23.0, `image` 0.25.10 and `plist` 1.10.0 all declare
+  `rust-version = "1.88.0"` — so the old `1.80` could not resolve this
+  `Cargo.lock` at all;
+- the source needs 1.89 — `ml/features.rs` builds
+  `Some(&ModelCapabilities { .. })` inside a `let`, and temporary lifetime
+  extension only reaches through a tuple-variant constructor from 1.89
+  ([rust-lang/rust#140593](https://github.com/rust-lang/rust/pull/140593)), so
+  the test targets do not compile at 1.88.
+
+`--all-targets` is not decoration: the 1.89 floor comes from test code, so a
+check that skipped test targets would certify 1.88 and be wrong.
+
+The toolchain row above is a different claim, and it stays local-only.
 
 ## Fixtures and Enforcement
 
