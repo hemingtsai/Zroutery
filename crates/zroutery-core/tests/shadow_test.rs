@@ -481,6 +481,108 @@ fn store_failure_does_not_propagate() {
 }
 
 // ---------------------------------------------------------------------------
+// Configuration-driven retention (ML-01)
+// ---------------------------------------------------------------------------
+
+/// The configured retention is what the store enforces: the limits supplied at
+/// construction bound the store, and a smaller limit applied to a live engine
+/// evicts the oldest decisions immediately.
+#[test]
+fn configured_retention_bounds_the_store_and_hot_shrinks_it() {
+    let engine = ShadowEngine::with_retention(decision_engine(), true, 2, 24 * 3600);
+    let input = default_shadow_input();
+    let first = engine.evaluate("req-cap-1", &input).unwrap();
+    let second = engine.evaluate("req-cap-2", &input).unwrap();
+    assert_eq!(
+        engine.store().len(),
+        2,
+        "the configured cap must be the store's cap from construction"
+    );
+
+    // A smaller limit reaches the already-running engine and evicts down to it.
+    let dropped = engine.reconfigure(true, 1, 24 * 3600);
+    assert_eq!(
+        dropped, 1,
+        "one decision must be evicted to reach the new cap"
+    );
+    assert_eq!(engine.store().len(), 1);
+    let kept = engine.store().decisions();
+    assert_eq!(kept.len(), 1);
+    assert_ne!(
+        kept[0].shadow_id, first.shadow_id,
+        "the oldest decision must be the one evicted"
+    );
+    assert_eq!(
+        kept[0].shadow_id, second.shadow_id,
+        "the newest decision must survive the shrink"
+    );
+}
+
+/// The configured age window is what the store serves: shrinking it drops the
+/// decisions that are already outside the new window, and a later evaluation
+/// is filtered by it.
+#[test]
+fn configured_age_window_drops_decisions_outside_it() {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    let source = engine();
+    let input = default_shadow_input();
+    let mut stale = source.evaluate("req-age-stale", &input).unwrap();
+    stale.timestamp = now - 7200;
+    let fresh = source.evaluate("req-age-fresh", &input).unwrap();
+
+    let store = ShadowStore::new(10, 30 * 24 * 3600);
+    store.push(stale).unwrap();
+    store.push(fresh).unwrap();
+    assert_eq!(
+        store.decisions().len(),
+        2,
+        "the 30-day window keeps both decisions"
+    );
+
+    // One hour: the two-hour-old decision falls outside and is dropped.
+    let dropped = store.set_limits(10, 3600);
+    assert_eq!(dropped, 1, "the aged decision must be dropped");
+    assert_eq!(store.len(), 1, "the aged decision is physically evicted");
+    let kept = store.decisions();
+    assert_eq!(kept.len(), 1);
+    assert_eq!(kept[0].actual.request_id, "req-age-fresh");
+}
+
+/// The master switch is configuration, not a construction constant: turning the
+/// engine off on a running instance stops recording without a fault, and
+/// turning it back on resumes.
+#[test]
+fn reconfigure_switches_evaluation_off_and_on() {
+    let engine = engine();
+    let input = default_shadow_input();
+    assert!(engine.evaluate("req-switch-1", &input).is_some());
+
+    engine.reconfigure(false, 10_000, 24 * 3600);
+    assert!(
+        !engine.enabled(),
+        "the running engine adopts the new switch"
+    );
+    assert!(
+        engine.evaluate("req-switch-off", &input).is_none(),
+        "a disabled engine must record nothing"
+    );
+    assert_eq!(engine.store().len(), 1, "nothing was recorded while off");
+
+    engine.reconfigure(true, 10_000, 24 * 3600);
+    assert!(engine.enabled());
+    assert!(engine.evaluate("req-switch-2", &input).is_some());
+    assert_eq!(
+        engine.store().len(),
+        2,
+        "recording resumed after re-enabling"
+    );
+    assert_eq!(engine.fault_count(), 0, "a switch is not a fault");
+}
+
+// ---------------------------------------------------------------------------
 // Determinism
 // ---------------------------------------------------------------------------
 

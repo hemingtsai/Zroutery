@@ -173,9 +173,11 @@ impl AppState {
             .first()
             .map(|p| p.connect_timeout_secs)
             .unwrap_or(15);
-        // Read before `config` moves into the registry.
+        // Read before `config` moves into the registry: the shadow switch and
+        // retention are configuration the engine carries, not construction
+        // constants.
         #[cfg(feature = "ml")]
-        let shadow_enabled = config.shadow.enabled;
+        let shadow_config = config.shadow.clone();
         AppState {
             registry: RwLock::new(Arc::new(Registry::new(Arc::new(config)))),
             router: Arc::new(Router::new()),
@@ -188,12 +190,14 @@ impl AppState {
             ledger_generation: AtomicU64::new(0),
             ledger_flush: Mutex::new(()),
             #[cfg(feature = "ml")]
-            shadow: crate::ml::ShadowEngine::new(
+            shadow: crate::ml::ShadowEngine::with_retention(
                 crate::ml::DecisionEngine::new(
                     crate::ml::CoordinatorConfig::default(),
                     crate::ml::RewardPolicy::default(),
                 ),
-                shadow_enabled,
+                shadow_config.enabled,
+                shadow_config.max_decisions,
+                shadow_config.max_age_secs,
             ),
             #[cfg(feature = "ml")]
             dataset: crate::ml::DatasetStore::production(),
@@ -424,6 +428,14 @@ impl AppState {
     /// instead of per request. In-flight requests keep their snapshot.
     pub fn set_config(&self, config: AppConfig) {
         self.stats.set_limit(config.server.log_limit);
+        // The shadow switch and retention are a running engine's configuration,
+        // so a swap has to reach the engine instead of only the next process.
+        #[cfg(feature = "ml")]
+        self.shadow.reconfigure(
+            config.shadow.enabled,
+            config.shadow.max_decisions,
+            config.shadow.max_age_secs,
+        );
         let known: std::collections::HashSet<String> =
             config.models.iter().map(|m| m.exposed_id()).collect();
         // Health rows for models that no longer exist would otherwise linger
@@ -1313,6 +1325,49 @@ mod tests {
             .registry()
             .resolve("standard-class")
             .is_ok_and(|r| matches!(r, crate::registry::Resolution::Tier(_))));
+    }
+
+    /// The shadow switch and retention are configuration the running engine
+    /// carries: the documented limits arrive at construction, and `set_config`
+    /// applies a changed switch and smaller limits without a restart.
+    #[cfg(feature = "ml")]
+    #[test]
+    fn swapping_the_config_applies_shadow_settings_to_the_running_engine() {
+        let secrets = Arc::new(crate::config::MemorySecretStore::new());
+        let mut initial = AppConfig::default();
+        initial.shadow.enabled = true;
+        initial.shadow.max_decisions = 5;
+        initial.shadow.max_age_secs = 60;
+        let state = AppState::new(initial, secrets);
+        assert!(state.shadow().enabled());
+        assert_eq!(
+            state.shadow().store().limits(),
+            (5, 60),
+            "the configured retention must reach the store"
+        );
+
+        let mut next = state.config().as_ref().clone();
+        next.shadow.enabled = false;
+        next.shadow.max_decisions = 2;
+        next.shadow.max_age_secs = 30;
+        state.set_config(next);
+        assert!(
+            !state.shadow().enabled(),
+            "turning shadow off must reach the running engine"
+        );
+        assert_eq!(
+            state.shadow().store().limits(),
+            (2, 30),
+            "the new retention must reach the running store"
+        );
+
+        let mut back_on = state.config().as_ref().clone();
+        back_on.shadow.enabled = true;
+        state.set_config(back_on);
+        assert!(
+            state.shadow().enabled(),
+            "turning shadow back on must reach the running engine"
+        );
     }
 
     /// The global day spend the ledger currently holds.

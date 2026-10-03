@@ -823,6 +823,51 @@ async fn a_disabled_engine_records_nothing() {
     h.shutdown().await;
 }
 
+/// A configuration change reaches the running shadow engine: turning it off
+/// through `set_config` stops recording without a restart, turning it back on
+/// resumes, and a smaller retention cap evicts the stored records down to it.
+#[tokio::test]
+async fn a_config_change_reaches_the_running_shadow_engine() {
+    let h = Harness::start_shadowed().await;
+    assert_eq!(h.ask("standard-class").await.status(), 200);
+    let first_id = h.shadow_record().shadow_id.clone();
+
+    // The switch is now configuration rather than a construction constant.
+    let mut off = h.state.config().as_ref().clone();
+    off.shadow.enabled = false;
+    h.state.set_config(off);
+    assert!(
+        !h.state.shadow().enabled(),
+        "the running engine must adopt the switch"
+    );
+    assert_eq!(h.ask("standard-class").await.status(), 200);
+    assert_eq!(
+        h.shadow_records().len(),
+        1,
+        "a switched-off engine records nothing"
+    );
+
+    // Back on, with a cap of one: the next record evicts the previous one.
+    let mut capped = h.state.config().as_ref().clone();
+    capped.shadow.enabled = true;
+    capped.shadow.max_decisions = 1;
+    h.state.set_config(capped);
+    assert!(h.state.shadow().enabled());
+    assert_eq!(h.ask("standard-class").await.status(), 200);
+    let records = h.shadow_records();
+    assert_eq!(
+        records.len(),
+        1,
+        "the store must evict down to the configured cap of one"
+    );
+    assert_ne!(
+        records[0].shadow_id, first_id,
+        "the newly recorded decision must be the one retained"
+    );
+
+    h.shutdown().await;
+}
+
 // ------------------------------------------------------------------ structural gates
 
 /// The decision-time snapshot is built once, in the routing handler, and is
