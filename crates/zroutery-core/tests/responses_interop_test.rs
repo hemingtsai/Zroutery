@@ -8,7 +8,7 @@ use zroutery_core::ir::{
     ContentBlock, Dialect, Role, StopReason, StreamEvent, ToolResultPart, Usage,
 };
 use zroutery_core::protocol::responses::{
-    decode_request, decode_response, ResponsesStreamEncoder, ResponsesStreamParser,
+    decode_request, decode_response, encode_request, ResponsesStreamEncoder, ResponsesStreamParser,
 };
 use zroutery_core::protocol::{SseDecoder, SseFrame, StreamEncoder, StreamParser};
 
@@ -478,4 +478,84 @@ fn parser_accepts_incomplete_and_reasoning_summary_parts() {
         )),
         "response.incomplete must stop the stream as MaxTokens"
     );
+}
+
+// --------------------------------------------------------------- LD3
+
+#[test]
+fn native_reasoning_input_keeps_payload_and_all_summaries() {
+    let body = json!({"model": "m", "input": [{
+        "type": "reasoning",
+        "id": "rs_native",
+        "encrypted_content": "native-opaque-blob",
+        "summary": [
+            {"type": "summary_text", "text": "first"},
+            {"type": "summary_text", "text": "second"},
+        ],
+    }]});
+    let req = decode_request(body).unwrap();
+
+    let content = &req.messages[0].content;
+    assert_eq!(content.len(), 2, "summary text plus the opaque payload");
+    match &content[0] {
+        ContentBlock::Thinking { text, signature } => {
+            assert_eq!(text, "first\n\nsecond", "every summary entry survives");
+            assert!(signature.is_none());
+        }
+        other => panic!("expected thinking block, got {other:?}"),
+    }
+    match &content[1] {
+        ContentBlock::RedactedThinking { data } => assert_eq!(data, "native-opaque-blob"),
+        other => panic!("expected redacted thinking block, got {other:?}"),
+    }
+
+    // Re-encoding for a native upstream echoes the opaque payload unchanged
+    // and keeps the whole summary.
+    let wire = encode_request(&req, "m").unwrap();
+    let input = wire["input"].as_array().unwrap();
+    assert!(
+        input
+            .iter()
+            .any(|item| item["type"] == "reasoning"
+                && item["encrypted_content"] == "native-opaque-blob"),
+        "opaque payload must round trip verbatim: {wire}"
+    );
+    assert!(
+        input
+            .iter()
+            .any(|item| item["type"] == "reasoning"
+                && item["summary"][0]["text"] == "first\n\nsecond"),
+        "full summary must round trip: {wire}"
+    );
+
+    // And the wire shape decodes again.
+    let decoded = decode_request(wire).unwrap();
+    assert!(decoded
+        .messages
+        .iter()
+        .flat_map(|message| &message.content)
+        .any(
+            |block| matches!(block, ContentBlock::RedactedThinking { data }
+            if data == "native-opaque-blob")
+        ));
+}
+
+#[test]
+fn native_reasoning_response_keeps_encrypted_content() {
+    let body = json!({
+        "id": "resp_1",
+        "status": "completed",
+        "output": [{
+            "type": "reasoning",
+            "id": "rs_1",
+            "summary": [],
+            "encrypted_content": "native-blob",
+        }],
+    });
+    let resp = decode_response(body).unwrap();
+    assert_eq!(resp.content.len(), 1);
+    match &resp.content[0] {
+        ContentBlock::RedactedThinking { data } => assert_eq!(data, "native-blob"),
+        other => panic!("expected redacted thinking block, got {other:?}"),
+    }
 }
