@@ -1660,7 +1660,10 @@ mod tests {
             if presented.as_deref() != Some(expected.as_str()) {
                 return (
                     StatusCode::UNAUTHORIZED,
-                    axum::Json(failure("AUTH_UNAUTHORIZED", "refresh cookie is no longer valid")),
+                    axum::Json(failure(
+                        "AUTH_UNAUTHORIZED",
+                        "refresh cookie is no longer valid",
+                    )),
                 )
                     .into_response();
             }
@@ -1672,9 +1675,14 @@ mod tests {
         }
         let mut response = state.default_body(&state.refresh_body);
         // NewAPI rotates the refresh cookie on every refresh.
-        let set_cookie = state.refresh_set_cookie.lock().unwrap().clone().unwrap_or_else(|| {
-            format!("{REFRESH_COOKIE_NAME}=rotated-cookie; Path=/api/user/auth; HttpOnly")
-        });
+        let set_cookie = state
+            .refresh_set_cookie
+            .lock()
+            .unwrap()
+            .clone()
+            .unwrap_or_else(|| {
+                format!("{REFRESH_COOKIE_NAME}=rotated-cookie; Path=/api/user/auth; HttpOnly")
+            });
         response.headers_mut().insert(
             SET_COOKIE,
             HeaderValue::from_str(&set_cookie).expect("a valid Set-Cookie header"),
@@ -2255,8 +2263,9 @@ mod tests {
         *panel.state.refresh_cookie.lock().unwrap() = Some("cookie0".into());
         *panel.state.refresh_next_cookie.lock().unwrap() = Some("cookie1".into());
         *panel.state.refresh_new_bearer.lock().unwrap() = Some("access-new".into());
-        *panel.state.refresh_set_cookie.lock().unwrap() =
-            Some(format!("{REFRESH_COOKIE_NAME}=cookie1; Path=/api/user/auth; HttpOnly"));
+        *panel.state.refresh_set_cookie.lock().unwrap() = Some(format!(
+            "{REFRESH_COOKIE_NAME}=cookie1; Path=/api/user/auth; HttpOnly"
+        ));
 
         // Both calls snapshot the same bearer and are both rejected before
         // either can refresh.

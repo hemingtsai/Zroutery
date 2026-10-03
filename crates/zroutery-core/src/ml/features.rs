@@ -1136,11 +1136,7 @@ mod tests {
         const PROVIDER: &str = "ml-feat-provider";
         let stats_store = StatsStore::new();
         let observation_store = ObservationStore::new();
-        for latency_ms in [100.0; 90]
-            .into_iter()
-            .chain([9000.0; 10])
-            .chain([100.0])
-        {
+        for latency_ms in [100.0; 90].into_iter().chain([9000.0; 10]).chain([100.0]) {
             stats_store.record_success(MODEL, PROVIDER, latency_ms, Some(40.0));
             observation_store.record_success(MODEL, PROVIDER, latency_ms, Some(40.0));
         }
@@ -1150,7 +1146,11 @@ mod tests {
         assert_eq!(observation.latency.total_ms.value, Some(100.0));
         assert_eq!(stats.total_latency.p50(), Some(100.0));
         assert_eq!(stats.total_latency.p95(), Some(9000.0));
-        let ewma = stats.total_latency.ewma.value.expect("the history has an EWMA");
+        let ewma = stats
+            .total_latency
+            .ewma
+            .value
+            .expect("the history has an EWMA");
         assert!(
             (ewma - 6154.017919872998).abs() < 1e-9,
             "unexpected EWMA {ewma}"

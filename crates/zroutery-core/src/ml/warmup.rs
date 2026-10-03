@@ -612,11 +612,8 @@ pub fn run_warmup(
         .iter()
         .map(project_for_training)
         .collect();
-    let holdout_samples: Vec<DatasetTrainingSample> = partition
-        .holdout
-        .iter()
-        .map(project_for_training)
-        .collect();
+    let holdout_samples: Vec<DatasetTrainingSample> =
+        partition.holdout.iter().map(project_for_training).collect();
 
     let holdout = FrozenHoldout::new(holdout_samples.clone(), config.holdout_description.clone());
     let (lineage, commit) = train_lineage(&training)?;
@@ -726,11 +723,7 @@ impl WarmupPartition {
         {
             return false;
         }
-        let training_groups: HashSet<&str> = self
-            .training
-            .iter()
-            .map(group_key)
-            .collect();
+        let training_groups: HashSet<&str> = self.training.iter().map(group_key).collect();
         !self
             .holdout
             .iter()
@@ -830,7 +823,9 @@ fn order_groups(mut groups: Vec<SampleGroup>) -> Vec<SampleGroup> {
             .then_with(|| left.key.cmp(&right.key))
     });
     for group in &mut groups {
-        group.rows.sort_by(|left, right| left.sample_id.cmp(&right.sample_id));
+        group
+            .rows
+            .sort_by(|left, right| left.sample_id.cmp(&right.sample_id));
     }
     groups
 }
@@ -889,7 +884,11 @@ fn holdout_group_count(
 
 /// Distinct request identities over a set of canonical rows.
 fn request_count(samples: &[OutcomeTrainingSample]) -> usize {
-    samples.iter().map(group_key).collect::<HashSet<&str>>().len()
+    samples
+        .iter()
+        .map(group_key)
+        .collect::<HashSet<&str>>()
+        .len()
 }
 
 // ---------------------------------------------------------------------------

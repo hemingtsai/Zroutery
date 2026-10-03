@@ -184,12 +184,8 @@ fn multi_row_request(index: usize) -> Vec<OutcomeTrainingSample> {
     };
     let outcome = fixture_outcome(quality, terminal, 1_700_000_000 + index as i64);
     let features = fixture_features(quality);
-    try_samples_from_outcome(
-        &outcome,
-        &[features.clone(), features],
-        DataOrigin::Native,
-    )
-    .expect("the canonical generator emits one attempt row and one request row")
+    try_samples_from_outcome(&outcome, &[features.clone(), features], DataOrigin::Native)
+        .expect("the canonical generator emits one attempt row and one request row")
 }
 
 /// A dataset of `requests` requests, each contributing an attempt row and a
