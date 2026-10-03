@@ -224,6 +224,31 @@ impl DatasetFingerprint {
     }
 }
 
+impl DatasetFingerprint {
+    /// Restore a fingerprint from its recorded form.
+    ///
+    /// A promotion decision is serialised with the fingerprint that decided it,
+    /// so reading that decision back has to reconstruct the identity rather
+    /// than re-derive it from a body that may no longer exist. The format is
+    /// validated, so a truncated or hand-edited field is refused instead of
+    /// becoming an identity that matches nothing and nothing else.
+    pub fn parse(text: &str) -> Result<Self, TraceError> {
+        let valid = text.len() == FINGERPRINT_HEX_DIGITS
+            && text.bytes().all(|byte| byte.is_ascii_hexdigit());
+        if !valid {
+            return Err(TraceError::Corrupt {
+                path: "<fingerprint>".to_string(),
+                line: 0,
+                reason: format!(
+                    "expected {FINGERPRINT_HEX_DIGITS} hex digits, got {:?}",
+                    text.chars().take(24).collect::<String>()
+                ),
+            });
+        }
+        Ok(Self(text.to_ascii_lowercase()))
+    }
+}
+
 /// A stable label for a sample's provenance.
 ///
 /// The provenance is part of the fitted identity: a body that includes synthetic
@@ -411,15 +436,16 @@ impl TraceLog {
                     .map_err(io)?,
             );
         }
-        let file = guard.as_mut().expect("the append handle was just installed");
+        let file = guard
+            .as_mut()
+            .expect("the append handle was just installed");
         file.write_all(line.as_bytes()).map_err(io)?;
         // Flushed per record on purpose. A router that loses the tail of its own
         // history on an unclean exit has an evidence gap it cannot detect, and
         // an undetectable gap is worse than a slow append. Throughput on this
         // path is one small sequential write per request.
         file.flush().map_err(io)?;
-        self.bytes
-            .fetch_add(line.len() as u64, Ordering::Relaxed);
+        self.bytes.fetch_add(line.len() as u64, Ordering::Relaxed);
         self.counters.appended.fetch_add(1, Ordering::Relaxed);
         Ok(1)
     }
@@ -450,13 +476,12 @@ impl TraceLog {
             if line.trim().is_empty() {
                 continue;
             }
-            let trace: RequestTrace = serde_json::from_str(&line).map_err(|error| {
-                TraceError::Corrupt {
+            let trace: RequestTrace =
+                serde_json::from_str(&line).map_err(|error| TraceError::Corrupt {
                     path: self.path.display().to_string(),
                     line: index + 1,
                     reason: error.to_string(),
-                }
-            })?;
+                })?;
             traces.push(trace);
         }
         Ok(traces)
@@ -535,7 +560,12 @@ pub fn contained_append(
         log.note_nothing();
         return TraceIngestion::Nothing;
     }
-    let trace = RequestTrace::new(input.decision_id.clone(), recorded_at, input.clone(), samples);
+    let trace = RequestTrace::new(
+        input.decision_id.clone(),
+        recorded_at,
+        input.clone(),
+        samples,
+    );
     // `decision_id` is accepted so a caller can log the id it holds when the
     // trace itself fails to build; keeping it in the signature means the
     // counter is attributable from the call site without re-deriving it.
@@ -587,7 +617,9 @@ pub fn contained_append(
 mod tests {
     use super::*;
     use crate::ml::dataset::{SampleScope, Targets};
-    use crate::ml::features::{RoutingFeatures, FEATURE_DIMENSION, FEATURE_SCHEMA_VERSION, UNKNOWN};
+    use crate::ml::features::{
+        RoutingFeatures, FEATURE_DIMENSION, FEATURE_SCHEMA_VERSION, UNKNOWN,
+    };
 
     fn features(seed: u32) -> RoutingFeatures {
         let mut values = [UNKNOWN; FEATURE_DIMENSION];

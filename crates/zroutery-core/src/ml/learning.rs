@@ -230,7 +230,9 @@ impl TrainingConfig {
             ("validation", self.validation_ratio),
             ("holdout", self.holdout_ratio),
         ];
-        let finite = parts.iter().all(|(_, ratio)| ratio.is_finite() && *ratio > 0.0);
+        let finite = parts
+            .iter()
+            .all(|(_, ratio)| ratio.is_finite() && *ratio > 0.0);
         let total: f64 = parts.iter().map(|(_, ratio)| *ratio).sum();
         if !finite || total > 1.0 {
             return Err(LearningError::InvalidRatios {
@@ -552,8 +554,12 @@ pub fn run_training(
     let dataset_fingerprint = DatasetFingerprint::of(&split.train);
     let coverage = FeatureCoverage::measure(&split.train);
 
-    let train_legacy: Vec<TrainingSample> =
-        split.train.iter().cloned().map(TrainingSample::from).collect();
+    let train_legacy: Vec<TrainingSample> = split
+        .train
+        .iter()
+        .cloned()
+        .map(TrainingSample::from)
+        .collect();
     let validation_legacy: Vec<TrainingSample> = split
         .validation
         .iter()
@@ -578,7 +584,8 @@ pub fn run_training(
     // that slice once each time and returns the same ensemble. The schedule has
     // to live in the payload, or `passes` is a number in a config that changes
     // nothing.
-    let mut schedule: Vec<TrainingSample> = Vec::with_capacity(train_legacy.len() * config.passes as usize);
+    let mut schedule: Vec<TrainingSample> =
+        Vec::with_capacity(train_legacy.len() * config.passes as usize);
     for _ in 0..config.passes {
         schedule.extend_from_slice(&train_legacy);
     }
@@ -807,53 +814,51 @@ mod tests {
                 values[0] = provider as f32 / providers as f32;
                 values[1] = if success { 0.5 } else { -0.5 };
                 values[2] = ((request % 7) as f32 / 7.0) - 0.5;
-                samples.push(
-                    OutcomeTrainingSample {
-                        sample_id: format!("s-{request}-{provider}"),
-                        schema_version: 1,
-                        timestamp: 1_700_000_000 + (request * providers + provider) as i64,
-                        streaming: false,
-                        dialect: "anthropic".to_string(),
-                        features: RoutingFeatures {
-                            schema_version: FEATURE_SCHEMA_VERSION,
-                            values,
-                        },
-                        targets: Targets {
-                            success,
-                            latency_ms: Some(100.0 + provider as f64 * 10.0),
-                            ttft_ms: Some(20.0),
-                            cost: Some(0.001 * (provider + 1) as f64),
-                            failure_class: None,
-                            fallback_count: 0,
-                        },
-                        provider_id: format!("p{provider}"),
-                        model_id: format!("m{provider}"),
-                        origin: DataOrigin::Native,
-                        outcome_id: format!("out-{request}"),
-                        request_id: format!("r{request}"),
-                        decision_id: Some(format!("d{request}")),
-                        response_id: None,
-                        final_status: if success {
-                            FinalStatus::Success
-                        } else {
-                            FinalStatus::Failed
-                        },
-                        success,
-                        identity: OutcomeIdentity::default(),
-                        scope: SampleScope::Attempt {
-                            index: 0,
-                            attempt_id: format!("a-{request}-{provider}"),
-                        },
-                        attempt_id: Some(format!("a-{request}-{provider}")),
-                        rectified: false,
-                        attempts: Vec::new(),
-                        usage: None,
-                        estimated_cost: None,
-                        actual_cost: None,
-                        terminal_error: None,
-                        feedback: None,
+                samples.push(OutcomeTrainingSample {
+                    sample_id: format!("s-{request}-{provider}"),
+                    schema_version: 1,
+                    timestamp: 1_700_000_000 + (request * providers + provider) as i64,
+                    streaming: false,
+                    dialect: "anthropic".to_string(),
+                    features: RoutingFeatures {
+                        schema_version: FEATURE_SCHEMA_VERSION,
+                        values,
                     },
-                );
+                    targets: Targets {
+                        success,
+                        latency_ms: Some(100.0 + provider as f64 * 10.0),
+                        ttft_ms: Some(20.0),
+                        cost: Some(0.001 * (provider + 1) as f64),
+                        failure_class: None,
+                        fallback_count: 0,
+                    },
+                    provider_id: format!("p{provider}"),
+                    model_id: format!("m{provider}"),
+                    origin: DataOrigin::Native,
+                    outcome_id: format!("out-{request}"),
+                    request_id: format!("r{request}"),
+                    decision_id: Some(format!("d{request}")),
+                    response_id: None,
+                    final_status: if success {
+                        FinalStatus::Success
+                    } else {
+                        FinalStatus::Failed
+                    },
+                    success,
+                    identity: OutcomeIdentity::default(),
+                    scope: SampleScope::Attempt {
+                        index: 0,
+                        attempt_id: format!("a-{request}-{provider}"),
+                    },
+                    attempt_id: Some(format!("a-{request}-{provider}")),
+                    rectified: false,
+                    attempts: Vec::new(),
+                    usage: None,
+                    estimated_cost: None,
+                    actual_cost: None,
+                    terminal_error: None,
+                    feedback: None,
+                });
             }
         }
         samples
@@ -895,10 +900,7 @@ mod tests {
         samples[3].features.values[7] = 4_096.0;
         assert!(matches!(
             split_samples(&samples, &TrainingConfig::default()),
-            Err(LearningError::FeatureOutOfRange {
-                first_index: 7,
-                ..
-            })
+            Err(LearningError::FeatureOutOfRange { first_index: 7, .. })
         ));
     }
 
@@ -926,7 +928,11 @@ mod tests {
         let first = split_samples(&samples, &config).expect("split");
         let second = split_samples(&samples, &config).expect("split");
         assert_eq!(
-            first.train.iter().map(|s| s.sample_id.clone()).collect::<Vec<_>>(),
+            first
+                .train
+                .iter()
+                .map(|s| s.sample_id.clone())
+                .collect::<Vec<_>>(),
             second
                 .train
                 .iter()
@@ -1056,7 +1062,10 @@ mod tests {
         )
         .expect("train");
         assert_ne!(one.commit_id, five.commit_id);
-        assert_ne!(one.checkpoint.content_hash(), five.checkpoint.content_hash());
+        assert_ne!(
+            one.checkpoint.content_hash(),
+            five.checkpoint.content_hash()
+        );
     }
 
     #[test]
@@ -1091,7 +1100,10 @@ mod tests {
         let report = &outcome.report;
         assert_eq!(report.sample_count, samples.len());
         assert_eq!(report.request_count, 40);
-        assert_eq!(report.train_size + report.validation_size + report.holdout_size, 40 * 3);
+        assert_eq!(
+            report.train_size + report.validation_size + report.holdout_size,
+            40 * 3
+        );
         assert_eq!(report.passes.len(), config.passes as usize);
         assert_eq!(report.feature_schema_version, FEATURE_SCHEMA_VERSION);
         assert!(!report.final_commit.is_empty());
@@ -1169,4 +1181,3 @@ mod tests {
         );
     }
 }
-
