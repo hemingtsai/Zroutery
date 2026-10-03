@@ -75,49 +75,84 @@ function Shell() {
   // the config file, so two overlapping saves could interleave and land out of
   // order. Tasks arriving mid-flight are queued in order and re-based onto the
   // latest committed config when they run.
+  //
+  // A caller's promise resolves only when *its own* task has run: answering a
+  // queued save with "true" before it ran would report an edit as saved that
+  // the queue might still drop, and a failed in-flight save resolves every
+  // waiting caller with false instead of discarding them silently.
   const runningRef = useRef(false);
-  const queuedRef = useRef<Array<() => Promise<Snapshot>>>([]);
+  const queuedRef = useRef<
+    Array<{ task: () => Promise<Snapshot>; answer: () => void; drop: () => void }>
+  >([]);
+  const queueTailRef = useRef<Promise<boolean>>(Promise.resolve(true));
 
   // The newest config known to have been committed (or loaded). Saves are
   // updaters against this, so an edit queued behind an in-flight save is
   // applied on top of it instead of overwriting it with a stale snapshot.
   const configRef = useRef<AppConfig | null>(null);
 
-  const run = useCallback(async (task: () => Promise<Snapshot>): Promise<boolean> => {
+  const run = useCallback((task: () => Promise<Snapshot>): Promise<boolean> => {
+    if (runningRef.current) {
+      // The task may still be queued when the in-flight save fails; carry that
+      // failure to this caller rather than answering before the attempt.
+      let finish: (ok: boolean) => void = () => {};
+      const settled = new Promise<boolean>((resolve) => {
+        finish = resolve;
+      });
+      queuedRef.current.push({
+        task,
+        answer: () => finish(true),
+        drop: () => finish(false),
+      });
+      return settled;
+    }
+
     const apply = (s: Snapshot) => {
       configRef.current = s.config;
       setSnapshot(s);
       return s;
     };
-    if (runningRef.current) {
-      queuedRef.current.push(task);
-      // The queued task's own outcome decides; this call did not fail.
-      return true;
-    }
     runningRef.current = true;
     setBusy(true);
     setError(null);
-    try {
-      apply(await task());
-      // Drain every edit that arrived while this one was in flight. Each task
-      // reads configRef when it runs, so later edits rebase on earlier ones.
-      while (queuedRef.current.length > 0) {
-        const queued = queuedRef.current.shift()!;
-        apply(await queued());
+    const previous = queueTailRef.current;
+    const outcome = (async () => {
+      // Wait for the save before this one so the queue stays a single chain
+      // and this caller's result is its own task's result.
+      await previous.catch(() => false);
+      try {
+        apply(await task());
+        // Drain every edit that arrived while this one was in flight. Each
+        // task reads configRef when it runs, so later edits rebase on earlier
+        // ones, and a queued caller is answered only once its own task ran.
+        while (queuedRef.current.length > 0) {
+          const queued = queuedRef.current.shift()!;
+          try {
+            apply(await queued.task());
+            queued.answer();
+          } catch (e) {
+            queued.drop();
+            throw e;
+          }
+        }
+        return true;
+      } catch (e) {
+        // A failed save invalidates the edits that were waiting behind it: the
+        // queue is dropped and each waiting caller is told its save did not
+        // land.
+        const dropped = queuedRef.current;
+        queuedRef.current = [];
+        for (const entry of dropped) entry.drop();
+        setError(errorText(e));
+        if (dropped.length > 0) notify("error", t("toast.queued_discarded"));
+        return false;
+      } finally {
+        runningRef.current = false;
+        setBusy(false);
       }
-      return true;
-    } catch (e) {
-      // A failed save invalidates the edits that were waiting behind it: they
-      // were built against a config that never became authoritative.
-      const dropped = queuedRef.current.length;
-      queuedRef.current = [];
-      setError(errorText(e));
-      if (dropped > 0) notify("error", t("toast.queued_discarded"));
-      return false;
-    } finally {
-      runningRef.current = false;
-      setBusy(false);
-    }
+    })();
+    queueTailRef.current = outcome;
+    return outcome;
   }, [notify, t]);
 
   useEffect(() => {
