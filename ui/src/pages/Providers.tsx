@@ -368,6 +368,9 @@ function CcSwitchRow({
   onSelect: (id: string, on: boolean) => void;
 }) {
   const { t } = useI18n();
+  // The backend decides this with the same rule the import command applies, so
+  // a disabled row really is one the import would skip.
+  const alreadyId = draft.already_imported ? draft.target_id : null;
   return (
     <tr className={draft.already_imported ? "row-warn" : ""}>
       <td>
@@ -376,6 +379,7 @@ function CcSwitchRow({
           aria-label={t("cc.import_row", { name: draft.name })}
           checked={checked}
           disabled={draft.already_imported}
+          title={alreadyId ? `${t("cc.already")} (${alreadyId})` : undefined}
           onChange={(e) => onSelect(draft.source_id, e.currentTarget.checked)}
         />
       </td>
