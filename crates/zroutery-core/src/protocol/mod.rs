@@ -388,6 +388,14 @@ pub trait StreamParser: Send {
 
 /// Turn canonical events into SSE frames for a client.
 pub trait StreamEncoder: Send {
+    /// Adopt the response id the pipeline owns for this stream.
+    ///
+    /// The Responses dialect names its whole response, and the proxy registers
+    /// that response under an id of its own before the first frame leaves, so
+    /// every frame the client is shown has to carry the registered identity:
+    /// an id the client cannot use against `cancel` or `GET` is not an
+    /// identity. Dialects without a response-level id ignore this.
+    fn set_response_id(&mut self, _id: &str) {}
     fn encode(&mut self, event: &StreamEvent) -> Vec<SseFrame>;
     /// Trailing frames, e.g. OpenAI's `[DONE]`.
     fn finish(&mut self) -> Vec<SseFrame>;

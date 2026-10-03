@@ -1913,12 +1913,19 @@ impl ResponsesStreamEncoder {
 }
 
 impl StreamEncoder for ResponsesStreamEncoder {
+    fn set_response_id(&mut self, id: &str) {
+        self.id = id.to_string();
+    }
+
     fn encode(&mut self, event: &StreamEvent) -> Vec<SseFrame> {
         let mut out = Vec::new();
         match event {
             StreamEvent::Start { id, .. } => {
                 // The upstream model name in the event is ignored: the frames
-                // carry the exposed id the client asked for.
+                // carry the exposed id the client asked for. When the pipeline
+                // owns the response identity it has already set that id and
+                // rewrites this event, so the upstream id is only adopted by a
+                // caller that has no identity of its own to publish.
                 if !id.is_empty() {
                     self.id = id.clone();
                 }

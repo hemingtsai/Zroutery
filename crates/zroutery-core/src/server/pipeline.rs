@@ -1326,9 +1326,13 @@ fn stream_response(
     response_id: Option<String>,
     cancel_rx: Option<watch::Receiver<bool>>,
 ) -> Response {
-    let encoder = protocol::stream_encoder(dialect, &candidate.exposed_id, include_usage);
+    let mut encoder = protocol::stream_encoder(dialect, &candidate.exposed_id, include_usage);
     if let Some(ref id) = response_id {
         lifecycle.note_response_id(id);
+        // The response was registered under this id before the handshake, so
+        // this is the identity every frame has to publish — including the
+        // failure frame, which can be the client's first and only sight of it.
+        encoder.set_response_id(id);
     }
     let body = Body::from_stream(sse_body(
         Arc::clone(state),
@@ -2470,12 +2474,14 @@ fn sse_body(
             };
             match next_event {
                 Some(Ok(event)) => {
-                    // Override response ID with pre-generated one if the
-                    // upstream did not supply one.
+                    // The response's public id is the one the proxy registered
+                    // as in-flight before the first byte went out. It is not a
+                    // substitute for an empty upstream id: an upstream id the
+                    // client could only repeat back to a cancel endpoint that
+                    // never heard of it is not an identity, so the upstream id
+                    // is never published.
                     let event = match (&st.response_id, &event) {
-                        (Some(ref pregen_id), StreamEvent::Start { id, model, usage })
-                            if id.is_empty() =>
-                        {
+                        (Some(pregen_id), StreamEvent::Start { model, usage, .. }) => {
                             StreamEvent::Start {
                                 id: pregen_id.clone(),
                                 model: model.clone(),
