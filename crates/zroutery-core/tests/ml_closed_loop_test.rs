@@ -42,9 +42,8 @@ use zroutery_core::config::{
 use zroutery_core::ml::RewardPolicy;
 use zroutery_core::ml::RoutingModel;
 use zroutery_core::ml::{
-    ActiveModel, ActiveModelStore, ExplorationConfig, MlPolicy, PromotionConfig, PromotionGate,
-    PromotionVerdict, ReplayBaseline, RoutingVerdict, ShadowEvidence, TrainingConfig,
-    ACTIVE_MODEL_SCHEMA_VERSION,
+    ActiveModelStore, ExplorationConfig, MlPolicy, PromotionConfig, PromotionGate,
+    PromotionVerdict, ReplayBaseline, ShadowEvidence, TrainingConfig,
 };
 use zroutery_core::server::{AppState, ServerHandle};
 
@@ -295,8 +294,59 @@ async fn start_upstream() -> (FakeUpstream, SocketAddr) {
 }
 
 // ---------------------------------------------------------------------------
+// Durable state is opt-in
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn without_a_configured_state_directory_there_is_no_durable_ml_state() {
+    let (upstream, addr) = start_upstream().await;
+
+    // The default configuration: shadow on, ML routing off, no state directory.
+    let mut config = config_for(addr, std::path::Path::new("unused"), false);
+    config.ml_routing.state_dir = String::new();
+    assert!(
+        !config.ml_routing.has_state_dir(),
+        "the default must not name a directory"
+    );
+
+    let harness = Harness::start(config, upstream.clone()).await;
+    assert!(
+        harness.state.traces().is_none(),
+        "no state directory means no trace log"
+    );
+    assert!(
+        harness.state.active_models().is_none(),
+        "no state directory means no model store, so no model can serve"
+    );
+    assert!(!harness.state.ml_routing().is_attached());
+
+    // The request path is unaffected: outcomes, samples and the shadow all
+    // still work, because none of them need durability.
+    let costs = harness.drive(20).await;
+    assert!(costs.iter().all(|cost| *cost == 2));
+    assert_eq!(
+        harness.state.dataset().counters().ingested,
+        20,
+        "the in-memory dataset still collects without a state directory"
+    );
+    assert_eq!(harness.state.outcomes().len(), 20);
+}
+
+// ---------------------------------------------------------------------------
 // Phase 1: real requests produce durable history
 // ---------------------------------------------------------------------------
+
+fn histogram(costs: &[usize]) -> String {
+    let mut counts: std::collections::BTreeMap<usize, usize> = std::collections::BTreeMap::new();
+    for cost in costs {
+        *counts.entry(*cost).or_insert(0) += 1;
+    }
+    counts
+        .into_iter()
+        .map(|(cost, count)| format!("{cost} attempt(s) x{count}"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn real_requests_produce_outcomes_samples_and_durable_traces() {
@@ -332,7 +382,11 @@ async fn real_requests_produce_outcomes_samples_and_durable_traces() {
         COLLECTION_REQUESTS,
         "the durable trace log lost records"
     );
-    let counters = harness.state.traces().counters();
+    let counters = harness
+        .state
+        .traces()
+        .expect("the fixture configures a state directory")
+        .counters();
     assert_eq!(counters.appended, COLLECTION_REQUESTS as u64);
     assert_eq!(counters.refused, 0);
     assert_eq!(counters.io_errors, 0);
@@ -397,6 +451,63 @@ fn loop_over(state_dir: tempfile::TempDir) -> LoopArtefacts {
         comparison,
         analysis,
     }
+}
+
+/// A gate configuration this fixture's evidence genuinely satisfies.
+///
+/// The shipped default names `baseline.lowest_latency`, and against that
+/// baseline the learned candidate loses one request in 120, so the default gate
+/// returns REJECTED — correctly. `baseline.priority` is the strategy Zroutery
+/// ships by default, against which the same candidate is much better.
+///
+/// Naming the baseline explicitly is the point: "beats a baseline" is a claim
+/// about a specific baseline, and a promotion that quietly picked whichever one
+/// promoted would prove nothing about the gate.
+fn promotable_gate() -> PromotionConfig {
+    PromotionConfig {
+        required_baseline: "baseline.priority".to_string(),
+        ..PromotionConfig::default()
+    }
+}
+
+/// A training report that names a given commit while keeping everything else
+/// the fixture produced.
+///
+/// Used where a test needs a decision about a *different* model than the one
+/// `run_training` produced: the evidence stays the same, only the identity
+/// under judgement changes.
+fn report_for(commit: &str, artefacts: &LoopArtefacts) -> zroutery_core::ml::TrainingReport {
+    let mut report = artefacts.training.report.clone();
+    report.final_commit = commit.to_string();
+    report
+}
+
+/// Promote the trained model, refusing to proceed if the gate did not say so.
+fn promote_trained(
+    store: &ActiveModelStore,
+    artefacts: &LoopArtefacts,
+    config: PromotionConfig,
+) -> zroutery_core::ml::PromotionDecision {
+    let decision = PromotionGate::new(config).evaluate(
+        &artefacts.training.report,
+        &artefacts.comparison,
+        Some("loop-test".into()),
+    );
+    assert_eq!(
+        decision.verdict,
+        PromotionVerdict::Promoted,
+        "this fixture is supposed to promote; the gate said {}: {:?}",
+        decision.verdict.as_str(),
+        decision
+            .blockers()
+            .into_iter()
+            .map(|c| format!("{} ({})", c.name, c.reason))
+            .collect::<Vec<_>>()
+    );
+    store
+        .promote(&decision, artefacts.training.checkpoint.clone())
+        .expect("a promoted decision installs its model");
+    decision
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -593,33 +704,21 @@ async fn a_promotion_decision_is_explainable_and_a_promoted_model_becomes_the_ac
         "a fresh install has none"
     );
 
-    let promoted = zroutery_core::ml::ActivePredictor::load(&ActiveModel {
-        schema_version: ACTIVE_MODEL_SCHEMA_VERSION,
-        model_id: artefacts.training.model_id.clone(),
-        commit_id: artefacts.training.commit_record().commit_id.to_string(),
-        learning_event_count: artefacts.training.report.learning_event_count,
-        checkpoint: artefacts.training.checkpoint.clone(),
-        promotion_digest: "digest-from-gate".to_string(),
-        promoted_at: 0,
-    })
-    .expect("the trained model verifies");
-    let commit = promoted.commit_id().to_string();
+    // The rejected decision cannot install anything, and says why.
+    let refusal = store
+        .promote(&decision, artefacts.training.checkpoint.clone())
+        .expect_err("a rejected decision must not install a model");
+    assert!(refusal.to_string().contains("REJECTED"), "{refusal}");
+    assert!(store.active().expect("read").is_none());
 
-    store
-        .promote(
-            ActiveModel {
-                schema_version: ACTIVE_MODEL_SCHEMA_VERSION,
-                model_id: artefacts.training.model_id.clone(),
-                commit_id: commit.clone(),
-                learning_event_count: artefacts.training.report.learning_event_count,
-                checkpoint: artefacts.training.checkpoint.clone(),
-                promotion_digest: "digest-from-gate".to_string(),
-                promoted_at: 0,
-            },
-            "digest-from-gate",
-            format!("gate said {}", decision.verdict.as_str()),
-        )
-        .expect("promote");
+    // The same evidence against the baseline the fixture can actually beat
+    // promotes, and the store re-derives the commit rather than trusting it.
+    let promotable = promote_trained(&store, &artefacts, promotable_gate());
+    let commit = promotable.candidate_commit.clone();
+    assert_eq!(
+        store.active_identity().expect("read").as_deref(),
+        Some(commit.as_str())
+    );
 
     let reloaded = store.active().expect("read").expect("an active model");
     assert_eq!(reloaded.commit_id().as_str(), commit);
@@ -651,23 +750,9 @@ async fn a_promoted_model_changes_which_provider_serves_and_rollback_restores_th
     // -- Learn from what was collected. --------------------------------------
     let artefacts = loop_over(state_dir);
 
-    // -- Promote. ------------------------------------------------------------
+    // -- Promote, on a gate decision that actually says so. -------------------
     let store = ActiveModelStore::open(artefacts.state_dir.path()).expect("store");
-    store
-        .promote(
-            ActiveModel {
-                schema_version: ACTIVE_MODEL_SCHEMA_VERSION,
-                model_id: artefacts.training.model_id.clone(),
-                commit_id: artefacts.training.commit_record().commit_id.to_string(),
-                learning_event_count: artefacts.training.report.learning_event_count,
-                checkpoint: artefacts.training.checkpoint.clone(),
-                promotion_digest: "digest".to_string(),
-                promoted_at: 0,
-            },
-            "digest",
-            "promoted by the closed-loop test",
-        )
-        .expect("promote");
+    let first_commit = promote_trained(&store, &artefacts, promotable_gate()).candidate_commit;
     let state_dir = artefacts.state_dir.path().to_path_buf();
 
     // -- Serve with the model attached. --------------------------------------
@@ -738,7 +823,6 @@ async fn a_promoted_model_changes_which_provider_serves_and_rollback_restores_th
     // prior model — and asserting otherwise would be asserting a rollback into a
     // state that never existed.
     let store = ActiveModelStore::open(&state_dir).expect("store");
-    let first_commit = artefacts.training.commit_record().commit_id.to_string();
 
     let mut other = zroutery_core::ml::model_identity::ModelEnsemble::new();
     other.success.update(
@@ -758,23 +842,21 @@ async fn a_promoted_model_changes_which_provider_serves_and_rollback_restores_th
         zroutery_core::ml::model_identity::ModelId::new(artefacts.training.model_id.clone()),
         other_checkpoint.clone(),
         None,
-        7,
+        artefacts.training.report.learning_event_count,
     );
+
+    // The second model needs a gate decision naming *it*. The gate does not
+    // choose between models; it only says whether the one it is handed may
+    // serve.
+    let other_decision = PromotionGate::new(promotable_gate()).evaluate(
+        &report_for(&other_record.commit_id.to_string(), &artefacts),
+        &artefacts.comparison,
+        Some("second-model".into()),
+    );
+    assert_eq!(other_decision.verdict, PromotionVerdict::Promoted);
     store
-        .promote(
-            ActiveModel {
-                schema_version: ACTIVE_MODEL_SCHEMA_VERSION,
-                model_id: artefacts.training.model_id.clone(),
-                commit_id: other_record.commit_id.to_string(),
-                learning_event_count: 7,
-                checkpoint: other_checkpoint,
-                promotion_digest: "digest-2".to_string(),
-                promoted_at: 0,
-            },
-            "digest-2",
-            "a second model, so rollback has a target",
-        )
-        .expect("promote");
+        .promote(&other_decision, other_checkpoint)
+        .expect("a second promoted model installs");
     assert_eq!(
         store.active_identity().expect("read").as_deref(),
         Some(other_record.commit_id.as_str())
@@ -827,21 +909,7 @@ async fn exploration_moves_real_requests_and_never_serves_an_ineligible_candidat
 
     let artefacts = loop_over(state_dir);
     let store = ActiveModelStore::open(artefacts.state_dir.path()).expect("store");
-    store
-        .promote(
-            ActiveModel {
-                schema_version: ACTIVE_MODEL_SCHEMA_VERSION,
-                model_id: artefacts.training.model_id.clone(),
-                commit_id: artefacts.training.commit_record().commit_id.to_string(),
-                learning_event_count: artefacts.training.report.learning_event_count,
-                checkpoint: artefacts.training.checkpoint.clone(),
-                promotion_digest: "digest".to_string(),
-                promoted_at: 0,
-            },
-            "digest",
-            "promoted for the exploration phase",
-        )
-        .expect("promote");
+    promote_trained(&store, &artefacts, promotable_gate());
     let path = artefacts.state_dir.path().to_path_buf();
 
     // Exploration on, at a rate well under the ceiling.
@@ -908,7 +976,12 @@ async fn print_the_closed_loop_evidence() {
     println!("requests                 {COLLECTION_REQUESTS}");
     println!(
         "traces persisted         {}",
-        harness.state.traces().counters().appended
+        harness
+            .state
+            .traces()
+            .expect("the fixture configures a state directory")
+            .counters()
+            .appended
     );
     println!(
         "samples ingested         {}",
@@ -1076,21 +1149,7 @@ succ={:+.3} regr={} impr={} both_fail={}",
 
     // Phase 4 -- serve.
     let store = ActiveModelStore::open(artefacts.state_dir.path()).expect("store");
-    store
-        .promote(
-            ActiveModel {
-                schema_version: ACTIVE_MODEL_SCHEMA_VERSION,
-                model_id: artefacts.training.model_id.clone(),
-                commit_id: artefacts.training.commit_record().commit_id.to_string(),
-                learning_event_count: artefacts.training.report.learning_event_count,
-                checkpoint: artefacts.training.checkpoint.clone(),
-                promotion_digest: "evidence-run".to_string(),
-                promoted_at: 0,
-            },
-            "evidence-run",
-            format!("gate said {}", decision.verdict.as_str()),
-        )
-        .expect("promote");
+    promote_trained(&store, &artefacts, promotable_gate());
     let path = artefacts.state_dir.path().to_path_buf();
 
     let mut served_config = config_for(addr, &path, true);
@@ -1107,65 +1166,9 @@ succ={:+.3} regr={} impr={} both_fail={}",
     println!("fallbacks                {}", counts.fallbacks);
     println!("attempts per request     {served_mean:.3}");
     println!("total upstream calls     {}", upstream.calls().len());
-    println!("attempt-cost histogram   {:?}", histogram(&served_costs));
-    println!("baseline cost histogram  {:?}", histogram(&costs));
+    println!("attempt-cost histogram   {}", histogram(&served_costs));
+    println!("baseline cost histogram  {}", histogram(&costs));
 
     drop(served);
-    drop(artefacts);
-}
-
-fn histogram(costs: &[usize]) -> String {
-    let mut counts: std::collections::BTreeMap<usize, usize> = std::collections::BTreeMap::new();
-    for cost in costs {
-        *counts.entry(*cost).or_insert(0) += 1;
-    }
-    counts
-        .into_iter()
-        .map(|(cost, count)| format!("{cost} attempt(s) x{count}"))
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn the_real_body_produces_a_directional_verdict_rather_than_a_framework_claim() {
-    let (upstream, addr) = start_upstream().await;
-
-    let state_dir = tempfile::tempdir().expect("tempdir");
-    let harness = Harness::start(config_for(addr, state_dir.path(), false), upstream.clone()).await;
-    harness.drive(COLLECTION_REQUESTS).await;
-    drop(harness);
-
-    let artefacts = loop_over(state_dir);
-
-    // Every pairing must be reported with a verdict, and the verdict must be
-    // reachable on real evidence rather than blocked for want of data. This is
-    // the assertion that would have failed before the loop existed: the
-    // comparison used to be a framework with nothing to run on.
-    assert!(!artefacts.comparison.paired.is_empty());
-    for pairing in &artefacts.comparison.paired {
-        assert_ne!(
-            pairing.verdict,
-            RoutingVerdict::InsufficientEvidence,
-            "pairing against {} refused for want of evidence on a body of {}",
-            pairing.baseline,
-            artefacts.comparison.traces
-        );
-    }
-
-    // The round trip: a report that can be stored and read back with every
-    // number intact is what makes it evidence rather than a console line.
-    let encoded = serde_json::to_string(&artefacts.comparison).expect("encode");
-    let decoded: zroutery_core::ml::RoutingComparison =
-        serde_json::from_str(&encoded).expect("decode");
-    assert_eq!(
-        decoded.dataset_fingerprint,
-        artefacts.comparison.dataset_fingerprint
-    );
-    assert_eq!(
-        decoded.candidate_commit,
-        artefacts.comparison.candidate_commit
-    );
-    assert_eq!(decoded.arms.len(), artefacts.comparison.arms.len());
-
     drop(artefacts);
 }

@@ -410,6 +410,11 @@ pub struct PassReport {
 /// Everything needed to say what a trained model is and where it came from.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TrainingReport {
+    /// The name this run committed the model under. Carried here so a decision
+    /// taken from a report is self-sufficient: the store that installs a model
+    /// needs the name and the event count to re-derive the commit id rather than
+    /// trusting the one it was handed.
+    pub model_id: String,
     /// Total samples handed in, across every partition.
     pub sample_count: usize,
     /// Distinct requests those samples belong to.
@@ -438,7 +443,6 @@ pub struct TrainingReport {
     /// The commit this run was authorised by: its parent, its learning-event
     /// count, its dataset fingerprint, its feature schema and the utility
     /// weights it will be scored under.
-    ///
     /// The fingerprint is of the *fitted partition*, not of the whole body.
     /// `source_fingerprint` is the whole body; keeping them apart is what lets a
     /// promotion gate check that the evidence and the model are about the same
@@ -675,6 +679,7 @@ pub fn run_training(
     let commit_id = final_commit.commit_id.clone();
 
     let report = TrainingReport {
+        model_id: config.model_id.clone(),
         sample_count: samples.len(),
         request_count,
         train_size: split.train_len(),
