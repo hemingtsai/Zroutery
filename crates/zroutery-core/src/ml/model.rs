@@ -1121,10 +1121,7 @@ mod tests {
     fn success_load_rejects_an_invalid_adagrad_accumulator() {
         let mut model = SuccessModel::new(FEATURE_DIMENSION);
         for i in 0..20 {
-            model.update(
-                &random_like_features(i),
-                if i % 2 == 0 { 1.0 } else { 0.0 },
-            );
+            model.update(&random_like_features(i), if i % 2 == 0 { 1.0 } else { 0.0 });
         }
         let valid = model.save();
         let first_accumulator = 1 + FEATURE_DIMENSION;

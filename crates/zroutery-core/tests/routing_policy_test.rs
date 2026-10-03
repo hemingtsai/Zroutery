@@ -2353,9 +2353,7 @@ fn empty_tier_uses_the_configured_fallback() {
         .unwrap();
     assert_eq!(candidates[0].exposed_id, "p1-std-m");
     assert!(matches!(decision.reason, DecisionReason::Escalated { .. }));
-    assert!(decision
-        .fallback_chain
-        .contains(&"fast-class".to_string()));
+    assert!(decision.fallback_chain.contains(&"fast-class".to_string()));
 
     // Degrading from an empty higher tier reaches the lower one.
     let degrade = PolicyFallback::Degrade {

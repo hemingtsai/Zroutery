@@ -760,10 +760,7 @@ fn natively_supported_capabilities_are_not_degraded() {
             &[Capability::Vision],
         )
         .unwrap();
-    assert!(
-        plan[0].degraded,
-        "a vision remediation is still observable"
-    );
+    assert!(plan[0].degraded, "a vision remediation is still observable");
 }
 
 #[test]

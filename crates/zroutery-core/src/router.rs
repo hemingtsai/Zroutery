@@ -540,8 +540,9 @@ impl Router {
                 {
                     remediated = true;
                 }
-                crate::ir::CapabilityState::Unknown
-                | crate::ir::CapabilityState::Unsupported => return false,
+                crate::ir::CapabilityState::Unknown | crate::ir::CapabilityState::Unsupported => {
+                    return false
+                }
             }
         }
         remediated

@@ -524,11 +524,8 @@ mod tests {
         // with the number of distinct names a caller invents.
         let stats = Stats::new(1);
         for i in 0..5_000 {
-            let mut b = RecordBuilder::new(
-                Dialect::OpenAI,
-                &format!("unknown-client-model-{i}"),
-                false,
-            );
+            let mut b =
+                RecordBuilder::new(Dialect::OpenAI, &format!("unknown-client-model-{i}"), false);
             b.fail(404, "no candidate for this model".into());
             stats.record(b.finish(5));
         }
@@ -556,10 +553,7 @@ mod tests {
             .per_model
             .iter()
             .any(|m| m.model_id == "resolved-model"));
-        assert!(summary
-            .per_model
-            .iter()
-            .any(|m| m.model_id == "unresolved"));
+        assert!(summary.per_model.iter().any(|m| m.model_id == "unresolved"));
     }
 
     #[test]
