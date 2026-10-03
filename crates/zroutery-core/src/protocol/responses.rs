@@ -225,10 +225,13 @@ fn decode_tool_result_output(value: &Value) -> Result<Vec<ToolResultPart>> {
 }
 
 fn decode_input_item(item: &Value, req: &mut ChatRequest) -> Result<()> {
-    let item_type = item
-        .get("type")
-        .and_then(Value::as_str)
-        .ok_or_else(|| Error::invalid("input item is missing `type`"))?;
+    // `type` is optional on the official EasyInputMessage: a bare object with
+    // `role` and `content` is a normal chat message.
+    let item_type = match item.get("type").and_then(Value::as_str) {
+        Some(kind) => kind,
+        None if item.get("role").is_some() || item.get("content").is_some() => "message",
+        None => return Err(Error::invalid("input item is missing `type`")),
+    };
     match item_type {
         "function_call" => {
             let arguments = item
@@ -401,12 +404,7 @@ fn decode_input_item(item: &Value, req: &mut ChatRequest) -> Result<()> {
             });
         }
         "message" => {
-            let role = match item.get("role").and_then(Value::as_str) {
-                Some("assistant") => Role::Assistant,
-                Some("user") => Role::User,
-                Some(other) => return Err(unsupported_content("message role", Some(other))),
-                None => return Err(Error::invalid("message item is missing `role`")),
-            };
+            let role = item.get("role").and_then(Value::as_str);
             let mut content = Vec::new();
             match item.get("content") {
                 Some(Value::Array(parts)) => {
@@ -508,12 +506,43 @@ fn decode_input_item(item: &Value, req: &mut ChatRequest) -> Result<()> {
                         }
                     }
                 }
+                Some(Value::String(text)) => content.push(ContentBlock::text(text)),
                 None | Some(Value::Null) => {}
                 Some(_) => {
-                    return Err(Error::invalid("message content must be an array or null"));
+                    return Err(Error::invalid(
+                        "message content must be a string, an array, or null",
+                    ));
                 }
             }
-            req.messages.push(Message { role, content });
+            match role {
+                Some("assistant") => req.messages.push(Message {
+                    role: Role::Assistant,
+                    content,
+                }),
+                Some("user") => req.messages.push(Message {
+                    role: Role::User,
+                    content,
+                }),
+                // system/developer messages are instructions, not turns.
+                Some("system") | Some("developer") => {
+                    let mut parts = Vec::new();
+                    for block in &content {
+                        match block {
+                            ContentBlock::Text { text, .. } => parts.push(text.clone()),
+                            _ => {
+                                return Err(Error::invalid(
+                                    "system and developer messages only support text content",
+                                ))
+                            }
+                        }
+                    }
+                    if !parts.is_empty() {
+                        req.system.push(SystemPart::new(parts.join("\n\n")));
+                    }
+                }
+                Some(other) => return Err(unsupported_content("message role", Some(other))),
+                None => return Err(Error::invalid("message item is missing `role`")),
+            }
         }
         other => return Err(unsupported_content("input item", Some(other))),
     }
