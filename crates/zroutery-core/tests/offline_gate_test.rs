@@ -976,8 +976,44 @@ fn a_holdout_smaller_than_the_floor_is_refused_as_insufficient_evidence() {
     else {
         panic!("expected an insufficient-evidence refusal");
     };
-    assert_eq!(context, "the holdout sample count");
+    // The floor is on decisions, not on the canonical rows they project to.
+    // The assertion used to pin "the holdout sample count"; that context named
+    // the wrong unit, because one decision produces a request row plus one row
+    // per attempt and a row floor is satisfied several times over.
+    assert_eq!(context, "the holdout decision count");
     assert!(observed < required);
+}
+
+#[test]
+fn the_holdout_floor_counts_decisions_and_not_canonical_rows() {
+    let trained = trained();
+    let recorded: Vec<RecordedDecision> = (0..4)
+        .map(|decision| record(&trained, decision, decision % AXIS.len()))
+        .collect();
+    let mut input = gate_input(&trained, recorded);
+    // Four decisions project to sixteen canonical rows (a request row plus one
+    // per attempt). A floor of five is therefore satisfied by the *rows* and
+    // not by the decisions, which is exactly the unit confusion this pins.
+    input.config.floors = EvidenceFloors {
+        min_replayed_decisions: 1,
+        min_holdout_decisions: 5,
+    };
+
+    let refusal = run_offline_gate(&input).expect_err("four decisions are not five");
+    let OfflineGateError::InsufficientEvidence {
+        context,
+        observed,
+        required,
+    } = refusal
+    else {
+        panic!("expected an insufficient-evidence refusal");
+    };
+    assert_eq!(context, "the holdout decision count");
+    assert_eq!(
+        observed, 4,
+        "the floor must count decisions, not the sixteen rows"
+    );
+    assert_eq!(required, 5);
 }
 
 #[test]
