@@ -5,7 +5,8 @@
 
 use serde_json::{json, Value};
 use zroutery_core::ir::{
-    ContentBlock, Dialect, Role, StopReason, StreamEvent, ToolResultPart, Usage,
+    ChatRequest, ContentBlock, Dialect, MediaSource, Message, Role, StopReason, StreamEvent,
+    ToolResultPart, Usage,
 };
 use zroutery_core::protocol::responses::{
     decode_request, decode_response, encode_request, ResponsesStreamEncoder, ResponsesStreamParser,
@@ -645,5 +646,81 @@ fn responses_response_with_tool_call_stops_for_tool_use() {
     assert_eq!(
         decode_response(text).unwrap().stop_reason,
         StopReason::EndTurn
+    );
+}
+
+// --------------------------------------------------------------- LD5
+
+#[test]
+fn assistant_history_uses_output_text_parts() {
+    let mut req = ChatRequest::new("m", Dialect::OpenAIResponses);
+    req.messages.push(Message {
+        role: Role::Assistant,
+        content: vec![ContentBlock::text("prior answer")],
+    });
+    req.messages.push(Message::user_text("new question"));
+
+    let wire = encode_request(&req, "upstream").unwrap();
+    let input = wire["input"].as_array().unwrap();
+    assert_eq!(input[0]["role"], "assistant");
+    assert_eq!(input[0]["content"][0]["type"], "output_text");
+    assert_eq!(input[0]["content"][0]["text"], "prior answer");
+    assert_eq!(input[1]["role"], "user");
+    assert_eq!(input[1]["content"][0]["type"], "input_text");
+
+    // The official shapes decode back to the same history.
+    let decoded = decode_request(wire).unwrap();
+    assert_eq!(decoded.messages.len(), 2);
+    assert_eq!(
+        decoded.messages[0].content[0].as_text(),
+        Some("prior answer")
+    );
+    assert_eq!(
+        decoded.messages[1].content[0].as_text(),
+        Some("new question")
+    );
+}
+
+#[test]
+fn image_parts_use_the_string_image_url() {
+    let mut req = ChatRequest::new("m", Dialect::OpenAIResponses);
+    req.messages.push(Message {
+        role: Role::User,
+        content: vec![
+            ContentBlock::Image {
+                source: MediaSource::Url {
+                    url: "https://example.com/a.png".into(),
+                },
+            },
+            ContentBlock::Image {
+                source: MediaSource::Base64 {
+                    media_type: "image/png".into(),
+                    data: "AAAA".into(),
+                },
+            },
+        ],
+    });
+
+    let wire = encode_request(&req, "upstream").unwrap();
+    let content = wire["input"][0]["content"].as_array().unwrap();
+    assert_eq!(content[0]["type"], "input_image");
+    assert_eq!(content[0]["image_url"], "https://example.com/a.png");
+    assert_eq!(content[1]["image_url"], "data:image/png;base64,AAAA");
+
+    let decoded = decode_request(wire).unwrap();
+    let images: Vec<String> = decoded.messages[0]
+        .content
+        .iter()
+        .filter_map(|block| match block {
+            ContentBlock::Image { source } => Some(source.to_data_url()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        images,
+        vec![
+            "https://example.com/a.png".to_string(),
+            "data:image/png;base64,AAAA".to_string()
+        ]
     );
 }
