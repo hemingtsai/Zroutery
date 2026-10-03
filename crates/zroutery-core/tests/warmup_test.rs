@@ -24,7 +24,7 @@ use zroutery_core::failure::FailureClass;
 use zroutery_core::feedback::DataOrigin;
 use zroutery_core::ml::coordinator::CoordinatorConfig;
 use zroutery_core::ml::dataset::{
-    outcome_to_dataset_sample, try_samples_from_outcome, OutcomeTrainingSample,
+    outcome_to_dataset_sample, try_samples_from_outcome, OutcomeTrainingSample, SampleScope,
     TrainingSample as DatasetTrainingSample,
 };
 use zroutery_core::ml::decision_contract::{DecisionDimension, DecisionModel, DecisionModelStates};
@@ -37,8 +37,8 @@ use zroutery_core::ml::model_identity::{ModelEnsemble, ReplayError};
 use zroutery_core::ml::reward::RewardPolicy;
 use zroutery_core::ml::shadow::{ModelEnsemblePredictor, ShadowDecision, ShadowEngine};
 use zroutery_core::ml::warmup::{
-    partition_snapshot, run_warmup, WarmupConfig, WarmupError, WarmupOutcome, WarmupVerdict,
-    BASELINE_DESCRIPTION,
+    head_scope, partition_snapshot, project_for_training, run_warmup, HeadScope, WarmupConfig,
+    WarmupError, WarmupOutcome, WarmupVerdict, BASELINE_DESCRIPTION,
 };
 use zroutery_core::outcome::{Attempt, FinalStatus, Outcome};
 
@@ -196,6 +196,75 @@ fn multi_row_request(index: usize) -> Vec<OutcomeTrainingSample> {
 /// request row under one request id.
 fn multi_row_snapshot(requests: usize) -> Vec<OutcomeTrainingSample> {
     (0..requests).flat_map(multi_row_request).collect()
+}
+
+/// One real request that fell back: candidate A failed after 1000 ms, candidate
+/// B served in 100 ms, and the request as a whole took 1100 ms. This is the
+/// shape whose attempt row and request row share B's feature vector while
+/// carrying different durations.
+fn mixed_scope_outcome(timestamp: i64) -> Outcome {
+    let failed = Attempt {
+        attempt_id: "attempt-a".to_string(),
+        candidate_model: "model-a".to_string(),
+        candidate_provider: "provider-a".to_string(),
+        started_at: timestamp,
+        completed_at: timestamp + 1,
+        latency_ms: 1000.0,
+        ttft_ms: None,
+        success: false,
+        failure_class: Some(FailureClass::RateLimit),
+        failure_message: Some("fixture rate limit".to_string()),
+        http_status: Some(429),
+        rectified: false,
+    };
+    let served = Attempt {
+        attempt_id: "attempt-b".to_string(),
+        candidate_model: "model-b".to_string(),
+        candidate_provider: "provider-b".to_string(),
+        started_at: timestamp + 1,
+        completed_at: timestamp + 3,
+        latency_ms: 100.0,
+        ttft_ms: Some(30.0),
+        success: true,
+        failure_class: None,
+        failure_message: None,
+        http_status: Some(200),
+        rectified: false,
+    };
+    Outcome::builder(format!("req-mix-{timestamp}"))
+        .initial("model-a", "provider-a")
+        .final_candidate("model-b", "provider-b")
+        .dialect("openai")
+        .streaming(true)
+        .attempt(failed)
+        .attempt(served)
+        .total_latency_ms(1100.0)
+        .ttft_ms(30.0)
+        .cost(Some(0.02), Some(0.009))
+        .timestamp(timestamp)
+        .build()
+}
+
+/// The canonical rows of [`mixed_scope_outcome`]: A's attempt, B's attempt, and
+/// the request as a whole, with B's vector retained for the request scope the
+/// way the decision-time collection path does.
+fn mixed_scope_rows(timestamp: i64) -> Vec<OutcomeTrainingSample> {
+    let outcome = mixed_scope_outcome(timestamp);
+    try_samples_from_outcome(
+        &outcome,
+        &[
+            fixture_features(0.15),
+            fixture_features(0.85),
+            fixture_features(0.85),
+        ],
+        DataOrigin::Native,
+    )
+    .expect("the canonical generator emits the attempt and request rows")
+}
+
+/// Whether two optional targets disagree: both present and different.
+fn optional_targets_disagree(left: Option<f64>, right: Option<f64>) -> bool {
+    matches!((left, right), (Some(left), Some(right)) if left != right)
 }
 
 /// The serialized per-dimension states of a trained ensemble, for a byte-level
@@ -938,11 +1007,12 @@ fn the_decision_contract_refuses_states_the_commit_does_not_hold() {
 // Gate 5 of the brief: label discipline through the projection
 // ---------------------------------------------------------------------------
 
-/// GATE 5 (labels): the projection copies the targets verbatim. Whatever the
-/// canonical sample says about its own dimensions is exactly what the accepted
-/// training seam receives.
+/// GATE 5 (labels): the raw canonical-to-legacy conversion copies the targets
+/// verbatim. Whatever the canonical sample says about its own dimensions is
+/// exactly what the conversion carries; warmup's training projection then
+/// applies the per-head scope on top of it.
 #[test]
-fn the_projection_carries_the_targets_verbatim() {
+fn the_raw_legacy_conversion_carries_the_targets_verbatim() {
     for terminal in [
         Terminal::Success,
         Terminal::Failed,
@@ -955,13 +1025,114 @@ fn the_projection_carries_the_targets_verbatim() {
         assert_eq!(
             serde_json::to_string(&legacy.targets).expect("targets serialize"),
             expected,
-            "{terminal:?}: the projection must not alter a single target"
+            "{terminal:?}: the conversion must not alter a single target"
         );
         assert_eq!(legacy.sample_id, canonical.sample_id);
         assert_eq!(legacy.schema_version, canonical.schema_version);
         assert_eq!(legacy.features, canonical.features);
         assert_eq!(legacy.feedback.len(), canonical.feedback_signals().len());
     }
+}
+
+/// GATE 5 (labels): the scope each head consumes is explicit, and the whole
+/// request heads never take a target from an attempt row.
+#[test]
+fn each_head_consumes_an_explicit_scope() {
+    assert_eq!(
+        head_scope(DecisionDimension::Latency),
+        HeadScope::Request,
+        "latency is the whole request's duration"
+    );
+    assert_eq!(head_scope(DecisionDimension::Ttft), HeadScope::Request);
+    assert_eq!(head_scope(DecisionDimension::Cost), HeadScope::Request);
+    assert_eq!(
+        head_scope(DecisionDimension::Success),
+        HeadScope::EveryRow,
+        "attempt rows carry the candidate's own result and request rows the terminal one"
+    );
+
+    let canonical = mixed_scope_rows(1_700_000_000);
+    assert_eq!(canonical.len(), 3);
+    for row in &canonical {
+        let projected = project_for_training(row);
+        match row.scope {
+            SampleScope::Request => {
+                assert_eq!(projected.targets, row.targets, "a request row is copied");
+                assert!(projected.targets.latency_ms.is_some());
+                assert!(projected.targets.ttft_ms.is_some());
+                assert!(projected.targets.cost.is_some());
+            }
+            SampleScope::Attempt { .. } => {
+                assert!(
+                    projected.targets.latency_ms.is_none(),
+                    "an attempt row must not carry a whole-request latency target"
+                );
+                assert!(projected.targets.ttft_ms.is_none());
+                assert!(projected.targets.cost.is_none());
+            }
+        }
+    }
+}
+
+/// GATE 5 (labels): one request no longer supervises one head with two
+/// durations. B's attempt row and B's request row share a feature vector, and
+/// after projection they no longer disagree on latency, TTFT, cost, or success.
+#[test]
+fn the_two_rows_of_one_request_no_longer_disagree_on_a_head() {
+    let canonical = mixed_scope_rows(1_700_000_000);
+    let projected: Vec<DatasetTrainingSample> =
+        canonical.iter().map(project_for_training).collect();
+
+    // The fixture really does repeat B's feature vector across two scopes.
+    let b_attempt = &projected[1];
+    let b_request = &projected[2];
+    assert_eq!(b_attempt.features, b_request.features);
+    assert_ne!(b_attempt.targets.latency_ms, b_request.targets.latency_ms);
+
+    // The whole-request total is the only latency label B's features carry.
+    assert_eq!(b_request.targets.latency_ms, Some(1100.0));
+    assert_eq!(b_request.targets.ttft_ms, Some(30.0));
+    assert_eq!(b_request.targets.cost, Some(0.009));
+    assert_eq!(b_attempt.targets.latency_ms, None);
+    assert_eq!(b_attempt.targets.ttft_ms, None);
+    assert_eq!(b_attempt.targets.cost, None);
+    assert!(b_attempt.targets.success);
+    assert!(b_request.targets.success);
+
+    // A's failed attempt keeps its own failure evidence and no timing.
+    assert!(!projected[0].targets.success);
+    assert_eq!(projected[0].targets.latency_ms, None);
+
+    // No two rows with an identical feature vector disagree on any head.
+    for (index, left) in projected.iter().enumerate() {
+        for right in projected.iter().skip(index + 1) {
+            if left.features != right.features {
+                continue;
+            }
+            assert_eq!(
+                left.targets.success, right.targets.success,
+                "identical features disagree on success"
+            );
+            assert!(
+                !optional_targets_disagree(left.targets.latency_ms, right.targets.latency_ms),
+                "identical features disagree on latency: {:?} vs {:?}",
+                left.targets.latency_ms,
+                right.targets.latency_ms
+            );
+            assert!(!optional_targets_disagree(
+                left.targets.ttft_ms,
+                right.targets.ttft_ms
+            ));
+            assert!(!optional_targets_disagree(
+                left.targets.cost,
+                right.targets.cost
+            ));
+        }
+    }
+
+    // The cost head keeps its supervision: request rows still carry the captured
+    // total cost, which attempt rows never have.
+    assert!(projected.iter().any(|row| row.targets.cost.is_some()));
 }
 
 /// GATE 5 (labels): a failed, cancelled, or interrupted request cannot become a
