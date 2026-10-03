@@ -461,13 +461,7 @@ pub trait AgentAdapter: Send + Sync {
     fn write_config(&self, snapshot: &AgentConfigSnapshot) -> Result<(), String> {
         let json = serde_json::to_string_pretty(&snapshot.raw)
             .map_err(|e| format!("failed to serialize config: {e}"))?;
-        if let Some(parent) = snapshot.config_path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("failed to create dir {}: {e}", parent.display()))?;
-        }
-        std::fs::write(&snapshot.config_path, json)
-            .map_err(|e| format!("failed to write {}: {e}", snapshot.config_path.display()))?;
-        Ok(())
+        write_config_atomic(&snapshot.config_path, json.as_bytes())
     }
 }
 
@@ -526,13 +520,7 @@ impl AgentAdapter for ClaudeAdapter {
             serde_json::to_string_pretty(&raw).map_err(|e| format!("serialize failed: {e}"))?;
         let hash = compute_hash(json.as_bytes());
         // Atomic write: write to temp file, then rename
-        let path = &snapshot.config_path;
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| format!("create dir failed: {e}"))?;
-        }
-        let tmp = path.with_extension("json.tmp");
-        std::fs::write(&tmp, &json).map_err(|e| format!("write failed: {e}"))?;
-        std::fs::rename(&tmp, path).map_err(|e| format!("rename failed: {e}"))?;
+        write_config_atomic(&snapshot.config_path, json.as_bytes())?;
         Ok(AgentConfigSnapshot {
             agent_type: snapshot.agent_type,
             config_path: snapshot.config_path.clone(),
@@ -619,13 +607,7 @@ impl AgentAdapter for CodexAdapter {
         let json =
             serde_json::to_string_pretty(&raw).map_err(|e| format!("serialize failed: {e}"))?;
         let hash = compute_hash(json.as_bytes());
-        let path = &snapshot.config_path;
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| format!("create dir failed: {e}"))?;
-        }
-        let tmp = path.with_extension("json.tmp");
-        std::fs::write(&tmp, &json).map_err(|e| format!("write failed: {e}"))?;
-        std::fs::rename(&tmp, path).map_err(|e| format!("rename failed: {e}"))?;
+        write_config_atomic(&snapshot.config_path, json.as_bytes())?;
         Ok(AgentConfigSnapshot {
             agent_type: snapshot.agent_type,
             config_path: snapshot.config_path.clone(),
@@ -712,13 +694,7 @@ impl AgentAdapter for GeminiAdapter {
         let json =
             serde_json::to_string_pretty(&raw).map_err(|e| format!("serialize failed: {e}"))?;
         let hash = compute_hash(json.as_bytes());
-        let path = &snapshot.config_path;
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| format!("create dir failed: {e}"))?;
-        }
-        let tmp = path.with_extension("json.tmp");
-        std::fs::write(&tmp, &json).map_err(|e| format!("write failed: {e}"))?;
-        std::fs::rename(&tmp, path).map_err(|e| format!("rename failed: {e}"))?;
+        write_config_atomic(&snapshot.config_path, json.as_bytes())?;
         Ok(AgentConfigSnapshot {
             agent_type: snapshot.agent_type,
             config_path: snapshot.config_path.clone(),
@@ -799,6 +775,88 @@ fn home_dir() -> Result<std::path::PathBuf, String> {
         return Ok(std::path::PathBuf::from(profile));
     }
     Err("could not determine home directory (HOME/USERPROFILE not set)".into())
+}
+
+/// Write `bytes` to `path` atomically, preserving the permissions of the file
+/// being replaced.
+///
+/// The replacement is staged in a temporary file in the same directory so the
+/// rename is atomic, and that temporary file is created with restrictive
+/// permissions (0600 on Unix) so a config holding credentials is never
+/// readable more widely than the file it replaces. When the destination
+/// already exists, its permission bits are re-applied to the staged file
+/// before the rename: replacing an existing 0600 config must not silently
+/// widen it to the umask default of 0644.
+fn write_config_atomic(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("failed to create dir {}: {e}", parent.display()))?;
+    }
+
+    let original_permissions = std::fs::metadata(path).ok().map(|meta| meta.permissions());
+    let tmp = temp_sibling(path);
+
+    if let Err(err) = write_restricted(&tmp, bytes) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(err);
+    }
+
+    if let Some(permissions) = original_permissions {
+        if let Err(e) = std::fs::set_permissions(&tmp, permissions) {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(format!(
+                "failed to preserve permissions for {}: {e}",
+                path.display()
+            ));
+        }
+    }
+
+    if let Err(e) = std::fs::rename(&tmp, path) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(format!("failed to replace {}: {e}", path.display()));
+    }
+
+    Ok(())
+}
+
+/// Create `path` with restrictive permissions and write `bytes` into it.
+#[cfg(unix)]
+fn write_restricted(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)
+        .map_err(|e| format!("failed to create {}: {e}", path.display()))?;
+    file.write_all(bytes)
+        .map_err(|e| format!("failed to write {}: {e}", path.display()))?;
+    file.sync_all()
+        .map_err(|e| format!("failed to flush {}: {e}", path.display()))?;
+    Ok(())
+}
+
+/// Create `path` and write `bytes` into it.
+#[cfg(not(unix))]
+fn write_restricted(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
+    std::fs::write(path, bytes).map_err(|e| format!("failed to write {}: {e}", path.display()))
+}
+
+/// A unique temporary file name next to `path`, in the same directory so the
+/// final rename cannot cross a filesystem boundary.
+fn temp_sibling(path: &std::path::Path) -> std::path::PathBuf {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    let sequence = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "config".to_string());
+    path.with_file_name(format!(".{name}.{}.{sequence}.tmp", std::process::id()))
 }
 
 /// Compute a hex-encoded hash of the given byte slice for change detection.
@@ -1461,14 +1519,6 @@ mod tests {
             };
             self.write_config(&restored)
         }
-
-        fn write_config(&self, snapshot: &AgentConfigSnapshot) -> Result<(), String> {
-            let json = serde_json::to_string_pretty(&snapshot.raw)
-                .map_err(|e| format!("serialize failed: {e}"))?;
-            std::fs::write(&snapshot.config_path, json)
-                .map_err(|e| format!("write failed: {e}"))?;
-            Ok(())
-        }
     }
 
     /// Read a JSON config file from disk.
@@ -1979,6 +2029,65 @@ mod tests {
         assert_ne!(claude_path, codex_path);
         assert_ne!(claude_path, gemini_path);
         assert_ne!(codex_path, gemini_path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn apply_patch_preserves_restrictive_file_mode() {
+        use std::os::unix::fs::PermissionsExt;
+
+        super::isolate_agent_home();
+        let home = super::isolated_agent_home().expect("isolated agent home");
+        let path = home.join(".claude.json");
+        std::fs::write(&path, r#"{"model":"gpt-4"}"#).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        let adapter = ClaudeAdapter;
+        let snapshot = adapter.read_config().unwrap();
+        adapter
+            .apply_patch(
+                &snapshot,
+                &[ManagedField {
+                    path: "model".into(),
+                    value: serde_json::json!("claude-3-opus"),
+                }],
+            )
+            .unwrap();
+
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "existing mode was widened to {mode:o}");
+
+        let disk: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(disk["model"], serde_json::json!("claude-3-opus"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn new_config_is_created_with_restrictive_mode() {
+        use std::os::unix::fs::PermissionsExt;
+
+        super::isolate_agent_home();
+        let adapter = ClaudeAdapter;
+        let snapshot = adapter.read_config().unwrap();
+        assert!(!snapshot.config_path.exists());
+
+        adapter
+            .apply_patch(
+                &snapshot,
+                &[ManagedField {
+                    path: "model".into(),
+                    value: serde_json::json!("claude-3-opus"),
+                }],
+            )
+            .unwrap();
+
+        let mode = std::fs::metadata(&snapshot.config_path)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600, "new config mode was {mode:o}");
     }
 
     #[test]
