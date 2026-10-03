@@ -202,6 +202,50 @@ pub struct RuntimeObservation {
 }
 
 impl RuntimeObservation {
+    /// The timestamp of the most recent signal this observation carries.
+    fn last_observed_at(&self) -> Option<i64> {
+        [
+            self.health.success_rate.observed_at,
+            self.latency.ttft_ms.observed_at,
+            self.latency.total_ms.observed_at,
+            self.latency.tokens_per_sec.observed_at,
+            self.cost.estimated.observed_at,
+            self.cost.actual.observed_at,
+            self.cost.estimation_error.observed_at,
+        ]
+        .into_iter()
+        .flatten()
+        .max()
+    }
+
+    /// Freshness derived from this observation's own timestamps, as of `now`.
+    ///
+    /// Freshness answers "when was this record last updated", so it follows the
+    /// newest signal rather than a value stored at write time: an observation
+    /// that nobody has touched for half an hour reports `Stale` or `Unknown`
+    /// however fresh it was when it was recorded.
+    ///
+    /// The mixed case is deliberate. A failure recorded just now keeps the
+    /// record `Fresh` even when the last latency sample is much older — the
+    /// record *was* just updated — because the failure is the newer evidence.
+    /// The latency value does not hide behind that label: each [`Signal`] still
+    /// reports its own age through [`Signal::is_stale`], which is what a caller
+    /// that needs per-signal freshness should read.
+    pub fn freshness_at(&self, now: i64) -> ObservationFreshness {
+        match self.last_observed_at() {
+            Some(ts) => ObservationFreshness::from_age_secs(now.saturating_sub(ts)),
+            None => ObservationFreshness::Unknown,
+        }
+    }
+
+    /// Recompute [`Self::freshness`] from the observation's timestamps.
+    ///
+    /// The store's read path calls this on every snapshot it hands out, so the
+    /// cached field never outlives the evidence behind it.
+    pub fn refresh_freshness(&mut self, now: i64) {
+        self.freshness = self.freshness_at(now);
+    }
+
     /// Update health after a successful request.
     pub fn record_success(&mut self, latency_ms: f64, ttft_ms: Option<f64>) {
         self.health.consecutive_failures = 0;
@@ -215,7 +259,7 @@ impl RuntimeObservation {
         if let Some(ttft) = ttft_ms {
             self.latency.ttft_ms = Signal::new(ttft);
         }
-        self.freshness = ObservationFreshness::Fresh;
+        self.refresh_freshness(chrono::Utc::now().timestamp());
     }
 
     /// Update health after a failed request.
@@ -234,7 +278,7 @@ impl RuntimeObservation {
             (self.health.total_requests - self.health.total_failures) as f64
                 / self.health.total_requests as f64,
         );
-        self.freshness = ObservationFreshness::Fresh;
+        self.refresh_freshness(chrono::Utc::now().timestamp());
     }
 }
 
@@ -271,30 +315,43 @@ impl ObservationStore {
     }
 
     /// Get observation for a specific provider+model pair.
+    ///
+    /// The returned freshness is derived from the stored timestamps as of now,
+    /// so an observation that has not been updated for a while comes back aged
+    /// rather than as `Fresh` forever.
     pub fn get(&self, model_id: &str, provider_id: &str) -> RuntimeObservation {
-        crate::sync::lock(&self.observations)
+        let now = chrono::Utc::now().timestamp();
+        let mut observation = crate::sync::lock(&self.observations)
             .get(&Self::key(model_id, provider_id))
             .cloned()
             .unwrap_or_else(|| RuntimeObservation {
                 model_id: model_id.to_string(),
                 provider_id: provider_id.to_string(),
                 ..Default::default()
-            })
+            });
+        observation.refresh_freshness(now);
+        observation
     }
 
     /// Get the best observation for a model across all providers.
-    /// Returns the observation with the highest health score.
+    /// Returns the observation with the highest health score, with freshness
+    /// derived from its timestamps as of now.
     pub fn get_best(&self, model_id: &str) -> Option<RuntimeObservation> {
-        crate::sync::lock(&self.observations)
+        let now = chrono::Utc::now().timestamp();
+        let mut candidates: Vec<RuntimeObservation> = crate::sync::lock(&self.observations)
             .iter()
             .filter(|(k, _)| k.model_id == model_id)
             .map(|(_, v)| v.clone())
-            .max_by(|a, b| {
-                a.health
-                    .score()
-                    .partial_cmp(&b.health.score())
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
+            .collect();
+        for observation in &mut candidates {
+            observation.refresh_freshness(now);
+        }
+        candidates.into_iter().max_by(|a, b| {
+            a.health
+                .score()
+                .partial_cmp(&b.health.score())
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
     }
 
     /// Record a successful request.
@@ -684,6 +741,86 @@ mod tests {
         assert!(s.is_stale(0));
         assert!(s.is_stale(999999));
         assert!(!s.is_known());
+    }
+
+    /// Move every signal in a stored observation `age_secs` into the past.
+    ///
+    /// Explicit age computation rather than a real sleep, so the test states the
+    /// elapsed time instead of waiting for it.
+    fn backdate(store: &ObservationStore, model_id: &str, provider_id: &str, age_secs: i64) {
+        let when = chrono::Utc::now().timestamp() - age_secs;
+        let mut map = crate::sync::lock(&store.observations);
+        let obs = map
+            .get_mut(&ObservationStore::key(model_id, provider_id))
+            .expect("the observation was recorded");
+        for observed in [
+            &mut obs.health.success_rate.observed_at,
+            &mut obs.latency.ttft_ms.observed_at,
+            &mut obs.latency.total_ms.observed_at,
+            &mut obs.latency.tokens_per_sec.observed_at,
+            &mut obs.cost.estimated.observed_at,
+            &mut obs.cost.actual.observed_at,
+            &mut obs.cost.estimation_error.observed_at,
+        ] {
+            if observed.is_some() {
+                *observed = Some(when);
+            }
+        }
+    }
+
+    #[test]
+    fn a_stored_observation_ages_out_on_read() {
+        let store = ObservationStore::new();
+        store.record_success("m1", "p1", 120.0, Some(40.0));
+        assert_eq!(store.get("m1", "p1").freshness, ObservationFreshness::Fresh);
+
+        // The store hands out the age of the evidence, not the value that was
+        // true when it was written.
+        backdate(&store, "m1", "p1", 31);
+        assert_eq!(
+            store.get("m1", "p1").freshness,
+            ObservationFreshness::Recent
+        );
+
+        backdate(&store, "m1", "p1", 400);
+        assert_eq!(store.get("m1", "p1").freshness, ObservationFreshness::Stale);
+
+        backdate(&store, "m1", "p1", 2000);
+        assert_eq!(
+            store.get("m1", "p1").freshness,
+            ObservationFreshness::Unknown
+        );
+    }
+
+    #[test]
+    fn a_failure_recorded_now_leaves_the_older_latency_sample_stale() {
+        let store = ObservationStore::new();
+        store.record_success("m1", "p1", 120.0, Some(40.0));
+        // The only latency evidence is ten minutes old...
+        backdate(&store, "m1", "p1", 600);
+        // ...when a failure arrives.
+        store.record_failure("m1", "p1");
+
+        let obs = store.get("m1", "p1");
+        // The record was updated just now, so it is fresh: the failure is the
+        // newer evidence and the health feature may rely on it.
+        assert_eq!(obs.freshness, ObservationFreshness::Fresh);
+        // The latency sample is not laundered by that label — it still reports
+        // its own age for any caller that needs per-signal freshness.
+        assert!(obs.latency.total_ms.is_stale(30));
+        assert!(obs.latency.ttft_ms.is_stale(30));
+    }
+
+    #[test]
+    fn get_best_reports_the_aged_freshness_too() {
+        let store = ObservationStore::new();
+        store.record_success("m1", "p1", 100.0, None);
+        store.record_success("m1", "p2", 900.0, None);
+        backdate(&store, "m1", "p1", 2000);
+        backdate(&store, "m1", "p2", 2000);
+
+        let best = store.get_best("m1").expect("an observation exists");
+        assert_eq!(best.freshness, ObservationFreshness::Unknown);
     }
 
     // =======================================================================
