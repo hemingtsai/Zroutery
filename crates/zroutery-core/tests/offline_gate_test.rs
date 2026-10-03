@@ -641,6 +641,62 @@ fn a_failed_request_classifies_through_the_accepted_table() {
 }
 
 #[test]
+fn an_outcome_correlated_to_another_request_is_refused_before_the_replay() {
+    let trained = trained();
+    let mut recorded = fixture(&trained);
+    // The decision and its Outcome describe different requests. The canonical
+    // conversion keys on candidate identity alone, so nothing downstream would
+    // notice: the foreign request's success, cost and latency would simply be
+    // attributed to this decision.
+    recorded[5].outcome.request_id = "foreign-request-0005".to_string();
+
+    let refusal = run_offline_gate(&gate_input(&trained, recorded)).expect_err(
+        "an Outcome for another request is not evidence about this decision and must not be measured",
+    );
+    let OfflineGateError::OutcomeDecisionMismatch {
+        decision_id,
+        outcome_id,
+        detail,
+    } = refusal
+    else {
+        panic!("expected an outcome-correlation refusal");
+    };
+    assert_eq!(decision_id, "dec-0005");
+    assert_eq!(outcome_id, "out-0005");
+    assert!(
+        detail.contains("foreign-request-0005") && detail.contains("req-0005"),
+        "the refusal must name both requests so the mispairing is actionable: {detail}"
+    );
+}
+
+#[test]
+fn an_outcome_that_names_another_decision_is_refused_before_the_replay() {
+    let trained = trained();
+    let mut recorded = fixture(&trained);
+    // The request ids agree, so only the decision identity distinguishes the
+    // pair. It is optional on the Outcome, and when it is present it must name
+    // the decision being replayed.
+    recorded[7].outcome.decision_id = Some("dec-foreign".to_string());
+
+    let refusal = run_offline_gate(&gate_input(&trained, recorded))
+        .expect_err("an Outcome naming another decision is foreign even when its request matches");
+    let OfflineGateError::OutcomeDecisionMismatch {
+        decision_id,
+        outcome_id,
+        detail,
+    } = refusal
+    else {
+        panic!("expected an outcome-correlation refusal");
+    };
+    assert_eq!(decision_id, "dec-0007");
+    assert_eq!(outcome_id, "out-0007");
+    assert!(
+        detail.contains("dec-foreign") && detail.contains("dec-0007"),
+        "the refusal must name both decision ids: {detail}"
+    );
+}
+
+#[test]
 fn a_replay_that_selects_a_candidate_the_outcome_never_attempted_is_a_refusal() {
     let trained = trained();
     // A single-candidate retained input: the replay can only select it.

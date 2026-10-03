@@ -275,6 +275,28 @@ pub enum OfflineGateError {
     #[error("the retained input of decision {decision_id} is incomplete: {reason}")]
     RetainedInputIncomplete { decision_id: String, reason: String },
 
+    // -- the recorded pair --
+    /// The canonical Outcome does not belong to the decision it was paired
+    /// with: its request or decision identity names a different one.
+    ///
+    /// Reached before the replay and before any canonical label exists, because
+    /// a foreign Outcome's success, failure, cost and latency would otherwise be
+    /// attributed to this decision and carried into the holdout, the calibration
+    /// measurement and the release verdict.
+    ///
+    /// [`DatasetStore::ingest`](crate::ml::dataset::DatasetStore::ingest)
+    /// refuses this pairing before it converts a sample; this gate calls the
+    /// conversion directly, so it has to make the same correlation check itself
+    /// rather than inherit it.
+    #[error(
+        "the canonical Outcome {outcome_id} does not belong to decision {decision_id}: {detail}"
+    )]
+    OutcomeDecisionMismatch {
+        decision_id: String,
+        outcome_id: String,
+        detail: String,
+    },
+
     // -- the replay --
     /// The replay produced no decision at all. The accepted seam answers `None`
     /// both when it is disabled and when it contained a fault, so the gate
@@ -1572,6 +1594,51 @@ fn build_predictor(
 // 3/4. one decision
 // ---------------------------------------------------------------------------
 
+/// Refuse a decision/Outcome pair whose identities disagree.
+///
+/// The gate converts the Outcome into canonical samples itself rather than
+/// through [`DatasetStore::ingest`](crate::ml::dataset::DatasetStore::ingest),
+/// so it does not inherit that path's correlation guard. This is that guard,
+/// applied to the retained pair before the replay and before any label exists.
+///
+/// The *request* id is always present on both sides, so it is compared
+/// unconditionally: an Outcome for another request would be attributed to this
+/// decision in full. The *decision* id is optional on the Outcome — a request
+/// that bypassed routing records none — so it is compared only when the record
+/// names one; an Outcome that names a different decision is foreign even if the
+/// request id happens to match.
+fn require_outcome_identity(
+    recorded: &RecordedDecision,
+    decision_id: &str,
+) -> Result<(), OfflineGateError> {
+    let outcome = &recorded.outcome;
+    let request_id = recorded.decision.actual.request_id.as_str();
+    if outcome.request_id != request_id {
+        return Err(OfflineGateError::OutcomeDecisionMismatch {
+            decision_id: decision_id.to_string(),
+            outcome_id: outcome.outcome_id.clone(),
+            detail: format!(
+                "it is correlated to request '{}' but the decision being replayed is request \
+                 '{request_id}'",
+                outcome.request_id
+            ),
+        });
+    }
+    if let Some(outcome_decision_id) = outcome.decision_id.as_deref() {
+        if outcome_decision_id != decision_id {
+            return Err(OfflineGateError::OutcomeDecisionMismatch {
+                decision_id: decision_id.to_string(),
+                outcome_id: outcome.outcome_id.clone(),
+                detail: format!(
+                    "it names decision '{outcome_decision_id}' but the decision being replayed is \
+                     '{decision_id}'"
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
 /// Replay one recorded decision and establish everything the gate claims about
 /// it.
 fn replay_one(
@@ -1582,6 +1649,10 @@ fn replay_one(
 ) -> Result<ReplayEvidence, OfflineGateError> {
     let decision_id = recorded.input().decision_id.clone();
     let recorded_decision = &recorded.decision;
+
+    // The pair is checked before anything else, because every claim below
+    // treats the Outcome as the terminal fact about *this* decision.
+    require_outcome_identity(recorded, &decision_id)?;
 
     if recorded_decision.input().candidates.is_empty() {
         return Err(OfflineGateError::RetainedInputAbsent {
