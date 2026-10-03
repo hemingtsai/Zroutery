@@ -24,7 +24,8 @@ use zroutery_core::failure::FailureClass;
 use zroutery_core::feedback::DataOrigin;
 use zroutery_core::ml::coordinator::CoordinatorConfig;
 use zroutery_core::ml::dataset::{
-    outcome_to_dataset_sample, OutcomeTrainingSample, TrainingSample as DatasetTrainingSample,
+    outcome_to_dataset_sample, try_samples_from_outcome, OutcomeTrainingSample,
+    TrainingSample as DatasetTrainingSample,
 };
 use zroutery_core::ml::decision_contract::{DecisionDimension, DecisionModel, DecisionModelStates};
 use zroutery_core::ml::decision_engine::DecisionEngine;
@@ -36,7 +37,8 @@ use zroutery_core::ml::model_identity::{ModelEnsemble, ReplayError};
 use zroutery_core::ml::reward::RewardPolicy;
 use zroutery_core::ml::shadow::{ModelEnsemblePredictor, ShadowDecision, ShadowEngine};
 use zroutery_core::ml::warmup::{
-    run_warmup, WarmupConfig, WarmupError, WarmupOutcome, WarmupVerdict, BASELINE_DESCRIPTION,
+    partition_snapshot, run_warmup, WarmupConfig, WarmupError, WarmupOutcome, WarmupVerdict,
+    BASELINE_DESCRIPTION,
 };
 use zroutery_core::outcome::{Attempt, FinalStatus, Outcome};
 
@@ -167,6 +169,33 @@ fn shifted_across_split_snapshot(rows: usize, split: usize) -> Vec<OutcomeTraini
             sample(quality, terminal, 1_700_000_000 + index as i64)
         })
         .collect()
+}
+
+/// One canonical request in the multi-row shape production collects: an
+/// attempt-scope row and a request-scope row that share a timestamp and a
+/// request id. `outcome_to_dataset_sample` emits a single request row, so the
+/// shared canonical generator is the only honest source of this shape.
+fn multi_row_request(index: usize) -> Vec<OutcomeTrainingSample> {
+    let quality = if index % 2 == 0 { 0.15 } else { 0.85 };
+    let terminal = if index % 2 == 0 {
+        Terminal::Failed
+    } else {
+        Terminal::Success
+    };
+    let outcome = fixture_outcome(quality, terminal, 1_700_000_000 + index as i64);
+    let features = fixture_features(quality);
+    try_samples_from_outcome(
+        &outcome,
+        &[features.clone(), features],
+        DataOrigin::Native,
+    )
+    .expect("the canonical generator emits one attempt row and one request row")
+}
+
+/// A dataset of `requests` requests, each contributing an attempt row and a
+/// request row under one request id.
+fn multi_row_snapshot(requests: usize) -> Vec<OutcomeTrainingSample> {
+    (0..requests).flat_map(multi_row_request).collect()
 }
 
 /// The serialized per-dimension states of a trained ensemble, for a byte-level
@@ -516,6 +545,157 @@ fn the_holdout_is_disjoint_from_training_and_holds_the_later_rows() {
     }
     assert_eq!(latest, snapshot.len() - 1);
     assert!(outcome.holdout().len() >= config.min_holdout);
+}
+
+/// GATE 4: the split cuts between whole requests, never between the rows of one
+/// request.
+///
+/// A canonical request contributes an attempt row and a request row under one
+/// request id. The fixture below has 21 requests and 42 rows, and its alternating
+/// success labels put a row boundary exactly between the two rows of one
+/// request, so a row-boundary split would train on that request's attempt and
+/// hold out its request row while still calling the holdout disjoint.
+#[test]
+fn the_partition_keeps_every_request_on_one_side() {
+    let snapshot = multi_row_snapshot(21);
+    assert_eq!(snapshot.len(), 42);
+    let all_requests: HashSet<&str> = snapshot
+        .iter()
+        .map(|sample| sample.request_id.as_str())
+        .collect();
+    assert_eq!(all_requests.len(), 21);
+
+    let config = WarmupConfig::default();
+    let partition = partition_snapshot(&snapshot, &config).expect("the snapshot partitions");
+
+    let train_requests: HashSet<&str> = partition
+        .training
+        .iter()
+        .map(|sample| sample.request_id.as_str())
+        .collect();
+    let holdout_requests: HashSet<&str> = partition
+        .holdout
+        .iter()
+        .map(|sample| sample.request_id.as_str())
+        .collect();
+    assert!(
+        train_requests.is_disjoint(&holdout_requests),
+        "no request may be on both sides: {train_requests:?} / {holdout_requests:?}"
+    );
+    assert_eq!(
+        train_requests.len() + holdout_requests.len(),
+        all_requests.len(),
+        "every request must land on exactly one side"
+    );
+    for sample in &snapshot {
+        let in_train = train_requests.contains(sample.request_id.as_str());
+        let in_holdout = holdout_requests.contains(sample.request_id.as_str());
+        assert!(
+            in_train ^ in_holdout,
+            "request '{}' row '{}' is split across the partition",
+            sample.request_id,
+            sample.sample_id
+        );
+    }
+
+    // Whole requests are the unit, so both sides are made of complete group
+    // shapes and the independent request floor really bounds the holdout.
+    assert_eq!(partition.holdout.len(), 2 * partition.holdout_requests());
+    assert_eq!(
+        partition.training.len(),
+        snapshot.len() - partition.holdout.len()
+    );
+    assert!(partition.holdout_requests() > 1);
+    assert!(partition.holdout_requests() >= config.min_holdout_requests);
+    assert!(partition.holdout.len() >= config.min_holdout);
+    assert!(partition.is_disjoint());
+}
+
+/// GATE 4 (the exact boundary case): the request straddling the row boundary
+/// the old split would have drawn is entirely inside the holdout.
+#[test]
+fn a_request_is_never_cut_by_the_holdout_boundary() {
+    let snapshot = multi_row_snapshot(21);
+    let config = WarmupConfig::new(0.5, 1);
+    let partition = partition_snapshot(&snapshot, &config).expect("the snapshot partitions");
+
+    // The row boundary at 50% of 42 rows falls inside request 10, whose two rows
+    // are indexes 20 and 21 of the ordered snapshot.
+    let requests: Vec<&str> = {
+        let mut ids: Vec<&str> = snapshot
+            .iter()
+            .map(|sample| sample.request_id.as_str())
+            .collect();
+        ids.dedup();
+        ids
+    };
+    assert_eq!(requests.len(), 21);
+    let boundary_request = requests[10];
+
+    let holdout_ids: HashSet<&str> = partition
+        .holdout
+        .iter()
+        .map(|sample| sample.sample_id.as_str())
+        .collect();
+    let boundary_rows: Vec<&OutcomeTrainingSample> = snapshot
+        .iter()
+        .filter(|sample| sample.request_id == boundary_request)
+        .collect();
+    assert_eq!(boundary_rows.len(), 2, "the fixture request has two rows");
+    let in_holdout = boundary_rows
+        .iter()
+        .filter(|sample| holdout_ids.contains(sample.sample_id.as_str()))
+        .count();
+    assert!(
+        in_holdout == 0 || in_holdout == boundary_rows.len(),
+        "request '{boundary_request}' must be wholly on one side, found {in_holdout} of {} rows in the holdout",
+        boundary_rows.len()
+    );
+    assert!(partition.is_disjoint());
+}
+
+/// GATE 4: the report counts the independent requests on both sides, and the
+/// disjointness it declares is the group-level property, not a row-id claim.
+#[test]
+fn the_report_counts_whole_requests_on_both_sides() {
+    let snapshot = multi_row_snapshot(21);
+    let config = WarmupConfig::default();
+    let outcome = run_warmup(&snapshot, &config).expect("the snapshot warms up");
+    let report = outcome.report();
+
+    assert!(report.holdout_disjoint_from_train);
+    assert_eq!(report.train_requests + report.holdout_requests, 21);
+    assert!(report.holdout_requests >= config.min_holdout_requests);
+    assert!(report.holdout_samples >= config.min_holdout);
+    assert_eq!(report.train_samples + report.holdout_samples, 42);
+    assert_eq!(report.holdout_samples, 2 * report.holdout_requests);
+    assert_eq!(report.train_samples, 2 * report.train_requests);
+    assert!(outcome.commit().verify());
+}
+
+/// GATE 6: a holdout that clears the row floor with too few independent
+/// requests is refused, because whole requests are the unit of evidence.
+#[test]
+fn a_holdout_short_of_independent_requests_is_refused() {
+    let snapshot = multi_row_snapshot(4);
+    assert_eq!(snapshot.len(), 8);
+    let mut config = WarmupConfig::new(0.5, 1);
+    config.min_holdout_requests = 5;
+
+    // The row floor alone would have been satisfied, so the refusal is the
+    // independent request floor doing the work.
+    assert!(snapshot.len().saturating_sub(1) >= config.min_holdout);
+    let error = error_of(run_warmup(&snapshot, &config));
+    assert!(
+        matches!(
+            error,
+            WarmupError::TooFewRequestsToHoldOut {
+                requests: 4,
+                min_requests: 5
+            }
+        ),
+        "got {error:?}"
+    );
 }
 
 /// GATE 4: a learnable dataset beats the accepted cold baseline, and the report
@@ -1125,6 +1305,13 @@ fn an_unusable_configuration_is_refused() {
         &WarmupConfig::new(0.25, 0),
     ));
     assert!(matches!(error, WarmupError::EmptyHoldoutFloor));
+
+    let mut empty_request_floor = WarmupConfig::new(0.25, 8);
+    empty_request_floor.min_holdout_requests = 0;
+    assert!(matches!(
+        error_of(run_warmup(&learnable_snapshot(40), &empty_request_floor)),
+        WarmupError::EmptyHoldoutRequestFloor
+    ));
 
     // A bad configuration outranks an empty snapshot, so a caller fixing one
     // defect at a time is never told about the other.

@@ -16,9 +16,15 @@
 //! # Sample shape
 //!
 //! The input is the canonical [`OutcomeTrainingSample`] — the exact value a
-//! dataset snapshot retains, and the only shape production collects. The
-//! accepted training seam, [`ModelEnsemblePredictor::try_train`], accepts only
-//! the legacy shape, so warmup projects once, internally, through
+//! dataset snapshot retains, and the only shape production collects. One
+//! request produces one row per attempt plus one row for the request as a
+//! whole, and those rows describe a single observation, so warmup partitions
+//! the snapshot by whole request/outcome group: every row of one request lands
+//! on one side of the split, and the holdout has to clear an independent
+//! request-count floor before it can decide a verdict.
+//!
+//! The accepted training seam, [`ModelEnsemblePredictor::try_train`], accepts
+//! only the legacy shape, so warmup projects once, internally, through
 //! [`OutcomeTrainingSample::into_legacy`] at the training boundary.
 //!
 //! Canonical-in is not tidiness. The evidence warmup needs in order to *police*
@@ -82,20 +88,37 @@ use crate::outcome::CandidateIdentity;
 pub struct WarmupConfig {
     /// Fraction of the snapshot reserved for the frozen holdout, in `(0, 1)`.
     pub holdout_ratio: f64,
-    /// Smallest holdout that may decide a verdict. A smaller holdout cannot
-    /// support an honest comparison, so a snapshot that cannot produce one is
-    /// refused instead of being split.
+    /// Smallest holdout that may decide a verdict, counted in rows. A smaller
+    /// holdout cannot support an honest comparison, so a snapshot that cannot
+    /// produce one is refused instead of being split.
     pub min_holdout: usize,
+    /// Smallest holdout measured in *whole requests*. Independent of the row
+    /// floor: one canonical request can contribute several rows, so a row floor
+    /// alone lets a holdout clear the bar with a single request, which is not
+    /// independent evidence. A snapshot that cannot hold out this many whole
+    /// requests is refused.
+    #[serde(default = "default_min_holdout_requests")]
+    pub min_holdout_requests: usize,
     /// Description recorded on the frozen holdout artifact.
     pub holdout_description: String,
 }
 
+/// Compatibility default for a configuration that names no request floor.
+fn default_min_holdout_requests() -> usize {
+    1
+}
+
 impl WarmupConfig {
-    /// A configuration with an explicit holdout ratio and floor.
+    /// A configuration with an explicit holdout ratio and row floor.
+    ///
+    /// The request floor defaults to one whole request; callers that need a
+    /// larger independent-evidence bar set [`WarmupConfig::min_holdout_requests`]
+    /// explicitly.
     pub fn new(holdout_ratio: f64, min_holdout: usize) -> Self {
         WarmupConfig {
             holdout_ratio,
             min_holdout,
+            min_holdout_requests: default_min_holdout_requests(),
             holdout_description: String::new(),
         }
     }
@@ -110,6 +133,9 @@ impl WarmupConfig {
         if self.min_holdout == 0 {
             return Err(WarmupError::EmptyHoldoutFloor);
         }
+        if self.min_holdout_requests == 0 {
+            return Err(WarmupError::EmptyHoldoutRequestFloor);
+        }
         Ok(())
     }
 }
@@ -119,6 +145,7 @@ impl Default for WarmupConfig {
         WarmupConfig {
             holdout_ratio: 0.25,
             min_holdout: 8,
+            min_holdout_requests: 8,
             holdout_description: "supervised warmup holdout".to_string(),
         }
     }
@@ -139,11 +166,21 @@ pub enum WarmupError {
     EmptyDataset,
 
     /// The snapshot cannot be split into a trainable partition and a holdout
-    /// that meets the configured floor.
+    /// that meets the configured row floor.
     #[error(
         "warmup dataset of {samples} samples cannot hold out {min_holdout} samples and still train"
     )]
     DatasetTooSmallToHoldOut { samples: usize, min_holdout: usize },
+
+    /// The snapshot cannot be split into a trainable partition and a holdout
+    /// that meets the configured request floor, counted in whole requests.
+    #[error(
+        "warmup dataset of {requests} requests cannot hold out {min_requests} whole requests and still train"
+    )]
+    TooFewRequestsToHoldOut {
+        requests: usize,
+        min_requests: usize,
+    },
 
     /// The configured holdout ratio is not a fraction in `(0, 1)`.
     #[error("holdout ratio {ratio} is not a fraction in (0, 1)")]
@@ -153,6 +190,11 @@ pub enum WarmupError {
     /// a holdout of no samples.
     #[error("min_holdout must be at least 1")]
     EmptyHoldoutFloor,
+
+    /// The configured request floor is zero, which would decide a verdict from
+    /// a holdout of no independent requests.
+    #[error("min_holdout_requests must be at least 1")]
+    EmptyHoldoutRequestFloor,
 
     /// A sample was encoded against a different schema than the one this build
     /// accepts.
@@ -349,14 +391,21 @@ pub struct WarmupReport {
     pub train_samples: usize,
     /// Rows reserved for the frozen holdout.
     pub holdout_samples: usize,
+    /// Distinct requests the models were trained on.
+    #[serde(default)]
+    pub train_requests: usize,
+    /// Distinct requests reserved for the frozen holdout.
+    #[serde(default)]
+    pub holdout_requests: usize,
     /// Fraction of the holdout whose label is a success.
     pub holdout_positive_rate: f64,
     /// Whether the holdout holds both classes. A single-class holdout can only
     /// demonstrate that the model learned the base rate, so it can never carry
     /// an improvement claim.
     pub holdout_is_degenerate: bool,
-    /// Whether the two partitions share no sample id. Always true for a
-    /// successful run; recorded so a reader does not have to take it on trust.
+    /// Whether the two partitions share no sample id and no request/outcome
+    /// group. Always true for a successful run; recorded so a reader does not
+    /// have to take it on trust.
     pub holdout_disjoint_from_train: bool,
     /// Training rows labelled a success.
     pub train_success: usize,
@@ -493,32 +542,20 @@ pub fn run_warmup(
     snapshot: &[OutcomeTrainingSample],
     config: &WarmupConfig,
 ) -> Result<WarmupOutcome, WarmupError> {
-    config.checked()?;
-    if snapshot.is_empty() {
-        return Err(WarmupError::EmptyDataset);
-    }
+    let partition = partition_snapshot(snapshot, config)?;
+    let training: Vec<DatasetTrainingSample> = partition
+        .training
+        .iter()
+        .map(|sample| sample.clone().into_legacy())
+        .collect();
+    let holdout_samples: Vec<DatasetTrainingSample> = partition
+        .holdout
+        .iter()
+        .map(|sample| sample.clone().into_legacy())
+        .collect();
 
-    let mut projected = Vec::with_capacity(snapshot.len());
-    for (index, sample) in snapshot.iter().enumerate() {
-        validate_sample(index, sample)?;
-        projected.push(sample.clone().into_legacy());
-    }
-    reject_duplicate_ids(snapshot)?;
-
-    let ordered = order_snapshot(projected);
-    let holdout_rows = holdout_count(ordered.len(), config)?;
-    let split = ordered.len() - holdout_rows;
-
-    let training = &ordered[..split];
-    let holdout_samples = &ordered[split..];
-    if !disjoint(training, holdout_samples) {
-        return Err(WarmupError::BrokenLineage {
-            reason: "holdout shares a sample id with the training partition".to_string(),
-        });
-    }
-
-    let holdout = FrozenHoldout::new(holdout_samples.to_vec(), config.holdout_description.clone());
-    let (lineage, commit) = train_lineage(training)?;
+    let holdout = FrozenHoldout::new(holdout_samples.clone(), config.holdout_description.clone());
+    let (lineage, commit) = train_lineage(&training)?;
     let ensemble = ModelEnsemble::load_all(&commit.checkpoint).map_err(|error| {
         WarmupError::ArtifactNotLoadable {
             reason: error.to_string(),
@@ -530,7 +567,7 @@ pub fn run_warmup(
     let baseline = holdout.evaluate(&cold.success);
     let warmed = holdout.evaluate(&ensemble.success);
     let (log_loss_delta, brier_delta, metric_verdict) = compare(&baseline, &warmed);
-    let holdout_is_degenerate = !holdout_has_both_classes(holdout_samples);
+    let holdout_is_degenerate = !holdout_has_both_classes(&holdout_samples);
     let verdict = if holdout_is_degenerate {
         metric_verdict.downgraded_to_not_better()
     } else {
@@ -538,12 +575,14 @@ pub fn run_warmup(
     };
 
     let report = WarmupReport {
-        samples_total: ordered.len(),
+        samples_total: training.len() + holdout_samples.len(),
         train_samples: training.len(),
         holdout_samples: holdout_samples.len(),
-        holdout_positive_rate: positive_rate(holdout_samples),
+        train_requests: partition.train_requests(),
+        holdout_requests: partition.holdout_requests(),
+        holdout_positive_rate: positive_rate(&holdout_samples),
         holdout_is_degenerate,
-        holdout_disjoint_from_train: true,
+        holdout_disjoint_from_train: partition.is_disjoint(),
         train_success: training
             .iter()
             .filter(|sample| sample.targets.success)
@@ -552,7 +591,7 @@ pub fn run_warmup(
             .iter()
             .filter(|sample| !sample.targets.success)
             .count(),
-        coverage: coverage(training),
+        coverage: coverage(&training),
         baseline,
         warmed,
         log_loss_delta,
@@ -568,6 +607,225 @@ pub fn run_warmup(
         holdout,
         report,
     })
+}
+
+// ---------------------------------------------------------------------------
+// Partition
+// ---------------------------------------------------------------------------
+
+/// One whole request/outcome group: every canonical row that shares a request
+/// identity, kept together so a split can only cut between groups.
+struct SampleGroup {
+    /// `request_id` when the sample carries one, else its `outcome_id`.
+    key: String,
+    /// The earliest timestamp in the group.
+    timestamp: i64,
+    rows: Vec<OutcomeTrainingSample>,
+}
+
+/// The two partitions of one warmup run, as whole request/outcome groups.
+///
+/// Both fields hold the canonical rows rather than the projected legacy shape,
+/// because group identity lives on the canonical sample and the projection
+/// drops it. The order is the deterministic group order the split used, so a
+/// caller that trains the rows itself reproduces warmup's chain.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WarmupPartition {
+    /// The whole groups the models are trained on, in group order.
+    pub training: Vec<OutcomeTrainingSample>,
+    /// The trailing whole groups frozen as the holdout, in group order.
+    pub holdout: Vec<OutcomeTrainingSample>,
+}
+
+impl WarmupPartition {
+    /// Distinct requests in the training partition.
+    pub fn train_requests(&self) -> usize {
+        request_count(&self.training)
+    }
+
+    /// Distinct requests in the holdout.
+    pub fn holdout_requests(&self) -> usize {
+        request_count(&self.holdout)
+    }
+
+    /// Whether no sample id and no request/outcome group appears on both sides.
+    pub fn is_disjoint(&self) -> bool {
+        let training_ids: HashSet<&str> = self
+            .training
+            .iter()
+            .map(|sample| sample.sample_id.as_str())
+            .collect();
+        if self
+            .holdout
+            .iter()
+            .any(|sample| training_ids.contains(sample.sample_id.as_str()))
+        {
+            return false;
+        }
+        let training_groups: HashSet<&str> = self
+            .training
+            .iter()
+            .map(group_key)
+            .collect();
+        !self
+            .holdout
+            .iter()
+            .any(|sample| training_groups.contains(group_key(sample)))
+    }
+}
+
+/// Split a snapshot into the whole groups warmup trains on and the whole groups
+/// it freezes, and nothing else.
+///
+/// The split is by request/outcome group: the canonical dataset emits one row
+/// per attempt plus one row for the request as a whole, and those rows describe
+/// a single observation. Cutting the ordered row list at an arbitrary boundary
+/// can put the attempt row of a request in training and the request row of the
+/// same request in the holdout, which leaves the holdout nominal rather than
+/// disjoint. This function cuts between groups, so every row of one request
+/// stays on one side, and it verifies the result before returning it.
+///
+/// It is the split [`run_warmup`] performs, exposed so a caller can audit the
+/// partition without training.
+pub fn partition_snapshot(
+    snapshot: &[OutcomeTrainingSample],
+    config: &WarmupConfig,
+) -> Result<WarmupPartition, WarmupError> {
+    config.checked()?;
+    if snapshot.is_empty() {
+        return Err(WarmupError::EmptyDataset);
+    }
+    for (index, sample) in snapshot.iter().enumerate() {
+        validate_sample(index, sample)?;
+    }
+    reject_duplicate_ids(snapshot)?;
+
+    let groups = order_groups(group_snapshot(snapshot));
+    let holdout_groups = holdout_group_count(&groups, snapshot.len(), config)?;
+    let split = groups.len() - holdout_groups;
+
+    let training: Vec<OutcomeTrainingSample> = groups[..split]
+        .iter()
+        .flat_map(|group| group.rows.iter().cloned())
+        .collect();
+    let holdout: Vec<OutcomeTrainingSample> = groups[split..]
+        .iter()
+        .flat_map(|group| group.rows.iter().cloned())
+        .collect();
+
+    let partition = WarmupPartition { training, holdout };
+    if !partition.is_disjoint() {
+        return Err(WarmupError::BrokenLineage {
+            reason: "holdout shares a sample id or a request group with the training partition"
+                .to_string(),
+        });
+    }
+    Ok(partition)
+}
+
+/// The identity a canonical row is grouped and split by.
+fn group_key(sample: &OutcomeTrainingSample) -> &str {
+    if sample.request_id.is_empty() {
+        sample.outcome_id.as_str()
+    } else {
+        sample.request_id.as_str()
+    }
+}
+
+/// Collapse a snapshot into one group per request identity.
+fn group_snapshot(snapshot: &[OutcomeTrainingSample]) -> Vec<SampleGroup> {
+    let mut index: HashMap<String, usize> = HashMap::with_capacity(snapshot.len());
+    let mut groups: Vec<SampleGroup> = Vec::new();
+    for sample in snapshot {
+        let key = group_key(sample).to_string();
+        let position = match index.get(&key) {
+            Some(position) => *position,
+            None => {
+                index.insert(key.clone(), groups.len());
+                groups.push(SampleGroup {
+                    key,
+                    timestamp: sample.timestamp,
+                    rows: Vec::new(),
+                });
+                groups.len() - 1
+            }
+        };
+        groups[position].rows.push(sample.clone());
+        groups[position].timestamp = groups[position].timestamp.min(sample.timestamp);
+    }
+    groups
+}
+
+/// Order groups by `(timestamp, request identity)` and rows within a group by
+/// sample id, so the partition is a function of the snapshot's contents rather
+/// than of the order a caller handed them over.
+fn order_groups(mut groups: Vec<SampleGroup>) -> Vec<SampleGroup> {
+    groups.sort_by(|left, right| {
+        left.timestamp
+            .cmp(&right.timestamp)
+            .then_with(|| left.key.cmp(&right.key))
+    });
+    for group in &mut groups {
+        group.rows.sort_by(|left, right| left.sample_id.cmp(&right.sample_id));
+    }
+    groups
+}
+
+/// Rows held by the trailing `count` groups.
+fn trailing_rows(groups: &[SampleGroup], count: usize) -> usize {
+    groups[groups.len().saturating_sub(count)..]
+        .iter()
+        .map(|group| group.rows.len())
+        .sum()
+}
+
+/// How many trailing whole groups the holdout takes, refusing a split it cannot
+/// make.
+///
+/// Both floors bind: the row floor keeps the holdout large enough to score, and
+/// the independent request floor keeps it from being one request's rows dressed
+/// up as a holdout. At least one whole group stays behind to train on.
+fn holdout_group_count(
+    groups: &[SampleGroup],
+    total_rows: usize,
+    config: &WarmupConfig,
+) -> Result<usize, WarmupError> {
+    if total_rows.saturating_sub(1) < config.min_holdout {
+        return Err(WarmupError::DatasetTooSmallToHoldOut {
+            samples: total_rows,
+            min_holdout: config.min_holdout,
+        });
+    }
+    let group_count = groups.len();
+    if group_count < 2 || group_count < config.min_holdout_requests + 1 {
+        return Err(WarmupError::TooFewRequestsToHoldOut {
+            requests: group_count,
+            min_requests: config.min_holdout_requests,
+        });
+    }
+
+    let largest_holdout = group_count - 1;
+    let proportional = (group_count as f64 * config.holdout_ratio).round() as usize;
+    let mut holdout_groups = proportional
+        .max(config.min_holdout_requests)
+        .min(largest_holdout);
+    while holdout_groups < largest_holdout
+        && trailing_rows(groups, holdout_groups) < config.min_holdout
+    {
+        holdout_groups += 1;
+    }
+    if trailing_rows(groups, holdout_groups) < config.min_holdout {
+        return Err(WarmupError::DatasetTooSmallToHoldOut {
+            samples: total_rows,
+            min_holdout: config.min_holdout,
+        });
+    }
+    Ok(holdout_groups)
+}
+
+/// Distinct request identities over a set of canonical rows.
+fn request_count(samples: &[OutcomeTrainingSample]) -> usize {
+    samples.iter().map(group_key).collect::<HashSet<&str>>().len()
 }
 
 // ---------------------------------------------------------------------------
@@ -652,46 +910,8 @@ fn reject_duplicate_ids(snapshot: &[OutcomeTrainingSample]) -> Result<(), Warmup
 }
 
 // ---------------------------------------------------------------------------
-// Partition
+// Holdout description
 // ---------------------------------------------------------------------------
-
-/// Order the projected samples by a total order.
-///
-/// The key is `(timestamp, sample_id)`: a total order over ids that
-/// [`reject_duplicate_ids`] has already made unique, so the partition below is a
-/// function of the snapshot's contents rather than of the order a caller
-/// happened to hand over.
-fn order_snapshot(mut projected: Vec<DatasetTrainingSample>) -> Vec<DatasetTrainingSample> {
-    projected.sort_by(|left, right| {
-        left.timestamp
-            .cmp(&right.timestamp)
-            .then_with(|| left.sample_id.cmp(&right.sample_id))
-    });
-    projected
-}
-
-/// How many trailing rows the holdout takes, refusing a split it cannot make.
-fn holdout_count(total: usize, config: &WarmupConfig) -> Result<usize, WarmupError> {
-    if total.saturating_sub(1) < config.min_holdout {
-        return Err(WarmupError::DatasetTooSmallToHoldOut {
-            samples: total,
-            min_holdout: config.min_holdout,
-        });
-    }
-    let proportional = (total as f64 * config.holdout_ratio).round() as usize;
-    Ok(proportional.max(config.min_holdout).min(total - 1))
-}
-
-/// Whether the two partitions share no sample id.
-fn disjoint(training: &[DatasetTrainingSample], holdout: &[DatasetTrainingSample]) -> bool {
-    let training_ids: HashSet<&str> = training
-        .iter()
-        .map(|sample| sample.sample_id.as_str())
-        .collect();
-    holdout
-        .iter()
-        .all(|sample| !training_ids.contains(sample.sample_id.as_str()))
-}
 
 /// The training rows' success rate, over a holdout that is never empty.
 fn positive_rate(holdout: &[DatasetTrainingSample]) -> f64 {
