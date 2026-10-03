@@ -798,3 +798,91 @@ fn compare_routing_refuses_rates_outside_the_unit_interval_and_negative_magnitud
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// The documented acceptance rule
+// ---------------------------------------------------------------------------
+//
+// The rule is "improve latency/cost without degrading success rate". The
+// implementation used to reject only a >= 1pp success-rate drop and then OR in
+// any latency or cost improvement, so a sub-1pp loss bought a latency win.
+
+#[test]
+fn compare_routing_rejects_a_latency_win_that_lowers_the_success_rate() {
+    // success .995 -> .986 is a 0.9pp absolute drop (failure rate .5% -> 1.4%),
+    // deliberately below the 1pp rejection floor, and p95 200 -> 170 is a 15%
+    // improvement, well past the 10% acceptance threshold.
+    let baseline = make_routing_metrics(1000, 0.995, 200.0, 200.0, 0.02, 0.0);
+    let candidate = make_routing_metrics(1000, 0.986, 200.0, 170.0, 0.02, 0.0);
+
+    let report = Evaluator::compare_routing(&baseline, &candidate);
+
+    assert!(
+        report.deltas.success_rate_delta < 0.0 && report.deltas.success_rate_delta > -0.01,
+        "the fixture must sit between 'no loss' and the 1pp rejection floor: {}",
+        report.deltas.success_rate_delta
+    );
+    assert!(
+        report.deltas.p95_latency_delta_pct <= -10.0,
+        "the fixture must contain a real latency improvement: {}",
+        report.deltas.p95_latency_delta_pct
+    );
+    assert_eq!(
+        report.recommendation,
+        Recommendation::Reject,
+        "a latency win must not buy a success-rate loss: {:?}",
+        report.reasons
+    );
+    assert!(
+        report
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("not accepted")),
+        "the report must say why the improvement did not stand: {:?}",
+        report.reasons
+    );
+}
+
+#[test]
+fn compare_routing_rejects_a_cost_win_that_lowers_the_success_rate() {
+    let baseline = make_routing_metrics(1000, 0.995, 200.0, 200.0, 0.02, 0.0);
+    // Cost halved, success down 0.6pp: still no degradation permitted.
+    let candidate = make_routing_metrics(1000, 0.989, 200.0, 200.0, 0.01, 0.0);
+
+    let report = Evaluator::compare_routing(&baseline, &candidate);
+    assert_eq!(
+        report.recommendation,
+        Recommendation::Reject,
+        "a cost win must not buy a success-rate loss: {:?}",
+        report.reasons
+    );
+}
+
+#[test]
+fn compare_routing_accepts_a_latency_win_without_any_success_rate_loss() {
+    // The same improvement with the success rate held: this is the case the
+    // documented rule does accept, so the guard above must not reject it.
+    let baseline = make_routing_metrics(1000, 0.995, 200.0, 200.0, 0.02, 0.0);
+    let candidate = make_routing_metrics(1000, 0.995, 200.0, 170.0, 0.02, 0.0);
+
+    let report = Evaluator::compare_routing(&baseline, &candidate);
+    assert_eq!(report.recommendation, Recommendation::Accept);
+    assert_eq!(report.deltas.success_rate_delta, 0.0);
+    assert!(report.deltas.p95_latency_delta_pct <= -10.0);
+}
+
+#[test]
+fn compare_routing_still_accepts_a_success_rate_improvement_on_its_own() {
+    // A success-rate improvement stands on its own: it is not an exchange rate
+    // against latency or cost.
+    let baseline = make_routing_metrics(1000, 0.90, 200.0, 200.0, 0.02, 0.0);
+    let candidate = make_routing_metrics(1000, 0.93, 200.0, 210.0, 0.02, 0.0);
+
+    let report = Evaluator::compare_routing(&baseline, &candidate);
+    assert_eq!(
+        report.recommendation,
+        Recommendation::Accept,
+        "{:?}",
+        report.reasons
+    );
+}

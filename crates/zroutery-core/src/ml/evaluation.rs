@@ -539,11 +539,14 @@ impl Evaluator {
     ///   deltas rather than a `NaN` that every threshold below would read as
     ///   false.
     /// - If either side has fewer than 30 requests, recommend `InsufficientData`.
-    /// - If the candidate improves success rate by >= 1pp OR reduces p95 latency
-    ///   by >= 10% without degrading success rate, recommend `Accept`.
     /// - If the candidate degrades success rate by >= 1pp OR increases p95 latency
     ///   by >= 20%, recommend `Reject`.
-    /// - Otherwise, `Accept` if the candidate has lower cost with no degradation.
+    /// - Otherwise, recommend `Accept` when the candidate improves success rate
+    ///   by >= 1pp, or when it reduces p95 latency by >= 10% or mean cost by
+    ///   > 5% **and** the success rate did not degrade at all
+    ///   (`success_rate_delta >= 0`). A latency or a cost win never buys a
+    ///   success-rate loss: that is the whole point of the comparison.
+    /// - Otherwise, `Reject`.
     pub fn compare_routing(
         baseline: &RoutingMetrics,
         candidate: &RoutingMetrics,
@@ -636,6 +639,11 @@ impl Evaluator {
 
         // Check for improvement
         let success_improved = deltas.success_rate_delta >= 0.01;
+        // The documented contract: a latency or a cost win is accepted only
+        // when the success rate did not degrade **at all**. The 1pp degradation
+        // test above is the rejection floor, not a licence to trade a smaller
+        // success-rate loss for speed or price.
+        let success_not_degraded = deltas.success_rate_delta >= 0.0;
         let latency_improved = deltas.p95_latency_delta_pct <= -10.0;
         let cost_improved = deltas.cost_delta_pct < -5.0;
 
@@ -655,12 +663,30 @@ impl Evaluator {
             reasons.push(format!("cost reduced by {:.1}%", -deltas.cost_delta_pct));
         }
 
-        if success_improved || latency_improved || cost_improved {
+        if success_improved || ((latency_improved || cost_improved) && success_not_degraded) {
             return ComparisonReport {
                 baseline: baseline.clone(),
                 candidate: candidate.clone(),
                 deltas,
                 recommendation: Recommendation::Accept,
+                reasons,
+            };
+        }
+
+        // An improvement that was withheld only because the success rate also
+        // fell is worth naming: "no significant difference" would be false, and
+        // the reader needs to know that the win was not enough to buy the loss.
+        if (latency_improved || cost_improved) && !success_not_degraded {
+            reasons.push(format!(
+                "success rate degraded by {:.1}pp, so a latency or cost improvement is not \
+                 accepted",
+                -deltas.success_rate_delta * 100.0
+            ));
+            return ComparisonReport {
+                baseline: baseline.clone(),
+                candidate: candidate.clone(),
+                deltas,
+                recommendation: Recommendation::Reject,
                 reasons,
             };
         }
