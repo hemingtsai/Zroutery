@@ -210,7 +210,14 @@ impl PromotionConfig {
 pub struct PromotionDecision {
     pub verdict: PromotionVerdict,
     pub candidate_commit: String,
+    /// The body the evidence was computed over, i.e. the whole body the model
+    /// was trained *from*. This is the identity a reader needs to reproduce the
+    /// decision.
     pub dataset_fingerprint: DatasetFingerprint,
+    /// The fitted partition, which is a strictly smaller set. Recorded as well
+    /// because "promoted on 120 requests" and "fitted on 252 samples" are
+    /// different facts and a decision that only names one of them is ambiguous.
+    pub fitted_partition_fingerprint: DatasetFingerprint,
     /// The holdout out-of-sample log loss the candidate achieved.
     pub holdout_loss: f64,
     /// Identity of the gate configuration.
@@ -514,7 +521,8 @@ impl PromotionGate {
         PromotionDecision {
             verdict,
             candidate_commit: training.final_commit.clone(),
-            dataset_fingerprint: training.dataset_fingerprint.clone(),
+            dataset_fingerprint: training.source_fingerprint.clone(),
+            fitted_partition_fingerprint: training.dataset_fingerprint.clone(),
             holdout_loss: training.holdout_loss,
             gate_config_identity: self.config.identity(),
             gate_config: self.config.clone(),
@@ -582,7 +590,7 @@ mod tests {
             base_commit: "0000000000000000".to_string(),
             learning_event_count: 84,
             dataset_fingerprint: dataset.clone(),
-            source_fingerprint: dataset,
+            source_fingerprint: dataset.clone(),
             config_identity: "00112233445566aa".to_string(),
             feature_schema_version: super::super::features::FEATURE_SCHEMA_VERSION,
             reward_policy: RewardPolicy::default(),
