@@ -199,6 +199,8 @@ fn route_decision_rejected_candidate_is_retained_but_never_actionable() {
             requirements_hash: 101,
             preference_hash: 202,
         },
+        // No learned model was consulted for this fixture decision.
+        ml_ranking: None,
     };
 
     let snapshot = ShadowInput::from_policy_plan(

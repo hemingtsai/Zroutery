@@ -305,20 +305,28 @@ pub(super) async fn handle_chat(
     }
 
     // shadow-block-begin
-    // Shadow evaluation (Stage 7E-1): snapshot what the ML stack *would have
-    // done*, strictly from the decision production already made. The snapshot
-    // is taken here — after routing, before any attempt — so the ranking state
-    // is untouched when shadow sees it. Direct-resolution and classifier
-    // requests carry no routing decision and are therefore out of scope by
+    // The decision-time snapshot: what the ML stack saw when the decision was
+    // made.
+    //
+    // Built once, here, and shared. Both the shadow record and the ML ranking
+    // read this same value, which is not an optimisation — if the two each built
+    // their own snapshot they could disagree about a candidate set, and every
+    // comparison between what production served and what the model would have
+    // served would then be comparing two different questions.
+    //
+    // Taken after routing and before any attempt, so no observation a request
+    // itself produced can leak into the features that judged it.
+    //
+    // Direct-resolution and classifier requests carry no routing decision and
+    // therefore have no policy evidence to snapshot, so they are out of scope by
     // construction.
     //
-    // Structural guarantee: the snapshot builder lives in the ml::shadow
-    // module behind a signature that accepts only read-only store handles
-    // plus the plan and decision production already computed — no AppState,
-    // no Router — so no ranking path is reachable from shadow evaluation.
-    // The compiler enforces this; the shadow tests tripwire the source.
+    // Built only when something will read it. Feature extraction walks every
+    // candidate and every observation, and a deployment with neither the shadow
+    // nor an active model has no use for the result, so paying for it on every
+    // request would be a cost for a record nothing would keep.
     #[cfg(feature = "ml")]
-    let shadow_input = if state.shadow().enabled() {
+    let decision_snapshot = if state.shadow().enabled() || state.ml_routing().is_attached() {
         routing_decision.as_ref().map(|decision| {
             ShadowInput::from_policy_plan(
                 state.router().observations(),
@@ -332,7 +340,31 @@ pub(super) async fn handle_chat(
     } else {
         None
     };
+    let shadow_input = decision_snapshot.clone();
     // shadow-block-end
+
+    // ml-ranking-block-begin
+    // The learned model re-orders the executable plan.
+    //
+    // Placement is deliberate. Eligibility, the circuit breaker and the attempt
+    // cap have already narrowed `plan`, so what ML chooses between is a set of
+    // candidates that are all legal to serve; ML never re-derives any of those
+    // filters and cannot widen them. The plan is also still the router's own, so
+    // when nothing can be ranked — no model, a prediction that is not finite, a
+    // selection the plan does not contain — the order below is exactly the one
+    // the router produced.
+    //
+    // The decision is amended as well as the plan. `RouteDecision.selected` is
+    // what the outcome records as the planned identity, so leaving it alone
+    // would produce traces in which the request says it planned one provider and
+    // was served by another. The learning loop reads those traces, so a mismatch
+    // here would be a systematic label error in the training data.
+    #[cfg(feature = "ml")]
+    let (plan, routing_decision) = {
+        let ranked = apply_ml_ranking(&state, plan, routing_decision, decision_snapshot);
+        (ranked.0, ranked.1)
+    };
+    // ml-ranking-block-end
 
     if req.stream {
         stream_chat(
@@ -370,8 +402,108 @@ pub(super) async fn handle_chat(
     }
 }
 
-/// How many prior turns a `previous_response_id` chain may replay.
+/// ml-ranking-helper-begin
+/// Re-order one request's executable plan with the learned model, if one can rank
+/// it.
 ///
+/// Returns the plan and the decision unchanged when nothing can be ranked. That
+/// is the normal case in a deployment that has never promoted a model, and the
+/// case whenever the model is attached but unavailable, so it is written as an
+/// ordinary return rather than as an error the caller has to remember to catch.
+#[cfg(feature = "ml")]
+fn apply_ml_ranking(
+    state: &Arc<AppState>,
+    plan: Vec<Candidate>,
+    routing_decision: Option<RouteDecision>,
+    snapshot: Option<crate::ml::ShadowInput>,
+) -> (Vec<Candidate>, Option<RouteDecision>) {
+    let untouched = || (plan.clone(), routing_decision.clone());
+
+    let (Some(decision), Some(snapshot)) = (routing_decision.clone(), snapshot) else {
+        // A direct-resolution or classifier request carries no routing decision,
+        // so there is no policy evidence to rank against. Reordering it on
+        // features alone would put the model in charge of a request the router
+        // never decided, which is a different product decision.
+        return untouched();
+    };
+    if plan.len() < 2 {
+        return untouched();
+    }
+    if !state.ml_routing().is_attached() {
+        return untouched();
+    }
+
+    let request_id = decision.decision_id.clone();
+    let ranked = match state.ml_routing().rank(&snapshot, &request_id) {
+        Ok(ranked) => ranked,
+        Err(reason) => {
+            tracing::debug!(
+                decision_id = %decision.decision_id,
+                reason = ?reason,
+                "the learned model could not rank this request; the deterministic plan stands"
+            );
+            return untouched();
+        }
+    };
+
+    let plan_order: Vec<String> = plan.iter().map(|c| c.exposed_id.clone()).collect();
+    let applied = crate::ml::AppliedRanking::apply(&ranked, &plan_order);
+    if !applied.changed {
+        return untouched();
+    }
+
+    // Rebuild the plan in the model's order. Only identities present in the
+    // original plan are looked up, so the set of servable candidates is
+    // unchanged and only the order differs.
+    let mut reordered: Vec<Candidate> = Vec::with_capacity(plan.len());
+    for id in &applied.order {
+        if let Some(candidate) = plan.iter().find(|c| &c.exposed_id == id) {
+            reordered.push(candidate.clone());
+        }
+    }
+    if reordered.len() != plan.len() {
+        // The ranking named something the plan does not contain in a way that
+        // lost a candidate. Refuse the whole ranking rather than serve a plan
+        // the router never produced.
+        tracing::warn!(
+            decision_id = %decision.decision_id,
+            planned = plan.len(),
+            reordered = reordered.len(),
+            "the learned ranking did not cover the executable plan; the deterministic plan stands"
+        );
+        return untouched();
+    }
+
+    // Amend the decision so the recorded planned identity is the one that will
+    // actually be tried, and so the model's influence is visible in the decision
+    // record rather than only in a log line.
+    let amended = routing_decision.map(|mut decision| {
+        decision.selected = Some(applied.selected.clone());
+        decision.ml_ranking = Some(policy::MlRankingTrace {
+            commit_id: applied.commit_id.clone(),
+            selected: applied.selected.clone(),
+            reason: applied.reason.clone(),
+            explored: applied.explored,
+            order: applied.order.clone(),
+            baseline_order: plan_order.clone(),
+        });
+        decision
+    });
+
+    tracing::debug!(
+        decision_id = %decision.decision_id,
+        commit_id = %applied.commit_id,
+        selected = %applied.selected,
+        explored = applied.explored,
+        reason = %applied.reason,
+        "the learned model re-ordered the provider plan"
+    );
+
+    (reordered, amended)
+}
+// ml-ranking-helper-end
+
+/// How many prior turns a `previous_response_id` chain may replay.
 /// The chain is walked newest to oldest, so this is also the bound on how much
 /// work a single continuation request can create before any upstream call.
 const MAX_CONTINUATION_TURNS: usize = 32;
@@ -2110,6 +2242,10 @@ struct RequestLifecycle {
     /// request", and a redundant guard is cheaper than discovering otherwise.
     #[cfg(feature = "ml")]
     ingested: bool,
+    /// The exactly-once guard for the durable trace write, on the same terms as
+    /// `ingested`.
+    #[cfg(feature = "ml")]
+    trace_written: bool,
     /// The exactly-once guard for the observability projection, for the same
     /// reason and on the same terms as `ingested`.
     projected: bool,
@@ -2146,6 +2282,8 @@ impl RequestLifecycle {
             terminal: false,
             #[cfg(feature = "ml")]
             ingested: false,
+            #[cfg(feature = "ml")]
+            trace_written: false,
             projected: false,
         }
     }
@@ -2315,6 +2453,64 @@ impl RequestLifecycle {
                     "training sample refused at the dataset boundary"
                 );
             }
+        }
+    }
+
+    /// Persist this request to the durable trace log.
+    ///
+    /// The same three facts as the dataset boundary, in the same terminal
+    /// transition, from the same validated outcome: which candidates were on the
+    /// table and eligible, and what each attempt that was actually made
+    /// produced. The dataset holds the samples and dies with the process; this is
+    /// what makes the history a *learning* history rather than a log line.
+    ///
+    /// Exactly once per request, and only when the same decision-time input the
+    /// dataset was given is available. Writing a trace without features would
+    /// produce a record that looks like counterfactual evidence and cannot support
+    /// a counterfactual claim.
+    ///
+    /// Contained exactly as the dataset is: no return value, no error, no panic
+    /// escapes, and a refusal is counted on the log rather than propagated.
+    #[cfg(feature = "ml")]
+    fn trace_persisted(&mut self) {
+        if self.trace_written {
+            return;
+        }
+        let Some(input) = self.decision_time.as_ref() else {
+            return;
+        };
+        let samples = self.state.dataset().training_slice();
+        let samples = samples
+            .into_iter()
+            .filter(|sample| sample.outcome_id == self.id() || sample.request_id == self.id())
+            .collect::<Vec<_>>();
+        if samples.is_empty() {
+            // Nothing was collected for this request, so there is nothing to
+            // record. Counted by the log on its own terms when it is told.
+            self.trace_written = true;
+            let _ = crate::ml::traces::contained_append(
+                self.state.traces(),
+                &input.decision_id,
+                input,
+                Vec::new(),
+                chrono::Utc::now().timestamp(),
+            );
+            return;
+        }
+        self.trace_written = true;
+        let verdict = crate::ml::traces::contained_append(
+            self.state.traces(),
+            &input.decision_id,
+            input,
+            samples,
+            chrono::Utc::now().timestamp(),
+        );
+        if let crate::ml::traces::TraceIngestion::Refused { reason } = verdict {
+            tracing::warn!(
+                request_id = %self.id(),
+                reason,
+                "routing trace was not persisted"
+            );
         }
     }
 
@@ -2619,6 +2815,13 @@ impl RequestLifecycle {
         #[cfg(feature = "ml")]
         self.dataset_ingested(&outcome, validation.is_ok());
         // dataset-block-end
+        // trace-block-begin
+        // The durable trace is written from the same terminal transition, on the
+        // same validated outcome and the same retained decision-time input, so a
+        // trace and the dataset samples can never disagree about a request.
+        #[cfg(feature = "ml")]
+        self.trace_persisted();
+        // trace-block-end
         // projection-block-begin
         // The observability projection runs last, on the same validated outcome,
         // with the request's own decision supplied so the record can be joined

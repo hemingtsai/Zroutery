@@ -1078,6 +1078,8 @@ fn production_shaped_input(h: &Harness) -> ShadowInput {
             requirements_hash: 11,
             preference_hash: 22,
         },
+        // No learned model was consulted for this fixture decision.
+        ml_ranking: None,
     };
     ShadowInput::from_policy_plan(
         h.state.router().observations(),

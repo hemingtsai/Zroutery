@@ -22,6 +22,7 @@ pub mod model_identity;
 pub mod offline_gate;
 pub mod promotion;
 pub mod reward;
+pub mod serving;
 pub mod shadow;
 pub mod shadow_analysis;
 pub mod statistics;
@@ -127,6 +128,12 @@ pub use promotion::{
 pub use reward::{
     compute_utility, Action, ActionGuard, AttemptReward, PredictionBundle, RequestReward,
     RewardComputer, RewardPolicy, UtilityBreakdown,
+};
+pub use serving::{
+    candidate_ids, explore, ActiveModel, ActiveModelAction, ActiveModelAuditEntry,
+    ActiveModelStore, ActivePredictor, AppliedRanking, ExplorationConfig, ExplorationOutcome,
+    MlRouter, MlRouterCounts, RankUnavailable, RankedPlan, ACTIVE_MODEL_AUDIT_FILE,
+    ACTIVE_MODEL_FILE, ACTIVE_MODEL_SCHEMA_VERSION, EXPLORATION_CEILING,
 };
 pub use shadow::{
     EnsemblePredictor, ModelEnsemblePredictor, ProductionDecisionRef, ShadowCandidate,
