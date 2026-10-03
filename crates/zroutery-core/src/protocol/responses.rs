@@ -595,22 +595,29 @@ pub fn encode_request(req: &ChatRequest, upstream_model: &str) -> Result<Value> 
     for m in &req.messages {
         let mut parts: Vec<Value> = Vec::new();
         let mut separate_items: Vec<Value> = Vec::new();
+        // Assistant history echoes the output_text parts a Responses response
+        // carries; user turns use input_text.
+        let text_part_type = if m.role == Role::Assistant {
+            "output_text"
+        } else {
+            "input_text"
+        };
 
         for b in &m.content {
             match b {
                 ContentBlock::Text { text, .. } => parts.push(json!({
-                    "type": "input_text",
+                    "type": text_part_type,
                     "text": text,
                 })),
                 ContentBlock::Image { source } => match source {
                     MediaSource::Base64 { media_type, data } => {
                         parts.push(json!({
                             "type": "input_image",
-                            "image_url": {"url": format!("data:{media_type};base64,{data}")}
+                            "image_url": format!("data:{media_type};base64,{data}"),
                         }));
                     }
                     MediaSource::Url { url } => {
-                        parts.push(json!({"type": "input_image", "image_url": {"url": url}}));
+                        parts.push(json!({"type": "input_image", "image_url": url}));
                     }
                     MediaSource::Reference { id } => {
                         parts.push(json!({"type": "input_image", "file_id": id}));
@@ -667,7 +674,7 @@ pub fn encode_request(req: &ChatRequest, upstream_model: &str) -> Result<Value> 
                         apply_content_policy(req.unsupported_content_policy, b)?
                     {
                         if let Some(text) = replacement.as_text() {
-                            parts.push(json!({"type": "input_text", "text": text}));
+                            parts.push(json!({"type": text_part_type, "text": text}));
                         }
                     } else {
                         return Err(Error::internal("thinking content could not be encoded"));
@@ -679,7 +686,7 @@ pub fn encode_request(req: &ChatRequest, upstream_model: &str) -> Result<Value> 
                             apply_content_policy(req.unsupported_content_policy, b)?
                         {
                             if let Some(text) = replacement.as_text() {
-                                parts.push(json!({"type": "input_text", "text": text}));
+                                parts.push(json!({"type": text_part_type, "text": text}));
                             }
                         } else {
                             return Err(Error::internal(
@@ -712,7 +719,7 @@ pub fn encode_request(req: &ChatRequest, upstream_model: &str) -> Result<Value> 
                                 apply_content_policy(req.unsupported_content_policy, b)?
                             {
                                 if let Some(t) = replacement.as_text() {
-                                    parts.push(json!({"type": "input_text", "text": t}));
+                                    parts.push(json!({"type": text_part_type, "text": t}));
                                 }
                             }
                         }
@@ -765,7 +772,7 @@ pub fn encode_request(req: &ChatRequest, upstream_model: &str) -> Result<Value> 
                         apply_content_policy(req.unsupported_content_policy, b)?
                     {
                         if let Some(t) = replacement.as_text() {
-                            parts.push(json!({"type": "input_text", "text": t}));
+                            parts.push(json!({"type": text_part_type, "text": t}));
                         }
                     }
                 }
