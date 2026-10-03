@@ -368,7 +368,7 @@ impl Router {
                             &member.provider_id,
                             member.tier,
                             &member.capabilities,
-                            self.is_circuit_open(&member.exposed_id()),
+                            self.is_circuit_blocked(&member.exposed_id()),
                             &request_capabilities,
                         );
                         if check.eligible {
@@ -538,10 +538,11 @@ impl Router {
 
     /// Filter members through the combined policy/request eligibility check.
     ///
-    /// Uses a read-only health check (`is_circuit_open`) to avoid consuming
+    /// Uses a read-only health check (`is_circuit_blocked`) to avoid consuming
     /// half-open permits, which would be a side effect during eligibility
-    /// filtering. The actual `allow_request()` is called later at the point
-    /// of send.
+    /// filtering. Only a breaker that is still serving its cooldown counts as
+    /// unavailable; an Open breaker whose timeout has elapsed stays eligible and
+    /// claims its probe permit later, at the point of send.
     fn filter_eligible<'a>(
         &self,
         registry: &Registry,
@@ -556,7 +557,7 @@ impl Router {
         let remediation_capabilities = canonical_capabilities(&remediation_capabilities);
 
         for member in members {
-            let circuit_open = self.is_circuit_open(&member.exposed_id());
+            let circuit_open = self.is_circuit_blocked(&member.exposed_id());
             let check = requirements.check_with_request_capabilities(
                 &member.exposed_id(),
                 &member.provider_id,
@@ -594,7 +595,7 @@ impl Router {
         requirements: &PolicyRequirements,
         request_capabilities: &[Capability],
     ) {
-        let circuit_open = self.is_circuit_open(&member.exposed_id());
+        let circuit_open = self.is_circuit_blocked(&member.exposed_id());
         let check = requirements.check_with_request_capabilities(
             &member.exposed_id(),
             &member.provider_id,
@@ -1399,11 +1400,31 @@ impl Router {
     ///
     /// Unlike [`allow_request`], this does not consume half-open probe permits
     /// and is safe to call during eligibility filtering where side effects are
-    /// not desired.
+    /// not desired. This is the raw state, including an Open breaker whose
+    /// cooldown has already elapsed; eligibility filtering wants
+    /// [`Self::is_circuit_blocked`] instead.
     pub fn is_circuit_open(&self, model_id: &str) -> bool {
         crate::sync::lock(&self.health)
             .get(model_id)
             .map(|h| h.breaker.state() == CircuitState::Open)
+            .unwrap_or(false)
+    }
+
+    /// Read-only check: would the breaker refuse a request to this model right
+    /// now?
+    ///
+    /// This is [`Self::is_circuit_open`] narrowed to the part of the Open state
+    /// that is still serving its cooldown. Once the configured timeout has
+    /// elapsed the breaker is ready to admit a half-open probe, so eligibility
+    /// filtering must treat the model as available — rejecting it here would
+    /// keep the model out forever because the Open → HalfOpen transition only
+    /// happens inside [`Self::allow_request`]. The single probe permit is still
+    /// claimed atomically at the point of send, so this predicate is a
+    /// classification, not a reservation.
+    pub fn is_circuit_blocked(&self, model_id: &str) -> bool {
+        crate::sync::lock(&self.health)
+            .get(model_id)
+            .map(|h| h.breaker.state() == CircuitState::Open && !h.breaker.can_probe())
             .unwrap_or(false)
     }
 
