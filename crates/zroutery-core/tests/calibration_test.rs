@@ -33,14 +33,16 @@ use zroutery_core::ml::calibration::{
     KWayCalibrator, MarginalView, PartitionKind, ReliabilityBin, ReliabilityConfig, UnrankedReason,
     DEFAULT_PROBABILITY_FLOOR, DISTRIBUTION_ROLE,
 };
-use zroutery_core::ml::dataset::{OutcomeTrainingSample, SampleScope, Targets};
+use zroutery_core::ml::dataset::{
+    try_samples_from_outcome, OutcomeTrainingSample, SampleScope, Targets,
+};
 use zroutery_core::ml::decision_contract::{
     DecisionContractError, DecisionDistribution, DISTRIBUTION_NORMALIZATION_TOLERANCE,
 };
 use zroutery_core::ml::features::{RoutingFeatures, FEATURE_DIMENSION, FEATURE_SCHEMA_VERSION};
 use zroutery_core::ml::model::{ModelState, Prediction, RoutingModel};
 use zroutery_core::outcome::{
-    Attempt, CandidateIdentity, FailureFacts, FinalStatus, OutcomeIdentity,
+    Attempt, CandidateIdentity, FailureFacts, FinalStatus, Outcome, OutcomeIdentity,
 };
 
 // ---------------------------------------------------------------------------
@@ -1764,6 +1766,108 @@ fn replicating_the_same_distribution_does_not_move_the_joint_fit() {
          {} vs {}",
         alpha.intercept,
         bravo.intercept
+    );
+}
+
+/// A legitimate same-candidate retry stays one candidate on the axis.
+///
+/// The product retries the same provider/model after a rectifier repairs a
+/// request and records each attempt separately. Projection used to push one
+/// candidate per attempt and then reject the resulting axis as a duplicate, so
+/// a single repaired request failed the whole batch. The candidate axis is now
+/// the set of unique identities and a retried candidate's evidence is its
+/// terminal attempt.
+#[test]
+fn a_same_candidate_rectifier_retry_is_one_candidate() {
+    let model = "model-alpha";
+    let provider = "p-alpha";
+
+    let outcome = Outcome::builder("req-rectified")
+        .decision_id("dec-rectified")
+        .dialect("anthropic")
+        .timestamp(BASE_TIMESTAMP)
+        .single_candidate(model, provider)
+        .attempt(Attempt {
+            attempt_id: "att-rectified-0".to_string(),
+            candidate_model: model.to_string(),
+            candidate_provider: provider.to_string(),
+            started_at: BASE_TIMESTAMP,
+            completed_at: BASE_TIMESTAMP + 1,
+            latency_ms: 30.0,
+            ttft_ms: None,
+            success: false,
+            failure_class: Some(FailureClass::Transport),
+            failure_message: Some("first attempt failed".to_string()),
+            http_status: Some(503),
+            rectified: false,
+        })
+        .attempt(Attempt {
+            attempt_id: "att-rectified-1".to_string(),
+            candidate_model: model.to_string(),
+            candidate_provider: provider.to_string(),
+            started_at: BASE_TIMESTAMP + 1,
+            completed_at: BASE_TIMESTAMP + 2,
+            latency_ms: 140.0,
+            ttft_ms: Some(50.0),
+            success: true,
+            failure_class: None,
+            failure_message: None,
+            http_status: Some(200),
+            rectified: true,
+        })
+        .total_latency_ms(170.0)
+        .cost(Some(0.01), Some(0.01))
+        .build();
+
+    outcome
+        .validate()
+        .expect("a failed-then-rectified outcome is valid");
+    assert!(outcome.success, "the terminal attempt succeeded");
+    assert_eq!(
+        outcome.served_identity(),
+        Some(identity((provider, model))),
+        "the retried candidate is the served identity"
+    );
+
+    // Two attempts on one candidate, plus the request-scope row.
+    let samples = try_samples_from_outcome(
+        &outcome,
+        &[scripted_features(0, 300), scripted_features(0, 700)],
+        DataOrigin::Native,
+    )
+    .expect("the canonical projection accepts a retried candidate");
+    assert_eq!(samples.len(), 3, "two attempts and the request row");
+    assert_eq!(
+        samples[0].attempts.len(),
+        2,
+        "both attempts stay in the retained evidence"
+    );
+    assert!(!samples[0].rectified, "the first attempt is not the retry");
+    assert!(
+        samples[1].rectified,
+        "the second attempt is the rectifier retry"
+    );
+
+    let cohorts = project_cohorts(&samples, &echo_model(), DEFAULT_PROBABILITY_FLOOR)
+        .expect("a repaired request must not fail the whole batch");
+    assert_eq!(cohorts.len(), 1, "both attempts belong to one decision");
+    let cohort = &cohorts[0];
+    assert_eq!(cohort.arity(), 1, "the identity appears on the axis once");
+    assert_eq!(
+        cohort.candidates()[0].candidate(),
+        &identity((provider, model))
+    );
+    assert_eq!(cohort.served(), Some(&identity((provider, model))));
+    let raw = cohort.candidates()[0]
+        .raw_success_probability()
+        .expect("the retried candidate is ranked");
+    assert!(
+        (raw - 0.7).abs() < 1e-12,
+        "the terminal attempt is the candidate's evidence, got {raw}"
+    );
+    assert!(
+        cohort.is_attributed(),
+        "the retried candidate is attributed"
     );
 }
 
