@@ -48,6 +48,7 @@ use zroutery_core::ml::journal::{
     frame_checksum, CanonicalEvent, JournalError, JournalEvidence, JournalMode, JournalRecordBody,
     LearningJournal, RecordOutcome, SequenceFault, FIRST_SEQUENCE, JOURNAL_ANCHOR_NAME,
     JOURNAL_LOCK_NAME, JOURNAL_LOG_NAME, JOURNAL_ROLE, JOURNAL_SCHEMA_VERSION, LEGACY_DEGRADATION,
+    MAX_FRAME_BYTES,
 };
 use zroutery_core::ml::model_identity::{
     CommitId, LearningEvent, ModelCommit, ModelEnsemble, ModelId, ModelStore,
@@ -1822,4 +1823,45 @@ fn the_journal_states_its_own_role() {
             "the role states {claim:?}: {JOURNAL_ROLE}"
         );
     }
+}
+
+/// The reader refuses a frame above `MAX_FRAME_BYTES`, so the writer refuses the
+/// same bytes before they reach the disk. Otherwise one legal but oversized
+/// event leaves an append-only log that can never be opened or read again.
+#[test]
+fn an_oversized_frame_is_refused_before_the_log_is_written() {
+    let root = scratch();
+    let dir = journal_dir(root.path());
+    let mut journal = LearningJournal::open(&dir, JournalMode::Append).expect("the journal opens");
+    journal
+        .record_canonical(canonical_event("oversized-prior-1", "prior", true))
+        .expect("a prior record is written");
+    let before = log_bytes(&dir);
+
+    // The event is well formed; only its serialized frame is over the limit.
+    let mut oversized = LearningEvent::new(
+        ModelId::new(MODEL),
+        vec![canonical_sample("oversized", true).into_legacy()],
+        None,
+        None,
+    );
+    oversized.event_id = "oversized-1".to_string();
+    oversized.source = Some("s".repeat(MAX_FRAME_BYTES + 1024));
+    match journal.record_legacy(&oversized) {
+        Err(JournalError::FrameTooLarge { bytes, .. }) => {
+            assert!(bytes > MAX_FRAME_BYTES, "the refusal names the image size");
+        }
+        other => panic!("an oversized frame must be refused, got {other:?}"),
+    }
+    assert_eq!(log_bytes(&dir), before, "nothing was appended");
+    drop(journal);
+
+    // The refusal kept the log readable: it still opens, and the prior record
+    // is still there.
+    let journal = LearningJournal::open(&dir, JournalMode::Read).expect("the log still opens");
+    let records = journal
+        .read_records(&ModelStore::new())
+        .expect("the log still reads back");
+    assert_eq!(records.len(), 1, "the prior record survived");
+    assert_eq!(records[0].event.event_id, "oversized-prior-1");
 }
