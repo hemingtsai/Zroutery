@@ -1395,12 +1395,27 @@ fn attempt_index(scope: &SampleScope) -> usize {
     }
 }
 
+/// Build one decision's cohort from its attempt rows.
+///
+/// The axis is the set of unique `(provider, model)` identities the decision
+/// attempted, in first-attempt order - *not* one entry per attempt. The product
+/// retries the same candidate after a rectifier repairs a request, and records
+/// each attempt separately; treating every attempt as a new candidate would put
+/// one identity on its own axis twice and make a legitimate retry fail the
+/// whole projection as a duplicate-candidate error.
+///
+/// A retried candidate's raw prediction is taken from its **terminal** attempt,
+/// the last row for that identity in attempt order. `served` is the decision's
+/// terminal attribution, so the terminal attempt is the observation the
+/// candidate's outcome belongs to; earlier attempts remain in the snapshot and
+/// in every sample's retained `attempts` evidence, they simply do not become
+/// separate axis entries.
 fn build_cohort(
     snapshot: &[OutcomeTrainingSample],
     group: &CohortGroup,
     model: &dyn RoutingModel,
 ) -> Result<DecisionCohort, CalibrationError> {
-    let mut candidates = Vec::with_capacity(group.rows.len());
+    let mut candidates: Vec<CandidateInput> = Vec::with_capacity(group.rows.len());
     for &row in &group.rows {
         let sample = &snapshot[row];
         validate_calibration_sample(row, sample)?;
@@ -1420,10 +1435,20 @@ fn build_cohort(
                 value: raw,
             });
         }
-        candidates.push(CandidateInput::Ranked {
-            candidate: CandidateIdentity::new(sample.model_id.clone(), sample.provider_id.clone()),
+        let identity = CandidateIdentity::new(sample.model_id.clone(), sample.provider_id.clone());
+        let ranked = CandidateInput::Ranked {
+            candidate: identity,
             raw_success_probability: raw,
-        });
+        };
+        match candidates
+            .iter()
+            .position(|input| input.candidate() == ranked.candidate())
+        {
+            // Another attempt of a candidate already on the axis: the terminal
+            // attempt replaces the raw prediction and the axis position is kept.
+            Some(slot) => candidates[slot] = ranked,
+            None => candidates.push(ranked),
+        }
     }
     DecisionCohort::try_new(
         group.context.clone(),
