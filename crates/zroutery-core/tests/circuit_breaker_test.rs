@@ -139,6 +139,27 @@ fn release_half_open_permit_does_not_count_health() {
 }
 
 #[test]
+fn set_config_swaps_tunables_and_preserves_state_and_counts() {
+    let mut b = breaker(1);
+    assert!(b.allow_request());
+    b.record_failure();
+    assert_eq!(b.state(), CircuitState::Open);
+    let failures = b.failed_requests();
+
+    let mut next = b.config().clone();
+    next.failure_threshold = 100;
+    next.timeout_secs = 30;
+    assert!(b.set_config(next.clone()), "a changed config is applied");
+    assert_eq!(b.config(), &next);
+
+    // The tripped state and the evidence behind it survive the swap: saving
+    // new thresholds must not reset the breaker behind the operator's back.
+    assert_eq!(b.state(), CircuitState::Open);
+    assert_eq!(b.failed_requests(), failures);
+    assert!(!b.set_config(next), "an identical config is a no-op");
+}
+
+#[test]
 fn reset_returns_to_closed_and_clears_metrics() {
     let b = breaker(1);
     assert!(b.allow_request());

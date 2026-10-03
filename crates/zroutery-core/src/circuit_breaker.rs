@@ -97,6 +97,23 @@ impl CircuitBreaker {
         &self.config
     }
 
+    /// Replace the tunables of a live breaker, returning whether anything
+    /// changed.
+    ///
+    /// A configuration hot swap must reach breakers that already exist, not only
+    /// models seen for the first time. The recorded evidence is deliberately
+    /// kept: consecutive counts, lifetime totals and the current
+    /// `Closed`/`Open`/`HalfOpen` state survive, so saving new thresholds never
+    /// silently resets a tripped breaker or erases the streak that tripped it.
+    /// Only the thresholds, the cooldown and the error-rate window are replaced.
+    pub fn set_config(&mut self, config: CircuitBreakerConfig) -> bool {
+        if self.config == config {
+            return false;
+        }
+        self.config = config;
+        true
+    }
+
     pub fn consecutive_failures(&self) -> u32 {
         self.consecutive_failures.load(Ordering::Relaxed)
     }
