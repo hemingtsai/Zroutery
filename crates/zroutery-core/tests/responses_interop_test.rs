@@ -559,3 +559,91 @@ fn native_reasoning_response_keeps_encrypted_content() {
         other => panic!("expected redacted thinking block, got {other:?}"),
     }
 }
+
+// --------------------------------------------------------------- LD4
+
+#[test]
+fn parser_closes_tool_blocks_and_stops_for_tool_use() {
+    let raw = concat!(
+        "event: response.created\ndata: ",
+        r#"{"type":"response.created","response":{"id":"resp_1","model":"m"}}"#,
+        "\n\n",
+        "event: response.output_item.added\ndata: ",
+        r#"{"type":"response.output_item.added","output_index":0,"item":{"id":"fc_1","type":"function_call","call_id":"call_1","name":"f","arguments":""}}"#,
+        "\n\n",
+        "event: response.function_call_arguments.delta\ndata: ",
+        r#"{"type":"response.function_call_arguments.delta","item_id":"fc_1","output_index":0,"delta":"{\"a\":1}"}"#,
+        "\n\n",
+        "event: response.function_call_arguments.done\ndata: ",
+        r#"{"type":"response.function_call_arguments.done","item_id":"fc_1","output_index":0,"arguments":"{\"a\":1}"}"#,
+        "\n\n",
+        "event: response.output_item.done\ndata: ",
+        r#"{"type":"response.output_item.done","output_index":0,"item":{"id":"fc_1","type":"function_call","call_id":"call_1","name":"f","arguments":"{\"a\":1}","status":"completed"}}"#,
+        "\n\n",
+        "event: response.completed\ndata: ",
+        r#"{"type":"response.completed","response":{"id":"resp_1","model":"m","status":"completed","output":[{"id":"fc_1","type":"function_call","call_id":"call_1","name":"f","arguments":"{\"a\":1}"}]}}"#,
+        "\n\n",
+    );
+
+    let mut decoder = SseDecoder::new();
+    let mut parser = ResponsesStreamParser::new("m");
+    let mut events = Vec::new();
+    for frame in decoder.push(raw.as_bytes()) {
+        events.extend(
+            parser
+                .push(&frame)
+                .unwrap_or_else(|err| panic!("{:?} rejected: {err}", frame.event)),
+        );
+    }
+    events.extend(parser.finish());
+
+    let stops: Vec<u32> = events
+        .iter()
+        .filter_map(|event| match event {
+            StreamEvent::BlockStop { index } => Some(*index),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(stops, vec![0], "the tool block must be closed exactly once");
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            StreamEvent::Stop {
+                stop_reason: StopReason::ToolUse,
+                ..
+            }
+        )),
+        "a function call response must stop for a tool round: {events:?}"
+    );
+}
+
+#[test]
+fn responses_response_with_tool_call_stops_for_tool_use() {
+    let body = json!({
+        "id": "resp_1",
+        "status": "completed",
+        "output": [{
+            "type": "function_call",
+            "id": "fc_1",
+            "call_id": "call_1",
+            "name": "f",
+            "arguments": "{}",
+        }],
+    });
+    let resp = decode_response(body).unwrap();
+    assert_eq!(resp.stop_reason, StopReason::ToolUse);
+
+    let text = json!({
+        "id": "resp_2",
+        "status": "completed",
+        "output": [{
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "hi"}],
+        }],
+    });
+    assert_eq!(
+        decode_response(text).unwrap().stop_reason,
+        StopReason::EndTurn
+    );
+}
