@@ -7,8 +7,10 @@ use serde_json::{json, Value};
 use zroutery_core::ir::{
     ContentBlock, Dialect, Role, StopReason, StreamEvent, ToolResultPart, Usage,
 };
-use zroutery_core::protocol::responses::{decode_request, decode_response, ResponsesStreamEncoder};
-use zroutery_core::protocol::{SseFrame, StreamEncoder};
+use zroutery_core::protocol::responses::{
+    decode_request, decode_response, ResponsesStreamEncoder, ResponsesStreamParser,
+};
+use zroutery_core::protocol::{SseDecoder, SseFrame, StreamEncoder, StreamParser};
 
 #[test]
 fn easy_input_message_without_type_decodes() {
@@ -415,4 +417,65 @@ fn non_null_response_error_still_fails() {
     });
     let err = decode_response(body).unwrap_err();
     assert!(err.to_string().contains("boom"), "got {err}");
+}
+
+// --------------------------------------------------------------- LD2
+
+#[test]
+fn parser_accepts_incomplete_and_reasoning_summary_parts() {
+    let raw = concat!(
+        "event: response.created\ndata: ",
+        r#"{"type":"response.created","response":{"id":"resp_1","model":"m"}}"#,
+        "\n\n",
+        "event: response.reasoning_summary_part.added\ndata: ",
+        r#"{"type":"response.reasoning_summary_part.added","item_id":"rs_1","output_index":0,"summary_index":0,"part":{"type":"summary_text","text":""}}"#,
+        "\n\n",
+        "event: response.reasoning_summary_text.delta\ndata: ",
+        r#"{"type":"response.reasoning_summary_text.delta","item_id":"rs_1","output_index":0,"summary_index":0,"delta":"one"}"#,
+        "\n\n",
+        "event: response.reasoning_summary_part.done\ndata: ",
+        r#"{"type":"response.reasoning_summary_part.done","item_id":"rs_1","output_index":0,"summary_index":0,"part":{"type":"summary_text","text":"one"}}"#,
+        "\n\n",
+        "event: response.reasoning_summary_text.delta\ndata: ",
+        r#"{"type":"response.reasoning_summary_text.delta","item_id":"rs_1","output_index":1,"summary_index":0,"delta":"two"}"#,
+        "\n\n",
+        "event: response.incomplete\ndata: ",
+        r#"{"type":"response.incomplete","response":{"id":"resp_1","model":"m","status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"usage":{"input_tokens":1,"output_tokens":2}}}"#,
+        "\n\n",
+    );
+
+    let mut decoder = SseDecoder::new();
+    let mut parser = ResponsesStreamParser::new("m");
+    let mut events = Vec::new();
+    for frame in decoder.push(raw.as_bytes()) {
+        events.extend(
+            parser
+                .push(&frame)
+                .unwrap_or_else(|err| panic!("{:?} rejected: {err}", frame.event)),
+        );
+    }
+    events.extend(parser.finish());
+
+    let thinking: Vec<(u32, String)> = events
+        .iter()
+        .filter_map(|event| match event {
+            StreamEvent::ThinkingDelta { index, text } => Some((*index, text.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        thinking,
+        vec![(0, "one".to_string()), (1, "two".to_string())],
+        "the summary part done event must close the open reasoning index"
+    );
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            StreamEvent::Stop {
+                stop_reason: StopReason::MaxTokens,
+                ..
+            }
+        )),
+        "response.incomplete must stop the stream as MaxTokens"
+    );
 }

@@ -1310,7 +1310,7 @@ impl StreamParser for ResponsesStreamParser {
                     text: delta.to_string(),
                 });
             }
-            "response.completed" => {
+            "response.completed" | "response.incomplete" => {
                 if !self.started {
                     self.started = true;
                     out.push(StreamEvent::Start {
@@ -1324,12 +1324,50 @@ impl StreamParser for ResponsesStreamParser {
                         self.usage = decode_usage(Some(usage));
                     }
                 }
+                let stop_reason = if event_type == "response.incomplete" {
+                    match event
+                        .get("response")
+                        .and_then(|r| r.pointer("/incomplete_details/reason"))
+                        .and_then(Value::as_str)
+                    {
+                        Some("content_filter") => StopReason::Refusal,
+                        _ => StopReason::MaxTokens,
+                    }
+                } else {
+                    StopReason::EndTurn
+                };
                 self.stopped = true;
                 out.push(StreamEvent::Stop {
-                    stop_reason: StopReason::EndTurn,
+                    stop_reason,
                     stop_sequence: None,
                     usage: self.usage,
                 });
+            }
+            "response.reasoning_summary_part.added" | "response.reasoning_summary_part.done" => {
+                let part = event.get("part").ok_or_else(|| {
+                    Error::BadUpstreamPayload(
+                        "reasoning summary part event is missing `part`".into(),
+                    )
+                })?;
+                match part.get("type").and_then(Value::as_str) {
+                    Some("summary_text") | Some("reasoning") | Some("reasoning_text") => {
+                        if event_type == "response.reasoning_summary_part.added" {
+                            self.open_index("thinking");
+                        } else {
+                            self.thinking_index = None;
+                        }
+                    }
+                    Some(_) => {
+                        return Err(unsupported_upstream_content(
+                            "Responses reasoning summary part",
+                        ));
+                    }
+                    None => {
+                        return Err(Error::BadUpstreamPayload(
+                            "Responses reasoning summary part is missing `type`".into(),
+                        ));
+                    }
+                }
             }
             "response.in_progress"
             | "response.queued"
