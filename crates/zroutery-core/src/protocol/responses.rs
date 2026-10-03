@@ -1156,27 +1156,34 @@ pub fn encode_response(resp: &ChatResponse) -> Value {
     resp_json
 }
 
+/// Decode an OpenAI Responses `usage` object into the IR contract.
+///
+/// `input_tokens` is already the cache-*inclusive* prompt total and
+/// `input_tokens_details.cached_tokens` is a subset of it, so the total passes
+/// through and the read part is clamped to it.
 pub(crate) fn decode_usage(v: Option<&Value>) -> Usage {
     let Some(u) = v.filter(|u| !u.is_null()) else {
         return Usage::default();
     };
+    let input_tokens = u
+        .get("input_tokens")
+        .and_then(Value::as_u64)
+        .unwrap_or(0)
+        .min(u32::MAX as u64) as u32;
+    let cache_read_tokens = u
+        .get("input_tokens_details")
+        .and_then(|d| d.get("cached_tokens"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0)
+        .min(u32::MAX as u64) as u32;
     Usage {
-        input_tokens: u
-            .get("input_tokens")
-            .and_then(Value::as_u64)
-            .unwrap_or(0)
-            .min(u32::MAX as u64) as u32,
+        input_tokens,
         output_tokens: u
             .get("output_tokens")
             .and_then(Value::as_u64)
             .unwrap_or(0)
             .min(u32::MAX as u64) as u32,
-        cache_read_tokens: u
-            .get("input_tokens_details")
-            .and_then(|d| d.get("cached_tokens"))
-            .and_then(Value::as_u64)
-            .unwrap_or(0)
-            .min(u32::MAX as u64) as u32,
+        cache_read_tokens: cache_read_tokens.min(input_tokens),
         cache_write_tokens: 0,
         reasoning_tokens: u
             .get("output_tokens_details")
@@ -1187,12 +1194,13 @@ pub(crate) fn decode_usage(v: Option<&Value>) -> Usage {
     }
 }
 
+/// Encode the IR contract to the Responses cache-inclusive total.
 pub(crate) fn encode_usage(u: &Usage) -> Value {
     json!({
         "input_tokens": u.input_tokens,
         "output_tokens": u.output_tokens,
         "total_tokens": u.total(),
-        "input_tokens_details": {"cached_tokens": u.cache_read_tokens},
+        "input_tokens_details": {"cached_tokens": u.cache_read_tokens.min(u.input_tokens)},
         "output_tokens_details": {"reasoning_tokens": u.reasoning_tokens},
     })
 }

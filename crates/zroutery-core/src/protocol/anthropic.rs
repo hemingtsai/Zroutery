@@ -664,36 +664,44 @@ pub fn stop_reason_to_str(r: StopReason) -> Option<&'static str> {
     }
 }
 
+/// Read one Anthropic counter, distinguishing "absent" from "zero".
+///
+/// `message_delta` restates cumulative counters one field at a time, so the
+/// parser has to know which fields the frame actually carried.
+fn usage_counter(u: &Value, key: &str) -> Option<u32> {
+    u.get(key)
+        .and_then(Value::as_u64)
+        .map(|n| n.min(u32::MAX as u64) as u32)
+}
+
+/// Decode an Anthropic `usage` object into the IR contract.
+///
+/// Anthropic reports `input_tokens` as the cache-*exclusive* prompt size and the
+/// two cache counters alongside it. The IR total is their sum, so a cache hit is
+/// not lost and `cache_read_tokens` can never exceed `input_tokens`.
 pub(crate) fn decode_usage(v: Option<&Value>) -> Usage {
     let Some(u) = v else { return Usage::default() };
+    let cache_read_tokens = usage_counter(u, "cache_read_input_tokens").unwrap_or(0);
+    let cache_write_tokens = usage_counter(u, "cache_creation_input_tokens").unwrap_or(0);
+    let total = usage_counter(u, "input_tokens").unwrap_or(0) as u64
+        + cache_read_tokens as u64
+        + cache_write_tokens as u64;
     Usage {
-        input_tokens: u
-            .get("input_tokens")
-            .and_then(Value::as_u64)
-            .unwrap_or(0)
-            .min(u32::MAX as u64) as u32,
-        output_tokens: u
-            .get("output_tokens")
-            .and_then(Value::as_u64)
-            .unwrap_or(0)
-            .min(u32::MAX as u64) as u32,
-        cache_read_tokens: u
-            .get("cache_read_input_tokens")
-            .and_then(Value::as_u64)
-            .unwrap_or(0)
-            .min(u32::MAX as u64) as u32,
-        cache_write_tokens: u
-            .get("cache_creation_input_tokens")
-            .and_then(Value::as_u64)
-            .unwrap_or(0)
-            .min(u32::MAX as u64) as u32,
+        input_tokens: total.min(u32::MAX as u64) as u32,
+        output_tokens: usage_counter(u, "output_tokens").unwrap_or(0),
+        cache_read_tokens,
+        cache_write_tokens,
         reasoning_tokens: 0,
     }
 }
 
+/// Encode the IR contract back to Anthropic's cache-exclusive shape.
+///
+/// The total is split back into fresh input plus the two cache counters, so a
+/// usage produced by any decoder round-trips to the same Anthropic numbers.
 pub(crate) fn encode_usage(u: &Usage) -> Value {
     json!({
-        "input_tokens": u.input_tokens,
+        "input_tokens": u.fresh_input_tokens(),
         "output_tokens": u.output_tokens,
         "cache_read_input_tokens": u.cache_read_tokens,
         "cache_creation_input_tokens": u.cache_write_tokens,
@@ -939,11 +947,33 @@ impl StreamParser for AnthropicStreamParser {
             "message_delta" => {
                 let delta = v.get("delta");
                 if let Some(u) = v.get("usage") {
-                    let partial = decode_usage(Some(u));
-                    // message_delta only carries output side counters.
-                    self.usage.output_tokens = partial.output_tokens;
-                    if partial.input_tokens > 0 {
-                        self.usage.input_tokens = partial.input_tokens;
+                    // `MessageDeltaUsage` is cumulative *per field*, including
+                    // the cache counters, and the final delta is the last word
+                    // on usage. Merging field by field means a delta that only
+                    // restates some counters does not drop the ones the
+                    // `message_start` frame already reported.
+                    if let Some(output) = usage_counter(u, "output_tokens") {
+                        self.usage.output_tokens = output;
+                    }
+                    let fresh = usage_counter(u, "input_tokens");
+                    let read = usage_counter(u, "cache_read_input_tokens");
+                    let write = usage_counter(u, "cache_creation_input_tokens");
+                    if fresh.is_some() || read.is_some() || write.is_some() {
+                        if let Some(read) = read {
+                            self.usage.cache_read_tokens = read;
+                        }
+                        if let Some(write) = write {
+                            self.usage.cache_write_tokens = write;
+                        }
+                        // `input_tokens` is cache-exclusive; a delta that omits
+                        // it keeps the fresh part already reported.
+                        let fresh = fresh
+                            .map(u64::from)
+                            .unwrap_or_else(|| u64::from(self.usage.fresh_input_tokens()));
+                        let total = fresh
+                            + u64::from(self.usage.cache_read_tokens)
+                            + u64::from(self.usage.cache_write_tokens);
+                        self.usage.input_tokens = total.min(u32::MAX as u64) as u32;
                     }
                 }
                 self.stopped = true;
@@ -1208,6 +1238,11 @@ impl StreamEncoder for AnthropicStreamEncoder {
                     ));
                 }
                 self.usage = *usage;
+                // `MessageDeltaUsage` carries cumulative input and cache
+                // counters too, so the last frame the client sees restates the
+                // complete, cache-exclusive Anthropic usage even when the
+                // `message_start` frame was emitted before the upstream
+                // reported any (an OpenAI trailer, for example).
                 out.push(Self::frame(
                     "message_delta",
                     json!({
@@ -1216,7 +1251,7 @@ impl StreamEncoder for AnthropicStreamEncoder {
                             "stop_reason": stop_reason_to_str(*stop_reason),
                             "stop_sequence": stop_sequence,
                         },
-                        "usage": {"output_tokens": usage.output_tokens},
+                        "usage": encode_usage(usage),
                     }),
                 ));
                 out.push(Self::frame("message_stop", json!({"type": "message_stop"})));
@@ -1246,7 +1281,7 @@ impl StreamEncoder for AnthropicStreamEncoder {
             json!({
                 "type": "message_delta",
                 "delta": {"stop_reason": "end_turn", "stop_sequence": Value::Null},
-                "usage": {"output_tokens": self.usage.output_tokens},
+                "usage": encode_usage(&self.usage),
             }),
         ));
         out.push(Self::frame("message_stop", json!({"type": "message_stop"})));
@@ -1547,12 +1582,140 @@ mod tests {
         let resp = decode_response(body).unwrap();
         assert_eq!(resp.text(), "hi");
         assert_eq!(resp.stop_reason, StopReason::EndTurn);
-        assert_eq!(resp.usage.input_tokens, 10);
+        // 10 cache-exclusive input tokens plus 2 cache reads are a 12 token IR
+        // prompt total; encoding splits them back apart.
+        assert_eq!(resp.usage.input_tokens, 12);
+        assert_eq!(resp.usage.fresh_input_tokens(), 10);
         assert_eq!(resp.usage.cache_read_tokens, 2);
         let back = encode_response(&resp);
         assert_eq!(back["content"][0]["text"], "hi");
         assert_eq!(back["stop_reason"], "end_turn");
         assert_eq!(back["usage"]["input_tokens"], 10);
+        assert_eq!(back["usage"]["cache_read_input_tokens"], 2);
+    }
+
+    #[test]
+    fn usage_normalizes_the_cache_counters_into_the_total() {
+        // The report's synthetic frame: 100 fresh, 10,000 cache reads, 200 cache
+        // writes. Anthropic's `input_tokens` is cache-exclusive, so the IR total
+        // is 10,300 and the encoder splits it back into the same three numbers.
+        let body = json!({
+            "id": "msg_cache",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude",
+            "content": [{"type": "text", "text": "hi"}],
+            "stop_reason": "end_turn",
+            "stop_sequence": Value::Null,
+            "usage": {
+                "input_tokens": 100,
+                "output_tokens": 0,
+                "cache_read_input_tokens": 10_000,
+                "cache_creation_input_tokens": 200,
+            }
+        });
+        let resp = decode_response(body).unwrap();
+        assert_eq!(resp.usage.input_tokens, 10_300);
+        assert_eq!(resp.usage.fresh_input_tokens(), 100);
+        assert_eq!(resp.usage.cache_read_tokens, 10_000);
+        assert_eq!(resp.usage.cache_write_tokens, 200);
+        assert!(
+            resp.usage.cache_read_tokens + resp.usage.cache_write_tokens <= resp.usage.input_tokens
+        );
+
+        let back = encode_response(&resp);
+        assert_eq!(back["usage"]["input_tokens"], 100);
+        assert_eq!(back["usage"]["cache_read_input_tokens"], 10_000);
+        assert_eq!(back["usage"]["cache_creation_input_tokens"], 200);
+
+        // And the normalized numbers survive a second full round-trip.
+        let again = decode_response(back).unwrap();
+        assert_eq!(again.usage, resp.usage);
+    }
+
+    #[test]
+    fn stream_final_usage_restates_the_cache_counters() {
+        // `MessageDeltaUsage` accepts the cumulative input and cache counters,
+        // and the final delta is the last word on usage.
+        let raw = concat!(
+            "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"model\":\"claude\",\"usage\":{\"input_tokens\":100,\"cache_read_input_tokens\":10000,\"cache_creation_input_tokens\":200,\"output_tokens\":0}}}\n\n",
+            "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+            "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hi\"}}\n\n",
+            "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+            "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"input_tokens\":100,\"cache_read_input_tokens\":10000,\"cache_creation_input_tokens\":200,\"output_tokens\":5}}\n\n",
+            "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+        );
+        let events = frames_to_events(raw, "claude");
+        let stop_usage = match events.last().unwrap() {
+            StreamEvent::Stop { usage, .. } => *usage,
+            other => panic!("unexpected tail {other:?}"),
+        };
+        assert_eq!(stop_usage.input_tokens, 10_300);
+        assert_eq!(stop_usage.cache_read_tokens, 10_000);
+        assert_eq!(stop_usage.cache_write_tokens, 200);
+        assert_eq!(stop_usage.output_tokens, 5);
+
+        // Re-encoding for an Anthropic client restates the complete final usage
+        // on the last frame instead of only the output count.
+        let mut enc = AnthropicStreamEncoder::new("claude");
+        let mut wire = String::new();
+        for ev in &events {
+            for f in enc.encode(ev) {
+                wire.push_str(&f.to_wire());
+            }
+        }
+        let delta = wire
+            .lines()
+            .filter_map(|line| line.strip_prefix("data: "))
+            .filter_map(|data| serde_json::from_str::<Value>(data).ok())
+            .find(|v| v["type"] == "message_delta")
+            .expect("a message_delta frame");
+        assert_eq!(delta["usage"]["input_tokens"], 100);
+        assert_eq!(delta["usage"]["cache_read_input_tokens"], 10_000);
+        assert_eq!(delta["usage"]["cache_creation_input_tokens"], 200);
+        assert_eq!(delta["usage"]["output_tokens"], 5);
+    }
+
+    #[test]
+    fn stream_delta_usage_alone_fills_the_final_cache_counters() {
+        // A stream whose `message_start` usage is empty (the OpenAI trailer
+        // shape) must still report the cache counters it learns at the end.
+        let raw = concat!(
+            "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"model\":\"claude\"}}\n\n",
+            "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+            "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+            "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"input_tokens\":60,\"cache_read_input_tokens\":40,\"output_tokens\":10}}\n\n",
+        );
+        let events = frames_to_events(raw, "claude");
+        let stop_usage = match events.last().unwrap() {
+            StreamEvent::Stop { usage, .. } => *usage,
+            other => panic!("unexpected tail {other:?}"),
+        };
+        assert_eq!(stop_usage.input_tokens, 100);
+        assert_eq!(stop_usage.cache_read_tokens, 40);
+        assert_eq!(stop_usage.output_tokens, 10);
+    }
+
+    #[test]
+    fn stream_delta_merge_keeps_counters_it_omits() {
+        // `message_start` reported 10,000 cache reads and 200 cache writes; the
+        // final delta restates only the fresh input, the cache reads and the
+        // output. The omitted write counter must survive the cumulative merge
+        // rather than being recomputed away.
+        let raw = concat!(
+            "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"model\":\"claude\",\"usage\":{\"input_tokens\":100,\"cache_read_input_tokens\":10000,\"cache_creation_input_tokens\":200,\"output_tokens\":0}}}\n\n",
+            "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"input_tokens\":100,\"cache_read_input_tokens\":10000,\"output_tokens\":5}}\n\n",
+        );
+        let events = frames_to_events(raw, "claude");
+        let stop_usage = match events.last().unwrap() {
+            StreamEvent::Stop { usage, .. } => *usage,
+            other => panic!("unexpected tail {other:?}"),
+        };
+        assert_eq!(stop_usage.input_tokens, 10_300);
+        assert_eq!(stop_usage.fresh_input_tokens(), 100);
+        assert_eq!(stop_usage.cache_read_tokens, 10_000);
+        assert_eq!(stop_usage.cache_write_tokens, 200);
+        assert_eq!(stop_usage.output_tokens, 5);
     }
 
     #[test]

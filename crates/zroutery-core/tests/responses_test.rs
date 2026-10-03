@@ -279,6 +279,41 @@ fn responses_response_round_trips_through_ir() {
 }
 
 #[test]
+fn responses_cached_tokens_are_a_subset_of_the_input_total() {
+    // `input_tokens` is the cache-inclusive total and `cached_tokens` is a
+    // detail nested inside it, so the two are never added together.
+    let body = json!({
+        "id": "resp_cache",
+        "object": "response",
+        "model": "gpt-5",
+        "status": "completed",
+        "output": [{
+            "type": "message",
+            "role": "assistant",
+            "status": "completed",
+            "content": [{"type": "output_text", "text": "hi", "annotations": []}]
+        }],
+        "usage": {
+            "input_tokens": 1_000,
+            "output_tokens": 5,
+            "total_tokens": 1_005,
+            "input_tokens_details": {"cached_tokens": 800},
+            "output_tokens_details": {"reasoning_tokens": 2}
+        }
+    });
+    let decoded = decode_response(body).unwrap();
+    assert_eq!(decoded.usage.input_tokens, 1_000);
+    assert_eq!(decoded.usage.cache_read_tokens, 800);
+    assert_eq!(decoded.usage.fresh_input_tokens(), 200);
+    assert_eq!(decoded.usage.reasoning_tokens, 2);
+
+    let wire = encode_response(&decoded);
+    assert_eq!(wire["usage"]["input_tokens"], 1_000);
+    assert_eq!(wire["usage"]["input_tokens_details"]["cached_tokens"], 800);
+    assert_eq!(wire["usage"]["total_tokens"], 1_005);
+}
+
+#[test]
 fn request_decode_empty_input_array() {
     let body = json!({
         "model": "gpt-4",

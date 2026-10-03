@@ -993,28 +993,37 @@ pub fn finish_reason_to_str(r: StopReason) -> Option<&'static str> {
     }
 }
 
+/// Decode an OpenAI `usage` object into the IR contract.
+///
+/// `prompt_tokens` is already a cache-*inclusive* total and
+/// `prompt_tokens_details.cached_tokens` (or DeepSeek's
+/// `prompt_cache_hit_tokens`) is the read part, so the total passes through and
+/// only the read is clamped to it. A relay that reports a cache count larger
+/// than its own prompt total cannot break the IR subset invariant.
 pub(crate) fn decode_usage(v: Option<&Value>) -> Usage {
     let Some(u) = v.filter(|u| !u.is_null()) else {
         return Usage::default();
     };
+    let input_tokens = u
+        .get("prompt_tokens")
+        .and_then(Value::as_u64)
+        .unwrap_or(0)
+        .min(u32::MAX as u64) as u32;
+    let cache_read_tokens = u
+        .get("prompt_tokens_details")
+        .and_then(|d| d.get("cached_tokens"))
+        .and_then(Value::as_u64)
+        .or_else(|| u.get("prompt_cache_hit_tokens").and_then(Value::as_u64))
+        .unwrap_or(0)
+        .min(u32::MAX as u64) as u32;
     Usage {
-        input_tokens: u
-            .get("prompt_tokens")
-            .and_then(Value::as_u64)
-            .unwrap_or(0)
-            .min(u32::MAX as u64) as u32,
+        input_tokens,
         output_tokens: u
             .get("completion_tokens")
             .and_then(Value::as_u64)
             .unwrap_or(0)
             .min(u32::MAX as u64) as u32,
-        cache_read_tokens: u
-            .get("prompt_tokens_details")
-            .and_then(|d| d.get("cached_tokens"))
-            .and_then(Value::as_u64)
-            .or_else(|| u.get("prompt_cache_hit_tokens").and_then(Value::as_u64))
-            .unwrap_or(0)
-            .min(u32::MAX as u64) as u32,
+        cache_read_tokens: cache_read_tokens.min(input_tokens),
         cache_write_tokens: 0,
         reasoning_tokens: u
             .get("completion_tokens_details")
@@ -1025,12 +1034,17 @@ pub(crate) fn decode_usage(v: Option<&Value>) -> Usage {
     }
 }
 
+/// Encode the IR contract to OpenAI's cache-inclusive total.
+///
+/// `prompt_tokens` is the full IR prompt total (fresh + cache read + cache
+/// write) and `cached_tokens` is only the read part, so the value a client sees
+/// can never exceed the total it is nested in.
 pub(crate) fn encode_usage(u: &Usage) -> Value {
     json!({
         "prompt_tokens": u.input_tokens,
         "completion_tokens": u.output_tokens,
         "total_tokens": u.total(),
-        "prompt_tokens_details": {"cached_tokens": u.cache_read_tokens},
+        "prompt_tokens_details": {"cached_tokens": u.cache_read_tokens.min(u.input_tokens)},
         "completion_tokens_details": {"reasoning_tokens": u.reasoning_tokens},
     })
 }
@@ -1932,10 +1946,61 @@ mod tests {
 
     #[test]
     fn deepseek_cache_hit_field_is_understood() {
+        // `prompt_tokens` is the inclusive total and the DeepSeek cache-hit
+        // field is a subset of it, not something to add on top.
         let u = decode_usage(Some(&json!({
             "prompt_tokens": 100, "completion_tokens": 1, "prompt_cache_hit_tokens": 64
         })));
+        assert_eq!(u.input_tokens, 100);
         assert_eq!(u.cache_read_tokens, 64);
+        assert_eq!(u.fresh_input_tokens(), 36);
+
+        // A relay that reports more cache hits than prompt tokens cannot make the
+        // cached counter exceed the total the client sees.
+        let contradictory = decode_usage(Some(&json!({
+            "prompt_tokens": 100, "completion_tokens": 1,
+            "prompt_tokens_details": {"cached_tokens": 900}
+        })));
+        assert_eq!(contradictory.input_tokens, 100);
+        assert_eq!(contradictory.cache_read_tokens, 100);
+
+        let wire = encode_usage(&contradictory);
+        assert_eq!(wire["prompt_tokens"], 100);
+        assert!(
+            wire["prompt_tokens_details"]["cached_tokens"]
+                .as_u64()
+                .unwrap()
+                <= 100
+        );
+    }
+
+    #[test]
+    fn encoded_prompt_total_includes_the_cached_tokens() {
+        // An IR usage that came from Anthropic: fresh=100, read=10_000,
+        // write=200, so the prompt total is 10,300. OpenAI clients get that
+        // total with the read nested inside it.
+        let u = Usage {
+            input_tokens: 10_300,
+            output_tokens: 0,
+            cache_read_tokens: 10_000,
+            cache_write_tokens: 200,
+            reasoning_tokens: 0,
+        };
+        let wire = encode_usage(&u);
+        assert_eq!(wire["prompt_tokens"], 10_300);
+        assert_eq!(wire["total_tokens"], 10_300);
+        assert_eq!(wire["prompt_tokens_details"]["cached_tokens"], 10_000);
+        assert!(
+            wire["prompt_tokens_details"]["cached_tokens"]
+                .as_u64()
+                .unwrap()
+                <= wire["prompt_tokens"].as_u64().unwrap()
+        );
+
+        // And the total survives a decode.
+        let back = decode_usage(Some(&wire));
+        assert_eq!(back.input_tokens, 10_300);
+        assert_eq!(back.cache_read_tokens, 10_000);
     }
 
     #[test]

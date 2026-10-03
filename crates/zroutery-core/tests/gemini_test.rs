@@ -72,6 +72,61 @@ fn response_round_trips_through_ir() {
 }
 
 #[test]
+fn cached_content_is_a_subset_of_the_gemini_prompt_total() {
+    // `promptTokenCount` is the total effective prompt size and already
+    // includes `cachedContentTokenCount`, so the cached count is carried as a
+    // subset rather than added on top of it.
+    let body = json!({
+        "candidates": [{
+            "content": {"role": "model", "parts": [{"text": "hi"}]},
+            "finishReason": "STOP"
+        }],
+        "usageMetadata": {
+            "promptTokenCount": 1_000,
+            "cachedContentTokenCount": 800,
+            "candidatesTokenCount": 5,
+            "totalTokenCount": 1_005
+        }
+    });
+    let decoded = decode_response(body).unwrap();
+    assert_eq!(decoded.usage.input_tokens, 1_000);
+    assert_eq!(decoded.usage.cache_read_tokens, 800);
+    assert_eq!(decoded.usage.fresh_input_tokens(), 200);
+
+    let wire = encode_response(&decoded);
+    assert_eq!(wire["usageMetadata"]["promptTokenCount"], 1_000);
+    assert_eq!(wire["usageMetadata"]["cachedContentTokenCount"], 800);
+    assert!(
+        wire["usageMetadata"]["cachedContentTokenCount"]
+            .as_u64()
+            .unwrap()
+            <= wire["usageMetadata"]["promptTokenCount"].as_u64().unwrap()
+    );
+}
+
+#[test]
+fn streamed_cached_content_lands_in_the_stop_usage() {
+    let raw = "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"hello\"}]}}]}\n\n\
+               data: {\"candidates\":[{\"content\":{\"parts\":[]},\"finishReason\":\"STOP\"}],\
+               \"usageMetadata\":{\"promptTokenCount\":100,\"cachedContentTokenCount\":64,\"candidatesTokenCount\":3}}\n\n";
+    let mut dec = SseDecoder::new();
+    let mut parser = GeminiStreamParser::new("gemini-2.0-flash");
+    let mut events = Vec::new();
+    for frame in dec.push(raw.as_bytes()) {
+        events.extend(parser.push(&frame).unwrap());
+    }
+    events.extend(parser.finish());
+    match events.last().unwrap() {
+        StreamEvent::Stop { usage, .. } => {
+            assert_eq!(usage.input_tokens, 100);
+            assert_eq!(usage.cache_read_tokens, 64);
+            assert_eq!(usage.output_tokens, 3);
+        }
+        other => panic!("unexpected tail {other:?}"),
+    }
+}
+
+#[test]
 fn request_round_trips_through_ir() {
     let mut req = ChatRequest::new("gemini-2.0-flash", Dialect::Gemini);
     req.system.push(zroutery_core::SystemPart::new("sys"));
