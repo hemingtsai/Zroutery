@@ -143,17 +143,19 @@ export default function Providers({
     setOpenId(id);
   };
 
+  /**
+   * Remove a provider, its models and its credential in one backend call.
+   *
+   * Saving the configuration first and clearing the key afterwards lost the
+   * provider's real `key_ref` — the clear could only guess `provider:{id}`, so
+   * a custom reference stayed in the credential store. The backend reads the
+   * reference before changing the configuration and refuses to delete one
+   * another provider still uses.
+   */
   const removeProvider = async (id: string) => {
     const models = config.models.filter((m) => m.provider_id === id);
-    const ok = await save((cfg) => {
-      const next = structuredClone(cfg);
-      next.providers = next.providers.filter((p) => p.id !== id);
-      next.models = next.models.filter((m) => m.provider_id !== id);
-      return next;
-    });
-    if (!ok) return;
-    await run(() => api.clearKey(id));
-    if (!isMounted.current) return;
+    const ok = await run(() => api.removeProvider(id));
+    if (!ok || !isMounted.current) return;
     setOpenId(null);
     if (models.length) {
       notify("ok", t("providers.removed_models_notice", { n: models.length }));

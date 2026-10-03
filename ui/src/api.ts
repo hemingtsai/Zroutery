@@ -532,6 +532,15 @@ export const api = {
     invoke<Snapshot>("set_provider_key", { providerId: provider_id, apiKey: api_key }),
   clearKey: (provider_id: string) =>
     invoke<Snapshot>("clear_provider_key", { providerId: provider_id }),
+  /**
+   * Remove a provider, its models and the credential only it used.
+   *
+   * One backend round trip: the key reference is read before the
+   * configuration changes, so a custom `key_ref` is cleared rather than
+   * guessed, and a reference another provider shares is kept.
+   */
+  removeProvider: (provider_id: string) =>
+    invoke<Snapshot>("remove_provider", { providerId: provider_id }),
   fetchModels: (provider: Provider) =>
     invoke<DiscoveredModel[]>("fetch_provider_models", { provider }),
   refreshBalance: (provider_id: string) =>
