@@ -1126,6 +1126,19 @@ pub fn decode_response(body: Value) -> Result<ChatResponse> {
             content.push(decode_tool_call(call)?);
         }
     }
+    let mut passthrough = Map::new();
+    if let Some(refusal) = msg
+        .get("refusal")
+        .and_then(Value::as_str)
+        .filter(|refusal| !refusal.is_empty())
+    {
+        // A refusal is a legal answer whose `content` is null. The text joins
+        // the content so every dialect can show it, and the field is kept so a
+        // same-dialect re-encode can restore OpenAI's own shape instead of
+        // turning the answer into an empty success.
+        content.push(ContentBlock::text(refusal));
+        passthrough.insert("refusal".into(), json!(refusal));
+    }
 
     Ok(ChatResponse {
         id: body
@@ -1146,7 +1159,7 @@ pub fn decode_response(body: Value) -> Result<ChatResponse> {
             .unwrap_or(StopReason::Unknown),
         stop_sequence: None,
         usage: decode_usage(body.get("usage")),
-        passthrough: Map::new(),
+        passthrough,
     })
 }
 
@@ -1180,16 +1193,29 @@ pub fn encode_response(resp: &ChatResponse) -> Value {
         }
     }
 
+    // OpenAI reports a refusal as `content: null` plus a `refusal` string.
+    // Keep that shape when the refusal text is the whole answer, and keep the
+    // text as content otherwise so a mixed answer loses nothing.
+    let refusal = resp
+        .passthrough
+        .get("refusal")
+        .and_then(Value::as_str)
+        .filter(|refusal| !refusal.is_empty());
+    let refusal_is_the_answer = refusal.is_some_and(|refusal| refusal == text);
+
     let mut message = Map::new();
     message.insert("role".into(), json!("assistant"));
     message.insert(
         "content".into(),
-        if text.is_empty() && !tool_calls.is_empty() {
+        if refusal_is_the_answer || (text.is_empty() && !tool_calls.is_empty()) {
             Value::Null
         } else {
             json!(text)
         },
     );
+    if let Some(refusal) = refusal.filter(|_| refusal_is_the_answer) {
+        message.insert("refusal".into(), json!(refusal));
+    }
     if !reasoning.is_empty() {
         message.insert("reasoning_content".into(), json!(reasoning));
     }
@@ -1481,6 +1507,16 @@ impl StreamParser for OpenAiStreamParser {
                 if !text.is_empty() {
                     self.push_text_delta(Block::Text, text, &mut out);
                 }
+            }
+
+            // `refusal` is a separate optional member of the delta shape, and
+            // an explicit null means the turn carries no refusal text.
+            if let Some(refusal) = delta
+                .and_then(|d| d.get("refusal"))
+                .and_then(Value::as_str)
+                .filter(|refusal| !refusal.is_empty())
+            {
+                self.push_text_delta(Block::Text, refusal.to_string(), &mut out);
             }
 
             if let Some(calls) = delta
@@ -2909,5 +2945,67 @@ mod tests {
         });
         let err = decode_request(body).unwrap_err().to_string();
         assert!(err.contains("file content is missing"), "{err}");
+    }
+
+    #[test]
+    fn a_refusal_only_answer_keeps_its_text_and_field() {
+        let body = json!({
+            "id": "chatcmpl-1",
+            "model": "m",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": null,
+                    "refusal": "I cannot assist with that request."
+                },
+                "finish_reason": "stop"
+            }]
+        });
+        let resp = decode_response(body).unwrap();
+        assert_eq!(resp.text(), "I cannot assist with that request.");
+        assert_eq!(
+            resp.passthrough.get("refusal").and_then(Value::as_str),
+            Some("I cannot assist with that request.")
+        );
+
+        // The same dialect gets OpenAI's own shape back, not an empty success.
+        let wire = encode_response(&resp);
+        assert_eq!(wire["choices"][0]["message"]["content"], Value::Null);
+        assert_eq!(
+            wire["choices"][0]["message"]["refusal"],
+            "I cannot assist with that request."
+        );
+
+        // Another dialect still shows the explanation as text.
+        let other = crate::protocol::anthropic::encode_response(&resp);
+        assert_eq!(
+            other["content"][0]["text"],
+            "I cannot assist with that request."
+        );
+    }
+
+    #[test]
+    fn a_streamed_refusal_delta_is_not_dropped() {
+        let mut parser = OpenAiStreamParser::new("fallback");
+        let mut frames = SseDecoder::new().push(
+            b"data: {\"id\":\"chatcmpl-1\",\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"refusal\":\"no\"},\"finish_reason\":null}]}\n\n",
+        );
+        frames.extend(SseDecoder::new().push(
+            b"data: {\"id\":\"chatcmpl-1\",\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"refusal\":null},\"finish_reason\":\"stop\"}]}\n\n",
+        ));
+        let mut events = Vec::new();
+        for frame in frames {
+            events.extend(parser.push(&frame).unwrap());
+        }
+        events.extend(parser.finish());
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                StreamEvent::TextDelta { text, .. } if text == "no"
+            )),
+            "{events:?}"
+        );
+        assert!(matches!(events.last(), Some(StreamEvent::Stop { .. })));
     }
 }
