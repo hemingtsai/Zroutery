@@ -436,3 +436,58 @@ fn rejects_an_empty_allowed_function_names_list() {
     let error = decode_request(gated_tool_request(json!([]))).unwrap_err();
     assert!(error.to_string().contains("allowedFunctionNames"));
 }
+
+#[test]
+fn decodes_parameters_json_schema_tool_declaration() {
+    let body = json!({
+        "model": "gemini-2.0-flash",
+        "contents": [{"role": "user", "parts": [{"text": "weather?"}]}],
+        "tools": [{"functionDeclarations": [{
+            "name": "get_weather",
+            "description": "Get weather",
+            "parametersJsonSchema": {
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+                "required": ["city"],
+                "additionalProperties": false
+            }
+        }]}]
+    });
+
+    let req = decode_request(body).unwrap();
+    let schema = &req.tools[0].input_schema;
+    assert_eq!(schema["type"], "object");
+    assert_eq!(schema["properties"]["city"]["type"], "string");
+    assert_eq!(schema["required"][0], "city");
+    assert_eq!(schema["additionalProperties"], false);
+
+    // The forwarded request must carry the declared schema rather than an
+    // empty object schema with no properties or constraints.
+    let upstream = translate_request(
+        Dialect::OpenAI,
+        &req,
+        "gpt-4o",
+        &ProviderQuirks::default(),
+    )
+    .unwrap();
+    let parameters = &upstream["tools"][0]["function"]["parameters"];
+    assert_eq!(parameters["properties"]["city"]["type"], "string");
+    assert_eq!(parameters["required"][0], "city");
+    assert_eq!(parameters["additionalProperties"], false);
+}
+
+#[test]
+fn rejects_a_declaration_with_both_schema_fields() {
+    let body = json!({
+        "model": "gemini-2.0-flash",
+        "contents": [{"role": "user", "parts": [{"text": "weather?"}]}],
+        "tools": [{"functionDeclarations": [{
+            "name": "get_weather",
+            "parameters": {"type": "object"},
+            "parametersJsonSchema": {"type": "object"}
+        }]}]
+    });
+
+    let error = decode_request(body).unwrap_err();
+    assert!(error.to_string().contains("parametersJsonSchema"));
+}
