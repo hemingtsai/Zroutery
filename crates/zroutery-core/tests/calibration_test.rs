@@ -1664,6 +1664,109 @@ fn the_holdout_is_disjoint_from_the_partition_the_calibrator_was_fitted_on() {
         .all(|fingerprint| fingerprint.len() == 16));
 }
 
+/// Two candidates the head reports identically, decided 60/40.
+///
+/// The only signal is the empirical winner frequency, so a fit that solves the
+/// reported mean log loss must reproduce it and a fit whose step size scales
+/// with the row count will not.
+fn contested_cohorts(count: usize) -> Vec<DecisionCohort> {
+    (0..count)
+        .map(|index| {
+            let alpha_serves = index % 10 < 6;
+            DecisionCohort::try_new(
+                probe_context(BASE_TIMESTAMP + index as i64),
+                None,
+                vec![
+                    CandidateInput::Ranked {
+                        candidate: identity(ALPHA),
+                        raw_success_probability: 0.5,
+                    },
+                    CandidateInput::Ranked {
+                        candidate: identity(BRAVO),
+                        raw_success_probability: 0.5,
+                    },
+                ],
+                Some(identity(if alpha_serves { ALPHA } else { BRAVO })),
+            )
+            .expect("a two-candidate contested cohort")
+        })
+        .collect()
+}
+
+/// GATE 4, third part: the joint fit solves the loss the report publishes.
+///
+/// The reported objective is the *mean* log loss over the attributed cohorts.
+/// Accumulating an unnormalised gradient made the fitted map a function of the
+/// snapshot's row count: the same 60/40 distribution fitted on ten decisions
+/// learned roughly the truth, while the same distribution replicated to ten
+/// thousand decisions learned its reverse and reported a worse mean loss. A
+/// fit of a mean loss must be invariant under replication, because replicating
+/// a distribution does not add information.
+#[test]
+fn replicating_the_same_distribution_does_not_move_the_joint_fit() {
+    let base = contested_cohorts(10);
+    let mut replicated = Vec::with_capacity(base.len() * 1_000);
+    for _ in 0..1_000 {
+        replicated.extend(base.iter().cloned());
+    }
+
+    let config = CalibrationConfig::default();
+    let small = KWayCalibrator::fit(&base, &config, DEFAULT_PROBABILITY_FLOOR).expect("fit");
+    let large = KWayCalibrator::fit(&replicated, &config, DEFAULT_PROBABILITY_FLOOR)
+        .expect("the replicated fit");
+
+    assert_eq!(small.intercepts().len(), large.intercepts().len());
+    for (small_record, large_record) in small.intercepts().iter().zip(large.intercepts()) {
+        assert_eq!(small_record.candidate, large_record.candidate);
+        assert!(
+            (small_record.intercept - large_record.intercept).abs() < 1e-9,
+            "{} moved from {} to {} when the same distribution was replicated",
+            small_record.candidate.provider(),
+            small_record.intercept,
+            large_record.intercept
+        );
+    }
+    assert!(
+        (small.temperature() - large.temperature()).abs() < 1e-9,
+        "temperature moved from {} to {}",
+        small.temperature(),
+        large.temperature()
+    );
+
+    // And the fit still improves on the identity parameterization at both
+    // sizes: solving the reported loss must not trade one degeneracy for
+    // another.
+    for calibrator in [&small, &large] {
+        assert!(
+            calibrator.final_log_loss() < calibrator.initial_log_loss(),
+            "the fit must beat identity: {} vs {}",
+            calibrator.final_log_loss(),
+            calibrator.initial_log_loss()
+        );
+        assert!(calibrator.final_log_loss().is_finite());
+    }
+
+    // The fitted mass tracks the 60/40 the data actually shows rather than
+    // reversing it. `alpha` is the always-present first candidate.
+    let alpha = small
+        .intercepts()
+        .iter()
+        .find(|record| record.candidate == identity(ALPHA))
+        .expect("alpha is in the vocabulary");
+    let bravo = small
+        .intercepts()
+        .iter()
+        .find(|record| record.candidate == identity(BRAVO))
+        .expect("bravo is in the vocabulary");
+    assert!(
+        alpha.intercept > bravo.intercept,
+        "the more frequent winner must not be pushed below the less frequent one: \
+         {} vs {}",
+        alpha.intercept,
+        bravo.intercept
+    );
+}
+
 /// GATE 4, second part: a regime shift between the two partitions is REFUSED,
 /// and the refusal carries the measurement.
 ///

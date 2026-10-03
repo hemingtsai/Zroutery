@@ -1567,6 +1567,17 @@ impl KWayCalibrator {
         let mut temperature = 1.0_f64;
         let mut intercepts = vec![0.0_f64; indexed.len()];
 
+        // The objective measured below is the **mean** log loss over the
+        // attributed cohorts, so its gradient is the mean of the per-cohort
+        // residuals, not their sum. Accumulating the raw sum made the step size
+        // - and therefore the fitted map - a function of how many rows the
+        // snapshot happened to hold: replicating the same distribution enough
+        // times drove the intercepts to their clamp while the reported mean
+        // loss got worse. Dividing the accumulated residual by the cohort count
+        // is what makes the optimizer solve the loss that is reported, and it
+        // leaves the L2 term at a fixed strength relative to that mean loss.
+        let cohort_scale = 1.0 / attributed.len() as f64;
+
         for _ in 0..config.fit.iterations {
             let mut gradient_intercept = vec![0.0_f64; indexed.len()];
             let mut gradient_temperature = 0.0_f64;
@@ -1606,11 +1617,12 @@ impl KWayCalibrator {
 
             for (slot, value) in intercepts.iter_mut().enumerate() {
                 *value -= config.fit.learning_rate
-                    * (gradient_intercept[slot] + config.fit.intercept_l2 * *value);
+                    * (cohort_scale * gradient_intercept[slot] + config.fit.intercept_l2 * *value);
                 *value = value.clamp(-config.fit.max_abs_intercept, config.fit.max_abs_intercept);
             }
             project_to_zero_mean(&mut intercepts);
-            temperature = (temperature - config.fit.learning_rate * gradient_temperature)
+            temperature = (temperature
+                - config.fit.learning_rate * cohort_scale * gradient_temperature)
                 .clamp(config.fit.min_temperature, config.fit.max_temperature);
         }
 
