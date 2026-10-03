@@ -287,6 +287,17 @@ impl AppState {
         self.ledger_dirty.store(true, Ordering::Release);
     }
 
+    /// Record what an auxiliary call cost, against the provider that answered.
+    ///
+    /// The same ledger as [`Self::charge`], with a separate entry point because
+    /// the attribution is different: a vision description (or any other side
+    /// call made on a request's behalf) is billed to the provider and tier it
+    /// actually reached, never folded into the main request's own settlement.
+    /// The main request's lifecycle keeps its single charge site.
+    pub fn charge_auxiliary(&self, provider_id: &str, tier: Option<ModelTier>, cost: &Cost) {
+        self.charge(provider_id, tier, cost);
+    }
+
     /// What the budgets say about a request that is about to be routed.
     pub fn budget_verdict(&self, provider_ids: &[String], tier: Option<ModelTier>) -> Verdict {
         let config = self.config();
