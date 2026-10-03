@@ -233,6 +233,7 @@ async fn start_mock() -> (SocketAddr, Mock) {
     let app = axum::Router::new()
         .route("/v1/chat/completions", post(mock_chat))
         .route("/chat/completions", post(mock_chat))
+        .route("/v1/messages", post(mock_anthropic))
         .with_state(mock.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -242,12 +243,90 @@ async fn start_mock() -> (SocketAddr, Mock) {
     (addr, mock)
 }
 
+/// One Anthropic SSE frame.
+fn anthropic_frame(kind: &str, data: Value) -> String {
+    format!("event: {kind}\ndata: {data}\n\n")
+}
+
+/// An Anthropic stream that names its own non-empty message id and then stays
+/// open, the way a real provider holds a long answer.
+fn held_open_anthropic(id: &str) -> axum::body::Body {
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    let id = id.to_string();
+    tokio::spawn(async move {
+        let _ = tx.send(anthropic_frame(
+            "message_start",
+            json!({"type": "message_start", "message": {
+                "id": id, "model": "claude-mock",
+                "usage": {"input_tokens": 11, "output_tokens": 0}}}),
+        ));
+        let _ = tx.send(anthropic_frame(
+            "content_block_start",
+            json!({"type": "content_block_start", "index": 0,
+                   "content_block": {"type": "text", "text": ""}}),
+        ));
+        let _ = tx.send(anthropic_frame(
+            "content_block_delta",
+            json!({"type": "content_block_delta", "index": 0,
+                   "delta": {"type": "text_delta", "text": "hel"}}),
+        ));
+        let _ = tx.send(anthropic_frame(
+            "content_block_delta",
+            json!({"type": "content_block_delta", "index": 0,
+                   "delta": {"type": "text_delta", "text": "lo"}}),
+        ));
+        // The answer is never finished.
+        std::future::pending::<()>().await;
+    });
+    let stream = futures_util::stream::unfold(rx, |mut rx| async move {
+        rx.recv()
+            .await
+            .map(|chunk| (Ok::<_, std::io::Error>(chunk), rx))
+    });
+    axum::body::Body::from_stream(stream)
+}
+
+/// The Anthropic-shaped upstream, so an upstream id with the other provider
+/// dialect's shape goes through the same identity rule.
+async fn mock_anthropic(State(mock): State<Mock>, Json(body): Json<Value>) -> Response {
+    let model = body["model"].as_str().unwrap_or_default().to_string();
+    mock.record(&model);
+
+    if body["stream"].as_bool().unwrap_or(false) && model.starts_with("hold") {
+        return Response::builder()
+            .header("content-type", "text/event-stream")
+            .body(held_open_anthropic("msg_upstream"))
+            .unwrap();
+    }
+
+    Json(json!({
+        "id": "msg_mock",
+        "type": "message",
+        "role": "assistant",
+        "model": model,
+        "content": [{"type": "text", "text": "hello from mock"}],
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": 11, "output_tokens": 7}
+    }))
+    .into_response()
+}
+
 // ------------------------------------------------------------------ fixtures
 
 const TOKEN: &str = "zr-lifecycle-token";
 
 fn provider(id: &str, name: &str, mock: SocketAddr) -> ProviderConfig {
     let mut provider = ProviderConfig::new(id, name, ProviderKind::OpenAICompatible);
+    provider.base_url = format!("http://{mock}");
+    provider.key_ref = format!("provider:{id}");
+    provider.timeout_secs = 10;
+    provider
+}
+
+/// A provider that speaks the other upstream dialect, so the same identity rule
+/// is exercised on an `msg_…` id as well as a `chatcmpl-…` one.
+fn anthropic_provider(id: &str, name: &str, mock: SocketAddr) -> ProviderConfig {
+    let mut provider = ProviderConfig::new(id, name, ProviderKind::Anthropic);
     provider.base_url = format!("http://{mock}");
     provider.key_ref = format!("provider:{id}");
     provider.timeout_secs = 10;
@@ -1435,3 +1514,97 @@ async fn a_cancelled_store_false_stream_is_not_retained() {
 
     h.shutdown().await;
 }
+
+// ------------------------------------------------------- response identity
+
+/// One upstream id shape is cancelled by the client, the other is a request the
+/// proxy refuses: the id the client saw in its first frame is the only key a
+/// cancel accepts, and the placeholder GET answers with says cancelled.
+async fn cancelling_by_the_published_id_works(h: &Harness, model: &str, upstream_id: &str) {
+    let mut response = h
+        .post("/v1/responses")
+        .json(&json!({"model": model, "input": "hi", "stream": true}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let visible = streaming_response_id(&mut response).await;
+    assert!(
+        visible.starts_with("resp-"),
+        "the client learns the registered id, not the upstream's: {visible}"
+    );
+    assert_ne!(
+        visible, upstream_id,
+        "the upstream id is not the identity the proxy registered"
+    );
+
+    // The upstream's own id names nothing the proxy knows about.
+    let miss = h
+        .post(&format!("/v1/responses/{upstream_id}/cancel"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        miss.status(),
+        400,
+        "an id the proxy never registered cannot cancel anything"
+    );
+
+    let cancelled = h
+        .post(&format!("/v1/responses/{visible}/cancel"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        cancelled.status(),
+        200,
+        "cancelling by the visible id works"
+    );
+    let _ = cancelled.text().await;
+
+    wait_for_outcomes(h, 1).await;
+
+    let get = h.get_response(&visible).send().await.unwrap();
+    assert_eq!(get.status(), 200);
+    let stored: Value = get.json().await.unwrap();
+    assert_eq!(stored["status"], "cancelled");
+    assert_eq!(stored["id"], visible);
+
+    // The recorded outcome names the identity the client was given.
+    assert_eq!(h.outcome().response_id.as_deref(), Some(visible.as_str()));
+}
+
+/// An OpenAI-shaped upstream id (`chatcmpl-…`) is never published: the client
+/// can cancel the stream it is reading, and only by the id from the first frame.
+#[tokio::test]
+async fn an_openai_upstream_id_is_never_the_cancel_key() {
+    let h = Harness::new().await;
+    cancelling_by_the_published_id_works(&h, "alpha-hold-model", "chatcmpl-mock").await;
+    h.shutdown().await;
+}
+
+/// The same rule for an Anthropic-shaped upstream id (`msg_…`).
+#[tokio::test]
+async fn an_anthropic_upstream_id_is_never_the_cancel_key() {
+    let (addr, mock) = start_mock().await;
+    let mut cfg = config_for(addr);
+    cfg.providers
+        .push(anthropic_provider("gamma", "Gamma", addr));
+    cfg.models
+        .push(model("gamma", "hold-model", 10, ModelTier::Fast));
+    let h = Harness::start_with_secrets(
+        cfg,
+        mock,
+        Arc::new(
+            MemorySecretStore::new()
+                .with("provider:alpha", "sk-alpha")
+                .with("provider:beta", "sk-beta")
+                .with("provider:gamma", "sk-gamma"),
+        ),
+    )
+    .await;
+
+    cancelling_by_the_published_id_works(&h, "gamma-hold-model", "msg_upstream").await;
+    h.shutdown().await;
+}
+
