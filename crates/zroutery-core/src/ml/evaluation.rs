@@ -44,6 +44,28 @@ pub enum EvaluationError {
     /// A regression prediction is `NaN` or infinite.
     #[error("regression prediction at index {index} is not finite: {value}")]
     NonFiniteRegressionPrediction { index: usize, value: f64 },
+
+    /// A field of a [`RoutingMetrics`] record is `NaN` or infinite, so no
+    /// comparison of it — a delta, a degradation test, an improvement test —
+    /// has a defined answer. A `NaN` success rate is the motivating case: every
+    /// `<` test against it reads false, so a comparison that did not check
+    /// would fall through to whatever the other terms said.
+    #[error("routing metric {side}.{metric} is not finite: {value}")]
+    NonFiniteRoutingMetric {
+        side: &'static str,
+        metric: &'static str,
+        value: f64,
+    },
+
+    /// A field of a [`RoutingMetrics`] record is outside the interval it can
+    /// occupy: a rate is a probability and a latency or a cost is a magnitude.
+    #[error("routing metric {side}.{metric} is outside its possible range ({bound}): {value}")]
+    RoutingMetricOutOfRange {
+        side: &'static str,
+        metric: &'static str,
+        value: f64,
+        bound: &'static str,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -356,6 +378,67 @@ impl RoutingMetrics {
             escalation_rate,
         }
     }
+
+    /// Refuse a metrics record whose numbers are not measurements.
+    ///
+    /// `side` names which compared side this record is (`"baseline"` or
+    /// `"candidate"`), so a refusal says which record was malformed without the
+    /// caller having to build a second message.
+    ///
+    /// The checks are exactly the ones a comparison silently depends on. A rate
+    /// must be a finite probability in `[0, 1]`; a latency percentile and a
+    /// mean cost must be finite and non-negative. `total_requests` is a `usize`
+    /// and has no invalid value. Fields are checked in declaration order, so a
+    /// malformed record's first refusal is deterministic.
+    ///
+    /// This is deliberately narrower than "every number is reasonable": a
+    /// comparison has no opinion about how fast or how cheap is good, only
+    /// about whether a number is a measurement at all.
+    pub fn validate(&self, side: &'static str) -> Result<(), EvaluationError> {
+        for (metric, value) in [
+            ("success_rate", self.success_rate),
+            ("fallback_rate", self.fallback_rate),
+            ("escalation_rate", self.escalation_rate),
+        ] {
+            if !value.is_finite() {
+                return Err(EvaluationError::NonFiniteRoutingMetric {
+                    side,
+                    metric,
+                    value,
+                });
+            }
+            if !(0.0..=1.0).contains(&value) {
+                return Err(EvaluationError::RoutingMetricOutOfRange {
+                    side,
+                    metric,
+                    value,
+                    bound: "[0, 1]",
+                });
+            }
+        }
+        for (metric, value) in [
+            ("p50_latency_ms", self.p50_latency_ms),
+            ("p95_latency_ms", self.p95_latency_ms),
+            ("mean_cost", self.mean_cost),
+        ] {
+            if !value.is_finite() {
+                return Err(EvaluationError::NonFiniteRoutingMetric {
+                    side,
+                    metric,
+                    value,
+                });
+            }
+            if value < 0.0 {
+                return Err(EvaluationError::RoutingMetricOutOfRange {
+                    side,
+                    metric,
+                    value,
+                    bound: ">= 0",
+                });
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Compute a percentile from a sorted slice.
@@ -390,7 +473,12 @@ pub enum Recommendation {
 }
 
 /// Deltas between baseline and candidate routing metrics.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// Every delta is `0.0` when the comparison could not be made at all, so a
+/// caller that reads a delta without reading the recommendation sees "no
+/// measured movement" rather than a `NaN` that compares false against
+/// everything and serializes as `null`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RoutingDeltas {
     pub success_rate_delta: f64,
     pub p95_latency_delta_pct: f64,
@@ -445,6 +533,11 @@ impl Evaluator {
     /// Returns a [`ComparisonReport`] with deltas and a recommendation.
     ///
     /// Rules:
+    /// - Both records are validated first. A field that is not finite, or that
+    ///   lies outside the interval it can occupy, is not a measurement: the
+    ///   comparison returns `InsufficientData`, names the field, and reports no
+    ///   deltas rather than a `NaN` that every threshold below would read as
+    ///   false.
     /// - If either side has fewer than 30 requests, recommend `InsufficientData`.
     /// - If the candidate improves success rate by >= 1pp OR reduces p95 latency
     ///   by >= 10% without degrading success rate, recommend `Accept`.
@@ -456,6 +549,25 @@ impl Evaluator {
         candidate: &RoutingMetrics,
     ) -> ComparisonReport {
         const MIN_SAMPLES: usize = 30;
+
+        // Validation comes first. Every delta below is arithmetic on these
+        // numbers and every threshold below is a comparison against them; a
+        // `NaN` makes the arithmetic `NaN` and every `<`/`>` test false, so a
+        // comparison that skipped this could accept a candidate on an
+        // unrelated improvement while the success rate was not a measurement.
+        let mut reasons = Vec::new();
+        for (side, metrics) in [("baseline", baseline), ("candidate", candidate)] {
+            if let Err(refusal) = metrics.validate(side) {
+                reasons.push(format!("cannot compare: {refusal}"));
+                return ComparisonReport {
+                    baseline: baseline.clone(),
+                    candidate: candidate.clone(),
+                    deltas: RoutingDeltas::default(),
+                    recommendation: Recommendation::InsufficientData,
+                    reasons,
+                };
+            }
+        }
 
         let deltas = RoutingDeltas {
             success_rate_delta: candidate.success_rate - baseline.success_rate,
@@ -472,8 +584,6 @@ impl Evaluator {
             },
             fallback_rate_delta: candidate.fallback_rate - baseline.fallback_rate,
         };
-
-        let mut reasons = Vec::new();
 
         // Insufficient data check
         if baseline.total_requests < MIN_SAMPLES || candidate.total_requests < MIN_SAMPLES {
