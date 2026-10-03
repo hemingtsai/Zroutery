@@ -110,19 +110,19 @@ pub struct Cost {
 }
 
 /// Sums kept apart by currency.
+///
+/// Amounts accumulate at full `f64` precision. Rounding each addition to a fixed
+/// number of decimal places would silently discard every amount smaller than the
+/// last kept digit, so a stream of sub-micro charges would total zero forever.
+/// Rounding belongs at the display boundary, where a formatter decides how many
+/// digits a human needs to see.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct CostTotals(pub BTreeMap<String, f64>);
-
-/// Six decimal places is far below the smallest billed unit of any provider and
-/// still exact enough that repeated addition cannot drift visibly.
-fn round_cents(amount: f64) -> f64 {
-    (amount * 1_000_000.0).round() / 1_000_000.0
-}
 
 impl CostTotals {
     pub fn add(&mut self, cost: &Cost) {
         let entry = self.0.entry(cost.currency.clone()).or_insert(0.0);
-        *entry = round_cents(*entry + cost.amount);
+        *entry += cost.amount;
     }
 
     pub fn is_empty(&self) -> bool {
@@ -390,6 +390,32 @@ mod tests {
 
         let cost = p.cost_of(&usage(1_000, 500));
         assert!((cost.amount - (0.003 + 0.0075)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn sub_micro_amounts_accumulate_instead_of_being_rounded_away() {
+        let mut totals = CostTotals::default();
+        // $0.0000001 each is smaller than the six-decimal grid a per-add round
+        // would keep, so rounding each addition used to leave the total at zero.
+        for _ in 0..10_000 {
+            totals.add(&Cost {
+                currency: "USD".into(),
+                amount: 0.000_000_1,
+            });
+        }
+        let total = totals.get("USD");
+        assert!(
+            (total - 0.001).abs() < 1e-12,
+            "ten thousand tenths of a micro-dollar are one mill, not zero; got {total}"
+        );
+
+        // A currency is never mixed into another one's sum.
+        totals.add(&Cost {
+            currency: "CNY".into(),
+            amount: 0.5,
+        });
+        assert!((totals.get("USD") - 0.001).abs() < 1e-12);
+        assert!((totals.get("CNY") - 0.5).abs() < 1e-12);
     }
 
     #[test]

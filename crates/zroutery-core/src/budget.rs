@@ -123,12 +123,6 @@ pub(crate) fn yes() -> bool {
     true
 }
 
-/// Six decimal places is far below the smallest billed unit of any provider and
-/// still exact enough that repeated addition cannot drift visibly.
-fn round_cents(amount: f64) -> f64 {
-    (amount * 1_000_000.0).round() / 1_000_000.0
-}
-
 impl Budget {
     pub fn new(scope: BudgetScope, period: BudgetPeriod, currency: &str, amount: f64) -> Self {
         Budget {
@@ -196,10 +190,11 @@ struct LedgerKey {
 /// need, and it means a daily and a monthly limit on the same scope both work
 /// without either having to reconstruct the other.
 ///
-/// Amounts are `f64` and are rounded to six decimal places as they accumulate:
-/// costs arrive as small floats and unbounded addition would drift away from the
-/// decimal amounts the pricing tables mean, which matters for a number that is
-/// compared against a limit someone typed.
+/// Amounts are `f64` and accumulate at full precision. Rounding every addition to
+/// a fixed number of decimal places would discard each amount smaller than the
+/// last kept digit, so a long run of sub-micro charges would stay at zero and a
+/// budget would never see them; the rounding a person needs happens where the
+/// number is formatted, not where it is stored.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Ledger {
     #[serde(default)]
@@ -240,7 +235,7 @@ impl Ledger {
                     currency: cost.currency.clone(),
                 };
                 let entry = self.entries.entry(Self::flat(&key)).or_insert(0.0);
-                *entry = round_cents(*entry + cost.amount);
+                *entry += cost.amount;
             }
         }
     }
@@ -411,6 +406,36 @@ mod tests {
         assert_eq!(ledger.spent(&monthly, at("2026-08-23 00:01:00")), 3.5);
         // And a new month starts from nothing.
         assert_eq!(ledger.spent(&monthly, at("2026-09-01 00:00:00")), 0.0);
+    }
+
+    #[test]
+    fn sub_micro_charges_accumulate_and_can_cross_a_limit() {
+        let mut ledger = Ledger::new();
+        let before = at("2026-08-22 12:00:00");
+        // $0.0000001 per request: smaller than the six-decimal grid a per-add
+        // round kept, so each charge used to be erased as it arrived.
+        for _ in 0..10_000 {
+            ledger.charge(
+                before,
+                "deepseek",
+                Some(ModelTier::Standard),
+                &usd(0.000_000_1),
+            );
+        }
+
+        let spent = ledger.spent(&daily_global(1.0), before);
+        assert!(
+            (spent - 0.001).abs() < 1e-12,
+            "ten thousand tenths of a micro-dollar are one mill, not zero; got {spent}"
+        );
+
+        // The accumulated amount is real enough to stop the next request, which
+        // an accumulator that discarded every sub-micro charge could never do.
+        let tiny = daily_global(0.0009);
+        assert!(matches!(
+            check(&[tiny], &ledger, before, &[], None),
+            Verdict::Reject { .. }
+        ));
     }
 
     #[test]
@@ -698,11 +723,20 @@ mod tests {
     fn repeated_charges_do_not_drift() {
         let mut ledger = Ledger::new();
         let now = at("2026-08-22 12:00:00");
-        // 0.1 is not representable in binary; a naive accumulator shows it.
+        // 0.1 is not representable in binary. The accumulator keeps the true f64
+        // sum — a per-add round to six decimals would hide that, and would also
+        // erase every charge smaller than a micro — so the check is against
+        // floating-point tolerance rather than against a decimal rounding grid.
         for _ in 0..10 {
             ledger.charge(now, "p", None, &usd(0.1));
         }
-        assert_eq!(ledger.spent(&daily_global(999.0), now), 1.0);
+        let spent = ledger.spent(&daily_global(999.0), now);
+        assert!(
+            (spent - 1.0).abs() < 1e-12,
+            "ten dimes are a dollar to within floating point; got {spent}"
+        );
+        // What a person reads is still exactly a dollar.
+        assert_eq!(format!("{spent:.6}"), "1.000000");
     }
 
     #[test]
