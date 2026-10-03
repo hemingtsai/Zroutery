@@ -451,36 +451,102 @@ async fn apply_vision_fallback_inner(state: &AppState, req: &mut ChatRequest, re
 
     let mut described = 0;
     let mut placeholders = 0;
+    let mut refused_by_budget = 0;
     for (slot, source) in &images {
-        let replacement =
-            match crate::media::vision::describe(&state.upstream, &target, key.as_deref(), source)
-                .await
-            {
-                Ok(resp) => {
-                    described += 1;
-                    crate::media::transform::Replacement::Description(
-                        crate::media::vision::description_text(&resp),
-                    )
+        // Every description is its own paid call to the vision provider, so
+        // every one is gated like any other request before it leaves: the
+        // shared verdict covers global, the provider it will actually reach,
+        // and that provider's tier. A fixed vision target cannot follow a
+        // degrade to another tier, so anything short of an allowance means
+        // "not this call" — and because a charge lands in the ledger
+        // immediately, the image that crosses the line completes while the
+        // next one is already stopped.
+        let verdict =
+            state.budget_verdict(std::slice::from_ref(&target.provider.id), target.entry.tier);
+        if !matches!(verdict, Verdict::Allow) {
+            refused_by_budget += 1;
+            tracing::warn!(
+                reason,
+                vision_model = target.entry.exposed_id(),
+                vision_provider = target.provider.id.as_str(),
+                verdict = ?verdict,
+                "vision fallback skipped by budget; image replaced with the placeholder"
+            );
+            crate::media::transform::replace(
+                req,
+                slot,
+                &crate::media::transform::Replacement::Placeholder(
+                    config.vision.placeholder.clone(),
+                ),
+            );
+            continue;
+        }
+
+        let started = std::time::Instant::now();
+        let outcome =
+            crate::media::vision::describe(&state.upstream, &target, key.as_deref(), source).await;
+        let latency_ms = started.elapsed().as_millis() as f64;
+        let model_id = target.entry.exposed_id();
+        let replacement = match outcome {
+            Ok(resp) => {
+                described += 1;
+                // The vision model is real traffic to a real provider, so
+                // its attempt is reported through the same canonical
+                // adapters as any other: a success keeps the health view
+                // from being failure-only, which would otherwise open the
+                // breaker for a model that answers far more often than it
+                // fails.
+                state
+                    .router
+                    .report_success(&model_id, latency_ms as u64, &state.config().routing);
+                state.router.record_classified_outcome(
+                    &model_id,
+                    &target.provider.id,
+                    latency_ms,
+                    None,
+                    true,
+                    None,
+                );
+                // Charge the auxiliary call immediately, against the
+                // provider that answered and the tier it is billed under,
+                // so a later failure in this loop cannot lose spend that
+                // was already incurred.
+                if let Some(pricing) = target.entry.pricing.as_ref() {
+                    let cost = pricing.cost_of(&resp.usage);
+                    state.charge_auxiliary(&target.provider.id, target.entry.tier, &cost);
                 }
-                Err(e) => {
-                    placeholders += 1;
-                    tracing::warn!(
-                        vision_model = target.entry.exposed_id(),
-                        error = %e,
-                        "vision description failed; using the placeholder for this image"
-                    );
-                    crate::media::transform::Replacement::Placeholder(
-                        config.vision.placeholder.clone(),
-                    )
-                }
-            };
+                crate::media::transform::Replacement::Description(
+                    crate::media::vision::description_text(&resp),
+                )
+            }
+            Err(e) => {
+                placeholders += 1;
+                // An auxiliary failure is still an observed failure of the
+                // model that was asked, reported through the same canonical
+                // adapter as any other attempt.
+                state.router.record_classified_attempt(
+                    &model_id,
+                    &target.provider.id,
+                    &e.classified(),
+                    &state.config().routing,
+                );
+                tracing::warn!(
+                    vision_model = model_id.as_str(),
+                    error = %e,
+                    "vision description failed; using the placeholder for this image"
+                );
+                crate::media::transform::Replacement::Placeholder(config.vision.placeholder.clone())
+            }
+        };
         crate::media::transform::replace(req, slot, &replacement);
     }
     tracing::info!(
         reason,
         vision_model = target.entry.exposed_id(),
+        vision_provider = target.provider.id.as_str(),
         described,
         placeholders,
+        refused_by_budget,
         "vision fallback applied"
     );
 }
