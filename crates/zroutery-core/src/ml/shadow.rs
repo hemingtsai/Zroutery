@@ -20,7 +20,7 @@
 //!   samples from genesis.
 
 use std::collections::{HashSet, VecDeque};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
 use serde::{Deserialize, Serialize};
@@ -1039,19 +1039,58 @@ fn sanitized_bundle(bundle: &PredictionBundle) -> PredictionBundle {
 
 /// Bounded store for shadow decisions with retention, mirroring
 /// [`DatasetStore`](super::dataset::DatasetStore).
+///
+/// The retention limits are interior-mutable on purpose: they come from
+/// `ShadowConfig` and a running engine has to adopt a configuration change
+/// without being rebuilt ([`ShadowStore::set_limits`]).
 pub struct ShadowStore {
     decisions: Mutex<VecDeque<ShadowDecision>>,
-    max_decisions: usize,
-    max_age_secs: i64,
+    max_decisions: AtomicUsize,
+    max_age_secs: AtomicI64,
 }
+
+/// Standalone-store default: 100k decisions, 30 days. The server never uses
+/// this — it passes the configured `ShadowConfig` limits — but the bare
+/// constructor and [`ShadowStore::default`] keep it as their documented
+/// fallback.
+const DEFAULT_MAX_DECISIONS: usize = 100_000;
+const DEFAULT_MAX_AGE_SECS: i64 = 30 * 24 * 3600;
 
 impl ShadowStore {
     pub fn new(max_decisions: usize, max_age_secs: i64) -> Self {
         Self {
             decisions: Mutex::new(VecDeque::with_capacity(max_decisions.min(10_000))),
-            max_decisions,
-            max_age_secs,
+            max_decisions: AtomicUsize::new(max_decisions),
+            max_age_secs: AtomicI64::new(max_age_secs),
         }
+    }
+
+    /// Current retention limits as `(max_decisions, max_age_secs)`.
+    pub fn limits(&self) -> (usize, i64) {
+        (
+            self.max_decisions.load(Ordering::Acquire),
+            self.max_age_secs.load(Ordering::Acquire),
+        )
+    }
+
+    /// Apply new retention limits to a live store and enforce them at once.
+    ///
+    /// Shrinking `max_decisions` evicts the oldest decisions down to the new
+    /// capacity, and shrinking `max_age_secs` drops decisions that are already
+    /// outside the new window, so what the store serves after this call is the
+    /// new retention rather than whatever the previous limits accumulated.
+    /// Returns how many decisions were dropped.
+    pub fn set_limits(&self, max_decisions: usize, max_age_secs: i64) -> usize {
+        self.max_decisions.store(max_decisions, Ordering::Release);
+        self.max_age_secs.store(max_age_secs, Ordering::Release);
+        let now = chrono::Utc::now().timestamp();
+        let mut decisions = crate::sync::lock(&self.decisions);
+        let before = decisions.len();
+        while decisions.len() > max_decisions {
+            decisions.pop_front();
+        }
+        decisions.retain(|decision| now - decision.timestamp < max_age_secs);
+        before - decisions.len()
     }
 
     /// Store-boundary gate enforcement.
@@ -1284,7 +1323,8 @@ impl ShadowStore {
         }
 
         let mut decisions = crate::sync::lock(&self.decisions);
-        if decisions.len() >= self.max_decisions {
+        let max_decisions = self.max_decisions.load(Ordering::Acquire);
+        if decisions.len() >= max_decisions {
             decisions.pop_front();
         }
         decisions.push_back(decision);
@@ -1363,9 +1403,10 @@ impl ShadowStore {
     /// Decisions within the retention window, oldest first.
     pub fn decisions(&self) -> Vec<ShadowDecision> {
         let now = chrono::Utc::now().timestamp();
+        let max_age_secs = self.max_age_secs.load(Ordering::Acquire);
         crate::sync::lock(&self.decisions)
             .iter()
-            .filter(|d| now - d.timestamp < self.max_age_secs)
+            .filter(|d| now - d.timestamp < max_age_secs)
             .cloned()
             .collect()
     }
@@ -1373,7 +1414,7 @@ impl ShadowStore {
 
 impl Default for ShadowStore {
     fn default() -> Self {
-        Self::new(100_000, 30 * 24 * 3600) // 100k decisions, 30 days
+        Self::new(DEFAULT_MAX_DECISIONS, DEFAULT_MAX_AGE_SECS)
     }
 }
 
@@ -1387,28 +1428,55 @@ impl Default for ShadowStore {
 /// Holds an immutable [`DecisionEngine`] plus a swappable ensemble predictor.
 /// Readers clone the [`Arc`] under the read lock and then predict lock-free;
 /// only [`ShadowEngine::train`] takes the write lock.
+///
+/// The master switch and the store retention are configuration, not
+/// construction constants: [`ShadowEngine::reconfigure`] applies a changed
+/// `ShadowConfig` to an already-running engine.
 pub struct ShadowEngine {
     engine: DecisionEngine,
     predictor: RwLock<Arc<ModelEnsemblePredictor>>,
     store: ShadowStore,
-    enabled: bool,
+    enabled: AtomicBool,
     faults: AtomicU64,
 }
 
 impl ShadowEngine {
     pub fn new(engine: DecisionEngine, enabled: bool) -> Self {
+        Self::with_retention(engine, enabled, DEFAULT_MAX_DECISIONS, DEFAULT_MAX_AGE_SECS)
+    }
+
+    /// Build an engine whose store starts with the given retention limits,
+    /// e.g. the configured `ShadowConfig::max_decisions` / `max_age_secs`.
+    pub fn with_retention(
+        engine: DecisionEngine,
+        enabled: bool,
+        max_decisions: usize,
+        max_age_secs: i64,
+    ) -> Self {
         Self {
             engine,
             predictor: RwLock::new(Arc::new(ModelEnsemblePredictor::genesis())),
-            store: ShadowStore::default(),
-            enabled,
+            store: ShadowStore::new(max_decisions, max_age_secs),
+            enabled: AtomicBool::new(enabled),
             faults: AtomicU64::new(0),
         }
     }
 
+    /// Apply a configuration change to a running engine.
+    ///
+    /// `enabled` takes effect on the next evaluation — turning the engine off
+    /// stops recording immediately and turning it back on resumes, without a
+    /// restart — and the new retention limits are enforced at once, evicting
+    /// the oldest decisions when they shrink. Returns how many stored decisions
+    /// were dropped to satisfy the new limits.
+    pub fn reconfigure(&self, enabled: bool, max_decisions: usize, max_age_secs: i64) -> usize {
+        self.enabled.store(enabled, Ordering::Release);
+        self.store.set_limits(max_decisions, max_age_secs)
+    }
+
     /// Whether shadow evaluation is active.
     pub fn enabled(&self) -> bool {
-        self.enabled
+        self.enabled.load(Ordering::Acquire)
     }
 
     /// Number of evaluation faults (panics, step failures, store rejections).
@@ -1543,7 +1611,7 @@ impl ShadowEngine {
         input: &ShadowInput,
         predictor: &dyn EnsemblePredictor,
     ) -> Option<ShadowDecision> {
-        if !self.enabled {
+        if !self.enabled() {
             return None;
         }
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
