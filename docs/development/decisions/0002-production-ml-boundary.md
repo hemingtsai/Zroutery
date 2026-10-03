@@ -2,61 +2,72 @@
 
 ## Decision state
 
-Unresolved. The current repository has a safe provisional boundary, but the
-future deployment shape of online learning is not accepted policy.
+**Superseded by ADR-0006.** The boundary this record provisions no longer
+exists. Kept because the reasoning it recorded is the reasoning ADR-0006 had to
+answer, and a reader who has only seen the outcome deserves to see the question.
 
-## Context
+## What this decided, and why it was wrong
 
-The Core crate is the production authority and is used by the Tauri shell.
-ML is an optional feature in `crates/zroutery-core/Cargo.toml`; the Tauri
-dependency does not enable it. Shadow evaluation is evidence-only and the
-current audit records `7E-0 FAILED`, `7E-1 PARTIAL`, and `7E-2A BLOCKED`.
-There is no accepted commit, atomic activation path, packaging gate, stable
-real-traffic shadow window, takeover budget, or rollback proof.
+The boundary was: ML is an optional in-process library, shadow evaluation is
+record-only, and "automatic activation, online RL, exploration, or takeover"
+must not be enabled in the production Tauri path.
 
-## Options
+The reasoning was sound. An unproven model must not be able to route a real
+request, and there was no accepted commit, no activation path, no rollback proof
+and no stable traffic window to judge one by.
 
-### Option A — Keep ML as an optional in-process library
+The remedy was wrong. A prohibition does not reduce the risk of an unproven
+model; it removes the only thing that could. With ML fenced out of production,
+the system could never accumulate the routing evidence that would make the risk
+manageable, so the risk stayed exactly where it was while a very large amount of
+infrastructure was built to keep the model away. The repository recorded this
+honestly — `7F PARTIAL`, "blocked on VOLUME", a refusal citing twelve decisions
+against a floor of thirty — without noticing that the volume was zero because
+the collector's output was never made durable and no binary could read it.
 
-- **Advantages:** preserves the current Core-authoritative dependency direction;
-  reuses existing feature/schema types; minimizes deployment changes.
-- **Risks:** an eventual default feature or desktop enablement could blur the
-  safety boundary; activation and resource isolation remain in-process concerns.
+Two artefacts made the fence self-enforcing, which is what turned a provisional
+boundary into a permanent one:
 
-### Option B — Move online learning to a separately owned sidecar
+- `scripts/desktop_artifact_test.py` failed the build if the shipped desktop
+  executable contained any ML symbol.
+- `tests/dataset_production_test.rs` and `tests/real_request_shadow_test.rs`
+  asserted that the serving path must never call a training entry point, and
+  that `router.rs` must not contain the string `dataset`.
 
-- **Advantages:** isolates model state, durable journals, resource budgets, and
-  rollback; makes read-only Core integration explicit.
-- **Risks:** introduces IPC, version negotiation, availability, packaging, and
-  operational ownership requirements that are not currently evidenced.
+A gate that proves a thing cannot happen is only worth its cost until the thing
+becomes the requirement. At that point it is not a safety mechanism; it is the
+thing standing in the way, and it will resist with exactly the rigour it was
+built with.
 
-### Option C — Expose a read-only evidence service first
+## Where that reasoning was right, and was kept
 
-- **Advantages:** permits observability and offline evaluation without changing
-  production routing; supports the current `OBSERVABILITY` `READY` track.
-- **Risks:** does not itself close activation, takeover, or exploration gates;
-  users may expect online behavior before the safety path is complete.
+The safety concern was real, so it became mechanism rather than prohibition.
+`ml::serving` holds what the fence was standing in for:
 
-## Provisional boundary
-
-Until this ADR is resolved, adopt Option A only as a library/test boundary and
-Option C only as a possible read-only projection. Do not enable automatic
-activation, online RL, exploration, or takeover in the production Tauri path.
-A future decision must identify the exact IPC or feature contract, rollback
-owner, packaging artifact, observability signals, and evidence gates.
+- a model serves only after a `PromotionGate` promoted it, and the promotion's
+  digest is stored beside it;
+- every ranking is recomputed from immutable decision-time facts through the
+  same `DecisionEngine` that decides everything else;
+- any fault, missing model or selection outside the executable plan falls back
+  to the deterministic plan the router already computed;
+- promotion and rollback are durable and audited;
+- `ml_routing.enabled` defaults to off, so an installation that has never
+  promoted a model routes exactly as it did before.
 
 ## Consequences
 
-- Core remains authoritative for policy, eligibility, failure, and served
-  identity.
-- ML may consume immutable decision-time facts and verified commits but cannot
-  silently override them.
-- A sidecar is a future architecture option, not a current implementation claim.
-- The critical path remains 7E-1A → 7E-1B → 7E-2A → … → 7E-3 → 7F → 7G → 7H.
+- Core remains authoritative for policy, eligibility, failure and served
+  identity. ML chooses among candidates those filters already admitted; it
+  cannot widen them.
+- A model's influence is recorded on the routing decision itself
+  (`RouteDecision::ml_ranking`), not only in a log line.
+- The learned model's usefulness is an empirical question with a defined
+  evidence floor, answered by `ml::comparison` and gated by `ml::promotion`. It
+  is not answered by the presence of infrastructure.
 
 ## Related records
 
+- `docs/development/decisions/0006-ml-closed-loop.md`
 - `docs/development/architecture.md`
 - `docs/development/roadmap.md`
-- `docs/development/dependency-dag.md`
-- `docs/development/evidence-registry.md`
+- `docs/development/ml-closed-loop-report.md`

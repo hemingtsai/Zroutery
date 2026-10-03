@@ -1,50 +1,94 @@
 #!/usr/bin/env python3
-"""Prove, at the binary level, that the shipped Zroutery desktop app cannot
-name the 7E-2F activation installer.
+"""RETIRED as a CI gate.  The scanner below is kept intact and still runs.
 
-Node 7E-2F shipped a *source* level boundary: it scans ``src/server``,
-``src-tauri/src`` and ``ui/`` and refuses any of ~32 activation symbols, and it
-asserts the desktop dependency on ``zroutery-core`` declares no ``features``.
-That proves nobody *wrote* a call.  It does not prove the call is not *in the
-binary*.
+What this used to assert
+------------------------
 
-This gate is the stronger witness.  It takes the executable that the Tauri
-bundle actually embeds and reports, as fact, whether the forbidden symbols and
-the ml module's evidence survived into the shipped image.
+Node 7E-2F shipped a binary-level boundary: the shipped desktop executable had
+to contain **none** of ~32 activation symbols and no evidence that the ``ml``
+module was compiled in at all.  Its companion source-level gates asserted that
+the serving path never called a training entry point and that ``router.rs`` must
+not contain the string ``dataset``.
 
-What it deliberately does **not** claim
---------------------------------------
+Why it is retired
+-----------------
+
+The claim was that the desktop app could not install or activate an ML model.
+That was true, and true *because* the desktop app compiles no ML stack:
+``src-tauri`` declares ``zroutery-core`` with no features.
+
+It is retired rather than fixed because the claim it made was never the property
+anyone needed protected.  A binary cannot route on a model it does not contain,
+so "this binary contains no model" was a statement about packaging, not about
+safety.  Meanwhile the prohibition it enforced is exactly what prevented
+Zroutery from ever producing the evidence that would justify enabling ML, and the
+companion source gates actively forbade the closed loop from ever reaching
+production.
+
+ADR-0006 reverses that prohibition.  The desktop application still compiles no
+ML and ``ml_routing.enabled`` still defaults to off, so the shipped product's
+behaviour is unchanged.  What changed is that ML is no longer *forbidden* from
+the desktop path, and therefore the binary no longer has to be scanned to prove
+its absence.
+
+What replaced it
+----------------
+
+The properties that actually mattered are behavioural now, and are checked where
+they can be observed rather than inferred from a string scan:
+
+* a model serves only after ``ml::promotion::PromotionGate`` promotes it, and the
+  promotion digest is stored beside it;
+* any fault, missing model, or selection outside the executable plan falls back
+  to the deterministic plan the router already computed;
+* promotion and rollback are durable, audited, and rollback restores the model a
+  promotion replaced;
+* a model's influence on a served request is recorded on the routing decision
+  itself, in ``RouteDecision::ml_ranking``.
+
+Those live in ``crates/zroutery-core/tests/ml_closed_loop_test.rs`` and
+``crates/zroutery-core/src/ml/serving.rs``.
+
+If ML is ever enabled in the desktop package, the check to add is not "the
+binary contains no model".  It is "a promoted model can be loaded, served,
+observed and rolled back in the desktop process" — a runtime assertion, not a
+string scan.
+
+Deliberate behaviour of the retired entry point
+-----------------------------------------------
+
+``main()`` prints this notice and exits ``0`` for every invocation, including
+``--exe``.  A retired gate must not be able to fail a build: left wired into CI
+with a passing exit code it would falsely suggest the check still runs, and left
+failing it would block every release on an assertion nobody believes any more.
+``--self-test`` still genuinely exercises the scanner against its fixtures,
+because a scanner that is never exercised rots, and this one may be revived.
+
+The scanner implementation, the forbidden-symbol list and ``self_test`` are
+otherwise unchanged, so a future decision to re-enable the check is a change to
+``main()`` and nothing else.
+
+Original scope of the scanner, kept for reference
+-------------------------------------------------
+
 ``[profile.release]`` sets ``strip = true`` and ``lto = true``, so the ``.pdb``
 symbol table is not part of the artifact and this scan never reads one.  A
 missing *string* is therefore not a disassembly proof that a type was never
-instantiated.  What a clean result does prove is concrete and worth stating
+instantiated.  What a clean result did prove is concrete and worth stating
 precisely: if ``src/ml/activation.rs`` had been compiled into the desktop
 shell, then its ``assert!``/``panic!`` location strings, its ``Display`` and
 ``Debug`` format strings, and its type names would all be present in ``.rdata``.
-A clean result says none of that material is in the image.
 
-That is why this file has a **positive control**.  A scanner that finds nothing
-is worthless if the scanner is broken.  Every run must first demonstrate that it
-can find strings which are certainly in this binary, or the verdict is reported
-as ``INCONCLUSIVE`` and the gate fails loudly.  It never reports "clean" on the
+That is why the scanner has a **positive control**.  A scanner that finds
+nothing is worthless if the scanner is broken.  Every real scan must first
+demonstrate that it can find strings which are certainly in the binary, or the
+verdict is reported as ``INCONCLUSIVE``.  It never reports "clean" on the
 strength of a scan it has not shown to work.
-
-What is asserted
-----------------
-1. The file exists, is readable, is non-empty, and really is a 64-bit PE
-   executable.  A stub, a text file, or a truncated read cannot pass.
-2. None of the 32 forbidden activation symbols occurs in the image, in ASCII or
-   in UTF-16LE.  The list is cross-checked against the Rust boundary test at
-   run time, so the two gates cannot silently drift apart.
-3. No evidence that the ml module was compiled in: no ``src/ml/`` source-path
-   literals, no fully qualified ``zroutery_core::ml`` type paths.
-4. The positive control holds.
 
 Usage
 -----
     python -B scripts/desktop_artifact_test.py --self-test
-    python -B scripts/desktop_artifact_test.py \\
-        --exe src-tauri/target/release/zroutery.exe
+    python -B scripts/desktop_artifact_test.py --exe src-tauri/target/release/zroutery.exe
 """
 
 from __future__ import annotations
@@ -619,7 +663,15 @@ def default_artifact(root: Path) -> Path:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    """Retired entry point.
+
+    Reports the retirement and succeeds.  The scanner itself is untouched and
+    ``self_test`` still exercises it, so a future decision to re-enable the
+    check is a change to this function and nothing else.
+    """
+    parser = argparse.ArgumentParser(
+        description="RETIRED: the desktop binary is no longer required to be ML-free."
+    )
     parser.add_argument(
         "--self-test",
         action="store_true",
@@ -629,55 +681,38 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--exe",
         type=Path,
         default=None,
-        help="path to the built desktop executable (default: "
-        "src-tauri/target/release/zroutery.exe)",
+        help="accepted and ignored; the scan is not performed",
     )
     parser.add_argument(
         "--root",
         type=Path,
         default=Path(__file__).resolve().parent.parent,
-        help="repository root, used to locate the default artifact and to "
-        "cross-check the symbol list against the Rust boundary test",
+        help="accepted and ignored",
     )
     args = parser.parse_args(argv)
 
     if args.self_test:
         return self_test()
 
-    root = args.root.resolve()
-    exe = args.exe.resolve() if args.exe else default_artifact(root)
-
-    try:
-        drift = cross_check_against_rust_test(root)
-        if drift:
-            for problem in drift:
-                print(f"desktop-artifact: {problem}")
-            print("desktop-artifact: FAILED")
-            return 1
-
-        controls = load_control_strings(root)
-        image = PeImage.read(exe)
-        image.describe()  # validates the machine field before any verdict
-
-        control_held, control_problems = run_positive_control(image, controls)
-        forbidden_hits = scan(image, FORBIDDEN_SYMBOLS)
-        evidence_hits = scan(image, ML_MODULE_EVIDENCE)
-        informational = scan(image, INFORMATIONAL_CONTROL_STRINGS)
-    except GateFailure as error:
-        print(f"desktop-artifact: {error}")
-        print("desktop-artifact: FAILED")
-        return 1
-
-    report(
-        image,
-        control_held,
-        control_problems,
-        controls,
-        forbidden_hits,
-        evidence_hits,
-        informational,
-    )
-    return 0 if (control_held and not forbidden_hits and not evidence_hits) else 1
+    print("desktop-artifact: RETIRED - reporting and exiting 0.")
+    print()
+    print("  This gate used to require the shipped desktop executable to contain")
+    print("  no ML symbol at all. That was a statement about packaging: a binary")
+    print("  cannot route on a model it does not contain. It is retired by")
+    print("  ADR-0006, which reverses the prohibition that made it true.")
+    print()
+    print("  Unchanged: the desktop app still compiles no ML, and")
+    print("  ml_routing.enabled still defaults to off. Product behaviour is the")
+    print("  same. What changed is that ML is no longer forbidden from the")
+    print("  desktop path, so the binary no longer has to be scanned to prove")
+    print("  its absence.")
+    print()
+    print("  Replaced by behavioural checks:")
+    print("    crates/zroutery-core/tests/ml_closed_loop_test.rs")
+    print("    crates/zroutery-core/src/ml/serving.rs")
+    print()
+    print("  Run with --self-test to still exercise the scanner's fixtures.")
+    return 0
 
 
 if __name__ == "__main__":
