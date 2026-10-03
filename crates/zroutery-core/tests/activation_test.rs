@@ -1207,6 +1207,83 @@ fn expect_generation_refuses_a_belief_the_file_disagrees_with() {
     );
 }
 
+/// The store's mutating transitions take `&self`, so two in-process callers can
+/// share one handle. The read-modify-write of the pointer must be serialised:
+/// without it, both callers can read the same generation and both commit it,
+/// losing a flip and reporting two winners for one generation.
+#[test]
+fn two_competing_transitions_cannot_consume_one_generation() {
+    use std::sync::{Arc, Barrier};
+    use std::thread;
+
+    let temp = scratch();
+    let root = store_root(temp.path());
+    let mut store = ModelStore::with_model_id(ModelId::new(MODEL));
+    let (commit, _) = activatable(&mut store, &root.join(JOURNAL_DIR_NAME), None, "alpha", 1);
+
+    let activation = Arc::new(ActivationStore::open(&root).expect("the store opens"));
+    let snapshot = activation.write_snapshot(&commit).expect("written");
+    let store = Arc::new(store);
+
+    // Every caller asks for the *same* transition, released from the same
+    // barrier, so the only thing that can order them is the store itself.
+    let callers = 4usize;
+    let barrier = Arc::new(Barrier::new(callers));
+    let mut handles = Vec::new();
+    for _ in 0..callers {
+        let activation = Arc::clone(&activation);
+        let store = Arc::clone(&store);
+        let barrier = Arc::clone(&barrier);
+        let target = snapshot.id().clone();
+        handles.push(thread::spawn(move || {
+            barrier.wait();
+            activation.activate(
+                &zroutery_core::ml::activation::ActivationRequest::new(target),
+                &store,
+            )
+        }));
+    }
+
+    let mut winners = Vec::new();
+    let mut losers = 0usize;
+    for handle in handles {
+        match handle.join().expect("no caller panicked") {
+            Ok(outcome) => winners.push(outcome),
+            Err(ActivationError::AlreadyActive { snapshot: name }) => {
+                assert_eq!(name, snapshot.id().as_str());
+                losers += 1;
+            }
+            other => {
+                panic!("a competing transition must be refused as already active, got {other:?}")
+            }
+        }
+    }
+
+    // One winner and a visible refusal for every loser: generation 1 is
+    // consumed exactly once, and nobody who lost it can report success.
+    assert_eq!(winners.len(), 1, "exactly one caller consumes generation 1");
+    assert_eq!(winners[0].generation, 1);
+    assert_eq!(losers, callers - 1);
+    assert_eq!(
+        activation
+            .read_pointer()
+            .expect("readable")
+            .expect("present")
+            .generation,
+        1,
+        "the pointer advanced exactly once"
+    );
+    let audit = activation.audit(&store).expect("the audit reads");
+    assert_eq!(
+        audit.traces.len(),
+        2,
+        "exactly one plan and one completion were recorded"
+    );
+    assert!(audit.pending.is_none());
+    assert!(audit.disagreement.is_none());
+    assert_clean_no_tmp(&root);
+}
+
 // ---------------------------------------------------------------------------
 // Gate 3: rollback
 // ---------------------------------------------------------------------------

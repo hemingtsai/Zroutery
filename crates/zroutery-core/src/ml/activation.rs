@@ -180,6 +180,7 @@ use std::fmt;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -1758,11 +1759,16 @@ fn prepare_directory(path: &Path) -> Result<(), ActivationError> {
 /// ```
 ///
 /// Nothing outside `<root>` is ever created, there is no default location, and
-/// the handle holds the lock and nothing else.
+/// the handle holds the lock and nothing else: a transition mutex that guards
+/// the pointer's read-modify-write within one process, and no model, predictor,
+/// or serving handle.
 pub struct ActivationStore {
     root: PathBuf,
     // Dropped with the handle, which releases the lock. Unread by design.
     _lock: LockGuard,
+    // Serialises the pointer's read-modify-write within this process. Unread by
+    // design: it guards the critical section and holds no state of its own.
+    transition: Mutex<()>,
 }
 
 impl fmt::Debug for ActivationStore {
@@ -1796,12 +1802,29 @@ impl ActivationStore {
             Ok(_) => Ok(Self {
                 root: root.to_path_buf(),
                 _lock: lock,
+                transition: Mutex::new(()),
             }),
             Err(error) => {
                 drop(lock);
                 Err(error)
             }
         }
+    }
+
+    /// Enter the in-process pointer transition.
+    ///
+    /// Every mutating method takes `&self`, so two callers can share one store.
+    /// Without serialising the whole read-verify-rename, both can read
+    /// generation G and both commit G+1: the pointer is replaced twice and a
+    /// flip is silently lost. The guard is held across that whole sequence, so a
+    /// generation that has been consumed can never be observed twice. A poisoned
+    /// lock is recovered rather than propagated, because the pointer *file* — not
+    /// any in-memory state — is the authority, and it is re-read inside the
+    /// guard.
+    fn enter_transition(&self) -> MutexGuard<'_, ()> {
+        self.transition
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     /// The caller-supplied directory. Every path this module writes is inside it.
@@ -1843,6 +1866,7 @@ impl ActivationStore {
     /// is refused, never overwritten: the immutability guarantee holds even when
     /// the existing bytes are themselves corrupt.
     pub fn write_snapshot(&self, commit: &ModelCommit) -> Result<Snapshot, ActivationError> {
+        let _transition = self.enter_transition();
         verify_commit(commit)?;
         let id = snapshot_id_for(commit);
         let target = self.snapshot_path(&id)?;
@@ -2003,6 +2027,10 @@ impl ActivationStore {
     /// steps 3 and 5 is a *named* state: the pointer is whole either way, and
     /// [`Self::audit`] reports the unmatched intent.
     ///
+    /// The whole sequence runs under the store's in-process transition guard, so
+    /// two callers sharing one store cannot both read the same generation and
+    /// both commit it: the loser observes the flip the winner made.
+    ///
     /// This installs the model nowhere. It moves a pointer that only
     /// [`Self::read_active`] reads, and it constructs no predictor and no serving
     /// handle.
@@ -2012,6 +2040,7 @@ impl ActivationStore {
         store: &ModelStore,
     ) -> Result<ActivationOutcome, ActivationError> {
         checked_id(&request.snapshot)?;
+        let _transition = self.enter_transition();
         self.flip(&request.snapshot, ActivationKind::Activate, store)
     }
 
@@ -2023,6 +2052,7 @@ impl ActivationStore {
     /// — [`ActivationError::NoPreviousSnapshot`] — rather than silently doing
     /// nothing or advancing the generation.
     pub fn rollback(&self, store: &ModelStore) -> Result<ActivationOutcome, ActivationError> {
+        let _transition = self.enter_transition();
         let pointer = self
             .read_pointer()?
             .ok_or_else(|| ActivationError::NoActiveSnapshot {
@@ -2255,6 +2285,7 @@ impl ActivationStore {
         &self,
         store: &ModelStore,
     ) -> Result<RecordOutcome, ActivationError> {
+        let _transition = self.enter_transition();
         let audit = self.audit(store)?;
         let pending =
             audit
