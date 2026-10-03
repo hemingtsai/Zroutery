@@ -12,8 +12,8 @@ mod projection_log;
 mod shadow_candidate;
 
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
 use chrono::Local;
@@ -70,7 +70,20 @@ pub struct AppState {
     ledger: RwLock<Ledger>,
     /// Set when the ledger has moved since it was last written out, so the desktop
     /// layer can flush on a timer instead of writing a file per request.
+    ///
+    /// It is cleared only after a write *succeeded*, so a failed flush leaves the
+    /// pending spend in place for the next attempt instead of silently dropping
+    /// it — a ledger that forgets a request is a budget that lets it through
+    /// again after a restart.
     ledger_dirty: AtomicBool,
+    /// Bumped by every ledger mutation. A flush snapshots it before writing and
+    /// compares it afterwards: a charge that landed while the file was being
+    /// written keeps the dirty flag set, so the newer numbers are written next
+    /// time instead of being swallowed by the snapshot that just succeeded.
+    ledger_generation: AtomicU64,
+    /// Held across snapshot/write/confirm, so a timer flush and a shutdown flush
+    /// cannot interleave into writing an older snapshot over a newer one.
+    ledger_flush: Mutex<()>,
     /// Shadow decision engine (Stage 7E-1): records what the ML routing stack
     /// would have done for policy-routed main traffic. Record-only by
     /// construction — nothing in the request pipeline reads its verdicts.
@@ -172,6 +185,8 @@ impl AppState {
             secrets,
             ledger: RwLock::new(Ledger::new()),
             ledger_dirty: AtomicBool::new(false),
+            ledger_generation: AtomicU64::new(0),
+            ledger_flush: Mutex::new(()),
             #[cfg(feature = "ml")]
             shadow: crate::ml::ShadowEngine::new(
                 crate::ml::DecisionEngine::new(
@@ -189,33 +204,83 @@ impl AppState {
     }
 
     /// Adopt a ledger read from disk.
+    ///
+    /// Takes the flush lock so adopting a ledger cannot interleave with a write
+    /// of the previous one, and bumps the generation so a snapshot taken before
+    /// the adoption cannot confirm itself against the new state.
     pub fn set_ledger(&self, ledger: Ledger) {
+        let _flush = crate::sync::lock(&self.ledger_flush);
         *crate::sync::write(&self.ledger) = ledger;
-        self.ledger_dirty.store(false, Ordering::Relaxed);
+        self.ledger_generation.fetch_add(1, Ordering::AcqRel);
+        self.ledger_dirty.store(false, Ordering::Release);
     }
 
     pub fn ledger(&self) -> Ledger {
         crate::sync::read(&self.ledger).clone()
     }
 
-    /// Take the ledger for writing out, clearing the dirty flag.
+    /// Snapshot the ledger for writing out, with the generation it carries.
     ///
-    /// Returns `None` when nothing has changed, so an idle proxy does not rewrite
-    /// the same file every few seconds. The snapshot is pruned so long-running
-    /// processes do not accumulate stale day/month buckets in `spend.json`
-    /// (the in-memory ledger keeps its buckets; checks ignore stale ones).
-    pub fn take_dirty_ledger(&self) -> Option<Ledger> {
-        self.ledger_dirty.swap(false, Ordering::Relaxed).then(|| {
-            let mut ledger = self.ledger();
-            ledger.prune(Local::now());
-            ledger
-        })
+    /// Returns `None` when nothing has changed since the last successful write,
+    /// so an idle proxy does not rewrite the same file every few seconds. The
+    /// snapshot is pruned so long-running processes do not accumulate stale
+    /// day/month buckets in `spend.json` (the in-memory ledger keeps its
+    /// buckets; checks ignore stale ones).
+    ///
+    /// The dirty flag is deliberately *not* cleared here: only a successful
+    /// write may do that, through [`Self::ledger_saved`].
+    fn dirty_ledger_snapshot(&self) -> Option<(Ledger, u64)> {
+        if !self.ledger_dirty.load(Ordering::Acquire) {
+            return None;
+        }
+        let generation = self.ledger_generation.load(Ordering::Acquire);
+        let mut ledger = self.ledger();
+        ledger.prune(Local::now());
+        Some((ledger, generation))
+    }
+
+    /// Confirm that the snapshot carrying `generation` reached the disk.
+    ///
+    /// Clears the dirty flag only when nothing has been charged since the
+    /// snapshot was taken. A charge that landed mid-write leaves the flag set,
+    /// so the next flush writes the newer numbers instead of losing them.
+    fn ledger_saved(&self, generation: u64) {
+        if self.ledger_generation.load(Ordering::Acquire) == generation {
+            self.ledger_dirty.store(false, Ordering::Release);
+        } else {
+            self.ledger_dirty.store(true, Ordering::Release);
+        }
+    }
+
+    /// Write the ledger out through `save`, if it has moved since the last
+    /// attempt.
+    ///
+    /// The whole snapshot/save/confirm sequence is serialised, so a timer flush
+    /// and a shutdown flush cannot interleave into writing an older snapshot
+    /// over a newer one. A failed `save` leaves the dirty flag exactly as it
+    /// was, so the pending spend is retried by the next flush rather than being
+    /// dropped; the error is returned for the caller to log.
+    ///
+    /// The save itself is a closure because the disk lives in the desktop
+    /// shell: the core owns the accounting, the shell owns the file.
+    pub fn flush_ledger(
+        &self,
+        save: impl FnOnce(&Ledger) -> std::result::Result<(), String>,
+    ) -> std::result::Result<(), String> {
+        let _flush = crate::sync::lock(&self.ledger_flush);
+        let Some((ledger, generation)) = self.dirty_ledger_snapshot() else {
+            return Ok(());
+        };
+        save(&ledger)?;
+        self.ledger_saved(generation);
+        Ok(())
     }
 
     /// Record what a finished request cost, against every scope that covers it.
     pub fn charge(&self, provider_id: &str, tier: Option<ModelTier>, cost: &Cost) {
         crate::sync::write(&self.ledger).charge(Local::now(), provider_id, tier, cost);
-        self.ledger_dirty.store(true, Ordering::Relaxed);
+        self.ledger_generation.fetch_add(1, Ordering::AcqRel);
+        self.ledger_dirty.store(true, Ordering::Release);
     }
 
     /// What the budgets say about a request that is about to be routed.
@@ -1248,5 +1313,147 @@ mod tests {
             .registry()
             .resolve("standard-class")
             .is_ok_and(|r| matches!(r, crate::registry::Resolution::Tier(_))));
+    }
+
+    /// The global day spend the ledger currently holds.
+    fn global_day_spend(state: &AppState) -> f64 {
+        state
+            .ledger()
+            .totals_for(&crate::budget::BudgetScope::Global, Local::now())
+            .into_iter()
+            .find(|(period, _)| *period == crate::budget::BudgetPeriod::Day)
+            .map(|(_, cost)| cost.amount)
+            .unwrap_or(0.0)
+    }
+
+    fn state_with_charge(amount: f64) -> AppState {
+        let state = AppState::new(
+            AppConfig::default(),
+            Arc::new(crate::config::MemorySecretStore::new()),
+        );
+        state.charge(
+            "provider",
+            Some(ModelTier::Standard),
+            &Cost {
+                currency: "USD".into(),
+                amount,
+            },
+        );
+        state
+    }
+
+    #[test]
+    fn a_failed_flush_keeps_the_pending_spend_and_the_next_flush_retries() {
+        let state = state_with_charge(1.0);
+        let mut failed_attempts = 0;
+
+        let result = state.flush_ledger(|_| {
+            failed_attempts += 1;
+            Err("disk is not writable".to_string())
+        });
+        assert_eq!(result, Err("disk is not writable".to_string()));
+        assert_eq!(failed_attempts, 1);
+        assert_eq!(
+            global_day_spend(&state),
+            1.0,
+            "a failed write must not drop the spend it could not persist"
+        );
+
+        // The disk recovers: the very next flush must still see the pending
+        // spend and write it, not report "nothing changed".
+        let mut written: Option<f64> = None;
+        state
+            .flush_ledger(|ledger| {
+                written = Some(
+                    ledger
+                        .totals_for(&crate::budget::BudgetScope::Global, Local::now())
+                        .into_iter()
+                        .find(|(period, _)| *period == crate::budget::BudgetPeriod::Day)
+                        .map(|(_, cost)| cost.amount)
+                        .unwrap_or(0.0),
+                );
+                Ok(())
+            })
+            .expect("the retry succeeds once the destination is writable again");
+        assert_eq!(written, Some(1.0));
+
+        // Nothing is pending after a successful write, so a flush on an idle
+        // proxy does not rewrite the file.
+        let mut writes_after_success = 0;
+        state
+            .flush_ledger(|_| {
+                writes_after_success += 1;
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(writes_after_success, 0);
+    }
+
+    #[test]
+    fn a_charge_that_lands_during_a_write_survives_the_confirmation() {
+        let state = state_with_charge(1.0);
+
+        // The charge arrives while the snapshot is on its way to disk. Clearing
+        // the dirty flag unconditionally afterwards would lose it.
+        state
+            .flush_ledger(|_| {
+                state.charge(
+                    "provider",
+                    Some(ModelTier::Standard),
+                    &Cost {
+                        currency: "USD".into(),
+                        amount: 0.5,
+                    },
+                );
+                Ok(())
+            })
+            .expect("the first write succeeds");
+
+        let mut written: Option<f64> = None;
+        state
+            .flush_ledger(|ledger| {
+                written = Some(
+                    ledger
+                        .totals_for(&crate::budget::BudgetScope::Global, Local::now())
+                        .into_iter()
+                        .find(|(period, _)| *period == crate::budget::BudgetPeriod::Day)
+                        .map(|(_, cost)| cost.amount)
+                        .unwrap_or(0.0),
+                );
+                Ok(())
+            })
+            .expect("the mid-write charge is flushed next");
+        assert_eq!(written, Some(1.5));
+    }
+
+    #[test]
+    fn concurrent_flushes_never_run_their_writes_at_the_same_time() {
+        let state = Arc::new(state_with_charge(1.0));
+        let inside = Arc::new(AtomicBool::new(false));
+        let overlap = Arc::new(AtomicBool::new(false));
+
+        let mut threads = Vec::new();
+        for _ in 0..8 {
+            let state = Arc::clone(&state);
+            let inside = Arc::clone(&inside);
+            let overlap = Arc::clone(&overlap);
+            threads.push(std::thread::spawn(move || {
+                state.flush_ledger(|_| {
+                    if inside.swap(true, Ordering::AcqRel) {
+                        overlap.store(true, Ordering::Release);
+                    }
+                    std::thread::sleep(Duration::from_millis(20));
+                    inside.store(false, Ordering::Release);
+                    Ok(())
+                })
+            }));
+        }
+        for thread in threads {
+            thread.join().expect("no flush panicked").unwrap();
+        }
+        assert!(
+            !overlap.load(Ordering::Acquire),
+            "two flushes wrote at once, so an older snapshot could overwrite a newer one"
+        );
     }
 }
