@@ -3,9 +3,12 @@
 //! These exercise the wire shapes an official Responses client actually sends
 //! and consumes, rather than only the frames this repository generates.
 
-use serde_json::json;
-use zroutery_core::ir::{ContentBlock, Dialect, Role, ToolResultPart};
-use zroutery_core::protocol::responses::decode_request;
+use serde_json::{json, Value};
+use zroutery_core::ir::{
+    ContentBlock, Dialect, Role, StopReason, StreamEvent, ToolResultPart, Usage,
+};
+use zroutery_core::protocol::responses::{decode_request, ResponsesStreamEncoder};
+use zroutery_core::protocol::{SseFrame, StreamEncoder};
 
 #[test]
 fn easy_input_message_without_type_decodes() {
@@ -120,5 +123,104 @@ fn legacy_nested_image_url_still_decodes() {
             assert_eq!(source.to_data_url(), "https://example.com/a.png");
         }
         other => panic!("expected image, got {other:?}"),
+    }
+}
+
+// --------------------------------------------------------------- RSP-03
+
+fn frame_payload(frame: &SseFrame) -> Value {
+    frame.json().unwrap()
+}
+
+fn frames_for(events: &[StreamEvent]) -> Vec<SseFrame> {
+    let mut enc = ResponsesStreamEncoder::new("m");
+    let mut frames = Vec::new();
+    for event in events {
+        frames.extend(enc.encode(event));
+    }
+    frames.extend(enc.finish());
+    frames
+}
+
+fn output_text_deltas(frames: &[SseFrame]) -> String {
+    frames
+        .iter()
+        .filter(|f| f.event.as_deref() == Some("response.output_text.delta"))
+        .map(|f| frame_payload(f)["delta"].as_str().unwrap().to_string())
+        .collect()
+}
+
+#[test]
+fn text_content_part_starts_with_empty_text() {
+    let frames = frames_for(&[
+        StreamEvent::Start {
+            id: "resp_1".into(),
+            model: "m".into(),
+            usage: Usage::default(),
+        },
+        StreamEvent::TextDelta {
+            index: 0,
+            text: "Hello".into(),
+        },
+        StreamEvent::TextDelta {
+            index: 0,
+            text: " world".into(),
+        },
+        StreamEvent::Stop {
+            stop_reason: StopReason::EndTurn,
+            stop_sequence: None,
+            usage: Usage::default(),
+        },
+    ]);
+
+    let added: Vec<Value> = frames
+        .iter()
+        .filter(|f| f.event.as_deref() == Some("response.content_part.added"))
+        .map(frame_payload)
+        .collect();
+    assert_eq!(added.len(), 1, "one text content part");
+    assert_eq!(added[0]["part"]["type"], "output_text");
+    assert_eq!(added[0]["part"]["text"], "");
+    assert!(added[0]["part"]["annotations"].is_array());
+
+    // The deltas a client accumulates must reproduce the model output.
+    assert_eq!(output_text_deltas(&frames), "Hello world");
+    let done_part = frames
+        .iter()
+        .find(|f| f.event.as_deref() == Some("response.content_part.done"))
+        .map(frame_payload)
+        .unwrap();
+    assert_eq!(done_part["part"]["text"], "Hello world");
+
+    let completed = frames
+        .iter()
+        .find(|f| f.event.as_deref() == Some("response.completed"))
+        .map(frame_payload)
+        .unwrap();
+    assert_eq!(
+        completed["response"]["output"][0]["content"][0]["text"],
+        "Hello world"
+    );
+
+    // Every frame carries a monotonic sequence number.
+    let sequences: Vec<u64> = frames
+        .iter()
+        .map(|f| frame_payload(f)["sequence_number"].as_u64().unwrap())
+        .collect();
+    assert_eq!(sequences, (0..frames.len() as u64).collect::<Vec<_>>());
+
+    // Newer SDKs require logprobs on the text delta and done events.
+    for frame in &frames {
+        let payload = frame_payload(frame);
+        if matches!(
+            frame.event.as_deref(),
+            Some("response.output_text.delta") | Some("response.output_text.done")
+        ) {
+            assert!(
+                payload["logprobs"].is_array(),
+                "{} must carry logprobs",
+                frame.event.as_deref().unwrap()
+            );
+        }
     }
 }
