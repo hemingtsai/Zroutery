@@ -644,6 +644,72 @@ fn documented_vision_remediation_is_degraded_and_not_a_capability_pass() {
         .is_some_and(|reason| reason.contains("unknown_capability:vision")));
 }
 
+/// A request whose capabilities are all natively supported is not degraded.
+///
+/// The remediation predicate answers "can this model cover the requirement at
+/// all", which is trivially true for native support. Callers read it as "a
+/// remediation path was used", so a healthy fully capable answer used to carry
+/// the degraded marker.
+#[test]
+fn natively_supported_capabilities_are_not_degraded() {
+    let reg = registry(config(vec![model("m", ModelTier::Standard)]));
+    let router = Router::new();
+
+    let (plan, decision) = router
+        .plan_with_trace(
+            &reg,
+            &Resolution::Tier(ModelTier::Standard),
+            &[Capability::Tools],
+        )
+        .unwrap();
+    assert_eq!(plan.len(), 1);
+    assert!(decision.candidates[0].eligible);
+    assert!(
+        !plan[0].degraded,
+        "native tools support is not a degraded answer"
+    );
+
+    // Policy-only requirements take the same path.
+    let requirements = PolicyRequirements {
+        required_capabilities: vec![Capability::Tools],
+        strict_capabilities: true,
+        ..Default::default()
+    };
+    let (plan, _) = router
+        .plan_with_policy(
+            &reg,
+            &Resolution::Tier(ModelTier::Standard),
+            &[],
+            &requirements,
+            &PolicyPreference::default(),
+            &PolicyFallback::Reject,
+            None,
+        )
+        .unwrap();
+    assert!(
+        !plan[0].degraded,
+        "a policy requirement satisfied natively is not a remediation"
+    );
+
+    // Positive control: a requirement that really is remediated stays marked.
+    let mut text = model("text", ModelTier::Standard);
+    text.capabilities = ModelCapabilities::default();
+    let mut cfg = config(vec![text]);
+    cfg.vision.enabled = true;
+    let reg = registry(cfg);
+    let (plan, _) = router
+        .plan_with_trace(
+            &reg,
+            &Resolution::Tier(ModelTier::Standard),
+            &[Capability::Vision],
+        )
+        .unwrap();
+    assert!(
+        plan[0].degraded,
+        "a vision remediation is still observable"
+    );
+}
+
 #[test]
 fn canonical_rejection_reason_distinguishes_unknown_capability() {
     let requirements = PolicyRequirements::default();

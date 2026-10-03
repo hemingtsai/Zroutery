@@ -504,6 +504,15 @@ impl Router {
         Ok((candidates, decision))
     }
 
+    /// Whether this member satisfies the required capabilities through at least
+    /// one documented remediation rather than natively.
+    ///
+    /// Native support is not remediation: a model that supports every
+    /// requirement outright must not carry a degraded marker, which is why this
+    /// predicate no longer returns true for an all-`Supported` set. It returns
+    /// true only when at least one requirement is `Unknown` and a configured
+    /// remediation covers it, while every other requirement is natively
+    /// `Supported`. An `Unsupported` requirement can never be remediated.
     fn capability_remediation_allowed(
         &self,
         registry: &Registry,
@@ -516,15 +525,20 @@ impl Router {
         let config = registry.config();
         let vision_remediation = config.vision.enabled
             || (config.routing.rectifier.enabled && config.routing.rectifier.media_fallback);
-        required_capabilities.iter().all(|capability| {
+        let mut remediated = false;
+        for capability in required_capabilities {
             match member.capabilities.capability_state(*capability) {
-                crate::ir::CapabilityState::Supported => true,
-                crate::ir::CapabilityState::Unknown => {
-                    *capability == Capability::Vision && vision_remediation
+                crate::ir::CapabilityState::Supported => {}
+                crate::ir::CapabilityState::Unknown
+                    if *capability == Capability::Vision && vision_remediation =>
+                {
+                    remediated = true;
                 }
-                crate::ir::CapabilityState::Unsupported => false,
+                crate::ir::CapabilityState::Unknown
+                | crate::ir::CapabilityState::Unsupported => return false,
             }
-        })
+        }
+        remediated
     }
 
     fn request_capability_remediation_allowed(
