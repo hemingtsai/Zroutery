@@ -455,7 +455,14 @@ impl RecordedDecision {
 pub struct EvidenceFloors {
     /// Fewest recorded decisions the replay-equivalence claim may be made over.
     pub min_replayed_decisions: usize,
-    /// Fewest decisions the holdout must hold.
+    /// Fewest independent decisions the holdout must hold.
+    ///
+    /// Counted by the decision's request and decision identity and
+    /// deduplicated, deliberately **not** by canonical sample rows: canonical
+    /// data carries a request row plus one row per attempt for every decision,
+    /// so a row floor is satisfied several times over by the same decision and
+    /// would let a caller's floor pass on a fraction of the decisions it asked
+    /// for.
     pub min_holdout_decisions: usize,
 }
 
@@ -1410,10 +1417,15 @@ pub fn run_offline_gate(input: &GateInput) -> Result<GateOutcome, OfflineGateErr
 
     // -- 5. the holdout --
     let holdout_samples = build_holdout(&input.recorded, &replay, &input.fit_sample_ids)?;
-    if holdout_samples.len() < input.config.floors.min_holdout_decisions {
+    // The floor is on independent decisions, and the holdout carries several
+    // canonical rows per decision. Comparing it against `holdout_samples.len()`
+    // would satisfy a floor of N decisions with as few as N/(attempts + 1)
+    // decisions, which is not the evidence the caller asked to be shown.
+    let holdout_decisions = holdout_decision_count(&input.recorded);
+    if holdout_decisions < input.config.floors.min_holdout_decisions {
         return Err(OfflineGateError::InsufficientEvidence {
-            context: "the holdout sample count",
-            observed: holdout_samples.len(),
+            context: "the holdout decision count",
+            observed: holdout_decisions,
             required: input.config.floors.min_holdout_decisions,
         });
     }
@@ -2333,6 +2345,27 @@ fn build_holdout(
     Ok(samples)
 }
 
+/// How many independent decisions the holdout covers.
+///
+/// The identity is the decision's request plus its decision id, both read from
+/// the retained pair, and the count is a set: a decision that appears twice in
+/// the recorded set is the same decision counted twice, not twice the evidence.
+/// Canonical rows are deliberately not the unit — one decision projects to a
+/// request row plus one row per attempt, so a row count overstates the
+/// independent decisions by that factor.
+fn holdout_decision_count(recorded: &[RecordedDecision]) -> usize {
+    recorded
+        .iter()
+        .map(|entry| {
+            (
+                entry.decision.actual.request_id.as_str(),
+                entry.input().decision_id.as_str(),
+            )
+        })
+        .collect::<BTreeSet<_>>()
+        .len()
+}
+
 fn summarise_holdout(
     recorded: &[RecordedDecision],
     evidence: &[ReplayEvidence],
@@ -2346,7 +2379,7 @@ fn summarise_holdout(
     }
     HoldoutSummary {
         samples,
-        decisions: recorded.len(),
+        decisions: holdout_decision_count(recorded),
         attributed: evidence
             .iter()
             .filter(|entry| entry.served.is_some() && entry.recorded_terminal.is_success())
