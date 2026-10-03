@@ -25,10 +25,10 @@ use zroutery_core::failure::FailureClass;
 use zroutery_core::feedback::DataOrigin;
 use zroutery_core::ml::bandit::{
     accepted_outcome_proxy_score, compare_outcome_proxy, run_bandit, ArmSafetyMetrics,
-    ArmSelectionStatistics, BanditConfig, BanditError, BanditReport, OutcomeProxy, RewardArm,
-    RewardFitConfig, RewardFitReport, RewardFitVerdict, SafetyConfig, SafetyEvaluation,
-    SafetyEvidence, SafetyTolerances, SafetyVerdict, SafetyViolation, SelectionConfig,
-    SelectionTrace, ACCEPTED_PRIOR_ARM_NAME, FITTED_ARM_NAME, OUTCOME_PROXY_ORDER,
+    ArmSelectionStatistics, BanditConfig, BanditError, BanditOutcome, BanditReport, OutcomeProxy,
+    RewardArm, RewardBasis, RewardFitConfig, RewardFitReport, RewardFitVerdict, SafetyConfig,
+    SafetyEvaluation, SafetyEvidence, SafetyTolerances, SafetyVerdict, SafetyViolation,
+    SelectionConfig, SelectionTrace, ACCEPTED_PRIOR_ARM_NAME, FITTED_ARM_NAME, OUTCOME_PROXY_ORDER,
     REWARD_FIT_TARGET_DESCRIPTION, UNIDENTIFIABLE_WEIGHT,
 };
 use zroutery_core::ml::dataset::{
@@ -248,6 +248,187 @@ fn report_json(snapshot: &[OutcomeTrainingSample], config: &BanditConfig) -> Str
     let outcome =
         run_bandit(snapshot, &declared_arms(), config).expect("the fixture snapshot must run");
     serde_json::to_string(outcome.report()).expect("a report must serialize")
+}
+
+// ---------------------------------------------------------------------------
+// The schedule witness
+// ---------------------------------------------------------------------------
+
+/// One arm's seed-dependent state, at the resolution of the replay itself.
+///
+/// The five `f64` fields are compared as raw bit patterns rather than as
+/// numbers. That is deliberate and it cuts both ways: two runs that replayed the
+/// same schedule accumulate the same sums in the same canonical order and so
+/// produce equal bits, while any difference whatsoever in the accumulated sums
+/// shows up. So the comparison needs no tolerance, and it cannot hide a
+/// difference behind one.
+#[derive(Debug, Clone, PartialEq)]
+struct ArmWitness {
+    arm: String,
+    observations: usize,
+    mean_bits: u64,
+    variance_bits: u64,
+    standard_error_bits: u64,
+    bonus_bits: u64,
+    ucb_bits: u64,
+}
+
+/// Everything one seeded replay decided, and nothing else.
+///
+/// This is the witness for "a different seed explores a different assignment
+/// schedule". It is deliberately **not** the per-arm observation count. The
+/// counts are three integers that sum to the replay size, so the space they range
+/// over is tiny, and two seeds land on the same one often enough to break a
+/// matrix: with 38 rows over 3 arms the probability that two independent seeds
+/// agree on the whole count vector is 0.0108, about one run in ninety-three.
+/// The statistics below are functions of *which* rows each arm received, not of
+/// how many, so the witness ranges over the schedule itself rather than over its
+/// size.
+///
+/// The recorded seed is **not** part of the witness, and that is the whole
+/// difficulty in choosing one. `SelectionTrace::seed` echoes back the seed the
+/// caller asked for, so two runs made with different seeds always differ there;
+/// a witness that included it would pass for any implementation at all, including
+/// one whose schedule ignored the seed entirely. What is left here is only what
+/// the replay *did*, and a replay that stopped depending on the seed would make
+/// every field of it equal.
+#[derive(Debug, Clone, PartialEq)]
+struct ScheduleWitness {
+    arms: Vec<ArmWitness>,
+    selected: String,
+    tied_arms: Vec<String>,
+}
+
+impl ScheduleWitness {
+    /// One legible line, for an assertion message.
+    fn summary(&self) -> String {
+        let arms = self
+            .arms
+            .iter()
+            .map(|arm| {
+                format!(
+                    "{}: n={} mean={} ucb={}",
+                    arm.arm,
+                    arm.observations,
+                    f64::from_bits(arm.mean_bits),
+                    f64::from_bits(arm.ucb_bits)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!(
+            "selected {} tied [{}] arms {{{}}}",
+            self.selected,
+            self.tied_arms.join(", "),
+            arms
+        )
+    }
+}
+
+/// The witness for one run's replay.
+///
+/// Taken from `run_bandit`'s own outputs, so it observes the production schedule
+/// rather than restating it. The caller keeps the seed, because the seed is the
+/// thing being varied and not a thing the witness is made of.
+fn schedule_witness(arms: &[ArmSelectionStatistics], trace: &SelectionTrace) -> ScheduleWitness {
+    ScheduleWitness {
+        arms: arms
+            .iter()
+            .map(|arm| ArmWitness {
+                arm: arm.arm.clone(),
+                observations: arm.observations,
+                mean_bits: arm.mean_outcome_proxy_reward.to_bits(),
+                variance_bits: arm.reward_variance.to_bits(),
+                standard_error_bits: arm.reward_standard_error.to_bits(),
+                bonus_bits: arm.exploration_bonus.to_bits(),
+                ucb_bits: arm.ucb_score.to_bits(),
+            })
+            .collect(),
+        selected: trace.selected.clone(),
+        tied_arms: trace.tied_arms.clone(),
+    }
+}
+
+/// The witness for one seed's replay of the given snapshot.
+fn witness_for_seed(rows: &[OutcomeTrainingSample], seed: u64) -> ScheduleWitness {
+    let mut config = fixture_config();
+    config.selection.seed = seed;
+    let outcome =
+        run_bandit(rows, &declared_arms(), &config).expect("the fixture snapshot must run");
+    schedule_witness(outcome.arms(), &outcome.report().selection)
+}
+
+/// The seeds the schedule property is checked over.
+///
+/// Both ends of the seed range and the fixture's own default are in the set, so
+/// the claim is not an artefact of two convenient interior values, and the count
+/// vector assertion is not the only thing standing between two seeds being
+/// compared at all.
+const SCHEDULE_SEEDS: [u64; 5] = [0, 1, 4_242, 99_991, u64::MAX];
+
+/// The smallest gap the witness argument requires between two replayed rows'
+/// scores under one arm.
+///
+/// `replay` sums at most 38 scores, each of magnitude at most a few units, so a
+/// sum accumulates at most 38 rounding steps of at most 2^-53 each: two sums
+/// differing by more than about 1.6e-13 cannot produce the same `f64`.
+/// Requiring 1e-9 leaves four orders of magnitude of headroom over that bound, so
+/// the premise below is not a statement about exact arithmetic.
+const MIN_REPLAY_SCORE_GAP: f64 = 1e-9;
+
+/// The fitted arm's policy, as the report published it.
+///
+/// Read back off the run rather than refitted, so the scores below are scored
+/// under exactly the policy the replay used.
+fn fitted_policy_of(outcome: &BanditOutcome) -> &RewardPolicy {
+    outcome
+        .arms()
+        .iter()
+        .find(|arm| arm.arm == FITTED_ARM_NAME)
+        .map(|arm| &arm.policy)
+        .expect("the fit's own arm is always reported")
+}
+
+/// The closest pair of scores in a set, or `f64::INFINITY` for fewer than two.
+fn smallest_gap(scores: &[f64]) -> f64 {
+    let mut sorted = scores.to_vec();
+    sorted.sort_by(f64::total_cmp);
+    sorted
+        .windows(2)
+        .map(|pair| pair[1] - pair[0])
+        .fold(f64::INFINITY, f64::min)
+}
+
+/// The scores the replay assigns to the rows of the evaluation partition, under
+/// one arm's policy.
+///
+/// This is the production computation reached through the public surface rather
+/// than restated: `run_bandit` builds
+/// `RewardBasis::from_targets(&targets, proxy.switch_count(), 1.0)` for every row
+/// and scores it with `basis.score(policy)`. The evaluation partition is the
+/// trailing cell of the split, and every cell in this fixture is one pass over
+/// [`cell_rows`], so one pass over `cell_rows` *is* the partition's content — the
+/// sample ids differ per cell but the schedule hashes those, while these scores
+/// do not read an id at all.
+fn replay_row_scores(policy: &RewardPolicy) -> Vec<f64> {
+    cell_rows()
+        .iter()
+        .enumerate()
+        .map(|(index, row)| {
+            let timestamp = 1_700_000_000i64 + index as i64 + 1;
+            let built = sample(
+                "model-d",
+                "provider-b",
+                row.0,
+                row.1,
+                row.2,
+                row.3,
+                timestamp,
+            );
+            let proxy = OutcomeProxy::from_targets(&built.targets);
+            RewardBasis::from_targets(&built.targets, proxy.switch_count(), 1.0).score(policy)
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -620,22 +801,41 @@ fn selection_picks_the_highest_ucb_score() {
 
 #[test]
 fn a_different_seed_replays_a_different_schedule() {
+    let rows = misordered_snapshot();
     let mut first = fixture_config();
     first.selection.seed = 1;
     let mut second = fixture_config();
     second.selection.seed = 99_991;
 
-    let a = run_bandit(&misordered_snapshot(), &declared_arms(), &first).expect("run");
-    let b = run_bandit(&misordered_snapshot(), &declared_arms(), &second).expect("run");
+    let a = run_bandit(&rows, &declared_arms(), &first).expect("run");
+    let b = run_bandit(&rows, &declared_arms(), &second).expect("run");
 
-    let counts = |arms: &[ArmSelectionStatistics]| -> Vec<usize> {
-        arms.iter().map(|arm| arm.observations).collect()
-    };
+    // The witness is the whole replay outcome, not the per-arm observation count.
+    // The counts are three integers summing to the replay size, so two seeds
+    // collide on them about one run in ninety-three; the statistics are functions
+    // of *which* rows each arm received, so they collide only if the two replays
+    // assigned the same rows to the same arms. See [`ScheduleWitness`].
+    let left = schedule_witness(a.arms(), &a.report().selection);
+    let right = schedule_witness(b.arms(), &b.report().selection);
     assert_ne!(
-        counts(a.arms()),
-        counts(b.arms()),
-        "a different seed must explore a different assignment schedule"
+        left,
+        right,
+        "a different seed must explore a different assignment schedule\n  seed {}: {}\n  \
+         seed {}: {}",
+        first.selection.seed,
+        left.summary(),
+        second.selection.seed,
+        right.summary()
     );
+
+    // Two premises make that witness worth having, and both are checked rather
+    // than asserted in prose. They live in the two tests named here rather than
+    // being repeated here: that the arm the argument leans on scores the replayed
+    // rows at distinguishable values, so two different row sets cannot share a sum
+    // (`the_replayed_rows_are_distinguishable_under_the_fitted_arm`), and that a
+    // single row moving between two arms leaves every count untouched while both
+    // means move (`the_schedule_witness_sees_a_row_move_the_counts_cannot`).
+
     // But the fit is seed-free, so the learned reward must not move.
     assert_eq!(
         a.fitted_policy().cost_weight,
@@ -645,6 +845,105 @@ fn a_different_seed_replays_a_different_schedule() {
     assert_eq!(
         a.fitted_policy().latency_weight,
         b.fitted_policy().latency_weight
+    );
+}
+
+#[test]
+fn distinct_seeds_replay_pairwise_distinct_schedules() {
+    let rows = misordered_snapshot();
+    let witnesses: Vec<ScheduleWitness> = SCHEDULE_SEEDS
+        .iter()
+        .map(|seed| witness_for_seed(&rows, *seed))
+        .collect();
+
+    // Every pair, not one convenient pair. If the schedule were seed-independent
+    // this fails on the first comparison, whatever the seeds are; if two seeds
+    // genuinely replayed the same schedule it names the two that did.
+    for (index, left) in witnesses.iter().enumerate() {
+        for (offset, right) in witnesses.iter().skip(index + 1).enumerate() {
+            assert_ne!(
+                left,
+                right,
+                "two distinct seeds replayed the same assignment schedule\n  seed {}: \
+                 {}\n  seed {}: {}",
+                SCHEDULE_SEEDS[index],
+                left.summary(),
+                SCHEDULE_SEEDS[index + 1 + offset],
+                right.summary()
+            );
+        }
+    }
+}
+
+#[test]
+fn the_replayed_rows_are_distinguishable_under_the_fitted_arm() {
+    let rows = misordered_snapshot();
+    let outcome = run_bandit(&rows, &declared_arms(), &fixture_config()).expect("run");
+    let scores = replay_row_scores(fitted_policy_of(&outcome));
+
+    // `replay_row_scores` stands in for the evaluation partition, so the fixture
+    // claim it rests on is checked here: four cells, each one pass over
+    // `cell_rows`, and the replay holding out exactly one of them.
+    assert_eq!(
+        outcome.report().rows,
+        CELLS.len() * cell_rows().len(),
+        "every cell must be one pass over cell_rows for the scores below to be the \
+         replayed rows' scores"
+    );
+    assert_eq!(
+        scores.len(),
+        outcome.report().selection.replay_rows,
+        "one score per replayed row"
+    );
+    assert!(
+        scores.iter().all(|score| score.is_finite()),
+        "every replayed row must score finitely, got {scores:?}"
+    );
+    let gap = smallest_gap(&scores);
+    assert!(
+        gap > MIN_REPLAY_SCORE_GAP,
+        "the fitted arm must score the replayed rows at values far enough apart that two \
+         different row sets cannot share a sum; the closest pair is {gap:e} apart and \
+         {MIN_REPLAY_SCORE_GAP:e} is required, got {scores:?}"
+    );
+}
+
+#[test]
+fn the_schedule_witness_sees_a_row_move_the_counts_cannot() {
+    // Why the witness is not the count vector, as arithmetic rather than as
+    // assertion. Move exactly one replayed row from one arm to another: every
+    // per-arm observation count is unchanged, so the old witness is blind to it,
+    // while the donor's and the receiver's means both move.
+    let rows = misordered_snapshot();
+    let outcome = run_bandit(&rows, &declared_arms(), &fixture_config()).expect("run");
+    let scores = replay_row_scores(fitted_policy_of(&outcome));
+    let moved = scores.len() / 2;
+    assert!(
+        moved > 0 && moved < scores.len(),
+        "the fixture splits in two"
+    );
+
+    let before = scores[..moved].to_vec();
+    let mut after = before.clone();
+    after[moved - 1] = scores[moved];
+
+    // The old witness: two integers per arm, and they are equal.
+    let counts_before: Vec<usize> = vec![before.len(), scores.len() - before.len()];
+    let counts_after: Vec<usize> = vec![after.len(), scores.len() - after.len()];
+    assert_eq!(
+        counts_before, counts_after,
+        "moving one row between arms leaves the count vector identical"
+    );
+
+    // The new witness: the same two arms report different means.
+    let mean_before = before.iter().sum::<f64>() / before.len() as f64;
+    let mean_after = after.iter().sum::<f64>() / after.len() as f64;
+    let gap = smallest_gap(&scores) / moved as f64;
+    assert!(
+        (mean_before - mean_after).abs() >= gap,
+        "one row moved between two arms with equal counts must move their means, by at \
+         least the smallest score gap divided by the pull count; got {mean_before} and \
+         {mean_after}"
     );
 }
 
