@@ -659,6 +659,17 @@ fn every_evaluation_error_carries_a_reason() {
             index: 1,
             value: 1.0e300,
         },
+        EvaluationError::NonFiniteRoutingMetric {
+            side: "candidate",
+            metric: "success_rate",
+            value: f64::NAN,
+        },
+        EvaluationError::RoutingMetricOutOfRange {
+            side: "baseline",
+            metric: "p95_latency_ms",
+            value: -1.0,
+            bound: ">= 0",
+        },
     ];
     for case in cases {
         let rendered = case.to_string();
@@ -666,6 +677,124 @@ fn every_evaluation_error_carries_a_reason() {
         assert!(
             !rendered.contains("Error {"),
             "the rendered reason must be prose, not a debug dump: {rendered}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The routing comparison's validation
+// ---------------------------------------------------------------------------
+//
+// `RoutingMetrics` carries public `f64`s, so a caller can hand the comparison a
+// record that is not a measurement at all. Every threshold in the comparison is
+// a `<`/`>` test, and a `NaN` reads false for all of them: the success-rate
+// degradation test goes quiet and any latency or cost improvement carries an
+// `Accept` — while the reported delta is also `NaN`. These tests pin the
+// explicit insufficient-evidence answer that replaced that acceptance.
+
+/// A candidate whose named metric is replaced with `value`.
+fn candidate_with(metric: &str, value: f64) -> RoutingMetrics {
+    let mut candidate = make_routing_metrics(100, 0.995, 200.0, 170.0, 0.02, 0.0);
+    match metric {
+        "success_rate" => candidate.success_rate = value,
+        "fallback_rate" => candidate.fallback_rate = value,
+        "escalation_rate" => candidate.escalation_rate = value,
+        "p50_latency_ms" => candidate.p50_latency_ms = value,
+        "p95_latency_ms" => candidate.p95_latency_ms = value,
+        "mean_cost" => candidate.mean_cost = value,
+        other => panic!("unknown metric {other}"),
+    }
+    candidate
+}
+
+#[test]
+fn compare_routing_refuses_a_candidate_success_rate_that_is_not_a_measurement() {
+    // The measured latency improvement is real: p95 200 -> 170 is -15%, inside
+    // the latency-improvement branch. Under a comparison that did not validate,
+    // it alone produced `Accept` with a `NaN` success-rate delta.
+    let baseline = make_routing_metrics(100, 0.995, 200.0, 200.0, 0.02, 0.0);
+
+    for non_finite in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        let report =
+            Evaluator::compare_routing(&baseline, &candidate_with("success_rate", non_finite));
+        assert_eq!(
+            report.recommendation,
+            Recommendation::InsufficientData,
+            "a {non_finite} success rate is not evidence for an acceptance"
+        );
+        assert!(
+            report
+                .reasons
+                .iter()
+                .any(|reason| reason.contains("candidate.success_rate")),
+            "the refusal must name the offending field: {:?}",
+            report.reasons
+        );
+        // No delta is reported for a comparison that could not be made, so no
+        // `NaN` escapes into a caller's arithmetic or serialization.
+        assert_eq!(report.deltas.p95_latency_delta_pct, 0.0);
+        assert!(report.deltas.success_rate_delta.is_finite());
+    }
+}
+
+#[test]
+fn compare_routing_refuses_a_baseline_that_is_not_a_measurement() {
+    let baseline = make_routing_metrics(100, f64::NAN, 200.0, 200.0, 0.02, 0.0);
+    let candidate = make_routing_metrics(100, 0.995, 200.0, 170.0, 0.02, 0.0);
+
+    let report = Evaluator::compare_routing(&baseline, &candidate);
+    assert_eq!(report.recommendation, Recommendation::InsufficientData);
+    assert!(
+        report
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("baseline.success_rate")),
+        "the refusal must name the malformed side: {:?}",
+        report.reasons
+    );
+    assert_eq!(report.deltas.success_rate_delta, 0.0);
+}
+
+#[test]
+fn compare_routing_refuses_rates_outside_the_unit_interval_and_negative_magnitudes() {
+    let baseline = make_routing_metrics(100, 0.99, 200.0, 200.0, 0.02, 0.0);
+
+    for (metric, value) in [
+        ("success_rate", 1.5),
+        ("success_rate", -0.001),
+        ("fallback_rate", 1.5),
+        ("escalation_rate", -1.0),
+        ("p50_latency_ms", -1.0),
+        ("p95_latency_ms", -1.0),
+        ("mean_cost", -0.01),
+    ] {
+        let report = Evaluator::compare_routing(&baseline, &candidate_with(metric, value));
+        assert_eq!(
+            report.recommendation,
+            Recommendation::InsufficientData,
+            "{metric} = {value} is not a measurement"
+        );
+        assert!(
+            report.reasons.iter().any(|reason| reason.contains(metric)),
+            "the refusal must name {metric} = {value}: {:?}",
+            report.reasons
+        );
+    }
+
+    // The boundaries themselves are measurements: a rate of exactly 0 or 1 and
+    // a latency or cost of exactly 0 are possible, so they must not be refused.
+    for (metric, value) in [
+        ("success_rate", 1.0),
+        ("success_rate", 0.0),
+        ("fallback_rate", 1.0),
+        ("p95_latency_ms", 0.0),
+        ("mean_cost", 0.0),
+    ] {
+        let report = Evaluator::compare_routing(&baseline, &candidate_with(metric, value));
+        assert_ne!(
+            report.recommendation,
+            Recommendation::InsufficientData,
+            "{metric} = {value} is inside its possible range"
         );
     }
 }
