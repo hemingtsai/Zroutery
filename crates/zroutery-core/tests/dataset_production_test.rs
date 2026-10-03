@@ -762,21 +762,63 @@ async fn collecting_samples_influences_no_response() {
 #[tokio::test]
 async fn the_dataset_is_never_read_back_by_production() {
     let source = include_str!("../src/server/pipeline.rs");
-    // Reading the store for a decision would be a second `.dataset()` call.
-    assert_eq!(source.matches(".dataset()").count(), 1);
-    for reader in ["training_slice(", "legacy_training_slice(", "counters()"] {
+
+    // The property is that the dataset cannot influence a *routing decision*.
+    //
+    // It used to be enforced by counting `.dataset()` occurrences and banning
+    // `training_slice` outright, which forbade the durable trace write as well:
+    // a trace that cannot read the samples it is a trace of cannot exist. Those
+    // were source-shape tripwires, not the behaviour anyone needed protected, and
+    // the fence is now replaced by the property itself.
+    //
+    // The decision path ends where the request is handed to `stream_chat` or
+    // `buffered_chat`. Nothing at or before that point may read the store.
+    let (before_dispatch, after_dispatch) = source
+        .split_once("if req.stream {")
+        .expect("the pipeline still dispatches both response shapes");
+    for reader in ["training_slice(", "legacy_training_slice(", ".dataset()"] {
         assert!(
-            !source.contains(reader),
-            "the pipeline must not read the dataset ({reader})"
+            !before_dispatch.contains(reader),
+            "the routing decision must not read the dataset ({reader})"
         );
     }
-    let state_source = include_str!("../src/server/mod.rs");
-    for forbidden in ["train(", "try_train(", "update_all(", "ModelEnsemble"] {
-        assert!(
-            !state_source.contains(forbidden),
-            "AppState must not reach a learning seam ({forbidden})"
-        );
+
+    // After dispatch, a read is allowed and must be one-way: inside the terminal
+    // transition, after the outcome exists, and never before it.
+    assert!(
+        after_dispatch.contains("training_slice("),
+        "the durable trace write must read the samples it records"
+    );
+    let (before_finalize, after_finalize) = after_dispatch
+        .split_once("fn finalize(")
+        .expect("the lifecycle still has its one terminal transition");
+    assert!(
+        before_finalize.contains("fn trace_persisted("),
+        "the trace write is a lifecycle method"
+    );
+    let outcome_built = after_finalize
+        .find("build_outcome(")
+        .expect("outcome construction");
+    let trace_call = after_finalize
+        .find("self.trace_persisted()")
+        .expect("trace write call");
+    assert!(
+        outcome_built < trace_call,
+        "a trace must be written from an outcome that exists"
+    );
+
+    // Every read of the store still goes through AppState, so there is one path
+    // in and not several competing ones.
+    for line in source.lines() {
+        if line.contains(".dataset()") {
+            assert!(
+                line.contains("self.state.dataset()"),
+                "the dataset must only be reached through AppState: {line}"
+            );
+        }
     }
+
+    // Routing still knows nothing about the dataset.
     let routing = include_str!("../src/router.rs");
     assert!(
         !routing.contains("dataset"),

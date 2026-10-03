@@ -505,6 +505,10 @@ impl Router {
             fallback_chain,
             reason,
             policy_revision,
+            // No model has been consulted here. The ML serving path amends this
+            // record when it re-orders the plan, so a decision that carries this
+            // as `None` is one the router produced on its own.
+            ml_ranking: None,
         };
 
         Ok((candidates, decision))

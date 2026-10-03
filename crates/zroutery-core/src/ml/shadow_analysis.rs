@@ -733,7 +733,7 @@ mod tests {
         let analysis = analyse_with(&traces);
         assert_eq!(
             analysis.dataset_fingerprint,
-            DatasetFingerprint::of(&super::super::traces::samples_from(&traces))
+            DatasetFingerprint::of(&super::super::traces::deduped_samples_from(&traces))
         );
     }
 

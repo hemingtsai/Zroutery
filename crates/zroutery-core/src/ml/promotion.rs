@@ -442,16 +442,23 @@ impl PromotionGate {
 
         // -- 9. Dataset identity: the model and the evidence must be about the
         //       same body of data. ------------------------------------------
+        //
+        // The comparison runs over the whole body the model was trained *from*,
+        // so this compares `source_fingerprint` and not `dataset_fingerprint`:
+        // the latter names the fitted partition, which is a strictly smaller set
+        // by construction and could never match. Comparing the wrong one made this
+        // criterion unsatisfiable, i.e. every promotion rejected for a reason that
+        // had nothing to do with the model.
         let same_body =
-            comparison.dataset_fingerprint.as_str() == training.dataset_fingerprint.as_str();
+            comparison.dataset_fingerprint.as_str() == training.source_fingerprint.as_str();
         criteria.push(if same_body {
             PromotionCriterion::held(
                 "dataset_identity",
                 None,
                 None,
                 format!(
-                    "both the model and the evidence name dataset {}",
-                    training.dataset_fingerprint
+                    "both the model and the evidence name source body {} (fitted partition {})",
+                    training.source_fingerprint, training.dataset_fingerprint
                 ),
             )
         } else {
@@ -460,8 +467,8 @@ impl PromotionGate {
                 None,
                 None,
                 format!(
-                    "the model was fitted on dataset {} but the comparison was computed over {}",
-                    training.dataset_fingerprint, comparison.dataset_fingerprint
+                    "the model was trained from body {} but the comparison was computed over {}",
+                    training.source_fingerprint, comparison.dataset_fingerprint
                 ),
             )
         });
@@ -574,7 +581,8 @@ mod tests {
             final_commit: "cafebabecafebabe".to_string(),
             base_commit: "0000000000000000".to_string(),
             learning_event_count: 84,
-            dataset_fingerprint: dataset,
+            dataset_fingerprint: dataset.clone(),
+            source_fingerprint: dataset,
             config_identity: "00112233445566aa".to_string(),
             feature_schema_version: super::super::features::FEATURE_SCHEMA_VERSION,
             reward_policy: RewardPolicy::default(),

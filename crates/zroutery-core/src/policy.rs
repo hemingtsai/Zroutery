@@ -1053,6 +1053,39 @@ pub enum DecisionReason {
     NoCandidate,
 }
 
+/// What a learned model did to a routing decision, when one was consulted.
+///
+/// Additive and optional: a decision this router produced without a model has
+/// none, which is the state a fresh installation and every non-`ml` build are in.
+///
+/// It exists because `DecisionReason` is a closed vocabulary of *why policy
+/// chose what it chose*, and "a model re-ordered this afterwards" is not one of
+/// those things. Overwriting `reason` would have been the easy option and would
+/// have destroyed the policy's own account of itself.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MlRankingTrace {
+    /// The commit that produced the ranking.
+    pub commit_id: String,
+    /// The candidate ML would serve first.
+    pub selected: String,
+    /// The engine's own reason, verbatim.
+    pub reason: String,
+    /// Whether an exploration draw moved the selection off the exploitation pick.
+    pub explored: bool,
+    /// Candidate identities in the order ML would try them.
+    pub order: Vec<String>,
+    /// The order the router produced, for comparison.
+    pub baseline_order: Vec<String>,
+}
+
+impl MlRankingTrace {
+    /// Whether the model changed the first candidate.
+    pub fn changed_selection(&self) -> bool {
+        self.baseline_order.first().map(String::as_str) != self.order.first().map(String::as_str)
+    }
+}
+
 /// Identifies the exact policy configuration used for a routing decision.
 ///
 /// Captures the policy id, enabled state, and hashes of the requirements and
@@ -1102,6 +1135,15 @@ pub struct RouteDecision {
     pub reason: DecisionReason,
     /// Identifies the exact policy/config version used.
     pub policy_revision: PolicyRevision,
+    /// What a learned model did to this decision, when one was consulted.
+    ///
+    /// `None` for every decision this router made on its own, which is every
+    /// decision in a build without the `ml` feature and every decision in a
+    /// deployment that has not enabled `ml_routing`. Present means a model was
+    /// consulted, not that it changed anything — a model that agreed with the
+    /// router is recorded with the same fidelity as one that did not.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ml_ranking: Option<MlRankingTrace>,
 }
 
 impl RouteDecision {
@@ -2098,6 +2140,8 @@ mod tests {
                 requirements_hash: 12345,
                 preference_hash: 67890,
             },
+            // No learned model was consulted for this fixture decision.
+            ml_ranking: None,
         };
 
         let json = serde_json::to_string(&decision).unwrap();

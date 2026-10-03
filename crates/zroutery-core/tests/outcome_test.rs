@@ -89,6 +89,8 @@ fn make_route_decision(decision_id: &str, selected_model: &str) -> RouteDecision
             requirements_hash: 12345,
             preference_hash: 67890,
         },
+        // No learned model was consulted for this fixture decision.
+        ml_ranking: None,
     }
 }
 

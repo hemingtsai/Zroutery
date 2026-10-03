@@ -98,6 +98,8 @@ fn decision_for(decision_id: &str, selected: &str) -> RouteDecision {
             requirements_hash: 1,
             preference_hash: 2,
         },
+        // No learned model was consulted for this fixture decision.
+        ml_ranking: None,
     }
 }
 
