@@ -1440,7 +1440,9 @@ impl Default for ShadowStore {
 ///
 /// Holds an immutable [`DecisionEngine`] plus a swappable ensemble predictor.
 /// Readers clone the [`Arc`] under the read lock and then predict lock-free;
-/// only [`ShadowEngine::train`] takes the write lock.
+/// only [`ShadowEngine::train`] takes the write lock, and training runs are
+/// serialised by `training` so a read-modify-write of the predictor cannot lose
+/// an update.
 ///
 /// The master switch and the store retention are configuration, not
 /// construction constants: [`ShadowEngine::reconfigure`] applies a changed
@@ -1451,6 +1453,11 @@ pub struct ShadowEngine {
     store: ShadowStore,
     enabled: AtomicBool,
     faults: AtomicU64,
+    /// Serialises the read-train-write of [`ShadowEngine::try_train`]. Training
+    /// itself stays off the predictor lock (readers never block behind it), so
+    /// without this a second concurrent run would start from the same commit
+    /// and overwrite the first run's update.
+    training: Mutex<()>,
 }
 
 impl ShadowEngine {
@@ -1472,6 +1479,7 @@ impl ShadowEngine {
             store: ShadowStore::new(max_decisions, max_age_secs),
             enabled: AtomicBool::new(enabled),
             faults: AtomicU64::new(0),
+            training: Mutex::new(()),
         }
     }
 
@@ -1540,7 +1548,12 @@ impl ShadowEngine {
 
     /// Fallible training and atomic predictor swap. The new predictor retains
     /// the complete verified commit, its parent, and its checkpoint.
+    ///
+    /// The whole read-train-write is serialised: a concurrent run waits here
+    /// and then re-reads the current commit, so it continues from the run that
+    /// finished first instead of racing it and losing one of the two updates.
     pub fn try_train(&self, samples: &[DatasetTrainingSample]) -> Result<CommitId, ReplayError> {
+        let _training = crate::sync::lock(&self.training);
         let current = crate::sync::read(&self.predictor).clone();
         let (ensemble, commit, history, lineage) = current.try_train_with_history(samples)?;
         let predictor =

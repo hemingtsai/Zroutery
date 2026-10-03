@@ -583,6 +583,47 @@ fn reconfigure_switches_evaluation_off_and_on() {
 }
 
 // ---------------------------------------------------------------------------
+// Concurrent training (ML-14)
+// ---------------------------------------------------------------------------
+
+/// Two barrier-synchronised training runs must not lose an update. The engine
+/// serialises the read-train-write, so the second run starts from the first
+/// run's commit and both batches of learned events survive to the final commit.
+#[test]
+fn concurrent_training_keeps_every_update() {
+    use std::sync::{Arc, Barrier};
+
+    let engine = Arc::new(engine());
+    let barrier = Arc::new(Barrier::new(2));
+    let mut handles = Vec::new();
+    for range in [0..1000, 1000..2000] {
+        let engine = Arc::clone(&engine);
+        let barrier = Arc::clone(&barrier);
+        let samples = training_samples(range);
+        handles.push(std::thread::spawn(move || {
+            barrier.wait();
+            engine.try_train(&samples)
+        }));
+    }
+    for handle in handles {
+        let _ = handle
+            .join()
+            .expect("a training thread must not panic")
+            .expect("a concurrent training run must not lose its samples");
+    }
+
+    let commit = engine.predictor_commit();
+    assert_eq!(
+        commit.learning_event_count, 2000,
+        "both 1000-sample batches must be in the final commit"
+    );
+    assert_eq!(
+        commit.checkpoint.success.update_count, 2000,
+        "both batches must be applied to the final ensemble"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Determinism
 // ---------------------------------------------------------------------------
 
