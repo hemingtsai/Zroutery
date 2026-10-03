@@ -102,6 +102,13 @@
 //! copy of the payload per activation; that cost is stated rather than avoided
 //! by fabricating evidence.
 //!
+//! Naming a commit is not the same as producing it, so the producing record is
+//! *proved* before it is re-recorded: its samples are replayed through the
+//! accepted strict [`ReplayEngine::replay_verified`] against the parent commit
+//! it declares, and a record whose replay rebuilds a different commit is
+//! [`ActivationError::ProvenanceUnproven`]. Trusting the id reference alone
+//! would let a mis-paired sample batch launder itself into durable evidence.
+//!
 //! # Immutability
 //!
 //! A snapshot is written once, through a temp file, a flush, and a rename, and
@@ -1289,6 +1296,17 @@ pub enum ActivationError {
         /// The record whose evidence is degraded.
         event_id: String,
     },
+    /// A record *names* the commit as its result but replaying its samples
+    /// through the strict accepted engine does not reproduce it. The declared
+    /// reference is not proof of production, so the activation is refused.
+    ProvenanceUnproven {
+        /// The commit the record claims to have produced.
+        commit: CommitId,
+        /// The record whose claim did not survive replay.
+        event_id: String,
+        /// What the strict replay said instead.
+        reason: String,
+    },
     /// A journal record claims to be an activation record but is not one.
     ForgedActivationRecord {
         /// The record's event id.
@@ -1427,6 +1445,15 @@ impl fmt::Display for ActivationError {
                 f,
                 "the only record producing commit '{commit}' is event '{event_id}', whose evidence \
                  is a degraded projection rather than the canonical samples"
+            ),
+            ActivationError::ProvenanceUnproven {
+                commit,
+                event_id,
+                reason,
+            } => write!(
+                f,
+                "record '{event_id}' names commit '{commit}' as its result but the strict replay \
+                 does not reproduce it: {reason}"
             ),
             ActivationError::ForgedActivationRecord { event_id, reason } => write!(
                 f,
@@ -2363,6 +2390,11 @@ fn activation_source(stage: ActivationStage, snapshot: &SnapshotId) -> String {
 /// The accepted learning event validator requires at least one sample, so there
 /// is no sample-less "activation event" to write; inventing one would be
 /// fabricated evidence, so a commit with no producing record is refused.
+///
+/// The record that names the commit is not taken at its word: its samples are
+/// replayed through the strict accepted engine first, and the activation is
+/// refused ([`ActivationError::ProvenanceUnproven`]) unless that replay
+/// reproduces the commit exactly.
 fn record_activation(
     journal: &mut LearningJournal,
     store: &ModelStore,
@@ -2389,6 +2421,13 @@ fn record_activation(
             event_id: producing.event.event_id.clone(),
         });
     };
+    // Naming a commit as a result is not proof of producing it. Before any
+    // evidence is re-recorded, the record is replayed through the strict
+    // accepted engine against the parent commit it declares: the parent, the
+    // model lineage, the sample batch, the cumulative learning-event count, and
+    // the result commit are all re-derived together, and a sample chain that
+    // rebuilds anything other than the target is refused rather than recorded.
+    prove_provenance(store, producing, &entry.commit)?;
     let samples: Vec<OutcomeTrainingSample> = samples.to_vec();
     let event = CanonicalEvent {
         event_id: event_id.to_string(),
@@ -2402,6 +2441,45 @@ fn record_activation(
     journal
         .record_canonical(event)
         .map_err(|cause| journal_error(context, cause, pointer))
+}
+
+/// Prove that a journal record really produced the commit it names.
+///
+/// This reuses the accepted strict replay engine — the same path whose
+/// `EventResultMismatch` the rest of the crate relies on — instead of trusting
+/// the record's own `result_commit` field. The base is the parent commit the
+/// record declares, checked out of the caller's store, so the replayed child is
+/// the commit that batch of samples actually produces on top of that parent:
+/// parent, model lineage, sample batch, cumulative learning-event count, and
+/// result are all re-derived together.
+fn prove_provenance(
+    store: &ModelStore,
+    producing: &JournalRecord,
+    commit: &CommitId,
+) -> Result<(), ActivationError> {
+    let unproven = |reason: String| ActivationError::ProvenanceUnproven {
+        commit: commit.clone(),
+        event_id: producing.event.event_id.clone(),
+        reason,
+    };
+    let base = match producing.event.parent_commit.as_ref() {
+        Some(parent) => Some(store.checkout_commit(parent).map_err(|error| {
+            unproven(format!(
+                "its declared parent commit '{parent}' cannot be checked out: {error}"
+            ))
+        })?),
+        None => None,
+    };
+    let replayed =
+        ReplayEngine::replay_verified(std::slice::from_ref(&producing.event), base.as_ref())
+            .map_err(|error| unproven(error.to_string()))?;
+    if replayed.commit_id != *commit {
+        return Err(unproven(format!(
+            "replaying its samples yields commit '{}'",
+            replayed.commit_id
+        )));
+    }
+    Ok(())
 }
 
 /// Read one record as an activation trace, or `None` when it is not one.
