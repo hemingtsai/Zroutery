@@ -11,6 +11,7 @@ mod pipeline;
 mod projection_log;
 mod shadow_candidate;
 
+use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
@@ -27,7 +28,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router as AxumRouter};
 use serde_json::{json, Value};
 use tokio::net::TcpListener;
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, OwnedSemaphorePermit, Semaphore};
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 
 use crate::billing::{Cost, Pricing};
@@ -84,6 +85,15 @@ pub struct AppState {
     /// Held across snapshot/write/confirm, so a timer flush and a shutdown flush
     /// cannot interleave into writing an older snapshot over a newer one.
     ledger_flush: Mutex<()>,
+    /// One admission gate per budgeted scope.
+    ///
+    /// A request takes a gate for every scope with a configured limit it could
+    /// spend against, before the budget check, and gives it back only once the
+    /// request has been settled and charged. That is what makes the documented
+    /// overshoot bound real: without it, N concurrent requests all read the same
+    /// historical total and all pass. A scope with no configured limit has no
+    /// gate and never blocks.
+    admission: AdmissionGates,
     /// Shadow decision engine (Stage 7E-1): records what the ML routing stack
     /// would have done for policy-routed main traffic. Record-only by
     /// construction — nothing in the request pipeline reads its verdicts.
@@ -119,6 +129,62 @@ pub struct AppState {
     /// serving path rather than only from tests.
     projections: ProjectionLog,
     pub response_store: ResponseStore,
+}
+
+/// The admission gates, one per budgeted scope.
+///
+/// Each gate is a one-permit semaphore, so whoever holds it is the only request
+/// in flight for that scope. Gates are created on first use and deliberately
+/// never removed: a request holds its permit through the `Arc` it acquired, so a
+/// budget removed (or re-added) while requests are in flight cannot strand a
+/// permit, and the next request for that scope waits on the same gate the
+/// outstanding request is about to release. The map only ever grows to the set
+/// of scopes a configuration has named, which is bounded by the configuration.
+#[derive(Default)]
+struct AdmissionGates {
+    gates: Mutex<BTreeMap<BudgetScope, Arc<Semaphore>>>,
+}
+
+/// The admission permits one request holds until it has been settled.
+///
+/// Opaque on purpose: dropping it is the only way to release, so no terminal
+/// path can charge the ledger without handing its scope to the next request.
+/// An empty guard is the honest representation of "no scope this request
+/// occupies has a configured limit", which is the case that must stay fully
+/// concurrent.
+struct AdmissionGuard {
+    _permits: Vec<OwnedSemaphorePermit>,
+}
+
+impl AdmissionGates {
+    /// Take the permit for every scope in `scopes`.
+    ///
+    /// The caller passes the scopes in canonical ascending order and every
+    /// caller does, so a request only ever accumulates gates in that one order
+    /// and two requests that want overlapping sets cannot each hold what the
+    /// other is waiting for. Blocking here is the point: the second request
+    /// waits, then re-reads a ledger that already contains what the first one
+    /// spent.
+    async fn admit(&self, scopes: &[BudgetScope]) -> AdmissionGuard {
+        let mut permits = Vec::with_capacity(scopes.len());
+        for scope in scopes {
+            let gate = {
+                let mut gates = crate::sync::lock(&self.gates);
+                Arc::clone(
+                    gates
+                        .entry(scope.clone())
+                        .or_insert_with(|| Arc::new(Semaphore::new(1))),
+                )
+            };
+            // `acquire_owned` fails only for a closed semaphore, and nothing
+            // here ever closes one; a missing permit would silently unbind the
+            // request, so it is treated as "hold nothing" rather than a panic.
+            if let Ok(permit) = gate.acquire_owned().await {
+                permits.push(permit);
+            }
+        }
+        AdmissionGuard { _permits: permits }
+    }
 }
 
 impl AppState {
@@ -189,6 +255,7 @@ impl AppState {
             ledger_dirty: AtomicBool::new(false),
             ledger_generation: AtomicU64::new(0),
             ledger_flush: Mutex::new(()),
+            admission: AdmissionGates::default(),
             #[cfg(feature = "ml")]
             shadow: crate::ml::ShadowEngine::with_retention(
                 crate::ml::DecisionEngine::new(
@@ -311,6 +378,17 @@ impl AppState {
             provider_ids,
             tier,
         )
+    }
+
+    /// Take the admission permits for a request's budgeted scopes.
+    ///
+    /// The caller passes every scope with a configured limit that this request
+    /// could spend against, sorted, and must call this before the budget check:
+    /// the gate is what stops a peer from being charged after the check but
+    /// before the request that passed it has finished. The returned guard is
+    /// held until the request is settled; dropping it releases every scope.
+    async fn admit(&self, scopes: &[BudgetScope]) -> AdmissionGuard {
+        self.admission.admit(scopes).await
     }
 
     /// What the budgets say about a classifier side request.
@@ -1549,6 +1627,96 @@ mod tests {
         assert!(
             !overlap.load(Ordering::Acquire),
             "two flushes wrote at once, so an older snapshot could overwrite a newer one"
+        );
+    }
+
+    fn budget_scope_state() -> AppState {
+        AppState::new(
+            AppConfig::default(),
+            Arc::new(crate::config::MemorySecretStore::new()),
+        )
+    }
+
+    /// One permit per scope, released by the drop and never by an explicit call.
+    #[tokio::test]
+    async fn an_admitted_scope_is_exclusive_until_the_guard_drops() {
+        let state = budget_scope_state();
+        let scope = BudgetScope::Global;
+
+        let held = state.admit(std::slice::from_ref(&scope)).await;
+        assert!(
+            tokio::time::timeout(
+                Duration::from_millis(50),
+                state.admit(std::slice::from_ref(&scope))
+            )
+            .await
+            .is_err(),
+            "a second request for a held scope must wait, not run against the same total"
+        );
+        drop(held);
+        assert!(
+            tokio::time::timeout(
+                Duration::from_millis(500),
+                state.admit(std::slice::from_ref(&scope))
+            )
+            .await
+            .is_ok(),
+            "dropping the guard must release the scope"
+        );
+    }
+
+    /// A request that occupies no budgeted scope is never gated, and two
+    /// different scopes do not block each other.
+    #[tokio::test]
+    async fn scopes_without_a_budget_stay_concurrent() {
+        let state = budget_scope_state();
+        let provider = BudgetScope::Provider {
+            id: "deepseek".into(),
+        };
+
+        let held = state.admit(std::slice::from_ref(&provider)).await;
+        // Nothing budgeted at all: admitted immediately, no waiting.
+        assert!(
+            tokio::time::timeout(Duration::from_millis(500), state.admit(&[]))
+                .await
+                .is_ok(),
+            "an unbudgeted request must not wait on anyone"
+        );
+        // A different scope is a different gate.
+        assert!(
+            tokio::time::timeout(
+                Duration::from_millis(500),
+                state.admit(&[BudgetScope::Tier {
+                    tier: ModelTier::Standard
+                }])
+            )
+            .await
+            .is_ok(),
+            "one held scope must not serialise another"
+        );
+        drop(held);
+    }
+
+    /// Removing a scope's budget while a request holds its permit must not
+    /// strand the permit: the gate outlives the configuration that made it.
+    #[tokio::test]
+    async fn removing_a_budget_does_not_leak_an_in_flight_permit() {
+        let state = budget_scope_state();
+        let scope = BudgetScope::Global;
+        let held = state.admit(std::slice::from_ref(&scope)).await;
+
+        // The budget disappears while the request is still in flight.
+        state.set_config(AppConfig::default());
+        drop(held);
+
+        assert!(
+            tokio::time::timeout(
+                Duration::from_millis(500),
+                state.admit(std::slice::from_ref(&scope))
+            )
+            .await
+            .is_ok(),
+            "the released permit must still be the one the gate hands out"
         );
     }
 }

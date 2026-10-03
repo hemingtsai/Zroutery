@@ -6,7 +6,7 @@
 //! is on one of them.
 
 use std::borrow::Cow;
-use std::collections::{HashSet, VecDeque};
+use std::collections::{BTreeSet, HashSet, VecDeque};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -17,10 +17,10 @@ use axum::Json;
 use serde_json::Value;
 use tokio::sync::watch;
 
-use super::{error_response, AppState};
+use super::{error_response, AdmissionGuard, AppState};
 use crate::billing::{Cost, Pricing};
-use crate::budget::Verdict;
-use crate::config::{ModelTier, RoutingConfig};
+use crate::budget::{Budget, BudgetScope, OnExceeded, Verdict};
+use crate::config::{AppConfig, ModelTier, RoutingConfig};
 use crate::error::{Error, Result};
 use crate::failure::ClassifiedFailure;
 use crate::ir::{
@@ -120,6 +120,13 @@ pub(super) async fn handle_chat(
     let policy_config = &config.routing.policies;
     let matched_policy = resolve_policy(policy_config, &client_ctx, &task_profile);
 
+    // Admission permits for every budgeted scope this request occupies. Taken
+    // before the budget check and held until the request settles: the streaming
+    // path moves the guard into the body stream, because that response outlives
+    // this function, and every other path drops it after the terminal
+    // transition has charged the ledger.
+    let admission: AdmissionGuard;
+
     let (plan, routing_decision) = match kind {
         RequestKind::Main => {
             // Fallback Contract:
@@ -139,52 +146,59 @@ pub(super) async fn handle_chat(
             //    - Once tool calls have been executed
             //    - Once terminal events have been sent
             //    - The response cannot be transparently retried
-            let result = registry
-                .resolve(&req.model)
-                .and_then(|resolution| apply_budgets(&state, &registry, resolution))
-                .and_then(|resolution| {
-                    // Resolution::Direct skips policy: the client named an exact
-                    // model, so policy filtering would be surprising.
-                    // Resolution::Tier uses policy-aware routing when a policy is
-                    // resolved (via client profile, matchers, or default).
-                    match &resolution {
-                        Resolution::Direct(_) => state
-                            .router
-                            .plan(&registry, &resolution, &req.required_capabilities)
-                            .map(|plan| (plan, None)),
-                        Resolution::Tier(_) => match &matched_policy {
-                            Some(policy) => {
-                                tracing::debug!(
-                                    policy_id = %policy.id,
-                                    "using policy-aware routing"
-                                );
-                                state
-                                    .router
-                                    .plan_with_policy(
-                                        &registry,
-                                        &resolution,
-                                        &req.required_capabilities,
-                                        &policy.requirements,
-                                        &policy.preference,
-                                        &policy.fallback,
-                                        Some(&task_profile),
-                                    )
-                                    .map(|(plan, mut decision)| {
-                                        decision.policy_id = policy.id.clone();
-                                        decision.policy_revision.policy_id = policy.id.clone();
-                                        decision.policy_revision.policy_enabled = policy.enabled;
-                                        (plan, Some(decision))
-                                    })
-                            }
-                            None => state
+            let result = match registry.resolve(&req.model) {
+                Ok(resolution) => apply_budgets(&state, &registry, resolution).await.and_then(
+                    |(resolution, guard)| {
+                        // Resolution::Direct skips policy: the client named an exact
+                        // model, so policy filtering would be surprising.
+                        // Resolution::Tier uses policy-aware routing when a policy is
+                        // resolved (via client profile, matchers, or default).
+                        let planned = match &resolution {
+                            Resolution::Direct(_) => state
                                 .router
                                 .plan(&registry, &resolution, &req.required_capabilities)
                                 .map(|plan| (plan, None)),
-                        },
-                    }
-                });
+                            Resolution::Tier(_) => match &matched_policy {
+                                Some(policy) => {
+                                    tracing::debug!(
+                                        policy_id = %policy.id,
+                                        "using policy-aware routing"
+                                    );
+                                    state
+                                        .router
+                                        .plan_with_policy(
+                                            &registry,
+                                            &resolution,
+                                            &req.required_capabilities,
+                                            &policy.requirements,
+                                            &policy.preference,
+                                            &policy.fallback,
+                                            Some(&task_profile),
+                                        )
+                                        .map(|(plan, mut decision)| {
+                                            decision.policy_id = policy.id.clone();
+                                            decision.policy_revision.policy_id = policy.id.clone();
+                                            decision.policy_revision.policy_enabled =
+                                                policy.enabled;
+                                            (plan, Some(decision))
+                                        })
+                                }
+                                None => state
+                                    .router
+                                    .plan(&registry, &resolution, &req.required_capabilities)
+                                    .map(|plan| (plan, None)),
+                            },
+                        };
+                        planned.map(|(plan, decision)| (plan, decision, guard))
+                    },
+                ),
+                Err(e) => Err(e),
+            };
             match result {
-                Ok((plan, decision)) => (plan, decision),
+                Ok((plan, decision, guard)) => {
+                    admission = guard;
+                    (plan, decision)
+                }
                 Err(e) => {
                     // Terminal before any candidate was tried: one record, one
                     // outcome, one canonical classification.
@@ -212,6 +226,12 @@ pub(super) async fn handle_chat(
             let classifier = config.classifier.clone();
             match state.router.plan_classifier(&registry, &classifier) {
                 Ok(plan) => {
+                    // Admission before the check, exactly as for main traffic:
+                    // a side request is real spend, and its permits cover every
+                    // provider the pool could fail over to.
+                    let guard = state
+                        .admit(&classifier_admission_scopes(&config, &plan))
+                        .await;
                     let mut allowed = Vec::new();
                     let mut refusal: Option<String> = None;
                     for candidate in plan {
@@ -253,6 +273,7 @@ pub(super) async fn handle_chat(
                         );
                         return error_response(dialect, &e);
                     }
+                    admission = guard;
                     (allowed, None)
                 }
                 Err(e) => {
@@ -325,6 +346,7 @@ pub(super) async fn handle_chat(
             previous_response_id,
             storage,
             routing_decision,
+            admission,
             #[cfg(feature = "ml")]
             shadow_input,
         )
@@ -340,6 +362,7 @@ pub(super) async fn handle_chat(
             previous_response_id,
             storage,
             routing_decision,
+            admission,
             #[cfg(feature = "ml")]
             shadow_input,
         )
@@ -451,17 +474,30 @@ fn expand_continuation(
 /// Apply the spending limits to a resolved request.
 ///
 /// The check is "have I already spent it", not "will this request spend it", because
-/// the cost is only known once a request has finished. The one that crosses the line
-/// completes and the next is stopped, which bounds the overshoot at one request.
+/// the cost is only known once a request has finished. What bounds the overshoot at
+/// one request instead of at one request *per racing caller* is admission: every
+/// scope with a configured limit that this request could spend against is taken as
+/// a permit before the check, in canonical order, and returned with the resolution
+/// so the caller can hold it until the request has been settled and charged. A
+/// request that arrives while another is in flight for the same scope waits, then
+/// reads the ledger the finished request already wrote.
 ///
 /// A degrade is followed at most once per tier: the cheaper tier's own budget still
 /// applies, so this cannot be used to route around a limit, and a cycle of degrades
-/// ends in a refusal rather than a loop.
-fn apply_budgets(
+/// ends in a refusal rather than a loop. The permit set is computed over the whole
+/// degrade closure, so the tier a request is degraded to is already held.
+async fn apply_budgets(
     state: &AppState,
     registry: &Registry,
     resolution: Resolution,
-) -> Result<Resolution> {
+) -> Result<(Resolution, AdmissionGuard)> {
+    let admission = state
+        .admit(&main_admission_scopes(
+            &registry.config(),
+            registry,
+            &resolution,
+        ))
+        .await;
     let mut resolution = resolution;
     let mut visited: Vec<ModelTier> = Vec::new();
 
@@ -489,7 +525,7 @@ fn apply_budgets(
         };
 
         match state.budget_verdict(&provider_ids, tier) {
-            Verdict::Allow => return Ok(resolution),
+            Verdict::Allow => return Ok((resolution, admission)),
             Verdict::Reject { because } => return Err(Error::OverBudget(because)),
             Verdict::Degrade { to, because } => {
                 if let Some(current) = tier {
@@ -506,6 +542,108 @@ fn apply_budgets(
             }
         }
     }
+}
+
+/// Every budgeted scope a main request could spend against, in canonical order.
+///
+/// That is the global scope, the providers the resolution it starts from could
+/// land on, the tier it starts at, and — because a covering tier budget can
+/// degrade the request to another tier whose own scope then applies — the
+/// closure of those degrade targets. Taking the whole set before the first check
+/// is what makes the acquisition order total: each request accumulates a subset
+/// of the same ordered gates ascending, so two requests cannot deadlock.
+///
+/// Only scopes that actually have an enabled budget are listed. A scope with no
+/// limit has no gate, so traffic no budget covers is never serialised.
+fn main_admission_scopes(
+    config: &AppConfig,
+    registry: &Registry,
+    resolution: &Resolution,
+) -> Vec<BudgetScope> {
+    let budgets: Vec<&Budget> = config.budgets.iter().filter(|b| b.enabled).collect();
+    if budgets.is_empty() {
+        return Vec::new();
+    }
+    let budgeted = |scope: &BudgetScope| budgets.iter().any(|b| &b.scope == scope);
+
+    let mut scopes: BTreeSet<BudgetScope> = BTreeSet::new();
+    if budgets
+        .iter()
+        .any(|b| matches!(b.scope, BudgetScope::Global))
+    {
+        scopes.insert(BudgetScope::Global);
+    }
+
+    let mut pending = vec![resolution.clone()];
+    let mut seen_tiers: BTreeSet<ModelTier> = BTreeSet::new();
+    let mut seen_direct: BTreeSet<String> = BTreeSet::new();
+    while let Some(next) = pending.pop() {
+        let (providers, tier) = match &next {
+            Resolution::Tier(tier) => (
+                registry
+                    .tier_members(*tier)
+                    .iter()
+                    .map(|m| m.provider_id.clone())
+                    .collect::<Vec<_>>(),
+                Some(*tier),
+            ),
+            Resolution::Direct(id) => {
+                if !seen_direct.insert(id.clone()) {
+                    continue;
+                }
+                match registry.entry(id) {
+                    Ok(entry) => (vec![entry.provider_id.clone()], entry.tier),
+                    Err(_) => (Vec::new(), None),
+                }
+            }
+        };
+        for provider in providers {
+            let scope = BudgetScope::Provider { id: provider };
+            if budgeted(&scope) {
+                scopes.insert(scope);
+            }
+        }
+        let Some(tier) = tier else { continue };
+        let tier_scope = BudgetScope::Tier { tier };
+        if budgeted(&tier_scope) {
+            scopes.insert(tier_scope.clone());
+        }
+        if !seen_tiers.insert(tier) {
+            continue;
+        }
+        for budget in &budgets {
+            if budget.scope == tier_scope {
+                if let OnExceeded::Degrade { to } = &budget.on_exceeded {
+                    pending.push(Resolution::Tier(*to));
+                }
+            }
+        }
+    }
+    scopes.into_iter().collect()
+}
+
+/// Every budgeted scope a classifier side request could spend against.
+///
+/// A side request is billed like any other, so global and provider limits admit
+/// it, and the permits cover every provider in the pool it could fail over to so
+/// a failover cannot escape the set. The class (tier) scope is deliberately
+/// excluded, matching [`AppState::classifier_budget_verdict`]: the pool is not
+/// chosen by tier policy, so a class budget neither degrades nor rejects a side
+/// request.
+fn classifier_admission_scopes(config: &AppConfig, plan: &[Candidate]) -> Vec<BudgetScope> {
+    let mut scopes = BTreeSet::new();
+    for budget in config.budgets.iter().filter(|b| b.enabled) {
+        match &budget.scope {
+            BudgetScope::Global => {
+                scopes.insert(BudgetScope::Global);
+            }
+            BudgetScope::Provider { id } if plan.iter().any(|c| &c.provider.id == id) => {
+                scopes.insert(BudgetScope::Provider { id: id.clone() });
+            }
+            _ => {}
+        }
+    }
+    scopes.into_iter().collect()
 }
 
 /// Prepare one attempt: resolve the key and encode the upstream body.
@@ -625,6 +763,18 @@ async fn apply_vision_fallback_inner(state: &AppState, req: &mut ChatRequest, re
         // "not this call" — and because a charge lands in the ledger
         // immediately, the image that crosses the line completes while the
         // next one is already stopped.
+        //
+        // Admission residual, deliberately accepted: this auxiliary call does
+        // not take a permit of its own. The request that made it already holds
+        // the permits for its own resolution, and acquiring the vision
+        // provider's scope here — possibly ordered before one already held —
+        // could invert the canonical order and deadlock two requests that
+        // crossed. So the vision provider's own budget is checked and charged
+        // but not serialised by its own permit: two requests that both call the
+        // same vision provider, with no shared global or provider scope in
+        // their resolution, can overshoot that one budget by more than one
+        // call. A global limit still serialises them, because the calling
+        // request holds the global permit across this loop.
         let verdict =
             state.budget_verdict(std::slice::from_ref(&target.provider.id), target.entry.tier);
         if !matches!(verdict, Verdict::Allow) {
@@ -973,6 +1123,10 @@ async fn buffered_chat(
     previous_response_id: Option<String>,
     storage: protocol::responses::StoragePolicy,
     routing_decision: Option<RouteDecision>,
+    // Held for the whole call, which is longer than the budget check and ends
+    // only after the terminal transition has charged the ledger: the drop is
+    // the release, so no early return in here can leak a scope.
+    _admission: AdmissionGuard,
     #[cfg(feature = "ml")] shadow_input: Option<ShadowInput>,
 ) -> Response {
     let mut lifecycle = RequestLifecycle::new(Arc::clone(&state), dialect, false, kind, &req.model);
@@ -1307,6 +1461,7 @@ async fn stream_chat(
     previous_response_id: Option<String>,
     storage: protocol::responses::StoragePolicy,
     routing_decision: Option<RouteDecision>,
+    admission: AdmissionGuard,
     #[cfg(feature = "ml")] shadow_input: Option<ShadowInput>,
 ) -> Response {
     let mut lifecycle = RequestLifecycle::new(Arc::clone(&state), dialect, true, kind, &req.model);
@@ -1427,6 +1582,7 @@ async fn stream_chat(
                     cancel_rx,
                     input_items.clone(),
                     previous_response_id.clone(),
+                    admission,
                 );
             }
             Err(e) => {
@@ -1465,6 +1621,7 @@ async fn stream_chat(
                             cancel_rx,
                             input_items,
                             previous_response_id,
+                            admission,
                         );
                     }
                     Ok(None) => {
@@ -1554,6 +1711,11 @@ fn stream_response(
     // retrieved and continued exactly like a buffered answer.
     input_items: Vec<Value>,
     previous_response_id: Option<String>,
+    // Held by the stream state, not by this function: a stream outlives the
+    // handler that built it, and the permit has to last exactly as long as the
+    // request does. `SseState`'s terminal transition charges the ledger before
+    // the field is dropped, and `Drop` runs for a client that disconnects too.
+    admission: AdmissionGuard,
 ) -> Response {
     let mut encoder = protocol::stream_encoder(dialect, &candidate.exposed_id, include_usage);
     if let Some(ref id) = response_id {
@@ -1579,6 +1741,7 @@ fn stream_response(
             cancel_rx,
             input_items,
             previous_response_id,
+            admission,
         },
     ));
     // Built from a plain body and static headers, so nothing here can fail and
@@ -2570,6 +2733,14 @@ struct SseState {
     input_items: Vec<Value>,
     /// The response this stream continues, when the client sent one.
     previous_response_id: Option<String>,
+    /// The admission permits for this request's budgeted scopes.
+    ///
+    /// Nothing reads it: it is held for its drop. `Drop for SseState` runs the
+    /// terminal transition — which charges the ledger — before any field is
+    /// released, so the next request for the scope can never be admitted against
+    /// a total this stream has not written yet, and a client that walks away
+    /// releases the scope through the same path.
+    _admission: AdmissionGuard,
 }
 
 impl SseState {
@@ -2685,6 +2856,8 @@ struct StreamContext {
     input_items: Vec<Value>,
     /// The response this stream continues, when the client sent one.
     previous_response_id: Option<String>,
+    /// Handed to the stream state, which holds it until the stream is over.
+    admission: AdmissionGuard,
 }
 
 /// Pipe canonical events through the egress encoder into an SSE byte stream.
@@ -2715,6 +2888,7 @@ fn sse_body(
         storage: context.storage,
         input_items: context.input_items,
         previous_response_id: context.previous_response_id,
+        _admission: context.admission,
     };
 
     futures_util::stream::unfold(state, |mut st| async move {
@@ -2873,6 +3047,201 @@ mod tests {
         assert_eq!(
             activity_error(&error),
             "invalid request: model sonnet-class is not configured"
+        );
+    }
+
+    /// Two providers and one model per tier, so a resolution's provider and tier
+    /// scopes are both non-trivial.
+    fn scope_registry(budgets: Vec<Budget>) -> Registry {
+        use crate::config::{ModelEntry, ProviderConfig, ProviderKind};
+
+        let mut config = AppConfig::default();
+        config.providers = vec![
+            ProviderConfig::new("deepseek", "DeepSeek", ProviderKind::OpenAICompatible),
+            ProviderConfig::new("openai", "OpenAI", ProviderKind::OpenAICompatible),
+        ];
+        config.models = vec![
+            ModelEntry::for_upstream("deepseek", "flash", Some(ModelTier::Fast)),
+            ModelEntry::for_upstream("deepseek", "pro", Some(ModelTier::Standard)),
+            ModelEntry::for_upstream("openai", "sol", Some(ModelTier::Reasoning)),
+        ];
+        config.budgets = budgets;
+        Registry::new(Arc::new(config))
+    }
+
+    fn daily(scope: BudgetScope) -> Budget {
+        Budget::new(scope, crate::budget::BudgetPeriod::Day, "USD", 1.0)
+    }
+
+    /// The permits cover exactly the scopes that have a configured limit: no
+    /// budget, no gate.
+    #[test]
+    fn admission_scopes_are_exactly_the_budgeted_ones() {
+        let registry = scope_registry(Vec::new());
+        assert!(
+            main_admission_scopes(
+                &registry.config(),
+                &registry,
+                &Resolution::Tier(ModelTier::Standard)
+            )
+            .is_empty(),
+            "no budgets at all means no admission gates"
+        );
+
+        // A budget for a provider this request cannot reach is not a permit it
+        // has to hold, or a proxy would serialise traffic it does not have to.
+        let registry = scope_registry(vec![daily(BudgetScope::Provider {
+            id: "openai".into(),
+        })]);
+        assert!(main_admission_scopes(
+            &registry.config(),
+            &registry,
+            &Resolution::Tier(ModelTier::Standard)
+        )
+        .is_empty());
+
+        // A disabled limit is not a limit.
+        let mut disabled = daily(BudgetScope::Global);
+        disabled.enabled = false;
+        let registry = scope_registry(vec![disabled]);
+        assert!(main_admission_scopes(
+            &registry.config(),
+            &registry,
+            &Resolution::Tier(ModelTier::Standard)
+        )
+        .is_empty());
+    }
+
+    /// Global, the candidate provider and the tier, in canonical order.
+    #[test]
+    fn admission_scopes_bundle_global_provider_and_tier() {
+        let registry = scope_registry(vec![
+            daily(BudgetScope::Global),
+            daily(BudgetScope::Provider {
+                id: "deepseek".into(),
+            }),
+            daily(BudgetScope::Tier {
+                tier: ModelTier::Standard,
+            }),
+        ]);
+        let scopes = main_admission_scopes(
+            &registry.config(),
+            &registry,
+            &Resolution::Tier(ModelTier::Standard),
+        );
+        assert_eq!(
+            scopes,
+            vec![
+                BudgetScope::Global,
+                BudgetScope::Provider {
+                    id: "deepseek".into()
+                },
+                BudgetScope::Tier {
+                    tier: ModelTier::Standard
+                },
+            ]
+        );
+
+        // A direct id occupies the provider it names and the tier it is billed
+        // under, exactly as the check does — and neither is taken when the
+        // configured limits do not cover them.
+        let scopes = main_admission_scopes(
+            &registry.config(),
+            &registry,
+            &Resolution::Direct("openai-sol".into()),
+        );
+        assert_eq!(
+            scopes,
+            vec![BudgetScope::Global],
+            "the deepseek provider budget and the standard tier budget do not \
+             cover an openai reasoning model"
+        );
+    }
+
+    /// A degrade target is part of the set before the first check, so the
+    /// degrade cannot leave the permit set.
+    #[test]
+    fn admission_scopes_include_the_degrade_closure() {
+        let registry = scope_registry(vec![
+            daily(BudgetScope::Provider {
+                id: "deepseek".into(),
+            }),
+            daily(BudgetScope::Tier {
+                tier: ModelTier::Fast,
+            }),
+            daily(BudgetScope::Tier {
+                tier: ModelTier::Reasoning,
+            })
+            .degrading_to(ModelTier::Fast),
+        ]);
+        let scopes = main_admission_scopes(
+            &registry.config(),
+            &registry,
+            &Resolution::Tier(ModelTier::Reasoning),
+        );
+        assert_eq!(
+            scopes,
+            vec![
+                BudgetScope::Provider {
+                    id: "deepseek".into()
+                },
+                BudgetScope::Tier {
+                    tier: ModelTier::Fast
+                },
+                BudgetScope::Tier {
+                    tier: ModelTier::Reasoning
+                },
+            ],
+            "the tier the request can degrade to — and the providers it could \
+             then reach — are held from the start"
+        );
+    }
+
+    /// A classifier side request is gated by global and provider limits over
+    /// every candidate the pool could fail over to, and by no class limit.
+    #[test]
+    fn classifier_admission_scopes_cover_the_pool_but_not_the_class() {
+        let registry = scope_registry(vec![
+            daily(BudgetScope::Global),
+            daily(BudgetScope::Provider {
+                id: "deepseek".into(),
+            }),
+            daily(BudgetScope::Provider {
+                id: "openai".into(),
+            }),
+            daily(BudgetScope::Tier {
+                tier: ModelTier::Fast,
+            }),
+        ]);
+
+        let candidate = |id: &str| {
+            let entry = registry.entry(id).unwrap().clone();
+            let provider = registry.provider_of(&entry).unwrap().clone();
+            Candidate {
+                exposed_id: id.to_string(),
+                entry,
+                provider,
+                degraded: false,
+            }
+        };
+        let plan = vec![candidate("deepseek-flash"), candidate("openai-sol")];
+        assert_eq!(
+            classifier_admission_scopes(&registry.config(), &plan),
+            vec![
+                BudgetScope::Global,
+                BudgetScope::Provider {
+                    id: "deepseek".into()
+                },
+                BudgetScope::Provider {
+                    id: "openai".into()
+                },
+            ],
+            "every candidate provider in the pool is held, and no class scope is"
+        );
+
+        // A pool that no budget covers takes no permits at all.
+        assert!(
+            classifier_admission_scopes(&scope_registry(Vec::new()).config(), &plan).is_empty()
         );
     }
 }

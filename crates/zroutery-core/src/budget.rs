@@ -1,13 +1,29 @@
 //! Spending limits, and the ledger that makes them mean something across restarts.
 //!
-//! A budget answers "stop when I have spent this much". Three things about that are
+//! A budget answers "stop when I have spent this much". Four things about that are
 //! worth stating up front, because they shape the whole design:
 //!
 //! * The cost of a request is only known once it has finished, so a budget is a
-//!   line-crossing detector, not a pre-authorisation. The request that crosses the
-//!   line completes; the next one is stopped. Overshoot is bounded by one request
-//!   per tier, and pretending otherwise would need a token estimate the providers
-//!   do not agree on.
+//!   line-crossing detector, not a pre-authorisation, and the cost is never
+//!   estimated. What makes the overshoot bounded rather than merely likely is
+//!   admission, which the server layer enforces around this check: a request takes
+//!   one permit for every scope with an enabled budget it could spend against — the
+//!   global scope, the providers its resolution could land on, its tier, and the
+//!   tiers a covering degrade could reach — before the check, in canonical order,
+//!   and holds them until it has been settled and charged. At most one such request
+//!   per scope is therefore in flight, the one that crosses the line completes, and
+//!   the next one reads a total that already includes it and is stopped. The
+//!   overshoot is bounded by one request per scope rather than by one request per
+//!   racing caller, and a scope with no enabled budget has no permit, so traffic no
+//!   budget covers stays fully concurrent.
+//! * The one call that admission deliberately does not reach is an auxiliary call
+//!   made on a request's behalf — today, the vision description. It is checked
+//!   against the budgets and charged immediately like any other spend, but it is
+//!   part of the request that made it: taking a nested permit for the vision
+//!   provider, while that request already holds its own, could invert the admission
+//!   order and deadlock two requests that crossed. A global limit still serialises
+//!   such calls, because the calling request holds the global permit; the vision
+//!   provider's own limit alone does not.
 //! * A guardrail that forgets is not a guardrail, so the ledger is persisted. The
 //!   request log is deliberately in memory only, which makes it the wrong place to
 //!   count money.

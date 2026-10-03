@@ -5,14 +5,17 @@
 
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use axum::extract::State;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::Json;
+use chrono::Local;
+use futures_util::StreamExt;
 use serde_json::{json, Value};
-use zroutery_core::billing::{BalanceConfig, BalancePreset, BalanceProbe, Pricing};
-use zroutery_core::budget::{Budget, BudgetPeriod, BudgetScope};
+use zroutery_core::billing::{BalanceConfig, BalancePreset, BalanceProbe, Cost, Pricing};
+use zroutery_core::budget::{Budget, BudgetPeriod, BudgetScope, Ledger};
 use zroutery_core::config::{
     AppConfig, MemorySecretStore, ModelEntry, ModelTier, ProviderConfig, ProviderKind,
     RoutingStrategy,
@@ -309,6 +312,185 @@ async fn start_mock() -> (SocketAddr, Mock) {
     (addr, mock)
 }
 
+// ------------------------------------------------------------------ timing mock
+
+/// How long a buffered request waits for a peer before answering alone.
+///
+/// It exists so the same mock can prove both directions: two requests that are
+/// allowed to overlap show `max_in_flight == 2` within milliseconds, while a
+/// serialised request still finishes after this grace instead of hanging.
+const HOLD_GRACE: Duration = Duration::from_millis(250);
+
+/// A mock upstream that holds each buffered request until a second one arrives,
+/// so a test can see how many requests the proxy really allows in flight.
+#[derive(Clone, Default)]
+struct HoldMock {
+    inner: Arc<Mutex<HoldInner>>,
+    notify: Arc<tokio::sync::Notify>,
+}
+
+#[derive(Default)]
+struct HoldInner {
+    /// Every request the mock was asked to answer.
+    requests: usize,
+    in_flight: usize,
+    max_in_flight: usize,
+}
+
+impl HoldMock {
+    /// Count a request as in flight; the returned guard leaves on drop.
+    fn enter(&self) -> InFlight {
+        {
+            let mut inner = self.inner.lock().unwrap();
+            inner.in_flight += 1;
+            inner.max_in_flight = inner.max_in_flight.max(inner.in_flight);
+        }
+        InFlight(self.clone())
+    }
+
+    fn leave(&self) {
+        let mut inner = self.inner.lock().unwrap();
+        inner.in_flight = inner.in_flight.saturating_sub(1);
+    }
+
+    fn record(&self) {
+        self.inner.lock().unwrap().requests += 1;
+    }
+
+    fn requests(&self) -> usize {
+        self.inner.lock().unwrap().requests
+    }
+
+    fn max_in_flight(&self) -> usize {
+        self.inner.lock().unwrap().max_in_flight
+    }
+
+    /// Wait until a peer is also in flight, or until `grace` runs out.
+    ///
+    /// The timeout is what lets a correctly serialised request finish: no peer
+    /// is coming, and the request under test still needs its answer.
+    async fn await_peer(&self) {
+        let deadline = tokio::time::Instant::now() + HOLD_GRACE;
+        loop {
+            {
+                let inner = self.inner.lock().unwrap();
+                if inner.in_flight >= 2 {
+                    self.notify.notify_waiters();
+                    return;
+                }
+            }
+            let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if tokio::time::timeout(left, self.notify.notified())
+                .await
+                .is_err()
+            {
+                return;
+            }
+        }
+    }
+}
+
+/// Leaves the in-flight count on drop, so an early return cannot skew it.
+struct InFlight(HoldMock);
+
+impl Drop for InFlight {
+    fn drop(&mut self) {
+        self.0.leave();
+    }
+}
+
+async fn hold_openai_chat(State(mock): State<HoldMock>, Json(body): Json<Value>) -> Response {
+    mock.record();
+    let model = body["model"].as_str().unwrap_or("").to_string();
+
+    if body["stream"].as_bool().unwrap_or(false) {
+        // A stream the proxy has to end: it emits one frame, then never
+        // finishes, so only a cancellation or a disconnect takes the request
+        // off the books.
+        return Response::builder()
+            .header("content-type", "text/event-stream")
+            .body(axum::body::Body::from_stream(stalled_openai_sse()))
+            .unwrap();
+    }
+
+    let _in_flight = mock.enter();
+    mock.await_peer().await;
+    Json(json!({
+        "id": "chatcmpl-hold",
+        "object": "chat.completion",
+        "created": 1,
+        "model": model,
+        "choices": [{"index": 0,
+                     "message": {"role": "assistant", "content": "held"},
+                     "finish_reason": "stop"}],
+        // 1000 fresh input tokens at the pricing the tests install is exactly
+        // one dime per request.
+        "usage": {"prompt_tokens": 1000, "completion_tokens": 0}
+    }))
+    .into_response()
+}
+
+/// One OpenAI SSE frame, then a stream that never ends.
+fn stalled_openai_sse(
+) -> impl futures_util::Stream<Item = std::result::Result<bytes::Bytes, std::io::Error>> {
+    let first = format!(
+        "data: {}\n\n",
+        json!({"id": "chatcmpl-hold", "object": "chat.completion.chunk", "created": 1,
+               "model": "mock",
+               "choices": [{"index": 0,
+                            "delta": {"role": "assistant", "content": "partial"},
+                            "finish_reason": null}]})
+    );
+    futures_util::stream::once(async move { Ok(bytes::Bytes::from(first)) }).chain(
+        futures_util::stream::once(async {
+            std::future::pending::<()>().await;
+            Ok(bytes::Bytes::new())
+        }),
+    )
+}
+
+async fn start_hold_mock() -> (SocketAddr, HoldMock) {
+    let mock = HoldMock::default();
+    let app = axum::Router::new()
+        .route("/chat/completions", post(hold_openai_chat))
+        .route("/v1/chat/completions", post(hold_openai_chat))
+        .with_state(mock.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    (addr, mock)
+}
+
+/// The global day spend the ledger currently holds.
+fn global_day_spend(state: &AppState) -> f64 {
+    state
+        .ledger()
+        .totals_for(&BudgetScope::Global, Local::now())
+        .into_iter()
+        .find(|(period, _)| *period == BudgetPeriod::Day)
+        .map(|(_, cost)| cost.amount)
+        .unwrap_or(0.0)
+}
+
+/// Wait until the lifecycle has recorded terminal transitions.
+///
+/// A client disconnect is noticed by the server when the connection goes away,
+/// which is asynchronous by nature, so this polls instead of guessing a delay.
+async fn wait_for_outcomes(harness: &Harness, expected: usize) {
+    for _ in 0..200 {
+        if harness.state.outcomes().len() == expected {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!(
+        "expected {expected} terminal outcomes, saw {}",
+        harness.state.outcomes().len()
+    );
+}
+
 // ------------------------------------------------------------------ fixtures
 
 const TOKEN: &str = "zr-test-token";
@@ -365,6 +547,23 @@ struct Harness {
 impl Harness {
     async fn start(cfg: AppConfig, mock: Mock) -> Harness {
         let state = Arc::new(AppState::new(cfg, secrets()));
+        Harness::from_state(state, mock).await
+    }
+
+    /// Start with a ledger that is already on the books.
+    ///
+    /// This is how a test states "$0.99 has already been spent" without
+    /// spending it: the admission fix is about what the check reads, and the
+    /// only way to make it deterministic is to hand it a known total. The
+    /// harness's own recording mock is left empty because the admission tests
+    /// assert against the timing mock they started themselves.
+    async fn start_with_ledger(cfg: AppConfig, ledger: Ledger) -> Harness {
+        let state = Arc::new(AppState::new(cfg, secrets()));
+        state.set_ledger(ledger);
+        Harness::from_state(state, Mock::default()).await
+    }
+
+    async fn from_state(state: Arc<AppState>, mock: Mock) -> Harness {
         let server = ServerHandle::start(Arc::clone(&state)).await.unwrap();
         let base = format!("http://{}", server.addr);
         Harness {
@@ -2043,6 +2242,214 @@ async fn per_provider_budget_blocks_only_that_provider() {
         .await
         .unwrap();
     assert_eq!(resp.status(), 200);
+
+    h.shutdown().await;
+}
+
+// --------------------------------------------------- concurrent budget admission
+
+/// The report's scenario, through the real server: a $1 limit with $0.99
+/// already spent, and 32 concurrent $0.10 requests.
+///
+/// Before admission they all read the same historical total and all passed, so
+/// the proxy spent $4.19 against a $1 limit. Now each request holds a permit for
+/// every budgeted scope it occupies until it has been charged, so exactly one
+/// gets through and the rest are refused — the documented overshoot of at most
+/// one request.
+#[tokio::test]
+async fn concurrent_requests_cannot_all_pass_the_same_budget() {
+    let (addr, mock) = start_hold_mock().await;
+    let mut cfg = config_for(addr);
+    // 1000 prompt tokens at $100/Mtok is exactly $0.10 a request.
+    cfg.models[1].pricing = Some(Pricing::new("USD", 100.0, 0.0));
+    cfg.budgets = vec![Budget::new(
+        BudgetScope::Global,
+        BudgetPeriod::Day,
+        "USD",
+        1.0,
+    )];
+
+    // $0.99 already spent, in the bucket the check will read.
+    let mut ledger = Ledger::new();
+    ledger.charge(
+        Local::now(),
+        "deepseek",
+        Some(ModelTier::Standard),
+        &Cost {
+            currency: "USD".into(),
+            amount: 0.99,
+        },
+    );
+    let h = Harness::start_with_ledger(cfg, ledger).await;
+
+    let ask = || {
+        h.post("/v1/chat/completions")
+            .json(&json!({"model": "sonnet-class",
+                          "messages": [{"role": "user", "content": "hi"}]}))
+    };
+    let sent: Vec<_> = (0..32).map(|_| ask().send()).collect();
+    let responses = futures_util::future::join_all(sent).await;
+
+    let mut admitted = 0;
+    let mut refused = 0;
+    for response in responses {
+        match response.unwrap().status().as_u16() {
+            200 => admitted += 1,
+            402 => refused += 1,
+            other => panic!("unexpected status {other}"),
+        }
+    }
+    assert_eq!(admitted + refused, 32, "every request got an answer");
+    assert_eq!(
+        admitted, 1,
+        "at most one request may pass the check while the others wait"
+    );
+    assert_eq!(refused, 31);
+
+    // The permit really was exclusive: one request reached the provider, and
+    // never more than one was in flight there.
+    assert_eq!(
+        mock.requests(),
+        1,
+        "the refused requests must be stopped before the provider"
+    );
+    assert_eq!(
+        mock.max_in_flight(),
+        1,
+        "at most one request held the permit"
+    );
+
+    // The overshoot is bounded by the one request that crossed the line:
+    // 0.99 + 0.10, not 0.99 + 32 x 0.10.
+    let spent = global_day_spend(&h.state);
+    assert!(
+        (spent - 1.09).abs() < 1e-9,
+        "expected the historical total plus one request, got {spent}"
+    );
+    assert!(
+        spent <= 1.0 + 0.1 + 1e-9,
+        "spend went past the limit by more than one request: {spent}"
+    );
+
+    h.shutdown().await;
+}
+
+/// A limit on a scope these requests cannot reach must not serialise them: the
+/// proxy must not become single-file for traffic no budget covers.
+#[tokio::test]
+async fn requests_whose_scopes_have_no_budget_stay_concurrent() {
+    let (addr, mock) = start_hold_mock().await;
+    let mut cfg = config_for(addr);
+    cfg.models[1].pricing = Some(Pricing::new("USD", 100.0, 0.0));
+    // A provider budget for a provider `sonnet-class` cannot land on.
+    cfg.budgets = vec![Budget::new(
+        BudgetScope::Provider {
+            id: "anthropic".into(),
+        },
+        BudgetPeriod::Day,
+        "USD",
+        1.0,
+    )];
+    let h = Harness::start_with_ledger(cfg, Ledger::new()).await;
+
+    let ask = || {
+        h.post("/v1/chat/completions")
+            .json(&json!({"model": "sonnet-class",
+                          "messages": [{"role": "user", "content": "hi"}]}))
+    };
+    let (first, second) = tokio::join!(ask().send(), ask().send());
+    assert_eq!(first.unwrap().status(), 200);
+    assert_eq!(second.unwrap().status(), 200);
+    assert_eq!(
+        mock.max_in_flight(),
+        2,
+        "two requests with no finite budget must be in flight at once"
+    );
+
+    h.shutdown().await;
+}
+
+/// A client that walks away mid-stream must give its permit back, or every
+/// later request for that scope would wait for a stream that will never end.
+#[tokio::test]
+async fn a_disconnected_stream_releases_its_permit() {
+    let (addr, mock) = start_hold_mock().await;
+    let mut cfg = config_for(addr);
+    cfg.models[1].pricing = Some(Pricing::new("USD", 100.0, 0.0));
+    cfg.budgets = vec![Budget::new(
+        BudgetScope::Global,
+        BudgetPeriod::Day,
+        "USD",
+        1.0,
+    )];
+    let h = Harness::start_with_ledger(cfg, Ledger::new()).await;
+
+    let mut held = h
+        .post("/v1/chat/completions")
+        .json(&json!({"model": "sonnet-class", "stream": true,
+                      "messages": [{"role": "user", "content": "hi"}]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(held.status(), 200);
+    let first = held.chunk().await.unwrap().expect("some output");
+    assert!(!first.is_empty(), "the stream really started");
+    assert_eq!(mock.requests(), 1, "the stream is in flight");
+
+    // The client walks away rather than reading the answer.
+    drop(held);
+    wait_for_outcomes(&h, 1).await;
+
+    let second = tokio::time::timeout(
+        Duration::from_secs(5),
+        h.post("/v1/chat/completions")
+            .json(&json!({"model": "sonnet-class",
+                          "messages": [{"role": "user", "content": "hi"}]}))
+            .send(),
+    )
+    .await
+    .expect("the disconnected stream must release its permit")
+    .unwrap();
+    assert_eq!(second.status(), 200);
+
+    h.shutdown().await;
+}
+
+/// A normal settlement releases the permit too, so requests that fit the budget
+/// keep flowing one after another.
+#[tokio::test]
+async fn a_normal_settlement_releases_the_permit() {
+    let (addr, _mock) = start_hold_mock().await;
+    let mut cfg = config_for(addr);
+    cfg.models[1].pricing = Some(Pricing::new("USD", 100.0, 0.0));
+    cfg.budgets = vec![Budget::new(
+        BudgetScope::Global,
+        BudgetPeriod::Day,
+        "USD",
+        1.0,
+    )];
+    let h = Harness::start_with_ledger(cfg, Ledger::new()).await;
+
+    // Three sequential requests that all fit: each one may only start because
+    // the previous settlement gave the scope back.
+    for expected in [0.1, 0.2, 0.3] {
+        let response = tokio::time::timeout(
+            Duration::from_secs(5),
+            h.post("/v1/chat/completions")
+                .json(&json!({"model": "sonnet-class",
+                              "messages": [{"role": "user", "content": "hi"}]}))
+                .send(),
+        )
+        .await
+        .expect("the previous settlement must have released the permit")
+        .unwrap();
+        assert_eq!(response.status(), 200);
+        let spent = global_day_spend(&h.state);
+        assert!(
+            (spent - expected).abs() < 1e-9,
+            "expected {expected} charged, got {spent}"
+        );
+    }
 
     h.shutdown().await;
 }
