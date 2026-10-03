@@ -19,7 +19,8 @@ use super::{
 use crate::error::{Error, Result};
 use crate::ir::{
     ChatRequest, ChatResponse, ContentBlock, Dialect, MediaSource, Message, Role, StopReason,
-    StreamEvent, SystemPart, ThinkingConfig, ToolChoice, ToolDef, ToolResultPart, Usage,
+    StreamEvent, StructuredOutput, SystemPart, ThinkingConfig, ToolChoice, ToolDef, ToolResultPart,
+    Usage, DEFAULT_STRUCTURED_OUTPUT_SCHEMA_NAME,
 };
 
 // ---------------------------------------------------------------- request in
@@ -95,6 +96,12 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
     {
         req.metadata_user = Some(user.to_string());
     }
+    // Structured output travels in `text.format`; it used to be dropped here,
+    // so a caller that asked for a schema silently got unconstrained text.
+    if let Some(text) = obj.get("text").filter(|value| !value.is_null()) {
+        req.structured_output = decode_text_format(text)?;
+    }
+
     // Store fields we pass through but don't interpret yet
     for field in ["store", "previous_response_id", "truncation", "include"] {
         if let Some(val) = obj.get(field) {
@@ -179,6 +186,64 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
 
     req.refresh_required_capabilities();
     Ok(req)
+}
+
+/// Decode the Responses `text.format` structured-output constraint.
+///
+/// Unlike Chat Completions, the schema fields sit directly on the format
+/// object (`{"type": "json_schema", "name": ..., "schema": ..., "strict": ...}`)
+/// rather than inside a nested `json_schema` member. A `text` object with no
+/// `format`, or `{"type": "text"}`, states no constraint.
+fn decode_text_format(text: &Value) -> Result<Option<StructuredOutput>> {
+    let format = match text.get("format") {
+        None | Some(Value::Null) => return Ok(None),
+        Some(format) => format,
+    };
+    let kind = format
+        .get("type")
+        .and_then(Value::as_str)
+        .ok_or_else(|| Error::invalid("`text.format` is missing `type`"))?;
+    match kind {
+        "text" => Ok(None),
+        "json_object" => Ok(Some(StructuredOutput::JsonObject)),
+        "json_schema" => {
+            let schema = format
+                .get("schema")
+                .cloned()
+                .ok_or_else(|| Error::invalid("`text.format.schema` is required"))?;
+            Ok(Some(StructuredOutput::JsonSchema {
+                name: format
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                schema,
+                strict: format
+                    .get("strict")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+            }))
+        }
+        other => Err(unsupported_content("text.format", Some(other))),
+    }
+}
+
+/// Render an IR structured-output constraint as Responses `text.format`.
+fn encode_text_format(structured: &StructuredOutput) -> Value {
+    match structured {
+        StructuredOutput::JsonObject => json!({"type": "json_object"}),
+        StructuredOutput::JsonSchema {
+            name,
+            schema,
+            strict,
+        } => json!({
+            "type": "json_schema",
+            "name": name
+                .as_deref()
+                .unwrap_or(DEFAULT_STRUCTURED_OUTPUT_SCHEMA_NAME),
+            "schema": schema,
+            "strict": strict,
+        }),
+    }
 }
 
 /// Decode a Responses `input_image` style object into a media source.
@@ -855,6 +920,12 @@ pub fn encode_request(req: &ChatRequest, upstream_model: &str) -> Result<Value> 
     }
     if let Some(user) = &req.metadata_user {
         body.insert("metadata".into(), json!({"user": user}));
+    }
+    if let Some(structured) = &req.structured_output {
+        body.insert(
+            "text".into(),
+            json!({"format": encode_text_format(structured)}),
+        );
     }
     // Pass through fields we stored but don't interpret
     for field in ["store", "previous_response_id", "truncation", "include"] {

@@ -3,7 +3,7 @@
 use serde_json::{json, Value};
 use zroutery_core::ir::{
     Capability, ChatRequest, ChatResponse, ContentBlock, Dialect, Role, StopReason, StreamEvent,
-    ThinkingConfig, ToolChoice, Usage,
+    StructuredOutput, ThinkingConfig, ToolChoice, Usage,
 };
 use zroutery_core::protocol::gemini::{
     decode_request, decode_response, encode_request, encode_response, GeminiStreamEncoder,
@@ -640,4 +640,102 @@ fn thinking_config_round_trips_through_gemini() {
 fn rejects_a_negative_thinking_budget() {
     let error = decode_request(thinking_request(json!({"thinkingBudget": -1}))).unwrap_err();
     assert!(error.to_string().contains("thinkingBudget"));
+}
+
+// ------------------------------------------------------ structured output
+
+fn structured_answer_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {"answer": {"type": "string"}},
+        "required": ["answer"],
+        "additionalProperties": false
+    })
+}
+
+fn gemini_structured_request() -> Value {
+    json!({
+        "model": "gemini-2.5-pro",
+        "contents": [{"role": "user", "parts": [{"text": "answer as json"}]}],
+        "generationConfig": {
+            "responseMimeType": "application/json",
+            "responseSchema": {
+                "type": "OBJECT",
+                "properties": {"answer": {"type": "STRING"}},
+                "required": ["answer"],
+                "additionalProperties": false
+            }
+        }
+    })
+}
+
+#[test]
+fn response_schema_decodes_into_ir_and_requires_capability() {
+    let req = decode_request(gemini_structured_request()).unwrap();
+
+    assert_eq!(
+        req.structured_output,
+        Some(StructuredOutput::JsonSchema {
+            // Gemini schemas are unnamed.
+            name: None,
+            // Gemini `Schema.type` is normalized to JSON Schema as it is for
+            // tool parameters.
+            schema: structured_answer_schema(),
+            strict: false,
+        })
+    );
+    assert_eq!(
+        req.required_capabilities,
+        vec![Capability::StructuredOutput]
+    );
+}
+
+#[test]
+fn response_schema_survives_same_dialect_re_encoding() {
+    let req = decode_request(gemini_structured_request()).unwrap();
+    let wire = translate_request(
+        Dialect::Gemini,
+        &req,
+        "gemini-upstream",
+        &ProviderQuirks::default(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        wire["generationConfig"]["responseMimeType"],
+        "application/json"
+    );
+    assert_eq!(
+        wire["generationConfig"]["responseSchema"],
+        json!({
+            "type": "OBJECT",
+            "properties": {"answer": {"type": "STRING"}},
+            "required": ["answer"],
+            "additionalProperties": false
+        })
+    );
+}
+
+#[test]
+fn json_object_mime_type_round_trips_without_a_schema() {
+    let req = decode_request(json!({
+        "model": "gemini-2.5-pro",
+        "contents": [{"role": "user", "parts": [{"text": "json please"}]}],
+        "generationConfig": {"responseMimeType": "application/json"}
+    }))
+    .unwrap();
+    assert_eq!(req.structured_output, Some(StructuredOutput::JsonObject));
+
+    let wire = translate_request(
+        Dialect::Gemini,
+        &req,
+        "gemini-upstream",
+        &ProviderQuirks::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        wire["generationConfig"]["responseMimeType"],
+        "application/json"
+    );
+    assert!(wire["generationConfig"].get("responseSchema").is_none());
 }

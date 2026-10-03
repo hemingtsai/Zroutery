@@ -13,8 +13,8 @@ use super::{explicit_placeholder, unsupported_content, SseFrame, StreamEncoder, 
 use crate::error::{Error, Result};
 use crate::ir::{
     classify_media, ChatRequest, ChatResponse, ContentBlock, Dialect, MediaSource, Message, Role,
-    StopReason, StreamEvent, SystemPart, ThinkingConfig, ToolChoice, ToolDef, ToolResultPart,
-    Usage,
+    StopReason, StreamEvent, StructuredOutput, SystemPart, ThinkingConfig, ToolChoice, ToolDef,
+    ToolResultPart, Usage,
 };
 
 // ---------------------------------------------------------------- request in
@@ -192,6 +192,11 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
         if let Some(thinking) = gc.get("thinkingConfig").filter(|value| !value.is_null()) {
             req.thinking = Some(decode_thinking_config(thinking)?);
         }
+        // `responseMimeType` / `responseSchema` are the Gemini structured-output
+        // knobs. They were accepted and ignored, so a caller that required JSON
+        // could still receive free-form text.
+        req.structured_output =
+            decode_structured_output(gc.get("responseMimeType"), gc.get("responseSchema"))?;
     }
 
     match obj.get("tools") {
@@ -330,6 +335,15 @@ fn mint_call_id(counter: &mut u32, used: &HashSet<String>) -> String {
     }
 }
 
+/// Which spelling of the OpenAPI `Schema.type` enum a schema uses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SchemaTypeCase {
+    /// Gemini `Schema` -> standard JSON Schema (`OBJECT` becomes `object`).
+    Lower,
+    /// Standard JSON Schema -> Gemini `Schema` (`object` becomes `OBJECT`).
+    Upper,
+}
+
 /// Rewrite a Gemini `Schema` into standard JSON Schema.
 ///
 /// `Schema.type` is the uppercase OpenAPI enum (`OBJECT`, `STRING`, ...),
@@ -337,19 +351,36 @@ fn mint_call_id(counter: &mut u32, used: &HashSet<String>) -> String {
 /// Forwarding the Gemini object verbatim sent `"type": "OBJECT"` upstream,
 /// which a provider that validates tool schemas rejects.
 fn normalize_gemini_schema(schema: &mut Value) {
+    retype_schema(schema, SchemaTypeCase::Lower);
+}
+
+/// Rewrite a standard JSON Schema into the Gemini `Schema` shape.
+///
+/// The reverse of [`normalize_gemini_schema`]: Gemini rejects lowercase
+/// `Schema.type` values, so an OpenAI-origin `responseSchema` is upper-cased
+/// before it is sent to a Gemini upstream.
+fn gemini_schema_from_json(schema: &Value) -> Value {
+    let mut schema = schema.clone();
+    retype_schema(&mut schema, SchemaTypeCase::Upper);
+    schema
+}
+
+fn retype_schema(schema: &mut Value, case: SchemaTypeCase) {
     let Some(map) = schema.as_object_mut() else {
         return;
     };
-    if matches!(map.get("type"), Some(Value::String(name)) if name == "TYPE_UNSPECIFIED") {
+    if case == SchemaTypeCase::Lower
+        && matches!(map.get("type"), Some(Value::String(name)) if name == "TYPE_UNSPECIFIED")
+    {
         // An unspecified type means "any type" in JSON Schema, which is the
         // absence of the keyword.
         map.remove("type");
     } else if let Some(Value::String(name)) = map.get_mut("type") {
-        name.make_ascii_lowercase();
+        retype_name(name, case);
     } else if let Some(Value::Array(types)) = map.get_mut("type") {
         for entry in types.iter_mut() {
             if let Value::String(name) = entry {
-                name.make_ascii_lowercase();
+                retype_name(name, case);
             }
         }
     }
@@ -366,25 +397,68 @@ fn normalize_gemini_schema(schema: &mut Value) {
         "prefixItems",
     ] {
         if let Some(child) = map.get_mut(key) {
-            normalize_gemini_schema_children(child);
+            retype_schema_children(child, case);
         }
     }
     for key in ["properties", "$defs", "definitions"] {
         if let Some(Value::Object(children)) = map.get_mut(key) {
             for child in children.values_mut() {
-                normalize_gemini_schema(child);
+                retype_schema(child, case);
             }
         }
     }
 }
 
-fn normalize_gemini_schema_children(value: &mut Value) {
+fn retype_name(name: &mut String, case: SchemaTypeCase) {
+    match case {
+        SchemaTypeCase::Lower => name.make_ascii_lowercase(),
+        SchemaTypeCase::Upper => name.make_ascii_uppercase(),
+    }
+}
+
+fn retype_schema_children(value: &mut Value, case: SchemaTypeCase) {
     if let Value::Array(children) = value {
         for child in children.iter_mut() {
-            normalize_gemini_schema(child);
+            retype_schema(child, case);
         }
     } else {
-        normalize_gemini_schema(value);
+        retype_schema(value, case);
+    }
+}
+
+/// Decode Gemini `generationConfig.responseMimeType` / `responseSchema`.
+///
+/// `responseSchema` takes precedence because it is the stronger constraint;
+/// `application/json` without a schema is plain JSON-object mode. Any other
+/// MIME type states a constraint the IR cannot express, so it is refused
+/// instead of silently dropped.
+fn decode_structured_output(
+    mime: Option<&Value>,
+    schema: Option<&Value>,
+) -> Result<Option<StructuredOutput>> {
+    let mime = match mime {
+        None | Some(Value::Null) => None,
+        Some(Value::String(mime)) => Some(mime.as_str()),
+        Some(_) => return Err(Error::invalid("`responseMimeType` must be a string")),
+    };
+    if let Some(schema) = schema.filter(|value| !value.is_null()) {
+        let mut schema = schema.clone();
+        // `responseSchema` is a Gemini `Schema`; the IR carries JSON Schema.
+        normalize_gemini_schema(&mut schema);
+        return Ok(Some(StructuredOutput::JsonSchema {
+            // Gemini schemas are unnamed.
+            name: None,
+            schema,
+            // Gemini enforces the schema but exposes no strictness flag, so no
+            // strict request is recorded on its behalf.
+            strict: false,
+        }));
+    }
+    match mime {
+        Some("application/json") => Ok(Some(StructuredOutput::JsonObject)),
+        // `text/plain` is the documented default and states no constraint.
+        Some("text/plain") | Some("") | None => Ok(None),
+        Some(other) => Err(unsupported_content("responseMimeType", Some(other))),
     }
 }
 
@@ -602,6 +676,14 @@ pub fn encode_request(req: &ChatRequest, upstream_model: &str) -> Result<Value> 
             (true, None) => {}
         }
         gc.insert("thinkingConfig".into(), Value::Object(config));
+    }
+    // Structured output is a `generationConfig` constraint; emitting it from
+    // the IR is what keeps an OpenAI -> Gemini translation from losing it.
+    if let Some(structured) = &req.structured_output {
+        gc.insert("responseMimeType".into(), json!("application/json"));
+        if let StructuredOutput::JsonSchema { schema, .. } = structured {
+            gc.insert("responseSchema".into(), gemini_schema_from_json(schema));
+        }
     }
     if !gc.is_empty() {
         body.insert("generationConfig".into(), Value::Object(gc));

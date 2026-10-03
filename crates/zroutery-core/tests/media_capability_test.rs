@@ -3,11 +3,14 @@
 use std::sync::Arc;
 
 use serde_json::json;
-use zroutery_core::config::{AppConfig, ModelEntry, ModelTier, ProviderConfig, ProviderKind};
+use zroutery_core::config::{
+    AppConfig, ModelCapabilities, ModelEntry, ModelTier, ProviderConfig, ProviderKind,
+};
 use zroutery_core::ir::{
     Capability, ChatRequest, ContentBlock, Dialect, MediaSource, Message, Role, ThinkingConfig,
     ToolDef, ToolResultPart,
 };
+use zroutery_core::policy::{PolicyRequirements, RejectionReason};
 use zroutery_core::protocol::{anthropic, gemini, openai, responses};
 
 fn base64(media_type: &str) -> MediaSource {
@@ -195,4 +198,57 @@ fn every_decoder_records_the_same_canonical_requirements() {
     }))
     .unwrap();
     assert!(gemini.required_capabilities.contains(&Capability::Video));
+}
+
+#[test]
+fn structured_output_requirement_filters_candidates_without_the_capability() {
+    let request = openai::decode_request(json!({
+        "model": "m",
+        "messages": [{"role": "user", "content": "answer as json"}],
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "answer",
+                "strict": true,
+                "schema": {"type": "object", "properties": {"answer": {"type": "string"}}}
+            }
+        }
+    }))
+    .unwrap();
+    assert!(!request.required_capabilities.is_empty());
+    assert!(request
+        .required_capabilities
+        .contains(&Capability::StructuredOutput));
+
+    // A model that does not declare the capability is fail-closed.
+    let undeclared = ModelCapabilities::default();
+    let check = PolicyRequirements::check_request_capabilities(
+        "m",
+        "p",
+        None,
+        &undeclared,
+        false,
+        &request.required_capabilities,
+    );
+    assert!(!check.eligible);
+    assert!(check.reasons.iter().any(|reason| matches!(
+        reason,
+        RejectionReason::MissingCapability(Capability::StructuredOutput)
+            | RejectionReason::UnknownCapability(Capability::StructuredOutput)
+    )));
+
+    // A model that declares it stays eligible.
+    let declared = ModelCapabilities {
+        structured_output: true,
+        ..Default::default()
+    };
+    let check = PolicyRequirements::check_request_capabilities(
+        "m",
+        "p",
+        None,
+        &declared,
+        false,
+        &request.required_capabilities,
+    );
+    assert!(check.eligible, "unexpected reasons: {:?}", check.reasons);
 }
