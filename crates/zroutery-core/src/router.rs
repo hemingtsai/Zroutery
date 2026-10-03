@@ -270,9 +270,11 @@ impl Router {
             }
             Resolution::Tier(tier) => registry.tier_members(*tier),
         };
-        if members.is_empty() {
-            return Err(Error::NoCandidate(resolution_name(resolution)));
-        }
+        // A tier with no usable members is not a special case: an empty pool is
+        // exactly a pool that filtered down to nothing, so it must take the same
+        // configured Escalate/Degrade route. Returning early here made "no model
+        // configured for this tier" fail while "every member was filtered out"
+        // fell back, which is inconsistent for the same client policy.
 
         let mut effective_tier: Option<ModelTier> = match resolution {
             Resolution::Tier(tier) => Some(*tier),

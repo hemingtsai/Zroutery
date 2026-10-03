@@ -2320,6 +2320,99 @@ fn fallback_reject_returns_error() {
     );
 }
 
+/// An empty tier takes the same configured fallback as a tier that filtered
+/// down to nothing.
+///
+/// "No model is configured for this tier" and "every member was rejected" are
+/// the same routing state for the client policy, so Escalate/Degrade must run
+/// for both. Reject must still reject.
+#[test]
+fn empty_tier_uses_the_configured_fallback() {
+    let cfg = e2e_cfg_with(vec![ModelEntry::for_upstream(
+        "p1",
+        "std-m",
+        Some(ModelTier::Standard),
+    )]);
+    let reg = e2e_reg(cfg);
+    let router = Router::new();
+
+    let escalate = PolicyFallback::Escalate {
+        enabled: true,
+        max_steps: 1,
+    };
+    let (candidates, decision) = router
+        .plan_with_policy(
+            &reg,
+            &Resolution::Tier(ModelTier::Fast),
+            &[],
+            &PolicyRequirements::default(),
+            &PolicyPreference::default(),
+            &escalate,
+            None,
+        )
+        .unwrap();
+    assert_eq!(candidates[0].exposed_id, "p1-std-m");
+    assert!(matches!(decision.reason, DecisionReason::Escalated { .. }));
+    assert!(decision
+        .fallback_chain
+        .contains(&"fast-class".to_string()));
+
+    // Degrading from an empty higher tier reaches the lower one.
+    let degrade = PolicyFallback::Degrade {
+        enabled: true,
+        max_steps: 2,
+    };
+    let (candidates, _decision) = router
+        .plan_with_policy(
+            &reg,
+            &Resolution::Tier(ModelTier::Frontier),
+            &[],
+            &PolicyRequirements::default(),
+            &PolicyPreference::default(),
+            &degrade,
+            None,
+        )
+        .unwrap();
+    assert_eq!(candidates[0].exposed_id, "p1-std-m");
+
+    // Reject is unchanged: an empty pool is a hard error.
+    let err = router
+        .plan_with_policy(
+            &reg,
+            &Resolution::Tier(ModelTier::Fast),
+            &[],
+            &PolicyRequirements::default(),
+            &PolicyPreference::default(),
+            &PolicyFallback::Reject,
+            None,
+        )
+        .unwrap_err();
+    assert!(
+        matches!(err, Error::NoCandidate(_)),
+        "Reject must still reject an empty tier, got: {err:?}"
+    );
+
+    // A tier whose only member is disabled is empty for the same purpose.
+    let mut disabled = ModelEntry::for_upstream("p1", "fast-m", Some(ModelTier::Fast));
+    disabled.enabled = false;
+    let reg = e2e_reg(e2e_cfg_with(vec![
+        disabled,
+        ModelEntry::for_upstream("p1", "std-m", Some(ModelTier::Standard)),
+    ]));
+    let (candidates, _decision) = router
+        .plan_with_policy(
+            &reg,
+            &Resolution::Tier(ModelTier::Fast),
+            &[],
+            &PolicyRequirements::default(),
+            &PolicyPreference::default(),
+            &escalate,
+            None,
+        )
+        .unwrap();
+    assert_eq!(candidates[0].exposed_id, "p1-std-m");
+}
+
 /// Max escalation steps is respected: escalation stops after max_steps even
 /// if higher tiers have eligible candidates.
 #[test]
