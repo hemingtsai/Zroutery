@@ -28,7 +28,12 @@
 //!    is a measurement rather than a tautology.
 //! 5. **The candidate reaches a named verdict** through 7E-3's gate over
 //!    real-request evidence, with the statistical constituent's refusal reported
-//!    in full and no floor moved to obtain it.
+//!    in full and no floor moved to obtain it. The refusal obtained is
+//!    `sample_too_small`: 12 effective decisions in the holdout against a floor
+//!    of 30. That number is the result, not a shortfall to be engineered away —
+//!    see [`FAILOVER_FRACTION`] for what this window can and cannot support, and
+//!    `the_statistical_floor_is_untouched_and_the_power_formula_says_what_it_would_need`
+//!    for the evidence the gate says it actually wants.
 //! 6. **The observability projection is invoked on the serving path**, it
 //!    correlates, it is deterministic, and its refusals survive.
 //! 7. **Rollback restores the prior behaviour exactly**, by withdrawal, at
@@ -72,13 +77,21 @@ use zroutery_core::server::{
 // The local fake upstream
 // ---------------------------------------------------------------------------
 
-/// Call counts per upstream model, so the flakiness is a function of the request
-/// sequence and nothing else.
+/// Call counts per upstream model.
 ///
-/// This matters more than it looks. The served-bytes comparison runs the same
-/// sequence three times and requires identical routing each time, so the
-/// upstream's behaviour has to be a pure function of how many times it has been
-/// called. Wall-clock jitter would make the comparison meaningless.
+/// These were once load-bearing: the injected models failed on odd calls and
+/// answered on even ones, so the flakiness was a function of how many times a
+/// model had been called. The injected models now fail every call (see
+/// [`fake_chat`] for why that changed), so the counter no longer decides
+/// anything and the upstream's behaviour is a pure function of which model was
+/// asked. The counts are kept because they are how a reader can see that fact —
+/// every injected model is asked exactly once per routed decision, with no retry
+/// and no rectifier pass.
+///
+/// This matters more than it looks either way. The served-bytes comparison runs
+/// the same sequence three times and requires identical routing each time, so the
+/// upstream's behaviour has to be a pure function of the request sequence. Wall
+/// clock jitter would make the comparison meaningless.
 #[derive(Clone, Default)]
 struct Fake {
     calls: Arc<Mutex<BTreeMap<String, usize>>>,
@@ -93,21 +106,39 @@ impl Fake {
     }
 }
 
-/// A model whose name starts with `flaky` fails on every odd call and answers on
-/// every even one, which produces a deterministic two-attempt failover on every
-/// request that reaches it.
+/// A model named by [`INJECTED_MODELS`] fails **every** call.
 ///
-/// Two attempts on *every* request, not just the first two, is the point. An
-/// earlier version of this fixture used the default
-/// `routing.break_after_failures`, so the circuit breaker quarantined the flaky
-/// model partway through the window and the requests after that had one attempt
-/// instead of two. That is a regime change in the middle of the evidence, and
-/// 7E-2D's drift gate refused the whole run for it — correctly. The quarantine
-/// threshold is raised below so the window has one shape throughout.
+/// This used to fail on odd calls and answer on even ones, and that has to be
+/// reported rather than quietly replaced, because the reason it had to change is
+/// the whole substance of this node:
+///
+/// * **What the old rule could not do.** With the injected models in the first
+///   routing slot, the first candidate is asked *exactly once per decision*, so
+///   an odd/even rule makes it succeed on every even ask. Measured, that gave a
+///   window of 30 routed decisions containing 16 with arity 2 and **14 with arity
+///   1** — a 53.3% failover rate. And `measure_release_evidence` does not skip an
+///   arity-1 decision: `attribution.rs` returns `DegenerateAxis` on the *first*
+///   one it walks, aborting the whole partition. So a cohort containing any
+///   arity-1 decision is unmeasurable, and an odd/even head produces arity-1
+///   decisions at every window size and every priority. No combination of
+///   `FLAKY_PRIORITY`, `ROUTED_REQUESTS` or breaker settings reaches a measurable
+///   cohort while the head alternates.
+/// * **What replaced it.** The injected models now fail every call, which is what
+///   this doc comment always *claimed* they did ("a deterministic two-attempt
+///   failover on every request that reaches it") and what the code did not do.
+///   Every routed decision now has arity 2.
+///
+/// The cost is stated in [`FAILOVER_FRACTION`]: the window's first-choice
+/// failure rate is 100%, which is not a production rate and is not claimed to be
+/// one. It is bought deliberately, to buy a cohort the gate can walk at all.
+///
+/// Failing every call is still a pure function of the request sequence, which is
+/// what the served-bytes comparison needs: it depends only on which model was
+/// asked, never on a clock or a counter's parity.
 async fn fake_chat(State(fake): State<Fake>, Json(body): Json<Value>) -> Response {
     let model = body["model"].as_str().unwrap_or_default().to_string();
-    let call = fake.next_call(&model);
-    if model.starts_with("flaky") && call % 2 == 1 {
+    fake.next_call(&model);
+    if INJECTED_MODELS.iter().any(|name| model == *name) {
         return (
             axum::http::StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({"error": {"message": "fake upstream failure", "type": "server_error"}})),
@@ -216,23 +247,84 @@ fn model(provider: &str, upstream: &str, priority: i32, tier: ModelTier) -> Mode
     entry
 }
 
+/// The priority the flaky models sit at, which is what makes them the *first*
+/// choice in their tier.
+///
+/// `RoutingStrategy::Priority` orders a tier by ascending priority number
+/// (`router::order` sorts on `priority` alone), so the lower number is tried
+/// first. This constant used to be **20**, which put `flaky-std` and
+/// `flaky-fast` behind `std-one`/`std-two`/`fast-one`/`fast-two` at 10. Routing
+/// therefore never *selected* the flaky model, its failure injection never
+/// fired, and every decision in the window had exactly one attempt.
+///
+/// That made the window unmeasurable rather than merely unrepresentative.
+/// `calibration::project_cohorts` builds each decision's K axis from the
+/// attempt-scope rows the production dataset boundary created
+/// (`dataset.rs:620` emits one `SampleScope::Attempt` row per attempt), so an
+/// axis of arity 1 is all a never-failing window can produce — and
+/// `statistics::measure_release_evidence` refuses an arity-1 axis with
+/// `DegenerateAxis`, because one candidate cannot be ranked. The gate was
+/// refusing with `degenerate_axis` on the first decision it walked, and no
+/// amount of evidence would have moved it: **no decision in the window contained
+/// a choice.** A router evaluated on data where routing never happened has
+/// measured nothing.
+///
+/// Moving the flaky models to 5 makes the injected failure the first-choice
+/// outcome of every routed request, which is what puts a real, two-candidate
+/// choice in the axis at all. This half is a pure fixture repair: the
+/// failure-injection mechanism already existed and was documented, it was simply
+/// unreachable.
+///
+/// It is only half the repair, though, and the other half is *not* a pure repair:
+/// once the injection is reachable the mechanism's own odd/even rule stops
+/// admitting a measurable cohort, and the rule had to change too. See
+/// [`fake_chat`] for that argument and [`FAILOVER_FRACTION`] for the rate it
+/// leaves behind and for what that rate does and does not license a conclusion
+/// about. Nothing about the rate is a tunable — there is no knob that sets it.
+const FLAKY_PRIORITY: i32 = 5;
+
+/// The upstream model names whose failures are injected, and the exposed ids
+/// that resolve to them.
+///
+/// Kept as one list because the two spellings are easy to let drift: the fake
+/// upstream injects on `body["model"]`, which is the bare upstream name, while
+/// `Outcome.attempts` records the *exposed* id. Anything matching the injected
+/// models is matched on the suffix so a `provider-` prefix does not defeat it.
+const INJECTED_MODELS: [&str; 2] = ["flaky-std", "flaky-fast"];
+
+/// The breaker's consecutive-failure threshold, set past anything a 34-request
+/// window can produce. See `config_for` for why this alone was never enough.
+const BREAKER_FAILURE_THRESHOLD: u32 = 1000;
+
+/// The breaker holds per-model request counts below this, so its error-rate rule
+/// cannot apply inside this window. See `config_for`.
+const BREAKER_MIN_REQUESTS: u32 = 1000;
+
 /// The window's configuration.
 ///
 /// Shadow evaluation on — that is the capability under test.
 ///
-/// Both tiers carry exactly three candidates, so every request in the window has
-/// the same cohort arity. That is not cosmetic: 7E-2D's drift gate bins on arity
-/// and refuses the whole run when the fit and holdout partitions sit in
-/// different bins, so a fixture whose tiers had different candidate counts would
-/// be refused for a reason that has nothing to do with the commit under
-/// consideration. Alternating the tiers is still what rotates the served
-/// identity, which a single-tier window could not do — the partition check
-/// refuses an axis on which only one candidate ever served.
+/// Both tiers carry exactly three candidates, so the *roster* every request is
+/// planned against is the same size throughout. That is not cosmetic: 7E-2D's
+/// drift gate compares the fit and holdout partitions and refuses the whole run
+/// when they sit in different bins, so a fixture whose tiers had different
+/// candidate counts would be refused for a reason that has nothing to do with
+/// the commit under consideration. Alternating the tiers is still what rotates
+/// the served identity, which a single-tier window could not do — the partition
+/// check refuses an axis on which only one candidate ever served.
 ///
-/// `break_after_failures` is raised rather than left at its default, and only so
-/// that the flaky model fails on *every* request instead of being quarantined
-/// partway through the window. No other default is touched, and in particular no
-/// statistical or calibration default is touched anywhere in this file.
+/// Note what the roster size does *not* determine. The K axis is the number of
+/// **attempts a decision actually made**, not the number of models it could have
+/// chosen, so equal rosters buy a uniform plan and not a uniform axis. Before
+/// this node's repair the axis was uniformly 1; it is now deliberately not
+/// uniform, and `the_window_contains_a_rankable_axis_and_states_its_failover_rate`
+/// measures exactly what it is rather than asserting a shape.
+///
+/// The breaker is configured so nothing is quarantined partway through the
+/// window, because a mid-window regime change is what 7E-2D's drift gate
+/// refuses. See the assignments below: getting this right took two corrections,
+/// and both are documented where they happen. No statistical or calibration
+/// default is touched anywhere in this file.
 fn config_for(upstream: SocketAddr) -> AppConfig {
     let mut cfg = AppConfig::default();
     cfg.server.host = "127.0.0.1".into();
@@ -243,14 +335,47 @@ fn config_for(upstream: SocketAddr) -> AppConfig {
         provider("beta", "Beta", upstream),
     ];
     cfg.models = vec![
+        model("alpha", "flaky-std", FLAKY_PRIORITY, ModelTier::Standard),
         model("alpha", "std-one", 10, ModelTier::Standard),
         model("beta", "std-two", 10, ModelTier::Standard),
-        model("alpha", "flaky-std", 20, ModelTier::Standard),
+        model("alpha", "flaky-fast", FLAKY_PRIORITY, ModelTier::Fast),
         model("alpha", "fast-one", 10, ModelTier::Fast),
         model("beta", "fast-two", 10, ModelTier::Fast),
-        model("alpha", "flaky-fast", 20, ModelTier::Fast),
     ];
-    cfg.routing.break_after_failures = Some(1000);
+    // Every path from `Closed` to `Open` is put out of reach for a window this
+    // short, so no candidate can be quarantined partway through.
+    //
+    // This fixture used to set `routing.break_after_failures` to 1000, and that
+    // did nothing at all, twice over:
+    //
+    // 1. `break_after_failures` is a **legacy** field. `RoutingConfig::apply_legacy`
+    //    migrates it into `routing.circuit_breaker.failure_threshold`, and only
+    //    `AppConfig::normalize` calls that. This fixture builds
+    //    `AppConfig::default()` in code and never normalizes it, so the live
+    //    threshold stayed at `CircuitBreakerConfig::default()`'s **4**.
+    // 2. Even at a live threshold of 1000 the window would still have changed
+    //    shape. `CircuitBreaker::record_failure` opens on **either** consecutive
+    //    failures **or** a sustained error rate once `min_requests` have
+    //    accumulated, and the injected failure rate is high enough to trip the
+    //    default `error_rate_threshold` of 0.6. Raising only the consecutive
+    //    threshold could never have produced one regime here.
+    //
+    // So both gates are raised, and `min_requests` is raised rather than
+    // `error_rate_threshold`: "minimum requests before the error rate check
+    // applies" is a window-size precondition, and raising it declares the truth —
+    // a 34-request window is far too small for a sustained error rate to mean
+    // anything. The *rate* thresholds themselves, `failure_threshold` at 1000
+    // and `error_rate_threshold` left at its own default of 0.6, are not
+    // weakened; both are simply unreachable within the window.
+    //
+    // None of this touches a statistical or calibration default. It is the
+    // fixture's own routing configuration, and it exists to keep one regime
+    // throughout the window — the property 7E-2D's drift gate is entitled to
+    // assume and that an earlier version of this file broke.
+    // `the_window_has_one_regime_and_the_injected_model_never_leaves_the_first_slot`
+    // measures the consequence rather than trusting these assignments.
+    cfg.routing.circuit_breaker.failure_threshold = BREAKER_FAILURE_THRESHOLD;
+    cfg.routing.circuit_breaker.min_requests = BREAKER_MIN_REQUESTS;
     cfg.shadow.enabled = true;
     cfg
 }
@@ -613,6 +738,280 @@ fn recorded_decisions(window: &Window) -> Vec<RecordedDecision> {
 /// [`the_statistical_floor_is_untouched`] fails if a future edit tries to.
 fn gate_config() -> GateConfig {
     GateConfig::default()
+}
+
+// ---------------------------------------------------------------------------
+// The K axis, measured
+// ---------------------------------------------------------------------------
+
+/// The failover rate this window's configuration produces: **every** routed
+/// decision, 30 of 30, 100%.
+///
+/// **This number was chosen, and saying so is the point of this entry.** It is
+/// not a parameter anyone can turn, and the reason it had to be 100% is
+/// structural rather than convenient — but a reader is entitled to know that a
+/// number arrived at by eliminating the alternatives is still a chosen number.
+///
+/// Why 100% is forced: `measure_release_evidence` aborts the whole partition on
+/// the *first* arity-1 decision it walks, so a cohort is measurable only if
+/// **every** decision in the holdout compared at least two candidates. The first
+/// candidate in a plan is attempted exactly once per decision, so the only way to
+/// keep every decision's arity at 2 is for the first candidate to fail every
+/// time. Measured at the nearest alternative — an odd/even head, which yields a
+/// 53.3% failover rate — the window carried 14 arity-1 decisions and the gate
+/// refused with `degenerate_axis` before measuring anything, at any window size.
+///
+/// **Is it plausible?** As a first-choice upstream failure rate for a healthy
+/// production fleet, **no**, and it is not dressed down here. No real fleet fails
+/// every first attempt. It is plausible as what it actually is: a fixture whose
+/// purpose is to exercise the failover path, soaked until the path is taken on
+/// every decision so that the axis has something to rank. The distinction is the
+/// difference between a representative cohort and a convenient one:
+///
+/// - **CAN** support: that the offline gate can walk a cohort whose decisions
+///   genuinely contained a choice — that `project_cohorts` builds a multi-candidate
+///   K axis from real serving-path evidence, that a failover survives replay,
+///   attribution and the partition checks, and that the refusal which follows is
+///   about *how much evidence* the gate needs rather than about the evidence
+///   being unmeasurable. Before this repair none of that held: the axis was arity
+///   1 throughout and the gate refused with `degenerate_axis` on the first
+///   decision it walked.
+/// - **CANNOT** support: anything about production failure rates, and therefore
+///   anything about how a router performs when upstream failures are rare or
+///   intermittent. This window was deliberately made maximally failure-heavy; a
+///   number measured on it describes this window's chosen difficulty, not a
+///   fleet's. It is also not a sample of demand — the upstream is an in-process
+///   fake and the requests are synthetic, as the file's own header says. In
+///   particular, **nothing measured here supports a claim that the model is safe
+///   to serve**, and the verdict printed by
+///   `the_candidate_reaches_a_named_verdict_over_real_request_evidence` is
+///   reported exactly as obtained.
+const FAILOVER_FRACTION: &str =
+    "30 of 30 routed decisions (100%), forced by the gate's all-or-nothing \
+                                arity requirement";
+
+/// The K axis the gate walks, measured through the accepted projection.
+///
+/// Two properties of this function are what make the number worth reporting:
+///
+/// * it projects over the **same snapshot the gate projects over**. The gate
+///   builds its holdout from `canonical_samples_from_decision_time` per recorded
+///   decision, so this does too, rather than measuring the dataset store's
+///   `training_slice` and calling it the axis;
+/// * the model it hands to `project_cohorts` is a cold-start ensemble, and that
+///   is deliberate. The K axis is the *count of attempt rows in a decision's
+///   group*, which is fixed by how many attempts the router made and by nothing
+///   in the model. Using the cold-start ensemble therefore measures the axis
+///   without letting a parameter move it, and no model is trained or consulted
+///   beyond constructing the type the trait needs.
+fn axis_arities(recorded: &[RecordedDecision]) -> BTreeMap<usize, usize> {
+    let mut samples = Vec::new();
+    for entry in recorded {
+        samples.extend(
+            zroutery_core::ml::dataset::canonical_samples_from_decision_time(
+                &entry.outcome,
+                entry.input(),
+                zroutery_core::feedback::DataOrigin::Native,
+            )
+            .expect("a recorded decision's retained features are complete by construction"),
+        );
+    }
+    let ensemble = zroutery_core::ml::model_identity::ModelEnsemble::new();
+    let cohorts = zroutery_core::ml::calibration::project_cohorts(
+        &samples,
+        &ensemble.success,
+        zroutery_core::ml::calibration::CalibrationConfig::default().probability_floor,
+    )
+    .expect("the window's decisions project into cohorts");
+    let mut histogram: BTreeMap<usize, usize> = BTreeMap::new();
+    for cohort in &cohorts {
+        *histogram.entry(cohort.arity()).or_insert(0) += 1;
+    }
+    histogram
+}
+
+/// How many of a window's decisions attempted more than one candidate.
+///
+/// Counted from the outcomes' own attempt lists rather than from the projection,
+/// so the two measurements are independent and can be compared.
+fn failover_count(recorded: &[RecordedDecision]) -> (usize, usize) {
+    let mut failover = 0usize;
+    for entry in recorded {
+        if entry.outcome.attempts.len() > 1 {
+            failover += 1;
+        }
+    }
+    (failover, recorded.len())
+}
+
+/// The window's K axis is rankable, and the rate at which it is.
+///
+/// Before this node's repair every decision in this window had an axis of arity
+/// 1 and the gate refused with `degenerate_axis` without measuring anything.
+/// The measurement below is the evidence that the repair worked, and it is a
+/// measurement rather than an assertion about a shape: it projects the real
+/// snapshot and counts what came out.
+#[tokio::test]
+async fn the_window_contains_a_rankable_axis_and_states_its_failover_rate() {
+    let window = drive_window(
+        ShadowAttachment::embedded().expect("the candidate verifies"),
+        window_requests(),
+    )
+    .await;
+    let recorded = recorded_decisions(&window);
+    assert!(
+        !recorded.is_empty(),
+        "the window must produce decisions or there is no axis to measure"
+    );
+
+    let histogram = axis_arities(&recorded);
+    let total: usize = histogram.values().sum();
+    let rankable: usize = histogram
+        .iter()
+        .filter(|(arity, _)| **arity >= 2)
+        .map(|(_, count)| *count)
+        .sum();
+    let degenerate: usize = histogram
+        .iter()
+        .filter(|(arity, _)| **arity < 2)
+        .map(|(_, count)| *count)
+        .sum();
+    println!(
+        "K axis over {total} decisions: {}",
+        histogram
+            .iter()
+            .map(|(arity, count)| format!("arity {arity}: {count}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    println!(
+        "rankable (arity >= 2): {rankable}; degenerate (arity 1): {degenerate}; \
+         expected failover rate: {FAILOVER_FRACTION}"
+    );
+
+    // The whole point of the repair: the gate's statistical walk aborts on the
+    // *first* arity-1 decision, so a partially rankable cohort measures nothing.
+    // Every routed decision must therefore have compared at least two candidates.
+    assert_eq!(
+        degenerate, 0,
+        "{} of {total} decisions still hold an arity-1 axis. `measure_release_evidence` returns \
+         `DegenerateAxis` on the first one it walks, so a single degenerate decision makes the \
+         whole cohort unmeasurable no matter how many of the others are rankable.",
+        degenerate
+    );
+    assert_eq!(
+        rankable, total,
+        "every decision in a measurable cohort must be rankable; {rankable} of {total} are"
+    );
+
+    // The two independent measurements of the same fact must agree: the
+    // projection's arity histogram and the outcomes' own attempt counts.
+    let (failover, decisions) = failover_count(&recorded);
+    assert_eq!(
+        rankable, failover,
+        "the projection found {rankable} multi-candidate axes and the outcomes recorded {failover} \
+         multi-attempt decisions; these are the same fact measured two ways and must agree"
+    );
+    assert_eq!(
+        rankable + degenerate,
+        decisions,
+        "every recorded decision lands in exactly one arity bucket"
+    );
+    println!(
+        "failover: {failover} of {decisions} routed decisions ({:.1}%)",
+        100.0 * failover as f64 / decisions as f64
+    );
+}
+
+/// The window has one regime: the injected model is still the first choice on
+/// the last request, so nothing accumulated during the window changed routing.
+///
+/// This is the property 7E-2D's drift gate is entitled to assume and 7E-2D's own
+/// predecessor broke. An earlier version of this fixture left
+/// `break_after_failures` at its default, so the circuit breaker quarantined the
+/// flaky model partway through the window and every request after the quarantine
+/// had a different first choice — a mid-window regime change, which the drift
+/// gate refused for, correctly.
+///
+/// It is asserted as a measurement over the whole window rather than as a
+/// statement about the configuration: if any decision's first attempt had *not*
+/// been the flaky model, the breaker would have opened and the later decisions
+/// would differ. Checking the first attempt of **every** decision, including the
+/// last, is what makes this a claim about the window's shape rather than about
+/// its beginning.
+#[tokio::test]
+async fn the_window_has_one_regime_and_the_injected_model_never_leaves_the_first_slot() {
+    let window = drive_window(
+        ShadowAttachment::embedded().expect("the candidate verifies"),
+        window_requests(),
+    )
+    .await;
+    let recorded = recorded_decisions(&window);
+    assert!(
+        !recorded.is_empty(),
+        "the window must produce decisions or there is no regime to measure"
+    );
+
+    // Direct model-id requests name a healthy upstream explicitly and are
+    // excluded by construction: they asked for that model, so the injected model
+    // was never going to be their first choice and counting them would measure
+    // the request mix rather than the regime.
+    let mut first_choice_flaky = 0usize;
+    let mut routed = 0usize;
+    let mut offenders: Vec<String> = Vec::new();
+    for entry in &recorded {
+        if entry
+            .outcome
+            .attempts
+            .first()
+            .is_some_and(|attempt| attempt.candidate_model == "alpha-std-one")
+        {
+            continue;
+        }
+        routed += 1;
+        // The first candidate *actually attempted*, not the first candidate in
+        // the retained plan. On a decision where the injected model was tried
+        // and failed these are the same model; on a decision where it was
+        // skipped they differ, and the difference is the whole measurement.
+        let attempted = entry
+            .outcome
+            .attempts
+            .iter()
+            .find(|attempt| attempt.success || attempt.failure_class.is_some())
+            .expect("every routed decision attempted at least one candidate");
+        // The attempt records the model's *exposed* id (`provider-upstream`),
+        // so the injected models are `alpha-flaky-std` and `alpha-flaky-fast`
+        // here rather than the bare `flaky-std` / `flaky-fast` the fake upstream
+        // matches on. Matching the suffix keeps the two spellings from drifting
+        // apart silently.
+        if INJECTED_MODELS
+            .iter()
+            .any(|name| attempted.candidate_model.ends_with(name))
+        {
+            first_choice_flaky += 1;
+        } else {
+            offenders.push(format!(
+                "{}/{}",
+                attempted.candidate_provider, attempted.candidate_model
+            ));
+        }
+    }
+    assert_eq!(
+        routed, ROUTED_REQUESTS,
+        "every routed request in the window is counted here, so the regime claim covers the whole \
+         window rather than the part of it that happened to look right"
+    );
+    println!(
+        "first candidate attempted was the injected model in {first_choice_flaky} of {routed} \
+         routed decisions; the breaker threshold is raised so it cannot be quarantined mid-window"
+    );
+    assert!(
+        offenders.is_empty(),
+        "the injected model was not the first candidate attempted for {} decision(s): {offenders:?}. \
+         That is a mid-window regime change — a quarantine, or some other accumulated state \
+         changing the order — and the window is no longer one shape.",
+        offenders.len()
+    );
 }
 
 // ---------------------------------------------------------------------------
