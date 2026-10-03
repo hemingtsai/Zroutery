@@ -10,9 +10,10 @@ on:
     branches: [main, dev]
 
 # The commit-message convention has its own workflow; this one is about the
-# code: lint and test the GUI-free core on Linux, validate the repository's own
-# records, test and smoke the whole workspace on the platform the desktop shell
-# ships for, and gate the shipped Windows binary on what it may not name.
+# code: lint and test the GUI-free core on Linux, check the declared minimum
+# toolchain against the locked tree, validate the repository's own records, test
+# and smoke the whole workspace on the platform the desktop shell ships for, and
+# gate the shipped Windows binary on what it may not name.
 env:
   CARGO_TERM_COLOR: always
 
@@ -42,6 +43,43 @@ jobs:
       # unreproducible rumour that cost another audit cycle.
       - name: Tests
         run: python3 -B scripts/test_gate.py --quiet -- cargo test -p zroutery-core --all-features
+
+  # The declared `rust-version` used to be a sentence nothing checked: every job
+  # followed the floating `stable` channel, so the workspace's stated minimum
+  # could sit below what the tree actually needs without any job changing
+  # colour. It did. The locked dependencies need 1.88 (`icu_normalizer` 2.3.0
+  # and `time` 0.3.55 declare it) and the source needs 1.89 (temporary lifetime
+  # extension through a tuple-variant constructor), so the old `1.80` was not
+  # merely untested, it was false. This job pins the declared minimum and builds
+  # the locked tree with it, test targets included.
+  msrv:
+    name: declared minimum toolchain
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Pinned to the declared minimum, not to `stable`. When Cargo.toml's
+      # rust-version moves, this line moves with it in the same commit.
+      - uses: dtolnay/rust-toolchain@1.89.0
+      - uses: Swatinem/rust-cache@v2
+      - name: The pinned compiler is the declared minimum
+        run: |
+          set -euo pipefail
+          declared="$(sed -n 's/^rust-version = "\(.*\)"/\1/p' Cargo.toml)"
+          installed="$(rustc --version | cut -d' ' -f2)"
+          echo "declared rust-version=$declared, installed rustc=$installed"
+          case "$installed" in
+            "$declared"|"$declared".*) ;;
+            *)
+              echo "::error title=msrv::installed rustc $installed does not satisfy the declared rust-version $declared"
+              exit 1
+              ;;
+          esac
+      # `--locked` is the point: the minimum has to satisfy the dependency tree
+      # the repository ships, not the one a resolver would pick today.
+      # `--all-targets` is the other half: the 1.89 floor comes from test code,
+      # so a check that skipped test targets would not prove the declaration.
+      - name: Check the locked workspace at the declared minimum
+        run: cargo check --workspace --locked --all-targets
 
   contracts:
     name: commit contract and orchestration docs
