@@ -831,14 +831,32 @@ fn shadow_overhead_stays_an_order_of_magnitude_under_budget() {
 /// GATE 7E-1 (coordinator semantics): the frozen session guard survives the
 /// full shadow path — sticky session + low confidence forces Keep with the
 /// session reason even when the trained utility favors a switch.
+///
+/// "Low confidence" has to mean an uncertain prediction, not a certain one.
+/// model-b is the utility favorite on latency and cost, but it won and lost the
+/// same requests, so its success head stays undecided (within 0.2 of a coin
+/// flip) and the guard's confidence input is low. Training it to near-certain
+/// success and still asserting a low confidence is what the previous
+/// `4p(1-p)` confidence reported, and it read a confident prediction as an
+/// uncertain one.
 #[test]
 fn shadow_respects_coordinator_semantics() {
     let engine = engine();
     let features_b = polarized_features(true);
     let features_a = polarized_features(false);
-    let mut samples = biased_samples("win", &features_b, true, 200.0, 100.0, 0.01, 1000);
+    // model-b: the same latency and cost won and lost, interleaved so the
+    // online success head sees a balanced signal rather than a block of wins
+    // followed by a block of losses. Success there is a coin flip the utility
+    // still prefers over model-a's failing record.
+    let wins = biased_samples("win-b", &features_b, true, 200.0, 100.0, 0.01, 1_000);
+    let losses = biased_samples("lose-b", &features_b, false, 200.0, 100.0, 0.01, 1_000);
+    let mut samples = Vec::with_capacity(3_000);
+    for (win, loss) in wins.into_iter().zip(losses) {
+        samples.push(win);
+        samples.push(loss);
+    }
     samples.extend(biased_samples(
-        "lose",
+        "lose-a",
         &features_a,
         false,
         4000.0,
@@ -854,7 +872,7 @@ fn shadow_respects_coordinator_semantics() {
     ];
 
     // Control (Free session): the utility path switches to model-b, proving
-    // the training really favors it.
+    // the training really favors it even though its success head is undecided.
     let free_input = shadow_input_with(candidates.clone());
     let free = engine
         .evaluate("req-free", &free_input)
@@ -869,6 +887,11 @@ fn shadow_respects_coordinator_semantics() {
     let sticky = engine
         .evaluate("req-sticky", &sticky_input)
         .expect("sticky evaluation");
+    assert!(
+        (sticky.candidates[0].prediction.success.value - 0.5).abs() < 0.2,
+        "the guard's confidence input must come from an undecided success head, got {}",
+        sticky.candidates[0].prediction.success.value
+    );
     assert!(
         sticky.candidates[0].prediction.success.confidence < 0.8,
         "the guard's confidence input (first valid candidate) must be low, got {}",
