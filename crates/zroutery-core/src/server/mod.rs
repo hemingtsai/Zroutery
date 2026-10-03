@@ -265,22 +265,32 @@ impl AppState {
             // deterministically. What is lost is history across restarts and the
             // ability to promote, both of which are absent in a fresh install
             // anyway.
-            let traces = match crate::ml::TraceLog::open(&config.ml_routing.state_dir) {
+            // An unset or unusable `state_dir` falls back to a process-scoped
+            // directory rather than the working directory, so a proxy launched
+            // from a source checkout cannot write its history into the tree it
+            // was launched from.
+            let fallback_dir = std::env::temp_dir().join("zroutery-ml");
+            let state_dir: std::path::PathBuf = if config.ml_routing.state_dir.trim().is_empty() {
+                fallback_dir.clone()
+            } else {
+                // A configured relative path is honoured rather than
+                // second-guessed: the operator pointed it somewhere. Only the
+                // *default* is ever redirected.
+                std::path::PathBuf::from(&config.ml_routing.state_dir)
+            };
+            let traces = match crate::ml::TraceLog::open(&state_dir) {
                 Ok(log) => log,
                 Err(error) => {
                     tracing::error!(
                         error = %error,
                         "the routing trace log could not be opened; traces will not survive this process"
                     );
-                    crate::ml::TraceLog::open(
-                        std::env::temp_dir().join("zroutery-unavailable-traces"),
-                    )
-                    .unwrap_or_else(|_| {
+                    crate::ml::TraceLog::open(&fallback_dir).unwrap_or_else(|_| {
                         unreachable!("a temporary trace directory is always creatable")
                     })
                 }
             };
-            let active_models = crate::ml::ActiveModelStore::open(&config.ml_routing.state_dir)
+            let active_models = crate::ml::ActiveModelStore::open(&state_dir)
                 .inspect_err(|error| {
                     tracing::error!(
                         error = %error,
