@@ -929,8 +929,32 @@ impl Default for MlRoutingConfig {
 
 #[cfg(feature = "ml")]
 impl MlRoutingConfig {
+    /// Where the trace log and the active-model pointer live by default.
+    ///
+    /// Absolute, and derived from the operating system's data directory. A
+    /// relative default would resolve against the process working directory,
+    /// which for a developer run is the crate root — that put a live
+    /// `traces.jsonl` inside `crates/zroutery-core/ml/` and nearly committed it.
+    /// A path that depends on where the binary happened to be launched is not a
+    /// place to keep history.
     fn default_state_dir() -> String {
-        "ml".to_string()
+        let base: Option<std::path::PathBuf> = if cfg!(windows) {
+            std::env::var_os("LOCALAPPDATA").map(std::path::PathBuf::from)
+        } else {
+            std::env::var_os("XDG_DATA_HOME")
+                .map(std::path::PathBuf::from)
+                .or_else(|| {
+                    std::env::var_os("HOME")
+                        .map(|home| std::path::PathBuf::from(home).join(".local/share"))
+                })
+        };
+        match base {
+            Some(base) => base.join("zroutery").join("ml").display().to_string(),
+            // No data directory to be found. An empty setting makes the caller
+            // fall back to a process-scoped directory rather than silently
+            // writing into the working directory.
+            None => String::new(),
+        }
     }
     fn default_exploration_seed() -> u64 {
         crate::ml::learning::TRAINING_DEFAULT_SEED
