@@ -1607,7 +1607,7 @@ async fn drive(harness: &Harness, offset: usize, count: usize) -> Vec<Served> {
     for index in 0..count {
         let step = (offset + index) % window_requests();
         let model = if step < ROUTED_REQUESTS {
-            if step % 2 == 0 {
+            if step.is_multiple_of(2) {
                 "standard-class"
             } else {
                 "fast-class"

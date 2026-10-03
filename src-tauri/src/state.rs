@@ -9,12 +9,14 @@ use std::sync::{Arc, Mutex};
 use chrono::{DateTime, Utc};
 
 use serde::{Deserialize, Serialize};
+#[cfg(test)]
+use std::path::Path;
 use tokio::sync::Mutex as AsyncMutex;
 use zroutery_core::billing::{Balance, Cost};
 use zroutery_core::budget::{Budget, BudgetPeriod, BudgetScope};
-use zroutery_core::config::{
-    AppConfig, ConfigIssue, IssueSeverity, RoutingStrategy, SecretStore, ServerConfig,
-};
+#[cfg(test)]
+use zroutery_core::config::SecretStore;
+use zroutery_core::config::{AppConfig, ConfigIssue, IssueSeverity, RoutingStrategy, ServerConfig};
 use zroutery_core::election::Election;
 use zroutery_core::router::ModelHealth;
 use zroutery_core::server::{AppState, ServerHandle};
@@ -64,7 +66,7 @@ pub struct TcpListenerProber;
 impl ListenerProber for TcpListenerProber {
     fn probe(&self, addr: &str) -> Result<(), String> {
         TcpListener::bind(addr)
-            .map(|listener| drop(listener))
+            .map(drop)
             .map_err(|e| format!("cannot bind {addr}: {e}"))
     }
 }
@@ -824,7 +826,7 @@ mod tests {
 
     /// The port the configuration on disk was saved with, when a document was
     /// written at all.
-    fn persisted_port(dir: &PathBuf) -> Option<u16> {
+    fn persisted_port(dir: &Path) -> Option<u16> {
         if !dir.join(store::FILE_NAME).exists() {
             return None;
         }
@@ -868,7 +870,7 @@ mod tests {
         }
     }
 
-    async fn observe(desktop: &Desktop, dir: &PathBuf) -> Observed {
+    async fn observe(desktop: &Desktop, dir: &Path) -> Observed {
         Observed {
             persisted: persisted_port(dir),
             memory: desktop.core.config().server.port,

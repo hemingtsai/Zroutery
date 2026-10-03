@@ -275,8 +275,7 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
                     // narrow the declarations instead: silently dropping the
                     // restriction made an excluded function selectable again.
                     Some(allowed) => {
-                        req.tools
-                            .retain(|tool| allowed.iter().any(|name| *name == tool.name));
+                        req.tools.retain(|tool| allowed.contains(&tool.name));
                         if allowed.len() == 1 {
                             Some(ToolChoice::Specific {
                                 name: allowed[0].clone(),
@@ -409,7 +408,7 @@ fn retype_schema(schema: &mut Value, case: SchemaTypeCase) {
     }
 }
 
-fn retype_name(name: &mut String, case: SchemaTypeCase) {
+fn retype_name(name: &mut str, case: SchemaTypeCase) {
     match case {
         SchemaTypeCase::Lower => name.make_ascii_lowercase(),
         SchemaTypeCase::Upper => name.make_ascii_uppercase(),

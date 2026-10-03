@@ -1506,7 +1506,7 @@ async fn oversized_request_bodies_are_rejected_before_reaching_a_provider() {
     // the oversized body, so the client may see the reset instead of the 413.
     // Either way nothing reached a provider, which the next line asserts.
     assert!(
-        resp.map_or(true, |r| r.status() == 413),
+        resp.is_none_or(|r| r.status() == 413),
         "an oversized body must be rejected",
     );
     assert_eq!(h.mock.count(), 0, "nothing was forwarded upstream");

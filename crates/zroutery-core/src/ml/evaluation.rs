@@ -562,8 +562,8 @@ impl Evaluator {
     /// - Otherwise, recommend `Accept` when the candidate improves success rate
     ///   by >= 1pp, or when it reduces p95 latency by >= 10% or mean cost by
     ///   > 5% **and** the success rate did not degrade at all
-    ///   (`success_rate_delta >= 0`). A latency or a cost win never buys a
-    ///   success-rate loss: that is the whole point of the comparison.
+    ///   > (`success_rate_delta >= 0`). A latency or a cost win never buys a
+    ///   > success-rate loss: that is the whole point of the comparison.
     /// - Otherwise, `Reject`.
     pub fn compare_routing(
         baseline: &RoutingMetrics,

@@ -2409,7 +2409,7 @@ mod tests {
         let raw = format!(
             "{}{}",
             chunk(json!({"content": "partial"})),
-            format!(
+            format_args!(
                 "data: {}\n\n",
                 json!({"id": "chatcmpl-1", "model": "m", "choices": [],
                        "usage": {"prompt_tokens": 11, "completion_tokens": 7}})
