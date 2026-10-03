@@ -1,5 +1,6 @@
 //! Tauri commands: the entire surface the dashboard can call.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use tauri::{AppHandle, Manager, State};
@@ -278,9 +279,61 @@ pub fn quit_app(app: AppHandle) -> Cmd<()> {
 pub struct CcSwitchPreview {
     /// The source path the providers came from, for the panel's subtitle.
     pub source: String,
-    /// Every provider found; `already_imported` marks the ones that would be
-    /// skipped because a provider with that id exists.
+    /// Every provider found, each with the decision an import would make.
     pub providers: Vec<ccswitch::CcProviderDraft>,
+}
+
+/// Digests of the credentials a configuration references, for the accounts it
+/// could read one from.
+///
+/// The import uses these to recognise an account whose provider was created
+/// before the source marker existed. A reference whose credential is missing
+/// (or whose lookup failed) is simply absent: that account can then only be
+/// recognised by its marker, never mistaken for another one.
+fn key_fingerprints(
+    config: &AppConfig,
+    secrets: &crate::secrets::KeychainSecrets,
+) -> BTreeMap<String, String> {
+    config
+        .providers
+        .iter()
+        .filter(|p| !p.key_ref.is_empty())
+        .filter_map(|p| {
+            secrets
+                .get(&p.key_ref)
+                .map(|key| (p.key_ref.clone(), ccswitch::credential_fingerprint(&key)))
+        })
+        .collect()
+}
+
+/// Every found provider with the id an import would use and whether it is
+/// already configured, decided by [`ccswitch::plan_import`].
+///
+/// Both the preview and the import command go through here. The rule used to
+/// live only in the preview, which made the disabled rows and the import
+/// command disagree.
+fn draft_preview(
+    config: &AppConfig,
+    found: Vec<ccswitch::CcProvider>,
+    fingerprints: &BTreeMap<String, String>,
+) -> Vec<ccswitch::CcProviderDraft> {
+    let accounts: Vec<ccswitch::SourceAccount> = found.iter().map(ccswitch::account_of).collect();
+    let plan = ccswitch::plan_import(config, &accounts, fingerprints);
+    found
+        .into_iter()
+        .zip(plan)
+        .map(|(provider, planned)| {
+            let (target_id, already_imported) = match planned.decision {
+                ccswitch::ImportDecision::Planned(id) => (id, false),
+                ccswitch::ImportDecision::AlreadyImported(id, _) => (id, true),
+            };
+            ccswitch::CcProviderDraft {
+                provider,
+                target_id,
+                already_imported,
+            }
+        })
+        .collect()
 }
 
 #[tauri::command]
@@ -291,34 +344,11 @@ pub async fn ccswitch_preview(desktop: State<'_, Arc<Desktop>>) -> Cmd<CcSwitchP
         .map_err(|e| e.to_string())??;
 
     let config = desktop.core.config();
-    let providers = found
-        .into_iter()
-        .map(|p| {
-            // A provider talking to the same endpoint is the same relay as
-            // far as an import is concerned, whatever it is called here.
-            let existing = config.providers.iter().find(|existing| {
-                existing.base_url.trim_end_matches('/') == p.base_url.trim_end_matches('/')
-            });
-            let (target_id, already_imported) = match existing {
-                Some(existing) => (existing.id.clone(), true),
-                None => {
-                    let taken = |id: &str| config.provider(id).is_some();
-                    (ccswitch::unique_provider_id(&p.name, &taken), false)
-                }
-            };
-            ccswitch::CcProviderDraft {
-                provider: p,
-                target_id,
-                already_imported,
-            }
-        })
-        .collect();
-
     Ok(CcSwitchPreview {
         source: ccswitch::cc_switch_dir()
             .map(|d| d.display().to_string())
             .unwrap_or_default(),
-        providers,
+        providers: draft_preview(&config, found, &key_fingerprints(&config, &desktop.secrets)),
     })
 }
 
@@ -328,6 +358,11 @@ pub async fn ccswitch_preview(desktop: State<'_, Arc<Desktop>>) -> Cmd<CcSwitchP
 /// preview draft), so the selection survives re-ordering in CC Switch.
 /// API keys go straight into the credential store; the config file keeps
 /// only key refs, exactly like a hand-entered provider.
+///
+/// The same [`ccswitch::plan_import`] decision the preview showed is applied
+/// again here: an entry that is already configured is skipped, and one relay's
+/// second account — a different source entry on the same endpoint — is
+/// imported under its own id instead of being mistaken for the first.
 ///
 /// Each draft is validated before conversion; invalid entries are skipped
 /// with a warning logged. The import batch is also validated after
@@ -342,7 +377,7 @@ pub async fn ccswitch_import(
         .map(|d| d.display().to_string())
         .unwrap_or_else(|| "unknown".into());
 
-    let drafts = {
+    let selected = {
         let providers = tauri::async_runtime::spawn_blocking(ccswitch::read_providers)
             .await
             .map_err(|e| e.to_string())??;
@@ -352,18 +387,31 @@ pub async fn ccswitch_import(
             .collect::<Vec<_>>()
     };
 
-    let mut config = (*desktop.core.config()).clone();
+    let config = desktop.core.config();
+    let accounts: Vec<ccswitch::SourceAccount> =
+        selected.iter().map(ccswitch::account_of).collect();
+    let plan = ccswitch::plan_import(
+        &config,
+        &accounts,
+        &key_fingerprints(&config, &desktop.secrets),
+    );
+    let decisions: BTreeMap<&str, &ccswitch::ImportDecision> = selected
+        .iter()
+        .zip(plan.iter())
+        .map(|(provider, planned)| (provider.source_id.as_str(), &planned.decision))
+        .collect();
+
+    let mut warnings: Vec<String> = Vec::new();
     let mut imported_keys: Vec<(String, String)> = Vec::new();
     let mut batch: Vec<(
         zroutery_core::config::ProviderConfig,
         Vec<zroutery_core::config::ModelEntry>,
     )> = Vec::new();
-    let mut warnings: Vec<String> = Vec::new();
 
     // The current CC Switch provider becomes the class primary; the rest keep
     // CC Switch's order behind it.
     let mut priority = 0;
-    for draft in &drafts {
+    for draft in &selected {
         // Validate before conversion; skip bad entries.
         if let Err(e) = ccswitch::validate_draft(draft) {
             tracing::warn!("skipping CC Switch provider `{}`: {e}", draft.name);
@@ -371,11 +419,22 @@ pub async fn ccswitch_import(
             continue;
         }
 
-        let taken = |id: &str| config.provider(id).is_some();
-        let provider_id = ccswitch::unique_provider_id(&draft.name, &taken);
+        let provider_id = match decisions.get(draft.source_id.as_str()) {
+            // Already configured: importing it again would duplicate an account.
+            Some(ccswitch::ImportDecision::AlreadyImported(existing, _)) => {
+                tracing::info!(
+                    "CC Switch provider `{}` is already configured as `{existing}`; skipping",
+                    draft.name
+                );
+                continue;
+            }
+            Some(ccswitch::ImportDecision::Planned(id)) => id.clone(),
+            None => ccswitch::source_target_id(&draft.name, &draft.source_id),
+        };
+
         let (provider, models) = ccswitch::to_zroutery(
             draft,
-            provider_id.clone(),
+            provider_id,
             if draft.is_current {
                 0
             } else {
@@ -387,8 +446,6 @@ pub async fn ccswitch_import(
             imported_keys.push((provider.key_ref.clone(), key));
         }
         batch.push((provider.clone(), models.clone()));
-        config.providers.push(provider);
-        config.models.extend(models);
         priority += 10;
     }
 
@@ -403,6 +460,17 @@ pub async fn ccswitch_import(
         return Err(msg);
     }
 
+    if batch.is_empty() {
+        // Nothing new to write: every selected entry was already configured.
+        return Ok(refreshed(&app, &desktop).await);
+    }
+
+    let mut next = (*config).clone();
+    for (provider, models) in &batch {
+        next.providers.push(provider.clone());
+        next.models.extend(models.iter().cloned());
+    }
+
     // Store the keys first: an import whose providers reference keys that do
     // not exist yet would look broken in the dashboard.
     let secrets = Arc::clone(&desktop.secrets);
@@ -415,7 +483,7 @@ pub async fn ccswitch_import(
     .await
     .map_err(|e| e.to_string())??;
 
-    desktop.apply_config(config).await?;
+    desktop.apply_config(next).await?;
 
     // Build and log the import report.
     let report = ccswitch::build_report(&source, &batch, warnings, vec![]);
@@ -439,4 +507,100 @@ pub async fn ccswitch_import(
         ));
     }
     Ok(snapshot)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use zroutery_core::config::{ModelTier, ProviderKind};
+
+    /// One CC Switch entry, in the order CC Switch hands it over when the same
+    /// relay holds two subscriptions with different keys.
+    fn entry(source_id: &str, name: &str, base_url: &str, key: &str) -> ccswitch::CcProvider {
+        ccswitch::CcProvider {
+            source_id: source_id.into(),
+            name: name.into(),
+            base_url: base_url.into(),
+            api_key: Some(key.into()),
+            models: vec![ccswitch::CcModel {
+                upstream_model: "m1".into(),
+                tier: Some(ModelTier::Standard),
+            }],
+            is_current: false,
+            timeout_ms: None,
+        }
+    }
+
+    fn target_of(draft: &ccswitch::CcProviderDraft) -> String {
+        draft.target_id.clone()
+    }
+
+    /// The preview decides what the import writes, so the id the row shows and
+    /// the id the provider gets cannot drift apart.
+    #[test]
+    fn preview_and_import_share_one_decision_rule() {
+        let found = vec![
+            entry("src-a", "Relay", "https://relay.example/v1", "sk-a"),
+            entry("src-b", "Relay", "https://relay.example/v1", "sk-b"),
+        ];
+
+        // Nothing is configured yet: both accounts are importable, under
+        // different ids, even though the endpoint and the name match.
+        let config = AppConfig::default();
+        let preview = draft_preview(&config, found.clone(), &std::collections::BTreeMap::new());
+        assert_eq!(preview.len(), 2);
+        assert!(preview.iter().all(|d| !d.already_imported));
+        assert_ne!(target_of(&preview[0]), target_of(&preview[1]));
+
+        // Importing the first must not make the second look imported: the
+        // account marker, not the URL, decides.
+        let first = preview[0].clone();
+        let mut config = AppConfig::default();
+        config
+            .providers
+            .push(ccswitch::to_zroutery(&first.provider, target_of(&first), 0, None).0);
+        let preview = draft_preview(&config, found, &std::collections::BTreeMap::new());
+        assert!(
+            preview[0].already_imported,
+            "the imported account must be recognised"
+        );
+        assert!(
+            !preview[1].already_imported,
+            "the second account on the same endpoint must stay importable"
+        );
+
+        // The import command would apply the same decision: the id it would
+        // write for the second entry is the one the preview showed.
+        let accounts: Vec<ccswitch::SourceAccount> =
+            vec![ccswitch::account_of(&preview[1].provider)];
+        let plan = ccswitch::plan_import(&config, &accounts, &std::collections::BTreeMap::new());
+        assert_eq!(
+            plan[0].decision,
+            ccswitch::ImportDecision::Planned(target_of(&preview[1])),
+            "preview and import disagree about the second account"
+        );
+    }
+
+    /// A key already stored under an endpoint is the same account, even when
+    /// the configured provider predates the source marker.
+    #[test]
+    fn a_stored_credential_recognises_an_account_without_a_marker() {
+        let found = vec![entry("src-a", "Relay", "https://relay.example/v1", "sk-a")];
+        let mut legacy =
+            zroutery_core::config::ProviderConfig::new("relay", "Relay", ProviderKind::Anthropic);
+        legacy.base_url = "https://relay.example/v1".into();
+        let mut config = AppConfig::default();
+        config.providers.push(legacy);
+
+        let fingerprints = std::collections::BTreeMap::from([(
+            "provider:relay".to_string(),
+            ccswitch::credential_fingerprint("sk-a"),
+        )]);
+        let preview = draft_preview(&config, found, &fingerprints);
+        assert!(
+            preview[0].already_imported,
+            "the same account was not recognised through its stored credential"
+        );
+        assert_eq!(target_of(&preview[0]), "relay");
+    }
 }

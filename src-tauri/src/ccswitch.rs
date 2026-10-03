@@ -18,11 +18,12 @@
 //! them, and only the selected ones are written — providers into the config,
 //! API keys straight into the OS credential store, never the config file.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use zroutery_core::config::{ModelEntry, ModelTier, ProviderConfig, ProviderKind};
+use zroutery_core::config::{AppConfig, ModelEntry, ModelTier, ProviderConfig, ProviderKind};
 use zroutery_core::query::strip_client_model_modifier;
 
 /// Where CC Switch keeps its provider data, in the order we look.
@@ -112,15 +113,177 @@ pub struct CcModel {
     pub tier: Option<ModelTier>,
 }
 
+/// The identity of one account behind a CC Switch entry.
+///
+/// A base URL alone is not an account: one relay commonly holds several
+/// subscriptions with their own keys, quotas and model sets. The entry's own id
+/// is the account marker CC Switch persists for it, and the target id carries
+/// that marker, so a later import of the same entry recognises the provider it
+/// created. The credential fingerprint is a second signal for a provider that
+/// was imported before the marker existed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceAccount {
+    pub source_id: String,
+    pub name: String,
+    pub base_url: String,
+    /// A digest of the account's credential, when the entry carries one. The
+    /// key itself never leaves the credential store.
+    pub credential_fingerprint: Option<String>,
+}
+
+/// One CC Switch entry considered against a configuration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ImportDecision {
+    /// Would be imported under this provider id.
+    Planned(String),
+    /// Already configured: `(provider id, why it is recognised)`.
+    AlreadyImported(String, AlreadyImported),
+}
+
+/// Why an entry counts as already imported.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AlreadyImported {
+    /// The configured provider was created by this source entry.
+    SameSource,
+    /// No marker, but the provider reaches the same endpoint with the same
+    /// credential: the same account, imported before the source was recorded.
+    SameAccount,
+}
+
+/// A decision plus the entry it was made about.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlannedImport {
+    pub source_id: String,
+    pub decision: ImportDecision,
+}
+
+/// What an import of `accounts` would do against `config`, in the order given.
+///
+/// `key_fingerprints` maps a configured provider's key reference to a digest of
+/// the credential stored under it, for the providers the caller could read one
+/// from. That is what lets an entry be recognised as an account imported before
+/// the source marker existed; without it only the marker can match.
+///
+/// Preview and import both call this, so the row the dashboard disables and the
+/// entry the command writes are decided by the same rule.
+pub fn plan_import(
+    config: &AppConfig,
+    accounts: &[SourceAccount],
+    key_fingerprints: &BTreeMap<String, String>,
+) -> Vec<PlannedImport> {
+    accounts
+        .iter()
+        .map(|account| {
+            // Deterministic in the source id, so asking again for an entry
+            // already imported answers the same target id.
+            let candidate = source_target_id(&account.name, &account.source_id);
+            let decision = if let Some(existing) = matching_marker(config, account) {
+                ImportDecision::AlreadyImported(existing, AlreadyImported::SameSource)
+            } else if let Some(existing) = matching_account(config, account, key_fingerprints) {
+                ImportDecision::AlreadyImported(existing, AlreadyImported::SameAccount)
+            } else {
+                ImportDecision::Planned(candidate)
+            };
+            PlannedImport {
+                source_id: account.source_id.clone(),
+                decision,
+            }
+        })
+        .collect()
+}
+
+/// The provider id an imported source entry gets.
+///
+/// The name keeps it recognisable and the source marker keeps one relay's
+/// several accounts apart, which a name or endpoint slug cannot.
+pub fn source_target_id(name: &str, source_id: &str) -> String {
+    let base = unique_provider_id(name, &|_| false);
+    let marker = marker_of(source_id);
+    format!("{base}-{:06x}", marker & 0x00ff_ffff)
+}
+
+/// The configured provider carrying this source entry's marker.
+fn matching_marker(config: &AppConfig, account: &SourceAccount) -> Option<String> {
+    let wanted = marker_of(&account.source_id) & 0x00ff_ffff;
+    config
+        .providers
+        .iter()
+        .find(|p| {
+            p.id.rsplit_once('-')
+                .and_then(|(_, suffix)| u64::from_str_radix(suffix, 16).ok())
+                == Some(wanted)
+        })
+        .map(|p| p.id.clone())
+}
+
+/// The configured provider on the same endpoint storing the same credential.
+///
+/// Nothing is matched without a fingerprint: two keyless providers on one
+/// endpoint are not necessarily the same account, and neither are two accounts
+/// whose credentials the caller could not read.
+fn matching_account(
+    config: &AppConfig,
+    account: &SourceAccount,
+    key_fingerprints: &BTreeMap<String, String>,
+) -> Option<String> {
+    let fingerprint = account.credential_fingerprint.as_deref()?;
+    config
+        .providers
+        .iter()
+        .find(|p| {
+            p.base_url.trim_end_matches('/') == account.base_url.trim_end_matches('/')
+                && key_fingerprints.get(&p.key_ref).map(String::as_str) == Some(fingerprint)
+        })
+        .map(|p| p.id.clone())
+}
+
+/// The account identity of one CC Switch entry.
+pub fn account_of(provider: &CcProvider) -> SourceAccount {
+    SourceAccount {
+        source_id: provider.source_id.clone(),
+        name: provider.name.clone(),
+        base_url: provider.base_url.clone(),
+        credential_fingerprint: provider
+            .api_key
+            .as_deref()
+            .filter(|key| !key.is_empty())
+            .map(credential_fingerprint),
+    }
+}
+
+/// A stable digest of a credential, so two accounts can be compared without the
+/// keys themselves ever leaving the credential store.
+pub fn credential_fingerprint(secret: &str) -> String {
+    format!("{:016x}", fnv1a(secret.as_bytes()))
+}
+
+fn marker_of(source_id: &str) -> u64 {
+    fnv1a(source_id.as_bytes())
+}
+
+/// FNV-1a. Not a security hash: it only has to be stable and spread ids apart.
+fn fnv1a(bytes: &[u8]) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
+}
+
 /// What the import preview shows for one CC Switch provider: the draft plus
 /// what would happen to it. The API key is deliberately absent.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CcProviderDraft {
     #[serde(flatten)]
     pub provider: CcProvider,
-    /// The Zroutery provider id this would get.
+    /// The Zroutery provider id the import would write, or the id of the
+    /// existing provider this entry was recognised as.
     pub target_id: String,
-    /// A provider with this id already exists, so the import is skipped.
+    /// This entry is already configured, so the import skips it; the dashboard
+    /// disables the row. Decided by [`plan_import`], the same rule the import
+    /// command applies.
     pub already_imported: bool,
 }
 
@@ -1116,6 +1279,159 @@ mod tests {
             "key_ref should reference the provider id, not the secret: {}",
             provider.key_ref,
         );
+    }
+
+    /// One CC Switch entry, with the key that makes it an account.
+    fn source_entry(id: &str, name: &str, url: &str, key: &str) -> CcProvider {
+        CcProvider {
+            source_id: id.into(),
+            name: name.into(),
+            base_url: url.into(),
+            api_key: (!key.is_empty()).then(|| key.to_string()),
+            models: vec![CcModel {
+                upstream_model: "m1".into(),
+                tier: Some(ModelTier::Standard),
+            }],
+            is_current: false,
+            timeout_ms: None,
+        }
+    }
+
+    /// The provider an import of `entry` would write.
+    fn imported(entry: &CcProvider, id: String) -> ProviderConfig {
+        to_zroutery(entry, id, 0, entry.timeout_ms).0
+    }
+
+    #[test]
+    fn two_accounts_on_one_endpoint_are_two_configurations() {
+        // The same relay, two subscriptions: different CC Switch entries, the
+        // same URL, different credentials.
+        let first = source_entry("src-a", "Relay", "https://relay.example/v1", "sk-a");
+        let second = source_entry("src-b", "Relay", "https://relay.example/v1", "sk-b");
+
+        let config = AppConfig::default();
+        let plan = plan_import(
+            &config,
+            &[account_of(&first), account_of(&second)],
+            &BTreeMap::new(),
+        );
+        let first_id = match &plan[0].decision {
+            ImportDecision::Planned(id) => id.clone(),
+            other => panic!("the first account must be importable, got {other:?}"),
+        };
+        let second_id = match &plan[1].decision {
+            ImportDecision::Planned(id) => id.clone(),
+            other => panic!("the second account must be importable, got {other:?}"),
+        };
+        assert_ne!(
+            first_id, second_id,
+            "two accounts on one endpoint must not collapse to one id"
+        );
+
+        // Import the first; the second must still be importable.
+        let mut config = AppConfig::default();
+        config.providers.push(imported(&first, first_id.clone()));
+        let plan = plan_import(
+            &config,
+            &[account_of(&first), account_of(&second)],
+            &BTreeMap::new(),
+        );
+        assert_eq!(
+            plan[0].decision,
+            ImportDecision::AlreadyImported(first_id.clone(), AlreadyImported::SameSource),
+        );
+        assert!(
+            matches!(&plan[1].decision, ImportDecision::Planned(id) if id == &second_id),
+            "the second account became unimportable: {:?}",
+            plan[1].decision,
+        );
+    }
+
+    #[test]
+    fn the_same_source_entry_is_recognised_after_a_round_trip_through_config() {
+        let entry = source_entry("src-a", "Relay", "https://relay.example/v1", "sk-a");
+        let id = source_target_id(&entry.name, &entry.source_id);
+        let mut config = AppConfig::default();
+        config.providers.push(imported(&entry, id.clone()));
+        save_and_reload(&mut config);
+        let plan = plan_import(&config, &[account_of(&entry)], &BTreeMap::new());
+        assert_eq!(
+            plan[0].decision,
+            ImportDecision::AlreadyImported(id, AlreadyImported::SameSource),
+            "re-importing the same entry must be recognised after a save/load cycle",
+        );
+    }
+
+    #[test]
+    fn a_provider_without_a_marker_is_matched_by_endpoint_and_credential() {
+        // A provider imported before the source marker existed: same endpoint,
+        // same stored credential, plain name-derived id. The host supplies the
+        // fingerprints because the key itself never enters the configuration.
+        let entry = source_entry("src-a", "Relay", "https://relay.example/v1", "sk-a");
+        let mut legacy = ProviderConfig::new("relay", "Relay", ProviderKind::Anthropic);
+        legacy.base_url = "https://relay.example/v1".into();
+        let mut config = AppConfig::default();
+        config.providers.push(legacy);
+        let stored =
+            BTreeMap::from([("provider:relay".to_string(), credential_fingerprint("sk-a"))]);
+
+        let plan = plan_import(&config, &[account_of(&entry)], &stored);
+        assert_eq!(
+            plan[0].decision,
+            ImportDecision::AlreadyImported("relay".into(), AlreadyImported::SameAccount),
+        );
+    }
+
+    #[test]
+    fn a_different_credential_on_the_endpoint_is_a_second_account() {
+        // Same endpoint, different stored key: this is the second account, not
+        // a re-import, and it has to stay importable.
+        let entry = source_entry("src-b", "Relay", "https://relay.example/v1", "sk-b");
+        let mut other = ProviderConfig::new("relay", "Relay", ProviderKind::Anthropic);
+        other.base_url = "https://relay.example/v1".into();
+        let mut config = AppConfig::default();
+        config.providers.push(other);
+        let stored =
+            BTreeMap::from([("provider:relay".to_string(), credential_fingerprint("sk-a"))]);
+
+        let plan = plan_import(&config, &[account_of(&entry)], &stored);
+        assert!(
+            matches!(plan[0].decision, ImportDecision::Planned(_)),
+            "a second account was mistaken for the first: {:?}",
+            plan[0].decision,
+        );
+    }
+
+    #[test]
+    fn a_keyless_provider_is_not_mistaken_for_an_account_with_a_key() {
+        let entry = source_entry("src-a", "Relay", "https://relay.example/v1", "sk-a");
+        let mut keyless = ProviderConfig::new("relay", "Relay", ProviderKind::Anthropic);
+        keyless.base_url = "https://relay.example/v1".into();
+        keyless.key_ref = String::new();
+        let mut config = AppConfig::default();
+        config.providers.push(keyless);
+
+        let plan = plan_import(&config, &[account_of(&entry)], &BTreeMap::new());
+        assert!(
+            matches!(plan[0].decision, ImportDecision::Planned(_)),
+            "a keyless provider is not the same account: {:?}",
+            plan[0].decision,
+        );
+    }
+
+    #[test]
+    fn source_target_ids_are_stable_and_name_derived() {
+        let id = source_target_id("Relay One", "src-a");
+        assert!(id.starts_with("relay-one-"), "unrecognisable id: {id}");
+        assert_eq!(id, source_target_id("Relay One", "src-a"));
+        assert_ne!(id, source_target_id("Relay One", "src-b"));
+    }
+
+    /// The configuration parse is the persistence boundary: an id that does
+    /// not survive it cannot deduplicate anything.
+    fn save_and_reload(config: &mut AppConfig) {
+        let text = serde_json::to_string(config).unwrap();
+        *config = serde_json::from_str(&text).unwrap();
     }
 
     #[test]
