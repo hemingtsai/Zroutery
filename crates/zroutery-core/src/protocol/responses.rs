@@ -1742,10 +1742,13 @@ impl ResponsesStreamEncoder {
     }
 
     /// Collect output_items into a sorted Vec by output_index.
-    fn sorted_output(&mut self) -> Value {
-        let mut items: Vec<_> = std::mem::take(&mut self.output_items).into_iter().collect();
-        items.sort_by_key(|(k, _)| *k);
-        Value::Array(items.into_iter().map(|(_, v)| v).collect())
+    ///
+    /// Borrows rather than drains: the assembled output is also what a stored
+    /// response replays, so publishing it once must not consume it.
+    fn sorted_output(&self) -> Vec<Value> {
+        let mut items: Vec<_> = self.output_items.iter().collect();
+        items.sort_by_key(|(index, _)| **index);
+        items.into_iter().map(|(_, item)| item.clone()).collect()
     }
 
     /// Finalize the current Text/Thinking output item into output_items.
@@ -1915,6 +1918,10 @@ impl ResponsesStreamEncoder {
 impl StreamEncoder for ResponsesStreamEncoder {
     fn set_response_id(&mut self, id: &str) {
         self.id = id.to_string();
+    }
+
+    fn response_output(&self) -> Option<Vec<Value>> {
+        Some(self.sorted_output())
     }
 
     fn encode(&mut self, event: &StreamEvent) -> Vec<SseFrame> {
@@ -2185,7 +2192,7 @@ impl StreamEncoder for ResponsesStreamEncoder {
                         }),
                     ));
                 }
-                let output = self.sorted_output();
+                let output = Value::Array(self.sorted_output());
                 // A stream cut off by the output token limit is not a success:
                 // report the terminal status the non-streaming encoder reports.
                 let terminal = if self.truncated {
@@ -2266,7 +2273,7 @@ impl StreamEncoder for ResponsesStreamEncoder {
                 }),
             ));
         }
-        let output = self.sorted_output();
+        let output = Value::Array(self.sorted_output());
         let status = if has_incomplete {
             "incomplete"
         } else {
@@ -2295,7 +2302,7 @@ impl StreamEncoder for ResponsesStreamEncoder {
             self.done = true;
             out.extend(self.close_output_item());
         }
-        let output = self.sorted_output();
+        let output = Value::Array(self.sorted_output());
         out.push(self.frame(
             "response.failed",
             json!({

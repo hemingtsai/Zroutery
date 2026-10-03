@@ -1608,3 +1608,160 @@ async fn an_anthropic_upstream_id_is_never_the_cancel_key() {
     h.shutdown().await;
 }
 
+// -------------------------------------------------- streaming response storage
+
+/// Every JSON payload in a complete Responses SSE body, in order.
+fn sse_payloads(wire: &str) -> Vec<Value> {
+    wire.lines()
+        .filter_map(|line| line.strip_prefix("data: "))
+        .filter_map(|data| serde_json::from_str::<Value>(data).ok())
+        .collect()
+}
+
+/// The terminal frame's `response` object: what the client was finally told.
+fn terminal_response(wire: &str) -> Value {
+    sse_payloads(wire)
+        .into_iter()
+        .find(|payload| {
+            matches!(
+                payload["type"].as_str(),
+                Some("response.completed")
+                    | Some("response.incomplete")
+                    | Some("response.failed")
+                    | Some("response.cancelled")
+            )
+        })
+        .unwrap_or_else(|| panic!("the stream reached no terminal frame: {wire}"))["response"]
+        .clone()
+}
+
+impl Harness {
+    /// `DELETE /v1/responses/{id}`.
+    fn delete_response(&self, id: &str) -> reqwest::RequestBuilder {
+        self.client
+            .delete(format!("{}/v1/responses/{id}", self.base))
+            .header("x-api-key", TOKEN)
+    }
+
+    /// Run a Responses stream to its end and return the whole body.
+    async fn stream_responses(&self, model: &str, store: Option<bool>) -> String {
+        let response = self
+            .responses_request(model, store, true)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        response.text().await.unwrap()
+    }
+}
+
+/// A stream that reaches its normal terminal is stored: the later `GET` returns
+/// the id, output and usage the client just read, and the input it sent.
+#[tokio::test]
+async fn a_completed_stream_is_retrievable_with_what_it_streamed() {
+    let h = Harness::new().await;
+
+    let wire = h.stream_responses("alpha-good-model", None).await;
+    let terminal = terminal_response(&wire);
+    assert_eq!(terminal["status"], "completed", "{wire}");
+    let id = terminal["id"].as_str().unwrap().to_string();
+
+    let get = h.get_response(&id).send().await.unwrap();
+    assert_eq!(get.status(), 200, "a completed stream is retrievable");
+    let stored: Value = get.json().await.unwrap();
+    assert_eq!(stored["status"], "completed");
+    assert_eq!(stored["id"], id);
+    assert_eq!(
+        stored["output"], terminal["output"],
+        "the stored output is exactly what was streamed"
+    );
+    assert_eq!(
+        stored["usage"]["input_tokens"],
+        terminal["usage"]["input_tokens"]
+    );
+    assert_eq!(
+        stored["usage"]["output_tokens"],
+        terminal["usage"]["output_tokens"]
+    );
+    assert!(
+        serde_json::to_string(&stored["input"])
+            .unwrap()
+            .contains("DO_NOT_STORE_MARKER"),
+        "the input is retrievable when retention was allowed: {stored}"
+    );
+
+    h.shutdown().await;
+}
+
+/// A truncated stream is not an answer: nothing is stored, so it can never come
+/// back as a completed response.
+#[tokio::test]
+async fn an_interrupted_stream_is_never_retrievable_as_completed() {
+    let h = Harness::new().await;
+
+    let wire = h.stream_responses("alpha-truncate-model", None).await;
+    let terminal = terminal_response(&wire);
+    assert_eq!(terminal["status"], "failed", "{wire}");
+    let id = terminal["id"].as_str().unwrap().to_string();
+
+    let get = h.get_response(&id).send().await.unwrap();
+    if get.status() == 200 {
+        let stored: Value = get.json().await.unwrap();
+        assert_ne!(
+            stored["status"], "completed",
+            "a truncated stream must never be stored as a completed answer: {stored}"
+        );
+    } else {
+        assert_eq!(get.status(), 400, "and nothing is retrievable for it");
+    }
+
+    h.shutdown().await;
+}
+
+/// `store: false` is a retention instruction for streams too: nothing is
+/// written, so the id answers with "not found".
+#[tokio::test]
+async fn store_false_never_retains_a_streamed_response() {
+    let h = Harness::new().await;
+
+    let wire = h.stream_responses("alpha-good-model", Some(false)).await;
+    let id = terminal_response(&wire)["id"].as_str().unwrap().to_string();
+
+    let get = h.get_response(&id).send().await.unwrap();
+    assert_eq!(get.status(), 400, "store:false must not be retrievable");
+    let text = get.text().await.unwrap();
+    assert!(
+        !text.contains("DO_NOT_STORE_MARKER"),
+        "the private input is not even echoed in the refusal: {text}"
+    );
+    assert_eq!(
+        h.state.response_store.len(),
+        0,
+        "nothing at all was written to the response store"
+    );
+
+    h.shutdown().await;
+}
+
+/// A stored stream can be deleted, and once deleted it is gone.
+#[tokio::test]
+async fn a_deleted_streamed_response_cannot_be_fetched() {
+    let h = Harness::new().await;
+
+    let wire = h.stream_responses("alpha-good-model", None).await;
+    let id = terminal_response(&wire)["id"].as_str().unwrap().to_string();
+    assert_eq!(h.get_response(&id).send().await.unwrap().status(), 200);
+
+    let deleted = h.delete_response(&id).send().await.unwrap();
+    assert_eq!(deleted.status(), 200);
+    let body: Value = deleted.json().await.unwrap();
+    assert_eq!(body["deleted"], true);
+
+    assert_eq!(
+        h.get_response(&id).send().await.unwrap().status(),
+        400,
+        "a deleted response cannot be fetched"
+    );
+
+    h.shutdown().await;
+}

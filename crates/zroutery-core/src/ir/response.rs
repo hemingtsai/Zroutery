@@ -181,7 +181,12 @@ impl ResponseStore {
         rx
     }
 
-    /// Mark an in-flight response as completed and move it to the store.
+    /// Drop the in-flight entry now that the stream has ended.
+    ///
+    /// This does not store anything: whether the answer is kept is the
+    /// pipeline's decision, made against the client's retention policy, and
+    /// the output it keeps is the output the stream actually published rather
+    /// than anything this handle could reconstruct.
     pub fn complete_in_flight(&self, id: &str) {
         crate::sync::lock(&self.inner.in_flight).remove(id);
     }
