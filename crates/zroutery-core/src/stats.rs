@@ -394,9 +394,11 @@ impl RecordBuilder {
 
     /// Record the failure message shown in Activity.
     ///
-    /// Callers pass `Error::to_string()`, which for upstream failures embeds
-    /// the provider's response body — the same internal-page leak `to_wire`
-    /// guards against. Redact here so every failure path is covered at once.
+    /// Prefer [`crate::error::Error::safe_message`] as the argument: it redacts
+    /// a structured error without having to recognise the provider's body
+    /// format. This method still guards itself, but only against this proxy's
+    /// own `upstream … returned … : <body>` prefix, never against the shape of
+    /// the body — see [`redact_upstream_body`].
     pub fn fail(&mut self, status: u16, error: String) -> &mut Self {
         self.record.ok = false;
         self.record.status = status;
@@ -423,20 +425,25 @@ impl RecordBuilder {
 
 /// Strip an upstream response body out of an error string.
 ///
-/// Error strings look like `upstream Xiaomi MiMo returned 404: <html>...`; the
-/// provider's page after the status can be HTML with server fingerprints and
-/// internal URLs. Keep the prefix — provider and status are the useful part —
-/// and drop everything after the status code that introduces the body.
+/// The `Display` form of an upstream error is
+/// `upstream <provider> returned <status>: <body>`, and the body can be HTML,
+/// JSON or plain text, with or without leading whitespace. Nothing here
+/// inspects that body: the cut is made at the `": "` that this proxy itself
+/// writes after `returned `, so every body shape is handled by the same rule.
+/// `Error::safe_message` is still the primary redaction; this is the fallback
+/// for a message that arrived as text.
 fn redact_upstream_body(error: &str) -> String {
-    if let Some(marker) = error.find(": <") {
-        // Only redact the body-position marker of upstream errors, not colons
-        // in arbitrary messages.
-        let prefix = &error[..marker];
-        if prefix.contains("returned ") && prefix.starts_with("upstream ") {
-            return prefix.to_string();
-        }
+    if !error.starts_with("upstream ") {
+        return error.to_string();
     }
-    error.to_string()
+    let Some(returned) = error.find("returned ") else {
+        return error.to_string();
+    };
+    let status_start = returned + "returned ".len();
+    match error[status_start..].find(": ") {
+        Some(colon) => error[..status_start + colon].to_string(),
+        None => error.to_string(),
+    }
 }
 
 #[cfg(test)]
@@ -654,6 +661,28 @@ mod tests {
         assert_eq!(
             redact_upstream_body(raw),
             "upstream Xiaomi MiMo returned 404"
+        );
+        // The same rule has to hold whatever the body is written in, because a
+        // provider is free to answer a JSON or plain-text error page instead.
+        for body in [
+            "{\"error\":{\"message\":\"invalid key sk-SYNTHETIC-TEST-ONLY\"}}",
+            "invalid key sk-SYNTHETIC-TEST-ONLY",
+            "\n\t  <html><body>openresty</body></html>",
+            "   ",
+        ] {
+            let raw = format!("upstream test-provider returned 401: {body}");
+            assert_eq!(
+                redact_upstream_body(&raw),
+                "upstream test-provider returned 401",
+                "a {body:?} body must not survive into Activity"
+            );
+        }
+        // `BadUpstreamPayload` has no status, but its payload is a body too.
+        assert_eq!(
+            redact_upstream_body(
+                "upstream returned malformed data: {\"access_token\":\"sk-SYNTHETIC\"}"
+            ),
+            "upstream returned malformed data"
         );
         // Non-upstream messages pass through untouched, colons included.
         assert_eq!(

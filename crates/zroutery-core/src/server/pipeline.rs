@@ -1438,7 +1438,10 @@ enum TerminalKind {
     /// The request failed. The class is the canonical one.
     Failed {
         failure: ClassifiedFailure,
-        /// The full message for the activity log, redacted by the record.
+        /// The message for the activity log, taken from the error's safe form.
+        /// `Error::to_string()` is deliberately not used: it embeds the
+        /// provider's response body, whose shape — HTML, JSON, plain text — no
+        /// string rule can be trusted to recognise.
         message: String,
     },
     /// The client went away before the answer was finished. `emitted` says
@@ -1452,10 +1455,15 @@ enum TerminalKind {
 
 impl TerminalKind {
     /// A request that failed, with the canonical classification of `error`.
+    ///
+    /// The activity message comes from [`Error::safe_message`], the structural
+    /// redaction, rather than the `Display` text: the latter carries whatever
+    /// the provider answered with, and that body can be HTML, JSON or plain
+    /// text indifferently.
     fn failed(error: &Error) -> Self {
         TerminalKind::Failed {
             failure: error.classified(),
-            message: error.to_string(),
+            message: error.safe_message(),
         }
     }
 
@@ -2426,4 +2434,61 @@ fn sse_body(
             }
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The Activity message for a failed request, through the same two steps the
+    /// terminal transition uses: the error becomes a terminal state, and that
+    /// state's message becomes the record's error.
+    fn activity_error(error: &Error) -> String {
+        let terminal = TerminalKind::failed(error);
+        let mut builder = RecordBuilder::new(Dialect::OpenAI, "sonnet-class", false);
+        builder.fail(terminal.record_status(), terminal.record_message());
+        builder.finish(0).error.unwrap_or_default()
+    }
+
+    #[test]
+    fn no_upstream_body_shape_reaches_the_activity_record() {
+        // Bodies that the old `": <"` rule let through, plus the one it caught.
+        let bodies = [
+            "{\"error\":{\"message\":\"invalid key sk-SYNTHETIC-TEST-ONLY\"}}",
+            "invalid key sk-SYNTHETIC-TEST-ONLY",
+            "\n\t  <html><body>openresty</body></html>",
+            "<html><body>openresty</body></html>",
+        ];
+        for body in bodies {
+            let error = Error::Upstream {
+                provider: "test-provider".into(),
+                status: 401,
+                body: body.into(),
+            };
+            let shown = activity_error(&error);
+            assert!(
+                !shown.contains("sk-SYNTHETIC-TEST-ONLY") && !shown.contains("openresty"),
+                "the provider body reached Activity: {shown}"
+            );
+            assert_eq!(shown, "upstream test-provider returned 401");
+        }
+
+        // A malformed payload is a body too, and its text can echo credentials.
+        let error = Error::BadUpstreamPayload(
+            "{\"access_token\":\"sk-SYNTHETIC-TEST-ONLY\"}".into(),
+        );
+        let shown = activity_error(&error);
+        assert!(
+            !shown.contains("sk-SYNTHETIC-TEST-ONLY"),
+            "the malformed payload reached Activity: {shown}"
+        );
+        assert_eq!(shown, "upstream returned malformed data");
+
+        // A refused request is still explained, not blanked.
+        let error = Error::invalid("model sonnet-class is not configured");
+        assert_eq!(
+            activity_error(&error),
+            "invalid request: model sonnet-class is not configured"
+        );
+    }
 }
