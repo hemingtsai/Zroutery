@@ -482,6 +482,33 @@ fn retention_evicts_by_count_and_reports_it() {
     assert_eq!(counters.evicted_by_age, 0);
 }
 
+/// A zero count bound is refused at construction: it can hold no sample and can
+/// evict none, so the retention loop used to spin forever on an empty queue
+/// while holding the lock.
+///
+/// The bound is asserted before the pushes, so a regression fails on the bound
+/// rather than hanging the suite in the lock.
+#[test]
+fn a_zero_count_bound_is_floored_and_push_still_makes_progress() {
+    let store = DatasetStore::new(0, 3600);
+    assert_eq!(
+        store.max_samples(),
+        1,
+        "a zero count bound cannot be accepted"
+    );
+
+    let first = try_outcome_sample(&served_outcome(), features(10), DataOrigin::Native, None)
+        .expect("a valid sample");
+    store.push(first).expect("push must make progress");
+    assert_eq!(store.len(), 1);
+
+    let second = try_outcome_sample(&failed_outcome(), features(11), DataOrigin::Native, None)
+        .expect("a valid sample");
+    store.push(second).expect("push must still make progress");
+    assert_eq!(store.len(), 1, "the floored bound is a real bound");
+    assert_eq!(store.counters().evicted_by_count, 1);
+}
+
 /// Age eviction is physical, not only a read-time filter, and it is reported.
 #[test]
 fn retention_evicts_by_age_and_reports_it() {

@@ -828,6 +828,11 @@ pub struct DatasetStore {
 
 impl DatasetStore {
     pub fn new(max_samples: usize, max_age_secs: i64) -> Self {
+        // A zero count bound can hold no sample and can evict none: the
+        // retention loop below would spin on an empty queue forever while
+        // holding the store lock. The bound is floored at one, so the store
+        // always makes progress.
+        let max_samples = max_samples.max(1);
         Self {
             samples: Mutex::new(VecDeque::with_capacity(max_samples.min(10_000))),
             max_samples,
@@ -869,9 +874,12 @@ impl DatasetStore {
         let mut samples = crate::sync::lock(&self.samples);
         self.evict_expired_locked(&mut samples, chrono::Utc::now().timestamp());
         while samples.len() >= self.max_samples {
-            if samples.pop_front().is_some() {
-                self.evicted_by_count.fetch_add(1, Ordering::Relaxed);
+            if samples.pop_front().is_none() {
+                // The bound is never zero, but the loop still terminates on an
+                // empty queue instead of spinning while holding the lock.
+                break;
             }
+            self.evicted_by_count.fetch_add(1, Ordering::Relaxed);
         }
         samples.push_back(sample);
         Ok(())
