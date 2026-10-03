@@ -1241,12 +1241,24 @@ impl StreamParser for OpenAiStreamParser {
             }
 
             if let Some(content) = delta.and_then(|d| d.get("content")) {
+                // `content` is optional in the OpenAI delta shape, so an
+                // explicit null is a legal chunk that merely carries no text
+                // (role-only, tool-only and reasoning-only deltas all look
+                // like this).  Only a genuinely wrong JSON type is an error,
+                // and it is the upstream that produced it.
                 let text = match content {
+                    Value::Null => String::new(),
                     Value::String(s) => s.clone(),
-                    Value::Array(_) => flatten_content(Some(content))?.unwrap_or_default(),
+                    Value::Array(_) => flatten_content(Some(content))
+                        .map_err(|err| {
+                            Error::BadUpstreamPayload(format!(
+                                "stream content array is malformed: {err}"
+                            ))
+                        })?
+                        .unwrap_or_default(),
                     _ => {
-                        return Err(Error::invalid(
-                            "stream content must be a string or an array",
+                        return Err(Error::BadUpstreamPayload(
+                            "stream content must be a string, an array, or null".into(),
                         ))
                     }
                 };
@@ -1919,6 +1931,61 @@ mod tests {
             data: r#"{"error":{"message":"rate limited","type":"rate_limit_error"}}"#.into(),
         };
         assert!(p.push(&f).unwrap_err().to_string().contains("rate limited"));
+    }
+
+    #[test]
+    fn null_stream_content_is_not_an_error() {
+        // `content` is an optional member of the OpenAI delta shape, so an
+        // explicit null is a legal chunk that simply carries no text.
+        let role_only = parse(&chunk(json!({"role": "assistant", "content": null})));
+        assert_eq!(
+            role_only.len(),
+            2,
+            "role-only delta must only start and stop the message: {role_only:?}"
+        );
+
+        let reasoning_only = parse(&chunk(
+            json!({"content": null, "reasoning_content": "думаю"}),
+        ));
+        assert!(reasoning_only.contains(&StreamEvent::ThinkingDelta {
+            index: 0,
+            text: "думаю".into()
+        }));
+
+        let tool_only = parse(&chunk(json!({
+            "content": null,
+            "tool_calls": [{"index": 0, "id": "call_1", "type": "function",
+                            "function": {"name": "get_weather", "arguments": "{}"}}]
+        })));
+        assert!(tool_only.contains(&StreamEvent::ToolUseStart {
+            index: 0,
+            id: "call_1".into(),
+            name: "get_weather".into()
+        }));
+        assert!(tool_only.contains(&StreamEvent::ToolUseDelta {
+            index: 0,
+            partial_json: "{}".into()
+        }));
+    }
+
+    #[test]
+    fn invalid_stream_content_is_an_upstream_payload_error() {
+        // A genuinely wrong JSON type is the upstream's bug, not the client's.
+        for content in [json!(42), json!({"text": "nope"})] {
+            let data = json!({
+                "id": "chatcmpl-1",
+                "model": "m",
+                "choices": [{"index": 0, "delta": {"content": content}, "finish_reason": null}]
+            })
+            .to_string();
+            let err = OpenAiStreamParser::new("m")
+                .push(&SseFrame { event: None, data })
+                .unwrap_err();
+            assert!(
+                matches!(err, Error::BadUpstreamPayload(_)),
+                "content {content} must be an upstream payload error, got {err:?}"
+            );
+        }
     }
 
     #[test]
