@@ -203,16 +203,20 @@ jobs:
       # the one this job produced.
       - name: Build the shipped desktop binary
         run: cargo build -p zroutery --release
-      # This gate fails the job on a violation and also on INCONCLUSIVE:
-      # main() returns 0 only when the positive control held AND no forbidden
-      # symbol and no ml marker was found, so a scan that could not prove its
-      # own control exits non-zero too. No `|| true` and no continue-on-error --
-      # an inconclusive reachability check has proven nothing, and this step is
-      # the whole point of the job.
+      # RETIRED by ADR-0006. This step used to fail the job if the shipped
+      # desktop executable contained any ML symbol, on the reasoning that a
+      # binary cannot route on a model it does not contain -- which is true, and
+      # is a statement about packaging rather than about safety.
       #
-      # This scans the binary `cargo build --release` produces. The NSIS bundler
-      # patches a copy of it with the bundle type before packaging, so that
-      # variant is a different file; packaging.yml runs this same gate over that
-      # exact variant, so both are certified.
-      - name: Reachability gate
+      # The prohibition it enforced is what prevented the ML closed loop from
+      # ever reaching production, so the check is retired rather than fixed. The
+      # desktop app still compiles no ML and `ml_routing.enabled` still defaults
+      # to off, so this step's removal changes no product behaviour.
+      #
+      # It is kept, reporting and exiting 0, because a retired gate that silently
+      # vanished from the pipeline is indistinguishable from one that was never
+      # there. Replaced by `cargo test -p zroutery-core --features ml
+      # --test ml_closed_loop_test`, which asserts the behaviour that actually
+      # matters: a promoted model is served, observed, and rolled back.
+      - name: Reachability gate (retired by ADR-0006)
         run: python -B scripts/desktop_artifact_test.py --exe target/release/zroutery.exe

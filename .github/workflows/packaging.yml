@@ -63,11 +63,14 @@ jobs:
         run: node node_modules/@tauri-apps/cli/tauri.js build --bundles nsis
       # `tauri build` patches target/release/zroutery.exe with the bundle type
       # before bundling, so the copy sitting there now is the exact bytes the
-      # installer embeds. The reachability gate in ci.yml scans the same file
-      # path, but from a plain `cargo build --release`, which is not patched and
-      # is measurably smaller. This runs the gate over the real artifact so the
-      # shipped bytes are certified too, and not only on an unpatched build.
-      - name: Reachability gate on the bundled binary
+      # installer embeds.
+      #
+      # RETIRED by ADR-0006: this used to certify that the bundled bytes contain
+      # no ML symbol, which was true because the desktop app compiles no ML and
+      # is a statement about packaging rather than safety. The check no longer
+      # runs; it is kept so its absence from the pipeline is visible rather than
+      # silent. See ci.yml for the full reasoning.
+      - name: Reachability gate on the bundled binary (retired by ADR-0006)
         run: python -B scripts/desktop_artifact_test.py --exe target/release/zroutery.exe
       # The installer file name carries the version, so it is discovered rather
       # than hardcoded. Zero matches or more than one match is a failure, not a
