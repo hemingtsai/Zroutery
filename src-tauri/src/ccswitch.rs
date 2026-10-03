@@ -63,10 +63,21 @@ fn candidate_dirs() -> Vec<PathBuf> {
     dirs
 }
 
-/// The directory CC Switch's data was found in, or its primary location.
+/// The directory holding CC Switch's provider data.
+///
+/// `ZROUTERY_CC_SWITCH_DIR` wins when it is set, so an import can be pointed at
+/// a specific installation (tests and troubleshooting); otherwise the first
+/// candidate that actually holds provider data, and failing that the primary
+/// location.
 ///
 /// Public so the dashboard can show where the providers came from.
 pub fn cc_switch_dir() -> Option<PathBuf> {
+    if let Ok(dir) = std::env::var("ZROUTERY_CC_SWITCH_DIR") {
+        let dir = dir.trim();
+        if !dir.is_empty() {
+            return Some(PathBuf::from(dir));
+        }
+    }
     let dirs = candidate_dirs();
     dirs.iter()
         .find(|d| d.join("cc-switch.db").exists() || d.join("config.json").exists())
@@ -90,6 +101,9 @@ pub struct CcProvider {
     pub models: Vec<CcModel>,
     /// The provider CC Switch currently has active.
     pub is_current: bool,
+    /// `API_TIMEOUT_MS` as CC Switch wrote it. Absent or unusable means the
+    /// import has no timeout opinion; see [`parse_timeout_ms`].
+    pub timeout_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -255,6 +269,9 @@ fn provider_from_env(
     let api_key = get("ANTHROPIC_AUTH_TOKEN").or_else(|| get("ANTHROPIC_API_KEY"));
 
     let models = collect_models(env);
+    // Claude Code reads this variable as a string, so a real configuration can
+    // hold anything from "3000000" to an empty value.
+    let timeout_ms = parse_timeout_ms(get("API_TIMEOUT_MS").as_deref());
     Some(CcProvider {
         source_id,
         name,
@@ -262,8 +279,26 @@ fn provider_from_env(
         api_key,
         models,
         is_current,
+        timeout_ms,
     })
 }
+
+/// Read CC Switch's `API_TIMEOUT_MS`, which reaches the client as a string.
+///
+/// A value that is not a positive integer is unusable, and so is one outside
+/// the range the gateway accepts: those are treated as "no timeout was
+/// configured" rather than being clamped, so the import falls back to the same
+/// default it uses when the variable is absent.
+fn parse_timeout_ms(raw: Option<&str>) -> Option<u64> {
+    let ms: u64 = raw?.trim().parse().ok()?;
+    (MIN_TIMEOUT_MS..=MAX_TIMEOUT_MS)
+        .contains(&ms)
+        .then_some(ms)
+}
+
+/// The range a configured timeout has to land in, in milliseconds.
+const MIN_TIMEOUT_MS: u64 = 60_000;
+const MAX_TIMEOUT_MS: u64 = 3_600_000;
 
 /// The tier defaults become class members; the general `ANTHROPIC_MODEL` and
 /// the subagent model join as unclassified entries when they differ.
@@ -392,10 +427,11 @@ pub fn to_zroutery(
     // default for Anthropic providers, and an import that silently disabled
     // it would break strict gateways.
     provider.impersonate_claude_code = true;
-    // CC Switch's API_TIMEOUT_MS is milliseconds against our seconds, and the
-    // values users configure there (3000000) are "effectively forever".
+    // CC Switch's API_TIMEOUT_MS is milliseconds against our seconds. Values
+    // outside the accepted range never reach here through the reader; a caller
+    // that supplies one directly is still held to the same bounds.
     provider.timeout_secs = timeout_ms
-        .map(|ms| (ms / 1000).clamp(60, 3600))
+        .map(|ms| (ms / 1000).clamp(MIN_TIMEOUT_MS / 1000, MAX_TIMEOUT_MS / 1000))
         .unwrap_or(600);
 
     let models = draft
@@ -590,9 +626,19 @@ mod tests {
         // model. All of these were read through `sonnet`, which panicked on the
         // opus+haiku pair and aborted the entire provider import with it.
         let cases: [(&str, Option<&str>, Option<&str>, Option<&str>); 3] = [
-            ("opus+sonnet", Some("relay-model"), Some("relay-model"), None),
+            (
+                "opus+sonnet",
+                Some("relay-model"),
+                Some("relay-model"),
+                None,
+            ),
             ("opus+haiku", Some("relay-model"), None, Some("relay-model")),
-            ("sonnet+haiku", None, Some("relay-model"), Some("relay-model")),
+            (
+                "sonnet+haiku",
+                None,
+                Some("relay-model"),
+                Some("relay-model"),
+            ),
         ];
         for (name, opus, sonnet, haiku) in cases {
             let mut env = json!({
@@ -630,21 +676,30 @@ mod tests {
                 Some("big-model"),
                 Some("mid-model"),
                 None,
-                vec![("big-model", ModelTier::Reasoning), ("mid-model", ModelTier::Standard)],
+                vec![
+                    ("big-model", ModelTier::Reasoning),
+                    ("mid-model", ModelTier::Standard),
+                ],
             ),
             (
                 "opus+haiku",
                 Some("big-model"),
                 None,
                 Some("small-model"),
-                vec![("big-model", ModelTier::Reasoning), ("small-model", ModelTier::Fast)],
+                vec![
+                    ("big-model", ModelTier::Reasoning),
+                    ("small-model", ModelTier::Fast),
+                ],
             ),
             (
                 "sonnet+haiku",
                 None,
                 Some("mid-model"),
                 Some("small-model"),
-                vec![("mid-model", ModelTier::Standard), ("small-model", ModelTier::Fast)],
+                vec![
+                    ("mid-model", ModelTier::Standard),
+                    ("small-model", ModelTier::Fast),
+                ],
             ),
         ];
         for (name, opus, sonnet, haiku, expected) in cases {
@@ -717,6 +772,7 @@ mod tests {
                 tier: Some(ModelTier::Standard),
             }],
             is_current: true,
+            timeout_ms: None,
         };
         let (provider, models) = to_zroutery(&draft, "stepfun".into(), 0, Some(3_000_000));
         assert_eq!(provider.id, "stepfun");
@@ -732,6 +788,61 @@ mod tests {
         assert_eq!(models[0].upstream_model, "step-3.7-flash");
         assert_eq!(models[0].tier, Some(ModelTier::Standard));
         assert_eq!(models[0].exposed_id(), "stepfun-step-3.7-flash");
+    }
+
+    /// The whole production path for a timeout: read the file CC Switch wrote,
+    /// build the draft, convert the draft. The converter alone was already
+    /// covered, which is exactly why the deadline never survived an import.
+    #[test]
+    fn a_configured_api_timeout_survives_read_draft_and_import() {
+        let dir = std::env::temp_dir().join(format!("ccswitch-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("config.json"),
+            r#"{"providers": {"claude": [
+                {"id": "p1", "name": "Relay One", "is_current": true,
+                 "settings_config": {"env": {
+                    "ANTHROPIC_BASE_URL": "https://one.example/v1",
+                    "ANTHROPIC_AUTH_TOKEN": "sk-1",
+                    "ANTHROPIC_DEFAULT_SONNET_MODEL": "m1",
+                    "API_TIMEOUT_MS": "3000000"}}}
+            ]}}"#,
+        )
+        .unwrap();
+        // The variable is the only way in, so the read path is the real one.
+        std::env::set_var("ZROUTERY_CC_SWITCH_DIR", &dir);
+        let providers = read_providers().expect("the temporary installation is readable");
+        std::env::remove_var("ZROUTERY_CC_SWITCH_DIR");
+
+        assert_eq!(providers.len(), 1);
+        // 3,000,000 ms is 3000 s; it is inside the accepted range, so the draft
+        // carries it and the import must not fall back to the default.
+        assert_eq!(providers[0].timeout_ms, Some(3_000_000));
+        let (provider, models) = to_zroutery(
+            &providers[0],
+            "relay-one".into(),
+            0,
+            providers[0].timeout_ms,
+        );
+        assert_eq!(provider.timeout_secs, 3000);
+        assert_eq!(models.len(), 1);
+
+        // A value outside the accepted range is refused rather than clamped:
+        // "effectively forever" is not a deadline, so the default applies.
+        for raw in ["30000000", "0", "-5", "", "soon"] {
+            let env = env_block(json!({
+                "ANTHROPIC_BASE_URL": "https://one.example/v1",
+                "ANTHROPIC_AUTH_TOKEN": "sk-1",
+                "ANTHROPIC_DEFAULT_SONNET_MODEL": "m1",
+                "API_TIMEOUT_MS": raw,
+            }));
+            let draft = provider_from_env("p1".into(), "Relay One".into(), &env, true).unwrap();
+            assert_eq!(draft.timeout_ms, None, "accepted `{raw}`");
+            let (provider, _) = to_zroutery(&draft, "relay-one".into(), 0, draft.timeout_ms);
+            assert_eq!(provider.timeout_secs, 600, "default lost for `{raw}`");
+        }
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
@@ -805,6 +916,7 @@ mod tests {
                 tier: Some(ModelTier::Standard),
             }],
             is_current: false,
+            timeout_ms: None,
         };
         let json = serde_json::to_string(&draft).unwrap();
         assert!(
@@ -829,6 +941,7 @@ mod tests {
                 tier: Some(ModelTier::Standard),
             }],
             is_current: false,
+            timeout_ms: None,
         };
         let preview = CcProviderDraft {
             provider,
@@ -854,6 +967,7 @@ mod tests {
                 tier: Some(ModelTier::Standard),
             }],
             is_current: false,
+            timeout_ms: None,
         };
         let err = validate_draft(&draft).unwrap_err();
         assert!(err.contains("no base url"), "unexpected error: {err}");
@@ -868,6 +982,7 @@ mod tests {
             api_key: None,
             models: vec![],
             is_current: false,
+            timeout_ms: None,
         };
         let err = validate_draft(&draft).unwrap_err();
         assert!(err.contains("no model entries"), "unexpected error: {err}");
@@ -885,6 +1000,7 @@ mod tests {
                 tier: Some(ModelTier::Standard),
             }],
             is_current: false,
+            timeout_ms: None,
         };
         let err = validate_draft(&draft).unwrap_err();
         assert!(
@@ -905,6 +1021,7 @@ mod tests {
                 tier: Some(ModelTier::Standard),
             }],
             is_current: false,
+            timeout_ms: None,
         };
         assert!(validate_draft(&draft).is_ok());
     }
@@ -990,6 +1107,7 @@ mod tests {
                 tier: Some(ModelTier::Standard),
             }],
             is_current: false,
+            timeout_ms: None,
         };
         let (provider, _models) = to_zroutery(&draft, "relay".into(), 0, None);
         assert_ne!(provider.key_ref, "sk-super-secret-key");
@@ -1013,6 +1131,7 @@ mod tests {
                     tier: Some(ModelTier::Standard),
                 }],
                 is_current: i == 0,
+                timeout_ms: None,
             })
             .collect();
 

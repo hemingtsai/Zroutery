@@ -381,7 +381,7 @@ pub async fn ccswitch_import(
             } else {
                 priority.max(10)
             },
-            None,
+            draft.timeout_ms,
         );
         if let Some(key) = draft.api_key.clone() {
             imported_keys.push((provider.key_ref.clone(), key));
