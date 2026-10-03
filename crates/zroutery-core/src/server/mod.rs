@@ -123,8 +123,11 @@ pub struct AppState {
     /// The durable routing trace log. Appended from the same terminal
     /// transition that produces the sample, so the history a future training
     /// run reads is the history this process actually served.
+    ///
+    /// `None` when no state directory is configured, which is the default: no
+    /// durable history at all, rather than history written somewhere implicit.
     #[cfg(feature = "ml")]
-    traces: crate::ml::TraceLog,
+    traces: Option<crate::ml::TraceLog>,
     /// The durable active-model pointer, when the state directory could be
     /// opened. `None` means no model can serve, which is the state a fresh
     /// installation is in and the state a rollback returns to.
@@ -269,35 +272,35 @@ impl AppState {
             // directory rather than the working directory, so a proxy launched
             // from a source checkout cannot write its history into the tree it
             // was launched from.
-            let fallback_dir = std::env::temp_dir().join("zroutery-ml");
-            let state_dir: std::path::PathBuf = if config.ml_routing.state_dir.trim().is_empty() {
-                fallback_dir.clone()
-            } else {
-                // A configured relative path is honoured rather than
-                // second-guessed: the operator pointed it somewhere. Only the
-                // *default* is ever redirected.
-                std::path::PathBuf::from(&config.ml_routing.state_dir)
-            };
-            let traces = match crate::ml::TraceLog::open(&state_dir) {
-                Ok(log) => log,
-                Err(error) => {
-                    tracing::error!(
-                        error = %error,
-                        "the routing trace log could not be opened; traces will not survive this process"
-                    );
-                    crate::ml::TraceLog::open(&fallback_dir).unwrap_or_else(|_| {
-                        unreachable!("a temporary trace directory is always creatable")
+            // Durable ML state is opt-in. With no configured state directory
+            // there is no trace log and no model store at all, rather than one
+            // written somewhere implicit - see `MlRoutingConfig::state_dir` for
+            // why an OS-derived default was a mistake.
+            let (traces, active_models) = if config.ml_routing.has_state_dir() {
+                let state_dir = std::path::PathBuf::from(&config.ml_routing.state_dir);
+                let log = match crate::ml::TraceLog::open(&state_dir) {
+                    Ok(log) => Some(log),
+                    Err(error) => {
+                        tracing::error!(
+                            error = %error,
+                            "the routing trace log could not be opened; \
+                             traces will not survive this process"
+                        );
+                        None
+                    }
+                };
+                let store = crate::ml::ActiveModelStore::open(&state_dir)
+                    .inspect_err(|error| {
+                        tracing::error!(
+                            error = %error,
+                            "the active model store could not be opened; no model can serve"
+                        );
                     })
-                }
+                    .ok();
+                (log, store)
+            } else {
+                (None, None)
             };
-            let active_models = crate::ml::ActiveModelStore::open(&state_dir)
-                .inspect_err(|error| {
-                    tracing::error!(
-                        error = %error,
-                        "the active model store could not be opened; no model can serve"
-                    );
-                })
-                .ok();
             Self::with_ml_routing(
                 config,
                 secrets,
@@ -350,7 +353,7 @@ impl AppState {
         secrets: Arc<dyn SecretStore>,
         attachment: ShadowAttachment,
         ml_routing: crate::ml::MlRouter,
-        traces: crate::ml::TraceLog,
+        traces: Option<crate::ml::TraceLog>,
         active_models: Option<crate::ml::ActiveModelStore>,
     ) -> Self {
         if let Some(store) = active_models.as_ref() {
@@ -396,7 +399,7 @@ impl AppState {
         secrets: Arc<dyn SecretStore>,
         attachment: ShadowAttachment,
         ml_routing: crate::ml::MlRouter,
-        traces: crate::ml::TraceLog,
+        traces: Option<crate::ml::TraceLog>,
         active_models: Option<crate::ml::ActiveModelStore>,
     ) -> Self {
         let log_limit = config.server.log_limit;
@@ -630,8 +633,8 @@ impl AppState {
 
     /// The durable routing trace log.
     #[cfg(feature = "ml")]
-    pub fn traces(&self) -> &crate::ml::TraceLog {
-        &self.traces
+    pub fn traces(&self) -> Option<&crate::ml::TraceLog> {
+        self.traces.as_ref()
     }
 
     /// The learned model's role in serving.

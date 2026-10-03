@@ -614,7 +614,7 @@ pub fn aggregate(policy: &str, records: &[ArmRecord], considered: usize) -> ArmM
 /// Positive deltas favour the candidate except for latency, TTFT and cost,
 /// where negative is better. The sign convention is stated per field rather
 /// than left to the reader.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct PairedDeltas {
     /// Traces where both arms' choices were measurable. Every number below is
     /// over exactly this set, and it is the number to read first.

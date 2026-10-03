@@ -901,9 +901,20 @@ pub struct MlRoutingConfig {
     #[serde(default)]
     pub enabled: bool,
     /// Where the durable trace log and the active-model pointer live, relative
-    /// to the application state directory. One directory for both, because the
-    /// loop reads and writes the same body of data.
-    #[serde(default = "MlRoutingConfig::default_state_dir")]
+    /// to the application state directory.
+    ///
+    /// **Empty by default, and empty means no durable ML state.** This was an
+    /// OS-derived default and it was wrong: every `AppState` in every process
+    /// then opened the same directory, so unrelated instances appended to one
+    /// another's history, and a test run wrote to the developer's real data
+    /// directory. A hidden global directory is not a default, it is a shared
+    /// mutable resource nobody asked for.
+    ///
+    /// A deployment that wants history across restarts sets this explicitly, and
+    /// a deployment that wants a promoted model to survive a restart must. The
+    /// in-memory dataset and the shadow still work either way; only durability
+    /// and promotion are off.
+    #[serde(default)]
     pub state_dir: String,
     /// Probability that a request deliberately tries an eligible candidate other
     /// than the one the model would pick. Zero means no exploration.
@@ -920,7 +931,7 @@ impl Default for MlRoutingConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            state_dir: Self::default_state_dir(),
+            state_dir: String::new(),
             exploration_probability: 0.0,
             exploration_seed: Self::default_exploration_seed(),
         }
@@ -929,35 +940,16 @@ impl Default for MlRoutingConfig {
 
 #[cfg(feature = "ml")]
 impl MlRoutingConfig {
-    /// Where the trace log and the active-model pointer live by default.
-    ///
-    /// Absolute, and derived from the operating system's data directory. A
-    /// relative default would resolve against the process working directory,
-    /// which for a developer run is the crate root — that put a live
-    /// `traces.jsonl` inside `crates/zroutery-core/ml/` and nearly committed it.
-    /// A path that depends on where the binary happened to be launched is not a
-    /// place to keep history.
-    fn default_state_dir() -> String {
-        let base: Option<std::path::PathBuf> = if cfg!(windows) {
-            std::env::var_os("LOCALAPPDATA").map(std::path::PathBuf::from)
-        } else {
-            std::env::var_os("XDG_DATA_HOME")
-                .map(std::path::PathBuf::from)
-                .or_else(|| {
-                    std::env::var_os("HOME")
-                        .map(|home| std::path::PathBuf::from(home).join(".local/share"))
-                })
-        };
-        match base {
-            Some(base) => base.join("zroutery").join("ml").display().to_string(),
-            // No data directory to be found. An empty setting makes the caller
-            // fall back to a process-scoped directory rather than silently
-            // writing into the working directory.
-            None => String::new(),
-        }
-    }
     fn default_exploration_seed() -> u64 {
         crate::ml::learning::TRAINING_DEFAULT_SEED
+    }
+
+    /// Whether durable ML state was asked for.
+    ///
+    /// False means the trace log and the active-model store are not opened at
+    /// all, rather than opened somewhere implicit.
+    pub fn has_state_dir(&self) -> bool {
+        !self.state_dir.trim().is_empty()
     }
 }
 

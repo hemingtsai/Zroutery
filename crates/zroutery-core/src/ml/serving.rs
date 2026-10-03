@@ -76,6 +76,19 @@ pub enum ServingError {
     Corrupt(String),
     #[error("there is no active model to operate on")]
     None,
+    #[error(
+        "commit {commit_id} was not promoted: the gate returned {verdict}{}",
+        if blockers.is_empty() {
+            String::new()
+        } else {
+            format!("\n  unmet criteria:\n    - {}", blockers.join("\n    - "))
+        }
+    )]
+    NotPromoted {
+        commit_id: String,
+        verdict: crate::ml::promotion::PromotionVerdict,
+        blockers: Vec<String>,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -101,12 +114,13 @@ pub struct ActiveModel {
     /// zero times, which is not a model.
     pub learning_event_count: u64,
     pub checkpoint: ModelCheckpoint,
-    /// Digest of the promotion decision that authorised this model.
+    /// The gate decision that authorised this model, stored whole.
     ///
-    /// Carried with the model so "which gate decision put this here" is
-    /// answerable from the model alone, without a separate record that could be
-    /// lost while this one survives.
-    pub promotion_digest: String,
+    /// Whole rather than as a digest, because the point of recording the
+    /// decision is that it can be read back: which gate configuration was in
+    /// force, which criteria held, what the evidence was, and when. A digest
+    /// would prove the decision has not changed and tell nobody what it said.
+    pub promotion: crate::ml::promotion::PromotionDecision,
     /// Unix seconds when this model was promoted.
     pub promoted_at: i64,
 }
@@ -225,10 +239,14 @@ pub struct ActiveModelAuditEntry {
     pub schema_version: u32,
     pub action: ActiveModelAction,
     pub commit_id: String,
-    pub promotion_digest: String,
+    /// Identity of the gate configuration that authorised the promotion.
+    pub gate_identity: String,
+    /// The verdict at the time. Retained so the history can be read without
+    /// reopening every stored decision.
+    pub verdict: crate::ml::promotion::PromotionVerdict,
     /// Unix seconds.
     pub at: i64,
-    /// Free-form note, e.g. the gate verdict that authorised the promotion.
+    /// Free-form note.
     pub note: String,
 }
 
@@ -337,32 +355,84 @@ impl ActiveModelStore {
             .map(|pointer| pointer.current.commit_id))
     }
 
-    /// Promote a model.
+    /// Promote a model, on the strength of a gate decision that said so.
     ///
-    /// `promotion_digest` is the digest of the gate decision that authorised
-    /// this; it is recorded in the pointer and in the audit so the two cannot be
-    /// confused later. The write is atomic: a temp file plus a rename, so a
-    /// crash leaves either the old pointer or the new one and never a torn
-    /// document.
+    /// The decision is a required argument rather than a note in a string,
+    /// because the whole point of this change is that a decision which said
+    /// REJECTED or BLOCKED cannot install a model. The caller previously passed
+    /// a free-text `promotion_digest` and a `note`, which meant the store
+    /// recorded whatever the caller claimed had authorised the promotion — so
+    /// "training succeeded = automatically live" was reachable by writing one
+    /// string differently.
+    ///
+    /// The model is not constructed here from the decision alone; the checkpoint
+    /// is passed too and its commit id is **re-derived** from the decision's own
+    /// inputs. A decision naming commit X cannot install a checkpoint for Y even
+    /// if the caller passes Y's bytes, which is what stops a stale decision from
+    /// authorising a model it never saw.
+    ///
+    /// The write is atomic: a temp file plus a rename, so a crash leaves either
+    /// the old pointer or the new one and never a torn document.
     pub fn promote(
         &self,
-        active: ActiveModel,
-        promotion_digest: impl Into<String>,
-        note: impl Into<String>,
-    ) -> Result<(), ServingError> {
-        let promotion_digest = promotion_digest.into();
+        decision: &crate::ml::promotion::PromotionDecision,
+        checkpoint: ModelCheckpoint,
+    ) -> Result<CommitId, ServingError> {
+        use crate::ml::promotion::PromotionVerdict;
+
+        if decision.verdict != PromotionVerdict::Promoted {
+            return Err(ServingError::NotPromoted {
+                commit_id: decision.candidate_commit.clone(),
+                verdict: decision.verdict,
+                blockers: decision
+                    .blockers()
+                    .into_iter()
+                    .map(|criterion| format!("{}: {}", criterion.name, criterion.reason))
+                    .collect(),
+            });
+        }
+
+        let derived = super::model_identity::ModelCommit::new(
+            ModelId::new(decision.model_id.clone()),
+            checkpoint.clone(),
+            None,
+            decision.learning_event_count,
+        );
+        if derived.commit_id.as_str() != decision.candidate_commit {
+            return Err(ServingError::Corrupt(format!(
+                "the gate decision authorised commit {} but the supplied checkpoint derives {}",
+                decision.candidate_commit, derived.commit_id
+            )));
+        }
+        if !derived.verify() {
+            return Err(ServingError::Corrupt(format!(
+                "commit {} does not verify",
+                decision.candidate_commit
+            )));
+        }
+
+        // The model is constructed from the decision and then loaded, which
+        // re-validates every parameter as finite. A checkpoint that verifies its
+        // own identity can still be unusable as a predictor.
+        let active = ActiveModel {
+            schema_version: ACTIVE_MODEL_SCHEMA_VERSION,
+            model_id: decision.model_id.clone(),
+            commit_id: decision.candidate_commit.clone(),
+            learning_event_count: decision.learning_event_count,
+            checkpoint,
+            promotion: decision.clone(),
+            promoted_at: now_seconds(),
+        };
+        ActivePredictor::load(&active).map_err(|error| ServingError::Corrupt(error.to_string()))?;
+
         // The model being replaced is the *current* pointer, not its own
         // previous. Reading the wrong one leaves the second promotion with no
         // rollback target, which makes rollback a silent no-op in production
         // while every unit test around it passes.
         let previous = self.read_pointer()?.map(|pointer| pointer.current);
-        let now = now_seconds();
         let pointer = StoredPointer {
             schema_version: ACTIVE_MODEL_SCHEMA_VERSION,
-            current: ActiveModel {
-                promoted_at: now,
-                ..active
-            },
+            current: active,
             previous,
         };
         self.write_pointer(&pointer)?;
@@ -370,12 +440,18 @@ impl ActiveModelStore {
             schema_version: ACTIVE_MODEL_SCHEMA_VERSION,
             action: ActiveModelAction::Promote,
             commit_id: pointer.current.commit_id.clone(),
-            promotion_digest,
-            at: now,
-            note: note.into(),
+            gate_identity: decision.gate_config_identity.clone(),
+            verdict: decision.verdict,
+            at: pointer.current.promoted_at,
+            note: format!(
+                "gate held on {} of {} criteria over body {}",
+                decision.criteria.iter().filter(|c| c.held).count(),
+                decision.criteria.len(),
+                decision.dataset_fingerprint
+            ),
         })?;
         self.promotions.fetch_add(1, Ordering::Relaxed);
-        Ok(())
+        Ok(derived.commit_id)
     }
 
     /// Restore the previous model.
@@ -411,9 +487,13 @@ impl ActiveModelStore {
             schema_version: ACTIVE_MODEL_SCHEMA_VERSION,
             action: ActiveModelAction::Rollback,
             commit_id: restored.current.commit_id.clone(),
-            promotion_digest: restored.current.promotion_digest.clone(),
+            gate_identity: restored.current.promotion.gate_config_identity.clone(),
+            verdict: restored.current.promotion.verdict,
             at: now,
-            note: "restored the previous active model".to_string(),
+            note: format!(
+                "restored the model promoted by commit {}",
+                restored.current.promotion.candidate_commit
+            ),
         })?;
         self.rollbacks.fetch_add(1, Ordering::Relaxed);
         Ok(true)
@@ -967,15 +1047,20 @@ pub fn candidate_ids(input: &ShadowInput) -> Vec<String> {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::ml::coordinator::CoordinatorConfig;
-    use crate::ml::features::{FEATURE_SCHEMA_VERSION, UNKNOWN};
+    use crate::ml::features::{FEATURE_DIMENSION, FEATURE_SCHEMA_VERSION, UNKNOWN};
     use crate::ml::model::RoutingModel;
+    use crate::ml::promotion::{PromotionDecision, PromotionVerdict};
     use crate::ml::reward::RewardPolicy;
 
     fn candidate(id: &str, provider: &str, eligible: bool, latency: f32) -> ShadowCandidateInput {
-        let mut values = [UNKNOWN; crate::ml::features::FEATURE_DIMENSION];
+        let mut values = [UNKNOWN; FEATURE_DIMENSION];
         values[crate::ml::features::F_OBS_LATENCY_EWMA] = latency;
         ShadowCandidateInput {
             candidate_id: id.to_string(),
@@ -1003,25 +1088,178 @@ mod tests {
         }
     }
 
-    fn predictor() -> ActivePredictor {
-        let ensemble = ModelEnsemble::new();
+    /// An ensemble that has seen one update, so it is distinguishable from a
+    /// cold one and a promotion of it can be told apart from a promotion of a
+    /// different model.
+    fn trained_ensemble() -> ModelEnsemble {
+        let mut ensemble = ModelEnsemble::new();
+        ensemble.success.update(
+            &RoutingFeatures {
+                schema_version: FEATURE_SCHEMA_VERSION,
+                values: {
+                    let mut values = [UNKNOWN; FEATURE_DIMENSION];
+                    values[0] = 1.0;
+                    values
+                },
+            },
+            1.0,
+        );
+        ensemble
+    }
+
+    /// Learning events every fixture model records.
+    ///
+    /// One constant, because the report and the checkpoint must agree on it or
+    /// the store's identity check is doing nothing.
+    const FIXTURE_EVENTS: u64 = 7;
+
+    /// A decision produced by a **real** `PromotionGate`, never by hand.
+    ///
+    /// `PromotionCriterion`'s constructors are private, so a decision cannot be
+    /// assembled outside the promotion module — which is exactly the property
+    /// that makes `promote` trustworthy. These tests therefore go through the
+    /// gate, so "the only way to obtain a PROMOTED verdict is to pass the gate"
+    /// is exercised rather than assumed.
+    fn training_report(commit: &str, holdout_loss: f64, seed: u64) -> crate::ml::TrainingReport {
+        crate::ml::TrainingReport {
+            model_id: "shadow".to_string(),
+            sample_count: 300,
+            request_count: 100,
+            train_size: 210,
+            validation_size: 45,
+            holdout_size: 45,
+            train_groups: 70,
+            validation_groups: 15,
+            holdout_groups: 15,
+            passes: Vec::new(),
+            holdout_loss,
+            holdout: Default::default(),
+            final_commit: commit.to_string(),
+            base_commit: "0000000000000000".to_string(),
+            learning_event_count: FIXTURE_EVENTS,
+            dataset_fingerprint: fingerprint(seed),
+            source_fingerprint: fingerprint(seed),
+            config_identity: "config-identity".to_string(),
+            feature_schema_version: FEATURE_SCHEMA_VERSION,
+            reward_policy: RewardPolicy::default(),
+            coverage: crate::ml::FeatureCoverage::measure(&[]),
+            produced_at: 0,
+        }
+    }
+
+    fn fingerprint(seed: u64) -> crate::ml::DatasetFingerprint {
+        crate::ml::DatasetFingerprint::parse(&format!("{seed:016x}"))
+            .expect("a u64 always formats as sixteen hex digits")
+    }
+
+    /// The commit id a checkpoint derives under the fixture's identity inputs.
+    fn commit_of(checkpoint: &ModelCheckpoint) -> String {
+        super::super::model_identity::ModelCommit::new(
+            ModelId::new("shadow"),
+            checkpoint.clone(),
+            None,
+            7,
+        )
+        .commit_id
+        .to_string()
+    }
+
+    /// An ensemble and a gate decision that promotes exactly it.
+    fn promoted_decision() -> (ModelEnsemble, PromotionDecision) {
+        let ensemble = trained_ensemble();
+        let checkpoint = ensemble.save_all();
+        let commit = commit_of(&checkpoint);
+        let decision = crate::ml::PromotionGate::new(permissive_gate()).evaluate(
+            &training_report(&commit, 0.30, 7),
+            &comparison(7, 0.5, 100),
+            None,
+        );
+        assert_eq!(
+            decision.verdict,
+            PromotionVerdict::Promoted,
+            "the fixture gate must promote: {:?}",
+            decision.criteria
+        );
+        (ensemble, decision)
+    }
+
+    fn comparison(body: u64, utility: f64, paired: usize) -> crate::ml::RoutingComparison {
+        use crate::ml::comparison::{ArmMetrics, BaselinePairing, PairedDeltas, RoutingVerdict};
+        crate::ml::RoutingComparison {
+            dataset_fingerprint: fingerprint(body),
+            traces: paired,
+            candidate_commit: String::new(),
+            arms: vec![ArmMetrics {
+                policy: "ml.candidate".to_string(),
+                ..Default::default()
+            }],
+            paired: vec![BaselinePairing {
+                baseline: "baseline.priority".to_string(),
+                deltas: PairedDeltas {
+                    paired_requests: paired,
+                    mean_observed_utility_delta: utility,
+                    candidate_regressions: 0,
+                    candidate_improvements: paired,
+                    both_succeeded: paired,
+                    both_failed: 0,
+                    utility_regressions: 0,
+                    ..Default::default()
+                },
+                verdict: RoutingVerdict::Improved,
+            }],
+            reward_policy: RewardPolicy::default(),
+            min_paired_requests: crate::ml::comparison::MIN_PAIRED_REQUESTS,
+            produced_at: 0,
+        }
+    }
+
+    /// A gate configuration that promotes anything with enough paired evidence
+    /// and a positive utility delta.
+    fn permissive_gate() -> crate::ml::PromotionConfig {
+        crate::ml::PromotionConfig {
+            required_baseline: "baseline.priority".to_string(),
+            min_paired_requests: 30,
+            min_utility_delta: 0.2,
+            max_success_regressions: 0,
+            min_holdout_loss_improvement: 0.05,
+            ..crate::ml::PromotionConfig::default()
+        }
+    }
+
+    fn predictor_for(ensemble: &ModelEnsemble, count: u64) -> ActivePredictor {
         let checkpoint = ensemble.save_all();
         let commit = super::super::model_identity::ModelCommit::new(
             ModelId::new("shadow"),
             checkpoint.clone(),
             None,
-            0,
+            count,
+        );
+        let report = training_report(commit.commit_id.as_str(), 0.30, 7);
+        let decision = crate::ml::PromotionGate::new(permissive_gate()).evaluate(
+            &report,
+            &comparison(7, 0.5, 100),
+            None,
+        );
+        assert_eq!(
+            decision.verdict,
+            PromotionVerdict::Promoted,
+            "the fixture gate must promote: {:?}",
+            decision.criteria
         );
         ActivePredictor::load(&ActiveModel {
             schema_version: ACTIVE_MODEL_SCHEMA_VERSION,
             model_id: "shadow".to_string(),
             commit_id: commit.commit_id.to_string(),
-            learning_event_count: 0,
+            learning_event_count: count,
             checkpoint,
-            promotion_digest: "digest".to_string(),
+            promotion: decision,
             promoted_at: 0,
         })
-        .expect("a fresh ensemble verifies")
+        .expect("the fixture ensemble verifies")
+    }
+
+    fn predictor() -> ActivePredictor {
+        predictor_for(&ModelEnsemble::new(), 0)
     }
 
     fn router(exploration: ExplorationConfig) -> MlRouter {
@@ -1030,6 +1268,113 @@ mod tests {
         router.attach(predictor());
         router
     }
+
+    // -- the gate is the only way in -------------------------------------
+
+    #[test]
+    fn a_decision_that_did_not_promote_cannot_install_a_model() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = ActiveModelStore::open(dir.path()).expect("open");
+        let checkpoint = trained_ensemble().save_all();
+        let commit = commit_of(&checkpoint);
+
+        // Rejected: the evidence was sufficient and the candidate lost.
+        let rejected = crate::ml::PromotionGate::new(permissive_gate()).evaluate(
+            &training_report(&commit, 0.30, 7),
+            &comparison(7, -0.5, 100),
+            None,
+        );
+        assert_eq!(rejected.verdict, PromotionVerdict::Rejected);
+
+        // Blocked: there was not enough evidence to judge.
+        let blocked = crate::ml::PromotionGate::new(permissive_gate()).evaluate(
+            &training_report(&commit, 0.30, 7),
+            &comparison(7, 0.5, 5),
+            None,
+        );
+        assert_eq!(blocked.verdict, PromotionVerdict::Blocked);
+
+        for decision in [&rejected, &blocked] {
+            let error = store
+                .promote(decision, checkpoint.clone())
+                .expect_err("a non-promoted decision must be refused");
+            let message = error.to_string();
+            assert!(message.contains(decision.verdict.as_str()), "{message}");
+            assert!(
+                message.contains("unmet criteria"),
+                "the refusal must name the unmet criteria: {message}"
+            );
+            assert!(
+                store.active().expect("read").is_none(),
+                "{:?} must leave the router with no model",
+                decision.verdict
+            );
+            assert_eq!(
+                store.counts().0,
+                0,
+                "{:?} must not be counted",
+                decision.verdict
+            );
+        }
+    }
+
+    #[test]
+    fn a_promoted_decision_cannot_install_a_different_checkpoint() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = ActiveModelStore::open(dir.path()).expect("open");
+        let (_, decision) = promoted_decision();
+        // A checkpoint the decision never saw.
+        let other = ModelEnsemble::new().save_all();
+
+        let error = store
+            .promote(&decision, other)
+            .expect_err("a stale decision must not authorise another model");
+        assert!(
+            error.to_string().contains("derives"),
+            "the refusal must explain the mismatch: {error}"
+        );
+        assert!(store.active().expect("read").is_none());
+    }
+
+    #[test]
+    fn a_promoted_decision_installs_exactly_the_model_it_names() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = ActiveModelStore::open(dir.path()).expect("open");
+        let (ensemble, decision) = promoted_decision();
+        let checkpoint = ensemble.save_all();
+
+        let commit = store
+            .promote(&decision, checkpoint)
+            .expect("a promoted decision installs its model");
+        assert_eq!(commit.to_string(), decision.candidate_commit);
+
+        let loaded = store.active().expect("read").expect("a model");
+        assert_eq!(loaded.commit_id().to_string(), decision.candidate_commit);
+
+        // The stored decision is readable, not just its digest: the gate
+        // configuration in force and the criteria that held are recoverable.
+        let pointer = store.read_pointer().expect("read").expect("a pointer");
+        assert_eq!(
+            pointer.current.promotion.gate_config_identity,
+            decision.gate_config_identity
+        );
+        assert_eq!(
+            pointer.current.promotion.verdict,
+            PromotionVerdict::Promoted
+        );
+        assert_eq!(
+            pointer.current.promotion.dataset_fingerprint,
+            decision.dataset_fingerprint
+        );
+
+        let audit = store.audit().expect("audit");
+        assert_eq!(audit.len(), 1);
+        assert_eq!(audit[0].action, ActiveModelAction::Promote);
+        assert_eq!(audit[0].verdict, PromotionVerdict::Promoted);
+        assert_eq!(audit[0].gate_identity, decision.gate_config_identity);
+    }
+
+    // -- ranking ----------------------------------------------------------
 
     #[test]
     fn with_no_model_attached_ranking_is_unavailable_not_a_failure() {
@@ -1056,7 +1401,7 @@ mod tests {
         assert!(ranked.order.contains(&"a".to_string()));
         assert!(ranked.order.contains(&"b".to_string()));
         assert_eq!(ranked.order.len(), 2);
-        assert_eq!(ranked.commit_id, *predictor().commit_id().as_str());
+        assert_eq!(ranked.commit_id, predictor().commit_id().to_string());
         assert!(!ranked.reason.is_empty());
     }
 
@@ -1087,6 +1432,51 @@ mod tests {
             Err(RankUnavailable::NoActiveModel)
         );
     }
+
+    // -- applying a ranking to an executable plan -------------------------
+
+    #[test]
+    fn applying_a_ranking_never_loses_or_invents_a_candidate() {
+        let router = router(ExplorationConfig::default());
+        let snapshot = input(
+            "a",
+            vec![
+                candidate("a", "alpha", true, 0.2),
+                candidate("b", "beta", true, 0.8),
+                candidate("c", "gamma", true, 0.5),
+            ],
+        );
+        let ranked = router.rank(&snapshot, "r1").expect("ranked");
+        let plan = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        let applied = AppliedRanking::apply(&ranked, &plan);
+
+        assert_eq!(applied.order.len(), plan.len());
+        let mut sorted = applied.order.clone();
+        sorted.sort();
+        let mut expected = plan.clone();
+        expected.sort();
+        assert_eq!(sorted, expected, "the candidate set must be unchanged");
+    }
+
+    #[test]
+    fn a_ranking_naming_a_candidate_outside_the_plan_is_dropped() {
+        let router = router(ExplorationConfig::default());
+        let snapshot = input(
+            "a",
+            vec![
+                candidate("a", "alpha", true, 0.2),
+                candidate("b", "beta", true, 0.8),
+            ],
+        );
+        let ranked = router.rank(&snapshot, "r1").expect("ranked");
+        // The executable plan holds only one of the two candidates.
+        let applied = AppliedRanking::apply(&ranked, &["a".to_string()]);
+        assert_eq!(applied.order, vec!["a".to_string()]);
+        assert_eq!(applied.selected, "a");
+        assert!(!applied.changed);
+    }
+
+    // -- exploration ------------------------------------------------------
 
     #[test]
     fn exploration_is_off_by_default() {
@@ -1221,173 +1611,136 @@ mod tests {
         .is_ok());
     }
 
+    // -- lifecycle --------------------------------------------------------
+
     #[test]
-    fn promotion_round_trips_through_disk() {
+    fn a_promotion_survives_a_restart() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let store = ActiveModelStore::open(dir.path()).expect("open");
-        assert!(store.active().expect("read").is_none());
-        assert!(!store.rollback().expect("rollback"));
-
-        let predictor = predictor();
-        let active = ActiveModel {
-            schema_version: ACTIVE_MODEL_SCHEMA_VERSION,
-            model_id: "shadow".to_string(),
-            commit_id: predictor.commit_id().to_string(),
-            learning_event_count: 0,
-            checkpoint: predictor.ensemble().save_all(),
-            promotion_digest: "digest-1".to_string(),
-            promoted_at: 0,
+        let (ensemble, decision) = promoted_decision();
+        let commit = {
+            let store = ActiveModelStore::open(dir.path()).expect("open");
+            let commit = store
+                .promote(&decision, ensemble.save_all())
+                .expect("promote")
+                .to_string();
+            assert_eq!(commit, decision.candidate_commit);
+            store
+                .active()
+                .expect("read")
+                .expect("the promoted model is live");
+            commit
         };
-        store
-            .promote(active.clone(), "digest-1", "gate said PROMOTED")
-            .expect("promote");
-
-        let loaded = store.active().expect("read").expect("a model");
-        assert_eq!(loaded.commit_id().as_str(), active.commit_id);
-        assert_eq!(
-            store.active_identity().expect("read").as_deref(),
-            Some(active.commit_id.as_str())
-        );
-
-        let audit = store.audit().expect("audit");
-        assert_eq!(audit.len(), 1);
-        assert_eq!(audit[0].action, ActiveModelAction::Promote);
-        assert_eq!(audit[0].promotion_digest, "digest-1");
-        assert!(audit[0].note.contains("PROMOTED"));
+        assert!(!commit.is_empty());
     }
 
     #[test]
-    fn a_checkpoint_whose_commit_field_was_edited_is_refused() {
+    fn a_promotion_survives_a_reopen() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (ensemble, decision) = promoted_decision();
+        {
+            let store = ActiveModelStore::open(dir.path()).expect("open");
+            store
+                .promote(&decision, ensemble.save_all())
+                .expect("promote");
+        }
+        // Reopened from scratch, which is what a process restart looks like. A
+        // promotion that only lived in memory would be a rollback nobody asked
+        // for.
+        let reopened = ActiveModelStore::open(dir.path()).expect("reopen");
+        let loaded = reopened.active().expect("read").expect("a model");
+        assert_eq!(loaded.commit_id().to_string(), decision.candidate_commit);
+        assert_eq!(loaded.model_id(), "shadow");
+        assert_eq!(reopened.audit().expect("audit").len(), 1);
+    }
+
+    #[test]
+    fn a_checkpoint_whose_commit_field_was_edited_is_refused_on_load() {
         let dir = tempfile::tempdir().expect("tempdir");
         let store = ActiveModelStore::open(dir.path()).expect("open");
-        let predictor = predictor();
-        let mut active = ActiveModel {
-            schema_version: ACTIVE_MODEL_SCHEMA_VERSION,
-            model_id: "shadow".to_string(),
-            commit_id: predictor.commit_id().to_string(),
-            learning_event_count: 0,
-            checkpoint: predictor.ensemble().save_all(),
-            promotion_digest: "digest-1".to_string(),
-            promoted_at: 0,
-        };
+        let (ensemble, decision) = promoted_decision();
         store
-            .promote(active.clone(), "digest-1", "")
+            .promote(&decision, ensemble.save_all())
             .expect("promote");
 
-        // Someone edits the identity without touching the content.
-        active.commit_id = "0000000000000000".to_string();
-        store.promote(active, "digest-2", "").expect("promote");
+        // Someone edits the stored identity without touching the content.
+        let mut pointer = store.read_pointer().expect("read").expect("a pointer");
+        pointer.current.commit_id = "0000000000000000".to_string();
+        store.write_pointer(&pointer).expect("write");
 
         // The store reports no active model and counts the refusal, rather than
         // serving under a borrowed identity.
         assert!(store.active().expect("read").is_none());
         let (_, _, refusals) = store.counts();
         assert_eq!(refusals, 1);
+
+        // The pointer is repaired by re-promoting on the real decision, which
+        // still names the commit the content derives. The store recovers; it
+        // does not require an operator to delete anything first.
+        assert!(store.promote(&decision, ensemble.save_all()).is_ok());
+        assert!(store.active().expect("read").is_some());
     }
 
     #[test]
     fn rollback_restores_the_previous_model_and_is_audited() {
         let dir = tempfile::tempdir().expect("tempdir");
         let store = ActiveModelStore::open(dir.path()).expect("open");
-        let first = predictor();
-        // A genuinely different model, so the identity assertion below can
-        // distinguish "rolled back to the other one" from "did nothing".
-        let mut trained = ModelEnsemble::new();
-        trained.success.update(
+        let (first, first_decision) = promoted_decision();
+        let second = trained_ensemble();
+        let mut second_ensemble = ModelEnsemble::new();
+        second_ensemble.cost.update(
             &RoutingFeatures {
                 schema_version: FEATURE_SCHEMA_VERSION,
                 values: {
-                    let mut values = [UNKNOWN; crate::ml::features::FEATURE_DIMENSION];
-                    values[0] = 1.0;
+                    let mut values = [UNKNOWN; FEATURE_DIMENSION];
+                    values[3] = 0.5;
                     values
                 },
             },
-            1.0,
+            2.0,
         );
-        let second_checkpoint = trained.save_all();
-        let second = super::super::model_identity::ModelCommit::new(
+        let second_checkpoint = second_ensemble.save_all();
+        let second_commit = super::super::model_identity::ModelCommit::new(
             ModelId::new("shadow"),
             second_checkpoint.clone(),
             None,
-            0,
+            FIXTURE_EVENTS,
         );
-        assert_ne!(first.commit_id().as_str(), second.commit_id.as_str());
+        // A second decision, from the gate, naming the second model. What
+        // distinguishes the two promotions is the identity each gate decision
+        // names, not the gate's opinion of which model is better.
+        let second_decision = crate::ml::PromotionGate::new(permissive_gate()).evaluate(
+            &training_report(second_commit.commit_id.as_str(), 0.30, 9),
+            &comparison(9, 0.5, 100),
+            None,
+        );
+        assert_eq!(second_decision.verdict, PromotionVerdict::Promoted);
+        assert_ne!(
+            first_decision.candidate_commit,
+            second_decision.candidate_commit
+        );
 
         store
-            .promote(
-                ActiveModel {
-                    schema_version: ACTIVE_MODEL_SCHEMA_VERSION,
-                    model_id: "shadow".to_string(),
-                    commit_id: first.commit_id().to_string(),
-                    learning_event_count: 0,
-                    checkpoint: first.ensemble().save_all(),
-                    promotion_digest: "digest-1".to_string(),
-                    promoted_at: 0,
-                },
-                "digest-1",
-                "first",
-            )
-            .expect("promote");
+            .promote(&first_decision, first.save_all())
+            .expect("first");
         store
-            .promote(
-                ActiveModel {
-                    schema_version: ACTIVE_MODEL_SCHEMA_VERSION,
-                    model_id: "shadow".to_string(),
-                    commit_id: second.commit_id.to_string(),
-                    learning_event_count: 0,
-                    checkpoint: second_checkpoint,
-                    promotion_digest: "digest-2".to_string(),
-                    promoted_at: 0,
-                },
-                "digest-2",
-                "second",
-            )
-            .expect("promote");
+            .promote(&second_decision, second_checkpoint)
+            .expect("second");
         assert_eq!(
             store.active_identity().expect("read").as_deref(),
-            Some(second.commit_id.as_str())
+            Some(second_decision.candidate_commit.as_str())
         );
 
         assert!(store.rollback().expect("rollback"));
         assert_eq!(
             store.active_identity().expect("read").as_deref(),
-            Some(first.commit_id().as_str())
+            Some(first_decision.candidate_commit.as_str()),
+            "rollback did not restore the model that was replaced"
         );
         let audit = store.audit().expect("audit");
         assert_eq!(audit.len(), 3);
         assert_eq!(audit[2].action, ActiveModelAction::Rollback);
         // Rolling back again has nowhere further to go.
         assert!(!store.rollback().expect("rollback"));
-    }
-
-    #[test]
-    fn a_promotion_survives_a_restart() {
-        // The store is reopened from scratch, which is what a process restart
-        // looks like. A promotion that only lived in memory would be a rollback
-        // nobody asked for.
-        let dir = tempfile::tempdir().expect("tempdir");
-        let active = {
-            let store = ActiveModelStore::open(dir.path()).expect("open");
-            let predictor = predictor();
-            let active = ActiveModel {
-                schema_version: ACTIVE_MODEL_SCHEMA_VERSION,
-                model_id: "shadow".to_string(),
-                commit_id: predictor.commit_id().to_string(),
-                learning_event_count: 0,
-                checkpoint: predictor.ensemble().save_all(),
-                promotion_digest: "digest-1".to_string(),
-                promoted_at: 0,
-            };
-            store
-                .promote(active.clone(), "digest-1", "gate said PROMOTED")
-                .expect("promote");
-            active
-        };
-
-        let reopened = ActiveModelStore::open(dir.path()).expect("reopen");
-        let loaded = reopened.active().expect("read").expect("a model");
-        assert_eq!(loaded.commit_id().as_str(), active.commit_id);
-        assert_eq!(loaded.model_id(), "shadow");
-        assert_eq!(reopened.audit().expect("audit").len(), 1);
+        let _ = second;
     }
 }

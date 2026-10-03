@@ -111,6 +111,12 @@ pub enum PromotionVerdict {
     Blocked,
 }
 
+impl std::fmt::Display for PromotionVerdict {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 impl PromotionVerdict {
     pub fn as_str(self) -> &'static str {
         match self {
@@ -210,6 +216,15 @@ impl PromotionConfig {
 pub struct PromotionDecision {
     pub verdict: PromotionVerdict,
     pub candidate_commit: String,
+    /// The model the decision names, and the number of learning events it
+    /// records.
+    ///
+    /// Carried because both are inputs to the commit id. A decision that did not
+    /// carry them could not be checked against a checkpoint by the store that
+    /// installs it, which would leave the store trusting the id it was handed
+    /// rather than re-deriving it.
+    pub model_id: String,
+    pub learning_event_count: u64,
     /// The body the evidence was computed over, i.e. the whole body the model
     /// was trained *from*. This is the identity a reader needs to reproduce the
     /// decision.
@@ -521,6 +536,8 @@ impl PromotionGate {
         PromotionDecision {
             verdict,
             candidate_commit: training.final_commit.clone(),
+            model_id: training.model_id.clone(),
+            learning_event_count: training.learning_event_count,
             dataset_fingerprint: training.source_fingerprint.clone(),
             fitted_partition_fingerprint: training.dataset_fingerprint.clone(),
             holdout_loss: training.holdout_loss,
@@ -568,6 +585,7 @@ mod tests {
 
     fn report(dataset: DatasetFingerprint, holdout_loss: f64) -> TrainingReport {
         TrainingReport {
+            model_id: "shadow".to_string(),
             sample_count: 120,
             request_count: 40,
             train_size: 84,
