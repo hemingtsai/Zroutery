@@ -1357,7 +1357,9 @@ mod tests {
         .unwrap();
         assert_eq!(req.parallel_tool_use, None);
         let encoded = encode_request(&req, "claude").unwrap();
-        assert!(encoded["tool_choice"].get("disable_parallel_tool_use").is_none());
+        assert!(encoded["tool_choice"]
+            .get("disable_parallel_tool_use")
+            .is_none());
     }
 
     #[test]
