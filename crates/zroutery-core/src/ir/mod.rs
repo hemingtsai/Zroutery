@@ -12,6 +12,7 @@ pub use response::{ResponseStatus, ResponseStore, StoredResponse};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use std::collections::BTreeMap;
 
 /// A capability a model may support and a request may require.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -419,6 +420,11 @@ pub struct ChatRequest {
     pub stop_sequences: Vec<String>,
     pub stream: bool,
     pub tools: Vec<ToolDef>,
+    /// Per-tool `strict` schema flags from the OpenAI dialect, keyed by tool
+    /// name.  An absent key means the client stated no preference; `false` is
+    /// an explicit non-strict schema, which is not the same as saying nothing.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub tool_strict: BTreeMap<String, bool>,
     pub tool_choice: Option<ToolChoice>,
     pub thinking: Option<ThinkingConfig>,
     pub metadata_user: Option<String>,
@@ -448,6 +454,7 @@ impl ChatRequest {
             stop_sequences: Vec::new(),
             stream: false,
             tools: Vec::new(),
+            tool_strict: BTreeMap::new(),
             tool_choice: None,
             thinking: None,
             metadata_user: None,

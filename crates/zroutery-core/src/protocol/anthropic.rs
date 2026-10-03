@@ -406,6 +406,14 @@ pub fn encode_request(req: &ChatRequest, upstream_model: &str) -> Result<Value> 
     if req.stream {
         body.insert("stream".into(), json!(true));
     }
+    if req.tool_strict.values().any(|strict| *strict) {
+        // Anthropic tool definitions carry no strict-schema flag, so
+        // forwarding the call would silently drop the client's requirement
+        // that the model obey the schema exactly.
+        return Err(Error::invalid(
+            "strict tool schemas are not representable in the anthropic dialect",
+        ));
+    }
     if !req.tools.is_empty() {
         body.insert(
             "tools".into(),
@@ -1300,6 +1308,33 @@ mod tests {
         let body = encode_request(&req, "m").unwrap();
         assert_eq!(body["max_tokens"], DEFAULT_MAX_TOKENS);
         assert!(body.get("system").is_none());
+    }
+
+    #[test]
+    fn strict_tool_schema_is_rejected_instead_of_dropped() {
+        let req = crate::protocol::openai::decode_request(json!({
+            "model": "m",
+            "messages": [{"role": "user", "content": "q"}],
+            "tools": [{"type": "function", "function": {"name": "f", "strict": true,
+                       "parameters": {"type": "object"}}}]
+        }))
+        .unwrap();
+        let err = encode_request(&req, "claude").unwrap_err();
+        assert!(
+            err.to_string().contains("strict"),
+            "the strict requirement must not be dropped silently: {err}"
+        );
+
+        // An explicitly non-strict tool is ordinary and still encodes.
+        let relaxed = crate::protocol::openai::decode_request(json!({
+            "model": "m",
+            "messages": [{"role": "user", "content": "q"}],
+            "tools": [{"type": "function", "function": {"name": "f", "strict": false,
+                       "parameters": {"type": "object"}}}]
+        }))
+        .unwrap();
+        let body = encode_request(&relaxed, "claude").unwrap();
+        assert_eq!(body["tools"][0]["name"], "f");
     }
 
     #[test]
