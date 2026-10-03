@@ -287,3 +287,110 @@ fn normal_stream_stop_still_reports_completed() {
     assert!(payload["response"]["incomplete_details"].is_null());
     assert_eq!(payload["response"]["output"][0]["status"], "completed");
 }
+
+// --------------------------------------------------------------- RSP-05
+
+fn streamed_output_items(frames: &[SseFrame]) -> Vec<Value> {
+    let terminal = frames
+        .iter()
+        .find(|f| {
+            matches!(
+                f.event.as_deref(),
+                Some("response.completed") | Some("response.incomplete")
+            )
+        })
+        .map(frame_payload)
+        .expect("terminal frame");
+    terminal["response"]["output"].as_array().unwrap().clone()
+}
+
+#[test]
+fn streamed_thinking_signature_survives_replay() {
+    let frames = frames_for(&[
+        StreamEvent::Start {
+            id: "resp_1".into(),
+            model: "m".into(),
+            usage: Usage::default(),
+        },
+        StreamEvent::ThinkingDelta {
+            index: 0,
+            text: "reasoning summary".into(),
+        },
+        StreamEvent::ThinkingSignature {
+            index: 0,
+            signature: "sig-abc".into(),
+        },
+        StreamEvent::Stop {
+            stop_reason: StopReason::EndTurn,
+            stop_sequence: None,
+            usage: Usage::default(),
+        },
+    ]);
+
+    let items = streamed_output_items(&frames);
+    let reasoning = items
+        .iter()
+        .find(|item| item["type"] == "reasoning")
+        .expect("reasoning item");
+    assert_eq!(reasoning["summary"][0]["text"], "reasoning summary");
+    assert!(
+        reasoning["encrypted_content"].is_string(),
+        "streamed reasoning must carry its signature: {reasoning}"
+    );
+    let done = frames
+        .iter()
+        .filter(|f| f.event.as_deref() == Some("response.output_item.done"))
+        .map(frame_payload)
+        .find(|payload| payload["item"]["type"] == "reasoning")
+        .expect("reasoning output_item.done");
+    assert_eq!(
+        done["item"]["encrypted_content"],
+        reasoning["encrypted_content"]
+    );
+
+    // Feeding the streamed output back as the next turn's input must restore
+    // the signature, not an empty one.
+    let body = json!({"model": "m", "input": [reasoning.clone()]});
+    let req = decode_request(body).unwrap();
+    match &req.messages[0].content[0] {
+        ContentBlock::Thinking { text, signature } => {
+            assert_eq!(text, "reasoning summary");
+            assert_eq!(signature.as_deref(), Some("sig-abc"));
+        }
+        other => panic!("expected thinking block, got {other:?}"),
+    }
+}
+
+#[test]
+fn streamed_redacted_thinking_survives_replay() {
+    let frames = frames_for(&[
+        StreamEvent::Start {
+            id: "resp_1".into(),
+            model: "m".into(),
+            usage: Usage::default(),
+        },
+        StreamEvent::RedactedThinking {
+            index: 0,
+            data: "opaque-blob".into(),
+        },
+        StreamEvent::Stop {
+            stop_reason: StopReason::EndTurn,
+            stop_sequence: None,
+            usage: Usage::default(),
+        },
+    ]);
+
+    let items = streamed_output_items(&frames);
+    let reasoning = items
+        .iter()
+        .find(|item| item["type"] == "reasoning")
+        .expect("redacted reasoning item");
+    assert!(reasoning["encrypted_content"].is_string());
+
+    let body = json!({"model": "m", "input": [reasoning.clone()]});
+    let req = decode_request(body).unwrap();
+    match &req.messages[0].content[0] {
+        ContentBlock::RedactedThinking { data } => assert_eq!(data, "opaque-blob"),
+        other => panic!("expected redacted thinking block, got {other:?}"),
+    }
+}
