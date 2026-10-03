@@ -158,6 +158,23 @@ pub async fn clear_provider_key(
     Ok(refreshed(&app, &desktop).await)
 }
 
+/// Remove a provider, its models and the credential only it referenced.
+///
+/// The backend reads the provider's real `key_ref` before changing the
+/// configuration, so a custom reference is cleared instead of the
+/// name-derived guess, and a reference another provider still holds is left
+/// alone. A credential that cannot be removed is reported on the returned
+/// snapshot rather than swallowed.
+#[tauri::command]
+pub async fn remove_provider(
+    app: AppHandle,
+    desktop: State<'_, Arc<Desktop>>,
+    provider_id: String,
+) -> Cmd<Snapshot> {
+    desktop.remove_provider(&provider_id).await?;
+    Ok(refreshed(&app, &desktop).await)
+}
+
 /// Ask a provider what credit is left. The stored answer, including a failure,
 /// comes back in the snapshot.
 #[tauri::command]

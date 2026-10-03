@@ -12,7 +12,9 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex as AsyncMutex;
 use zroutery_core::billing::{Balance, Cost};
 use zroutery_core::budget::{Budget, BudgetPeriod, BudgetScope};
-use zroutery_core::config::{AppConfig, ConfigIssue, IssueSeverity, RoutingStrategy, ServerConfig};
+use zroutery_core::config::{
+    AppConfig, ConfigIssue, IssueSeverity, RoutingStrategy, SecretStore, ServerConfig,
+};
 use zroutery_core::election::Election;
 use zroutery_core::router::ModelHealth;
 use zroutery_core::server::{AppState, ServerHandle};
@@ -469,6 +471,65 @@ impl Desktop {
         self.start().await
     }
 
+    /// Remove a provider, its models and the credential only it used.
+    ///
+    /// The real `key_ref` is captured before the configuration changes, so a
+    /// custom reference is cleared instead of a guessed `provider:{id}`. A
+    /// reference another provider still holds is left alone, and a delete that
+    /// failed comes back as a warning on the next snapshot rather than a
+    /// silent success.
+    ///
+    /// Returns the warning when the credential could not be removed.
+    pub async fn remove_provider(&self, provider_id: &str) -> Result<Option<String>, String> {
+        let _migration = self.migration.lock().await;
+        let previous = self.core.config();
+        let provider = previous
+            .provider(provider_id)
+            .ok_or_else(|| format!("unknown provider `{provider_id}`"))?;
+        let removed_key_ref = provider.key_ref.clone();
+
+        let mut next = (*previous).clone();
+        next.providers.retain(|p| p.id != provider_id);
+        next.models.retain(|m| m.provider_id != provider_id);
+
+        let orphaned = if removed_key_ref.trim().is_empty() {
+            // No credential to look after.
+            None
+        } else if next.providers.iter().any(|p| p.key_ref == removed_key_ref) {
+            // A reference another provider still holds is not ours to delete:
+            // it may be deliberate sharing, and removing it would break the
+            // provider that stays.
+            tracing::info!(
+                "provider `{provider_id}` removed; `{removed_key_ref}` is still used by another provider"
+            );
+            None
+        } else {
+            match self.secrets.delete(&removed_key_ref) {
+                Ok(()) => None,
+                // The provider is gone either way; the key that could not be
+                // removed is reported so the user can clear it by hand.
+                Err(e) => {
+                    tracing::warn!(
+                        "provider `{provider_id}` removed, but its stored key could not be removed: {e}"
+                    );
+                    Some(format!(
+                        "provider `{provider_id}` was removed, but its stored key `{removed_key_ref}` could not be removed ({e}); remove it in the credential manager"
+                    ))
+                }
+            }
+        };
+
+        store::save(&self.config_dir, &next)?;
+        *lock(&self.window_rules) = WindowRules {
+            keep_in_tray: next.window.keep_in_tray,
+        };
+        self.core.set_config(next);
+        if orphaned.is_some() {
+            self.set_warning(orphaned.clone());
+        }
+        Ok(orphaned)
+    }
+
     /// Persist and hot swap a new configuration.
     ///
     /// Returns `true` when the listener had to be rebound, which only happens
@@ -807,15 +868,6 @@ mod tests {
         }
     }
 
-    /// The port the running gateway actually serves.
-    async fn running_port(desktop: &Desktop) -> u16 {
-        desktop
-            .bound_addr()
-            .await
-            .expect("gateway is running")
-            .port()
-    }
-
     async fn observe(desktop: &Desktop, dir: &PathBuf) -> Observed {
         Observed {
             persisted: persisted_port(dir),
@@ -1012,6 +1064,177 @@ mod tests {
         seen.serves(target);
 
         desktop.stop().await;
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// A credential store that keeps secrets in memory and can be told to
+    /// refuse a deletion, so provider removal is exercised without the real
+    /// keychain.
+    #[derive(Default)]
+    struct FakeSecrets {
+        entries: Mutex<std::collections::HashMap<String, String>>,
+        refuse_delete: bool,
+    }
+
+    impl crate::secrets::CredentialBackend for FakeSecrets {
+        fn get(&self, key_ref: &str) -> Result<String, crate::secrets::StoreError> {
+            self.entries
+                .lock()
+                .unwrap()
+                .get(key_ref)
+                .cloned()
+                .ok_or(crate::secrets::StoreError::NoEntry)
+        }
+
+        fn set(&self, key_ref: &str, secret: &str) -> Result<(), crate::secrets::StoreError> {
+            self.entries
+                .lock()
+                .unwrap()
+                .insert(key_ref.to_string(), secret.to_string());
+            Ok(())
+        }
+
+        fn delete(&self, key_ref: &str) -> Result<(), crate::secrets::StoreError> {
+            if self.refuse_delete {
+                return Err(crate::secrets::StoreError::Backend(
+                    "access denied by the user".into(),
+                ));
+            }
+            self.entries.lock().unwrap().remove(key_ref);
+            Ok(())
+        }
+    }
+
+    /// A provider using a reference a user typed by hand.
+    fn custom_provider(id: &str, key_ref: &str) -> zroutery_core::config::ProviderConfig {
+        use zroutery_core::config::{ProviderConfig, ProviderKind};
+
+        let mut provider = ProviderConfig::new(id, id, ProviderKind::Anthropic);
+        provider.key_ref = key_ref.to_string();
+        provider
+    }
+
+    /// A desktop whose secrets live in memory and can be inspected afterwards.
+    fn desktop_with_secrets(
+        config: AppConfig,
+        secrets: FakeSecrets,
+    ) -> (Arc<Desktop>, Arc<KeychainSecrets>, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("zroutery-state-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = Arc::new(KeychainSecrets::with_backend(Box::new(secrets)));
+        (
+            Arc::new(Desktop::new(dir.clone(), config, Arc::clone(&store))),
+            store,
+            dir,
+        )
+    }
+
+    /// A provider whose `key_ref` is not the name-derived default has its real
+    /// credential removed, not a guessed `provider:{id}`.
+    #[tokio::test]
+    async fn removing_a_provider_clears_its_custom_key_reference() {
+        let mut config = config_with_token("zr-remove");
+        config
+            .providers
+            .push(custom_provider("relay", "vault:relay-prod"));
+
+        let (desktop, secrets, dir) = desktop_with_secrets(config, FakeSecrets::default());
+        secrets.set("vault:relay-prod", "sk-real").unwrap();
+        assert!(secrets.has("vault:relay-prod"));
+
+        let warning = desktop.remove_provider("relay").await.unwrap();
+        assert!(warning.is_none(), "a clean removal: {warning:?}");
+        assert!(
+            secrets.get("vault:relay-prod").is_none(),
+            "the real key reference must be the one removed"
+        );
+        assert!(desktop.core.config().provider("relay").is_none());
+        // The document on disk agrees.
+        let (persisted, warning) = store::load(&dir);
+        assert!(warning.is_none());
+        assert!(persisted.provider("relay").is_none());
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// A reference another provider still holds is never deleted: the provider
+    /// that stays would lose its key.
+    #[tokio::test]
+    async fn removing_a_provider_keeps_a_shared_credential() {
+        let mut config = config_with_token("zr-shared");
+        config
+            .providers
+            .push(custom_provider("one", "shared:team-key"));
+        config
+            .providers
+            .push(custom_provider("two", "shared:team-key"));
+
+        let (desktop, secrets, dir) = desktop_with_secrets(config, FakeSecrets::default());
+        secrets.set("shared:team-key", "sk-shared").unwrap();
+
+        assert!(desktop.remove_provider("one").await.unwrap().is_none());
+        assert_eq!(
+            secrets.get("shared:team-key").as_deref(),
+            Some("sk-shared"),
+            "a shared credential is not the removed provider's to delete"
+        );
+        assert!(desktop.core.config().provider("two").is_some());
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// A credential store that refuses must not turn a removal into a silent
+    /// orphan: the caller is told, and the provider is still gone.
+    #[tokio::test]
+    async fn a_refused_credential_delete_is_reported_after_the_removal() {
+        let mut config = config_with_token("zr-refused");
+        config
+            .providers
+            .push(custom_provider("relay", "vault:relay-prod"));
+
+        let (desktop, secrets, dir) = desktop_with_secrets(
+            config,
+            FakeSecrets {
+                entries: Mutex::new(std::collections::HashMap::from([(
+                    "vault:relay-prod".to_string(),
+                    "sk-kept".to_string(),
+                )])),
+                refuse_delete: true,
+            },
+        );
+
+        let warning = desktop.remove_provider("relay").await.unwrap().unwrap();
+        assert!(warning.contains("could not be removed"), "{warning}");
+        assert!(warning.contains("vault:relay-prod"), "{warning}");
+        assert!(desktop.core.config().provider("relay").is_none());
+        // The dashboard sees the same warning on its next snapshot.
+        assert_eq!(
+            desktop.snapshot().await.warning.as_deref(),
+            Some(warning.as_str())
+        );
+        assert_eq!(secrets.get("vault:relay-prod").as_deref(), Some("sk-kept"));
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// A provider with no credential at all is removed without touching the
+    /// store.
+    #[tokio::test]
+    async fn removing_a_provider_without_a_credential_is_clean() {
+        let mut config = config_with_token("zr-nocred");
+        config.providers.push(custom_provider("local", ""));
+        let (desktop, _secrets, dir) = desktop_with_secrets(config, FakeSecrets::default());
+        assert!(desktop.remove_provider("local").await.unwrap().is_none());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// Removing something that is not there is an error, not a silent success.
+    #[tokio::test]
+    async fn removing_an_unknown_provider_is_refused() {
+        let (desktop, _secrets, dir) =
+            desktop_with_secrets(config_with_token("zr-unknown"), FakeSecrets::default());
+        let err = desktop.remove_provider("nope").await.unwrap_err();
+        assert!(err.contains("unknown provider"), "{err}");
         std::fs::remove_dir_all(dir).ok();
     }
 

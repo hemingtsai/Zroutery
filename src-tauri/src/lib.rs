@@ -49,6 +49,7 @@ pub fn run() {
             commands::save_config,
             commands::set_provider_key,
             commands::clear_provider_key,
+            commands::remove_provider,
             commands::fetch_provider_models,
             commands::refresh_balance,
             commands::refresh_balances,
