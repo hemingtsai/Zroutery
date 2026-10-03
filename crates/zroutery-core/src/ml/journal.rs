@@ -1540,7 +1540,7 @@ impl LearningJournal {
         }
         let log_path = self.dir.join(JOURNAL_LOG_NAME);
         let anchor_path = self.dir.join(JOURNAL_ANCHOR_NAME);
-        let (_, frames) = self_scan(&log_path, &anchor_path)?;
+        let (report, frames) = self_scan(&log_path, &anchor_path)?;
         // Every stored record is re-validated through the accepted type before
         // anything is appended, so a journal whose history no longer validates
         // cannot be extended.
@@ -1601,6 +1601,19 @@ impl LearningJournal {
             .map_or(FIRST_SEQUENCE, |frame| frame.sequence + 1);
         // Validate before a single byte is written.
         body.try_into_record(sequence)?;
+
+        // The reader refuses a materialized frame above MAX_FRAME_BYTES. The
+        // writer has to refuse the identical byte count here: a legal but
+        // oversized event would otherwise be appended and leave an append-only
+        // log that can never be opened again. The count is the frame the reader
+        // materializes: sequence, tab, checksum, tab, body, minus the newline.
+        let frame_bytes = sequence.to_string().len() + 1 + 16 + 1 + body_bytes.len();
+        if frame_bytes > MAX_FRAME_BYTES {
+            return Err(JournalError::FrameTooLarge {
+                offset: report.log_bytes,
+                bytes: frame_bytes,
+            });
+        }
 
         let previous = frames
             .last()
