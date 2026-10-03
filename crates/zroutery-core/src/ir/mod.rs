@@ -426,6 +426,11 @@ pub struct ChatRequest {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub tool_strict: BTreeMap<String, bool>,
     pub tool_choice: Option<ToolChoice>,
+    /// Whether the client allows more than one tool call per turn.  `None`
+    /// keeps the target dialect's default, `Some(false)` is an explicit
+    /// request to run at most one call.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parallel_tool_use: Option<bool>,
     pub thinking: Option<ThinkingConfig>,
     pub metadata_user: Option<String>,
     /// Vendor specific fields we do not understand but pass through untouched.
@@ -456,6 +461,7 @@ impl ChatRequest {
             tools: Vec::new(),
             tool_strict: BTreeMap::new(),
             tool_choice: None,
+            parallel_tool_use: None,
             thinking: None,
             metadata_user: None,
             passthrough: Map::new(),
