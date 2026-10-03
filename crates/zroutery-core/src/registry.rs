@@ -126,61 +126,80 @@ impl Registry {
 
     /// Resolve what the client asked for.
     ///
-    /// Order: exact model id or alias (one hash lookup), `*-class` virtual id,
-    /// configured client alias, Claude-style name heuristic (opt-in),
-    /// unknown-model fallback tier.
+    /// The ladder runs in two passes over the exact spelling and the spelling
+    /// with any client window modifier stripped (`claude-opus-4-8[1m]`):
     ///
-    /// Client-side window modifiers such as the `[1m]` in
-    /// `claude-opus-4-8[1m]` are not part of any model's name, so when the
-    /// exact spelling fails the modifier is stripped and the ladder is tried
-    /// again on the bare name. The original string is what gets logged and
+    /// 1. Deterministic names: model id or alias, `*-class` virtual id,
+    ///    configured client alias.
+    /// 2. Opt-in Claude-style name heuristic, then the configured
+    ///    unknown-model fallback.
+    ///
+    /// Completing the deterministic pass for both spellings first is what keeps
+    /// an explicitly configured model in front of the heuristic: otherwise a
+    /// bare `p-m[1m]` could be re-routed to a whole tier by the name guess or by
+    /// the unknown-model fallback. The original string is what gets logged and
     /// echoed to the client; only resolution sees the stripped form.
     pub fn resolve(&self, requested: &str) -> Result<Resolution> {
         let asked = requested.trim();
         if asked.is_empty() {
             return Err(Error::invalid("`model` must not be empty"));
         }
-        match self.resolve_exact(asked) {
-            Ok(resolution) => Ok(resolution),
-            Err(err) => {
-                let bare = crate::query::strip_client_model_modifier(asked);
-                if bare != asked {
-                    if let Ok(resolution) = self.resolve_exact(bare) {
-                        return Ok(resolution);
-                    }
-                }
-                Err(err)
+        let bare = crate::query::strip_client_model_modifier(asked);
+        let names: &[&str] = if bare == asked {
+            &[asked]
+        } else {
+            &[asked, bare]
+        };
+        for name in names {
+            if let Some(resolution) = self.resolve_named(name) {
+                return Ok(resolution);
             }
         }
+        for name in names {
+            if let Some(resolution) = self.resolve_guessed(name) {
+                return Ok(resolution);
+            }
+        }
+        Err(self.unknown_model_error(asked))
     }
 
-    /// The resolution ladder for one exact candidate name.
-    fn resolve_exact(&self, asked: &str) -> Result<Resolution> {
-        let known = self.index.by_name.get(asked).copied();
-        if let Some(position) = known {
+    /// Deterministic lookups for one exact spelling: model id or alias, a
+    /// `*-class` virtual id, or a configured client alias.
+    fn resolve_named(&self, name: &str) -> Option<Resolution> {
+        if let Some(position) = self.index.by_name.get(name).copied() {
             if self.config.models[position].enabled {
-                return Ok(Resolution::Direct(self.id_at(position).to_string()));
+                return Some(Resolution::Direct(self.id_at(position).to_string()));
             }
         }
-        if let Some(tier) = ModelTier::from_virtual_id(asked) {
-            return Ok(Resolution::Tier(tier));
+        if let Some(tier) = ModelTier::from_virtual_id(name) {
+            return Some(Resolution::Tier(tier));
         }
-        if let Some(tier) = self.config.routing.client_aliases.get(asked) {
-            return Ok(Resolution::Tier(*tier));
+        if let Some(tier) = self.config.routing.client_aliases.get(name) {
+            return Some(Resolution::Tier(*tier));
         }
+        None
+    }
+
+    /// Opt-in name heuristic, then the configured unknown-model fallback.
+    fn resolve_guessed(&self, name: &str) -> Option<Resolution> {
         if self.config.routing.match_claude_names {
-            if let Some(tier) = tier_from_name(asked) {
-                return Ok(Resolution::Tier(tier));
+            if let Some(tier) = tier_from_name(name) {
+                return Some(Resolution::Tier(tier));
             }
         }
-        if let Some(tier) = self.config.routing.unknown_model_fallback {
-            return Ok(Resolution::Tier(tier));
-        }
-        // A disabled-but-known id gets a clearer error than a typo.
-        Err(Error::UnknownModel(match known {
+        self.config
+            .routing
+            .unknown_model_fallback
+            .map(Resolution::Tier)
+    }
+
+    /// The error for a name that matched no model. A disabled-but-known id gets
+    /// a clearer message than a typo.
+    fn unknown_model_error(&self, asked: &str) -> Error {
+        Error::UnknownModel(match self.index.by_name.get(asked).copied() {
             Some(position) => format!("{} (disabled)", self.id_at(position)),
             None => asked.to_string(),
-        }))
+        })
     }
 
     /// All usable models of a tier, in the order the router will try them.
@@ -616,6 +635,50 @@ mod tests {
         let r = registry(cfg);
         let err = r.resolve("does-not-exist[1m]").unwrap_err();
         assert!(err.to_string().contains("does-not-exist[1m]"));
+    }
+
+    #[test]
+    fn window_modifier_does_not_defeat_an_explicit_model() {
+        // The default Claude-name heuristic recognises this alias, so the
+        // modified spelling used to resolve to the Standard tier instead of the
+        // model the user configured.
+        let mut cfg = brief_config();
+        assert!(
+            cfg.routing.match_claude_names,
+            "the heuristic is on by default"
+        );
+        cfg.models[2].aliases.push("claude-sonnet-custom".into());
+        let r = registry(cfg);
+        assert_eq!(
+            r.resolve("claude-sonnet-custom").unwrap(),
+            Resolution::Direct("openai-gpt-5.3-sol".into())
+        );
+        assert_eq!(
+            r.resolve("claude-sonnet-custom[1m]").unwrap(),
+            Resolution::Direct("openai-gpt-5.3-sol".into()),
+            "the modified spelling must reach the explicitly configured model"
+        );
+
+        // The unknown-model fallback must not capture a name that has an exact
+        // model behind it either.
+        let mut cfg = brief_config();
+        cfg.routing.unknown_model_fallback = Some(ModelTier::Fast);
+        cfg.models[2].aliases.push("p-m".into());
+        let r = registry(cfg);
+        assert_eq!(
+            r.resolve("p-m").unwrap(),
+            Resolution::Direct("openai-gpt-5.3-sol".into())
+        );
+        assert_eq!(
+            r.resolve("p-m[1m]").unwrap(),
+            Resolution::Direct("openai-gpt-5.3-sol".into()),
+            "an exact model wins over the unknown-model fallback"
+        );
+        // A genuinely unknown name still gets the fallback tier.
+        assert_eq!(
+            r.resolve("does-not-exist[1m]").unwrap(),
+            Resolution::Tier(ModelTier::Fast)
+        );
     }
 
     #[test]
