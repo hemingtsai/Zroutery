@@ -2476,6 +2476,12 @@ impl RequestLifecycle {
         if self.trace_written {
             return;
         }
+        // No configured state directory means no durable history at all. The
+        // in-memory dataset still collected the samples; nothing persists them.
+        let Some(log) = self.state.traces() else {
+            self.trace_written = true;
+            return;
+        };
         let Some(input) = self.decision_time.as_ref() else {
             return;
         };
@@ -2489,7 +2495,7 @@ impl RequestLifecycle {
             // record. Counted by the log on its own terms when it is told.
             self.trace_written = true;
             let _ = crate::ml::traces::contained_append(
-                self.state.traces(),
+                log,
                 &input.decision_id,
                 input,
                 Vec::new(),
@@ -2499,7 +2505,7 @@ impl RequestLifecycle {
         }
         self.trace_written = true;
         let verdict = crate::ml::traces::contained_append(
-            self.state.traces(),
+            log,
             &input.decision_id,
             input,
             samples,
