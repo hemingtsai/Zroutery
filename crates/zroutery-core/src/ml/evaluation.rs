@@ -45,6 +45,11 @@ pub enum EvaluationError {
     #[error("regression prediction at index {index} is not finite: {value}")]
     NonFiniteRegressionPrediction { index: usize, value: f64 },
 
+    /// A regression actual is `NaN` or infinite, so the error it enters and
+    /// every mean built over it would be `NaN` too.
+    #[error("regression actual at index {index} is not finite: {value}")]
+    NonFiniteRegressionActual { index: usize, value: f64 },
+
     /// A field of a [`RoutingMetrics`] record is `NaN` or infinite, so no
     /// comparison of it — a delta, a degradation test, an improvement test —
     /// has a defined answer. A `NaN` success rate is the motivating case: every
@@ -187,6 +192,11 @@ impl PredictionMetrics {
     /// The fallible twin of [`PredictionMetrics::compute_regression`]. Unlike
     /// the classification twin this one does not police a range: a latency or a
     /// cost is a magnitude, and there is no interval a magnitude must lie in.
+    ///
+    /// It does police finiteness on **both** sides. A non-finite actual enters
+    /// every error term and every mean exactly as a non-finite prediction does,
+    /// so returning `Ok` with `NaN` metrics would hand the caller a result that
+    /// reads like a measurement and is not one.
     pub fn try_compute_regression(
         predictions: &[f64],
         actuals: &[f64],
@@ -205,6 +215,14 @@ impl PredictionMetrics {
                 return Err(EvaluationError::NonFiniteRegressionPrediction {
                     index,
                     value: *prediction,
+                });
+            }
+        }
+        for (index, actual) in actuals.iter().enumerate() {
+            if !actual.is_finite() {
+                return Err(EvaluationError::NonFiniteRegressionActual {
+                    index,
+                    value: *actual,
                 });
             }
         }
