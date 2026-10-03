@@ -5,6 +5,7 @@
 //! back into a Responses response, and the stream parser/encoder handle the SSE
 //! lifecycle.
 
+use std::cell::Cell;
 use std::collections::HashMap;
 
 use serde_json::{json, Map, Value};
@@ -1377,6 +1378,8 @@ pub struct ResponsesStreamEncoder {
     created_at: i64,
     done: bool,
     next_output_index: u32,
+    /// Monotonic SSE `sequence_number`, stamped on every emitted frame.
+    next_sequence: Cell<u64>,
     // --- Text/Thinking state (sequential, one at a time) ---
     current_output_index: u32,
     content_index: u32,
@@ -1400,6 +1403,7 @@ impl ResponsesStreamEncoder {
             created_at: chrono::Utc::now().timestamp(),
             done: false,
             next_output_index: 0,
+            next_sequence: Cell::new(0),
             current_output_index: 0,
             content_index: 0,
             current_kind: None,
@@ -1414,6 +1418,12 @@ impl ResponsesStreamEncoder {
     }
 
     fn frame(&self, event_type: &str, data: Value) -> SseFrame {
+        // Every official Responses event carries a monotonic sequence_number.
+        let mut data = data;
+        if let Value::Object(map) = &mut data {
+            map.insert("sequence_number".into(), json!(self.next_sequence.get()));
+        }
+        self.next_sequence.set(self.next_sequence.get() + 1);
         SseFrame {
             event: Some(event_type.to_string()),
             data: data.to_string(),
@@ -1432,9 +1442,17 @@ impl ResponsesStreamEncoder {
             return None;
         }
         self.content_part_open = false;
-        let part_type = match self.current_kind {
-            Some(OutputItemKind::Text) => "output_text",
-            Some(OutputItemKind::Thinking) => "reasoning",
+        let part = match self.current_kind {
+            Some(OutputItemKind::Text) => json!({
+                "type": "output_text",
+                "text": self.current_text,
+                "annotations": [],
+                "logprobs": [],
+            }),
+            Some(OutputItemKind::Thinking) => json!({
+                "type": "reasoning",
+                "text": self.current_thinking,
+            }),
             _ => return None,
         };
         Some(self.frame(
@@ -1444,7 +1462,7 @@ impl ResponsesStreamEncoder {
                 "item_id": self.current_item_id,
                 "output_index": self.current_output_index,
                 "content_index": self.content_index,
-                "part": {"type": part_type},
+                "part": part,
             }),
         ))
     }
@@ -1507,6 +1525,7 @@ impl ResponsesStreamEncoder {
                             "output_index": self.current_output_index,
                             "content_index": self.content_index,
                             "text": self.current_text,
+                            "logprobs": [],
                         }),
                     ));
                 }
@@ -1617,7 +1636,10 @@ impl StreamEncoder for ResponsesStreamEncoder {
                         }),
                     ));
                 }
-                // Emit content_part.added if needed.
+                // Emit content_part.added if needed. The official
+                // ResponseOutputText part starts with an empty text; the SDK's
+                // stream state machine appends deltas to it and raises a
+                // TypeError when it is missing.
                 if !self.content_part_open {
                     self.content_part_open = true;
                     out.push(self.frame(
@@ -1627,7 +1649,7 @@ impl StreamEncoder for ResponsesStreamEncoder {
                             "item_id": self.current_item_id,
                             "output_index": self.current_output_index,
                             "content_index": self.content_index,
-                            "part": {"type": "output_text"},
+                            "part": {"type": "output_text", "text": "", "annotations": [], "logprobs": []},
                         }),
                     ));
                 }
@@ -1639,6 +1661,7 @@ impl StreamEncoder for ResponsesStreamEncoder {
                         "output_index": self.current_output_index,
                         "content_index": self.content_index,
                         "delta": text,
+                        "logprobs": [],
                     }),
                 ));
                 self.current_text.push_str(text);
@@ -1670,7 +1693,7 @@ impl StreamEncoder for ResponsesStreamEncoder {
                             "item_id": self.current_item_id,
                             "output_index": self.current_output_index,
                             "content_index": self.content_index,
-                            "part": {"type": "reasoning"},
+                            "part": {"type": "reasoning", "text": ""},
                         }),
                     ));
                 }
