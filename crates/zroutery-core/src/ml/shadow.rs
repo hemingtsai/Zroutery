@@ -618,6 +618,15 @@ impl ModelEnsemblePredictor {
     /// accepts only the canonical root `shadow` commit. New callers loading a
     /// child should use [`Self::from_model_commit`], which verifies the full
     /// model/schema/parent/lineage record.
+    ///
+    /// A root commit record carries no parent and no learning-event count, so
+    /// the checkpoint is the only evidence of whether the ensemble was ever
+    /// trained. Only a checkpoint identical to the cold genesis ensemble is
+    /// treated as a complete empty history (it really is the genesis); a
+    /// checkpoint that already holds training is loaded with *unknown* history,
+    /// exactly like [`Self::from_model_commit`], so the next training run
+    /// continues from it instead of rebuilding a cold ensemble from genesis and
+    /// silently discarding the loaded training.
     pub fn from_commit(
         checkpoint: &ModelCheckpoint,
         commit: CommitId,
@@ -632,7 +641,11 @@ impl ModelEnsemblePredictor {
                 actual: commit,
             });
         }
-        Self::from_verified_parts(ensemble, expected.clone(), Some(Vec::new()), vec![expected])
+        if checkpoint.content_hash() == ModelEnsemble::new().save_all().content_hash() {
+            Self::from_verified_parts(ensemble, expected.clone(), Some(Vec::new()), vec![expected])
+        } else {
+            Self::from_verified_parts(ensemble, expected.clone(), None, vec![expected])
+        }
     }
 
     /// Build a predictor from a complete immutable commit record.
