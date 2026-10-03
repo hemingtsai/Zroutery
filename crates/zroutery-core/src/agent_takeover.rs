@@ -830,19 +830,31 @@ fn compute_hash(data: &[u8]) -> String {
 }
 
 /// Set a nested JSON value by dotted path (e.g. "model.temperature").
-fn set_nested(root: &mut serde_json::Value, path: &str, value: serde_json::Value) {
+///
+/// Missing intermediate tables are created, but an existing non-table on the
+/// path is a type conflict and reported as an error. Quietly skipping the write
+/// would report success while changing nothing, and replacing the value with a
+/// table would destroy an existing setting.
+fn set_nested(
+    root: &mut serde_json::Value,
+    path: &str,
+    value: serde_json::Value,
+) -> Result<(), String> {
     let parts: Vec<&str> = path.split('.').collect();
-    if parts.is_empty() {
-        return;
+    if parts.iter().any(|part| part.is_empty()) {
+        return Err(format!("invalid field path `{path}`"));
+    }
+
+    if !root.is_object() {
+        return Err(format!(
+            "cannot set `{path}`: the config root is not a table"
+        ));
     }
 
     let mut current = root;
 
-    // Navigate to the parent, creating intermediate objects as needed.
+    // Navigate to the parent, creating intermediate tables as needed.
     for part in &parts[..parts.len() - 1] {
-        if !current.is_object() {
-            *current = serde_json::Value::Object(serde_json::Map::new());
-        }
         let obj = current.as_object_mut().unwrap();
         if !obj.contains_key(*part) {
             obj.insert(
@@ -851,13 +863,26 @@ fn set_nested(root: &mut serde_json::Value, path: &str, value: serde_json::Value
             );
         }
         current = obj.get_mut(*part).unwrap();
+        if !current.is_object() {
+            return Err(type_conflict(path, part));
+        }
     }
 
     // Set the leaf value.
     let leaf = parts.last().unwrap();
-    if let Some(obj) = current.as_object_mut() {
-        obj.insert(leaf.to_string(), value);
-    }
+    current
+        .as_object_mut()
+        .unwrap()
+        .insert(leaf.to_string(), value);
+
+    Ok(())
+}
+
+/// Describe a patch that would have to overwrite an existing non-table value.
+fn type_conflict(path: &str, part: &str) -> String {
+    format!(
+        "cannot set `{path}`: `{part}` already holds a non-table value of a different type"
+    )
 }
 
 /// Restore a manifest's managed fields into `raw`.
@@ -865,21 +890,26 @@ fn set_nested(root: &mut serde_json::Value, path: &str, value: serde_json::Value
 /// Fields that already existed at adoption time are set back to their captured
 /// value; fields recorded in [`OwnershipManifest::absent_fields`] are removed
 /// so a value Zroutery introduced does not outlive the ownership.
-fn restore_fields(raw: &mut serde_json::Value, manifest: &OwnershipManifest) {
+fn restore_fields(
+    raw: &mut serde_json::Value,
+    manifest: &OwnershipManifest,
+) -> Result<(), String> {
     for field_path in &manifest.managed_fields {
         if manifest.absent_fields.iter().any(|absent| absent == field_path) {
             remove_nested(raw, field_path);
         } else if let Some(original_value) = manifest.field_snapshots.get(field_path) {
-            set_nested(raw, field_path, original_value.clone());
+            set_nested(raw, field_path, original_value.clone())?;
         }
     }
+    Ok(())
 }
 
 /// Apply managed field patches to `raw`.
-fn apply_fields(raw: &mut serde_json::Value, fields: &[ManagedField]) {
+fn apply_fields(raw: &mut serde_json::Value, fields: &[ManagedField]) -> Result<(), String> {
     for field in fields {
-        set_nested(raw, &field.path, field.value.clone());
+        set_nested(raw, &field.path, field.value.clone())?;
     }
+    Ok(())
 }
 
 /// Re-read the config a snapshot was taken from, refusing to touch a file that
@@ -925,7 +955,7 @@ fn apply_patch_to_disk(
     format: ConfigFormat,
 ) -> Result<AgentConfigSnapshot, String> {
     let mut raw = reread_raw(snapshot, format)?;
-    apply_fields(&mut raw, fields);
+    apply_fields(&mut raw, fields)?;
 
     let text = serialize_config(format, &raw)?;
     let hash = compute_hash(text.as_bytes());
@@ -946,7 +976,7 @@ fn release_to_disk(
     format: ConfigFormat,
 ) -> Result<(), String> {
     let mut raw = snapshot.raw.clone();
-    restore_fields(&mut raw, manifest);
+    restore_fields(&mut raw, manifest)?;
 
     let text = serialize_config(format, &raw)?;
     write_config_atomic(&snapshot.config_path, text.as_bytes())
@@ -2241,9 +2271,7 @@ mod tests {
             fields: &[ManagedField],
         ) -> Result<AgentConfigSnapshot, String> {
             let mut raw = snapshot.raw.clone();
-            for field in fields {
-                set_nested(&mut raw, &field.path, field.value.clone());
-            }
+            apply_fields(&mut raw, fields)?;
             let json =
                 serde_json::to_string_pretty(&raw).map_err(|e| format!("serialize failed: {e}"))?;
             let hash = compute_hash(json.as_bytes());
@@ -2261,7 +2289,7 @@ mod tests {
             manifest: &OwnershipManifest,
         ) -> Result<(), String> {
             let mut raw = snapshot.raw.clone();
-            restore_fields(&mut raw, manifest);
+            restore_fields(&mut raw, manifest)?;
             let json =
                 serde_json::to_string_pretty(&raw).map_err(|e| format!("serialize failed: {e}"))?;
             let hash = compute_hash(json.as_bytes());
@@ -2869,7 +2897,7 @@ mod tests {
         // Use ClaudeAdapter-style logic directly on the temp path.
         let mut raw = snapshot.raw.clone();
         for field in &fields {
-            set_nested(&mut raw, &field.path, field.value.clone());
+            set_nested(&mut raw, &field.path, field.value.clone()).unwrap();
         }
         let json = serde_json::to_string_pretty(&raw).unwrap();
         let hash = compute_hash(json.as_bytes());
@@ -3094,6 +3122,66 @@ mod tests {
         let disk = read_json_file(&path);
         assert_eq!(disk["managed"], serde_json::json!("zroutery"));
         assert_eq!(disk["unmanaged"], serde_json::json!("user-new"));
+    }
+
+    #[test]
+    fn apply_patch_reports_type_conflict_on_scalar_parent() {
+        super::isolate_agent_home();
+        let home = super::isolated_agent_home().expect("isolated agent home");
+        let path = home.join(".claude.json");
+        std::fs::write(
+            &path,
+            serde_json::to_string_pretty(&serde_json::json!({"model": "existing-scalar"}))
+                .unwrap(),
+        )
+        .unwrap();
+
+        let adapter = ClaudeAdapter;
+        let snapshot = adapter.read_config().unwrap();
+
+        // `model.temperature` cannot be set when `model` is a scalar; the old
+        // code reported success and changed nothing.
+        let err = adapter
+            .apply_patch(
+                &snapshot,
+                &[ManagedField {
+                    path: "model.temperature".into(),
+                    value: serde_json::json!(0.5),
+                }],
+            )
+            .unwrap_err();
+        assert!(err.contains("model.temperature"), "error: {err}");
+        assert!(err.contains("non-table"), "error: {err}");
+
+        let disk = read_json_file(&path);
+        assert_eq!(disk["model"], serde_json::json!("existing-scalar"));
+    }
+
+    #[test]
+    fn apply_patch_refuses_to_replace_existing_non_table() {
+        super::isolate_agent_home();
+        let home = super::isolated_agent_home().expect("isolated agent home");
+        let path = home.join(".claude.json");
+        let initial = serde_json::json!({"a": {"b": 5}});
+        std::fs::write(&path, serde_json::to_string_pretty(&initial).unwrap()).unwrap();
+
+        let adapter = ClaudeAdapter;
+        let snapshot = adapter.read_config().unwrap();
+
+        // The old code replaced the existing scalar `a.b` with a table.
+        let err = adapter
+            .apply_patch(
+                &snapshot,
+                &[ManagedField {
+                    path: "a.b.c.d".into(),
+                    value: serde_json::json!(1),
+                }],
+            )
+            .unwrap_err();
+        assert!(err.contains("a.b.c.d"), "error: {err}");
+
+        let disk = read_json_file(&path);
+        assert_eq!(disk, initial, "the existing value must not be replaced");
     }
 
     #[test]
