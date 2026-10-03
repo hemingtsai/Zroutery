@@ -67,7 +67,8 @@ use std::collections::{HashMap, HashSet};
 use serde::{Deserialize, Serialize};
 
 use super::dataset::{
-    validate_outcome_sample, OutcomeTrainingSample, TrainingSample as DatasetTrainingSample,
+    validate_outcome_sample, OutcomeTrainingSample, SampleScope,
+    TrainingSample as DatasetTrainingSample,
 };
 use super::decision_contract::{
     CandidateEligibility, DecisionCandidate, DecisionDimension, DecisionModel, DecisionModelStates,
@@ -529,6 +530,69 @@ impl WarmupOutcome {
 }
 
 // ---------------------------------------------------------------------------
+// Head scope and projection
+// ---------------------------------------------------------------------------
+
+/// Which canonical scope supervises one per-dimension head.
+///
+/// The canonical dataset emits an attempt-scope row and a request-scope row for
+/// one request, and those two rows can carry identical decision-time features
+/// while describing different durations: the attempt row carries the candidate's
+/// own service time and the request row carries the whole request's total. A
+/// head supervised by both would learn a mixture of two durations from one
+/// feature vector, so each head names the one scope it consumes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HeadScope {
+    /// The request-scope row only. Attempt-scope rows of the same request carry
+    /// no target for this head.
+    Request,
+    /// Every row. Both scopes carry a true label about their own subject, and
+    /// the head is trained on each; the two labels agree whenever the rows
+    /// share a feature vector.
+    EveryRow,
+}
+
+/// The scope each per-dimension head consumes, stated once.
+///
+/// The whole-request heads are `Request`-scoped: `latency` is the request's
+/// total duration, `ttft` is the first token of the request, and `cost` is the
+/// request's captured billing fact (attempt rows carry no cost at all). The
+/// success head is `EveryRow`-scoped: an attempt row says whether that
+/// candidate's attempt succeeded and the request row says whether the request
+/// terminated in success, and warmup never rewrites the first into the second,
+/// so a failed candidate cannot become a positive label.
+pub fn head_scope(dimension: DecisionDimension) -> HeadScope {
+    match dimension {
+        DecisionDimension::Success => HeadScope::EveryRow,
+        DecisionDimension::Latency | DecisionDimension::Ttft | DecisionDimension::Cost => {
+            HeadScope::Request
+        }
+    }
+}
+
+/// Project one canonical sample to the legacy training row, with every head's
+/// documented scope applied.
+///
+/// This is the only projection warmup trains through. It starts from the raw
+/// [`OutcomeTrainingSample::into_legacy`] conversion, which copies the targets
+/// verbatim, and then removes from an attempt-scope row exactly the targets that
+/// [`head_scope`] assigns to the request scope. The result is that one candidate
+/// feature vector is never supervised by both its own single service duration
+/// and the whole request's total, while both rows stay in the snapshot: the
+/// request row keeps the terminal success and the captured cost, and the attempt
+/// row keeps the candidate's own success.
+pub fn project_for_training(sample: &OutcomeTrainingSample) -> DatasetTrainingSample {
+    let mut row = sample.clone().into_legacy();
+    if sample.scope != SampleScope::Request {
+        row.targets.latency_ms = None;
+        row.targets.ttft_ms = None;
+        row.targets.cost = None;
+    }
+    row
+}
+
+// ---------------------------------------------------------------------------
 // run_warmup
 // ---------------------------------------------------------------------------
 
@@ -546,12 +610,12 @@ pub fn run_warmup(
     let training: Vec<DatasetTrainingSample> = partition
         .training
         .iter()
-        .map(|sample| sample.clone().into_legacy())
+        .map(project_for_training)
         .collect();
     let holdout_samples: Vec<DatasetTrainingSample> = partition
         .holdout
         .iter()
-        .map(|sample| sample.clone().into_legacy())
+        .map(project_for_training)
         .collect();
 
     let holdout = FrozenHoldout::new(holdout_samples.clone(), config.holdout_description.clone());
