@@ -33,8 +33,10 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
     // snake_case form is accepted as a compatibility alias.  Reading only the
     // alias silently discarded whatever the official SDKs sent.
     let instruction = match (
-        obj.get("systemInstruction").filter(|value| !value.is_null()),
-        obj.get("system_instruction").filter(|value| !value.is_null()),
+        obj.get("systemInstruction")
+            .filter(|value| !value.is_null()),
+        obj.get("system_instruction")
+            .filter(|value| !value.is_null()),
     ) {
         (Some(_), Some(_)) => {
             return Err(Error::invalid(
@@ -216,8 +218,13 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
                         }
                         // `parametersJsonSchema` already carries a standard JSON
                         // Schema, so it is kept verbatim instead of being
-                        // replaced by an empty object schema.
-                        (Some(gemini_schema), None) => gemini_schema.clone(),
+                        // replaced by an empty object schema.  `parameters` is
+                        // a Gemini `Schema` and is normalized below.
+                        (Some(gemini_schema), None) => {
+                            let mut schema = gemini_schema.clone();
+                            normalize_gemini_schema(&mut schema);
+                            schema
+                        }
                         (None, Some(schema)) => schema.clone(),
                         (None, None) => json!({"type": "object"}),
                     };
@@ -314,6 +321,64 @@ fn mint_call_id(counter: &mut u32, used: &HashSet<String>) -> String {
         if !used.contains(&candidate) {
             return candidate;
         }
+    }
+}
+
+/// Rewrite a Gemini `Schema` into standard JSON Schema.
+///
+/// `Schema.type` is the uppercase OpenAPI enum (`OBJECT`, `STRING`, ...),
+/// while the IR carries JSON Schema whose `type` values are lowercase.
+/// Forwarding the Gemini object verbatim sent `"type": "OBJECT"` upstream,
+/// which a provider that validates tool schemas rejects.
+fn normalize_gemini_schema(schema: &mut Value) {
+    let Some(map) = schema.as_object_mut() else {
+        return;
+    };
+    if matches!(map.get("type"), Some(Value::String(name)) if name == "TYPE_UNSPECIFIED") {
+        // An unspecified type means "any type" in JSON Schema, which is the
+        // absence of the keyword.
+        map.remove("type");
+    } else if let Some(Value::String(name)) = map.get_mut("type") {
+        name.make_ascii_lowercase();
+    } else if let Some(Value::Array(types)) = map.get_mut("type") {
+        for entry in types.iter_mut() {
+            if let Value::String(name) = entry {
+                name.make_ascii_lowercase();
+            }
+        }
+    }
+
+    // Recurse only where a schema nests other schemas, so a `type` key inside
+    // `default`, `example` or `enum` data is left untouched.
+    for key in [
+        "items",
+        "additionalProperties",
+        "not",
+        "anyOf",
+        "oneOf",
+        "allOf",
+        "prefixItems",
+    ] {
+        if let Some(child) = map.get_mut(key) {
+            normalize_gemini_schema_children(child);
+        }
+    }
+    for key in ["properties", "$defs", "definitions"] {
+        if let Some(Value::Object(children)) = map.get_mut(key) {
+            for child in children.values_mut() {
+                normalize_gemini_schema(child);
+            }
+        }
+    }
+}
+
+fn normalize_gemini_schema_children(value: &mut Value) {
+    if let Value::Array(children) = value {
+        for child in children.iter_mut() {
+            normalize_gemini_schema(child);
+        }
+    } else {
+        normalize_gemini_schema(value);
     }
 }
 
