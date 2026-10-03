@@ -1865,3 +1865,56 @@ fn an_oversized_frame_is_refused_before_the_log_is_written() {
     assert_eq!(records.len(), 1, "the prior record survived");
     assert_eq!(records[0].event.event_id, "oversized-prior-1");
 }
+
+/// The process-local `evt-<n>` form is not a durable identity. The named entry
+/// points refuse it, and so must the shared append boundary a caller can reach
+/// directly, on every public append path.
+#[test]
+fn a_volatile_event_id_is_refused_on_every_public_append_path() {
+    let root = scratch();
+    let dir = journal_dir(root.path());
+    let mut journal = LearningJournal::open(&dir, JournalMode::Append).expect("the journal opens");
+    journal
+        .record_canonical(canonical_event("durable-prior-1", "prior", true))
+        .expect("a durable prior record is written");
+    let before = log_bytes(&dir);
+
+    // 1. The legacy path.
+    let mut legacy = legacy_of(&canonical_event("evt-legacy-1", "l1", true));
+    legacy.event_id = "evt-1".to_string();
+    match journal.record_legacy(&legacy) {
+        Err(JournalError::VolatileEventId { event_id }) => assert_eq!(event_id, "evt-1"),
+        other => panic!("record_legacy must refuse a volatile id, got {other:?}"),
+    }
+
+    // 2. The canonical path.
+    match journal.record_canonical(canonical_event("evt-2", "c1", true)) {
+        Err(JournalError::VolatileEventId { event_id }) => assert_eq!(event_id, "evt-2"),
+        other => panic!("record_canonical must refuse a volatile id, got {other:?}"),
+    }
+
+    // 3. The shared validating write path, reached with a hand-built body.
+    let body = JournalRecordBody {
+        schema_version: JOURNAL_SCHEMA_VERSION,
+        event_schema_version: LEARNING_EVENT_SCHEMA_VERSION,
+        event: legacy_of(&canonical_event("evt-3", "b1", true)),
+        evidence: JournalEvidence::LegacyProjection {
+            degradation: LEGACY_DEGRADATION.to_string(),
+        },
+        recorded_at: 1_700_000_000,
+    };
+    match journal.append_body(body) {
+        Err(JournalError::VolatileEventId { event_id }) => assert_eq!(event_id, "evt-3"),
+        other => panic!("append_body must refuse a volatile id, got {other:?}"),
+    }
+
+    assert_eq!(log_bytes(&dir), before, "no refusal wrote a frame");
+    drop(journal);
+
+    let journal = LearningJournal::open(&dir, JournalMode::Read).expect("the log still opens");
+    let records = journal
+        .read_records(&ModelStore::new())
+        .expect("the log still reads back");
+    assert_eq!(records.len(), 1, "only the durable record is on disk");
+    assert_eq!(records[0].event.event_id, "durable-prior-1");
+}
