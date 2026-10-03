@@ -372,6 +372,17 @@ export function Section({
  * The right-hand detail surface. Clicking a row opens its whole story here
  * instead of navigating — the interaction model of a desktop application
  * rather than a page-based admin tool.
+ *
+ * The veil is not the modal boundary: `aria-modal` promises that the rest of
+ * the page is unreachable, so focus starts inside the drawer, Tab is kept
+ * inside it, focus that lands outside is pulled back, and closing returns
+ * focus to whatever opened it.
+ *
+ * The background is isolated rather than marked `inert`: the shell is a
+ * *sibling* of the drawer, and `inert` on it stops Chromium from hit testing
+ * the drawer's own controls as well, which leaves the visible drawer unusable
+ * by mouse. The focus guard below gives the same keyboard guarantee without
+ * that side effect.
  */
 export function Drawer({
   title,
@@ -382,20 +393,77 @@ export function Drawer({
   onClose: () => void;
   children: ReactNode;
 }) {
+  const panel = useRef<HTMLElement>(null);
+  const restoreTo = useRef<Element | null>(null);
+  const titleId = useId();
+
+  useEffect(() => {
+    const previous = document.activeElement;
+    restoreTo.current = previous instanceof HTMLElement ? previous : null;
+    const first = panel.current?.querySelector<HTMLElement>(
+      "input, select, textarea, button:not([disabled]), [tabindex]:not([tabindex='-1'])",
+    );
+    (first ?? panel.current)?.focus();
+    // Nothing behind the drawer may hold focus while it is open.
+    const keepInside = (event: FocusEvent) => {
+      const root = panel.current;
+      if (!root) return;
+      const target = event.target;
+      if (target instanceof Node && !root.contains(target)) root.focus();
+    };
+    document.addEventListener("focusin", keepInside);
+    return () => {
+      document.removeEventListener("focusin", keepInside);
+      const target = restoreTo.current;
+      if (target instanceof HTMLElement && target.isConnected) target.focus();
+    };
+  }, []);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") {
+        onClose();
+        return;
+      }
+      if (e.key !== "Tab") return;
+      const root = panel.current;
+      if (!root) return;
+      const focusable = Array.from(
+        root.querySelectorAll<HTMLElement>(
+          "a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])",
+        ),
+      ).filter((el) => el.offsetParent !== null || el === document.activeElement);
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const active = document.activeElement;
+      if (e.shiftKey && (active === first || !root.contains(active))) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && active === last) {
+        e.preventDefault();
+        first.focus();
+      }
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
   }, [onClose]);
 
   return (
     <>
       <div className="drawer-veil" onClick={onClose} aria-hidden />
-      <aside className="drawer" role="dialog" aria-modal>
+      <aside
+        ref={panel}
+        className="drawer"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
+      >
         <header className="drawer-head">
-          <div className="drawer-title">{title}</div>
+          <div className="drawer-title" id={titleId}>
+            {title}
+          </div>
           <button className="linky" onClick={onClose} title="Close (Esc)" aria-label="Close">
             ×
           </button>
