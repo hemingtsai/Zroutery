@@ -6,7 +6,7 @@
 //! is on one of them.
 
 use std::borrow::Cow;
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -23,7 +23,9 @@ use crate::budget::Verdict;
 use crate::config::{ModelTier, RoutingConfig};
 use crate::error::{Error, Result};
 use crate::failure::ClassifiedFailure;
-use crate::ir::{ChatRequest, Dialect, StoredResponse, StreamEvent, Usage};
+use crate::ir::{
+    ChatRequest, Dialect, Message, ResponseStatus, StoredResponse, StreamEvent, Usage,
+};
 #[cfg(feature = "ml")]
 use crate::ml::ShadowInput;
 use crate::outcome::{Attempt as OutcomeAttempt, CandidateIdentity, Outcome};
@@ -46,23 +48,6 @@ pub(super) async fn handle_chat(
     let mut req = match protocol::decode_request(dialect, body.clone()) {
         Ok(r) => r,
         Err(e) => return error_response(dialect, &e),
-    };
-    req.required_capabilities = req.compute_required_capabilities();
-
-    // Extract Responses API fields from the raw body for storage.
-    let (input_items, previous_response_id) = if dialect == Dialect::OpenAIResponses {
-        let input = body
-            .get("input")
-            .and_then(|v| v.as_array())
-            .cloned()
-            .unwrap_or_default();
-        let prev = body
-            .get("previous_response_id")
-            .and_then(|v| v.as_str())
-            .map(str::to_string);
-        (input, prev)
-    } else {
-        (Vec::new(), None)
     };
 
     // Retention policy, read from the decoded request rather than the raw
@@ -91,6 +76,36 @@ pub(super) async fn handle_chat(
     } else {
         RequestKind::Main
     };
+
+    // The Responses API lifecycle fields. A continuation is either accepted —
+    // the prior conversation is replayed into this request's messages — or the
+    // request is rejected with the reason; `previous_response_id` is an
+    // instruction to include history, and answering without it is the one
+    // outcome that is never allowed. The input items kept for storage are the
+    // items as they arrived, normalized so a string `input` is the user turn it
+    // means rather than an empty list.
+    let (input_items, previous_response_id) = if dialect == Dialect::OpenAIResponses {
+        // Capability requirements are derived after history expansion, because
+        // a continued conversation can carry images or tools the current turn
+        // does not mention.
+        match expand_continuation(&state.response_store, &body, &mut req) {
+            Ok(fields) => fields,
+            Err(e) => {
+                reject(
+                    Arc::clone(&state),
+                    dialect,
+                    req.stream,
+                    kind,
+                    &req.model,
+                    &e,
+                );
+                return error_response(dialect, &e);
+            }
+        }
+    } else {
+        (Vec::new(), None)
+    };
+    req.required_capabilities = req.compute_required_capabilities();
 
     // Build task profile and client context for policy resolution.
     let task_profile = policy::TaskProfile::from_request(&req);
@@ -330,6 +345,107 @@ pub(super) async fn handle_chat(
         )
         .await
     }
+}
+
+/// How many prior turns a `previous_response_id` chain may replay.
+///
+/// The chain is walked newest to oldest, so this is also the bound on how much
+/// work a single continuation request can create before any upstream call.
+const MAX_CONTINUATION_TURNS: usize = 32;
+
+/// The byte budget for one continuation's replayed history.
+///
+/// Measured over the stored input and output items that are about to become
+/// messages, so an oversized chain is refused before it reaches a provider.
+const MAX_CONTINUATION_BYTES: usize = 1 << 20;
+
+/// Size of one stored item list, as the bytes a request would carry.
+fn items_bytes(items: &[Value]) -> usize {
+    items.iter().map(|item| item.to_string().len()).sum()
+}
+
+/// The wire name of a stored response's status, for a refusal message.
+fn response_status_name(status: ResponseStatus) -> &'static str {
+    match status {
+        ResponseStatus::Queued => "queued",
+        ResponseStatus::InProgress => "in progress",
+        ResponseStatus::Completed => "completed",
+        ResponseStatus::Failed => "failed",
+        ResponseStatus::Cancelled => "cancelled",
+    }
+}
+
+/// Resolve a Responses API continuation, expanding the prior conversation.
+///
+/// Returns the input items to store for *this* request (normalized from the raw
+/// body, never the expanded history — a chain must not duplicate itself) and the
+/// prior id when one was accepted.
+///
+/// `previous_response_id` is only accepted when the prior response exists and
+/// may actually be continued, and its conversation is then replayed into the
+/// request's messages ahead of the current turn. Every way that can fail is an
+/// explicit error: an unknown or deleted prior, one that was never retained, a
+/// non-completed prior, a chain longer than [`MAX_CONTINUATION_TURNS`] or
+/// larger than [`MAX_CONTINUATION_BYTES`], and a chain that loops. Silently
+/// ignoring the field would answer the wrong question with the right status.
+fn expand_continuation(
+    store: &crate::ir::ResponseStore,
+    body: &Value,
+    req: &mut ChatRequest,
+) -> Result<(Vec<Value>, Option<String>)> {
+    let input_items = protocol::responses::input_items(body);
+    let Some(previous) = body.get("previous_response_id").and_then(Value::as_str) else {
+        return Ok((input_items, None));
+    };
+    let previous = previous.to_string();
+
+    let mut chain: Vec<StoredResponse> = Vec::new();
+    let mut visited: HashSet<String> = HashSet::new();
+    let mut cursor = Some(previous.clone());
+    let mut bytes = 0usize;
+    while let Some(id) = cursor {
+        if !visited.insert(id.clone()) {
+            return Err(Error::invalid(format!(
+                "`previous_response_id` chain loops back to `{id}`"
+            )));
+        }
+        if chain.len() >= MAX_CONTINUATION_TURNS {
+            return Err(Error::invalid(format!(
+                "`previous_response_id` chain is longer than {MAX_CONTINUATION_TURNS} turns"
+            )));
+        }
+        let stored = store.get(&id).ok_or_else(|| {
+            Error::invalid(format!(
+                "`previous_response_id` `{id}` is not available to continue"
+            ))
+        })?;
+        if stored.status != ResponseStatus::Completed {
+            return Err(Error::invalid(format!(
+                "`previous_response_id` `{id}` is {} and cannot be continued",
+                response_status_name(stored.status)
+            )));
+        }
+        bytes += items_bytes(&stored.input) + items_bytes(&stored.output);
+        if bytes > MAX_CONTINUATION_BYTES {
+            return Err(Error::invalid(format!(
+                "`previous_response_id` history is larger than {MAX_CONTINUATION_BYTES} bytes"
+            )));
+        }
+        cursor = stored.previous_response_id.clone();
+        chain.push(stored);
+    }
+
+    // Oldest turn first, so the replayed messages read in conversation order.
+    chain.reverse();
+    let mut history: Vec<Message> = Vec::new();
+    for stored in &chain {
+        history.extend(protocol::responses::decode_history(&stored.input)?);
+        history.extend(protocol::responses::decode_history(&stored.output)?);
+    }
+    let current = std::mem::take(&mut req.messages);
+    req.messages = history;
+    req.messages.extend(current);
+    Ok((input_items, Some(previous)))
 }
 
 /// Apply the spending limits to a resolved request.
