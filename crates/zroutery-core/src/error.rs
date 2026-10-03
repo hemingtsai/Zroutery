@@ -63,6 +63,15 @@ pub enum Error {
     #[error("upstream returned malformed data: {0}")]
     BadUpstreamPayload(String),
 
+    /// The upstream ended an SSE body without ever naming a normal terminal.
+    ///
+    /// Everything it did stream stays streamed to the client; this error is how
+    /// the cut is reported instead of presenting the partial answer as one that
+    /// finished. `usage` is whatever the body reported before it ended, so the
+    /// spend it did incur is still accounted for.
+    #[error("upstream ended the stream before a terminal event")]
+    InterruptedStream { usage: crate::ir::Usage },
+
     #[error("request timed out after {0}s")]
     Timeout(u64),
 
@@ -93,7 +102,12 @@ impl Error {
                 StatusCode::from_u16(*status).unwrap_or(StatusCode::BAD_GATEWAY)
             }
             Error::Transport { .. } => StatusCode::BAD_GATEWAY,
-            Error::BadUpstreamPayload(_) => StatusCode::BAD_GATEWAY,
+            // The client already holds part of the answer; what failed is the
+            // upstream's stream, so this is a bad gateway rather than a 5xx
+            // the client could retry into a fresh answer.
+            Error::BadUpstreamPayload(_) | Error::InterruptedStream { .. } => {
+                StatusCode::BAD_GATEWAY
+            }
             Error::Timeout(_) => StatusCode::GATEWAY_TIMEOUT,
             Error::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
@@ -117,7 +131,9 @@ impl Error {
                 529 => "overloaded_error",
                 _ => "api_error",
             },
-            Error::Transport { .. } | Error::BadUpstreamPayload(_) => "api_error",
+            Error::Transport { .. }
+            | Error::BadUpstreamPayload(_)
+            | Error::InterruptedStream { .. } => "api_error",
             Error::Timeout(_) => "timeout_error",
             Error::Internal(_) => "api_error",
         }

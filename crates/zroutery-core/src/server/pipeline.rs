@@ -2419,6 +2419,13 @@ fn sse_body(
                 }
                 Some(Err(err)) => {
                     st.finished = true;
+                    // The upstream may have ended a truncated body after
+                    // reporting usage: keep that accounting even though the
+                    // request itself is failing, so the partial answer's real
+                    // spend is not silently dropped.
+                    if let Error::InterruptedStream { usage } = &err {
+                        st.usage = *usage;
+                    }
                     let frames = st.encoder.error(&err);
                     st.emitted |= !frames.is_empty();
                     st.pending.extend(frames);
@@ -2474,9 +2481,8 @@ mod tests {
         }
 
         // A malformed payload is a body too, and its text can echo credentials.
-        let error = Error::BadUpstreamPayload(
-            "{\"access_token\":\"sk-SYNTHETIC-TEST-ONLY\"}".into(),
-        );
+        let error =
+            Error::BadUpstreamPayload("{\"access_token\":\"sk-SYNTHETIC-TEST-ONLY\"}".into());
         let shown = activity_error(&error);
         assert!(
             !shown.contains("sk-SYNTHETIC-TEST-ONLY"),

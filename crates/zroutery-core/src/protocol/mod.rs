@@ -12,7 +12,7 @@ pub mod responses;
 
 use crate::error::{Error, Result};
 use crate::ir::{
-    ChatRequest, ChatResponse, ContentBlock, Dialect, StreamEvent, UnsupportedContentPolicy,
+    ChatRequest, ChatResponse, ContentBlock, Dialect, StreamEvent, UnsupportedContentPolicy, Usage,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -365,7 +365,25 @@ fn parse_frame(raw: &str) -> Option<SseFrame> {
 pub trait StreamParser: Send {
     fn push(&mut self, frame: &SseFrame) -> Result<Vec<StreamEvent>>;
     /// Called when the upstream body ends, to close dangling blocks.
+    ///
+    /// This is *not* proof that the answer finished: an upstream relay that
+    /// drops the connection mid-answer reaches here too. [`Self::saw_normal_terminal`]
+    /// is the only evidence of a genuine ending.
     fn finish(&mut self) -> Vec<StreamEvent>;
+    /// Whether a genuine normal terminal event was observed before the body
+    /// ended: an OpenAI `finish_reason` or `[DONE]`, an Anthropic
+    /// `message_delta` carrying a `stop_reason` or `message_stop`, a
+    /// Responses `response.completed`/`response.incomplete`, or a Gemini
+    /// `finishReason`.
+    ///
+    /// A body that ends without one of these was truncated, not completed,
+    /// however much valid content preceded the cut.
+    fn saw_normal_terminal(&self) -> bool;
+    /// Usage the body reported before it ended.
+    ///
+    /// Read when the body ended without a normal terminal, so the partial
+    /// answer's known spend is still recorded honestly.
+    fn reported_usage(&self) -> Usage;
 }
 
 /// Turn canonical events into SSE frames for a client.
@@ -506,7 +524,10 @@ mod tests {
         // Tool arguments carry file names and paths; a mangled byte here is not
         // a display problem, it is an unusable function call.
         let arguments = "{\"path\":\"项目/报告.txt\",\"note\":\"🙂\"}";
-        let wire = format!("data: {{\"arguments\":{}}}\n\n", serde_json::json!(arguments));
+        let wire = format!(
+            "data: {{\"arguments\":{}}}\n\n",
+            serde_json::json!(arguments)
+        );
         let mut d = SseDecoder::new();
         let mut frames = Vec::new();
         for byte in wire.as_bytes() {

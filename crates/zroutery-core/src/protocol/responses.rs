@@ -1211,7 +1211,10 @@ pub struct ResponsesStreamParser {
     id: String,
     model: String,
     started: bool,
-    stopped: bool,
+    /// Whether the upstream really ended the response
+    /// (`response.completed`/`response.incomplete`). A body that just stops
+    /// arriving is truncated.
+    normal_terminal: bool,
     next_index: u32,
     text_index: Option<u32>,
     thinking_index: Option<u32>,
@@ -1227,7 +1230,7 @@ impl ResponsesStreamParser {
             id: String::new(),
             model: model.to_string(),
             started: false,
-            stopped: false,
+            normal_terminal: false,
             next_index: 0,
             text_index: None,
             thinking_index: None,
@@ -1497,7 +1500,7 @@ impl StreamParser for ResponsesStreamParser {
                 } else {
                     StopReason::EndTurn
                 };
-                self.stopped = true;
+                self.normal_terminal = true;
                 out.push(StreamEvent::Stop {
                     stop_reason,
                     stop_sequence: None,
@@ -1547,29 +1550,25 @@ impl StreamParser for ResponsesStreamParser {
     }
 
     fn finish(&mut self) -> Vec<StreamEvent> {
-        if !(self.started && !self.stopped) {
-            return Vec::new();
-        }
-        self.stopped = true;
         let mut out = Vec::new();
         // A stream cut off after tool deltas still owes each open tool its
-        // block stop.
+        // block stop, so the client's block stream is well formed — but no
+        // `Stop` is synthesized: this body never named a terminal.
         let mut indices: Vec<u32> = self.tool_indices.values().copied().collect();
         indices.sort_unstable();
         indices.dedup();
         for index in indices {
             self.close_tool(index, &mut out);
         }
-        out.push(StreamEvent::Stop {
-            stop_reason: if self.tool_indices.is_empty() {
-                StopReason::EndTurn
-            } else {
-                StopReason::ToolUse
-            },
-            stop_sequence: None,
-            usage: self.usage,
-        });
         out
+    }
+
+    fn saw_normal_terminal(&self) -> bool {
+        self.normal_terminal
+    }
+
+    fn reported_usage(&self) -> Usage {
+        self.usage
     }
 }
 

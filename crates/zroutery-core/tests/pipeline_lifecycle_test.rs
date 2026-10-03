@@ -123,6 +123,43 @@ async fn mock_chat(State(mock): State<Mock>, Json(body): Json<Value>) -> Respons
                 .body(held_open_stream(""))
                 .unwrap();
         }
+        if model.starts_with("truncate") {
+            // A 200 that starts an answer and then just ends: no
+            // `finish_reason`, no `[DONE]`, no terminal of any kind. This is
+            // what a relay cutting the connection looks like.
+            let mut sse = String::new();
+            sse.push_str(&openai_chunk(
+                "chatcmpl-mock",
+                json!({"role": "assistant", "content": ""}),
+                Value::Null,
+            ));
+            sse.push_str(&openai_chunk(
+                "chatcmpl-mock",
+                json!({"content": "partial answer"}),
+                Value::Null,
+            ));
+            if model.starts_with("truncate-usage") {
+                // The relay reported usage before it vanished, so the spend
+                // really happened even though the answer did not finish.
+                sse.push_str(&format!(
+                    "data: {}\n\n",
+                    json!({"id": "chatcmpl-mock", "object": "chat.completion.chunk",
+                           "model": "mock", "choices": [],
+                           "usage": {"prompt_tokens": 11, "completion_tokens": 7}})
+                ));
+            }
+            return Response::builder()
+                .header("content-type", "text/event-stream")
+                .body(axum::body::Body::from(sse))
+                .unwrap();
+        }
+        if model.starts_with("empty-stream") {
+            // HTTP 200 with no SSE frames at all.
+            return Response::builder()
+                .header("content-type", "text/event-stream")
+                .body(axum::body::Body::from(""))
+                .unwrap();
+        }
         let mut sse = String::new();
         sse.push_str(&openai_chunk(
             "chatcmpl-mock",
@@ -212,6 +249,9 @@ fn config_for(mock: SocketAddr) -> AppConfig {
         model("beta", "hold-model", 10, ModelTier::Fast),
         model("beta", "broken-model", 10, ModelTier::Fast),
         model("alpha", "cancel-model", 10, ModelTier::Fast),
+        model("alpha", "truncate-model", 10, ModelTier::Fast),
+        model("alpha", "truncate-usage-model", 10, ModelTier::Fast),
+        model("alpha", "empty-stream-model", 10, ModelTier::Fast),
     ];
     cfg
 }
@@ -970,4 +1010,160 @@ fn dropping_a_stream_is_not_a_success_in_the_source_either() {
         !drop_impl.contains("finalize(None)"),
         "a dropped stream is never finalized with no terminal state"
     );
+}
+
+// ------------------------------------------------------------------ PL-01 truncated streams
+
+/// A 200 SSE body that ends without any terminal event is a truncated answer,
+/// not a completed one: the client keeps what streamed, the request is
+/// recorded as an interruption, and the provider is not credited with a
+/// success it did not deliver.
+#[tokio::test]
+async fn a_truncated_stream_is_never_a_completed_success() {
+    let h = Harness::new().await;
+
+    let response = h.ask_streaming("alpha-truncate-model").await;
+    assert_eq!(response.status(), 200, "the handshake succeeded");
+    let wire = response.text().await.unwrap();
+    assert!(
+        wire.contains("partial answer"),
+        "the client keeps the bytes that did arrive: {wire}"
+    );
+    assert!(
+        wire.contains("event: error"),
+        "the stream ends with a failure terminal, not a normal stop: {wire}"
+    );
+    assert!(
+        !wire.contains("event: message_stop"),
+        "an unterminated stream must not look finished: {wire}"
+    );
+
+    let record = h.record();
+    assert!(!record.ok, "a truncated answer is not a success");
+    assert_eq!(record.status, 502);
+    assert!(
+        record
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("terminal event"),
+        "activity names the truncation: {:?}",
+        record.error
+    );
+
+    let outcome = h.outcome();
+    assert_eq!(outcome.final_status, FinalStatus::Interrupted);
+    assert_eq!(outcome.failure_class(), Some(FailureClass::Interrupted));
+    assert!(!outcome.is_terminal_success());
+    assert!(
+        outcome.served_identity().is_none(),
+        "nothing delivered a finished answer"
+    );
+    assert!(outcome.validate().is_ok(), "{:?}", outcome.validate());
+
+    // The handshake really happened, so it is reported once; the cut is an
+    // interruption, not evidence that the provider is unhealthy.
+    let health = h.state.router().health_snapshot();
+    let alpha = health
+        .iter()
+        .find(|model| model.model_id == "alpha-truncate-model")
+        .expect("the handshake was reported");
+    assert_eq!(alpha.total_success, 1);
+    assert_eq!(alpha.total_failure, 0);
+    let breakdown = h
+        .state
+        .router()
+        .stats_store
+        .get("alpha-truncate-model", "alpha");
+    assert_eq!(breakdown.failures.count(FailureClass::Interrupted), 1);
+
+    h.shutdown().await;
+}
+
+/// Usage the relay reported before it cut the stream is real spend: the
+/// outcome stays a failure, but the ledger keeps what actually happened.
+#[tokio::test]
+async fn a_truncated_stream_keeps_the_usage_it_reported() {
+    let h = Harness::new().await;
+
+    let response = h.ask_streaming("alpha-truncate-usage-model").await;
+    let wire = response.text().await.unwrap();
+    assert!(wire.contains("partial answer"), "{wire}");
+
+    let record = h.record();
+    assert!(!record.ok);
+    assert!(record.cost.is_some(), "the partial spend is still recorded");
+
+    let outcome = h.outcome();
+    assert_eq!(outcome.final_status, FinalStatus::Interrupted);
+    assert_eq!(
+        outcome
+            .usage
+            .map(|usage| (usage.input_tokens, usage.output_tokens)),
+        Some((11, 7)),
+        "the usage reported before the cut survives"
+    );
+    assert_eq!(
+        outcome.actual_cost,
+        record.cost.as_ref().map(|cost| cost.amount)
+    );
+    assert!(
+        h.spent_today() > 0.0,
+        "the spend reached the ledger even though the answer did not finish"
+    );
+
+    h.shutdown().await;
+}
+
+/// An empty 200 body names no answer at all, so it is a failure rather than an
+/// empty success.
+#[tokio::test]
+async fn an_empty_upstream_stream_body_is_a_failure() {
+    let h = Harness::new().await;
+
+    let response = h.ask_streaming("alpha-empty-stream-model").await;
+    assert_eq!(response.status(), 200);
+    let wire = response.text().await.unwrap();
+    assert!(
+        wire.contains("event: error"),
+        "an empty body still reports a terminal failure: {wire}"
+    );
+
+    let outcome = h.outcome();
+    assert_eq!(outcome.final_status, FinalStatus::Interrupted);
+    assert!(outcome.served_identity().is_none());
+    assert!(outcome.validate().is_ok(), "{:?}", outcome.validate());
+
+    h.shutdown().await;
+}
+
+/// The Responses dialect gets the same treatment: a truncated upstream stream
+/// becomes `response.failed`, never `response.completed`.
+#[tokio::test]
+async fn a_truncated_responses_stream_fails_rather_than_completing() {
+    let h = Harness::new().await;
+
+    let response = h
+        .post("/v1/responses")
+        .json(&json!({"model": "alpha-truncate-model", "input": "hi", "stream": true}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let wire = response.text().await.unwrap();
+    assert!(
+        wire.contains("response.failed"),
+        "the terminal frame is a failure: {wire}"
+    );
+    assert!(
+        !wire.contains("response.completed"),
+        "a truncated Responses stream must not be announced as completed: {wire}"
+    );
+
+    let outcome = h.outcome();
+    assert_eq!(outcome.final_status, FinalStatus::Interrupted);
+    assert!(outcome.served_identity().is_none());
+    assert!(outcome.validate().is_ok(), "{:?}", outcome.validate());
+
+    h.shutdown().await;
 }
