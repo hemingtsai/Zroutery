@@ -2117,9 +2117,9 @@ mod tests {
         // The late text survives, in a block of its own after the tools.
         let late = events
             .iter()
-            .position(|event| {
-                matches!(event, StreamEvent::TextDelta { text, .. } if text == "second")
-            })
+            .position(
+                |event| matches!(event, StreamEvent::TextDelta { text, .. } if text == "second"),
+            )
             .expect("late text must not be dropped");
         for index in [2u32, 3] {
             let stop = events
@@ -2296,7 +2296,9 @@ mod tests {
             "parallel_tool_calls": "no"
         }))
         .unwrap_err();
-        assert!(err.to_string().contains("`parallel_tool_calls` must be a boolean"));
+        assert!(err
+            .to_string()
+            .contains("`parallel_tool_calls` must be a boolean"));
     }
 
     #[test]
