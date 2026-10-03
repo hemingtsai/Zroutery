@@ -1150,6 +1150,52 @@ fn predictor_rejects_wrong_checkpoint_commit_pairing() {
     assert!(ModelEnsemblePredictor::from_model_commit(&other_commit).is_ok());
 }
 
+/// ML-13: the compatibility loader must not present an already trained root
+/// checkpoint as an empty genesis history. The loaded samples survive the next
+/// training run and the loaded commit stays its parent; only the canonical cold
+/// genesis keeps the empty-history path.
+#[test]
+fn from_commit_continues_from_a_trained_root_checkpoint() {
+    // A root commit record over an already trained checkpoint: the record
+    // cannot describe the training, but it must not erase it either.
+    let mut trained = ModelEnsemble::new();
+    for sample in &training_samples(0..1) {
+        trained.update_all(sample);
+    }
+    let checkpoint = trained.save_all();
+    let loaded_commit = ModelCommit::new(ModelId::new("shadow"), checkpoint.clone(), None, 0);
+    let predictor =
+        ModelEnsemblePredictor::from_commit(&checkpoint, loaded_commit.commit_id.clone())
+            .expect("a trained root checkpoint must load");
+
+    let (ensemble, next) = predictor
+        .try_train(&training_samples(1..2))
+        .expect("training from a loaded checkpoint must succeed");
+    assert_eq!(
+        next.parent,
+        Some(loaded_commit.commit_id.clone()),
+        "the loaded commit must be the parent of the next training commit"
+    );
+    assert_eq!(
+        ensemble.save_all().success.update_count,
+        2,
+        "the loaded sample and the new sample must both be applied"
+    );
+
+    // The cold genesis is unchanged: it is the one checkpoint that really is an
+    // empty, complete history, so it keeps rebuilding from itself.
+    let genesis = ModelEnsemblePredictor::genesis();
+    let cold =
+        ModelEnsemblePredictor::from_commit(&genesis.ensemble_checkpoint(), genesis.commit())
+            .expect("the cold genesis must load through the compatibility path");
+    let (_, cold_commit) = cold.train(&training_samples(0..1));
+    let (_, inline_commit) = genesis.train(&training_samples(0..1));
+    assert_eq!(
+        cold_commit, inline_commit,
+        "the cold genesis must keep its empty-history training path"
+    );
+}
+
 #[test]
 fn predictor_train_and_swap_retain_verified_lineage() {
     let engine = engine();
