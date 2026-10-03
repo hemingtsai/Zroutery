@@ -880,9 +880,7 @@ fn set_nested(
 
 /// Describe a patch that would have to overwrite an existing non-table value.
 fn type_conflict(path: &str, part: &str) -> String {
-    format!(
-        "cannot set `{path}`: `{part}` already holds a non-table value of a different type"
-    )
+    format!("cannot set `{path}`: `{part}` already holds a non-table value of a different type")
 }
 
 /// Restore a manifest's managed fields into `raw`.
@@ -890,12 +888,13 @@ fn type_conflict(path: &str, part: &str) -> String {
 /// Fields that already existed at adoption time are set back to their captured
 /// value; fields recorded in [`OwnershipManifest::absent_fields`] are removed
 /// so a value Zroutery introduced does not outlive the ownership.
-fn restore_fields(
-    raw: &mut serde_json::Value,
-    manifest: &OwnershipManifest,
-) -> Result<(), String> {
+fn restore_fields(raw: &mut serde_json::Value, manifest: &OwnershipManifest) -> Result<(), String> {
     for field_path in &manifest.managed_fields {
-        if manifest.absent_fields.iter().any(|absent| absent == field_path) {
+        if manifest
+            .absent_fields
+            .iter()
+            .any(|absent| absent == field_path)
+        {
             remove_nested(raw, field_path);
         } else if let Some(original_value) = manifest.field_snapshots.get(field_path) {
             set_nested(raw, field_path, original_value.clone())?;
@@ -1220,7 +1219,8 @@ fn parse_toml_key(text: &str, line_number: usize) -> Result<Vec<String>, String>
             text[start..end].to_string()
         } else {
             let start = index;
-            while index < bytes.len() && !bytes[index].is_ascii_whitespace() && bytes[index] != b'.' {
+            while index < bytes.len() && !bytes[index].is_ascii_whitespace() && bytes[index] != b'.'
+            {
                 index += 1;
             }
             if start == index {
@@ -1300,7 +1300,10 @@ fn insert_toml_value(
 
 /// Parse a single-line TOML value.
 fn parse_toml_value(text: &str, line_number: usize) -> Result<serde_json::Value, String> {
-    let mut parser = TomlValueParser { input: text, pos: 0 };
+    let mut parser = TomlValueParser {
+        input: text,
+        pos: 0,
+    };
     let value = parser.parse_value(line_number)?;
     parser.skip_whitespace();
     if parser.pos != text.len() {
@@ -2125,7 +2128,9 @@ mod tests {
         let err = adapter.read_config().unwrap_err();
         assert!(err.contains("arrays of tables"), "error: {err}");
         assert!(
-            std::fs::read_to_string(&path).unwrap().contains("[[profiles]]"),
+            std::fs::read_to_string(&path)
+                .unwrap()
+                .contains("[[profiles]]"),
             "the unreadable config must be left untouched"
         );
     }
@@ -3131,8 +3136,7 @@ mod tests {
         let path = home.join(".claude.json");
         std::fs::write(
             &path,
-            serde_json::to_string_pretty(&serde_json::json!({"model": "existing-scalar"}))
-                .unwrap(),
+            serde_json::to_string_pretty(&serde_json::json!({"model": "existing-scalar"})).unwrap(),
         )
         .unwrap();
 
