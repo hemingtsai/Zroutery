@@ -521,8 +521,14 @@ fn decode_user_content(v: Option<&Value>) -> Result<Vec<ContentBlock>> {
                         // Support both legacy {file: {data, url, media_type}} and
                         // Responses-style {file_data, file_url, file_id, filename, media_type}.
                         let (source, media_type, name) = if let Some(file_obj) = part.get("file") {
+                            // The official Chat Completions shape is
+                            // `{"type":"file","file":{"file_id"|"file_data",...}}`;
+                            // the flat `data`/`url` members are older relay
+                            // spellings and stay supported as a fallback.
                             let data = file_obj.get("data").and_then(Value::as_str);
+                            let file_data = file_obj.get("file_data").and_then(Value::as_str);
                             let url = file_obj.get("url").and_then(Value::as_str);
+                            let file_id = file_obj.get("file_id").and_then(Value::as_str);
                             let media_type = file_obj
                                 .get("media_type")
                                 .or_else(|| file_obj.get("mime_type"))
@@ -539,13 +545,20 @@ fn decode_user_content(v: Option<&Value>) -> Result<Vec<ContentBlock>> {
                                     media_type: media_type.clone(),
                                     data: data.to_string(),
                                 }
+                            } else if let Some(file_data) = file_data {
+                                // `file_data` is a base64 data URL in the
+                                // official shape, so the media type it carries
+                                // wins over the declared one.
+                                MediaSource::from_url(file_data)
                             } else if let Some(url) = url {
                                 MediaSource::Url {
                                     url: url.to_string(),
                                 }
+                            } else if let Some(id) = file_id {
+                                MediaSource::Reference { id: id.to_string() }
                             } else {
                                 return Err(Error::invalid(
-                                    "file content is missing `data`, `url`, or `file_id`",
+                                    "file content is missing `data`, `url`, `file_data`, or `file_id`",
                                 ));
                             };
                             (source, media_type, name)
@@ -935,6 +948,28 @@ fn encode_message_into(
                                 }
                             }
                         }
+                    }
+                    // An input file is representable in the official dialect,
+                    // so a same-protocol request carries it instead of
+                    // rejecting content the upstream understands.
+                    ContentBlock::File {
+                        source: MediaSource::Reference { id },
+                        ..
+                    } => parts.push(json!({
+                        "type": "file",
+                        "file": {"file_id": id},
+                    })),
+                    ContentBlock::File {
+                        source: source @ MediaSource::Base64 { .. },
+                        name,
+                        ..
+                    } => {
+                        let mut file = Map::new();
+                        file.insert("file_data".into(), json!(source.to_data_url()));
+                        if let Some(name) = name {
+                            file.insert("filename".into(), json!(name));
+                        }
+                        parts.push(json!({"type": "file", "file": file}));
                     }
                     ContentBlock::Document { .. }
                     | ContentBlock::File { .. }
@@ -2794,5 +2829,85 @@ mod tests {
         assert!(msgs[1].get("reasoning_content").is_none());
         assert!(msgs[1]["content"].as_str().unwrap().contains("Unsupported"));
         assert!(msgs[1]["content"].as_str().unwrap().contains("answer"));
+    }
+
+    #[test]
+    fn the_official_file_id_part_decodes_and_re_encodes() {
+        let body = json!({
+            "model": "m",
+            "messages": [{
+                "role": "user",
+                "content": [{"type": "file", "file": {"file_id": "file-123"}}]
+            }]
+        });
+        let req = decode_request(body).unwrap();
+        assert_eq!(
+            req.messages[0].content,
+            vec![ContentBlock::File {
+                source: MediaSource::Reference {
+                    id: "file-123".into()
+                },
+                media_type: "application/octet-stream".into(),
+                name: None,
+            }]
+        );
+        let wire = encode_request(&req, "m").unwrap();
+        assert_eq!(
+            wire["messages"][0]["content"][0],
+            json!({"type": "file", "file": {"file_id": "file-123"}})
+        );
+    }
+
+    #[test]
+    fn the_official_file_data_part_decodes_and_re_encodes() {
+        let body = json!({
+            "model": "m",
+            "messages": [{
+                "role": "user",
+                "content": [{
+                    "type": "file",
+                    "file": {
+                        "file_data": "data:application/pdf;base64,QQ==",
+                        "filename": "a.pdf"
+                    }
+                }]
+            }]
+        });
+        let req = decode_request(body).unwrap();
+        assert_eq!(
+            req.messages[0].content,
+            vec![ContentBlock::File {
+                source: MediaSource::Base64 {
+                    media_type: "application/pdf".into(),
+                    data: "QQ==".into(),
+                },
+                media_type: "application/octet-stream".into(),
+                name: Some("a.pdf".into()),
+            }]
+        );
+        let wire = encode_request(&req, "m").unwrap();
+        assert_eq!(
+            wire["messages"][0]["content"][0],
+            json!({
+                "type": "file",
+                "file": {
+                    "file_data": "data:application/pdf;base64,QQ==",
+                    "filename": "a.pdf"
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn a_file_without_a_reference_still_fails_closed() {
+        let body = json!({
+            "model": "m",
+            "messages": [{
+                "role": "user",
+                "content": [{"type": "file", "file": {"filename": "a.pdf"}}]
+            }]
+        });
+        let err = decode_request(body).unwrap_err().to_string();
+        assert!(err.contains("file content is missing"), "{err}");
     }
 }
