@@ -104,6 +104,10 @@ pub struct InFlightResponse {
     pub cancel_tx: watch::Sender<bool>,
     /// The response id.
     pub id: String,
+    /// Whether the client asked for the response to be retained. A client that
+    /// said `store: false` gets no cancelled placeholder either: the in-flight
+    /// handle is short-lived and carries no content.
+    pub retains: bool,
 }
 
 /// Thread-safe response store with bounded capacity.
@@ -161,10 +165,19 @@ impl ResponseStore {
     }
 
     /// Register an in-flight response. Returns a cancel receiver.
-    pub fn register_in_flight(&self, id: String) -> watch::Receiver<bool> {
+    ///
+    /// `retains` is the client's storage policy, carried so cancellation can
+    /// honour it without the caller having to remember it.
+    pub fn register_in_flight(&self, id: String, retains: bool) -> watch::Receiver<bool> {
         let (tx, rx) = watch::channel(false);
-        crate::sync::lock(&self.inner.in_flight)
-            .insert(id.clone(), InFlightResponse { cancel_tx: tx, id });
+        crate::sync::lock(&self.inner.in_flight).insert(
+            id.clone(),
+            InFlightResponse {
+                cancel_tx: tx,
+                id,
+                retains,
+            },
+        );
         rx
     }
 
@@ -174,13 +187,22 @@ impl ResponseStore {
     }
 
     /// Cancel an in-flight response. Returns true if it was found.
-    pub fn cancel(&self, id: &str) -> bool {
-        let mut map = crate::sync::lock(&self.inner.in_flight);
-        if let Some(inflight) = map.remove(id) {
-            let _ = inflight.cancel_tx.send(true);
-            true
-        } else {
-            false
+    ///
+    /// A client that asked for `store: false` gets no cancelled placeholder:
+    /// cancellation must not retain anything the request asked to discard.
+    /// `model` names the placeholder's model, as the pipeline does when it
+    /// notices the cancellation itself.
+    pub fn cancel(&self, id: &str, model: &str) -> bool {
+        let inflight = crate::sync::lock(&self.inner.in_flight).remove(id);
+        match inflight {
+            Some(inflight) => {
+                let _ = inflight.cancel_tx.send(true);
+                if inflight.retains {
+                    self.mark_cancelled(id, model.to_string());
+                }
+                true
+            }
+            None => false,
         }
     }
 
@@ -290,9 +312,9 @@ mod tests {
     #[tokio::test]
     async fn cancel_in_flight() {
         let store = ResponseStore::new(10);
-        let mut rx = store.register_in_flight("r1".to_string());
+        let mut rx = store.register_in_flight("r1".to_string(), true);
         assert!(!store.is_cancelled("r1"));
-        assert!(store.cancel("r1"));
+        assert!(store.cancel("r1", "m"));
         assert!(rx.changed().await.is_ok());
         assert!(*rx.borrow());
     }
@@ -300,9 +322,9 @@ mod tests {
     #[test]
     fn complete_removes_from_in_flight() {
         let store = ResponseStore::new(10);
-        let _rx = store.register_in_flight("r1".to_string());
+        let _rx = store.register_in_flight("r1".to_string(), true);
         store.complete_in_flight("r1");
-        assert!(!store.cancel("r1"), "should no longer be in-flight");
+        assert!(!store.cancel("r1", "m"), "should no longer be in-flight");
     }
 
     #[test]

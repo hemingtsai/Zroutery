@@ -65,6 +65,10 @@ pub(super) async fn handle_chat(
         (Vec::new(), None)
     };
 
+    // Retention policy, read from the decoded request rather than the raw
+    // body, and honoured by every path that could write a response snapshot.
+    let storage = protocol::responses::StoragePolicy::from_request(&req);
+
     let registry = state.registry();
     let config = registry.config();
 
@@ -256,6 +260,7 @@ pub(super) async fn handle_chat(
             plan,
             kind,
             include_usage,
+            storage,
             routing_decision,
             #[cfg(feature = "ml")]
             shadow_input,
@@ -270,6 +275,7 @@ pub(super) async fn handle_chat(
             kind,
             input_items,
             previous_response_id,
+            storage,
             routing_decision,
             #[cfg(feature = "ml")]
             shadow_input,
@@ -703,6 +709,7 @@ async fn buffered_chat(
     kind: RequestKind,
     input_items: Vec<Value>,
     previous_response_id: Option<String>,
+    storage: protocol::responses::StoragePolicy,
     routing_decision: Option<RouteDecision>,
     #[cfg(feature = "ml")] shadow_input: Option<ShadowInput>,
 ) -> Response {
@@ -864,7 +871,7 @@ async fn buffered_chat(
                 // Report the model that actually answered, not the virtual id.
                 resp.model = candidate.exposed_id.clone();
                 let wire = protocol::encode_response(dialect, &resp);
-                if dialect == Dialect::OpenAIResponses {
+                if dialect == Dialect::OpenAIResponses && storage.retains() {
                     let output = wire
                         .get("output")
                         .cloned()
@@ -938,7 +945,7 @@ async fn buffered_chat(
                         );
                         resp.model = candidate.exposed_id.clone();
                         let wire = protocol::encode_response(dialect, &resp);
-                        if dialect == Dialect::OpenAIResponses {
+                        if dialect == Dialect::OpenAIResponses && storage.retains() {
                             let output = wire
                                 .get("output")
                                 .cloned()
@@ -1023,6 +1030,7 @@ async fn stream_chat(
     plan: Vec<Candidate>,
     kind: RequestKind,
     include_usage: bool,
+    storage: protocol::responses::StoragePolicy,
     routing_decision: Option<RouteDecision>,
     #[cfg(feature = "ml")] shadow_input: Option<ShadowInput>,
 ) -> Response {
@@ -1130,7 +1138,7 @@ async fn stream_chat(
                     true,
                     None,
                 );
-                let (response_id, cancel_rx) = register_in_flight(&state, dialect);
+                let (response_id, cancel_rx) = register_in_flight(&state, dialect, storage);
                 return stream_response(
                     &state,
                     candidate,
@@ -1139,6 +1147,7 @@ async fn stream_chat(
                     include_usage,
                     lifecycle,
                     events,
+                    storage,
                     response_id,
                     cancel_rx,
                 );
@@ -1154,7 +1163,7 @@ async fn stream_chat(
                         // The repair is a second handshake, so it is explicit
                         // attempt evidence rather than an invisible retry.
                         lifecycle.begin_attempt(candidate, true);
-                        let (response_id, cancel_rx) = register_in_flight(&state, dialect);
+                        let (response_id, cancel_rx) = register_in_flight(&state, dialect, storage);
                         return stream_response(
                             &state,
                             candidate,
@@ -1163,6 +1172,7 @@ async fn stream_chat(
                             include_usage,
                             lifecycle,
                             events,
+                            storage,
                             response_id,
                             cancel_rx,
                         );
@@ -1219,10 +1229,13 @@ async fn stream_chat(
 fn register_in_flight(
     state: &Arc<AppState>,
     dialect: Dialect,
+    storage: protocol::responses::StoragePolicy,
 ) -> (Option<String>, Option<watch::Receiver<bool>>) {
     if dialect == Dialect::OpenAIResponses {
         let id = format!("resp-{}", uuid::Uuid::new_v4().simple());
-        let rx = state.response_store.register_in_flight(id.clone());
+        let rx = state
+            .response_store
+            .register_in_flight(id.clone(), storage.retains());
         (Some(id), Some(rx))
     } else {
         (None, None)
@@ -1243,6 +1256,7 @@ fn stream_response(
     include_usage: bool,
     mut lifecycle: RequestLifecycle,
     events: crate::upstream::EventStream,
+    storage: protocol::responses::StoragePolicy,
     response_id: Option<String>,
     cancel_rx: Option<watch::Receiver<bool>>,
 ) -> Response {
@@ -1261,6 +1275,7 @@ fn stream_response(
             provider_id: candidate.provider.id.clone(),
             tier: candidate.entry.tier,
             kind,
+            storage,
             response_id,
             cancel_rx,
         },
@@ -2240,6 +2255,8 @@ struct SseState {
     response_id: Option<String>,
     /// Cancel receiver for cancellation detection (Responses API).
     cancel_rx: Option<watch::Receiver<bool>>,
+    /// What the client asked the proxy to retain for this response.
+    storage: protocol::responses::StoragePolicy,
 }
 
 impl SseState {
@@ -2317,6 +2334,8 @@ struct StreamContext {
     response_id: Option<String>,
     /// Cancel receiver for cancellation detection (Responses API).
     cancel_rx: Option<watch::Receiver<bool>>,
+    /// What the client asked the proxy to retain for this response.
+    storage: protocol::responses::StoragePolicy,
 }
 
 /// Pipe canonical events through the egress encoder into an SSE byte stream.
@@ -2344,6 +2363,7 @@ fn sse_body(
         emitted: false,
         response_id: context.response_id,
         cancel_rx: context.cancel_rx,
+        storage: context.storage,
     };
 
     futures_util::stream::unfold(state, |mut st| async move {
@@ -2361,9 +2381,14 @@ fn sse_body(
                     result = rx.changed() => {
                         if result.is_ok() && *rx.borrow() {
                             st.finished = true;
-                            if let Some(ref id) = st.response_id {
-                                let model = st.lifecycle.served_model();
-                                st.state.response_store.mark_cancelled(id, model);
+                            // The cancelled placeholder carries no content, but
+                            // it is still a retained response: a client that
+                            // asked for `store: false` gets none.
+                            if st.storage.retains() {
+                                if let Some(ref id) = st.response_id {
+                                    let model = st.lifecycle.served_model();
+                                    st.state.response_store.mark_cancelled(id, model);
+                                }
                             }
                             // An explicit cancellation is a terminal state of its
                             // own, never a success.

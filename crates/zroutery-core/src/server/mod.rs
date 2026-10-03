@@ -1111,11 +1111,10 @@ async fn cancel_response(
     State(state): State<Arc<AppState>>,
     Path(response_id): Path<String>,
 ) -> Response {
-    if state.response_store.cancel(&response_id) {
-        // Store a cancelled placeholder so GET immediately after returns it.
-        state
-            .response_store
-            .mark_cancelled(&response_id, "unknown".to_string());
+    // Cancellation stores a content-free placeholder itself, but only when the
+    // request asked for retention; a `store: false` client gets the status
+    // without anything being kept.
+    if state.response_store.cancel(&response_id, "unknown") {
         // Return the cancelled response.
         match state.response_store.get(&response_id) {
             Some(resp) => Json(serde_json::to_value(&resp).unwrap()).into_response(),
