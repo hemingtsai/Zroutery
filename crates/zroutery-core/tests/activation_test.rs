@@ -638,6 +638,77 @@ fn a_snapshot_whose_stored_name_disagrees_with_its_content_is_refused() {
     }
 }
 
+/// ML-16: the loader must compare the *content-derived* name, not only the
+/// header the file declares. A file holding snapshot B's content with the header
+/// rewritten to A used to load as A, which makes a name no longer bind content.
+#[test]
+fn a_snapshot_whose_content_derives_a_different_name_is_refused() {
+    let temp = scratch();
+    let root = store_root(temp.path());
+    let mut store = ModelStore::with_model_id(ModelId::new(MODEL));
+    let (commit_a, _) = trained_commit(&mut store, None, "alpha", 1);
+    let (commit_b, commit_b_id) = trained_commit(&mut store, None, "beta", 2);
+    let derived_a = snapshot_id_for(&commit_a);
+    let derived_b = snapshot_id_for(&commit_b);
+    assert_ne!(
+        derived_a, derived_b,
+        "the two fixtures must have different content addresses"
+    );
+
+    let activation = ActivationStore::open(&root).expect("the store opens");
+    let snapshot_a = activation.write_snapshot(&commit_a).expect("written");
+    let snapshot_b = activation.write_snapshot(&commit_b).expect("written");
+    assert_eq!(snapshot_a.id(), &derived_a);
+    assert_eq!(snapshot_b.id(), &derived_b);
+
+    // B's whole legal payload, with only its header rewritten to A: the header
+    // agrees with the requested (and file) name, so only the re-derived content
+    // address can catch it. This is a missing comparison, not a hash collision.
+    let mut value: serde_json::Value =
+        serde_json::from_slice(&fs::read(snapshot_file(&root, snapshot_b.id())).expect("readable"))
+            .expect("the snapshot is valid json");
+    assert_eq!(value["snapshot_id"], serde_json::json!(derived_b.as_str()));
+    value["snapshot_id"] = serde_json::json!(derived_a.as_str());
+    let rewritten = serde_json::to_vec_pretty(&value).expect("serializable");
+    let path_a = snapshot_file(&root, snapshot_a.id());
+    fs::write(&path_a, &rewritten).expect("the snapshot is writable");
+
+    match activation.read_snapshot(snapshot_a.id()) {
+        Err(ActivationError::IdentityMismatch {
+            snapshot,
+            stored,
+            derived,
+        }) => {
+            assert_eq!(snapshot, derived_a.as_str());
+            assert_eq!(
+                stored,
+                derived_a.as_str(),
+                "the header was rewritten to agree with the path"
+            );
+            assert_eq!(
+                derived,
+                derived_b.as_str(),
+                "the content is what derives the address"
+            );
+        }
+        other => panic!("expected an IdentityMismatch refusal, got {other:?}"),
+    }
+    assert_eq!(
+        fs::read(&path_a).expect("readable"),
+        rewritten,
+        "loading never repairs the bytes it refused"
+    );
+
+    // The untouched B snapshot still loads under its own, correct name.
+    assert_eq!(
+        activation
+            .read_snapshot(snapshot_b.id())
+            .expect("B still verifies")
+            .commit_id(),
+        &commit_b_id
+    );
+}
+
 #[test]
 fn a_malformed_snapshot_name_is_refused_before_it_becomes_a_path() {
     let temp = scratch();
