@@ -1113,6 +1113,66 @@ def reload(devtools: DevTools) -> None:
     raise ProtocolError("the dashboard never came back after a reload")
 
 
+def case_ui2_candidate_priority(devtools: DevTools) -> list[str]:
+    """Moving a candidate up must renumber priority, which is what Rust sorts by."""
+    seed(devtools)
+    failures: list[str] = []
+
+    devtools.click_selector(".nav-item", 3)
+    devtools.wait_for("document.querySelector('.flow-row') !== null", "routing page")
+    # The Auto Mode section's Edit button is the second `.section-head button.linky`.
+    devtools.click_selector(".section-head button.linky", 1)
+    devtools.wait_for("document.querySelector('.drawer table.table') !== null", "auto drawer")
+
+    before = devtools.evaluate(
+        "Array.from(document.querySelectorAll('.drawer table.table tbody tr td.mono'))"
+        ".map((td) => td.textContent.trim())"
+    )
+    if before[:2] != ["deepseek-deepseek-chat", "anthropic-mystery"]:
+        failures.append("unexpected pool order before the move: %r" % before)
+
+    # Move the second entry up with a real click on its ↑ button.
+    devtools.click_selector(
+        "button[aria-label='Move anthropic-mystery up']"
+    )
+    devtools.wait_for(
+        "window.__zrStub.log('save_config').length >= 1", "the move to be saved", timeout=15.0
+    )
+    time.sleep(0.4)
+    saved = devtools.evaluate(
+        "(window.__zrStub.last('save_config')||{args:{config:null}}).args.config"
+    )
+    if not saved:
+        return failures + ["no save_config reached the fake backend"]
+
+    candidates = saved["classifier"]["candidates"]
+    by_model = {c["model"]: c for c in candidates}
+    moved = by_model.get("anthropic-mystery")
+    stayed = by_model.get("deepseek-deepseek-chat")
+    if moved is None or stayed is None:
+        return failures + ["the move lost a candidate: %r" % candidates]
+    if not moved["priority"] < stayed["priority"]:
+        failures.append(
+            "Rust would still try %s first: priorities are %s"
+            % (
+                "deepseek-deepseek-chat",
+                {c["model"]: c["priority"] for c in candidates},
+            )
+        )
+
+    # The page must draw the same order it just saved, and label it with the
+    # priority rule rather than the array position.
+    after = devtools.evaluate(
+        "Array.from(document.querySelectorAll('.drawer table.table tbody tr td.mono'))"
+        ".map((td) => td.textContent.trim())"
+    )
+    if after[:2] != ["anthropic-mystery", "deepseek-deepseek-chat"]:
+        failures.append("the drawer still lists %r after the move" % after)
+
+    devtools.evaluate("window.__zrStub.reset()")
+    return failures
+
+
 def connect(debugging_port: int, url: str) -> DevTools:
     """Attach to the page the browser opened, retrying while it starts."""
     deadline = time.monotonic() + 30.0
@@ -1126,6 +1186,7 @@ def connect(debugging_port: int, url: str) -> DevTools:
 
 CASES = (
     {"label": "UI-1 two nested edits in sequence (first save delayed)", "run": case_ui1_nested_rebase},
+    {"label": "UI-2 moved candidate renumbers priority", "run": case_ui2_candidate_priority},
 )
 
 

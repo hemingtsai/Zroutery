@@ -188,6 +188,57 @@ export interface ClassifierCandidate {
   enabled: boolean;
 }
 
+/** Spacing between two generated candidate priorities. */
+export const CANDIDATE_PRIORITY_STEP = 10;
+
+export function nextCandidatePriority(candidates: ClassifierCandidate[]): number {
+  return (
+    candidates.reduce((max, c) => Math.max(max, c.priority), 0) + CANDIDATE_PRIORITY_STEP
+  );
+}
+
+/**
+ * The pool order a priority strategy would try.
+ *
+ * Rust sorts the pool by `priority`, ascending, not by the order the entries
+ * happen to sit in the array, so anything that displays or renumbers the pool
+ * has to use the same rule.
+ */
+export function orderCandidatesByPriority<T extends { priority: number; model: string }>(
+  candidates: T[],
+): T[] {
+  return [...candidates].sort(
+    (a, b) => a.priority - b.priority || (a.model < b.model ? -1 : a.model > b.model ? 1 : 0),
+  );
+}
+
+/**
+ * Move one candidate `delta` places and renumber the whole pool.
+ *
+ * Swapping two array elements only changes what the page draws: the router
+ * still sorts by `priority`, so a move that is not written into the numbers is
+ * a move the gateway never makes. The pool is renumbered from the array order
+ * the user is looking at, which is what "up" means; renumbering whatever order
+ * the priorities already implied would leave them exactly as they were.
+ */
+export function moveCandidatePriority(
+  candidates: ClassifierCandidate[],
+  model: string,
+  delta: number,
+): ClassifierCandidate[] | null {
+  const index = candidates.findIndex((c) => c.model === model);
+  const swap = index + delta;
+  if (index < 0 || swap < 0 || swap >= candidates.length) return null;
+  const next = candidates.map((c) => ({ ...c }));
+  const moved = next[index];
+  next[index] = next[swap];
+  next[swap] = moved;
+  return next.map((candidate, place) => ({
+    ...candidate,
+    priority: CANDIDATE_PRIORITY_STEP * (place + 1),
+  }));
+}
+
 /** Routing policy for Auto Mode classifier side queries. */
 export interface ClassifierConfig {
   enabled: boolean;

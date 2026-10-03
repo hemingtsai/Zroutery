@@ -208,6 +208,7 @@ export default function Models({
       <Section title={t("models.add_section")} hint={t("models.add_hint")}>
         <div className="controls">
           <Select
+            ariaLabel={t("field.provider")}
             value={draft.provider_id || null}
             onChange={(provider_id) => setDraft({ ...draft, provider_id })}
             placeholder={t("field.provider")}
@@ -294,6 +295,7 @@ function ModelDrawer({
           [
             t("models.tier"),
             <Select<ModelTier | "none">
+              ariaLabel={t("models.tier")}
               value={m.tier ?? "none"}
               disabled={busy}
               onChange={(next) =>
@@ -424,6 +426,7 @@ function ModelDrawer({
         <div className="grid-two">
           <Toggle
             label={t("models.tool_use")}
+            ariaLabel="Tool use"
             checked={m.capabilities.tools}
             onChange={(v) =>
               onUpdate((model) => {
@@ -433,6 +436,7 @@ function ModelDrawer({
           />
           <Toggle
             label={t("models.vision")}
+            ariaLabel="Vision"
             checked={m.capabilities.vision}
             onChange={(v) =>
               onUpdate((model) => {
@@ -442,6 +446,7 @@ function ModelDrawer({
           />
           <Toggle
             label={t("models.thinking")}
+            ariaLabel="Extended thinking"
             checked={m.capabilities.thinking}
             onChange={(v) =>
               onUpdate((model) => {
@@ -504,12 +509,14 @@ function PriceFields({
     <div className="controls">
       <TextField
         label={t("field.currency")}
+        ariaLabel="Currency"
         hint={t("field.currency_hint")}
         value={current.currency}
         onCommit={(currency) => patch({ currency: currency.trim().toUpperCase() || "USD" })}
       />
       <NumberField
         label={t("field.input")}
+        ariaLabel="Input price"
         hint={t("field.input_hint")}
         min={0}
         value={current.input_per_mtok}
@@ -517,6 +524,7 @@ function PriceFields({
       />
       <NumberField
         label={t("field.output")}
+        ariaLabel="Output price"
         hint={t("field.output_hint")}
         min={0}
         value={current.output_per_mtok}

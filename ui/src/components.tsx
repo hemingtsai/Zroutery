@@ -449,6 +449,7 @@ export function Button({
   disabled,
   title,
   type = "button",
+  ariaLabel,
   buttonRef,
 }: {
   children: ReactNode;
@@ -457,6 +458,7 @@ export function Button({
   disabled?: boolean;
   title?: string;
   type?: "button" | "submit";
+  ariaLabel?: string;
   buttonRef?: React.Ref<HTMLButtonElement>;
 }) {
   return (
@@ -467,6 +469,7 @@ export function Button({
       onClick={onClick}
       disabled={disabled}
       title={title}
+      aria-label={ariaLabel}
     >
       {children}
     </button>
@@ -501,17 +504,21 @@ export function Toggle({
   onChange,
   label,
   hint,
+  ariaLabel,
 }: {
   checked: boolean;
   onChange: (value: boolean) => void;
   label: string;
   hint?: string;
+  /** Accessible name for the switch itself, independent of the language. */
+  ariaLabel?: string;
 }) {
   return (
     <label className="toggle">
       <input
         type="checkbox"
         checked={checked}
+        aria-label={ariaLabel}
         onChange={(e) => onChange(e.currentTarget.checked)}
       />
       <span className="toggle-label">
@@ -539,6 +546,7 @@ export function TextField({
   readOnly,
   password,
   error,
+  ariaLabel,
 }: {
   label: string;
   hint?: string;
@@ -550,6 +558,8 @@ export function TextField({
   password?: boolean;
   /** Inline problem with the current value; shown under the input in danger tone. */
   error?: string | null;
+  /** Accessible name, for inputs whose visible label is generic. */
+  ariaLabel?: string;
 }) {
   const [draft, setDraft] = useState(value);
   // Adopt values that changed underneath us, e.g. after a save elsewhere.
@@ -568,6 +578,7 @@ export function TextField({
         value={draft}
         placeholder={placeholder}
         readOnly={readOnly}
+        aria-label={ariaLabel}
         onChange={(e) => setDraft(e.currentTarget.value)}
         onBlur={commit}
         onKeyDown={(e) => {
@@ -593,6 +604,7 @@ export function NumberField({
   max,
   placeholder,
   integer,
+  ariaLabel,
 }: {
   label: string;
   hint?: string;
@@ -603,6 +615,8 @@ export function NumberField({
   placeholder?: string;
   /** Round committed values to whole numbers (counts, ports, seconds). */
   integer?: boolean;
+  /** Accessible name, for inputs whose visible label is generic. */
+  ariaLabel?: string;
 }) {
   return (
     <Field label={label} hint={hint}>
@@ -613,6 +627,7 @@ export function NumberField({
         max={max}
         placeholder={placeholder}
         integer={integer}
+        ariaLabel={ariaLabel}
       />
     </Field>
   );
