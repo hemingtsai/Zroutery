@@ -325,7 +325,8 @@ Only items that block `PRODUCTION_READY`.
 | The frozen holdout was a content cluster | **Closed (ADR-0008).** `project_cohorts` sorted by `CohortOrderKey` and the holdout was a contiguous tail of that, so which decisions were held out depended on tie-breaking rather than on time; the gate refused a fifth of runs with `SingleServedCandidate` — §E5 | — |
 | Exploration defaults to zero, which has a measured cost | **Closed as a report, and the cost turned out to be two-sided.** The unreachable candidate is named in `MlStatus::blind_candidates` and warned about in the panel. But raising `exploration_probability` to fix it **blocks promotion of any learned model**, so the advice would have been self-defeating; the warning now says so and recommends top priority instead — §E6 | Nothing, unless the promotion gate learns to compare on something other than request-identical pairing. That is a design change with a real cost: paired evidence is what makes the improvement claim honest |
 | The shadow overhead gate was a wall-clock assertion | **Closed by reshaping, not widening.** `shadow_marginal_cost_per_candidate_does_not_grow` measures the *marginal* cost of a candidate at 4–8 and at 32–64 candidates, interleaved under one scheduler, and asserts it does not grow. Scale-free, so machine speed and load cancel. Verified by mutation: a quadratic regression scores 42.3us against 239.0us and fails; the old endpoint ratio scored that same mutation 3.6x against a bound of 12 and **passed**. `shadow_evaluate_absolute_cost` (`#[ignore]`) reads the magnitude for a human — §E7 | The shape is gated; a constant-factor slowdown is not, and cannot be without an absolute ceiling. That limitation is stated in the test rather than papered over |
-| `state::tests::a_successful_rebind_commits_the_document_and_moves_the_listener` is intermittent | 1 failure in 6 full-suite runs, always under concurrent load, never in isolation. A rebind test is a port-and-listener race wearing a test's clothes, in the same family as the shadow budget test | Same treatment as above, and out of scope for the ML work: it needs a serial runner or an injected listener, not a looser assertion |
+| `state::tests::a_successful_rebind_commits_the_document_and_moves_the_listener` was intermittent | **Closed.** `advertised_port()` binds `:0`, reads the number, drops the socket — so the port is free when probed and can be gone by the time the gateway binds it. Four tests start on an explicitly probed port and run concurrently, so the window was taken about 1 run in 6. `with_ports_that_survive` retries on a bind that says `cannot bind`, which is the one string `ServerHandle::start` produces and both callers pass through verbatim — §E8 | — |
+| Whether the port race is *eliminated* rather than tolerated | Retry, honestly. 8 consecutive clean full-suite runs after the change against a ~1-in-6 baseline is consistent with a large reduction and is **not** proof of elimination: the race depends on what else on the machine binds ports at the same moment | Reserving the port instead of probing it, which needs `ServerHandle` to accept a pre-bound listener. That is a real capability (port 0 in production, socket activation) rather than test scaffolding, so it is worth doing on its own merits — but it is production surface, not a test fix |
 | The status field's meaning is only asserted, not measured | **Closed.** `blind_spot_warning_matches_what_exploration_actually_does` runs `explore` over 2000 ids at each probability and requires the document's verdict to match. Mutating `explore` to explore at probability 0 fails this test and **nothing else in the workspace** — the other 2128 pass with exploration silently running | — |
 | Tauri command dispatch is not covered by a test | The status document, replay and rollback are exercised through `AppState` and over HTTP. Nothing drives them through a real webview | An integration harness around a webview, or accepting the seam and keeping `ml_available` so a failure there is reported as a failure rather than read as an absence |
 
@@ -873,6 +874,71 @@ and leaves its shape alone. Catching that requires an absolute ceiling — the f
 thing this replaced. So the shape is gated and the magnitude is *measured*:
 `shadow_evaluate_absolute_cost` is `#[ignore]`d and prints p50/p95/p99 at 1, 4, 16 and
 64 candidates for a human to read.
+
+## E8. A port that was free when probed, and gone when bound
+
+`a_successful_rebind_commits_the_document_and_moves_the_listener` failed about one
+full-suite run in six, always under concurrent load, never in isolation.
+
+**It is not the same defect as §E7, and my first guess that it was was wrong.** That
+one was a wall-clock ceiling; this one is a resource collision.
+
+`advertised_port()` probes by binding `127.0.0.1:0`, reading the number the OS
+assigned, and **dropping the socket**:
+
+```rust
+let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+let port = listener.local_addr().unwrap().port();
+drop(listener);          // <- the port is released here
+if port >= 30_000 { return port; }
+```
+
+The port is free when probed. Between that and the gateway's `bind` there are two
+`await`s — `desktop.start()`, and for the rebind test a full migrate — and in that
+window another test in the same binary can be handed the same port by the OS and take
+it. Four tests here start on an explicitly probed port, and the test harness runs
+them concurrently, so the window is taken often enough to be visible and rarely
+enough to look like noise.
+
+**Scope, which is smaller than it looks.** Only four of the six users of
+`advertised_port` are affected: the default configuration port is `0`, so
+`a_refused_address_is_not_persisted_while_stopped` never binds, and
+`a_save_racing_a_stop_leaves_one_consistent_state` already tolerates either outcome
+of its target bind.
+
+**The fix is retry, and the reason it is retry rather than something cleverer is
+worth stating.** The port genuinely is free at probe time, so a lost race is exactly
+that — a race. The alternative framings were both rejected on their merits:
+
+- *A fixed port.* Worse. It collides with anything else on the machine and cannot be
+  reasoned about.
+- *Configure port 0 and read the resolved port back from `bound_addr()`.* This does
+  remove the race entirely, and `bound_addr`'s own documentation says port 0 resolves
+  to a real port. But these tests exist to check that **the committed document names a
+  port the listener really serves** — `store::save` persists the configuration as
+  given, so a port-0 document stays 0 and the assertion becomes vacuous. That is the
+  property this file is for.
+
+`with_ports_that_survive` therefore retries while the failure is a bind failure. The
+discriminator is one string from one place: `ServerHandle::start` is the only code
+that binds and it reports `cannot bind {addr}: {os error}`, which reaches
+`Desktop::start` directly and is embedded verbatim by `migrate_listener` in its
+"previous gateway was restored" note.
+
+**The retry is proven, not assumed.** `the_port_race_retry_retries_only_port_races`
+covers three cases: a port lost twice is retried and then succeeds with the body
+having run exactly three times; a failure that is *not* a port race is reported
+immediately with the caller's message intact; and — the case that matters most — a
+refusal that two of the sibling tests assert on never enters the retry loop. Verified
+by mutation: making the helper not retry fails the first case.
+
+**What is not claimed.** 8 consecutive clean full-suite runs, against a ~1-in-6
+baseline, is consistent with a large reduction and is not proof of elimination — the
+race depends on what else on the machine binds ports at the same moment. Eliminating
+it means reserving the port rather than probing it, which needs `ServerHandle` to
+accept a pre-bound listener. That is a genuine capability (port 0 in production,
+socket activation) rather than test scaffolding, so it is worth doing on its own
+merits; it is just not a test fix, and it is not taken here.
 
 ### Still not measured
 
