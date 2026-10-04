@@ -225,6 +225,25 @@ explicitly alongside it.
 
 ### Open, and stated rather than assumed
 
+- The **cost head is verified, and verified not to matter.** It learns its targets
+  (features fixed, cost varied 10x, predictions track at 10:1) and the learned
+  figure reaches the ranking utility exactly — both pinned by mutation in
+  `cost_head_test.rs`. But `compute_utility` scores cost as
+  `-cost_weight * min(cost_dollars, 1.0)`, and a per-request LLM bill is cents, so
+  nine times the price moves utility by `0.0009` against `0.75` for a success
+  difference. The head is wired, working, and has never changed a routing decision.
+
+  That is left as it is and pinned rather than changed: making cost outvote
+  reliability is a policy decision nobody has made, and
+  `cost_cannot_outvote_success_at_the_shipped_weights` fails until someone argues
+  for it in the open.
+
+  Two incidental findings, both asserted so neither changes silently: no head ever
+  constructs a `Prediction::cold` (cold-ness reaches the decision through
+  `confidence`, which is what `compute_utility` reads), and an untrained cost head
+  predicts `0.01` rather than zero, so it looks like a *cheap* candidate rather
+  than an absent one.
+
 - A **billed failure** is unattributed. A 5xx carries no usage, so nothing in the
   error says what that failed call cost, and the all-failed buffered path settles
   with `Settlement::default()`. If a provider bills errors, that spend is invisible
@@ -236,11 +255,6 @@ explicitly alongside it.
   deliberately, and it reaches the same settlement, so the attempt is priced.
   Verified by `a_truncated_stream_that_reported_usage_is_charged_to_its_attempt`,
   which fails with its own message when the per-attempt pricing is removed.
-
-- The **cost head is never checked**. The axis carries data and the arms separate
-  on it, but nothing trains a model on cost and checks the head predicts it. In
-  these fixtures cost is a deterministic function of a model's price, so a head
-  that ignored cost entirely would score identically.
 
 - Whether the engine's 0.1 switch threshold is crossed for an unobserved
   candidate still depends on measured latency, which is wall clock. The *split* is
