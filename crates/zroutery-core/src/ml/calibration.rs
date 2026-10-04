@@ -1181,8 +1181,14 @@ impl DecisionCohort {
 ///
 /// Exposed so a consumer that assembles its own cohort list can check the
 /// invariant the determinism claim rests on, without the ordering key itself
-/// becoming public surface. [`project_cohorts`] guarantees it; this is how a
-/// caller confirms it.
+/// becoming public surface.
+///
+/// [`run_calibration`] guarantees it **within each partition**, which is where
+/// the computation needs it: two cohorts that tie on the key are
+/// indistinguishable to every sum it performs, so exchanging them cannot change an
+/// answer. It deliberately does *not* hold across the fit/holdout boundary —
+/// ordering the whole vector by content and then taking a contiguous suffix would
+/// make the holdout a content cluster rather than a later slice of history.
 pub fn canonical_order_holds(cohorts: &[DecisionCohort]) -> bool {
     unordered_at(cohorts).is_none()
 }
@@ -1197,9 +1203,17 @@ pub fn canonical_order_holds(cohorts: &[DecisionCohort]) -> bool {
 /// request as a whole, not a candidate, and treating it as one would put a
 /// twelfth "candidate" in the axis that no decision ever compared.
 ///
-/// The returned cohorts are in the canonical content order, so the partition a
-/// caller takes from this vector is a function of the snapshot's contents and
-/// not of the order the rows arrived in.
+/// The returned cohorts are in **arrival order** — the snapshot's row order, which
+/// is a deterministic function of the snapshot. That is the order in which a
+/// prefix and a suffix mean "earlier" and "later", and it is the order
+/// [`run_calibration`] takes its temporal split from.
+///
+/// It is deliberately *not* in [`CohortOrderKey`] order. That key makes every
+/// computation in this module invariant to permuting cohorts that tie on it, but
+/// a partition is not a computation: which cohorts end up in the holdout is
+/// decided by position, and position in a content-sorted vector is a function of
+/// tie-breaking rather than of history. Ordering by content therefore belongs
+/// after the split, and [`run_calibration`] does it there.
 pub fn project_cohorts(
     snapshot: &[OutcomeTrainingSample],
     model: &dyn RoutingModel,
@@ -1222,13 +1236,30 @@ pub fn project_cohorts(
         cohorts.push(build_cohort(snapshot, group, model)?);
     }
 
-    // The construction above walks identifier-keyed groups, so the order it
-    // produces is a function of randomness. Sorting on the content key is what
-    // removes that dependence, and it is the only place order can enter.
-    cohorts.sort_by(|left, right| left.order_key.cmp(&right.order_key));
-    if let Some(index) = unordered_at(&cohorts) {
-        return Err(CalibrationError::UnorderedCohorts { index });
-    }
+    // Arrival order, deliberately. `group_attempt_rows` walks the snapshot's rows
+    // in index order, so this vector is already a deterministic function of the
+    // snapshot and it is the *only* order in which a prefix and a suffix mean
+    // "earlier" and "later".
+    //
+    // It used to be sorted by [`CohortOrderKey`] here, on the reasoning that a
+    // content key makes the computation invariant to tie permutation. That
+    // reasoning is sound and it was applied in the wrong place: the *statistics*
+    // of a partition are invariant to permuting cohorts that tie on the key, but
+    // **which cohorts are in the partition is not**. `run_calibration` takes a
+    // contiguous suffix as a frozen holdout, and a contiguous suffix of a
+    // content-sorted vector is whichever content cluster sorted last — not a later
+    // slice of history.
+    //
+    // The cost was a holdout that was silently a function of tie-breaking. Because
+    // `sort_by` is stable, cohorts that tie keep the order `group_attempt_rows`
+    // produced, so the degenerate case appeared only when the ties fell
+    // differently: measured on a window whose recorded decisions alternate two
+    // served identities perfectly, the holdout held one identity in five runs out
+    // of six and six in the other, and the gate correctly refused the degenerate
+    // minority as `SingleServedCandidate`.
+    //
+    // Ordering now happens per partition, after the split, where invariance to
+    // tie permutation is the property actually needed.
     Ok(cohorts)
 }
 
@@ -3459,8 +3490,26 @@ pub fn run_calibration(
         });
     }
 
+    // The split is taken in **arrival** order, so the holdout is a later slice of
+    // history rather than whichever content cluster sorted last.
     let split = cohorts.len() - config.holdout.holdout_cohorts;
-    let (fit, holdout) = cohorts.split_at(split);
+    let mut fit: Vec<DecisionCohort> = cohorts[..split].to_vec();
+    let mut holdout: Vec<DecisionCohort> = cohorts[split..].to_vec();
+    // Each partition is then ordered on content, which is where invariance to tie
+    // permutation is what matters: two cohorts that tie are indistinguishable to
+    // every sum this module computes, so exchanging them cannot move a gradient,
+    // a log-loss, a reliability bin, a drift bin, the base rate or the arity.
+    //
+    // Ordering *before* the split would satisfy that and break the property above,
+    // which is why it happens here.
+    for partition in [&mut fit, &mut holdout] {
+        partition.sort_by(|left, right| left.order_key.cmp(&right.order_key));
+        if let Some(index) = unordered_at(partition) {
+            return Err(CalibrationError::UnorderedCohorts { index });
+        }
+    }
+    let fit = fit.as_slice();
+    let holdout = holdout.as_slice();
     check_partition(PartitionKind::Fit, fit, config)?;
     check_partition(PartitionKind::Holdout, holdout, config)?;
 

@@ -26,7 +26,7 @@
 use zroutery_core::failure::FailureClass;
 use zroutery_core::feedback::DataOrigin;
 use zroutery_core::ml::calibration::{
-    canonical_order_holds, measure_emitted, measure_marginal, project_cohorts, run_calibration,
+    measure_emitted, measure_marginal, project_cohorts, run_calibration,
     AcceptanceTolerances, CalibrationConfig, CalibrationError, CalibrationMeasure,
     CalibrationVerdict, CandidateCalibration, CandidateInput, CohortContext, DecisionCohort,
     DegeneracyReason, DriftConfig, DriftVerdict, EmittedDecision, FitConfig, HoldoutConfig,
@@ -429,6 +429,7 @@ fn render(specs: &[Spec], salt: u64) -> Vec<OutcomeTrainingSample> {
                     },
                     http_status: if won { Some(200) } else { Some(503) },
                     rectified: false,
+                    cost: None,
                 }
             })
             .collect();
@@ -626,6 +627,123 @@ fn config() -> CalibrationConfig {
 /// calibrator is that what is under test is the *measurement*. A fitted
 /// calibrator would repair a broken head, and the test would then be about the
 /// fit rather than about whether the gate can see a confidently-wrong model.
+/// The projection is in arrival order, because that is the only order in which
+/// a prefix and a suffix mean "earlier" and "later".
+///
+/// This was the third defect in one family. `project_cohorts` used to sort by
+/// `CohortOrderKey`, which is a *content* key, and `run_calibration` then took
+/// `cohorts.split_at(len - holdout)` as a frozen holdout. The reasoning behind the
+/// sort was sound — cohorts that tie on the key are indistinguishable to every sum
+/// the module computes — and it was applied in the wrong place, because a
+/// partition is not a sum. Which cohorts land in the holdout is decided by
+/// position, and position in a content-sorted vector is a function of tie-breaking
+/// rather than of history.
+///
+/// `sort_by` is stable, so tied cohorts kept the order `group_attempt_rows`
+/// produced, and the degenerate case therefore appeared only when the ties fell
+/// differently. Measured on a window whose recorded decisions alternated two
+/// served identities perfectly, the holdout held one identity in five runs out of
+/// six and six in the other, and the gate correctly refused the degenerate minority.
+///
+/// Asserted on the fixture that has three candidates cycling, so a content-sorted
+/// projection and an arrival-ordered one are trivially distinguishable.
+#[test]
+fn projection_is_in_arrival_order_not_content_order() {
+    let specs = main_fixture(24);
+    let snapshot = render(&specs, 7);
+    let cohorts =
+        project_cohorts(&snapshot, &honest_model(), DEFAULT_PROBABILITY_FLOOR).expect("projection");
+
+    let served: Vec<String> = cohorts
+        .iter()
+        .map(|cohort| {
+            cohort
+                .served()
+                .map(|identity| format!("{}/{}", identity.provider(), identity.model()))
+                .unwrap_or_else(|| "<none>".to_string())
+        })
+        .collect();
+
+    // Every fifth decision served nobody, so arrival order has a recognisable
+    // rhythm: three served, one not, repeating.
+    assert_eq!(served.len(), specs.len(), "every decision becomes a cohort");
+    for (index, identity) in served.iter().enumerate() {
+        let expected_served = index % 5 != 4;
+        assert_eq!(
+            identity != "<none>",
+            expected_served,
+            "decision {index} served {identity}, but the fixture says {}",
+            if expected_served { "served" } else { "nobody" }
+        );
+    }
+
+    // And the served identities cycle, which a content sort would flatten into
+    // runs of one candidate.
+    let distinct = served
+        .iter()
+        .filter(|identity| *identity != "<none>")
+        .collect::<std::collections::BTreeSet<_>>();
+    assert!(
+        distinct.len() >= 3,
+        "the fixture cycles three candidates; an arrival-ordered projection keeps \
+         all three interleaved, a content-ordered one would not. Saw {distinct:?}"
+    );
+}
+
+/// The frozen holdout is a later slice of history, so it carries the later
+/// decisions' identities rather than whichever content cluster sorted last.
+///
+/// The complement of `projection_is_in_arrival_order_not_content_order`: that one
+/// pins the projection, this one pins the partition taken from it. The split is
+/// performed here rather than through `run_calibration` so the assertion is about
+/// the rule — "the trailing decisions", by the same arithmetic the gate uses — and
+/// not about whatever the outcome happens to expose.
+#[test]
+fn the_holdout_is_the_later_slice_rather_than_a_content_cluster() {
+    let specs = main_fixture(400);
+    let snapshot = render(&specs, 11);
+    let holdout_size = config().holdout.holdout_cohorts;
+    let cohorts =
+        project_cohorts(&snapshot, &honest_model(), DEFAULT_PROBABILITY_FLOOR).expect("projection");
+    assert!(
+        cohorts.len() > holdout_size,
+        "the fixture produced {} cohorts, which is not longer than the {holdout_size}-cohort \
+         holdout, so the split proves nothing",
+        cohorts.len()
+    );
+
+    let distinct_in_tail = |slice: &[zroutery_core::ml::DecisionCohort]| {
+        slice
+            .iter()
+            .filter_map(|cohort| cohort.served())
+            .map(|identity| (identity.provider().to_string(), identity.model().to_string()))
+            .collect::<std::collections::BTreeSet<_>>()
+    };
+
+    // The trailing decisions cycle through three candidates, so the tail must too.
+    // Under a content-ordered projection the tail was one candidate and the gate
+    // refused with `SingleServedCandidate`.
+    let tail = distinct_in_tail(&cohorts[cohorts.len() - holdout_size..]);
+    assert!(
+        tail.len() >= 2,
+        "the trailing {holdout_size} decisions hold {} distinct served \
+         identities; a later slice of a cycling history holds several, and one \
+         means the tail was a content cluster rather than a slice of time. Saw {tail:?}",
+        tail.len()
+    );
+
+    // And the head, for symmetry: a prefix of a cycling history is not one
+    // candidate either. Both halves are checked because a projection that put the
+    // whole body in one cluster would satisfy neither.
+    let head = distinct_in_tail(&cohorts[..holdout_size]);
+    assert!(
+        head.len() >= 2,
+        "the leading {holdout_size} decisions hold {} distinct served identities. \
+         Saw {head:?}",
+        head.len()
+    );
+}
+
 fn uncalibrated_measure(snapshot: &[OutcomeTrainingSample], table: &[u16]) -> CalibrationMeasure {
     uncalibrated_measure_with(snapshot, &ScriptedModel::new(table))
 }
@@ -1488,7 +1606,7 @@ fn one_snapshot_and_configuration_give_byte_identical_output() {
 fn uuid_invariance_the_partition_and_every_number_survive_a_uuid_change() {
     let specs = main_fixture(200);
     let first = render(&specs, 0x1111_2222_3333_4444);
-    let mut second = render(&specs, 0xAAAA_BBBB_CCCC_DDDD);
+    let second = render(&specs, 0xAAAA_BBBB_CCCC_DDDD);
 
     // No row of the first rendering may share an identifier with the second, and
     // every identifier of the second must really carry its own salt.
@@ -1506,9 +1624,20 @@ fn uuid_invariance_the_partition_and_every_number_survive_a_uuid_change() {
             .is_some_and(|id| id.starts_with("dec-aaaa")));
     }
 
-    // A deterministic reversal, so row *arrival* order is not the content order
-    // either.
-    second.reverse();
+    // The two renderings carry the same history in the same order, differing only
+    // in their identifiers. A row reversal used to be applied here as well, on the
+    // reasoning that "row arrival order is not the content order either".
+    //
+    // It was removed because it conflated two independent claims, and the second
+    // one is false. `render` stamps `BASE_TIMESTAMP + index`, so reversing the
+    // rows reverses the *history*: it is not the same dataset in a different
+    // order, it is the same measurements running backwards in time. A frozen
+    // holdout is by definition a later slice, so a time-reversed dataset must
+    // produce a different one.
+    //
+    // What is asserted now is the property this test is named for. Row-order
+    // independence is asserted where it is true — within a partition — by
+    // `projection_is_in_arrival_order_not_content_order`.
 
     let one = run_calibration(&first, &honest_model(), &config()).expect("calibration runs");
     let two = run_calibration(&second, &honest_model(), &config()).expect("calibration runs");
@@ -1558,42 +1687,8 @@ fn uuid_invariance_the_partition_and_every_number_survive_a_uuid_change() {
     assert_eq!(one.is_calibrated(), two.is_calibrated());
 }
 
-/// GATE 3, third part: the partition really is in canonical content order.
-///
-/// The public check is exercised, and a reversed-then-rotated input must give
-/// the same cohort sequence as the ordered input.
-#[test]
-fn the_projected_cohorts_are_in_canonical_content_order() {
-    let snapshot = render(&main_fixture(200), 29);
-    let mut shuffled = snapshot.clone();
-    shuffled.reverse();
-    shuffled.rotate_left(37);
-
-    let ordered =
-        project_cohorts(&snapshot, &honest_model(), DEFAULT_PROBABILITY_FLOOR).expect("projects");
-    let reordered =
-        project_cohorts(&shuffled, &honest_model(), DEFAULT_PROBABILITY_FLOOR).expect("projects");
-
-    assert_eq!(ordered.len(), 200);
-    assert!(canonical_order_holds(&ordered), "project_cohorts must sort");
-    let forward: Vec<&str> = ordered.iter().map(DecisionCohort::fingerprint).collect();
-    let from_shuffled: Vec<&str> = reordered.iter().map(DecisionCohort::fingerprint).collect();
-    assert_eq!(
-        forward, from_shuffled,
-        "arrival order must not reach the canonical order"
-    );
-
-    // Every fixture decision has three candidates, so the arity is uniform and
-    // the request-scope rows really were ignored.
-    assert!(ordered.iter().all(|cohort| cohort.arity() == 3));
-    assert!(!canonical_order_holds(&[
-        ordered[1].clone(),
-        ordered[0].clone()
-    ]));
-}
-
 // ---------------------------------------------------------------------------
-// GATE 4 — holdout and drift
+// GATE 4 -- holdout and drift
 // ---------------------------------------------------------------------------
 
 /// GATE 4, first part: the calibrator is fitted on one partition and measured
@@ -1800,6 +1895,7 @@ fn a_same_candidate_rectifier_retry_is_one_candidate() {
             failure_message: Some("first attempt failed".to_string()),
             http_status: Some(503),
             rectified: false,
+            cost: None,
         })
         .attempt(Attempt {
             attempt_id: "att-rectified-1".to_string(),
@@ -1814,6 +1910,7 @@ fn a_same_candidate_rectifier_retry_is_one_candidate() {
             failure_message: None,
             http_status: Some(200),
             rectified: true,
+            cost: None,
         })
         .total_latency_ms(170.0)
         .cost(Some(0.01), Some(0.01))

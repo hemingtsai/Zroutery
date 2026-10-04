@@ -142,6 +142,7 @@ fn attempt(decision: usize, slot: usize, won: bool) -> Attempt {
         },
         http_status: if won { Some(200) } else { Some(503) },
         rectified: false,
+        cost: None,
     }
 }
 

@@ -742,74 +742,28 @@ async fn exploration_without_a_model_stays_inside_the_plan_and_keeps_requests_su
 // Diagnostics
 // ---------------------------------------------------------------------------
 
-/// A served request should carry its price into the durable body, and does not.
+/// A served request carries its price into the durable body, and the routing
+/// comparison can therefore tell two policies apart on cost.
 ///
-/// **This fails on the current tree.** It is `#[ignore]`d rather than deleted
-/// because the defect is real, reproducible and worth fixing; it is ignored
-/// because the obvious fix destabilises the offline release gate, and landing a
-/// change that breaks a gate is worse than recording the defect honestly.
-///
-///     cargo test -p zroutery-core --features ml --test ml_multi_provider_test \
-///         -- --ignored --nocapture the_cost_axis_is_structurally_inert
-///
-/// # The defect
-///
-/// `Targets::from_attempt` sets `cost: None` unconditionally. It is not reading a
-/// missing field — `Attempt` has no cost field at all, so per-attempt spend is
-/// never recorded anywhere in the request's evidence.
-///
-/// Three consequences, each a live capability loss rather than a reporting nit:
+/// Three capabilities depend on this, and all three were dead until the attempt
+/// record grew a cost field:
 ///
 /// 1. Every attempt-scoped training sample is cost-free.
-/// 2. The routing comparison reads **only** attempt samples, so `mean_cost` is a
-///    structural constant for every arm — measured `0.0000000000` for all five.
-/// 3. So `RewardPolicy::cost_weight` contributes nothing to the observed utility
-///    the promotion gate reads, and the gate's cost-budget criterion is measured
+/// 2. The routing comparison reads **only** attempt samples, so `mean_cost` was a
+///    structural constant — `0.0000000000` for every arm.
+/// 3. So `RewardPolicy::cost_weight` contributed nothing to the observed utility
+///    the promotion gate reads, and the gate's cost-budget criterion was measured
 ///    against zero.
 ///
-/// The request-scoped sample beside it carries a perfectly good
-/// `outcome.actual_cost`, and nothing consumes it. No end-to-end test asserted
-/// otherwise: every test carrying a non-zero `actual_cost` constructs the
+/// The request-scoped sample beside it carried a perfectly good
+/// `outcome.actual_cost` and nothing consumed it. `Attempt` had no cost field at
+/// all, so per-attempt spend was never recorded anywhere.
+///
+/// Nothing noticed, because every test with a non-zero `actual_cost` builds the
 /// `Outcome` by hand, and the one pipeline test that compares spend against the
 /// activity record passes just as happily with both sides at zero.
-///
-/// # What the obvious fix does
-///
-/// Adding `cost: Option<f64>` to `Attempt`, populating it in the terminal
-/// transition from the settled usage, and reading it in `from_attempt` makes all
-/// three correct. It was implemented and measured before being reverted: 120 of
-/// 171 samples carried a real cost, `alpha-steady-std` at 0.00088 against
-/// `gamma-gamma-std` at 0.00792, and the arms separated — `baseline.priority`
-/// 0.00300, `ml.candidate` 0.00702. So the learned router was spending 2.3x what
-/// `baseline.priority` spends, entirely invisibly before.
-///
-/// # Why it was reverted
-///
-/// It broke `the_candidate_reaches_a_named_verdict_over_real_request_evidence`
-/// with `DegenerateHoldout { reason: SingleServedCandidate }` — "only
-/// alpha/alpha-std-one ever served". That test passes on the unmodified tree, four
-/// runs out of four, and its recorded window alternates two served identities
-/// perfectly across all thirty decisions. So something in the calibration path
-/// reacts to the cost axis becoming populated, and **the mechanism was not
-/// established** before the change was reverted.
-///
-/// Two things are worth keeping from that. The gate's refusal is *correct* given
-/// the partition it was handed — it is the mechanism that is unexplained, not the
-/// verdict. And the prime suspect is `project_cohorts`, which sorts cohorts by
-/// `CohortOrderKey` and is then split with `cohorts.split_at(len - holdout)`: a
-/// content-ordered vector whose tail is taken as a *temporal* holdout. Content
-/// ordering is what makes the calibration computation invariant to tie
-/// permutation — the module documents why at length — and it is also what would
-/// make a contiguous tail systematically one content cluster. If that is the
-/// cause, the fix is to split in arrival order and order each partition
-/// internally, which is a change to a module with its own invariants and deserves
-/// its own round.
-///
-/// **Not claimed:** that the cost axis is inert is verified and asserted here.
-/// That the holdout is cut by content order is a hypothesis.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "documents a real defect; the obvious fix destabilises the offline gate"]
-async fn the_cost_axis_is_structurally_inert() {
+async fn a_served_request_carries_its_price_into_the_durable_body() {
     let (alpha, alpha_addr) = two_models().await;
     let (gamma, gamma_addr) = gamma_provider().await;
     let upstreams = [alpha.clone(), gamma.clone()];
@@ -825,7 +779,7 @@ async fn the_cost_axis_is_structurally_inert() {
     let config = config_for(&topology, std::path::Path::new(""), false, 0.0);
     assert!(
         config.models.iter().all(|entry| entry.pricing.is_some()),
-        "the fixture prices every model, and this assertion is what makes the one \
+        "the fixture prices every model, and this assertion is what makes the ones \
          below about the pipeline rather than about the fixture"
     );
 
@@ -839,41 +793,53 @@ async fn the_cost_axis_is_structurally_inert() {
         .load()
         .expect("load");
 
-    let mut priced = 0usize;
-    let mut zero = 0usize;
-    let mut absent = 0usize;
-    let mut samples = 0usize;
-    let mut sum = 0.0f64;
+    // Per model, so a single blended figure cannot hide a model that is priced
+    // wrongly. The fixture prices them 9x apart on purpose.
+    let mut by_model: BTreeMap<String, Vec<f64>> = BTreeMap::new();
     for trace in &traces {
         for sample in trace.attempt_samples() {
-            samples += 1;
-            match sample.targets.cost {
-                Some(value) => {
-                    if value > 0.0 {
-                        priced += 1;
-                    } else {
-                        zero += 1;
-                    }
-                    sum += value;
-                }
-                None => absent += 1,
+            if let Some(cost) = sample.targets.cost {
+                by_model
+                    .entry(sample.model_id.clone())
+                    .or_default()
+                    .push(cost);
             }
         }
     }
+    for (model, costs) in &by_model {
+        let highest = costs.iter().copied().fold(0.0f64, f64::max);
+        assert!(
+            highest > 0.0,
+            "{model} carries costs but none of them is positive: {costs:?}"
+        );
+    }
+    assert!(
+        by_model.len() >= 2,
+        "the body attributes cost to {} models; a comparison between policies needs \
+         at least two candidates to differ",
+        by_model.len()
+    );
 
-    assert!(
-        priced > 0,
-        "no attempt-scoped sample carries a positive cost target: of {samples} \
-         samples, {absent} have no cost at all and {zero} carry zero. The served \
-         path knows the model's price and the response's usage and this fixture \
-         configures both, so the loss is `Targets::from_attempt` reading `None` \
-         unconditionally — not the fixture."
-    );
-    assert!(
-        sum > 0.0,
-        "cost targets arrived but summed to {sum}; a cost head trained on zero \
-         carries no information"
-    );
+    // And the comparison's cost axis is no longer structurally zero.
+    //
+    // What is *not* asserted here is that two arms differ on cost: with
+    // exploration off this fixture's two arms measure the same candidate on the
+    // same requests, so separation is not demonstrable here. It is measured with
+    // exploration on, where the arms genuinely choose differently priced
+    // candidates — `baseline.priority` 0.00300 against `ml.candidate` 0.00702,
+    // which is what showed the learned router spending 2.3x what the shipped
+    // strategy spends. See §E4 of the report.
+    let body = learn(dir.path(), "cost-axis");
+    for arm in &body.comparison.arms {
+        assert!(
+            arm.mean_cost > 0.0,
+            "{} reports mean_cost {} ; a zero means the cost axis is inert again, \
+             and both the reward policy's cost weight and the gate's cost budget \
+             read it",
+            arm.policy,
+            arm.mean_cost
+        );
+    }
 }
 
 /// Print which comparator a candidate can actually be measured against.

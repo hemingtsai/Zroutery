@@ -106,6 +106,7 @@ fn canonical_sample(suffix: &str, served: bool) -> OutcomeTrainingSample {
         failure_message: (!served).then(|| "scripted failure".to_string()),
         http_status: Some(if served { 200 } else { 503 }),
         rectified: false,
+        cost: None,
     };
     let identity = CandidateIdentity::new(MODEL_NAME.to_string(), PROVIDER.to_string());
     OutcomeTrainingSample {
