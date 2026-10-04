@@ -313,7 +313,11 @@ impl ActiveModelStore {
     }
 
     /// The stored pointer, without verifying it.
-    fn read_pointer(&self) -> Result<Option<StoredPointer>, ServingError> {
+    ///
+    /// Public because an operator surface has to be able to report what is
+    /// installed without installing it again, and a pointer that only promote
+    /// and rollback can reach would mean reading the state requires changing it.
+    pub fn read_pointer(&self) -> Result<Option<StoredPointer>, ServingError> {
         let path = self.pointer_path();
         let text = match fs::read_to_string(&path) {
             Ok(text) => text,
@@ -587,9 +591,9 @@ impl ActiveModelStore {
 
 /// The on-disk pointer: the active model plus the one it replaced.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct StoredPointer {
-    schema_version: u32,
-    current: ActiveModel,
+pub struct StoredPointer {
+    pub schema_version: u32,
+    pub current: ActiveModel,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     previous: Option<ActiveModel>,
 }
@@ -808,6 +812,26 @@ impl MlRouter {
     /// Whether a model is attached.
     pub fn is_attached(&self) -> bool {
         crate::sync::read(&self.predictor).is_some()
+    }
+
+    /// A snapshot of the attached model's weights, if one is attached.
+    ///
+    /// For analysis of what the *serving* model would have done. Snapshot
+    /// rather than borrow because a replay over tens of thousands of records
+    /// must not hold the router's write lock for its duration, and because a
+    /// promotion arriving mid-analysis should not change the answers underneath
+    /// it.
+    pub fn attached_ensemble(&self) -> Option<ModelEnsemble> {
+        crate::sync::read(&self.predictor)
+            .as_ref()
+            .map(|predictor| predictor.ensemble().clone())
+    }
+
+    /// The commit of the attached model, if one is attached.
+    pub fn attached_commit(&self) -> Option<String> {
+        crate::sync::read(&self.predictor)
+            .as_ref()
+            .map(|predictor| predictor.commit_id().as_str().to_string())
     }
 
     pub fn set_exploration(&self, exploration: ExplorationConfig) {

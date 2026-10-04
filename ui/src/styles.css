@@ -588,6 +588,60 @@ body {
   border-bottom: none;
 }
 
+/*
+ * The promotion gate's criteria, and the promotion history, as a flat list of
+ * facts. Left-aligned rather than in the key/value grid above on purpose: a
+ * criterion is a sentence with a number in it, and squeezing it into the
+ * right-hand column of a two-column layout is what makes an operator stop
+ * reading halfway down.
+ */
+.ml-criteria {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.ml-criteria > li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.ml-criteria code {
+  flex: none;
+}
+
+/*
+ * The on-demand replay's numbers.
+ *
+ * Set apart from the counters above it because it answers a different kind of
+ * question. Everything above is "what has happened"; this is "what would have
+ * happened", and reading the two as siblings on the same footing is how a
+ * measured comparison turns into an implied claim about live traffic.
+ */
+.ml-replay {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--surface-muted);
+}
+
+.ml-replay p {
+  margin: 0;
+}
+
+/* A failed command stays a failure on screen; it is never rendered as "off". */
+.ml-fault {
+  margin: 0 0 12px;
+  font-size: 13px;
+  color: var(--danger);
+}
+
 .kv-key {
   color: var(--muted);
   flex: none;

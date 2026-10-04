@@ -17,6 +17,7 @@ import {
   type Snapshot,
 } from "../api";
 import { api } from "../api";
+import MlRouting from "./MlRouting";
 import {
   Badge,
   Button,
@@ -85,6 +86,8 @@ export default function Routing({
   return (
     <>
       <PageHead lede={t("routing.lede")} />
+
+      <MlRouting available={snapshot.ml_available} />
 
       <Section
         title={t("route.default")}

@@ -953,6 +953,55 @@ impl MlRoutingConfig {
     }
 }
 
+#[cfg(all(test, feature = "ml"))]
+mod ml_routing_defaults {
+    use super::MlRoutingConfig;
+
+    /// Compiling the learning stack into a binary must not by itself change how
+    /// that binary routes.
+    ///
+    /// ADR-0006 made the desktop app depend on `zroutery-core/ml`, and the
+    /// temptation that creates is to reason that the stack is now live because it
+    /// is linked in. It is not: what makes a model able to rank is
+    /// `enabled`, and what makes history durable is a state directory. Both are
+    /// off by default, so an installation that has never promoted a model routes
+    /// exactly as it did before the feature existed.
+    ///
+    /// Asserted as behaviour rather than by reading `Default`'s body, because the
+    /// property that matters is what a default-constructed config *does*, not how
+    /// it is written.
+    #[test]
+    fn a_default_configuration_cannot_rank_with_a_model_and_keeps_nothing() {
+        let config = MlRoutingConfig::default();
+        assert!(
+            !config.enabled,
+            "a default configuration lets a model re-order the provider plan"
+        );
+        assert!(
+            !config.has_state_dir(),
+            "a default configuration opens durable state somewhere implicit"
+        );
+        assert_eq!(
+            config.exploration_probability, 0.0,
+            "a default configuration explores"
+        );
+    }
+
+    /// A configuration read from a document that predates the feature, or that
+    /// simply never mentions it, must land in the same place.
+    ///
+    /// This is the upgrade path every existing install takes, and it is the one
+    /// where "opt-in" is easy to get wrong: a missing `ml_routing` block has to
+    /// mean off, not mean "use whatever is in memory".
+    #[test]
+    fn a_document_without_an_ml_routing_block_lands_in_the_same_place() {
+        let config: MlRoutingConfig =
+            serde_json::from_str("{}").expect("an empty block deserialises");
+        assert!(!config.enabled);
+        assert!(!config.has_state_dir());
+    }
+}
+
 #[cfg(feature = "ml")]
 impl AppConfig {
     /// The utility weights the learned model is scored and ranked under.
