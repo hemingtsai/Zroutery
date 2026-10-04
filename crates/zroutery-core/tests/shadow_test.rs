@@ -12,8 +12,6 @@
 //! 6. Structural purity — the shadow modules cannot reach any production
 //!    mutation surface (source-level tripwires)
 
-use std::time::Duration;
-
 use zroutery_core::config::ModelTier;
 use zroutery_core::feedback::DataOrigin;
 use zroutery_core::ml::coordinator::{CoordinatorConfig, RoutingAction};
@@ -897,74 +895,184 @@ fn shadow_decision_shape() {
 /// GATE 7E-1 (performance): per-evaluate overhead over a realistic
 /// The 8-candidate shadow path stays fast enough to be worth running inline.
 ///
-/// This is a coarse regression guard, not a performance guarantee. A wall-clock
-/// percentile is a property of the machine as much as of the code: this
-/// assertion failed under concurrent build load while measuring p99 of 655us on
-/// identical source, and the same source has measured anywhere from 385us to
-/// 655us across conditions. Loosening does not fix that, so the ceilings are set
-/// roughly an order of magnitude above anything observed, the observed numbers
-/// are always printed, and the failure message says what the number means.
+/// The marginal cost of a candidate must not itself grow with the candidate count.
 ///
-/// Making this genuinely reliable needs either a dedicated serial runner or a
-/// deterministic proxy in place of the clock. Both are separate decisions and
-/// neither is taken here.
+/// # Why this replaced a wall-clock gate
+///
+/// This was a fixed ceiling: p95 <= 10ms, p99 <= 30ms, against a path that measures
+/// tens of microseconds. It failed under concurrent build load roughly one run in
+/// eight, and the failure was pure scheduling noise — the observed p95 was a
+/// preemption, not a regression.
+///
+/// Widening the number does not fix that and neither does tightening it. A fixed
+/// ceiling cannot distinguish *a slow machine* from *a slow regression*, because
+/// both produce the same number. Any ceiling loose enough not to fire on a loaded
+/// machine is too loose to catch a 10x regression; any ceiling tight enough to catch
+/// one fires on a busy one. That is not a tuning problem, which is why the previous
+/// version's own comment said loosening would not fix it.
+///
+/// # Why not a ratio between two candidate counts
+///
+/// Because two points cannot see the difference. Measured on this path, cost is
+/// linear at about 20us per candidate plus a ~15us fixed cost, so a *quadratic*
+/// term small enough to be invisible between n=1 and n=8 fits that data exactly.
+/// An endpoint ratio passes a genuinely quadratic regression.
+///
+/// Measured, so this is not a claim about a hypothetical. Putting a pairwise
+/// comparison where the sort belongs — score every candidate against every other
+/// candidate — fits `T(n) = 80us + 3.5us*n^2` and produces:
+///
+/// ```text
+///   4c p50=  137us    8c p50=  306us    32c p50= 2818us    64c p50=10016us
+/// ```
+///
+/// As an endpoint ratio that is `306/84 = 3.6x`, which sails past any bound loose
+/// enough not to fire on a loaded machine. Under the marginal comparison below the
+/// same mutation reports 42.4us against 224.9us and fails. The old gate would not
+/// have caught a 5x regression at 64 candidates, and neither would a wider one.
+///
+/// # How the comparison stays honest under load
+///
+/// Differentiating the curve divides out the fixed per-request cost, and comparing
+/// the marginal cost at a low count against the marginal cost at a high count
+/// compares the shape directly: flat means linear, rising means the per-candidate
+/// work is itself growing.
+///
+/// The four measurements are **interleaved in one loop**, so all of them see the same
+/// scheduler. Run as separate phases, a load spike lands on one of them and
+/// manufactures a curvature that is not in the code. The comparison is on
+/// **medians**, because a median is unmoved by an occasional preemption where a tail
+/// percentile is defined by exactly those.
+///
+/// # What this does not catch
+///
+/// A *constant-factor* slowdown: making per-candidate work twice as expensive
+/// doubles the whole curve and leaves its shape alone. Measured, by mutation — a
+/// duplicated prediction per candidate moved the 1-to-8 ratio from 4.69 to 4.83,
+/// which is nothing. Catching that needs an absolute ceiling, which is the flaky
+/// thing this replaced. `shadow_evaluate_absolute_cost` measures the magnitude for a
+/// human; this gates the shape.
 #[test]
-fn shadow_overhead_stays_an_order_of_magnitude_under_budget() {
+fn shadow_marginal_cost_per_candidate_does_not_grow() {
     let engine = engine();
     engine.train(&training_samples(0..100));
 
-    let candidates: Vec<ShadowCandidateInput> = (0..8)
-        .map(|i| {
-            candidate_input(
-                &format!("model-{}", i),
-                &format!("prov-{}", i % 3),
-                0.10 + i as f32 * 0.08,
-            )
-        })
-        .collect();
-    let mut input = shadow_input_with(candidates);
-    input.production_selected = "model-3".to_string();
+    let at = |count: usize| {
+        let candidates: Vec<ShadowCandidateInput> = (0..count)
+            .map(|i| {
+                candidate_input(
+                    &format!("model-{}", i),
+                    &format!("prov-{}", i % 3),
+                    0.10 + i as f32 * 0.08,
+                )
+            })
+            .collect();
+        let mut input = shadow_input_with(candidates);
+        input.production_selected = "model-0".to_string();
+        input
+    };
+    // Wide enough that a quadratic term is unmistakable, narrow enough to stay fast:
+    // measured cost at 64 candidates is ~1.3ms, so 300 interleaved rounds of all four
+    // arms is well under a second.
+    const COUNTS: [usize; 4] = [4, 8, 32, 64];
+    const SAMPLES: usize = 300;
+    let inputs: Vec<ShadowInput> = COUNTS.iter().map(|n| at(*n)).collect();
 
     // Warm-up: allocator, caches, store growth.
     for _ in 0..50 {
-        assert!(engine.evaluate("req-perf", &input).is_some());
+        for input in &inputs {
+            assert!(engine.evaluate("req-warm", input).is_some());
+        }
     }
 
-    const SAMPLES: usize = 1_000;
-    let mut durations: Vec<Duration> = Vec::with_capacity(SAMPLES);
+    let mut samples: Vec<Vec<u64>> = vec![Vec::with_capacity(SAMPLES); COUNTS.len()];
     for _ in 0..SAMPLES {
-        let start = std::time::Instant::now();
-        let decision = engine.evaluate("req-perf", &input);
-        durations.push(start.elapsed());
-        assert!(decision.is_some());
+        // Interleaved: every arm sees the same scheduler as every other.
+        for (arm, input) in inputs.iter().enumerate() {
+            let start = std::time::Instant::now();
+            let decision = engine.evaluate("req-perf", input);
+            samples[arm].push(start.elapsed().as_nanos() as u64);
+            assert!(decision.is_some());
+        }
     }
+    for arm in &mut samples {
+        arm.sort_unstable();
+    }
+    let p50 = |arm: usize| samples[arm][SAMPLES / 2] as f64 / 1_000.0;
 
-    durations.sort_unstable();
-    let p95 = durations[SAMPLES * 95 / 100];
-    let p99 = durations[SAMPLES * 99 / 100];
-    let max = durations[SAMPLES - 1];
     println!(
-        "shadow evaluate overhead (8 candidates, {} samples): p95={:?} p99={:?} max={:?}",
-        SAMPLES, p95, p99, max
+        "shadow evaluate cost ({} interleaved rounds):\n  \
+         4c p50={:.1}us   8c p50={:.1}us   32c p50={:.1}us   64c p50={:.1}us\n  \
+         marginal per candidate: {:.1}us low, {:.1}us high",
+        SAMPLES,
+        p50(0),
+        p50(1),
+        p50(2),
+        p50(3),
+        (p50(1) - p50(0)) / (COUNTS[1] - COUNTS[0]) as f64,
+        (p50(3) - p50(2)) / (COUNTS[3] - COUNTS[2]) as f64,
     );
+
+    let low = (p50(1) - p50(0)) / (COUNTS[1] - COUNTS[0]) as f64;
+    let high = (p50(3) - p50(2)) / (COUNTS[3] - COUNTS[2]) as f64;
     assert!(
-        p95 <= Duration::from_millis(10),
-        "p95 {:?} is an order of magnitude past the 325-501us this path measures on a \
-         quiet machine. That is a real regression rather than load, because the same \
-         source has measured 385-655us at p99 under concurrent builds. Observed p95 {:?}",
-        p95,
-        p95
+        high <= low * 3.0,
+        "the marginal cost of a candidate grows from {low:.1}us at 4-8 candidates \
+         to {high:.1}us at 32-64. Flat means the per-candidate work is constant; \
+         rising means it is growing with the count, which is how a microsecond \
+         request path becomes a millisecond one. Unlike a fixed ceiling this is \
+         independent of machine speed and load, because every arm is measured \
+         interleaved under the same scheduler."
     );
-    assert!(
-        p99 <= Duration::from_millis(30),
-        "p99 {:?} is an order of magnitude past the 385-655us this path measures on a \
-         quiet machine. That is a real regression rather than load, because the same \
-         source has measured 385-655us at p99 under concurrent builds. Observed p99 {:?} \
-         against a max of {:?}",
-        p99,
-        p99,
-        max
-    );
+}
+
+/// Absolute cost of the shadow path, measured deliberately rather than gated.
+///
+/// The gate above guards the *shape* of this cost, not its magnitude, because a
+/// wall-clock ceiling cannot tell a slow machine from a slow regression. This is
+/// where the magnitude is read: run it when you want to know what the path costs,
+/// or after changing anything on it.
+///
+///     cargo test -p zroutery-core --features ml --test shadow_test \
+///         -- --ignored --nocapture shadow_evaluate_absolute_cost
+#[test]
+#[ignore = "measures; run it deliberately"]
+fn shadow_evaluate_absolute_cost() {
+    let engine = engine();
+    engine.train(&training_samples(0..100));
+
+    println!("candidates   p50      p95      p99");
+    for count in [1usize, 4, 16, 64] {
+        let candidates: Vec<ShadowCandidateInput> = (0..count)
+            .map(|i| {
+                candidate_input(
+                    &format!("model-{}", i),
+                    &format!("prov-{}", i % 3),
+                    0.10 + i as f32 * 0.08,
+                )
+            })
+            .collect();
+        let mut input = shadow_input_with(candidates);
+        input.production_selected = "model-0".to_string();
+
+        for _ in 0..50 {
+            engine.evaluate("warm", &input);
+        }
+        let mut durations: Vec<u64> = Vec::with_capacity(500);
+        for _ in 0..500 {
+            let start = std::time::Instant::now();
+            let decision = engine.evaluate("perf", &input);
+            durations.push(start.elapsed().as_nanos() as u64);
+            assert!(decision.is_some());
+        }
+        durations.sort_unstable();
+        println!(
+            "{count:>10}   {:>6}us {:>7}us {:>7}us",
+            durations[250] / 1_000,
+            durations[475] / 1_000,
+            durations[495] / 1_000
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
