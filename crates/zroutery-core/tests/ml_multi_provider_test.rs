@@ -742,6 +742,140 @@ async fn exploration_without_a_model_stays_inside_the_plan_and_keeps_requests_su
 // Diagnostics
 // ---------------------------------------------------------------------------
 
+/// A served request should carry its price into the durable body, and does not.
+///
+/// **This fails on the current tree.** It is `#[ignore]`d rather than deleted
+/// because the defect is real, reproducible and worth fixing; it is ignored
+/// because the obvious fix destabilises the offline release gate, and landing a
+/// change that breaks a gate is worse than recording the defect honestly.
+///
+///     cargo test -p zroutery-core --features ml --test ml_multi_provider_test \
+///         -- --ignored --nocapture the_cost_axis_is_structurally_inert
+///
+/// # The defect
+///
+/// `Targets::from_attempt` sets `cost: None` unconditionally. It is not reading a
+/// missing field — `Attempt` has no cost field at all, so per-attempt spend is
+/// never recorded anywhere in the request's evidence.
+///
+/// Three consequences, each a live capability loss rather than a reporting nit:
+///
+/// 1. Every attempt-scoped training sample is cost-free.
+/// 2. The routing comparison reads **only** attempt samples, so `mean_cost` is a
+///    structural constant for every arm — measured `0.0000000000` for all five.
+/// 3. So `RewardPolicy::cost_weight` contributes nothing to the observed utility
+///    the promotion gate reads, and the gate's cost-budget criterion is measured
+///    against zero.
+///
+/// The request-scoped sample beside it carries a perfectly good
+/// `outcome.actual_cost`, and nothing consumes it. No end-to-end test asserted
+/// otherwise: every test carrying a non-zero `actual_cost` constructs the
+/// `Outcome` by hand, and the one pipeline test that compares spend against the
+/// activity record passes just as happily with both sides at zero.
+///
+/// # What the obvious fix does
+///
+/// Adding `cost: Option<f64>` to `Attempt`, populating it in the terminal
+/// transition from the settled usage, and reading it in `from_attempt` makes all
+/// three correct. It was implemented and measured before being reverted: 120 of
+/// 171 samples carried a real cost, `alpha-steady-std` at 0.00088 against
+/// `gamma-gamma-std` at 0.00792, and the arms separated — `baseline.priority`
+/// 0.00300, `ml.candidate` 0.00702. So the learned router was spending 2.3x what
+/// `baseline.priority` spends, entirely invisibly before.
+///
+/// # Why it was reverted
+///
+/// It broke `the_candidate_reaches_a_named_verdict_over_real_request_evidence`
+/// with `DegenerateHoldout { reason: SingleServedCandidate }` — "only
+/// alpha/alpha-std-one ever served". That test passes on the unmodified tree, four
+/// runs out of four, and its recorded window alternates two served identities
+/// perfectly across all thirty decisions. So something in the calibration path
+/// reacts to the cost axis becoming populated, and **the mechanism was not
+/// established** before the change was reverted.
+///
+/// Two things are worth keeping from that. The gate's refusal is *correct* given
+/// the partition it was handed — it is the mechanism that is unexplained, not the
+/// verdict. And the prime suspect is `project_cohorts`, which sorts cohorts by
+/// `CohortOrderKey` and is then split with `cohorts.split_at(len - holdout)`: a
+/// content-ordered vector whose tail is taken as a *temporal* holdout. Content
+/// ordering is what makes the calibration computation invariant to tie
+/// permutation — the module documents why at length — and it is also what would
+/// make a contiguous tail systematically one content cluster. If that is the
+/// cause, the fix is to split in arrival order and order each partition
+/// internally, which is a change to a module with its own invariants and deserves
+/// its own round.
+///
+/// **Not claimed:** that the cost axis is inert is verified and asserted here.
+/// That the holdout is cut by content order is a hypothesis.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "documents a real defect; the obvious fix destabilises the offline gate"]
+async fn the_cost_axis_is_structurally_inert() {
+    let (alpha, alpha_addr) = two_models().await;
+    let (gamma, gamma_addr) = gamma_provider().await;
+    let upstreams = [alpha.clone(), gamma.clone()];
+    let topology = Topology {
+        alpha: alpha_addr,
+        gamma: gamma_addr,
+        include_gamma: true,
+    };
+
+    // The fixture's own precondition, asserted rather than assumed: every model is
+    // priced. Without this, a failure below would be ambiguous between the
+    // pipeline dropping the cost and the fixture never having one to drop.
+    let config = config_for(&topology, std::path::Path::new(""), false, 0.0);
+    assert!(
+        config.models.iter().all(|entry| entry.pricing.is_some()),
+        "the fixture prices every model, and this assertion is what makes the one \
+         below about the pipeline rather than about the fixture"
+    );
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    {
+        let harness = Harness::start(config_for(&topology, dir.path(), false, 0.0)).await;
+        harness.drive(PHASE_REQUESTS, &upstreams).await;
+    }
+    let traces = zroutery_core::ml::TraceLog::open(dir.path())
+        .expect("open")
+        .load()
+        .expect("load");
+
+    let mut priced = 0usize;
+    let mut zero = 0usize;
+    let mut absent = 0usize;
+    let mut samples = 0usize;
+    let mut sum = 0.0f64;
+    for trace in &traces {
+        for sample in trace.attempt_samples() {
+            samples += 1;
+            match sample.targets.cost {
+                Some(value) => {
+                    if value > 0.0 {
+                        priced += 1;
+                    } else {
+                        zero += 1;
+                    }
+                    sum += value;
+                }
+                None => absent += 1,
+            }
+        }
+    }
+
+    assert!(
+        priced > 0,
+        "no attempt-scoped sample carries a positive cost target: of {samples} \
+         samples, {absent} have no cost at all and {zero} carry zero. The served \
+         path knows the model's price and the response's usage and this fixture \
+         configures both, so the loss is `Targets::from_attempt` reading `None` \
+         unconditionally — not the fixture."
+    );
+    assert!(
+        sum > 0.0,
+        "cost targets arrived but summed to {sum}; a cost head trained on zero \
+         carries no information"
+    );
+}
+
 /// Print which comparator a candidate can actually be measured against.
 ///
 /// Ignored by default because it is a measurement, and because **its numbers are

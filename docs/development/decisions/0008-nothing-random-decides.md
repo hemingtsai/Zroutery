@@ -173,10 +173,30 @@ trace written before the field existed was a model ranking.
 
 ### Open, and stated rather than assumed
 
-- Cost is still degenerate. At 400 prompt and 120 completion tokens every arm
-  reports `mean_cost` at five decimal places as `0.00000`. The cost axis carries
-  no discriminative signal in these fixtures even after the token counts were
-  raised.
+- **The cost axis is inert.** `Targets::from_attempt` sets `cost: None`
+  unconditionally and `Attempt` has no cost field, so per-attempt spend is never
+  recorded. Every attempt-scoped sample is cost-free; the routing comparison reads
+  only attempt samples, so `mean_cost` is `0.0000000000` for every arm; so
+  `RewardPolicy::cost_weight` contributes nothing to the observed utility the gate
+  reads, and the gate's cost criterion measures zero.
+
+  The fix is small — a `cost` field on `Attempt`, populated at the terminal
+  transition, read in `from_attempt` — and it works: 120 of 171 samples then carry
+  a real cost, and the arms separate, showing the learned router spending 2.3×
+  what `baseline.priority` spends.
+
+  It also breaks the offline release gate with
+  `DegenerateHoldout { SingleServedCandidate }` on a test that passes four times
+  out of four without it, over a window that alternates two served identities
+  perfectly. **That mechanism was not established**, so the change was reverted
+  rather than landed with an unexplained failure attached. The finding is kept as
+  `the_cost_axis_is_structurally_inert`, an ignored test that reproduces on
+  demand, and written up in §E4 of the report.
+
+  The prime suspect is `project_cohorts` sorting by `CohortOrderKey` and
+  `run_calibration` then taking `cohorts.split_at(len - holdout)` as a *temporal*
+  holdout. That is a hypothesis, not a finding.
+
 - Whether the engine's 0.1 switch threshold is crossed for an unobserved
   candidate still depends on measured latency, which is wall clock. The *split* is
   now deterministic; this decision is not, and conflating the two would be its own
