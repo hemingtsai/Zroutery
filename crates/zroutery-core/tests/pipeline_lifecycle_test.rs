@@ -728,6 +728,84 @@ async fn a_client_disconnect_is_never_recorded_as_success() {
     h.shutdown().await;
 }
 
+/// A truncated stream that reported usage before it vanished is charged, and the
+/// charge is attributed to the attempt that incurred it.
+///
+/// The second half is the part that was missing. `Error::InterruptedStream`
+/// carries the usage the body reported, and the streaming path deliberately keeps
+/// it — but "the spend is accounted for" used to mean only that the *ledger*
+/// recorded a total. Per-attempt attribution is what the ML cost axis reads, and
+/// `Targets::from_attempt` reads `attempt.cost`. A request that failed after
+/// being billed would otherwise contribute a cost-free attempt sample, and a
+/// failover chain's waste is exactly the spend a cost-aware router most needs to
+/// see.
+///
+/// The fixture already existed for the ledger half (`truncate-usage-model`
+/// reports 11 prompt and 7 completion tokens and then stops). What is new is the
+/// assertion that the tokens land on the attempt rather than only in a total.
+#[tokio::test]
+async fn a_truncated_stream_that_reported_usage_is_charged_to_its_attempt() {
+    let h = Harness::new().await;
+
+    let response = h.ask_streaming("alpha-truncate-usage-model").await;
+    assert_eq!(response.status(), 200);
+    // Drain it so the stream really does end mid-answer rather than being dropped
+    // by the client.
+    let mut body = response;
+    while let Ok(Some(chunk)) = body.chunk().await {
+        assert!(!chunk.is_empty());
+    }
+    drop(body);
+
+    wait_for_outcomes(&h, 1).await;
+
+    let outcome = h.outcome();
+    assert!(
+        !outcome.is_terminal_success(),
+        "a truncated stream did not finish, so it is not a success"
+    );
+    // The spend is real: the upstream reported 11 prompt and 7 completion tokens
+    // before it stopped.
+    let total = outcome
+        .actual_cost
+        .expect("a stream that reported usage is charged for it");
+    assert!(
+        total > 0.0,
+        "the ledger recorded a zero for a stream that reported usage: {total}"
+    );
+
+    // And it is attributed per attempt, which is what the cost axis reads.
+    let attempt = outcome
+        .attempts
+        .last()
+        .expect("a stream that started has an attempt");
+    assert_eq!(attempt.candidate_model, "alpha-truncate-usage-model");
+    let attributed = attempt
+        .cost
+        .expect("the truncated attempt carries the cost it incurred");
+    assert!(
+        attributed > 0.0,
+        "the attempt is recorded at zero cost while the request total is {total}; \
+         the attempt-level figure is what Targets::from_attempt reads"
+    );
+    assert!(
+        (attributed - total).abs() < 1e-12,
+        "one attempt incurred the whole spend, so the attempt figure ({attributed}) \
+         and the request total ({total}) should agree"
+    );
+
+    // Scope stops at the outcome on purpose. Reaching a *model* additionally needs
+    // the routing path's decision-time snapshot, because dataset ingestion for a
+    // direct-model request has no candidate set to attach features to. That half is
+    // covered end to end by `a_served_request_carries_its_price_into_the_durable_body`
+    // in `ml_multi_provider_test.rs`, which drives real routed requests. Asserting
+    // it here would be asserting that a fixture set up for streams also happens to
+    // produce routed samples, which is a statement about this test rather than
+    // about the mechanism.
+
+    h.shutdown().await;
+}
+
 /// The same drop must not poison the provider: the upstream really did answer,
 /// and a client leaving is not evidence that the model is unhealthy.
 #[tokio::test]
