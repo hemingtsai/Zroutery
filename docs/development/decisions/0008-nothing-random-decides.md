@@ -171,6 +171,43 @@ trace written before the field existed was a model ranking.
   measured cost rather than an assumed one. It is a product decision and is left
   to the operator.
 
+### The zero default is now reported, not silent
+
+The finding above stayed open for a long time because nothing in the product said
+so. `exploration_probability: 0.0` is a plausible-looking number in a
+configuration file, and an operator who added a provider had no way to learn that
+the addition was inert. The silence was indistinguishable from health — which is
+the same failure this document has been about throughout, one level up.
+
+What changed is the reporting, not the default:
+
+- `MlStatus::blind_candidates` names every configured candidate the observation
+  store holds nothing for, derived from the same `exposed_id` keys the outcome
+  recorder writes. Two candidates that have served are absent; one that has not is
+  named.
+- `MlStatus::blind_spots_are_permanent` distinguishes the two cases that look alike
+  in the raw numbers: an unobserved candidate *with* exploration is a cold start
+  that traffic resolves, and an unobserved candidate *without* it cannot be
+  resolved by anything in the configuration.
+- `blind_spot_warning()` states the consequence and names the candidates, and the
+  Routing panel renders it as an alert.
+
+The default stays at 0.0. A router that explores by default spends real money on
+deliberate mistakes, and that is not a call this repository should make silently
+either. But an operator now reads the cost of the default at the moment they add a
+provider, instead of discovering it months later from a bill.
+
+One thing this work turned up that is worth keeping: **the linkage between the
+status field and `explore` is measured, not asserted.**
+`blind_spot_warning_matches_what_exploration_actually_does` runs `explore` over
+2000 request ids at probability 0 and at 0.05, counts how often it leaves
+`Exploit`, and requires the document's verdict to match. When `explore` was mutated
+to treat a zero probability as "use a default" — a plausible-looking change, since
+it is exactly what someone might write trying to be helpful — that test was the
+**only** one in the workspace that failed. The other 2128 passed with exploration
+silently running at probability 0. A status field whose meaning is a claim about
+another function needs a test that reads the other function.
+
 ### The frozen holdout was a content cluster, not a slice of time
 
 Found while landing the cost-axis fix, and the third defect in this family.

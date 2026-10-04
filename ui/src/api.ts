@@ -564,6 +564,13 @@ export interface PromotionHistoryEntry {
   note: string;
 }
 
+export interface BlindCandidate {
+  /** The exposed model id, the key the router records outcomes under. */
+  model_id: string;
+  /** The provider that would serve it. */
+  provider_id: string;
+}
+
 export interface MlStatus {
   routing_enabled: boolean;
   durable_state: boolean;
@@ -591,6 +598,16 @@ export interface MlStatus {
   };
   exploration_probability: number;
   exploration_seed: number;
+  /**
+   * Configured candidates the router holds no evidence about.
+   *
+   * `exploration_probability` ships at 0, and exploration returns `Exploit` at
+   * zero before it draws, so a candidate the deterministic plan never picks can
+   * never be reached. Adding a provider then looks like adding a capability and
+   * is in fact inert, which is why this is reported rather than left for the
+   * reader to derive from the probability above.
+   */
+  blind_candidates: BlindCandidate[];
   dataset: {
     ingested: number;
     samples: number;

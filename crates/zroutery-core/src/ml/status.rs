@@ -14,6 +14,8 @@
 //! * which gate decision promoted it, over which body of evidence;
 //! * is routing deterministic or model-driven right now;
 //! * how often the model ranked, fell back, and explored;
+//! * which configured candidates hold no evidence, and whether anything in the
+//!   configuration can ever change that;
 //! * what has been promoted and rolled back, and when.
 //!
 //! # Read-only, and honestly so
@@ -36,6 +38,7 @@ use super::promotion::{PromotionDecision, PromotionVerdict};
 use super::serving::{ActiveModelAction, ActiveModelAuditEntry, MlRouterCounts};
 use super::shadow_analysis::ShadowAnalysis;
 use super::traces::TraceCounters;
+use crate::observation::ObservationStore;
 
 /// A read-only view of one promotion, as an operator sees it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -81,6 +84,71 @@ pub struct ShadowStatus {
     pub faults: u64,
 }
 
+/// A configured candidate the router holds no evidence about.
+///
+/// # Why this needs naming
+///
+/// `ml_routing.exploration_probability` ships at `0.0`, and `explore` returns
+/// `Exploit` at zero *before it draws*. So a candidate the deterministic plan
+/// never picks receives traffic from no source at all: not from the model,
+/// because the model has no observation of it, and not from exploration,
+/// because exploration is off. It cannot accumulate evidence, so it can never be
+/// discovered to be better than the candidate that shadows it.
+///
+/// Adding a provider to the configuration therefore looks like adding a
+/// capability and is in fact inert, and nothing anywhere said so. This type is
+/// the report: it names the affected candidates, and
+/// [`MlStatus::blind_spots_are_permanent`] says whether the configuration in
+/// force can change that.
+///
+/// # What "no evidence" means precisely
+///
+/// `total_requests == 0`, which the store reports for a key it has never
+/// written. Note this is *not* "no successful requests": a candidate tried
+/// three times and failed every time is observed and is correctly absent here.
+/// Conversely a candidate whose only traffic was a neutral failure — one that
+/// `affects_observation` rejects, such as a 4xx — never reaches the store at
+/// all, and is correctly present. In both cases the reading is the same one the
+/// ranking features get: nothing to rank it with.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct BlindCandidate {
+    /// The exposed model id — the same key the router records outcomes under.
+    pub model_id: String,
+    /// The provider that would serve it.
+    pub provider_id: String,
+}
+
+impl BlindCandidate {
+    /// The configured candidates the observation store holds nothing for.
+    ///
+    /// Takes pairs rather than an `AppConfig` so this stays a pure function of
+    /// what it was handed, and so that deciding what counts as "configured" —
+    /// enabled provider, enabled model entry — stays with the caller that owns
+    /// the configuration, instead of being restated here where it would drift
+    /// out of step with the classifier's own view.
+    ///
+    /// Sorted by `(model_id, provider_id)` so consecutive reads diff cleanly.
+    /// The configuration's order is not meaningful to this question.
+    pub fn unobserved<'a, I>(candidates: I, observations: &ObservationStore) -> Vec<Self>
+    where
+        I: IntoIterator<Item = (&'a str, &'a str)>,
+    {
+        let mut blind: Vec<Self> = candidates
+            .into_iter()
+            .filter(|(model_id, provider_id)| {
+                observations.get(model_id, provider_id).health.total_requests == 0
+            })
+            .map(|(model_id, provider_id)| Self {
+                model_id: model_id.to_string(),
+                provider_id: provider_id.to_string(),
+            })
+            .collect();
+        blind.sort();
+        blind.dedup();
+        blind
+    }
+}
+
 /// The whole operator-facing document.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MlStatus {
@@ -105,6 +173,12 @@ pub struct MlStatus {
     /// Exploration in force right now.
     pub exploration_probability: f64,
     pub exploration_seed: u64,
+    /// Configured candidates the router holds no evidence about.
+    ///
+    /// Empty on a fresh installation with one provider, and non-empty the
+    /// moment a second provider is added and exploration is off. See
+    /// [`BlindCandidate`] for why that is a defect rather than a policy.
+    pub blind_candidates: Vec<BlindCandidate>,
     /// Counters for collection. Not quality metrics.
     pub dataset: IngestionCounters,
     /// Counters for durability. Not quality metrics.
@@ -147,6 +221,53 @@ impl MlStatus {
             }
             (None, false) => "ML routing off; routing is deterministic".to_string(),
         }
+    }
+
+    /// Whether the blind spots in this document can ever be closed.
+    ///
+    /// True whenever exploration is off, which is the shipped default. This is
+    /// the distinction that carries the whole finding: an unobserved candidate
+    /// *with* exploration is a cold start that traffic resolves, and an
+    /// unobserved candidate *without* it is permanent — the configuration cannot
+    /// produce the evidence that would change the answer.
+    ///
+    /// The linkage to `explore` is asserted empirically rather than assumed;
+    /// see `blind_spot_warning_matches_what_exploration_actually_does` in
+    /// `crates/zroutery-core/tests/blind_spot_test.rs`.
+    pub fn blind_spots_are_permanent(&self) -> bool {
+        !self.blind_candidates.is_empty() && self.exploration_probability <= 0.0
+    }
+
+    /// The consequence, in a sentence an operator can act on.
+    ///
+    /// `None` when there is nothing to say: no blind candidates, or exploration
+    /// on, in which case an unobserved candidate is a cold start that traffic
+    /// resolves on its own and calling it a problem would be noise.
+    pub fn blind_spot_warning(&self) -> Option<String> {
+        if !self.blind_spots_are_permanent() {
+            return None;
+        }
+        // `exposed_id` is already `provider-model`, so the provider is not
+        // repeated: naming it twice reads as two different things to an operator
+        // looking for a configuration entry.
+        let named: Vec<&str> = self
+            .blind_candidates
+            .iter()
+            .map(|blind| blind.model_id.as_str())
+            .collect();
+        // One plural decision, reused, rather than a sentence with agreement to
+        // get wrong in three places.
+        let them = if self.blind_candidates.len() == 1 {
+            "it"
+        } else {
+            "them"
+        };
+        Some(format!(
+            "{} — configured but never tried, and exploration is off, so no traffic \
+             will ever reach {them}. Raise ml_routing.exploration_probability above 0, \
+             or give {them} top priority so the deterministic plan picks {them}.",
+            named.join(", ")
+        ))
     }
 }
 
@@ -258,6 +379,7 @@ mod tests {
             active,
             active_decision: None,
             history: Vec::new(),
+            blind_candidates: Vec::new(),
             routing: MlRouterCounts {
                 rankings: 0,
                 fallbacks: 0,

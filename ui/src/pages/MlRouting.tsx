@@ -134,6 +134,16 @@ export default function MlRouting({
   // model, and offering a button that can only ever be refused is how an operator
   // learns to distrust the panel.
   const canRollBack = status.history.some((entry) => entry.action === "promote") && active !== null;
+  // Configured candidates the router has never served. With exploration off
+  // these can never be served at all, which is a defect in the configuration
+  // rather than a cold start — so the distinction is made here and drives
+  // whether this is a quiet row or a warning. The backend's own verdict is not
+  // reimplemented: `exploration_probability <= 0` is the same condition
+  // `MlStatus::blind_spots_are_permanent` uses, and
+  // `blind_spot_warning_matches_what_exploration_actually_does` keeps the two
+  // honest against `explore`'s real behaviour.
+  const blind = status.blind_candidates ?? [];
+  const blindIsPermanent = blind.length > 0 && status.exploration_probability <= 0;
 
   return (
     <Section title={t("ml.title")} hint={t("ml.hint")}>
@@ -150,6 +160,14 @@ export default function MlRouting({
       {fault && (
         <p className="ml-fault" role="alert">
           {fault}
+        </p>
+      )}
+
+      {blindIsPermanent && (
+        <p className="ml-fault" role="alert">
+          {t("ml.blind_spot_warning", {
+            names: blind.map((b) => `${b.provider_id}/${b.model_id}`).join(", "),
+          })}
         </p>
       )}
 
@@ -182,6 +200,16 @@ export default function MlRouting({
             status.routing.blind_explorations > 0 && [
               t("ml.blind_explored"),
               `${status.routing.blind_explorations} ${t("ml.with_no_model")}`,
+            ],
+            blind.length > 0 && [
+              t("ml.never_tried"),
+              <>
+                {t("ml.blind_spot_count", { n: blind.length })}
+                <StatusDot tone={blindIsPermanent ? "warn" : "ok"} />{" "}
+                <div className="muted">
+                  {blind.map((b) => `${b.provider_id}/${b.model_id}`).join(", ")}
+                </div>
+              </>,
             ],
             [
               t("ml.collected"),
