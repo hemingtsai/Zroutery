@@ -1510,6 +1510,186 @@ mod tests {
         assert!(!ranked.reason.is_empty());
     }
 
+    // -- does the cost axis survive all the way to a served decision? -------
+    //
+    // Everything above this line tests the cost head as a component. These two
+    // test it as a *served* quantity, and they exist because of a measured hole:
+    // zeroing `bundle.cost` inside `ActivePredictor::predict` — between the
+    // ensemble and the ranking — leaves all 2129 tests in the workspace green.
+    //
+    // The reason nothing caught it is structural rather than accidental. The head
+    // is trained, checkpointed, loaded and bundled correctly; the cost term is
+    // three orders of magnitude below the success term; and `RankedPlan` reports
+    // only total utility. So a serving path that discards cost entirely produces
+    // byte-identical rankings and no test in the repository can see it.
+
+    /// Features that differ only in tier, which is the coordinate this fixture
+    /// teaches the cost head to read.
+    fn tier_features(tier: f32) -> RoutingFeatures {
+        let mut values = [UNKNOWN; FEATURE_DIMENSION];
+        values[crate::ml::features::F_TIER] = tier;
+        RoutingFeatures {
+            schema_version: FEATURE_SCHEMA_VERSION,
+            values,
+        }
+    }
+
+    /// A model that has learned *a higher tier costs more*, and in which nothing
+    /// else varies with tier.
+    ///
+    /// Every sample carries the same success, latency and TTFT target, so those
+    /// three heads converge to a constant and the only thing distinguishing the
+    /// two probe vectors is the cost axis. Without that, an assertion about cost
+    /// would be an assertion about a correlation.
+    fn cost_separated_ensemble() -> ModelEnsemble {
+        let mut ensemble = ModelEnsemble::new();
+        for pass in 0..8 {
+            for (tier, cost) in [(0.0f32, 0.001f64), (8.0f32, 0.010f64)] {
+                for repeat in 0..20 {
+                    let mut values = [UNKNOWN; FEATURE_DIMENSION];
+                    values[crate::ml::features::F_TIER] = tier;
+                    ensemble.update_all(&crate::ml::DatasetTrainingSample {
+                        sample_id: format!("s-{pass}-{tier}-{repeat}"),
+                        schema_version: 1,
+                        timestamp: 1_700_000_000 + pass as i64,
+                        features: RoutingFeatures {
+                            schema_version: FEATURE_SCHEMA_VERSION,
+                            values,
+                        },
+                        targets: crate::ml::dataset::Targets {
+                            success: true,
+                            latency_ms: Some(100.0),
+                            ttft_ms: Some(50.0),
+                            cost: Some(cost),
+                            failure_class: None,
+                            fallback_count: 0,
+                        },
+                        provider_id: "p".to_string(),
+                        model_id: "m".to_string(),
+                        origin: crate::feedback::DataOrigin::Native,
+                        outcome_id: format!("o-{pass}-{tier}-{repeat}"),
+                        feedback: Vec::new(),
+                    });
+                }
+            }
+        }
+        ensemble
+    }
+
+    /// **The promoted model's cost is the head's cost.**
+    ///
+    /// Goes through the gate and `ActivePredictor::load`, so this also covers
+    /// the checkpoint round trip: a cost head dropped by `save_all`/`load_all`
+    /// would load as the seeded 0.01 and the ratio below would collapse.
+    #[test]
+    fn a_promoted_model_delivers_the_cost_its_head_learned() {
+        let ensemble = cost_separated_ensemble();
+        let predictor = predictor_for(&ensemble, FIXTURE_EVENTS);
+
+        let cheap = predictor.predict("m", "p", &tier_features(0.0));
+        let dear = predictor.predict("m", "p", &tier_features(8.0));
+
+        assert!(
+            cheap.cost.value > 0.0,
+            "the promoted model reports cost {} for the cheap tier; a head that \
+             never trained would report its seeded bias of 0.01 for both tiers \
+             and the comparison below would be meaningless",
+            cheap.cost.value
+        );
+        assert!(
+            dear.cost.value > cheap.cost.value * 2.0,
+            "a head trained on costs 0.001 and 0.010 predicts {} and {} across the \
+             two tiers. A promoted model that reports the same cost for both has \
+             lost the cost axis somewhere between the checkpoint and the ranking.",
+            cheap.cost.value,
+            dear.cost.value
+        );
+
+        // And it is the head's own figure rather than something reconstructed
+        // from the checkpoint, which is what makes this a fidelity check and not
+        // a plausibility check.
+        assert_eq!(
+            dear.cost.value,
+            ensemble.cost.predict(&tier_features(8.0)).value,
+            "the served cost must be exactly what the cost head predicts"
+        );
+    }
+
+    /// **The cost reaches the number the router acts on.**
+    ///
+    /// `RankedPlan::utilities` reports each candidate's total, and that total is
+    /// `compute_utility` over the bundle the serving path built. So recomputing
+    /// the utility from the ensemble's own prediction is a per-candidate
+    /// fidelity check on the whole chain — trained head, checkpoint, attached
+    /// predictor, bundle, engine, reported total — and it needs no outcome flip
+    /// to be decisive.
+    ///
+    /// The check is deliberately per candidate rather than a comparison between
+    /// them: the other three heads converge to a constant but not to *exactly* a
+    /// constant, and this way their residual drift cancels out instead of
+    /// needing a tolerance wide enough to hide a real cost regression.
+    #[test]
+    fn the_reported_utility_carries_the_cost_the_model_predicted() {
+        let ensemble = cost_separated_ensemble();
+        let router = {
+            let engine =
+                DecisionEngine::new(CoordinatorConfig::default(), RewardPolicy::default());
+            let router = MlRouter::new(engine, ExplorationConfig::default());
+            router.attach(predictor_for(&ensemble, FIXTURE_EVENTS));
+            router
+        };
+
+        let probes = [("cheap", 0.0f32), ("dear", 8.0f32)];
+        let candidates: Vec<ShadowCandidateInput> = probes
+            .iter()
+            .map(|(id, tier)| ShadowCandidateInput {
+                candidate_id: (*id).to_string(),
+                provider_id: "p".to_string(),
+                tier: None,
+                eligible: true,
+                features: tier_features(*tier),
+                rejection_reason: None,
+            })
+            .collect();
+        let plan = router
+            .rank(&input("cheap", candidates), "r1")
+            .expect("ranked");
+
+        let policy = RewardPolicy::default();
+        for (id, tier) in probes {
+            let bundle = crate::ml::predict_bundle(&ensemble, id, "p", &tier_features(tier));
+            let expected = crate::ml::compute_utility(&bundle, &policy, false, 0).total;
+            let reported = plan
+                .utilities
+                .iter()
+                .find(|(candidate_id, _)| candidate_id == id)
+                .map(|(_, total)| *total)
+                .unwrap_or_else(|| {
+                    panic!("the ranking reported no utility for {id}: {:?}", plan.utilities)
+                });
+
+            // `expected` here was built from a prediction of {} dollars, so the
+            // cost term in it is {}. A serving path that dropped cost would
+            // report {reported} instead — a difference of exactly that term.
+            assert!(
+                (reported - expected).abs() < 1e-12,
+                "the utility reported for {id} is {reported}, but the bundle the \
+                 ensemble produces for it scores {expected}. The gap is {} — which is \
+                 the cost term, so the cost axis did not reach the ranking.",
+                (reported - expected).abs()
+            );
+        }
+
+        // And the two are genuinely different numbers, so the check above is not
+        // passing because the assertion is vacuous.
+        let totals: Vec<f64> = plan.utilities.iter().map(|(_, total)| *total).collect();
+        assert!(
+            (totals[0] - totals[1]).abs() > 0.0,
+            "the two candidates should not score identically, or nothing above \
+             was actually tested"
+        );
+    }
+
     #[test]
     fn an_ineligible_candidate_is_never_ranked_first() {
         let router = router(ExplorationConfig::default());
