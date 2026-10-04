@@ -321,7 +321,7 @@ Only items that block `PRODUCTION_READY`.
 | The cold-start window is unbounded in principle | Every new process begins with an empty observation store, so the first requests fall back until history accumulates. Measured at 1–2 requests; not characterised as a function of traffic rate | Carry the observation store across restarts, or persist it |
 | The cost axis is inert | **Closed.** `Attempt` had no cost field and `Targets::from_attempt` read `None` unconditionally, so per-attempt spend was never recorded, every attempt-scoped sample was cost-free, and `mean_cost` was `0.0000000000` for every arm — which made `RewardPolicy::cost_weight` and the gate's cost criterion both read a constant. Now recorded and discriminating — §E4 | — |
 | A billed failure is unattributed | A 5xx carries no usage, so nothing in the error says what the failed call cost. If a provider bills errors, that spend is invisible to the ledger and to the cost axis | Carry usage out of the failure path — an upstream protocol change, not a routing one |
-| The cost head is never checked | **Closed.** The head learns its targets at 10:1 and the learned figure reaches the ranking utility, both verified by mutation. Separately measured: at the shipped weights a 9x price difference moves utility `0.0009` against `0.75` for a success difference, so the cost head **cannot outvote reliability** — pinned so the weights cannot be changed silently — §E4 |
+| The cost head is never checked | **Closed.** The head learns its targets at 10:1; the learned figure reaches the ranking utility; and both survive to a *served* decision through a real promotion, all verified by mutation. Separately measured: at the shipped weights a 9x price difference moves utility `0.0009` against `0.75` for a success difference, so the cost head **cannot outvote reliability** — pinned so the weights cannot be changed silently — §E4 |
 | The frozen holdout was a content cluster | **Closed (ADR-0008).** `project_cohorts` sorted by `CohortOrderKey` and the holdout was a contiguous tail of that, so which decisions were held out depended on tie-breaking rather than on time; the gate refused a fifth of runs with `SingleServedCandidate` — §E5 | — |
 | Exploration defaults to zero, which has a measured cost | **Half closed.** The cost is measured (0 of 60 requests) *and now reported*: `MlStatus::blind_candidates` names unreachable candidates, `blind_spots_are_permanent` separates a cold start from a permanent gap, and the Routing panel warns before the operator is billed for the mistake. The default itself is still **0.0** | Moving the default is a product decision, not engineering: a router that explores by default spends real money on deliberate mistakes. It is left to the operator, now with the cost visible where they will read it |
 | The status field's meaning is only asserted, not measured | **Closed.** `blind_spot_warning_matches_what_exploration_actually_does` runs `explore` over 2000 ids at each probability and requires the document's verdict to match. Mutating `explore` to explore at probability 0 fails this test and **nothing else in the workspace** — the other 2128 pass with exploration silently running | — |
@@ -672,10 +672,11 @@ to be wrong is cheaper than one wrong commit.
 ### Whether the cost head learns anything
 
 **Yes — and it cannot outvote reliability. Both are pinned by
-`crates/zroutery-core/tests/cost_head_test.rs`.**
+`crates/zroutery-core/tests/cost_head_test.rs` and two tests in `ml/serving.rs`.**
 
-Four tests, because "the cost axis is inert" conflated two questions: does the head
-learn its targets, and does what it learned reach a decision.
+Six tests, because three questions were conflated by "the cost axis is inert": does
+the head learn its targets, does what it learned reach the utility, and does it
+survive all the way to a *served* decision.
 
 | Test | Claim | Fails if |
 |---|---|---|
@@ -689,6 +690,34 @@ two; zeroing the cost term in `compute_utility` fails the second and fourth. The
 second test needed an explicit "the two predictions differ" assertion placed *first*
 — without it the algebraic identity holds as `0 == 0` and the test passes with the
 cost axis disconnected, which is exactly the failure mode it exists to prevent.
+
+### The serving seam had no coverage at all
+
+The four tests above are component-level, and that turned out to matter. Zeroing
+`bundle.cost` inside `ActivePredictor::predict` — between the trained ensemble and
+the ranking — left **all 2129 tests in the workspace green**. The cost head is
+trained, checkpointed, loaded and bundled correctly; the cost term is three
+orders of magnitude below the success term; and `RankedPlan` reports only *total*
+utility. A serving path that discards cost entirely therefore produces
+byte-identical rankings, and nothing in the repository could see it.
+
+Two tests in `ml/serving.rs` close it:
+
+| Test | Claim | Fails if |
+|---|---|---|
+| `a_promoted_model_delivers_the_cost_its_head_learned` | A model promoted through the real gate and `ActivePredictor::load` reports the trained cost, and reports it *exactly* — not a plausible reconstruction | Cost is dropped or replaced between the ensemble and the ranking |
+| `the_reported_utility_carries_the_cost_the_model_predicted` | Each candidate's reported total equals `compute_utility` over the bundle the ensemble produces for it | Any link in the chain breaks, including the reported number itself |
+
+Both fail, and are the only failures, under the mutation that previously passed
+everything. The second is deliberately a **per-candidate** fidelity check rather
+than a comparison between two candidates: the other three heads converge towards a
+constant but not to exactly one, and checking each candidate against its own
+expectation makes that drift cancel instead of needing a tolerance wide enough to
+hide a real cost regression.
+
+Persistence needed no test of its own: `ModelCheckpoint::cost` is a non-`Option`
+field with no `Default`, so losing the cost head at checkpoint time does not
+compile. The gate-and-load route in the first test covers it anyway.
 
 **The confound these tests are shaped around.** The obvious end-to-end check is
 worthless: in the routing fixtures a candidate's cost is a deterministic function

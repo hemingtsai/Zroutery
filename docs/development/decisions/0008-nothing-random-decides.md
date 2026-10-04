@@ -263,17 +263,40 @@ explicitly alongside it.
 ### Open, and stated rather than assumed
 
 - The **cost head is verified, and verified not to matter.** It learns its targets
-  (features fixed, cost varied 10x, predictions track at 10:1) and the learned
-  figure reaches the ranking utility exactly — both pinned by mutation in
-  `cost_head_test.rs`. But `compute_utility` scores cost as
-  `-cost_weight * min(cost_dollars, 1.0)`, and a per-request LLM bill is cents, so
-  nine times the price moves utility by `0.0009` against `0.75` for a success
-  difference. The head is wired, working, and has never changed a routing decision.
+  (features fixed, cost varied 10x, predictions track at 10:1), the learned figure
+  reaches the ranking utility exactly, and both survive to a served decision
+  through a real promotion — all pinned by mutation. But `compute_utility` scores
+  cost as `-cost_weight * min(cost_dollars, 1.0)`, and a per-request LLM bill is
+  cents, so nine times the price moves utility by `0.0009` against `0.75` for a
+  success difference. The head is wired, working, and has never changed a routing
+  decision.
 
   That is left as it is and pinned rather than changed: making cost outvote
   reliability is a policy decision nobody has made, and
   `cost_cannot_outvote_success_at_the_shipped_weights` fails until someone argues
   for it in the open.
+
+  **The component tests were not enough, and finding that out is the useful
+  part.** The first four tests all pass if `bundle.cost` is zeroed inside
+  `ActivePredictor::predict` — between the trained ensemble and the ranking. Every
+  one of the 2129 tests in the workspace stayed green. The cause is structural:
+  the head trains and checkpoints and bundles correctly, the cost term is three
+  orders of magnitude below the success term, and `RankedPlan` reports only total
+  utility, so a serving path that throws cost away produces byte-identical
+  rankings. A cost axis that is *too small to matter* and a cost axis that is
+  *discarded in transit* are indistinguishable from outside unless something reads
+  the value at the far end.
+
+  Two tests now read it. `a_promoted_model_delivers_the_cost_its_head_learned`
+  promotes a cost-trained ensemble through the real gate and asserts the served
+  figure is the head's own; `the_reported_utility_carries_the_cost_the_model_predicted`
+  asserts each candidate's reported total is the utility of the bundle the
+  ensemble produces for it. Both, and only both, fail under the mutation.
+
+  The second is per-candidate on purpose. The other three heads converge towards a
+  constant but not to exactly one, so comparing two candidates against each other
+  would need a tolerance wide enough to hide a genuine cost regression. Checking
+  each against its own expectation makes the drift cancel.
 
   Two incidental findings, both asserted so neither changes silently: no head ever
   constructs a `Prediction::cold` (cold-ness reaches the decision through
