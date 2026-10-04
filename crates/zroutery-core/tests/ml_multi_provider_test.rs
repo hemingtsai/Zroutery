@@ -676,6 +676,104 @@ async fn a_provider_the_plan_never_reaches_is_never_measured_and_is_reported() {
     );
 }
 
+/// **Exploration blocks the promotion gate. It does not enable it.**
+///
+/// This is the opposite of what the blind-spot warning used to advise, and it was
+/// found by running the sweep that diagnostic already contained.
+///
+/// At exploration 0 a body of 120 or 240 requests promotes: the learned policy
+/// picks the provider the plan always tries second, that provider was attempted on
+/// 90 of 120 traces, so 91 requests are measurable and paired 1:1 against
+/// `baseline.priority`.
+///
+/// At exploration 0.25 the same bodies are **refused**, and the gate names its own
+/// reason:
+///
+/// ```text
+/// BLOCKED paired_evidence: 2 paired requests against a floor of 30
+/// ```
+///
+/// The mechanism is documented rather than guessed. `ArmRecord::measured` is false
+/// exactly when the policy's choice was not among the candidates that trace
+/// attempted, and `pair_against_baseline` skips any request where either arm is
+/// unmeasured. Exploration routes a fraction of requests to a provider the
+/// baseline's pick never displaced, so on those requests the baseline has no
+/// outcome; and once the body has trained the learned policy prefers the explored
+/// provider, whose attempt count is set by the *exploration probability* rather
+/// than by traffic. Measured across runs at 0.25: `ml measured` between 10 and 40,
+/// `paired` between 2 and 15.
+///
+/// **Doubling the traffic does not fix it.** At 240 requests with exploration 0.25
+/// the paired count was 6, 8 and 10 across three runs — still under the floor of
+/// 30, and not trending toward it.
+///
+/// # What this test does and does not assert
+///
+/// The counts are not asserted. They vary by 4x and 7x run to run, so any exact
+/// figure here would be a flaky test asserting noise. The *verdict* was PROMOTED
+/// at 0 and BLOCKED at 0.25 in every run observed, and the paired collapse is 6x
+/// or worse with a wide margin, so this asserts the direction and the blocker's
+/// name. Same discipline as the rest of this file: assert reachability, not
+/// preference.
+///
+/// Regenerate the underlying numbers with:
+///
+///     cargo test -p zroutery-core --features ml --test ml_multi_provider_test \
+///         -- --ignored --nocapture print_why_exploration_blocks_promotion
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn exploration_starves_the_evidence_a_promotion_needs() {
+    async fn paired_under(probability: f64) -> Body {
+        let (alpha, alpha_addr) = two_models().await;
+        let (gamma, gamma_addr) = gamma_provider().await;
+        let upstreams = [alpha.clone(), gamma.clone()];
+        let topology = Topology {
+            alpha: alpha_addr,
+            gamma: gamma_addr,
+            include_gamma: true,
+        };
+        let dir = tempfile::tempdir().expect("tempdir");
+        {
+            let harness = Harness::start(config_for(&topology, dir.path(), false, probability)).await;
+            harness.drive(2 * PHASE_REQUESTS, &upstreams).await;
+        }
+        learn(dir.path(), "exploration-starvation")
+    }
+
+    let quiet = paired_under(0.0).await;
+    let exploring = paired_under(0.25).await;
+
+    assert_eq!(
+        quiet.decision.verdict,
+        PromotionVerdict::Promoted,
+        "without exploration this body should promote; if it does not, the \
+         comparison this test rests on has changed"
+    );
+
+    let quiet_paired = quiet.paired_with("baseline.priority");
+    let exploring_paired = exploring.paired_with("baseline.priority");
+
+    assert!(
+        exploring_paired * 4 < quiet_paired,
+        "exploration should collapse the paired evidence the gate needs. Without \
+         exploration {quiet_paired} requests paired against baseline.priority; with \
+         exploration at 0.25, {exploring_paired}. A ratio near 1 would mean this \
+         finding is wrong."
+    );
+
+    // And the gate says so itself, by name, rather than by us inferring it.
+    let blockers: Vec<String> = exploring
+        .decision
+        .blockers()
+        .iter()
+        .map(|criterion| criterion.name.clone())
+        .collect();
+    assert!(
+        blockers.iter().any(|name| name == "paired_evidence"),
+        "the gate should be refusing for want of paired evidence; it refused for \
+         {blockers:?} instead"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // What opens it
 // ---------------------------------------------------------------------------
@@ -1064,6 +1162,94 @@ async fn print_what_a_promotion_costs_to_measure() {
                 body.paired_with("baseline.priority"),
                 body.decision.verdict.as_str(),
             );
+        }
+    }
+    println!();
+}
+
+/// Print *why* the gate refuses, as a function of traffic volume and exploration.
+///
+/// This exists because the sweep above produced a result nobody expected and the
+/// table alone does not explain it: **exploration makes the promotion gate harder
+/// to pass, not easier.** At probability 0 a body of 120 requests promotes; at 0.25
+/// the same body is refused at 120 and still refused at 240, with the paired
+/// request count collapsing from 181 to 2.
+///
+/// Exploration is the mechanism that would let a model discover a better
+/// provider. If it also makes the model unpromotable, then the advice to "raise
+/// exploration_probability" — which this repository now prints at an operator
+/// whose provider is unreachable — traps them on the deterministic plan
+/// permanently. That is worth knowing precisely rather than approximately.
+///
+/// So this prints the gate's own blockers rather than inferring a cause from the
+/// counters. The gate already knows why it refused; the question is whether its
+/// reason matches the explanation above.
+///
+///     cargo test -p zroutery-core --features ml --test ml_multi_provider_test \
+///         -- --ignored --nocapture print_why_exploration_blocks_promotion
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "prints measurements; run it deliberately"]
+async fn print_why_exploration_blocks_promotion() {
+    for requests in [2 * PHASE_REQUESTS, 4 * PHASE_REQUESTS] {
+        for probability in [0.0, 0.25] {
+            let (alpha, alpha_addr) = two_models().await;
+            let (gamma, gamma_addr) = gamma_provider().await;
+            let upstreams = [alpha.clone(), gamma.clone()];
+            let topology = Topology {
+                alpha: alpha_addr,
+                gamma: gamma_addr,
+                include_gamma: true,
+            };
+            let dir = tempfile::tempdir().expect("tempdir");
+            {
+                let harness =
+                    Harness::start(config_for(&topology, dir.path(), false, probability)).await;
+                harness.drive(requests, &upstreams).await;
+            }
+            let body = learn(dir.path(), "blockers");
+
+            println!(
+                "\n{requests} requests, exploration {probability:.2} -> {}",
+                body.decision.verdict.as_str()
+            );
+            println!(
+                "  ml measured {}, priority measured {}, paired {}",
+                body.arm("ml.candidate").requests_measured,
+                body.arm("baseline.priority").requests_measured,
+                body.paired_with("baseline.priority"),
+            );
+            for criterion in &body.decision.criteria {
+                if !criterion.held {
+                    println!("  BLOCKED {}: {}", criterion.name, criterion.reason);
+                }
+            }
+
+            // How many traces actually attempted each candidate. This is the ceiling on what
+            // any arm can be measured against: `ArmRecord::measured` is false exactly
+            // when the policy's choice was not among the candidates that trace
+            // attempted, and pairing needs both arms measured on the same request.
+            //
+            // It does not show which candidate the learned policy actually chose --
+            // `RoutingComparison` reports aggregates only, and adding per-request
+            // choice records to it would be production surface bought for a test.
+            // So the causal chain below is the documented one, not a measured one.
+            let mut attempted: BTreeMap<String, usize> = BTreeMap::new();
+            for trace in &body.traces {
+                let mut seen: BTreeMap<String, ()> = BTreeMap::new();
+                for sample in trace.attempt_samples() {
+                    seen.insert(format!("{}/{}", sample.provider_id, sample.model_id), ());
+                }
+                for key in seen.keys() {
+                    *attempted.entry(key.clone()).or_default() += 1;
+                }
+            }
+            for (candidate, count) in &attempted {
+                println!(
+                    "  {candidate} attempted on {count}/{} traces, so at most {count} \
+                     requests can measure a policy that chose it",
+                    body.traces.len()
+                );
+            }
         }
     }
     println!();

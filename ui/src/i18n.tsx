@@ -474,7 +474,7 @@ const en = {
   "ml.with_no_model": "with no model, to gather evidence",
   "ml.never_tried": "Never tried",
   "ml.blind_spot_warning":
-    "Exploration is off, so a configured provider the plan never picks can never be tried — {names} would receive no traffic at all. Raise ml_routing.exploration_probability above 0, or give it top priority.",
+    "{names} is configured but never tried, and exploration is off, so no traffic will ever reach it. Raising ml_routing.exploration_probability above 0 does reach it, but it blocks promotion of any learned model: the gate needs the model and the baseline compared on the same requests, which exploration prevents, so routing stays deterministic either way. Give it top priority instead.",
   "ml.blind_spot_count": "{n} unreachable",
   "ml.collected": "Collected",
   "ml.refused": "Refused",
@@ -938,7 +938,7 @@ const zh: Dict = {
   "ml.with_no_model": "在没有模型的情况下，为采集证据而尝试",
   "ml.never_tried": "从未尝试",
   "ml.blind_spot_warning":
-    "探索已关闭，因此计划从不选择的已配置供应商永远不会被尝试 —— {names} 完全收不到流量。请将 ml_routing.exploration_probability 提高到 0 以上，或将其置于最高优先级。",
+    "{names} 已配置但从未尝试，且探索已关闭，因此永远不会有流量到达它。把 ml_routing.exploration_probability 提高到 0 以上确实能触达它，但会阻止任何已学习模型的晋升 —— 门控需要在同一批请求上比较模型与基线，而探索恰恰使两者不一致，所以无论如何路由都仍是确定性的。改为给它最高优先级。",
   "ml.blind_spot_count": "{n} 个无法触达",
   "ml.collected": "已采集",
   "ml.refused": "已拒绝",
