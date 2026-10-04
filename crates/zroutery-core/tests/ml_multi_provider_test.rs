@@ -433,12 +433,18 @@ fn mean_after_cold_start(costs: &[usize]) -> f64 {
 /// Requests at the head of every process that are expected to fall back.
 const COLD_START: usize = 2;
 
-/// A configuration whose gate names a baseline this evidence can beat.
+/// A gate configuration naming a baseline this fixture's evidence can beat.
 ///
-/// `Priority` is the strategy Zroutery ships, and against it a learned router
-/// that finds the fast reliable provider has something real to win. Naming it
-/// explicitly is the point: "beats a baseline" is a claim about a specific
-/// baseline.
+/// `baseline.priority` is the strategy Zroutery ships, and against it a learned
+/// router that avoids the failing provider has something real to win *within one
+/// provider*. Naming it explicitly is the point: "beats a baseline" is a claim
+/// about a specific baseline.
+///
+/// It is **not** the right choice for a candidate that has discovered a second
+/// provider, and that is measured rather than asserted — see
+/// `print_which_comparator_a_candidate_can_be_measured_against`. Exploration
+/// reaches a new provider by displacing priority's first pick, so the two arms'
+/// measured requests barely overlap.
 fn promotable_gate() -> PromotionConfig {
     PromotionConfig {
         required_baseline: "baseline.priority".to_string(),
@@ -490,10 +496,9 @@ impl Body {
 
 /// The paired-evidence floor the shipped gate applies.
 ///
-/// Not asserted against directly — the verdict it produces is unstable on this
-/// fixture by design, and `print_how_often_the_verdict_moves` measures that. It
-/// is restated here so the doc comments above can name the number the gate is
-/// actually refusing against.
+/// Not asserted against directly. The verdict it produces is unstable on this
+/// fixture — see `print_how_often_the_verdict_moves` — so it is restated here
+/// only so the diagnostics can name the number the gate refuses against.
 #[allow(dead_code)]
 const MIN_PAIRED: usize = 30;
 
@@ -734,69 +739,98 @@ async fn exploration_without_a_model_stays_inside_the_plan_and_keeps_requests_su
 }
 
 // ---------------------------------------------------------------------------
-// The cost, stated rather than smoothed over
-// ---------------------------------------------------------------------------
-
-/// A model that genuinely prefers a different provider is *harder* to promote
-/// than one that agrees with the incumbent.
-///
-/// Pairing is defined on the measured intersection: a request is comparable only
-/// where both arms' choices were actually attempted. So when the model diverges
-/// onto a candidate the plan rarely reaches, those requests drop out of the
-/// comparison entirely — and the better the model gets, the fewer requests remain
-/// to prove it.
-///
-/// This is asserted as a *budget*, which is stable, rather than as a verdict,
-/// which is not. Whether the engine's 0.1 switch threshold is crossed for an
-/// unobserved candidate depends on measured latency, which is wall clock, so on
-/// this fixture the same traffic yields PROMOTED on some runs and BLOCKED on
-/// others. `print_how_often_the_verdict_moves` measures that spread; it is the
-/// finding, and asserting either verdict would be asserting noise.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn divergence_onto_an_untried_candidate_costs_the_comparison_its_evidence() {
-    let (alpha, alpha_addr) = two_models().await;
-    let (gamma, gamma_addr) = gamma_provider().await;
-    let upstreams = [alpha.clone(), gamma.clone()];
-    let topology = Topology {
-        alpha: alpha_addr,
-        gamma: gamma_addr,
-        include_gamma: true,
-    };
-
-    // A body with exploration on, so the newly reachable provider does have
-    // outcomes and the arm is measurable over a real share of it.
-    let explored = tempfile::tempdir().expect("tempdir");
-    {
-        let harness =
-            Harness::start(config_for(&topology, explored.path(), false, MAX_EXPLORATION)).await;
-        harness.drive(2 * PHASE_REQUESTS, &upstreams).await;
-    }
-    let body = learn(explored.path(), "divergence-cost");
-    let arm = body.arm("ml.candidate");
-
-    // The ranking spans providers, so it did diverge.
-    assert!(
-        arm.distinct_providers >= 2,
-        "with gamma reachable the ranking should have crossed providers; it used {}",
-        arm.distinct_providers
-    );
-    // And the requests where it chose something untried are not comparable, so
-    // measurability is strictly below the body size. That shortfall is what the
-    // gate's paired-evidence floor is applied to, and it is why this body blocks:
-    // the requests that would prove the model right are the requests nobody
-    // collected.
-    let measured = arm.requests_measured;
-    assert!(
-        measured < body.traces.len(),
-        "a divergent arm must be missing outcomes on the requests where it chose \
-         a candidate nobody tried; measured all {} of {}",
-        measured,
-        body.traces.len()
-    );
-}
-// ---------------------------------------------------------------------------
 // Diagnostics
 // ---------------------------------------------------------------------------
+
+/// Print which comparator a candidate can actually be measured against.
+///
+/// Ignored by default because it is a measurement, and because **its numbers are
+/// not stable enough to assert**. It repeats the same body and prints the paired
+/// set against every baseline, so the spread is visible rather than asserted.
+///
+///     cargo test -p zroutery-core --features ml --test ml_multi_provider_test \
+///         -- --ignored --nocapture print_which_comparator
+///
+/// # What it shows
+///
+/// The paired set is a property of the candidate *and the baseline it is named
+/// against*, not of the candidate alone.
+///
+/// An earlier version of this file asserted `paired(balanced) > paired(priority)`
+/// and failed roughly one run in three. Repeating it showed why: whether the
+/// model discovers the newly reachable provider on a given run is itself
+/// borderline, because `gamma-std` is eight times faster than `steady-std` and
+/// equally reliable but costs nine times as much, and `RewardPolicy` weights
+/// latency 0.3 against cost 0.1. Five runs at the exploration ceiling:
+///
+/// ```text
+///   run  providers  paired: priority  round_robin  lowest_latency  balanced
+///     1          2               4           15              38        40
+///     2          2               6           11              14        31
+///     3          1              40           30               8         1
+///     4          2               2            9              17        34
+///     5          2               2            7               2        29
+/// ```
+///
+/// Run 3 is the clearest case: with no discovery the candidate pairs *perfectly*
+/// with `baseline.priority` (40) and not at all with `baseline.balanced` (1). With
+/// discovery the reverse. Exploration reached the new provider by displacing
+/// priority's first pick, so the candidate's measured requests and priority's are
+/// close to disjoint, while `baseline.balanced` — which considers the same
+/// candidates — overlaps them.
+///
+/// A sixth run broke even the anti-correlation (discovery *and* `paired(priority)`
+/// at 31, one over the floor), so the effect is a strong tendency and not an
+/// invariant. That is why it is printed.
+///
+/// The operational reading: `promotable_gate()`'s `baseline.priority` is a
+/// same-provider choice. Naming it for a candidate that has discovered a provider
+/// tends to yield `BLOCKED (paired_evidence: N)` for a candidate that may be
+/// perfectly good, and the blocker reads as "not enough data" rather than "you
+/// compared against the wrong arm".
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "prints measurements; run it deliberately"]
+async fn print_which_comparator_a_candidate_can_be_measured_against() {
+    const REPEATS: usize = 5;
+    println!(
+        "\n{REPEATS} bodies, exploration at the ceiling, {} requests each\n",
+        2 * PHASE_REQUESTS
+    );
+    println!(
+        "  run  providers  ml measured  paired: priority  round_robin  lowest_latency  balanced"
+    );
+    for run in 1..=REPEATS {
+        let (alpha, alpha_addr) = two_models().await;
+        let (gamma, gamma_addr) = gamma_provider().await;
+        let upstreams = [alpha.clone(), gamma.clone()];
+        let topology = Topology {
+            alpha: alpha_addr,
+            gamma: gamma_addr,
+            include_gamma: true,
+        };
+        let dir = tempfile::tempdir().expect("tempdir");
+        {
+            let harness =
+                Harness::start(config_for(&topology, dir.path(), false, MAX_EXPLORATION)).await;
+            harness.drive(2 * PHASE_REQUESTS, &upstreams).await;
+        }
+        let body = learn(dir.path(), "comparator");
+        let paired = |baseline: &str| body.paired_with(baseline).to_string();
+        println!(
+            "  {run:>3}  {:>9}  {:>11}  {:>14}  {:>11}  {:>14}  {}",
+            body.arm("ml.candidate").distinct_providers,
+            body.arm("ml.candidate").requests_measured,
+            paired("baseline.priority"),
+            paired("baseline.round_robin"),
+            paired("baseline.lowest_latency"),
+            paired("baseline.balanced"),
+        );
+    }
+    println!(
+        "\n  the shipped gate's paired floor is {MIN_PAIRED}; the comparator a candidate is \
+         named\n  against can move the paired set from near zero to comfortably over it.\n"
+    );
+}
 
 /// Print how often the promotion verdict moves on identical traffic.
 ///
