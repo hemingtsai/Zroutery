@@ -44,6 +44,12 @@ pub fn run() {
             commands::get_snapshot,
             commands::get_activity,
             commands::get_logs,
+            #[cfg(feature = "ml")]
+            commands::get_ml_status,
+            #[cfg(feature = "ml")]
+            commands::get_ml_shadow,
+            #[cfg(feature = "ml")]
+            commands::rollback_ml_model,
             commands::reveal_token,
             commands::copy_token,
             commands::save_config,

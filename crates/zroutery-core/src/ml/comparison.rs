@@ -315,9 +315,22 @@ impl std::fmt::Debug for MlPolicy {
 
 impl MlPolicy {
     pub fn new(outcome: &TrainingOutcome, reward_policy: RewardPolicy) -> Self {
+        let ensemble = ModelEnsemble::load_all(&outcome.checkpoint)
+            .unwrap_or_else(|_| ModelEnsemble::new());
+        Self::from_ensemble(ensemble, reward_policy)
+    }
+
+    /// A policy over an ensemble that is already loaded.
+    ///
+    /// For the operator surface. The question "what would the model serving
+    /// right now have done with my traffic?" has only one correct answer, and it
+    /// comes from the weights actually attached to the router. Rebuilding the
+    /// ensemble from a training report would answer a subtly different
+    /// question — about a copy — and the difference is exactly the kind that is
+    /// invisible until it matters.
+    pub fn from_ensemble(ensemble: ModelEnsemble, reward_policy: RewardPolicy) -> Self {
         Self {
-            ensemble: ModelEnsemble::load_all(&outcome.checkpoint)
-                .unwrap_or_else(|_| ModelEnsemble::new()),
+            ensemble,
             engine: DecisionEngine::new(
                 super::coordinator::CoordinatorConfig::default(),
                 reward_policy.clone(),

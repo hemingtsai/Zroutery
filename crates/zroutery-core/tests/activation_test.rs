@@ -2497,33 +2497,46 @@ fn nothing_in_the_shipped_product_can_name_this_module() {
         }
     }
 
-    // The desktop application still does not enable the feature, so none of this
-    // is even compiled into the shipped binary.
+    // The desktop application ships the learning stack, since ADR-0006 replaced
+    // the prohibition on a model serving with a gate, a deterministic fallback
+    // and a rollback. Two things are still worth asserting about that, and they
+    // are the opposite of the assertion that used to be here.
+    //
+    // First, the escape hatch has to remain: `--no-default-features` must still
+    // produce a desktop binary with no ML stack, because "ship without
+    // learning" is a legitimate choice for someone who does not want their
+    // routing history on disk.
     let manifest = fs::read_to_string(repo.join("src-tauri/Cargo.toml")).expect("readable");
-    let core_dep = manifest
-        .lines()
-        .find(|line| line.contains("zroutery-core"))
-        .expect("the desktop app depends on the core crate");
     assert!(
-        !core_dep.contains("features"),
-        "the desktop dependency on the core crate must name no features: {core_dep}"
+        manifest.contains("ml = [\"zroutery-core/ml\"]"),
+        "the desktop app must expose the ml feature as a named package feature, \
+         so it can be turned off; the manifest is:\n{manifest}"
     );
-    // The desktop shell has no legitimate ml usage to gate, so it must not
-    // mention the feature at all. `server/` *does* gate its own ml usage behind
-    // the feature, which is the correct direction and is why the check is not
-    // applied there: the gate is on the desktop manifest, not on the server.
-    for path in rust_and_manifest_files(&repo.join("src-tauri/src")) {
-        let text = fs::read_to_string(&path).expect("readable");
-        assert!(
-            !text.contains("feature = \"ml\""),
-            "{} must not enable the ml feature",
-            path.display()
-        );
+    assert!(
+        manifest.contains("default = [\"ml\"]"),
+        "the desktop app ships with the learning stack by default"
+    );
+    // And it is not enabled by a bare feature reference on the dependency, which
+    // would make it impossible to turn off without editing the manifest.
+    for line in manifest.lines() {
+        if line.contains("zroutery-core") && line.contains("features") {
+            panic!(
+                "the core dependency must not name features directly; the package \
+                 feature is the switch, so it can be turned off. Offending line: {line}"
+            );
+        }
     }
 
-    // The crate gates the whole ml module, and its own re-exports do not widen
-    // the surface. Line endings are normalized so the check is about the text
-    // rather than about how a checkout happens to be stored.
+    // Second, and the property that actually matters now: enabling the stack is
+    // not the same as changing behaviour. A desktop install that has never
+    // promoted a model must route exactly as it did before. That is asserted
+    // behaviourally in `config.rs`, against a default-constructed and a
+    // document-deserialised configuration, because the property is about what
+    // those configurations *do* rather than about how the default is written.
+
+    // The crate still gates the whole ml module, and its own re-exports do not
+    // widen the surface. Line endings are normalized so the check is about the
+    // text rather than about how a checkout happens to be stored.
     let lib = fs::read_to_string(core.join("src/lib.rs"))
         .expect("readable")
         .replace("\r\n", "\n");

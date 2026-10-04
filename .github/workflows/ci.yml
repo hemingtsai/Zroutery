@@ -196,27 +196,29 @@ jobs:
           node-version: '22'
       - run: pnpm install --frozen-lockfile
       - run: pnpm ui:build
-      # Deliberately no build cache in this job. The gate's entire claim is
-      # about the bytes in one file, and a cache restoring target/ could hand it
-      # a zroutery.exe from an earlier commit. `cargo build` writes that file
-      # from this tree or the step fails, so the binary the gate reads is always
-      # the one this job produced.
+      # Deliberately no build cache in this job, so the binary under test is the
+      # one this job produced.
       - name: Build the shipped desktop binary
         run: cargo build -p zroutery --release
-      # RETIRED by ADR-0006. This step used to fail the job if the shipped
-      # desktop executable contained any ML symbol, on the reasoning that a
-      # binary cannot route on a model it does not contain -- which is true, and
-      # is a statement about packaging rather than about safety.
+      # RETIRED by ADR-0006, and its subject then changed underneath it. This step
+      # used to fail the job if the shipped desktop executable contained any ML
+      # symbol, on the reasoning that a binary cannot route on a model it does not
+      # contain -- true, and a statement about packaging rather than safety. The
+      # prohibition it enforced is what kept the ML closed loop out of production.
       #
-      # The prohibition it enforced is what prevented the ML closed loop from
-      # ever reaching production, so the check is retired rather than fixed. The
-      # desktop app still compiles no ML and `ml_routing.enabled` still defaults
-      # to off, so this step's removal changes no product behaviour.
+      # ADR-0006 replaced the prohibition with a gate, a deterministic fallback
+      # and a rollback, and this job now builds the learning stack into the
+      # desktop app on purpose. The scanner's premise is therefore inverted: the
+      # binary is *supposed* to contain it now, and a byte scan would be asserting
+      # the opposite of the truth.
       #
-      # It is kept, reporting and exiting 0, because a retired gate that silently
-      # vanished from the pipeline is indistinguishable from one that was never
-      # there. Replaced by `cargo test -p zroutery-core --features ml
-      # --test ml_closed_loop_test`, which asserts the behaviour that actually
-      # matters: a promoted model is served, observed, and rolled back.
-      - name: Reachability gate (retired by ADR-0006)
-        run: python -B scripts/desktop_artifact_test.py --exe target/release/zroutery.exe
+      # What replaced it is the pair of steps below, because both are claims that
+      # can actually fail rather than claims about symbol names:
+      #   - `ml_closed_loop_test` in the core job asserts that a promoted model is
+      #     served, observed and rolled back, in a live process, with the rollback
+      #     verified to reach the router rather than only the pointer;
+      #   - the escape-hatch build here asserts that "ship without learning" is
+      #     still a build someone can choose, which is a promise the manifest makes
+      #     and nothing else keeps honest.
+      - name: Build the desktop app without the learning stack
+        run: cargo check -p zroutery --no-default-features

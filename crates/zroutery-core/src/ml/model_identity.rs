@@ -921,6 +921,11 @@ pub struct CommitInfo {
 // ---------------------------------------------------------------------------
 
 /// An ensemble holding all four routing models.
+///
+/// `Clone` snapshots the weights so an analysis can run against exactly what is
+/// serving, without waiting for the router's read lock to be free for the whole
+/// replay.
+#[derive(Debug, Clone)]
 pub struct ModelEnsemble {
     pub success: SuccessModel,
     pub latency: LatencyModel,

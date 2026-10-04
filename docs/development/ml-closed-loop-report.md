@@ -98,6 +98,9 @@ Status vocabulary: `0 NOT_STARTED` · `1 SCAFFOLDED` · `2 IMPLEMENTED` ·
 | Exploration | **3** | `ml/serving.rs::explore`; fires on real requests, never leaves the eligible set, ceiling enforced |
 | Retraining | **4** | collect → process ends → retrain → gate → promote → new process serves → retrain again; round 2 body 120 requests, distinct fingerprint, distinct commit, re-promoted |
 | Model identity | **4** | one identity per model (`TrainingOutcome::commit_record`); commit `06f7da3409a14147` |
+| Product wiring | **4** | ADR-0007: `ml` is a named, default-on, still-refusable desktop package feature; `<config_dir>/ml` claimed for durable state; `ml_routing.enabled` asserted off by default, so no install's behaviour changed |
+| Operator surface | **4** | `ml::MlStatus` read live and asserted to agree with `MlRouter`; `/v1/ml/{status,shadow,rollback}` behind the auth layer (401 asserted); the replay runs the *attached* model over real traffic, bounded |
+| Reversibility | **4** | rollback reaches the router in a live process, verified to fail against a pointer-only implementation; refused rollback changes nothing |
 | Coordinator convergence | **2** | `DecisionEngine` authoritative; `Coordinator` unreferenced by production, not deleted |
 
 ---
@@ -305,16 +308,91 @@ Only items that block `PRODUCTION_READY`.
 
 | Blocker | Why it blocks | What unblocks it |
 |---|---|---|
-| Desktop app compiles no ML | The serving path exists in `zroutery-core` and the headless proxy, but the product a user runs cannot reach it | Enable the `ml` feature in `src-tauri`; the work is a dependency declaration, not new code. Needs a decision, not engineering |
-| No operator surface for model state | Active model, commit, promotion history and shadow analysis are readable only from Rust. An operator cannot tell what is serving | Read-only HTTP endpoint or Tauri command over `ActiveModelStore::audit` and `MlRouter::counts` |
-| Durable ML state is opt-in and nothing opts in | `ml_routing.state_dir` defaults to empty, so a deployment gets no history and no promotion. That was deliberate — an OS-derived default had every process sharing one directory — but nothing sets it | The desktop and headless wiring should pass the app state directory through. One line each, once ML is enabled there |
-| No cross-restart retraining evidence | **Now closed.** `new_outcomes_from_a_new_process_reach_the_next_round_of_learning` runs collect → process ends → retrain → gate → promote → new process serves → retrain again, and asserts round two's body contains round two's requests | — |
+| ~~Desktop app compiles no ML~~ | **Now closed (ADR-0007).** `src-tauri` depends on `zroutery-core/ml` through a named `default = ["ml"]` package feature, so the shipping desktop product contains the trace log, the model store and the gate. `--no-default-features` still yields a desktop app with no learning stack, and CI builds it | — |
+| ~~No operator surface for model state~~ | **Now closed (ADR-0007).** `ml::MlStatus` reads live; `GET /v1/ml/status`, `POST /v1/ml/rollback`, `GET /v1/ml/shadow` behind the auth layer; `get_ml_status` / `get_ml_shadow` / `rollback_ml_model` Tauri commands; a panel on the Routing page with the gate's criteria, the promotion history and the replay's measured numbers | — |
+| ~~Durable ML state is opt-in and nothing opts in~~ | **Now closed for the desktop app (ADR-0007).** `Desktop::new` claims `<config_dir>/ml` unless the document names one. Still open for the headless proxy, which has no app directory to claim | A state directory for the headless binary, which is a product decision about where a CLI keeps history |
+| ~~No cross-restart retraining evidence~~ | **Now closed.** `new_outcomes_from_a_new_process_reach_the_next_round_of_learning` runs collect → process ends → retrain → gate → promote → new process serves → retrain again, and asserts round two's body contains round two's requests | — |
 | One-candidate robustness unmeasured | Every arm selected 1 provider. Behaviour with an empty or single-candidate plan is asserted in unit tests only | Traffic with genuine multi-provider competition |
 | The cold-start window is unbounded in principle | Every new process begins with an empty observation store, so the first requests fall back until history accumulates. Measured at 1–2 requests; not characterised as a function of traffic rate | Carry the observation store across restarts, or persist it |
+| Tauri command dispatch is not covered by a test | The status document, replay and rollback are exercised through `AppState` and over HTTP. Nothing drives them through a real webview | An integration harness around a webview, or accepting the seam and keeping `ml_available` so a failure there is reported as a failure rather than read as an absence |
 
 Not blockers, deliberately excluded: `Coordinator` deletion, `train_batch`
 removal, cost axis coverage (the fixtures price ~20 tokens, which rounds to
-zero), more baselines, GUI work.
+zero), more baselines.
+
+---
+
+## E2. The operator surface (ADR-0007)
+
+The loop was real and invisible. Four capabilities close that, and each replaces
+a guess an operator would otherwise be making.
+
+### Reading the state
+
+`ml::MlStatus` is read live from the router, the stores and the gate. The
+distinctions it keeps are the ones that would otherwise be guesses:
+
+| State | What it reads as |
+|---|---|
+| No model, `enabled: false` | "ML routing off; routing is deterministic" |
+| `enabled: true`, nothing attached | "no model is attached" — the misconfiguration, never "working" |
+| Promoted, `enabled: false` | installed and deliberately inert |
+| Attached and enabled | names the commit, the gate identity and the body it was judged on |
+
+The gate decision travels whole, so "why is this serving" has an answer rather
+than a verdict: every criterion, whether it held, the number it was decided on,
+and the baseline that had to be beaten. Collection counters are counters and are
+labelled as such — a count of collected samples says collection is happening and
+nothing about quality.
+
+`the_status_document_describes_the_process_that_is_actually_serving` asserts each
+row, asserts that `attached.commit_id` equals `MlRouter::attached_commit()` (the
+document and the router must not disagree), and round-trips the whole thing
+through JSON, because a status that cannot be serialised is a status nobody reads.
+
+### Replaying the serving model over real traffic
+
+`AppState::ml_shadow_analysis(limit)` runs the same `analyse` the offline gate
+runs, over the operator's own traces, against the weights actually ranking
+requests. Bounded: the tail is read by walking backwards to the *n*-th line from
+the end, and the limit is capped at 50 000 inside, because this is callable from
+a button.
+
+It reports why it could not run. "No history" and "no model attached" are
+different answers and only the first is fixed by serving traffic:
+
+```
+no state dir      → traces_read 0,  reason: no durable state directory
+history, no model → traces_read N,  reason: no model is attached to the router
+model attached    → commit_id = attached commit, records = traces_read
+```
+
+### Removing a model that turned out to be wrong
+
+`AppState::rollback_active_model` moves the durable pointer **and** reloads the
+router from it.
+
+`a_rollback_takes_effect_in_the_live_process_and_not_only_on_disk` promotes two
+models into a *running* process and requires the router's attached commit to
+follow the pointer forward and back, then drives 20 real requests through the
+restored model to prove it ranks. It was verified to fail against a pointer-only
+rollback, with the withdrawn model's commit still attached.
+
+A pointer that cannot be read leaves whatever is attached alone and reports the
+fault. A second rollback with no prior model is refused, says why, and changes
+nothing.
+
+### Being explicit about what the dashboard cannot see
+
+`Snapshot.ml_available` declares build capability. To a webview a command that
+was never registered and a command that failed are the same event, so without
+the flag a broken IPC bridge renders as "this build has no ML stack" — which
+looks like deliberate configuration rather than a fault.
+
+`ml_routing.enabled` and `ml_routing.state_dir` are asserted to default to off
+and empty, behaviourally, against a default-constructed **and** a
+document-deserialised configuration. That is what makes building ML into the
+desktop app a packaging change rather than a behaviour change.
 
 ---
 
@@ -465,3 +543,8 @@ model up from the state directory and serves 40 more; the second retraining sees
 a body of 120 requests whose fingerprint differs from round one's, contains 40
 request ids round one never saw, produces a different commit, and is promoted
 again. Round one's model is retained as the rollback target.
+
+That target is not decorative.
+`a_rollback_takes_effect_in_the_live_process_and_not_only_on_disk` requires the
+rollback to reach the *router* in a running process, not only the durable pointer,
+and was verified to fail when it does not. See §E2.

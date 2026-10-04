@@ -1159,6 +1159,60 @@ async fn a_promotion_decision_is_explainable_and_a_promoted_model_becomes_the_ac
 // Phase 4: a promoted model re-orders a real request, and rollback undoes it
 // ---------------------------------------------------------------------------
 
+/// A second, different promotable model, so a rollback has somewhere to go.
+///
+/// Built from the same evidence as `artefacts` but with different weights, which
+/// is what makes it a *different* model rather than a copy: it gets its own
+/// commit id, and promoting it moves the pointer away from the trained one.
+///
+/// Used by the offline gate tests, which hand the gate two models, and by the
+/// operator-surface tests, which need a live rollback to have somewhere to land.
+fn second_model(
+    artefacts: &LoopArtefacts,
+    store: &ActiveModelStore,
+    label: &str,
+) -> String {
+    let mut other = zroutery_core::ml::model_identity::ModelEnsemble::new();
+    other.success.update(
+        &zroutery_core::ml::features::RoutingFeatures {
+            schema_version: zroutery_core::ml::features::FEATURE_SCHEMA_VERSION,
+            values: {
+                let mut values = [zroutery_core::ml::features::UNKNOWN;
+                    zroutery_core::ml::features::FEATURE_DIMENSION];
+                values[0] = -0.75;
+                values
+            },
+        },
+        1.0,
+    );
+    let other_checkpoint = other.save_all();
+    let other_record = zroutery_core::ml::model_identity::ModelCommit::new(
+        zroutery_core::ml::model_identity::ModelId::new(artefacts.training.model_id.clone()),
+        other_checkpoint.clone(),
+        None,
+        artefacts.training.report.learning_event_count,
+    );
+
+    // The second model needs a gate decision naming *it*. The gate does not
+    // choose between models; it only says whether the one it is handed may
+    // serve.
+    let other_decision = PromotionGate::new(promotable_gate()).evaluate(
+        &report_for(&other_record.commit_id.to_string(), artefacts),
+        &artefacts.comparison,
+        Some(label.into()),
+    );
+    assert_eq!(
+        other_decision.verdict,
+        PromotionVerdict::Promoted,
+        "the second model should also be promotable; the gate said {}",
+        other_decision.verdict.as_str()
+    );
+    store
+        .promote(&other_decision, other_checkpoint)
+        .expect("a second promoted model installs");
+    other_record.commit_id.to_string()
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_promoted_model_changes_which_provider_serves_and_rollback_restores_the_plan() {
     let (upstream, addr) = start_upstream(Profile::DeadFlaky).await;
@@ -1253,44 +1307,8 @@ async fn a_promoted_model_changes_which_provider_serves_and_rollback_restores_th
     // prior model — and asserting otherwise would be asserting a rollback into a
     // state that never existed.
     let store = ActiveModelStore::open(&state_dir).expect("store");
-
-    let mut other = zroutery_core::ml::model_identity::ModelEnsemble::new();
-    other.success.update(
-        &zroutery_core::ml::features::RoutingFeatures {
-            schema_version: zroutery_core::ml::features::FEATURE_SCHEMA_VERSION,
-            values: {
-                let mut values = [zroutery_core::ml::features::UNKNOWN;
-                    zroutery_core::ml::features::FEATURE_DIMENSION];
-                values[0] = -0.75;
-                values
-            },
-        },
-        1.0,
-    );
-    let other_checkpoint = other.save_all();
-    let other_record = zroutery_core::ml::model_identity::ModelCommit::new(
-        zroutery_core::ml::model_identity::ModelId::new(artefacts.training.model_id.clone()),
-        other_checkpoint.clone(),
-        None,
-        artefacts.training.report.learning_event_count,
-    );
-
-    // The second model needs a gate decision naming *it*. The gate does not
-    // choose between models; it only says whether the one it is handed may
-    // serve.
-    let other_decision = PromotionGate::new(promotable_gate()).evaluate(
-        &report_for(&other_record.commit_id.to_string(), &artefacts),
-        &artefacts.comparison,
-        Some("second-model".into()),
-    );
-    assert_eq!(other_decision.verdict, PromotionVerdict::Promoted);
-    store
-        .promote(&other_decision, other_checkpoint)
-        .expect("a second promoted model installs");
-    assert_eq!(
-        store.active_identity().expect("read").as_deref(),
-        Some(other_record.commit_id.as_str())
-    );
+    let other_commit =
+        second_model(&artefacts, &store, "second-model");
 
     assert!(
         store.rollback().expect("rollback"),
@@ -1300,6 +1318,10 @@ async fn a_promoted_model_changes_which_provider_serves_and_rollback_restores_th
         store.active_identity().expect("read").as_deref(),
         Some(first_commit.as_str()),
         "rollback did not restore the model that was replaced"
+    );
+    assert_ne!(
+        other_commit, first_commit,
+        "the second model must be a different model, or this proves nothing"
     );
     let audit = store.audit().expect("audit");
     assert_eq!(
@@ -1378,6 +1400,453 @@ async fn exploration_moves_real_requests_and_never_serves_an_ineligible_candidat
     }
     .validate()
     .is_ok());
+}
+
+// ---------------------------------------------------------------------------
+// The operator surface
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_status_document_describes_the_process_that_is_actually_serving() {
+    let (upstream, addr) = start_upstream(Profile::DeadFlaky).await;
+
+    // -- A fresh installation says so, in every field that could be misread. ---
+    //
+    // No state directory is the default, and "enabled but nothing is attached" is
+    // the state a misconfiguration produces. Neither may read as "working".
+    let harness = Harness::start(
+        config_for(addr, std::path::Path::new(""), false),
+        upstream.clone(),
+    )
+    .await;
+    let fresh = harness.state.ml_status();
+    assert!(!fresh.durable_state, "no directory was configured");
+    assert!(!fresh.traces_open);
+    assert!(!fresh.model_store_open);
+    assert!(fresh.active.is_none());
+    assert!(
+        !fresh.is_routing_with_a_model(),
+        "a fresh install cannot be routing with a model"
+    );
+    assert!(
+        fresh.headline().contains("deterministic"),
+        "headline was {:?}",
+        fresh.headline()
+    );
+    drop(harness);
+
+    // A directory but no model: the switch could be on with nothing attached, and
+    // that is the state an operator is most likely to misread as working.
+    let empty_dir = tempfile::tempdir().expect("tempdir");
+    let harness = Harness::start(config_for(addr, empty_dir.path(), true), upstream.clone()).await;
+    let nothing = harness.state.ml_status();
+    assert!(nothing.durable_state && nothing.traces_open && nothing.model_store_open);
+    assert!(nothing.active.is_none());
+    assert!(
+        nothing.headline().contains("no model is attached"),
+        "the enabled-with-no-model state must name itself; headline was {:?}",
+        nothing.headline()
+    );
+    drop(harness);
+
+    // -- Collect, learn, promote, serve. --------------------------------------
+    let state_dir = tempfile::tempdir().expect("tempdir");
+    {
+        let harness =
+            Harness::start(config_for(addr, state_dir.path(), false), upstream.clone()).await;
+        harness.drive(40).await;
+    }
+    let artefacts = loop_over(state_dir);
+    let store = ActiveModelStore::open(artefacts.state_dir.path()).expect("store");
+    let commit = promote_trained(&store, &artefacts, promotable_gate()).candidate_commit;
+
+    let harness =
+        Harness::start(config_for(addr, artefacts.state_dir.path(), true), upstream.clone()).await;
+    harness.drive(20).await;
+
+    // -- Now the document has to agree with the router, field by field. --------
+    let status = harness.state.ml_status();
+    assert!(
+        status.is_routing_with_a_model(),
+        "a promoted, enabled model should read as serving; headline was {:?}",
+        status.headline()
+    );
+    let active = status.active.as_ref().expect("an active model");
+    assert_eq!(active.commit_id, commit, "the status names the wrong commit");
+    assert_eq!(
+        harness.state.ml_routing().attached_commit().as_deref(),
+        Some(commit.as_str()),
+        "the status document and the router disagree about what is serving"
+    );
+    assert_eq!(active.verdict, PromotionVerdict::Promoted);
+    assert!(active.paired_requests > 0);
+    assert!(active.holdout_loss.is_finite());
+
+    // The gate's own reasoning is readable, criteria and all, so "why is this
+    // serving" has an answer rather than a verdict.
+    let decision = status.active_decision.as_ref().expect("the decision travels");
+    assert_eq!(decision.verdict, PromotionVerdict::Promoted);
+    assert!(
+        !decision.criteria.is_empty(),
+        "a promotion with no criteria listed is not explainable"
+    );
+    for criterion in &decision.criteria {
+        assert!(
+            criterion.held,
+            "criterion {} did not hold on a PROMOTED decision: {}",
+            criterion.name,
+            criterion.reason
+        );
+    }
+
+    // Collection counters are real, and they are counts rather than claims.
+    assert!(status.dataset.samples > 0, "no samples were ingested");
+    assert!(
+        status.traces.as_ref().expect("the log is open").appended > 0,
+        "no traces were written"
+    );
+    assert!(status.routing.rankings > 0, "the model never ranked");
+    assert!(status.routing.attached);
+    assert!(status.routing.fallbacks == 0);
+
+    // And the history records the promotion that got here.
+    assert!(
+        status
+            .history
+            .iter()
+            .any(|entry| entry.commit_id == commit && entry.action
+                == zroutery_core::ml::ActiveModelAction::Promote),
+        "the promotion that produced the serving model is not in the history"
+    );
+
+    // It survives the trip to JSON, because that is how an operator reads it.
+    let encoded = serde_json::to_string(&status).expect("encode");
+    let decoded: zroutery_core::MlStatus = serde_json::from_str(&encoded).expect("decode");
+    assert_eq!(decoded, status);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_operator_can_replay_the_serving_model_over_their_own_traffic() {
+    let (upstream, addr) = start_upstream(Profile::DeadFlaky).await;
+
+    // -- Refusals first, because they are the states an operator hits first. ---
+    //
+    // No history is not the same answer as no model, and an analysis that
+    // returned an empty result for both would leave the operator unable to tell
+    // "serve some traffic" from "promote a model".
+    {
+        let harness =
+            Harness::start(config_for(addr, std::path::Path::new(""), false), upstream.clone()).await;
+        let analysis = harness.state.ml_shadow_analysis(1_000);
+        assert!(!analysis.is_analysed());
+        assert_eq!(analysis.traces_read, 0);
+        assert!(
+            analysis.reason.as_deref().unwrap_or_default().contains("durable state"),
+            "reason was {:?}",
+            analysis.reason
+        );
+    }
+    let empty_dir = tempfile::tempdir().expect("tempdir");
+    {
+        let harness =
+            Harness::start(config_for(addr, empty_dir.path(), false), upstream.clone()).await;
+        harness.drive(10).await;
+        let analysis = harness.state.ml_shadow_analysis(1_000);
+        assert!(!analysis.is_analysed());
+        assert!(
+            analysis.traces_read >= 10,
+            "history was collected, so the replay should have read it before \
+             concluding there was nothing to replay"
+        );
+        assert!(
+            analysis.reason.as_deref().unwrap_or_default().contains("no model is attached"),
+            "reason was {:?}",
+            analysis.reason
+        );
+    }
+
+    // -- Now with a model serving. --------------------------------------------
+    let state_dir = tempfile::tempdir().expect("tempdir");
+    {
+        let harness =
+            Harness::start(config_for(addr, state_dir.path(), false), upstream.clone()).await;
+        harness.drive(40).await;
+    }
+    let artefacts = loop_over(state_dir);
+    let store = ActiveModelStore::open(artefacts.state_dir.path()).expect("store");
+    let commit = promote_trained(&store, &artefacts, promotable_gate()).candidate_commit;
+
+    let harness =
+        Harness::start(config_for(addr, artefacts.state_dir.path(), true), upstream.clone()).await;
+    harness.drive(20).await;
+
+    let status = harness.state.ml_shadow_analysis(1_000);
+    assert!(status.is_analysed(), "reason was {:?}", status.reason);
+    assert_eq!(
+        status.commit_id.as_deref(),
+        Some(commit.as_str()),
+        "the replay judged a different model than the one serving"
+    );
+    assert!(status.traces_read > 0, "it read nothing and still reported numbers");
+
+    let analysis = status.analysis.as_ref().expect("the analysis");
+    assert_eq!(analysis.records, status.traces_read);
+    assert!(
+        (0.0..=1.0).contains(&analysis.agreement_rate),
+        "agreement rate {} is not a rate",
+        analysis.agreement_rate
+    );
+    assert_eq!(
+        analysis.agreements + analysis.disagreements,
+        analysis.decision_records,
+        "agreements and disagreements do not account for every decision record"
+    );
+    // Prediction-only records are counted apart from decisions, because a
+    // counterfactual that never decided is a different kind of evidence.
+    assert_eq!(
+        analysis.records,
+        analysis.decision_records + analysis.prediction_only_records,
+        "records are not accounted for"
+    );
+
+    // A limit is a real bound, and a smaller window is a smaller analysis rather
+    // than the same one repeated.
+    let bounded = harness.state.ml_shadow_analysis(5);
+    assert!(bounded.traces_read <= 5, "the bound was not applied");
+    if let Some(bounded) = bounded.analysis {
+        assert!(bounded.records <= 5);
+    }
+
+    // A bound of zero reads nothing rather than everything.
+    let none = harness.state.ml_shadow_analysis(0);
+    assert_eq!(none.traces_read, 0);
+    assert!(!none.is_analysed());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_rollback_takes_effect_in_the_live_process_and_not_only_on_disk() {
+    let (upstream, addr) = start_upstream(Profile::DeadFlaky).await;
+
+    let state_dir = tempfile::tempdir().expect("tempdir");
+    {
+        let harness =
+            Harness::start(config_for(addr, state_dir.path(), false), upstream.clone()).await;
+        harness.drive(40).await;
+    }
+    let artefacts = loop_over(state_dir);
+    let state_dir = artefacts.state_dir.path().to_path_buf();
+    let store = ActiveModelStore::open(&state_dir).expect("store");
+    let first_commit = promote_trained(&store, &artefacts, promotable_gate()).candidate_commit;
+
+    let harness = Harness::start(config_for(addr, &state_dir, true), upstream.clone()).await;
+    assert_eq!(
+        harness.state.ml_routing().attached_commit().as_deref(),
+        Some(first_commit.as_str())
+    );
+
+    // -- Promote a second model while the process is running. -----------------
+    //
+    // This is the step a pointer-only implementation gets wrong. Nothing tells
+    // the router that the durable pointer moved, so a rollback afterwards would
+    // restore the pointer and leave the withdrawn model ranking traffic.
+    let second_commit = second_model(&artefacts, &store, "second-model");
+    assert_ne!(second_commit, first_commit);
+
+    let reload = harness.state.reload_active_model();
+    assert!(
+        reload.is_clean(),
+        "reloading a good pointer reported {:?}",
+        reload.error
+    );
+    assert_eq!(
+        harness.state.ml_routing().attached_commit().as_deref(),
+        Some(second_commit.as_str()),
+        "a promotion on disk did not reach the running router"
+    );
+
+    // -- Roll back, and require the router to follow. --------------------------
+    let outcome = harness.state.rollback_active_model();
+    assert!(
+        outcome.is_clean(),
+        "a rollback with a prior model reported {:?}",
+        outcome.error
+    );
+    assert!(outcome.attached, "the restored model should be serving");
+    assert_eq!(
+        harness.state.ml_routing().attached_commit().as_deref(),
+        Some(first_commit.as_str()),
+        "the router is still ranking with the model that was rolled back"
+    );
+    assert_eq!(
+        harness.state.ml_status().active.expect("active").commit_id,
+        first_commit,
+        "the status document disagrees with the router about what is serving"
+    );
+
+    // And it keeps serving: the restored model is usable, not just named.
+    // Measured as a delta, so this says "every one of these twenty requests was
+    // ranked by the restored model" rather than "some number above twenty".
+    let rankings_before = harness.state.ml_routing().counts().rankings;
+    harness.drive(20).await;
+    let counts = harness.state.ml_routing().counts();
+    assert_eq!(
+        counts.fallbacks, 0,
+        "the restored model should rank without falling back"
+    );
+    assert_eq!(
+        counts.rankings,
+        rankings_before + 20,
+        "the restored model was not consulted on every request"
+    );
+
+    // -- A second rollback has nowhere to go, and says so. ---------------------
+    let refused = harness.state.rollback_active_model();
+    assert!(
+        !refused.is_clean(),
+        "rolling back with no prior model reported success"
+    );
+    assert!(
+        refused.error.as_deref().unwrap_or_default().contains("earlier"),
+        "the refusal did not say why; error was {:?}",
+        refused.error
+    );
+    assert_eq!(
+        harness.state.ml_routing().attached_commit().as_deref(),
+        Some(first_commit.as_str()),
+        "a refused rollback changed what is serving"
+    );
+
+    // The refusal is on the record, next to the rollback that worked.
+    let audit = store.audit().expect("audit");
+    assert_eq!(
+        audit
+            .iter()
+            .filter(|entry| entry.action == zroutery_core::ml::ActiveModelAction::Rollback)
+            .count(),
+        1,
+        "the audit does not match the one rollback that happened"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_operator_surface_is_served_over_http_and_behind_the_auth_layer() {
+    let (upstream, addr) = start_upstream(Profile::DeadFlaky).await;
+
+    let state_dir = tempfile::tempdir().expect("tempdir");
+    {
+        let harness =
+            Harness::start(config_for(addr, state_dir.path(), false), upstream.clone()).await;
+        harness.drive(40).await;
+    }
+    let artefacts = loop_over(state_dir);
+    let store = ActiveModelStore::open(artefacts.state_dir.path()).expect("store");
+    let commit = promote_trained(&store, &artefacts, promotable_gate()).candidate_commit;
+
+    let mut config = config_for(addr, artefacts.state_dir.path(), true);
+    config.server.require_auth = true;
+    let harness = Harness::start(config, upstream.clone()).await;
+    let base = format!("http://{}", harness.server.addr);
+
+    // Which model is serving, and on whose authority, is not public
+    // information: it says what an installation's routing is doing right now.
+    for path in ["/v1/ml/status", "/v1/ml/shadow"] {
+        let response = harness
+            .client
+            .get(format!("{base}{path}"))
+            .send()
+            .await
+            .expect("send");
+        assert_eq!(
+            response.status(),
+            401,
+            "{path} answered an unauthenticated caller"
+        );
+    }
+    let response = harness
+        .client
+        .post(format!("{base}/v1/ml/rollback"))
+        .send()
+        .await
+        .expect("send");
+    assert_eq!(
+        response.status(),
+        401,
+        "the rollback route answered an unauthenticated caller"
+    );
+
+    // With the token, all three answer, and they answer about *this* model.
+    let status: serde_json::Value = harness
+        .client
+        .get(format!("{base}/v1/ml/status"))
+        .bearer_auth(TOKEN)
+        .send()
+        .await
+        .expect("send")
+        .error_for_status()
+        .expect("status")
+        .json()
+        .await
+        .expect("json");
+    assert_eq!(status["available"], serde_json::json!(true));
+    assert_eq!(status["routing_with_a_model"], serde_json::json!(true));
+    assert_eq!(status["status"]["active"]["commit_id"], serde_json::json!(commit));
+
+    let shadow: serde_json::Value = harness
+        .client
+        .get(format!("{base}/v1/ml/shadow"))
+        .bearer_auth(TOKEN)
+        .send()
+        .await
+        .expect("send")
+        .error_for_status()
+        .expect("shadow")
+        .json()
+        .await
+        .expect("json");
+    assert!(shadow["traces_read"].as_u64().unwrap_or(0) > 0);
+    assert_eq!(shadow["commit_id"], serde_json::json!(commit));
+
+    // A bound can be asked for, and is honoured.
+    let bounded: serde_json::Value = harness
+        .client
+        .get(format!("{base}/v1/ml/shadow?limit=3"))
+        .bearer_auth(TOKEN)
+        .send()
+        .await
+        .expect("send")
+        .error_for_status()
+        .expect("shadow")
+        .json()
+        .await
+        .expect("json");
+    assert!(bounded["traces_read"].as_u64().unwrap_or(u64::MAX) <= 3);
+
+    // -- The rollback route does what the command does, in this process. ------
+    let second_commit = second_model(&artefacts, &store, "second-model");
+    let _ = harness.state.reload_active_model();
+    let rollback: serde_json::Value = harness
+        .client
+        .post(format!("{base}/v1/ml/rollback"))
+        .bearer_auth(TOKEN)
+        .send()
+        .await
+        .expect("send")
+        .error_for_status()
+        .expect("rollback")
+        .json()
+        .await
+        .expect("json");
+    assert_eq!(rollback["outcome"]["error"], serde_json::Value::Null);
+    assert_eq!(
+        rollback["status"]["active"]["commit_id"],
+        serde_json::json!(commit),
+        "the HTTP rollback did not restore the trained model"
+    );
+    assert_ne!(second_commit, commit);
+    assert_eq!(
+        harness.state.ml_routing().attached_commit().as_deref(),
+        Some(commit.as_str())
+    );
 }
 
 // ---------------------------------------------------------------------------

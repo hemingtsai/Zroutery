@@ -90,11 +90,13 @@ pub use migration::{
 #[cfg(feature = "ml")]
 pub use ml::{
     extract_features, outcome_to_dataset_sample, samples_from_outcome, temporal_split,
-    validate_outcome_sample, validate_sample, Action, ActionGuard, AttemptReward,
-    CanonicalTrainingSample, ComparisonReport, DatasetStore, DatasetTrainingSample, Evaluator,
-    FeatureContext, FrozenHoldout, OutcomeDatasetSample, OutcomeTrainingSample, PredictionMetrics,
-    Recommendation, RequestReward, RewardComputer, RewardPolicy, RoutingDeltas, RoutingFeatures,
-    RoutingMetrics, SampleBuilder, SampleScope, Targets, FEATURE_DIMENSION, FEATURE_SCHEMA_VERSION,
+    validate_outcome_sample, validate_sample, Action, ActionGuard, ActiveModel, ActiveModelStore,
+    AttemptReward, CanonicalTrainingSample, ComparisonReport, DatasetStore, DatasetTrainingSample,
+    Evaluator, ExplorationConfig, FeatureContext, FrozenHoldout, MlRouter, MlStatus,
+    OutcomeDatasetSample, OutcomeTrainingSample, PredictionMetrics, PromotedModelStatus,
+    PromotionDecision, PromotionGate, PromotionVerdict, Recommendation, ReloadOutcome, RequestReward,
+    RewardComputer, RewardPolicy, RoutingDeltas, RoutingFeatures, RoutingMetrics, SampleBuilder,
+    SampleScope, ShadowAnalysisStatus, Targets, FEATURE_DIMENSION, FEATURE_SCHEMA_VERSION,
 };
 pub use observation::{
     HealthState, LatencyObservation, ObservationFreshness, ObservationStore, RuntimeObservation,

@@ -126,6 +126,14 @@ pub struct Snapshot {
     pub election: Option<Election>,
     /// Every budget with what has been spent against it, for the dashboard.
     pub budgets: Vec<BudgetStatus>,
+    /// Whether this build contains a learning stack at all.
+    ///
+    /// Declared here so the dashboard can ask before it calls, rather than
+    /// discovering the absence from an error. A command that was never
+    /// registered and a command that failed are the same event to the webview,
+    /// and conflating them is how an operator ends up reading "no learning
+    /// stack" out of what is actually a broken bridge.
+    pub ml_available: bool,
 }
 
 /// One budget and how much of it is gone.
@@ -166,6 +174,7 @@ pub fn token_hint(token: &str) -> String {
 
 impl Desktop {
     pub fn new(config_dir: PathBuf, config: AppConfig, secrets: Arc<KeychainSecrets>) -> Self {
+        let config = Self::with_ml_state_dir(config_dir.clone(), config);
         let core = Arc::new(AppState::new(config, secrets.clone() as Arc<_>));
         // Spend is carried over from previous runs, because a budget that starts from
         // zero on every launch protects nothing.
@@ -184,6 +193,30 @@ impl Desktop {
             balances: Mutex::new(BTreeMap::new()),
             window_rules: Mutex::new(window_rules),
         }
+    }
+
+    /// Point the ML durable state at the application's own configuration
+    /// directory, unless the document already names one.
+    ///
+    /// Durable ML state is opt-in and its default is *off*, deliberately: an
+    /// implicit directory meant every process on the machine shared one. The
+    /// desktop app is the one place that legitimately owns a directory, so it
+    /// is the right place to say so — and it says so per installation rather
+    /// than per user.
+    ///
+    /// The document's own value always wins, so an operator who wants the
+    /// history somewhere else still gets that.
+    #[cfg(feature = "ml")]
+    fn with_ml_state_dir(config_dir: PathBuf, mut config: AppConfig) -> AppConfig {
+        if !config.ml_routing.has_state_dir() {
+            config.ml_routing.state_dir = config_dir.join("ml").display().to_string();
+        }
+        config
+    }
+
+    #[cfg(not(feature = "ml"))]
+    fn with_ml_state_dir(_config_dir: PathBuf, config: AppConfig) -> AppConfig {
+        config
     }
 
     /// The same as [`Desktop::new`] with a chosen listener prober.
@@ -259,6 +292,7 @@ impl Desktop {
             balances: self.balances(),
             election: self.core.router().election(),
             budgets: self.budget_status(),
+            ml_available: cfg!(feature = "ml"),
             config,
         }
     }
@@ -335,6 +369,27 @@ impl Desktop {
     ///
     /// A full snapshot clones the whole configuration and asks the keychain about
     /// every provider; this is what the dashboard actually needs twice a second.
+    /// The learned model's status, read from the live serving components.
+    ///
+    /// Delegates to Core rather than re-deriving anything here, so the dashboard
+    /// and the HTTP endpoint cannot disagree about what is serving.
+    #[cfg(feature = "ml")]
+    pub fn ml_status(&self) -> zroutery_core::MlStatus {
+        self.core.ml_status()
+    }
+
+    /// Replay the serving model over recorded history.
+    #[cfg(feature = "ml")]
+    pub fn ml_shadow_analysis(&self, limit: usize) -> zroutery_core::ShadowAnalysisStatus {
+        self.core.ml_shadow_analysis(limit)
+    }
+
+    /// Withdraw the current model and return to the previously promoted one.
+    #[cfg(feature = "ml")]
+    pub fn rollback_active_model(&self) -> zroutery_core::ReloadOutcome {
+        self.core.rollback_active_model()
+    }
+
     pub fn activity(&self) -> Activity {
         Activity {
             health: self.core.router().health_snapshot(),
@@ -770,9 +825,73 @@ mod tests {
         )
     }
 
+    /// The desktop app is the one place that legitimately owns a directory, so
+    /// it is the one place that says where durable ML state lives.
+    ///
+    /// Previously nothing set `ml_routing.state_dir` in the product, which meant
+    /// the desktop app had a trace log, a model store and a promotion gate that
+    /// could never be used. A state directory alone changes nothing an operator
+    /// can observe — `ml_routing.enabled` still defaults to false and no model is
+    /// promoted — but it is what makes history survivable, and without it the
+    /// whole loop stops at the request.
+    #[cfg(feature = "ml")]
+    #[test]
+    fn the_desktop_app_points_durable_ml_state_at_its_own_directory() {
+        let (desktop, dir) = desktop_with(AppConfig::default());
+        let configured = &desktop.core.config().ml_routing.state_dir;
+        assert_eq!(
+            configured,
+            &dir.join("ml").display().to_string(),
+            "the desktop app did not claim a state directory under its own config dir"
+        );
+        assert!(desktop.core.config().ml_routing.has_state_dir());
+        // And the switch that actually lets a model rank is still off, so
+        // claiming the directory changed nothing about how this install routes.
+        assert!(!desktop.core.config().ml_routing.enabled);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// An operator who names a directory gets that directory.
+    ///
+    /// The default is for the app's own use; it is not a policy that overrides
+    /// what was asked for. Getting this backwards would silently relocate
+    /// someone's routing history.
+    #[cfg(feature = "ml")]
+    #[test]
+    fn a_configured_state_directory_is_never_overwritten() {
+        let (desktop, dir) = desktop_with({
+            let mut config = AppConfig::default();
+            config.ml_routing.state_dir = std::env::temp_dir()
+                .join("zroutery-explicit-ml")
+                .display()
+                .to_string();
+            config
+        });
+        assert_eq!(
+            desktop.core.config().ml_routing.state_dir,
+            std::env::temp_dir()
+                .join("zroutery-explicit-ml")
+                .display()
+                .to_string()
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The dashboard is told whether this build has a learning stack, rather
+    /// than finding out by calling a command that is not there.
+    #[tokio::test]
+    async fn the_snapshot_declares_whether_the_build_has_a_learning_stack() {
+        let (desktop, dir) = desktop_with(AppConfig::default());
+        assert_eq!(
+            desktop.snapshot().await.ml_available,
+            cfg!(feature = "ml"),
+            "the snapshot's capability flag does not match what was compiled in"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     /// A prober that answers from a policy instead of touching a socket.
-    struct PolicyProber {
-        running: bool,
+    struct PolicyProber {        running: bool,
     }
 
     impl ListenerProber for PolicyProber {

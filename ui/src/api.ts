@@ -481,6 +481,15 @@ export interface Snapshot {
   election: Election | null;
   /** Every budget with what has been spent against it. */
   budgets: BudgetStatus[];
+  /**
+   * Whether this build contains a learning stack.
+   *
+   * Declared rather than discovered. To the webview a command that was never
+   * registered and a command that failed are the same event, so the panel asks
+   * first and a failed call stays a failure instead of being read as "this build
+   * has no ML".
+   */
+  ml_available: boolean;
 }
 
 /** One entry of a provider's catalogue, with prices when it publishes them. */
@@ -523,10 +532,178 @@ export interface Activity {
   recent: RequestRecord[];
 }
 
+/**
+ * What the learned model is doing, mirroring `zroutery_core::ml::MlStatus`.
+ *
+ * Deliberately shallow about quality: this document reports what is installed
+ * and what has been counted, not whether the model is any good. That claim
+ * lives in a promotion decision, and a dashboard that implied otherwise would
+ * be the exact confusion the ML boundary exists to prevent.
+ */
+export type PromotionVerdict = "promoted" | "rejected" | "blocked";
+
+export interface PromotedModelStatus {
+  model_id: string;
+  commit_id: string;
+  verdict: PromotionVerdict;
+  dataset_fingerprint: string;
+  fitted_partition_fingerprint: string;
+  gate_config_identity: string;
+  required_baseline: string;
+  paired_requests: number;
+  holdout_loss: number;
+  promoted_at: number;
+}
+
+export interface PromotionHistoryEntry {
+  action: "promote" | "rollback";
+  commit_id: string;
+  gate_identity: string;
+  verdict: PromotionVerdict;
+  at: number;
+  note: string;
+}
+
+export interface MlStatus {
+  routing_enabled: boolean;
+  durable_state: boolean;
+  traces_open: boolean;
+  model_store_open: boolean;
+  active: PromotedModelStatus | null;
+  active_decision: PromotionDecision | null;
+  history: PromotionHistoryEntry[];
+  routing: { rankings: number; fallbacks: number; explorations: number; attached: boolean };
+  exploration_probability: number;
+  exploration_seed: number;
+  dataset: {
+    ingested: number;
+    samples: number;
+    no_decision_time_input: number;
+    rejected: number;
+    evicted_by_count: number;
+    evicted_by_age: number;
+    faults: number;
+  };
+  traces: {
+    appended: number;
+    nothing: number;
+    refused: number;
+    io_errors: number;
+  } | null;
+  shadow: { enabled: boolean; decisions_recorded: number; faults: number };
+  read_at: number;
+}
+
+/** One named gate criterion, with the number it was decided on. */
+export interface PromotionCriterion {
+  name: string;
+  held: boolean;
+  measured: number | null;
+  threshold: number | null;
+  reason: string;
+}
+
+export interface PromotionDecision {
+  verdict: PromotionVerdict;
+  candidate_commit: string;
+  model_id: string;
+  learning_event_count: number;
+  dataset_fingerprint: string;
+  fitted_partition_fingerprint: string;
+  holdout_loss: number;
+  gate_config_identity: string;
+  criteria: PromotionCriterion[];
+  baseline: string;
+  paired_requests: number;
+  decided_at: number;
+  revision: string | null;
+}
+
+/** Why a shadow record contributed nothing to the quality measurement. */
+export type ShadowGap =
+  | "alternative_unmeasured"
+  | "agreement"
+  | "no_alternative"
+  | "no_candidates";
+
+/**
+ * What the serving model would have done with the traffic already served.
+ *
+ * Mirrors `zroutery_core::ml::ShadowAnalysis`. The `Option`-valued means are the
+ * point: a body with nothing measured reports `null` rather than zero, because a
+ * zero improvement and an unmeasured one are different facts and averaging them
+ * together is how a dashboard ends up claiming a model is worth exactly nothing
+ * on the strength of never having been tested.
+ */
+export interface ShadowAnalysis {
+  dataset_fingerprint: string;
+  records: number;
+  decision_records: number;
+  prediction_only_records: number;
+  agreements: number;
+  disagreements: number;
+  disagreements_measured: number;
+  /** 0.0 to 1.0. */
+  agreement_rate: number;
+  measured_alternative_rate: number;
+  alternative_selections: Record<string, number>;
+  mean_estimated_utility_delta: number | null;
+  mean_observed_utility_delta: number | null;
+  mean_regret: number | null;
+  harmful_alternatives: number;
+  helpful_alternatives: number;
+  gaps: Record<ShadowGap, number>;
+  produced_at: number;
+}
+
+/**
+ * The result of asking for a replay.
+ *
+ * `analysis` and `reason` are separate on purpose: "no model is attached" and
+ * "the model disagreed with production on nothing" are different answers, and an
+ * operator who reads one as the other draws the wrong conclusion from both.
+ */
+export interface ShadowAnalysisStatus {
+  /** The bound that was applied, not a claim about all the history there is. */
+  traces_read: number;
+  commit_id: string | null;
+  reason: string | null;
+  analysis: ShadowAnalysis | null;
+}
+
+/** What re-reading the durable pointer did, and the status that resulted. */
+export interface MlRollback {
+  outcome: ReloadOutcome;
+  status: MlStatus;
+}
+
+export interface ReloadOutcome {
+  attached: boolean;
+  commit_id: string | null;
+  error: string | null;
+}
+
 export const api = {
   snapshot: () => invoke<Snapshot>("get_snapshot"),
   activity: () => invoke<Activity>("get_activity"),
   logs: () => invoke<string[]>("get_logs"),
+  /**
+   * Live counters and the stored pointer. Read-only.
+   *
+   * Call only when `snapshot.ml_available` is true. A missing command and a
+   * failing one are indistinguishable from here, so the absence is declared in
+   * the snapshot rather than discovered by catching this call.
+   */
+  mlStatus: () => invoke<MlStatus>("get_ml_status"),
+  /** Replay the serving model over recorded history. Bounded by `limit`. */
+  mlShadow: (limit: number) => invoke<ShadowAnalysisStatus>("get_ml_shadow", { limit }),
+  /**
+   * Withdraw the serving model and return to the previously promoted one.
+   *
+   * Returns the outcome together with the freshly read status, so the dashboard
+   * cannot render a state the process is not in.
+   */
+  rollbackMlModel: () => invoke<MlRollback>("rollback_ml_model"),
   saveConfig: (config: AppConfig) => invoke<Snapshot>("save_config", { config }),
   setKey: (provider_id: string, api_key: string) =>
     invoke<Snapshot>("set_provider_key", { providerId: provider_id, apiKey: api_key }),

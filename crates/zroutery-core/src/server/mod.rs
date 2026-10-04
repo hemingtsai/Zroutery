@@ -128,7 +128,7 @@ pub struct AppState {
     /// durable history at all, rather than history written somewhere implicit.
     #[cfg(feature = "ml")]
     traces: Option<crate::ml::TraceLog>,
-    /// The durable active-model pointer, when the state directory could be
+    /// The durable active-model pointer, when a state directory could be
     /// opened. `None` means no model can serve, which is the state a fresh
     /// installation is in and the state a rollback returns to.
     #[cfg(feature = "ml")]
@@ -655,6 +655,229 @@ impl AppState {
         self.active_models.as_ref()
     }
 
+    /// Bring the serving model back in line with the durable pointer.
+    ///
+    /// Returns whether a model is attached afterwards.
+    ///
+    /// This exists because a rollback that only rewrites the pointer is a lie:
+    /// the router would keep ranking with the model the operator just withdrew,
+    /// and every status document would then report a state the process is not
+    /// in. The same seam is used after a promotion for the same reason.
+    ///
+    /// A pointer that cannot be read is *not* treated as "no model" — it leaves
+    /// whatever is attached alone and reports the fault, because the one thing an
+    /// operator must not lose by a transient read error is a model they chose.
+    #[cfg(feature = "ml")]
+    pub fn reload_active_model(&self) -> crate::ml::ReloadOutcome {
+        let store = match self.active_models.as_ref() {
+            Some(store) => store,
+            None => {
+                return crate::ml::ReloadOutcome::fault(
+                    self.ml_routing.is_attached(),
+                    "no durable state directory is configured, so no model can be attached",
+                )
+            }
+        };
+        let outcome = match store.active() {
+            Ok(Some(predictor)) => {
+                let commit = predictor.commit_id().as_str().to_string();
+                if self.config().ml_routing.enabled {
+                    self.ml_routing.attach(predictor);
+                } else {
+                    // Installed but deliberately inert. Withdrawing rather than
+                    // leaving a stale predictor in place is what makes a
+                    // configuration change take effect without a restart.
+                    self.ml_routing.withdraw();
+                }
+                tracing::info!(commit_id = commit, "the active model pointer was reloaded");
+                crate::ml::ReloadOutcome::ok(self.ml_routing.is_attached(), Some(commit))
+            }
+            Ok(None) => {
+                self.ml_routing.withdraw();
+                tracing::info!("no model is promoted; routing is deterministic");
+                crate::ml::ReloadOutcome::ok(false, None)
+            }
+            Err(error) => crate::ml::ReloadOutcome::fault(
+                self.ml_routing.is_attached(),
+                error.to_string(),
+            ),
+        };
+        outcome
+    }
+
+    /// Withdraw the current model and return to the previously promoted one.
+    ///
+    /// The operator's kill switch, and the reason the promotion gate is
+    /// trustworthy: a model that turns out to be wrong can be removed without
+    /// stopping the proxy, without editing a file by hand, and without waiting
+    /// for a restart.
+    ///
+    /// Two things happen and both are required. The durable pointer moves, so
+    /// the change survives a restart; and the router is reloaded from that
+    /// pointer, so the process stops using the withdrawn model *now*. Doing only
+    /// the first is the cosmetic rollback this module was written to prevent.
+    ///
+    /// Reports `false` when there is no previous model, which is a genuine "there
+    /// was nothing to roll back to" rather than a failure — a fresh installation
+    /// has a history of length zero and saying so is more useful than an error.
+    #[cfg(feature = "ml")]
+    pub fn rollback_active_model(&self) -> crate::ml::ReloadOutcome {
+        let store = match self.active_models.as_ref() {
+            Some(store) => store,
+            None => {
+                return crate::ml::ReloadOutcome::fault(
+                    self.ml_routing.is_attached(),
+                    "no durable state directory is configured, so nothing can be rolled back",
+                )
+            }
+        };
+        match store.rollback() {
+            Ok(true) => {
+                tracing::info!("the active model was rolled back by an operator");
+                self.reload_active_model()
+            }
+            Ok(false) => crate::ml::ReloadOutcome::fault(
+                self.ml_routing.is_attached(),
+                "there is no earlier promoted model to roll back to",
+            ),
+            Err(error) => crate::ml::ReloadOutcome::fault(
+                self.ml_routing.is_attached(),
+                format!("the rollback was refused: {error}"),
+            ),
+        }
+    }
+
+    /// A test of the loaded model against real request history.
+    ///
+    /// This is the shadow analysis from the outside: the same `analyse` the
+    /// offline gate uses, fed by the operator's own traffic rather than a
+    /// fixture, and run against the weights actually attached to the router.
+    ///
+    /// Bounded on purpose. `limit` caps how many records are read, because this
+    /// is callable from a desktop button and an unbounded read would take the
+    /// app down rather than answer a question.
+    ///
+    /// Reports *why* it could not run instead of returning an empty analysis,
+    /// because "no model is attached" and "the model disagreed with production on
+    /// nothing" are different answers and only the first is a problem.
+    #[cfg(feature = "ml")]
+    pub fn ml_shadow_analysis(&self, limit: usize) -> crate::ml::ShadowAnalysisStatus {
+        const MAX_RECORDS: usize = 50_000;
+        let limit = limit.min(MAX_RECORDS);
+        let traces = match self.traces.as_ref() {
+            None => {
+                return crate::ml::ShadowAnalysisStatus::unavailable(
+                    0,
+                    "no durable state directory is configured, so there is no history to replay",
+                )
+            }
+            Some(log) => match log.tail(limit) {
+                Ok(traces) => traces,
+                Err(error) => {
+                    return crate::ml::ShadowAnalysisStatus::unavailable(0, error.to_string())
+                }
+            },
+        };
+        let read = traces.len();
+        if read == 0 {
+            return crate::ml::ShadowAnalysisStatus::unavailable(
+                0,
+                "no request history has been recorded yet",
+            );
+        }
+        // Replay the attached model, not whatever was promoted most recently.
+        let (ensemble, commit_id) = match (
+            self.ml_routing.attached_ensemble(),
+            self.ml_routing.attached_commit(),
+        ) {
+            (Some(ensemble), Some(commit_id)) => (ensemble, commit_id),
+            _ => {
+                return crate::ml::ShadowAnalysisStatus::unavailable(
+                    read,
+                    "no model is attached to the router, so there is nothing to replay; \
+                     promote a model and enable ml_routing",
+                )
+            }
+        };
+        let reward_policy = self.config().ml_routing_reward_policy();
+        let policy =
+            crate::ml::MlPolicy::from_ensemble(ensemble, reward_policy.clone());
+        let evidence = crate::ml::ShadowEvidence::from_policy(&traces, &policy, BTreeMap::new());
+        let analysis = crate::ml::analyse(&traces, &evidence, &reward_policy);
+        crate::ml::ShadowAnalysisStatus {
+            traces_read: read,
+            commit_id: Some(commit_id),
+            reason: None,
+            analysis: Some(analysis),
+        }
+    }
+
+    /// Read the operator-facing view of the learned model.
+    ///
+    /// Everything here is read from the live components; nothing is recomputed.
+    /// A store that cannot be read reports itself as unreadable rather than as
+    /// empty, because "there is no model" and "I could not tell whether there is
+    /// a model" are different answers and an operator acting on the second one
+    /// as if it were the first is how a broken deployment keeps routing.
+    #[cfg(feature = "ml")]
+    pub fn ml_status(&self) -> crate::ml::MlStatus {
+        let store = self.active_models.as_ref();
+        let (active, active_decision, history) = match store {
+            None => (None, None, Vec::new()),
+            Some(store) => {
+                let pointer = store.read_pointer().ok().flatten();
+                let current = pointer.map(|pointer| pointer.current);
+                let active = current.as_ref().map(|model| crate::ml::PromotedModelStatus {
+                    model_id: model.model_id.clone(),
+                    commit_id: model.commit_id.clone(),
+                    verdict: model.promotion.verdict,
+                    dataset_fingerprint: model.promotion.dataset_fingerprint.to_string(),
+                    fitted_partition_fingerprint: model
+                        .promotion
+                        .fitted_partition_fingerprint
+                        .to_string(),
+                    gate_config_identity: model.promotion.gate_config_identity.clone(),
+                    required_baseline: model.promotion.baseline.clone(),
+                    paired_requests: model.promotion.paired_requests,
+                    holdout_loss: model.promotion.holdout_loss,
+                    promoted_at: model.promoted_at,
+                });
+                let decision = current.map(|model| model.promotion.clone());
+                let history = store
+                    .audit()
+                    .map(|entries| {
+                        entries
+                            .iter()
+                            .map(crate::ml::PromotionHistoryEntry::from)
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                (active, decision, history)
+            }
+        };
+
+        crate::ml::MlStatus {
+            routing_enabled: self.config().ml_routing.enabled,
+            durable_state: self.config().ml_routing.has_state_dir(),
+            traces_open: self.traces.is_some(),
+            model_store_open: store.is_some(),
+            active,
+            active_decision,
+            history,
+            routing: self.ml_routing.counts(),
+            exploration_probability: self.config().ml_routing.exploration_probability,
+            exploration_seed: self.config().ml_routing.exploration_seed,
+            dataset: self.dataset.counters(),
+            traces: self.traces.as_ref().map(crate::ml::TraceLog::counters),
+            shadow: crate::ml::ShadowStatus {
+                enabled: self.shadow().enabled(),
+                decisions_recorded: self.shadow().store().len(),
+                faults: self.shadow().fault_count(),
+            },
+            read_at: chrono::Utc::now().timestamp(),
+        }
+    }
+
     /// Evaluate one request's shadow counterfactual, against whatever is attached.
     ///
     /// The predictor does not leave this struct. That is a deliberate boundary,
@@ -895,7 +1118,10 @@ pub fn build_app(state: Arc<AppState>) -> AxumRouter {
             .route(&format!("{prefix}/generateContent"), post(gemini_generate))
             .route(&format!("{prefix}/models"), get(list_models))
             .route(&format!("{prefix}/models/{{id}}"), get(get_model))
-            .route(&format!("{prefix}/status"), get(status));
+            .route(&format!("{prefix}/status"), get(status))
+            .route(&format!("{prefix}/ml/status"), get(ml_status))
+            .route(&format!("{prefix}/ml/shadow"), get(ml_shadow))
+            .route(&format!("{prefix}/ml/rollback"), post(ml_rollback));
     }
 
     let mut app = api
@@ -1189,6 +1415,96 @@ async fn status(State(state): State<Arc<AppState>>) -> Json<Value> {
         "models": registry.list().len(),
         "providers": cfg.providers.iter().filter(|p| p.enabled).count(),
         "auth_required": cfg.server.require_auth,
+    }))
+}
+
+/// The optional bound on a replay, from the query string.
+#[cfg(feature = "ml")]
+#[derive(Debug, Clone, Copy, Default, serde::Deserialize)]
+struct LimitQuery {
+    limit: Option<usize>,
+}
+
+#[cfg(feature = "ml")]
+impl LimitQuery {
+    fn limit(&self) -> usize {
+        self.limit.unwrap_or(DEFAULT_SHADOW_LIMIT)
+    }
+}
+
+/// Records read by an on-demand replay when the caller does not say.
+///
+/// Sized to be comfortable to run from a UI click while still covering enough
+/// traffic for the agreement and regret numbers to mean something. The caller
+/// can ask for more; nobody should want to.
+#[cfg(feature = "ml")]
+const DEFAULT_SHADOW_LIMIT: usize = 5_000;
+
+/// Read the learned model's status.
+///
+/// Read-only, and behind the same auth layer as everything else: an operator
+/// surface that leaked which model is serving, and on whose authority, over an
+/// unauthenticated port would be a disclosure.
+///
+/// Without the `ml` feature this reports `available: false` rather than 404, so
+/// a client can tell "this build has no ML stack" from "this build does and the
+/// request went somewhere wrong".
+#[cfg(feature = "ml")]
+async fn ml_status(State(state): State<Arc<AppState>>) -> Json<Value> {
+    let status = state.ml_status();
+    Json(json!({
+        "available": true,
+        "routing_with_a_model": status.is_routing_with_a_model(),
+        "headline": status.headline(),
+        "status": status,
+    }))
+}
+
+#[cfg(not(feature = "ml"))]
+async fn ml_status() -> Json<Value> {
+    Json(json!({
+        "available": false,
+        "routing_with_a_model": false,
+        "headline": "this build contains no ML stack; routing is deterministic",
+    }))
+}
+
+/// Replay the serving model over recorded history, on demand.
+///
+/// Bounded by the `limit` query parameter, and capped again inside, because this
+/// is a button in a desktop app and an unbounded replay is a hang.
+#[cfg(feature = "ml")]
+async fn ml_shadow(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Query(limit): axum::extract::Query<LimitQuery>,
+) -> Json<Value> {
+    Json(json!(state.ml_shadow_analysis(limit.limit())))
+}
+
+#[cfg(not(feature = "ml"))]
+async fn ml_shadow() -> Json<Value> {
+    Json(json!({
+        "available": false,
+        "traces_read": 0,
+        "reason": "this build contains no ML stack",
+    }))
+}
+
+/// Roll back to the previously promoted model, or to deterministic routing if
+/// there was not one.
+#[cfg(feature = "ml")]
+async fn ml_rollback(State(state): State<Arc<AppState>>) -> Json<Value> {
+    let outcome = state.rollback_active_model();
+    Json(json!({
+        "outcome": outcome,
+        "status": state.ml_status(),
+    }))
+}
+
+#[cfg(not(feature = "ml"))]
+async fn ml_rollback() -> Json<Value> {
+    Json(json!({
+        "error": "this build contains no ML stack, so nothing can be rolled back",
     }))
 }
 

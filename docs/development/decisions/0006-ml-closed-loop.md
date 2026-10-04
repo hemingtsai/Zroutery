@@ -66,9 +66,12 @@ Five properties are load-bearing:
 ## What this does not claim
 
 - `ml_routing.enabled` defaults to **off**. An installation that has never
-  promoted a model routes exactly as it did before.
-- The desktop application still compiles no ML. Enabling it is a separate
-  decision with a separate trade-off (see Consequences).
+  promoted a model routes exactly as it did before. (ADR-0007 builds the learning
+  stack into the desktop app; this default is what keeps that from changing
+  product behaviour, and it is asserted behaviourally in `config.rs`.)
+- ~~The desktop application still compiles no ML. Enabling it is a separate
+  decision with a separate trade-off.~~ **Resolved by ADR-0007**, which enables it
+  behind a named, still-refusable package feature.
 - A model in the active slot has passed a gate. It has not been shown to beat
   every baseline on any particular upstream; the evidence is per-dataset and
   the gate says so.
@@ -76,9 +79,10 @@ Five properties are load-bearing:
 
 ## Consequences
 
-- The desktop byte-gate (`scripts/desktop_artifact_test.py`) is retired. It
-  asserted that the shipped binary contains no ML symbol, which is now a
-  statement about the packaging rather than about safety.
+- The desktop byte-gate (`scripts/desktop_artifact_test.py`) is retired, and
+  ADR-0007 removes its CI step outright: once the desktop package gained the
+  feature, the binary was *supposed* to contain the ML serving path and a live
+  scan would have asserted the opposite of the truth.
 - The anti-wiring assertions in `tests/dataset_production_test.rs`,
   `tests/dataset_ingestion_test.rs` and `tests/shadow_integration_test.rs` are
   replaced by the properties they were protecting, not merely deleted.
@@ -88,11 +92,14 @@ Five properties are load-bearing:
   filter remaining authoritative, and by the fallback. It is not eliminated.
 - An operator needs somewhere to see what is active. `RouteDecision::ml_ranking`
   makes the influence visible per request; the active model, its commit and its
-  promotion history are in `ml::serving`.
+  promotion history are in `ml::serving`. **ADR-0007** adds the read-only
+  surface for this: `ml::MlStatus`, `/v1/ml/status`, the on-demand replay, and a
+  rollback that is verified to reach the router rather than only the pointer.
 
 ## Related records
 
 - `docs/development/decisions/0002-production-ml-boundary.md` (superseded)
+- `docs/development/decisions/0007-ml-operator-surface.md`
 - `docs/development/ml-closed-loop-report.md`
-- `crates/zroutery-core/src/ml/{traces,learning,comparison,shadow_analysis,promotion,serving}.rs`
+- `crates/zroutery-core/src/ml/{traces,learning,comparison,shadow_analysis,promotion,serving,status}.rs`
 - `crates/zroutery-core/tests/ml_closed_loop_test.rs`

@@ -26,6 +26,7 @@ pub mod serving;
 pub mod shadow;
 pub mod shadow_analysis;
 pub mod statistics;
+pub mod status;
 pub mod traces;
 pub mod warmup;
 pub use activation::{
@@ -142,6 +143,10 @@ pub use shadow::{
 };
 pub use shadow_analysis::{
     analyse, ShadowAnalysis, ShadowEvidence, ShadowGap, ShadowKind, ShadowVerdictRecord,
+};
+pub use status::{
+    MlStatus, PromotedModelStatus, PromotionHistoryEntry, ReloadOutcome, ShadowAnalysisStatus,
+    ShadowStatus,
 };
 pub use statistics::{
     holm_adjust, ln_gamma, mcnemar_exact_log_p, mcnemar_exact_p, measure_release_evidence,
