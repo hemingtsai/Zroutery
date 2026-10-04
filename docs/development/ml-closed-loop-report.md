@@ -100,7 +100,8 @@ Status vocabulary: `0 NOT_STARTED` · `1 SCAFFOLDED` · `2 IMPLEMENTED` ·
 | Reproducibility | **4** | ADR-0008: the split's tiebreak was a random UUID, so the verdict alternated 3-of-6 on identical traffic; now 6-of-6 identical |
 | Cross-provider | **4** | `ml_multi_provider_test.rs`: three providers on three upstreams; unobserved provider received **0 of 60** requests with exploration off, and the learned ranking used **1 provider** against round-robin's 2 |
 | Exploration reach | **4** | `MlRouter::explore_plan` reachable with no model; `blind_explorations` counted apart from `explorations`; stays inside the eligible set and the plan |
-| Cost axis | **1** | `SCAFFOLDED` and inert. `Targets::from_attempt` reads `None` unconditionally and `Attempt` has no cost field, so `mean_cost` is `0.0000000000` for every arm and `RewardPolicy::cost_weight` contributes nothing to the gate's utility. Fix implemented, measured and reverted — §E4 |
+| Cost axis | **4** | `Attempt` grew a cost field, populated at the terminal transition. 120 of 171 samples now carry a real cost; `mean_cost` separates across arms (`baseline.priority` 0.00300, `ml.candidate` 0.00702). `RewardPolicy::cost_weight` and the gate's cost budget read a real number — §E4 |
+| Holdout temporality | **4** | ADR-0008: the frozen holdout was a contiguous tail of a *content*-sorted vector, so it was a content cluster and its composition varied run to run. Now split in arrival order, ordered per partition — §E5 |
 | Model identity | **4** | one identity per model (`TrainingOutcome::commit_record`); commit `06f7da3409a14147` |
 | Product wiring | **4** | ADR-0007: `ml` is a named, default-on, still-refusable desktop package feature; `<config_dir>/ml` claimed for durable state; `ml_routing.enabled` asserted off by default, so no install's behaviour changed |
 | Operator surface | **4** | `ml::MlStatus` read live and asserted to agree with `MlRouter`; `/v1/ml/{status,shadow,rollback}` behind the auth layer (401 asserted); the replay runs the *attached* model over real traffic, bounded |
@@ -318,7 +319,8 @@ Only items that block `PRODUCTION_READY`.
 | ~~No cross-restart retraining evidence~~ | **Now closed.** `new_outcomes_from_a_new_process_reach_the_next_round_of_learning` runs collect → process ends → retrain → gate → promote → new process serves → retrain again, and asserts round two's body contains round two's requests | — |
 | One-candidate robustness unmeasured | **Partly closed (ADR-0008).** The first fixture configured two providers but gave models to only one. `ml_multi_provider_test.rs` runs three providers on three separate upstreams and measures candidate-set shape directly: `mean_eligible_candidates` 3.00, `distinct_providers` per arm. What remains open is cross-provider *promotion*, and the reason is measured: the comparator a candidate is named against can move its paired set from 2 to 40. See §E3 |
 | The cold-start window is unbounded in principle | Every new process begins with an empty observation store, so the first requests fall back until history accumulates. Measured at 1–2 requests; not characterised as a function of traffic rate | Carry the observation store across restarts, or persist it |
-| The cost axis is inert | `Targets::from_attempt` sets `cost: None` unconditionally, and `Attempt` has no cost field, so per-attempt spend is never recorded. Every attempt-scoped sample is cost-free; the comparison reads only attempt samples, so `mean_cost` is `0.0000000000` for every arm; so `RewardPolicy::cost_weight` contributes nothing to the utility the gate reads, and the gate's cost criterion measures zero. **Found, root-caused, fix implemented and reverted** — see §E4 | Add `cost` to `Attempt`, populate it at the terminal transition, and re-cut the calibration holdout in arrival order rather than content order |
+| The cost axis is inert | **Closed.** `Attempt` had no cost field and `Targets::from_attempt` read `None` unconditionally, so per-attempt spend was never recorded, every attempt-scoped sample was cost-free, and `mean_cost` was `0.0000000000` for every arm — which made `RewardPolicy::cost_weight` and the gate's cost criterion both read a constant. Now recorded and discriminating — §E4 | — |
+| The frozen holdout was a content cluster | **Closed (ADR-0008).** `project_cohorts` sorted by `CohortOrderKey` and the holdout was a contiguous tail of that, so which decisions were held out depended on tie-breaking rather than on time; the gate refused a fifth of runs with `SingleServedCandidate` — §E5 | — |
 | Exploration defaults to zero, which has a measured cost | With `exploration_probability = 0.0` a provider added to the configuration is invisible, permanently. Measured, not assumed: 0 of 60 requests | A product decision, not engineering. Either the default moves, or the cost is documented where an operator will read it before adding a provider |
 | Tauri command dispatch is not covered by a test | The status document, replay and rollback are exercised through `AppState` and over HTTP. Nothing drives them through a real webview | An integration harness around a webview, or accepting the seam and keeping `ml_available` so a failure there is reported as a failure rather than read as an absence |
 
@@ -520,7 +522,7 @@ symptom is indistinguishable from one.
 
 ---
 
-## E4. The cost axis is inert, and the fix that was not landed
+## E4. The cost axis was inert
 
 Every arm in every fixture has reported `mean_cost` as `0.0000000000`. That is not
 a reporting-precision artefact.
@@ -548,11 +550,11 @@ test with a non-zero `actual_cost` builds the `Outcome` by hand, and the one
 pipeline test comparing spend against the activity record passes just as happily
 with both sides at zero — a ledger and a record agreeing about nothing.
 
-### The fix, and why it was reverted
+### The fix
 
 Adding `cost: Option<f64>` to `Attempt`, populating it in the terminal transition
 from the settled usage, and reading it in `from_attempt` makes all three correct.
-Measured with it in place:
+Measured:
 
 ```
 alpha-flaky-std         n=17   0.00300000
@@ -570,38 +572,77 @@ Which immediately shows something that was invisible before: **the learned route
 spends 2.3× what `baseline.priority` spends.** It buys its latency improvement
 with money, and the gate's cost budget was structurally unable to see it.
 
-It also broke `the_candidate_reaches_a_named_verdict_over_real_request_evidence`
-with:
+### What it broke, and what that turned out to be
+
+It broke `the_candidate_reaches_a_named_verdict_over_real_request_evidence` with:
 
 ```
 DegenerateHoldout { partition: Holdout, reason: SingleServedCandidate,
                     detail: "only alpha/alpha-std-one ever served" }
 ```
 
-That test passes on the unmodified tree, four runs out of four, and its recorded
-window alternates two served identities perfectly across all thirty decisions. So
-something in the calibration path reacts to the cost axis becoming populated, and
-**the mechanism was not established** before the change was reverted. Landing a
-change that breaks a release gate is worse than recording the defect, so it was
-reverted and the finding kept as an ignored test that reproduces on demand.
+That test passes on the unmodified tree four runs out of four, and its recorded
+window alternates two served identities perfectly across all thirty decisions.
 
-### What is claimed and what is not
+Instrumenting the split showed the projection arriving as **14 fast, then 15 std,
+then 1 fast** — clustered by content — and `split_at(18)` producing a holdout of
+**11 std and 1 fast**. So the "temporal" holdout was a content cluster.
 
-**Verified:** the cost axis is inert, and `the_cost_axis_is_structurally_inert`
-asserts it with the fixture's own precondition checked first — every model priced —
-so the failure is attributable to `from_attempt` rather than to the fixture.
+Then the interesting part: the holdout's composition **varied between runs**,
+holding one identity in five runs out of six and six in the other. So the
+tie-breaking was random, which means `sort_by`'s stability was *preserving* the
+randomness rather than removing it. The content key makes the **statistics** of a
+partition invariant to tie permutation; it says nothing about **which** cohorts are
+in the partition, and that is decided by position.
 
-**Hypothesis, not established:** that the gate breaks because `project_cohorts`
-sorts cohorts by `CohortOrderKey` and `run_calibration` then takes
-`cohorts.split_at(len - holdout)` as a *temporal* holdout. Content ordering is
-what makes the calibration computation invariant to tie permutation — the module
-documents why at length — and it is also exactly what would make a contiguous tail
-one content cluster. If that is the cause, the fix is to split in arrival order
-and order each partition internally, which is a change to a module with its own
-invariants and deserves its own round.
+So the fix was not to the cost axis at all — it is §E5. With it, the cost fix
+lands and the gate test passes ten runs out of ten.
 
-The gate's *refusal* is correct given the partition it was handed. It is the
-mechanism that is unexplained.
+---
+
+## E5. The frozen holdout was a content cluster
+
+`project_cohorts` sorted cohorts by `CohortOrderKey`, and `run_calibration` took
+`cohorts.split_at(len - holdout_cohorts)` as the frozen holdout.
+
+The sort is not a mistake. The module documents at length why it exists: two
+cohorts that tie on the key are indistinguishable to every sum it computes, so
+exchanging them cannot move a gradient, a log-loss, a reliability bin, a drift
+bin, the base rate or the arity. All of that is true.
+
+It was applied in the wrong place. **A partition is not a sum.** Which cohorts are
+held out is decided by position, and position in a content-sorted vector is a
+function of tie-breaking rather than of history. So the frozen holdout was a
+content cluster, and `DegenerateHoldout { SingleServedCandidate }` was the gate
+correctly refusing a partition it had been handed.
+
+The fix splits in **arrival** order and orders **each partition** on content
+afterwards. Both properties then hold and neither is traded away:
+
+- the holdout is a later slice of history;
+- the computation within a partition is invariant to tie permutation.
+
+`group_attempt_rows` already walked the snapshot's rows by index, so arrival order
+was available and deterministic all along.
+
+### The contract changed, and a test encoded the old one
+
+`uuid_invariance_the_partition_and_every_number_survive_a_uuid_change` reversed
+the second rendering's rows and asserted nothing changed, reasoning that "row
+arrival order is not the content order either".
+
+But `render` stamps `BASE_TIMESTAMP + index`, so reversing the rows reverses the
+*history*. It is not one dataset reordered; it is the same measurements running
+backwards, and a later slice of that is a different slice. The reversal is gone,
+the test asserts what its name says — identifiers do not matter — and row-order
+dependence is asserted explicitly beside it by
+`projection_is_in_arrival_order_not_content_order` and
+`the_holdout_is_the_later_slice_rather_than_a_content_cluster`.
+
+**Not claimed:** that this ever produced a bad promotion decision. It produced a
+gate that refused roughly a fifth of the time for a reason that had nothing to do
+with the model. That is a false negative rather than a false positive — the safe
+direction — but it would have blocked a release on an unrelated ground.
 
 ---
 

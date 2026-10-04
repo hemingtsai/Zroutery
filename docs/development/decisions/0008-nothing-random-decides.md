@@ -171,31 +171,59 @@ trace written before the field existed was a model ranking.
   measured cost rather than an assumed one. It is a product decision and is left
   to the operator.
 
+### The frozen holdout was a content cluster, not a slice of time
+
+Found while landing the cost-axis fix, and the third defect in this family.
+
+`project_cohorts` sorted cohorts by `CohortOrderKey` — a **content** key — and
+`run_calibration` then took `cohorts.split_at(len - holdout)` as the frozen
+holdout.
+
+The sort's reasoning was sound and is documented at length in the module: two
+cohorts that tie on the key are indistinguishable to every sum it computes, so
+exchanging them cannot move a gradient, a log-loss, a reliability bin, a drift
+bin, the base rate or the arity. That is true, and it was applied in the wrong
+place. **A partition is not a sum.** Which cohorts land in the holdout is decided
+by position, and position in a content-sorted vector is a function of tie-breaking
+rather than of history.
+
+Because `sort_by` is stable, tied cohorts kept the order `group_attempt_rows`
+produced, so the degenerate case appeared only when the ties fell differently.
+Measured on a window whose recorded decisions alternated two served identities
+perfectly, across thirty decisions:
+
+```
+run  providers  paired: priority  balanced
+  1          2               4        40
+  2          2               6        31
+  3          1              40         1
+  4          2               2        34
+  5          2               2        29
+```
+
+and on the calibration side, the holdout's served-identity composition varied
+between one and six out of twelve from run to run. When it landed on one, the gate
+correctly refused: `DegenerateHoldout { reason: SingleServedCandidate }`.
+
+**The fix**: `project_cohorts` returns arrival order — which
+`group_attempt_rows` already produces, since it walks the snapshot's rows by
+index — and `run_calibration` splits there, then orders *each partition* by
+content. Both properties are then true and neither is traded for the other: the
+holdout is a later slice of history, and the computation within it is invariant
+to tie permutation.
+
+**The contract changed, and a test encoded the old one.**
+`uuid_invariance_the_partition_and_every_number_survive_a_uuid_change` reversed
+the second rendering's rows and asserted the report was unchanged, on the
+reasoning that "row arrival order is not the content order either". But `render`
+stamps `BASE_TIMESTAMP + index`, so reversing the rows reverses the *history*:
+it is not one dataset reordered, it is the same measurements running backwards. A
+frozen holdout is by definition a later slice, so a time-reversed dataset must
+produce a different one. The reversal is gone and the test now asserts what its
+name says — identifiers do not matter — with row-order dependence asserted
+explicitly alongside it.
+
 ### Open, and stated rather than assumed
-
-- **The cost axis is inert.** `Targets::from_attempt` sets `cost: None`
-  unconditionally and `Attempt` has no cost field, so per-attempt spend is never
-  recorded. Every attempt-scoped sample is cost-free; the routing comparison reads
-  only attempt samples, so `mean_cost` is `0.0000000000` for every arm; so
-  `RewardPolicy::cost_weight` contributes nothing to the observed utility the gate
-  reads, and the gate's cost criterion measures zero.
-
-  The fix is small — a `cost` field on `Attempt`, populated at the terminal
-  transition, read in `from_attempt` — and it works: 120 of 171 samples then carry
-  a real cost, and the arms separate, showing the learned router spending 2.3×
-  what `baseline.priority` spends.
-
-  It also breaks the offline release gate with
-  `DegenerateHoldout { SingleServedCandidate }` on a test that passes four times
-  out of four without it, over a window that alternates two served identities
-  perfectly. **That mechanism was not established**, so the change was reverted
-  rather than landed with an unexplained failure attached. The finding is kept as
-  `the_cost_axis_is_structurally_inert`, an ignored test that reproduces on
-  demand, and written up in §E4 of the report.
-
-  The prime suspect is `project_cohorts` sorting by `CohortOrderKey` and
-  `run_calibration` then taking `cohorts.split_at(len - holdout)` as a *temporal*
-  holdout. That is a hypothesis, not a finding.
 
 - Whether the engine's 0.1 switch threshold is crossed for an unobserved
   candidate still depends on measured latency, which is wall clock. The *split* is

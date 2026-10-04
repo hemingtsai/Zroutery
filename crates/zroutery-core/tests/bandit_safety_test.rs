@@ -89,6 +89,7 @@ fn fixture_outcome(
             Terminal::Failed => Some(429),
         },
         rectified: false,
+        cost: None,
     };
     let builder = Outcome::builder(format!("req_{timestamp}"))
         .single_candidate(model, provider)

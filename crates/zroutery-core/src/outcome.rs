@@ -212,6 +212,21 @@ pub struct Attempt {
     pub http_status: Option<u16>,
     /// Whether this attempt was a rectifier retry (same candidate, repaired request).
     pub rectified: bool,
+    /// What this attempt cost, in the pricing currency of its model.
+    ///
+    /// Per attempt rather than only per request, because a failover chain spends
+    /// more than the attempt that answered: most providers bill the failed call,
+    /// and a router that cannot attribute it cannot tell a cheap single-attempt
+    /// plan from an expensive one that needed three.
+    ///
+    /// `None` means the price or the usage was not available for this attempt,
+    /// which is a different statement from zero — a zero here would claim a call
+    /// was free.
+    ///
+    /// Defaults to `None`, so an outcome persisted before this field existed
+    /// still reads, with its cost unattributed rather than fabricated.
+    #[serde(default)]
+    pub cost: Option<f64>,
 }
 
 impl Attempt {
@@ -1347,6 +1362,7 @@ mod tests {
             },
             http_status: if success { Some(200) } else { Some(500) },
             rectified: false,
+            cost: None,
         }
     }
 
@@ -1781,6 +1797,7 @@ mod tests {
             failure_message: None,
             http_status: Some(200),
             rectified: true,
+            cost: None,
         };
         let json = serde_json::to_string(&a).unwrap();
         let restored: Attempt = serde_json::from_str(&json).unwrap();

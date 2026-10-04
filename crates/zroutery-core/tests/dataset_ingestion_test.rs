@@ -50,6 +50,7 @@ fn attempt(model: &str, provider: &str, success: bool, class: Option<FailureClas
         failure_message: class.map(|class| format!("{class:?} happened")),
         http_status: success.then_some(200),
         rectified: false,
+        cost: None,
     }
 }
 

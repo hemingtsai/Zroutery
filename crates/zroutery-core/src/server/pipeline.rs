@@ -2702,7 +2702,35 @@ impl RequestLifecycle {
             failure_message: None,
             http_status: None,
             rectified,
+            // Filled in when the request settles, because the price depends on
+            // what the provider reported back and is not knowable before.
+            cost: None,
         });
+    }
+
+    /// Price the most recent attempt, once its usage is known.
+    ///
+    /// Separate from settling the attempt because a *failed* call can be billed
+    /// too, and a router that prices only its successes cannot tell a plan that
+    /// failed cheaply from one that failed expensively.
+    ///
+    /// Called from the terminal transition rather than from the attempt loop,
+    /// because that is where the settlement — and therefore the usage — is known.
+    /// It prices the last attempt, which is the one the settlement describes; an
+    /// earlier failed attempt in the same chain keeps whatever usage its own
+    /// failure reported.
+    fn price_last_attempt(&mut self, pricing: Option<&Pricing>, usage: &Usage) {
+        let Some(pricing) = pricing else {
+            return;
+        };
+        if *usage == Usage::default() {
+            // No usage means no basis for a figure. Leaving it unattributed is
+            // the honest answer; zero would claim the call was free.
+            return;
+        }
+        if let Some(attempt) = self.attempts.last_mut() {
+            attempt.cost = Some(pricing.cost_of(usage).amount);
+        }
     }
 
     /// The attempt that has no verdict yet, if one is open.
@@ -2857,6 +2885,12 @@ impl RequestLifecycle {
                     .charge(&settlement.provider_id, settlement.tier, cost);
             }
         }
+        // And attributed to the attempt that incurred it, so a chain's spend is
+        // per-attempt rather than only in total. Without this the attempt-scoped
+        // training samples carry no cost target at all, and the routing
+        // comparison — which reads only attempt samples — compares cost as a
+        // structural constant.
+        self.price_last_attempt(settlement.pricing.as_ref(), &settlement.usage);
 
         // 4. The activity record, once.
         let latency_ms = self.elapsed_ms();

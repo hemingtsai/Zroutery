@@ -87,6 +87,7 @@ fn fixture_outcome(quality: f32, terminal: Terminal, timestamp: i64) -> Outcome 
             Terminal::Cancelled | Terminal::Interrupted => None,
         },
         rectified: false,
+        cost: None,
     };
     let builder = Outcome::builder(format!("req_{timestamp}"))
         .single_candidate(MODEL, PROVIDER)
@@ -212,6 +213,7 @@ fn mixed_scope_outcome(timestamp: i64) -> Outcome {
         failure_message: Some("fixture rate limit".to_string()),
         http_status: Some(429),
         rectified: false,
+        cost: None,
     };
     let served = Attempt {
         attempt_id: "attempt-b".to_string(),
@@ -226,6 +228,7 @@ fn mixed_scope_outcome(timestamp: i64) -> Outcome {
         failure_message: None,
         http_status: Some(200),
         rectified: false,
+        cost: None,
     };
     Outcome::builder(format!("req-mix-{timestamp}"))
         .initial("model-a", "provider-a")

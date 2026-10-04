@@ -52,6 +52,7 @@ fn make_attempt(
         },
         http_status: if success { Some(200) } else { Some(500) },
         rectified: false,
+        cost: None,
     }
 }
 
