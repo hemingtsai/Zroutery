@@ -226,7 +226,20 @@ impl Targets {
                 None
             },
             ttft_ms: if success { attempt.ttft_ms } else { None },
-            cost: None,
+            // The attempt's own recorded cost, not a hard-coded `None`.
+            //
+            // It used to be `None` unconditionally, which made every
+            // attempt-scoped sample cost-free. The routing comparison reads *only*
+            // attempt samples, so `mean_cost` was a structural constant for every
+            // arm, `RewardPolicy::cost_weight` contributed nothing to the observed
+            // utility the promotion gate reads, and the gate's cost budget was
+            // measured against zero — while the request-scoped sample beside it
+            // carried a perfectly good figure that nothing consumed.
+            //
+            // `None` still means unattributed, which is not the same as zero: a
+            // provider that reports no usage on a failed call has told us nothing
+            // about whether that call was billed.
+            cost: attempt.cost,
             failure_class: attempt.failure_class.map(|class| format!("{:?}", class)),
             fallback_count: 0,
         }
@@ -1323,6 +1336,7 @@ mod tests {
             },
             http_status: if success { Some(200) } else { Some(500) },
             rectified: false,
+            cost: None,
         }
     }
 

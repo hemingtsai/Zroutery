@@ -34,6 +34,7 @@ fn attempt(
         failure_message: (!success).then(|| "captured failure".to_string()),
         http_status: success.then_some(200).or(Some(503)),
         rectified: false,
+        cost: None,
     }
 }
 

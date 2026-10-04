@@ -141,6 +141,7 @@ fn attempt(decision: usize, slot: usize, won: bool) -> Attempt {
         },
         http_status: if won { Some(200) } else { Some(503) },
         rectified: false,
+        cost: None,
     }
 }
 
@@ -572,6 +573,7 @@ fn a_retained_input_that_names_a_candidate_the_outcome_never_touched_is_incomple
         failure_message: None,
         http_status: Some(200),
         rectified: false,
+        cost: None,
     });
     recorded[0].outcome = outcome;
 

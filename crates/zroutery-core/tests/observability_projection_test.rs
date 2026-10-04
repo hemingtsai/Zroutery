@@ -117,6 +117,7 @@ fn attempt(model: &str, provider: &str, success: bool, class: Option<FailureClas
         failure_message: class.map(|class| format!("upstream said {class:?}")),
         http_status: if success { Some(200) } else { Some(500) },
         rectified: false,
+        cost: None,
     }
 }
 

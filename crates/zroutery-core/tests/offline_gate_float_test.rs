@@ -96,6 +96,7 @@ fn sample_with(id: &str, latency: f64, cost: f64) -> Outcome2 {
             failure_message: None,
             http_status: Some(200),
             rectified: false,
+            cost: None,
         }],
         usage: None,
         estimated_cost: Some(cost),
@@ -518,6 +519,7 @@ fn the_outcome_attempt_latency_is_part_of_the_measured_surface() {
         failure_message: Some("timed out".to_string()),
         http_status: Some(504),
         rectified: false,
+        cost: None,
     });
 
     let fidelity = JournalFloatFidelity::measure(std::slice::from_ref(&sample));
