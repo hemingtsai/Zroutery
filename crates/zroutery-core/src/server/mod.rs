@@ -856,6 +856,34 @@ impl AppState {
             }
         };
 
+        // What the configuration names, narrowed to the candidates that could
+        // actually be routed to. This is the classifier's own view — an enabled
+        // provider with an enabled model entry — and it is what makes the blind
+        // spot list a statement about the configuration the operator just edited
+        // rather than a second, drifting copy of what is callable.
+        let configured: Vec<(String, String)> = {
+            let config = self.config();
+            config
+                .models
+                .iter()
+                .filter(|entry| entry.enabled)
+                .filter(|entry| {
+                    config
+                        .providers
+                        .iter()
+                        .any(|provider| provider.enabled && provider.id == entry.provider_id)
+                })
+                .map(|entry| (entry.exposed_id(), entry.provider_id.clone()))
+                .collect()
+        };
+        let observations = self.router().observations();
+        let blind_candidates = crate::ml::BlindCandidate::unobserved(
+            configured
+                .iter()
+                .map(|(model_id, provider_id)| (model_id.as_str(), provider_id.as_str())),
+            observations,
+        );
+
         crate::ml::MlStatus {
             routing_enabled: self.config().ml_routing.enabled,
             durable_state: self.config().ml_routing.has_state_dir(),
@@ -864,8 +892,10 @@ impl AppState {
             active,
             active_decision,
             history,
-            routing: self.ml_routing.counts(),            exploration_probability: self.config().ml_routing.exploration_probability,
+            routing: self.ml_routing.counts(),
+            exploration_probability: self.config().ml_routing.exploration_probability,
             exploration_seed: self.config().ml_routing.exploration_seed,
+            blind_candidates,
             dataset: self.dataset.counters(),
             traces: self.traces.as_ref().map(crate::ml::TraceLog::counters),
             shadow: crate::ml::ShadowStatus {

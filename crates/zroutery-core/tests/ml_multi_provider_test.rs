@@ -557,15 +557,25 @@ async fn gamma_provider() -> (Upstream, SocketAddr) {
 // The deadlock
 // ---------------------------------------------------------------------------
 
-/// A provider the deterministic plan never reaches is invisible, and the silence
-/// is indistinguishable from health.
+/// A provider the deterministic plan never reaches is never measured — and is now
+/// named, so the silence is distinguishable from health.
 ///
 /// This is a fact about the *plan*, not about the model, which is what makes it
 /// stable enough to assert: `Priority` tries `flaky-std`, falls back to
 /// `steady-std`, and one of those two always succeeds. `gamma-std` sits below
 /// both, so it is never attempted and no amount of retraining changes that.
+///
+/// The invisibility itself is unchanged and still asserted below: the durable
+/// body holds no outcome for `gamma-std`, so the model genuinely cannot know the
+/// provider exists. What changed is the reporting. This test used to be named
+/// `..._and_nothing_reports_it`, which was the defect — an unreachable provider
+/// was indistinguishable from a healthy one. `MlStatus::blind_candidates` now
+/// names it, and the assertion at the end of the driving phase is what checks the
+/// derivation against the real request path: it reads the observation store
+/// through the same keys the outcome recorder writes, so a wrong key would show
+/// up here as every candidate reported blind.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_provider_the_plan_never_reaches_is_never_measured_and_nothing_reports_it() {
+async fn a_provider_the_plan_never_reaches_is_never_measured_and_is_reported() {
     let (alpha, alpha_addr) = two_models().await;
     let (gamma, gamma_addr) = gamma_provider().await;
     let upstreams = [alpha.clone(), gamma.clone()];
@@ -599,6 +609,39 @@ async fn a_provider_the_plan_never_reaches_is_never_measured_and_nothing_reports
             mean_after_cold_start(&costs) > 1.2,
             "the deterministic plan should be paying for its bad first choice, got {:.3}",
             mean_after_cold_start(&costs)
+        );
+
+        // And the operator surface now names it. This is the assertion that ties
+        // `BlindCandidate::unobserved`'s key format to the one the outcome
+        // recorder actually writes: the two candidates that did serve are absent
+        // because the store has records under exactly these keys, and gamma is
+        // present because it has none. A mismatch in either direction — deriving
+        // `exposed_id()` wrongly, or reading a different provider id — would move
+        // one of the served candidates into this list, or empty it.
+        let status = harness.state.ml_status();
+        let blind: Vec<String> = status
+            .blind_candidates
+            .iter()
+            .map(|candidate| candidate.model_id.clone())
+            .collect();
+        assert_eq!(
+            blind,
+            vec!["gamma-gamma-std".to_string()],
+            "exactly the candidate that was never tried should be reported blind; \
+             the two that served must not appear. Exploration was off, so this gap \
+             is permanent."
+        );
+        assert!(
+            status.blind_spots_are_permanent(),
+            "exploration was configured at 0.0, so nothing can ever reach it"
+        );
+        let warning = status
+            .blind_spot_warning()
+            .expect("an unreachable provider with exploration off must warn");
+        assert!(
+            warning.contains("gamma-gamma-std"),
+            "the warning has to name the provider so the operator knows which \
+             configuration entry to look at; got: {warning}"
         );
     }
 
