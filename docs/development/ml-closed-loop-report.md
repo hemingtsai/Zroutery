@@ -324,7 +324,8 @@ Only items that block `PRODUCTION_READY`.
 | The cost head is never checked | **Closed.** The head learns its targets at 10:1; the learned figure reaches the ranking utility; and both survive to a *served* decision through a real promotion, all verified by mutation. Separately measured: at the shipped weights a 9x price difference moves utility `0.0009` against `0.75` for a success difference, so the cost head **cannot outvote reliability** — pinned so the weights cannot be changed silently — §E4 |
 | The frozen holdout was a content cluster | **Closed (ADR-0008).** `project_cohorts` sorted by `CohortOrderKey` and the holdout was a contiguous tail of that, so which decisions were held out depended on tie-breaking rather than on time; the gate refused a fifth of runs with `SingleServedCandidate` — §E5 | — |
 | Exploration defaults to zero, which has a measured cost | **Closed as a report, and the cost turned out to be two-sided.** The unreachable candidate is named in `MlStatus::blind_candidates` and warned about in the panel. But raising `exploration_probability` to fix it **blocks promotion of any learned model**, so the advice would have been self-defeating; the warning now says so and recommends top priority instead — §E6 | Nothing, unless the promotion gate learns to compare on something other than request-identical pairing. That is a design change with a real cost: paired evidence is what makes the improvement claim honest |
-| `shadow_overhead_stays_an_order_of_magnitude_under_budget` is a wall-clock assertion | Intermittent: 1 failure in ~8 full-suite runs, always under load, never in isolation. A P95/P99 latency budget measured against `Instant::now()` is a machine-speed assertion wearing a test's clothes | Either widen the budget to something load-independent, or move it to a benchmark that is not part of the correctness suite. Pre-existing and unrelated to the ML work |
+| The shadow overhead gate was a wall-clock assertion | **Closed by reshaping, not widening.** `shadow_marginal_cost_per_candidate_does_not_grow` measures the *marginal* cost of a candidate at 4–8 and at 32–64 candidates, interleaved under one scheduler, and asserts it does not grow. Scale-free, so machine speed and load cancel. Verified by mutation: a quadratic regression scores 42.3us against 239.0us and fails; the old endpoint ratio scored that same mutation 3.6x against a bound of 12 and **passed**. `shadow_evaluate_absolute_cost` (`#[ignore]`) reads the magnitude for a human — §E7 | The shape is gated; a constant-factor slowdown is not, and cannot be without an absolute ceiling. That limitation is stated in the test rather than papered over |
+| `state::tests::a_successful_rebind_commits_the_document_and_moves_the_listener` is intermittent | 1 failure in 6 full-suite runs, always under concurrent load, never in isolation. A rebind test is a port-and-listener race wearing a test's clothes, in the same family as the shadow budget test | Same treatment as above, and out of scope for the ML work: it needs a serial runner or an injected listener, not a looser assertion |
 | The status field's meaning is only asserted, not measured | **Closed.** `blind_spot_warning_matches_what_exploration_actually_does` runs `explore` over 2000 ids at each probability and requires the document's verdict to match. Mutating `explore` to explore at probability 0 fails this test and **nothing else in the workspace** — the other 2128 pass with exploration silently running | — |
 | Tauri command dispatch is not covered by a test | The status document, replay and rollback are exercised through `AppState` and over HTTP. Nothing drives them through a real webview | An integration harness around a webview, or accepting the seam and keeping `ml_available` so a failure there is reported as a failure rather than read as an absence |
 
@@ -750,7 +751,7 @@ even on a wholly untrained head. Cold-ness does reach the decision, but through
 uncertainty term reads. And an untrained cost head predicts `0.01`, not zero, so it
 looks like a *cheap* candidate rather than an absent one.
 
-### E6. Exploration and promotion are in direct conflict
+## E6. Exploration and promotion are in direct conflict
 
 Found by running a diagnostic the repository already contained. It is the opposite
 of what §E3 recommends, and it made advice shipped one commit earlier wrong.
@@ -815,6 +816,63 @@ direction (paired collapses by ≥4×) and the blocker's name. It deliberately a
 no count: the counts vary 4× and 7× run to run, so an exact figure would be a flaky
 test asserting noise. The *verdict* was PROMOTED at 0 and BLOCKED at 0.25 in every
 run observed, and the test passed 8 of 8.
+
+## E7. A performance gate that could not tell a slow machine from a slow regression
+
+`shadow_overhead_stays_an_order_of_magnitude_under_budget` asserted p95 ≤ 10ms and
+p99 ≤ 30ms against a path that measures tens of microseconds. It failed roughly one
+run in eight, always under concurrent load, never in isolation — a preemption
+reported as a regression.
+
+The previous author diagnosed it correctly and declined to fix it, saying that
+loosening would not help and naming two real options. Both of those turn out to be
+the wrong frame. The problem is not the threshold; it is that **a fixed ceiling
+cannot distinguish a slow machine from a slow regression.** Any ceiling loose enough
+not to fire on a loaded machine is too loose to catch a 10× regression, and any
+ceiling tight enough to catch one fires on a busy one. No value of that number works,
+so tuning it was never going to.
+
+**Measured shape of the path.** Cost is linear at about 20µs per candidate plus a
+~15µs fixed cost:
+
+```text
+candidates      1      2      4      8     16     32     64
+p50          34.8   53.1   95.3  169.4  324.1  639.9 1298.9   us
+per cand.    34.8   26.6   23.8   21.2   20.3   20.0   20.3   us
+```
+
+The per-candidate cost converges to ~20µs and stays flat to n=64. Nothing is wrong
+today — but that flatness is the thing worth guarding, and a ceiling cannot guard it.
+
+**The tempting fix that does not work.** An endpoint ratio (8 candidates against 1)
+looks scale-free and therefore load-independent. It is not sufficient: because the
+curve is linear with a large fixed term, a *quadratic* term small enough to be
+invisible between n=1 and n=8 fits that data exactly. Verified by mutation — putting
+a pairwise comparison where the sort belongs gives:
+
+```text
+  4c p50=  137us    8c p50=  306us    32c p50= 2818us    64c p50=10016us
+```
+
+As an endpoint ratio that is `306/84 = 3.6×`, which passes any bound loose enough to
+survive load. **The old gate would not have caught a 5× regression at 64 candidates,
+and neither would a wider one.**
+
+**What replaced it.** `shadow_marginal_cost_per_candidate_does_not_grow` measures the
+*marginal* cost of a candidate — differentiating the curve divides out the fixed
+per-request term — at 4–8 and at 32–64 candidates, and asserts it does not grow. The
+same mutation reports 42.3µs against 239.0µs and fails; the real code reports 17.7µs
+against 19.9µs and passes. The four arms are measured **interleaved in one loop** so
+all see the same scheduler, and compared on **medians**, which an occasional
+preemption cannot move.
+
+**What it does not catch, stated plainly.** A *constant-factor* slowdown. Measured, by
+mutation: a duplicated prediction per candidate moved the 1-to-8 ratio from 4.69 to
+4.83, which is nothing, because doubling per-candidate work doubles the whole curve
+and leaves its shape alone. Catching that requires an absolute ceiling — the flaky
+thing this replaced. So the shape is gated and the magnitude is *measured*:
+`shadow_evaluate_absolute_cost` is `#[ignore]`d and prints p50/p95/p99 at 1, 4, 16 and
+64 candidates for a human to read.
 
 ### Still not measured
 
