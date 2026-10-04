@@ -937,6 +937,58 @@ mod tests {
         panic!("no ephemeral port above 30000 was offered");
     }
 
+    /// Whether an error is the gateway losing a race for a port, rather than the
+    /// behaviour a test is about.
+    ///
+    /// `ServerHandle::start` is the only place that binds, and it reports
+    /// `cannot bind {addr}: {os error}`. That string reaches both callers verbatim:
+    /// `Desktop::start` returns it directly, and `migrate_listener` embeds it in
+    /// the note about the previous gateway being restored. So this matches one
+    /// string from one place rather than guessing at several.
+    fn lost_a_port_race(error: &str) -> bool {
+        error.contains("cannot bind")
+    }
+
+    /// Run `body`, retrying while it fails because a probed port was taken first.
+    ///
+    /// `advertised_port` binds `:0`, reads the number and drops the socket, so the
+    /// port genuinely is free when probed and may be gone by the time the gateway
+    /// binds it. Four tests here start on an explicitly probed port and they run
+    /// concurrently, so the window is taken often enough to present as an
+    /// intermittent failure rather than as a broken test.
+    ///
+    /// Retrying rather than sleeping, and retrying rather than using a fixed port:
+    /// a fixed port collides with anything else on the machine and cannot be
+    /// reasoned about. Configuring port 0 would remove the race too, but these
+    /// tests exist to check that the committed document names a port the listener
+    /// really serves, and a document saying 0 does not check that.
+    ///
+    /// `body` returns `Err` only for a bind the test did *not* intend to fail. The
+    /// failures these tests are about are asserted inside the body, so they never
+    /// reach the retry.
+    async fn with_ports_that_survive<F, Fut>(what: &str, mut body: F) -> Result<(), String>
+    where
+        F: FnMut() -> Fut,
+        Fut: std::future::Future<Output = Result<(), String>>,
+    {
+        const TRIES: u32 = 8;
+        let mut last = String::new();
+        for attempt in 1..=TRIES {
+            match body().await {
+                Ok(()) => return Ok(()),
+                Err(error) => {
+                    let raced = lost_a_port_race(&error);
+                    last = error;
+                    if attempt == TRIES || !raced {
+                        return Err(format!("{what}: {last}"));
+                    }
+                    tracing::debug!("{what}: lost a race for a port ({last}); retry {attempt}");
+                }
+            }
+        }
+        Err(format!("{what}: {last}"))
+    }
+
     fn config_on(port: u16, token: &str) -> AppConfig {
         let mut config = config_with_token(token);
         config.server.port = port;
@@ -1002,9 +1054,10 @@ mod tests {
     /// the running listener and the saved configuration keep the old address.
     #[tokio::test]
     async fn an_occupied_target_port_leaves_the_config_and_listener_untouched() {
-        let old = advertised_port();
-        let (desktop, dir) = desktop_with(config_on(old, "zr-occupied"));
-        desktop.start().await.unwrap();
+        with_ports_that_survive("an_occupied_target_port", || async {
+            let old = advertised_port();
+            let (desktop, dir) = desktop_with(config_on(old, "zr-occupied"));
+            desktop.start().await?;
 
         let squatter = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let busy = squatter.local_addr().unwrap().port();
@@ -1026,18 +1079,23 @@ mod tests {
         drop(squatter);
         desktop.stop().await;
         std::fs::remove_dir_all(dir).ok();
+        Ok(())
+        })
+        .await
+        .expect("the gateway must come up on a port nobody took first");
     }
 
     /// An address no listener can claim is refused the same way, with the
     /// reason attached to the state that actually resulted.
     #[tokio::test]
     async fn an_unbindable_address_is_refused_with_the_resulting_state() {
-        let old = advertised_port();
-        let (desktop, dir) = desktop_with_prober(
-            config_on(old, "zr-invalid"),
-            Box::new(PolicyProber { running: false }),
-        );
-        desktop.start().await.unwrap();
+        with_ports_that_survive("an_unbindable_address", || async {
+            let old = advertised_port();
+            let (desktop, dir) = desktop_with_prober(
+                config_on(old, "zr-invalid"),
+                Box::new(PolicyProber { running: false }),
+            );
+            desktop.start().await?;
 
         // A host name that cannot resolve is not bindable, exactly like an
         // occupied port: the address itself is the problem.
@@ -1056,6 +1114,10 @@ mod tests {
 
         desktop.stop().await;
         std::fs::remove_dir_all(dir).ok();
+        Ok(())
+        })
+        .await
+        .expect("the gateway must come up on a port nobody took first");
     }
 
     /// With the gateway stopped nothing is listening, so a configuration that
@@ -1078,6 +1140,54 @@ mod tests {
         assert!(!seen.running);
 
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// The retry the other tests here depend on, proven rather than assumed.
+    ///
+    /// Without this, "no more intermittent failures" would be an observation over a
+    /// handful of runs and the helper could be doing nothing at all. Three cases:
+    /// it retries a lost race, it stops retrying once the port holds, and it does
+    /// not retry a failure that is not a port race — which matters because two of
+    /// the tests above assert on a bind failure that is the *point*, and a helper
+    /// that looped on those would hang rather than fail.
+    #[tokio::test]
+    async fn the_port_race_retry_retries_only_port_races() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        // A port lost twice, then held: two retries, then success.
+        let attempts = AtomicUsize::new(0);
+        with_ports_that_survive("recovers", || async {
+            if attempts.fetch_add(1, Ordering::SeqCst) < 2 {
+                Err("cannot bind 127.0.0.1:51234: address already in use".to_string())
+            } else {
+                Ok(())
+            }
+        })
+        .await
+        .expect("a port race is recoverable");
+        assert_eq!(
+            attempts.load(Ordering::SeqCst),
+            3,
+            "the body should run once per attempt: twice lost, once held"
+        );
+
+        // A failure that is not a port race is reported immediately, not retried.
+        let unrelated = AtomicUsize::new(0);
+        let error = with_ports_that_survive("unrelated", || async {
+            unrelated.fetch_add(1, Ordering::SeqCst);
+            Err::<(), String>("the change was refused and the gateway is still up".to_string())
+        })
+        .await
+        .expect_err("an unrelated failure must not be swallowed");
+        assert_eq!(
+            unrelated.load(Ordering::SeqCst),
+            1,
+            "a refusal that is the behaviour under test must not be retried"
+        );
+        assert!(
+            error.contains("was refused"),
+            "the caller's failure should survive verbatim: {error}"
+        );
     }
 
     /// A prober that reports the probe through a channel, so a test can act
@@ -1140,10 +1250,11 @@ mod tests {
     /// probe window — restores the previous configuration and listener.
     #[tokio::test]
     async fn a_failed_listener_start_restores_the_previous_configuration() {
-        let old = advertised_port();
-        let (desktop, dir) =
-            desktop_with_prober(config_on(old, "zr-rollback"), Box::new(PermissiveProber));
-        desktop.start().await.unwrap();
+        with_ports_that_survive("a_failed_listener_start", || async {
+            let old = advertised_port();
+            let (desktop, dir) =
+                desktop_with_prober(config_on(old, "zr-rollback"), Box::new(PermissiveProber));
+            desktop.start().await?;
 
         let target = advertised_port();
         let mut next = (*desktop.core.config()).clone();
@@ -1165,27 +1276,41 @@ mod tests {
 
         desktop.stop().await;
         std::fs::remove_dir_all(dir).ok();
+        Ok(())
+        })
+        .await
+        .expect("the gateway must come up on a port nobody took first");
     }
 
     /// A successful migration commits the document and moves the listener.
     #[tokio::test]
     async fn a_successful_rebind_commits_the_document_and_moves_the_listener() {
-        let old = advertised_port();
-        let (desktop, dir) =
-            desktop_with_prober(config_on(old, "zr-move"), Box::new(PermissiveProber));
-        desktop.start().await.unwrap();
+        with_ports_that_survive("a_successful_rebind", || async {
+            let old = advertised_port();
+            let (desktop, dir) =
+                desktop_with_prober(config_on(old, "zr-move"), Box::new(PermissiveProber));
+            desktop.start().await?;
 
-        let target = advertised_port();
-        let mut next = (*desktop.core.config()).clone();
-        next.server.port = target;
-        assert!(desktop.apply_config(next).await.unwrap());
+            let target = advertised_port();
+            let mut next = (*desktop.core.config()).clone();
+            next.server.port = target;
+            // Both ports are probed, so this one can be lost too. `apply_config`
+            // puts the document back before returning, so a retry starts clean.
+            assert!(
+                desktop.apply_config(next).await?,
+                "a changed port must be reported as a rebind"
+            );
 
-        let seen = observe(&desktop, &dir).await;
-        seen.agrees(target);
-        seen.serves(target);
+            let seen = observe(&desktop, &dir).await;
+            seen.agrees(target);
+            seen.serves(target);
 
-        desktop.stop().await;
-        std::fs::remove_dir_all(dir).ok();
+            desktop.stop().await;
+            std::fs::remove_dir_all(dir).ok();
+            Ok(())
+        })
+        .await
+        .expect("both the original and the target port must be bindable");
     }
 
     /// A credential store that keeps secrets in memory and can be told to
