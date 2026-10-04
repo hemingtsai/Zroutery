@@ -262,6 +262,7 @@ mod tests {
                 rankings: 0,
                 fallbacks: 0,
                 explorations: 0,
+                blind_explorations: 0,
                 attached: false,
             },
             exploration_probability: 0.0,
