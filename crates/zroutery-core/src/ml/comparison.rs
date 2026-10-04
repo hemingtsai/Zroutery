@@ -986,6 +986,77 @@ mod tests {
         ]
     }
 
+    /// A body where two arms measure different candidates must still pair.
+    ///
+    /// Pairing is defined on the measured intersection, so an arm that diverges
+    /// onto a candidate the other arm never tried should reduce the paired set —
+    /// but it must not annihilate it. Both arms here are measured on every
+    /// request, choosing *different* candidates, and the intersection is every
+    /// request.
+    #[test]
+    fn two_arms_that_choose_different_candidates_still_pair_on_the_same_requests() {
+        let traces = body(MIN_PAIRED_REQUESTS + 10);
+        let policy = RewardPolicy::default();
+        let (deltas, verdict) = {
+            let baseline = {
+                let mut state = ReplayState::default();
+                traces
+                    .iter()
+                    .map(|trace| {
+                        let choice = ReplayBaseline::Priority.select(trace, &mut state);
+                        ArmRecord {
+                            outcome: measured_outcomes(trace)
+                                .get(&(choice.candidate_id.clone(), choice.provider_id.clone()))
+                                .copied(),
+                            measured: measured_outcomes(trace).contains_key(&(
+                                choice.candidate_id.clone(),
+                                choice.provider_id.clone(),
+                            )),
+                            choice,
+                            fell_back: false,
+                            utility: None,
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            };
+            let candidate = {
+                traces
+                    .iter()
+                    .map(|trace| {
+                        // Deliberately the *other* candidate, so the two arms
+                        // disagree on every request while both stay measured.
+                        let choice = PolicyChoice {
+                            policy: "test.other".to_string(),
+                            request_id: trace.request_id.clone(),
+                            candidate_id: "steady".to_string(),
+                            provider_id: "beta".to_string(),
+                            eligible: true,
+                            reason: "chosen to disagree".to_string(),
+                        };
+                        let outcome = measured_outcomes(trace)
+                            .get(&("steady".to_string(), "beta".to_string()))
+                            .copied();
+                        ArmRecord {
+                            measured: outcome.is_some(),
+                            outcome,
+                            choice,
+                            fell_back: false,
+                            utility: None,
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            };
+            pair_against_baseline(&baseline, &candidate, &policy)
+        };
+        assert_eq!(
+            deltas.paired_requests,
+            traces.len(),
+            "two fully-measured arms over the same requests produced no pairs; \
+             the request ids are not being joined on the same key"
+        );
+        assert_ne!(verdict, RoutingVerdict::InsufficientEvidence);
+    }
+
     /// One trace whose `fast` attempt succeeded and whose `steady` attempt
     /// failed, so both candidates have a measurement and the choice matters.
     fn trace(id: &str) -> RequestTrace {
