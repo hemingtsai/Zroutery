@@ -264,8 +264,13 @@ impl MlStatus {
         };
         Some(format!(
             "{} — configured but never tried, and exploration is off, so no traffic \
-             will ever reach {them}. Raise ml_routing.exploration_probability above 0, \
-             or give {them} top priority so the deterministic plan picks {them}.",
+             will ever reach {them}. Raising ml_routing.exploration_probability above 0 \
+             does reach {them}, but it blocks promotion of any learned model: the gate \
+             needs the model and the baseline compared on the same requests, and \
+             exploration makes them disagree. Measured, not assumed — paired evidence \
+             collapses by at least 6x and doubling the traffic does not recover it. So \
+             routing would stay deterministic either way. Give {them} top priority \
+             instead: that reaches {them} and keeps promotion possible.",
             named.join(", ")
         ))
     }

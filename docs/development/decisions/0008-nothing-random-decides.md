@@ -208,6 +208,53 @@ it is exactly what someone might write trying to be helpful — that test was th
 silently running at probability 0. A status field whose meaning is a claim about
 another function needs a test that reads the other function.
 
+### What nobody checked: whether exploration can be promoted at all
+
+The warning above tells an operator whose provider is unreachable to raise
+`exploration_probability`. That advice is self-defeating, and running a diagnostic
+the repository already contained is how it turned up.
+
+**Exploration blocks promotion. Measured, at two traffic volumes, with the gate
+naming its own reason:**
+
+```text
+120 requests, exploration 0.00 -> PROMOTED   ml measured 91, paired 91
+120 requests, exploration 0.25 -> BLOCKED    ml measured 10-40, paired 2-15
+    BLOCKED paired_evidence: 2 paired requests against a floor of 30
+240 requests, exploration 0.00 -> PROMOTED   ml measured 181, paired 181
+240 requests, exploration 0.25 -> BLOCKED    ml measured 32-41, paired 6-10
+```
+
+**More traffic does not fix it.** At 240 requests with exploration 0.25 the paired
+count was 6, 8 and 10 across three runs — still under a floor of 30, and not
+trending toward it.
+
+The mechanism is in the code, not in a guess. `ArmRecord::measured` is false exactly
+when the policy's choice was not among the candidates that trace attempted, and
+`pair_against_baseline` skips any request where either arm is unmeasured. Exploration
+routes a fraction of requests to a provider the baseline's pick never displaced, so
+on those requests the baseline has no outcome to pair against — and once the body has
+trained, the policy prefers the explored provider, whose attempt count is set by the
+exploration probability rather than by traffic.
+
+This is not a gate bug. Paired, request-identical evidence is what makes an
+"it improved" claim honest; you cannot know how a model would have done on a request
+whose outcome nobody recorded. The tension is real and the gate is right about it.
+But it means **exploration and promotion cannot both be had** in the current design,
+and an operator who raises exploration to reach a new provider silently opts out of
+ever having a learned model.
+
+So the warning does not simply say "raise exploration" any more. It states that
+raising it blocks promotion, and recommends top priority instead — which reaches the
+provider and keeps promotion possible. `blind_spot_test.rs` asserts the warning
+contains "blocks promotion", because a warning that recommends the option that does
+not work is worse than silence: it gets acted on.
+
+`exploration_starves_the_evidence_a_promotion_needs` pins the finding. It asserts the
+direction and the blocker's name and deliberately asserts **no count**, because the
+counts vary 4x and 7x run to run; the verdict was PROMOTED at 0 and BLOCKED at 0.25
+in every run observed, and the paired collapse is 6x or wider.
+
 ### The frozen holdout was a content cluster, not a slice of time
 
 Found while landing the cost-axis fix, and the third defect in this family.

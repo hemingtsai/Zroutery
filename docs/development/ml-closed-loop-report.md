@@ -99,7 +99,7 @@ Status vocabulary: `0 NOT_STARTED` · `1 SCAFFOLDED` · `2 IMPLEMENTED` ·
 | Retraining | **4** | collect → process ends → retrain → gate → promote → new process serves → retrain again; round 2 body 120 requests, distinct fingerprint, distinct commit, re-promoted |
 | Reproducibility | **4** | ADR-0008: the split's tiebreak was a random UUID, so the verdict alternated 3-of-6 on identical traffic; now 6-of-6 identical |
 | Cross-provider | **4** | `ml_multi_provider_test.rs`: three providers on three upstreams; unobserved provider received **0 of 60** requests with exploration off, and the learned ranking used **1 provider** against round-robin's 2 |
-| Exploration reach | **4** | `MlRouter::explore_plan` reachable with no model; `blind_explorations` counted apart from `explorations`; stays inside the eligible set and the plan. **Reachable is not the same as used:** with the shipped default of 0, a provider the plan never picks is unreachable — now *named* in `MlStatus::blind_candidates` and warned about in the panel |
+| Exploration reach | **4** | `MlRouter::explore_plan` reachable with no model; `blind_explorations` counted apart from `explorations`; stays inside the eligible set and the plan. **But reaching a candidate and being promotable are in conflict** — measured: at exploration 0.25 the gate refuses at 120 *and* 240 requests for want of paired evidence. See §E6 |
 | Cost axis | **4** | `Attempt` grew a cost field, populated at the terminal transition. 120 of 171 samples now carry a real cost; `mean_cost` separates across arms (`baseline.priority` 0.00300, `ml.candidate` 0.00702). `RewardPolicy::cost_weight` and the gate's cost budget read a real number — §E4 |
 | Holdout temporality | **4** | ADR-0008: the frozen holdout was a contiguous tail of a *content*-sorted vector, so it was a content cluster and its composition varied run to run. Now split in arrival order, ordered per partition — §E5 |
 | Model identity | **4** | one identity per model (`TrainingOutcome::commit_record`); commit `06f7da3409a14147` |
@@ -323,7 +323,8 @@ Only items that block `PRODUCTION_READY`.
 | A billed failure is unattributed | A 5xx carries no usage, so nothing in the error says what the failed call cost. If a provider bills errors, that spend is invisible to the ledger and to the cost axis | Carry usage out of the failure path — an upstream protocol change, not a routing one |
 | The cost head is never checked | **Closed.** The head learns its targets at 10:1; the learned figure reaches the ranking utility; and both survive to a *served* decision through a real promotion, all verified by mutation. Separately measured: at the shipped weights a 9x price difference moves utility `0.0009` against `0.75` for a success difference, so the cost head **cannot outvote reliability** — pinned so the weights cannot be changed silently — §E4 |
 | The frozen holdout was a content cluster | **Closed (ADR-0008).** `project_cohorts` sorted by `CohortOrderKey` and the holdout was a contiguous tail of that, so which decisions were held out depended on tie-breaking rather than on time; the gate refused a fifth of runs with `SingleServedCandidate` — §E5 | — |
-| Exploration defaults to zero, which has a measured cost | **Half closed.** The cost is measured (0 of 60 requests) *and now reported*: `MlStatus::blind_candidates` names unreachable candidates, `blind_spots_are_permanent` separates a cold start from a permanent gap, and the Routing panel warns before the operator is billed for the mistake. The default itself is still **0.0** | Moving the default is a product decision, not engineering: a router that explores by default spends real money on deliberate mistakes. It is left to the operator, now with the cost visible where they will read it |
+| Exploration defaults to zero, which has a measured cost | **Closed as a report, and the cost turned out to be two-sided.** The unreachable candidate is named in `MlStatus::blind_candidates` and warned about in the panel. But raising `exploration_probability` to fix it **blocks promotion of any learned model**, so the advice would have been self-defeating; the warning now says so and recommends top priority instead — §E6 | Nothing, unless the promotion gate learns to compare on something other than request-identical pairing. That is a design change with a real cost: paired evidence is what makes the improvement claim honest |
+| `shadow_overhead_stays_an_order_of_magnitude_under_budget` is a wall-clock assertion | Intermittent: 1 failure in ~8 full-suite runs, always under load, never in isolation. A P95/P99 latency budget measured against `Instant::now()` is a machine-speed assertion wearing a test's clothes | Either widen the budget to something load-independent, or move it to a benchmark that is not part of the correctness suite. Pre-existing and unrelated to the ML work |
 | The status field's meaning is only asserted, not measured | **Closed.** `blind_spot_warning_matches_what_exploration_actually_does` runs `explore` over 2000 ids at each probability and requires the document's verdict to match. Mutating `explore` to explore at probability 0 fails this test and **nothing else in the workspace** — the other 2128 pass with exploration silently running | — |
 | Tauri command dispatch is not covered by a test | The status document, replay and rollback are exercised through `AppState` and over HTTP. Nothing drives them through a real webview | An integration harness around a webview, or accepting the seam and keeping `ml_available` so a failure there is reported as a failure rather than read as an absence |
 
@@ -749,12 +750,83 @@ even on a wholly untrained head. Cold-ness does reach the decision, but through
 uncertainty term reads. And an untrained cost head predicts `0.01`, not zero, so it
 looks like a *cheap* candidate rather than an absent one.
 
+### E6. Exploration and promotion are in direct conflict
+
+Found by running a diagnostic the repository already contained. It is the opposite
+of what §E3 recommends, and it made advice shipped one commit earlier wrong.
+
+**The measurement.** Sweeping traffic volume against exploration probability on the
+three-provider fixture, then asking the gate for its own reason rather than
+inferring one:
+
+| requests | exploration | ml measured | priority measured | paired | verdict |
+|---|---|---|---|---|---|
+| 120 | 0.00 | 91 | 120 | 91 | **PROMOTED** |
+| 120 | 0.25 | 10–40 | 81–87 | 2–15 | BLOCKED |
+| 240 | 0.00 | 181 | 240 | 181 | **PROMOTED** |
+| 240 | 0.25 | 32–41 | 181–192 | 6–10 | BLOCKED |
+
+and the gate names its own blocker:
+
+```text
+BLOCKED paired_evidence: 2 paired requests against a floor of 30
+```
+
+At zero exploration the learned policy picks the provider the plan always tries
+second, which was attempted on 90 of 120 traces, so 91 requests pair 1:1 against
+`baseline.priority`. At 0.25 the paired count collapses by at least 6×.
+
+**Doubling the traffic does not recover it.** At 240 requests with exploration 0.25
+the paired count was 6, 8 and 10 across three runs — under the floor of 30, and not
+trending toward it.
+
+**The mechanism, from the code rather than from inference.** `ArmRecord::measured`
+is false exactly when the policy's choice was not among the candidates that trace
+attempted, and `pair_against_baseline` skips any request where either arm is
+unmeasured. Exploration routes a fraction of requests to a provider the
+baseline's pick never displaced, so on those requests the baseline has no outcome
+to pair against. Once the body has trained, the policy prefers the explored
+provider, whose attempt count is set by the *exploration probability* rather than
+by traffic — which is why more requests do not help.
+
+What is **not** measured: which candidate the learned policy actually chooses.
+`RoutingComparison` reports aggregates only, and adding per-request choice records to
+it would be production surface bought for a test, so that link in the chain is
+argued from the code rather than observed.
+
+**Why this is not a bug in the gate.** Paired, request-identical evidence is
+precisely what makes an improvement claim honest: you cannot know how a model would
+have done on a request whose outcome nobody recorded. A gate that accepted unpaired
+evidence would be accepting a guess. The tension is real and the gate is right about
+it.
+
+**What it cost us.** The blind-spot warning added in `1933853` told an operator with
+an unreachable provider to "raise `ml_routing.exploration_probability` above 0".
+Acting on that trades an unreachable provider for a permanently unpromotable model:
+routing stays deterministic either way, and now the operator has spent real money
+on exploration to get there. The warning now states the cost and recommends top
+priority instead, which reaches the provider *and* keeps promotion possible.
+`blind_spot_test.rs` asserts the warning says "blocks promotion" — a warning that
+recommends the option that does not work is worse than no warning, because it gets
+acted on.
+
+**What is pinned.** `exploration_starves_the_evidence_a_promotion_needs` asserts the
+direction (paired collapses by ≥4×) and the blocker's name. It deliberately asserts
+no count: the counts vary 4× and 7× run to run, so an exact figure would be a flaky
+test asserting noise. The *verdict* was PROMOTED at 0 and BLOCKED at 0.25 in every
+run observed, and the test passed 8 of 8.
+
 ### Still not measured
 
 - **A failover chain's billed failures.** If a provider bills a 5xx, that spend is
   invisible to the ledger *and* to the cost axis, because nothing in the error
   carries the tokens. Fixing it means getting usage out of the failure path, which
   is an upstream protocol change rather than a routing one.
+- **Which candidate a learned policy converges on.** `RoutingComparison` exposes
+  aggregates, so §E6's causal chain is argued from `ArmRecord::measured`'s documented
+  semantics rather than observed directly. Exposing per-request choices would answer
+  it and would also be useful to an operator asking "why did it pick that?", so it is
+  a reasonable feature request rather than a test-only accessor.
 
 ---
 

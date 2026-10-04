@@ -170,6 +170,25 @@ fn with_exploration_off_a_blind_candidate_is_permanent() {
              got: {warning}"
         );
     }
+
+    // The warning must not recommend the option that does not work.
+    //
+    // Raising exploration is the obvious advice and it is a trap: exploration
+    // starves the paired evidence the promotion gate needs, so the operator would
+    // trade an unreachable provider for a permanently unpromotable model and end
+    // up on the deterministic plan anyway. That finding is measured in
+    // `exploration_starves_the_evidence_a_promotion_needs`. A warning that says
+    // "raise exploration_probability" without saying this is worse than no
+    // warning, because it is acted on.
+    assert!(
+        warning.contains("blocks promotion"),
+        "the warning has to say what raising exploration actually costs, or the \
+         obvious reading is that it is a free fix; got: {warning}"
+    );
+    assert!(
+        warning.contains("top priority"),
+        "the warning should still offer the option that works; got: {warning}"
+    );
 }
 
 /// **With exploration on, an unobserved candidate is a cold start, not a fault.**
