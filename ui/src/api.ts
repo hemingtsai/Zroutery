@@ -572,7 +572,23 @@ export interface MlStatus {
   active: PromotedModelStatus | null;
   active_decision: PromotionDecision | null;
   history: PromotionHistoryEntry[];
-  routing: { rankings: number; fallbacks: number; explorations: number; attached: boolean };
+  routing: {
+    rankings: number;
+    fallbacks: number;
+    /** Deliberate alternatives tried with a model attached. */
+    explorations: number;
+    /**
+     * Deliberate alternatives tried with *no* model attached, purely to gather
+     * evidence about a candidate the current plan never reached.
+     *
+     * Counted apart from `explorations` because they are different claims. One is
+     * the model choosing to try something else; the other is the router admitting
+     * it knows nothing and going to find out. Showing them as one number would
+     * let the second be read as the first.
+     */
+    blind_explorations: number;
+    attached: boolean;
+  };
   exploration_probability: number;
   exploration_seed: number;
   dataset: {

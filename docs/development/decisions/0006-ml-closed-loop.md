@@ -75,7 +75,10 @@ Five properties are load-bearing:
 - A model in the active slot has passed a gate. It has not been shown to beat
   every baseline on any particular upstream; the evidence is per-dataset and
   the gate says so.
-- Exploration defaults to a probability of **zero**.
+- Exploration defaults to a probability of **zero**. **ADR-0008** measured the
+  cost of that default rather than assuming it: with exploration off, a provider
+  added to the configuration is never tried and never learned about. It remains a
+  product decision.
 
 ## Consequences
 
@@ -100,6 +103,7 @@ Five properties are load-bearing:
 
 - `docs/development/decisions/0002-production-ml-boundary.md` (superseded)
 - `docs/development/decisions/0007-ml-operator-surface.md`
+- `docs/development/decisions/0008-nothing-random-decides.md`
 - `docs/development/ml-closed-loop-report.md`
 - `crates/zroutery-core/src/ml/{traces,learning,comparison,shadow_analysis,promotion,serving,status}.rs`
 - `crates/zroutery-core/tests/ml_closed_loop_test.rs`

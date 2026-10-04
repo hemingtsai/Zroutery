@@ -179,6 +179,10 @@ export default function MlRouting({
             active && [t("ml.holdout_loss"), active.holdout_loss.toFixed(4)],
             [t("ml.ranking"), `${status.routing.rankings} / ${status.routing.fallbacks}`],
             [t("ml.explored"), `${status.routing.explorations} / ${status.routing.rankings}`],
+            status.routing.blind_explorations > 0 && [
+              t("ml.blind_explored"),
+              `${status.routing.blind_explorations} ${t("ml.with_no_model")}`,
+            ],
             [
               t("ml.collected"),
               `${count(status.dataset.samples)} ${t("ml.samples")} · ${

@@ -433,11 +433,15 @@ fn apply_ml_ranking(
     if plan.len() < 2 {
         return untouched();
     }
-    if !state.ml_routing().is_attached() {
-        return untouched();
-    }
-
     let request_id = decision.decision_id.clone();
+    if !state.ml_routing().is_attached() {
+        // No model, but exploration still applies — and this is the only place it
+        // can. A model cannot be trained on evidence the router never gathered,
+        // so if exploring required a promoted model the dataset could only ever
+        // contain candidates the incumbent plan already reached, and a provider
+        // added at the bottom of the priority order would be invisible forever.
+        return apply_exploration_without_a_model(state, plan, decision, &snapshot, &request_id);
+    }
     let ranked = match state.ml_routing().rank(&snapshot, &request_id) {
         Ok(ranked) => ranked,
         Err(reason) => {
@@ -488,6 +492,7 @@ fn apply_ml_ranking(
             selected: applied.selected.clone(),
             reason: applied.reason.clone(),
             explored: applied.explored,
+            modelled: true,
             order: applied.order.clone(),
             baseline_order: plan_order.clone(),
         });
@@ -504,6 +509,80 @@ fn apply_ml_ranking(
     );
 
     (reordered, amended)
+}
+
+/// Try an eligible candidate the plan would not have reached, with no model.
+///
+/// The counterpart to [`apply_ml_ranking`] for the state before anything has been
+/// promoted. It reorders within the executable plan exactly as the model path
+/// does, and it records `modelled: false` so nothing downstream can read a
+/// deliberate experiment as a decision the model made.
+#[cfg(feature = "ml")]
+fn apply_exploration_without_a_model(
+    state: &Arc<AppState>,
+    plan: Vec<Candidate>,
+    decision: RouteDecision,
+    snapshot: &crate::ml::ShadowInput,
+    request_id: &str,
+) -> (Vec<Candidate>, Option<RouteDecision>) {
+    let Some(explored) = state.ml_routing().explore_plan(snapshot, request_id) else {
+        return (plan.clone(), Some(decision));
+    };
+    if !plan.iter().any(|c| c.exposed_id == explored.selected) {
+        // The draw named something the executable plan does not contain. Refuse
+        // it rather than serve a candidate the router never planned.
+        tracing::warn!(
+            decision_id = %request_id,
+            selected = %explored.selected,
+            "the exploration draw named a candidate outside the executable plan; \
+             the deterministic plan stands"
+        );
+        return (plan, Some(decision));
+    }
+
+    let mut order: Vec<String> = plan
+        .iter()
+        .map(|candidate| candidate.exposed_id.clone())
+        .collect();
+    // Move the explored candidate to the front, keeping everything else's
+    // relative order. The set of servable candidates is untouched.
+    order.retain(|id| id != &explored.selected);
+    order.insert(0, explored.selected.clone());
+    let mut reordered: Vec<Candidate> = Vec::with_capacity(plan.len());
+    for id in &order {
+        if let Some(candidate) = plan.iter().find(|c| &c.exposed_id == id) {
+            reordered.push(candidate.clone());
+        }
+    }
+    if reordered.len() != plan.len() {
+        return (plan.clone(), Some(decision));
+    }
+
+    let plan_order: Vec<String> = plan.iter().map(|c| c.exposed_id.clone()).collect();
+    let amended = {
+        let mut decision = decision;
+        decision.selected = Some(explored.selected.clone());
+        decision.ml_ranking = Some(policy::MlRankingTrace {
+            // No model, so no commit. Empty rather than a placeholder string,
+            // because a field that can hold a fake commit is a field that will.
+            commit_id: String::new(),
+            selected: explored.selected.clone(),
+            reason: explored.reason.clone(),
+            explored: true,
+            modelled: false,
+            order: order.clone(),
+            baseline_order: plan_order,
+        });
+        decision
+    };
+
+    tracing::debug!(
+        decision_id = %request_id,
+        selected = %explored.selected,
+        "explored a candidate with no model attached, to gather evidence about it"
+    );
+
+    (reordered, Some(amended))
 }
 // ml-ranking-helper-end
 
