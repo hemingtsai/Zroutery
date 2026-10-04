@@ -321,7 +321,7 @@ Only items that block `PRODUCTION_READY`.
 | The cold-start window is unbounded in principle | Every new process begins with an empty observation store, so the first requests fall back until history accumulates. Measured at 1–2 requests; not characterised as a function of traffic rate | Carry the observation store across restarts, or persist it |
 | The cost axis is inert | **Closed.** `Attempt` had no cost field and `Targets::from_attempt` read `None` unconditionally, so per-attempt spend was never recorded, every attempt-scoped sample was cost-free, and `mean_cost` was `0.0000000000` for every arm — which made `RewardPolicy::cost_weight` and the gate's cost criterion both read a constant. Now recorded and discriminating — §E4 | — |
 | A billed failure is unattributed | A 5xx carries no usage, so nothing in the error says what the failed call cost. If a provider bills errors, that spend is invisible to the ledger and to the cost axis | Carry usage out of the failure path — an upstream protocol change, not a routing one |
-| The cost head is never checked | The axis now carries data and the arms separate on it, but no test trains a model on cost and checks the head predicts it. Cost is a deterministic function of price in these fixtures, so a head that ignored it would score the same | A fixture where cost varies for reasons other than the model's price |
+| The cost head is never checked | **Closed.** The head learns its targets at 10:1 and the learned figure reaches the ranking utility, both verified by mutation. Separately measured: at the shipped weights a 9x price difference moves utility `0.0009` against `0.75` for a success difference, so the cost head **cannot outvote reliability** — pinned so the weights cannot be changed silently — §E4 |
 | The frozen holdout was a content cluster | **Closed (ADR-0008).** `project_cohorts` sorted by `CohortOrderKey` and the holdout was a contiguous tail of that, so which decisions were held out depended on tie-breaking rather than on time; the gate refused a fifth of runs with `SingleServedCandidate` — §E5 | — |
 | Exploration defaults to zero, which has a measured cost | With `exploration_probability = 0.0` a provider added to the configuration is invisible, permanently. Measured, not assumed: 0 of 60 requests | A product decision, not engineering. Either the default moves, or the cost is documented where an operator will read it before adding a provider |
 | Tauri command dispatch is not covered by a test | The status document, replay and rollback are exercised through `AppState` and over HTTP. Nothing drives them through a real webview | An integration harness around a webview, or accepting the seam and keeping `ml_available` so a failure there is reported as a failure rather than read as an absence |
@@ -668,16 +668,63 @@ carries no usage to drop, and the stream path — the only place usage can exist
 failure — already preserves it. Three probes before reporting something turned out
 to be wrong is cheaper than one wrong commit.
 
+### Whether the cost head learns anything
+
+**Yes — and it cannot outvote reliability. Both are pinned by
+`crates/zroutery-core/tests/cost_head_test.rs`.**
+
+Four tests, because "the cost axis is inert" conflated two questions: does the head
+learn its targets, and does what it learned reach a decision.
+
+| Test | Claim | Fails if |
+|---|---|---|
+| `the_cost_head_learns_the_targets_it_is_given` | Features fixed, cost varied 10x; predictions track it at 10:1 and the head reports its sample count | The cost branch of `update_all` is removed |
+| `a_learned_cost_reaches_the_ranking_utility` | The utility gap between two bundles equals `cost_weight ×` the predicted-cost gap, with the other three terms identical | The cost branch is removed, **or** the cost term is dropped from `compute_utility` |
+| `samples_without_a_cost_leave_the_cost_head_untouched` | A cost-free body trains the cost head zero times while the success head trains normally | The per-head gate in `update_all` is removed |
+| `cost_cannot_outvote_success_at_the_shipped_weights` | Nine times the price moves utility orders of magnitude less than a success difference | The normalisation or the weight changes |
+
+Each was verified by mutation. Disabling `update_all`'s cost branch fails the first
+two; zeroing the cost term in `compute_utility` fails the second and fourth. The
+second test needed an explicit "the two predictions differ" assertion placed *first*
+— without it the algebraic identity holds as `0 == 0` and the test passes with the
+cost axis disconnected, which is exactly the failure mode it exists to prevent.
+
+**The confound these tests are shaped around.** The obvious end-to-end check is
+worthless: in the routing fixtures a candidate's cost is a deterministic function
+of *which model it is*, so a head that learned nothing about cost but correlated it
+with whatever features happen to separate those two models — priority, tier,
+observation statistics — would score identically. These tests hold features fixed,
+vary only the cost target, and never go through model identity.
+
+**The answer, as a number.** `compute_utility` scores cost as
+`-cost_weight * min(cost_dollars, 1.0)`. A per-request LLM bill is cents, so the
+clamp never bites and the term is `0.1 × dollars`. The dearest provider on the
+three-provider fixture costs 9× the cheapest — `0.00792` against `0.00088` — and the
+whole utility consequence is `0.0009`, against `0.75` for a candidate that succeeds
+where another fails.
+
+So the cost head works, is wired in, and **has never once changed a routing
+decision**. Not because it is broken, but because at the shipped weights a price
+difference is three orders of magnitude less consequential than a reliability
+difference. That may be a sensible default, but it is a policy nobody has
+explicitly made, so it is pinned: anyone who wants cost to matter has to change
+`RewardPolicy::cost_weight` or the normalisation, and
+`cost_cannot_outvote_success_at_the_shipped_weights` fails until they argue for it
+in the open.
+
+**Two incidental findings, both asserted.** `Prediction::cold` is constructed
+nowhere except its own test — every head reports `trained`, so the flag is `false`
+even on a wholly untrained head. Cold-ness does reach the decision, but through
+`confidence` (below 20 samples it drops to 0.1), which `compute_utility`'s
+uncertainty term reads. And an untrained cost head predicts `0.01`, not zero, so it
+looks like a *cheap* candidate rather than an absent one.
+
 ### Still not measured
 
 - **A failover chain's billed failures.** If a provider bills a 5xx, that spend is
   invisible to the ledger *and* to the cost axis, because nothing in the error
   carries the tokens. Fixing it means getting usage out of the failure path, which
   is an upstream protocol change rather than a routing one.
-- **Whether the cost head learns anything.** The axis now carries data and the
-  arms separate on it, but no test trains a model on cost and checks the head
-  predicts it. The fixture's cost is a deterministic function of a model's price,
-  so a head that ignored cost entirely would score just as well.
 
 ---
 
