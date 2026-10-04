@@ -130,6 +130,43 @@ trace written before the field existed was a model ranking.
   Exploration is what breaks this, and it has to be on *before* the promotion
   attempt, not after.
 
+- **The comparator is part of the measurement**, which is sharper than the point
+  above and was measured afterwards. Across five bodies at the exploration
+  ceiling:
+
+  ```
+    run  providers  paired: priority  round_robin  lowest_latency  balanced
+      1          2               4           15              38        40
+      2          2               6           11              14        31
+      3          1              40           30               8         1
+      4          2               2            9              17        34
+      5          2               2            7               2        29
+  ```
+
+  Run 3 is the clearest case: with no discovery the candidate pairs *perfectly*
+  with `baseline.priority` (40) and not at all with `baseline.balanced` (1). With
+  discovery, the reverse. Exploration reached the new provider by displacing
+  priority's first pick, so the candidate's measured requests and priority's are
+  nearly disjoint, while a spreading baseline — which considers the same
+  candidates — overlaps them.
+
+  So `baseline.priority` is a **same-provider** choice, and naming it for a
+  candidate that has discovered a provider tends to produce
+  `BLOCKED (paired_evidence: N)` for a candidate that may be perfectly good. The
+  blocker reads as "not enough data" rather than "you compared against the wrong
+  arm", which is the failure mode this project exists to avoid.
+
+  A sixth run broke even the anti-correlation — discovery *and*
+  `paired(priority)` at 31, one over the floor — so this is a strong tendency and
+  not an invariant. It is a diagnostic, not an assertion. A test that fails one
+  run in three teaches its reader to re-run it.
+
+- `pair_against_baseline` itself is verified to join on the right key, including
+  when the two arms choose different candidates on every request
+  (`two_arms_that_choose_different_candidates_still_pair_on_the_same_requests`).
+  The collapse above is a property of the evidence, not a pairing bug — which is
+  worth having checked, because the symptom is indistinguishable from one.
+
 - `exploration_probability` still defaults to **0.0**, and that default now has a
   measured cost rather than an assumed one. It is a product decision and is left
   to the operator.

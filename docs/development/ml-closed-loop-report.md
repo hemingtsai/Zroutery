@@ -315,7 +315,7 @@ Only items that block `PRODUCTION_READY`.
 | ~~No operator surface for model state~~ | **Now closed (ADR-0007).** `ml::MlStatus` reads live; `GET /v1/ml/status`, `POST /v1/ml/rollback`, `GET /v1/ml/shadow` behind the auth layer; `get_ml_status` / `get_ml_shadow` / `rollback_ml_model` Tauri commands; a panel on the Routing page with the gate's criteria, the promotion history and the replay's measured numbers | — |
 | ~~Durable ML state is opt-in and nothing opts in~~ | **Now closed for the desktop app (ADR-0007).** `Desktop::new` claims `<config_dir>/ml` unless the document names one. Still open for the headless proxy, which has no app directory to claim | A state directory for the headless binary, which is a product decision about where a CLI keeps history |
 | ~~No cross-restart retraining evidence~~ | **Now closed.** `new_outcomes_from_a_new_process_reach_the_next_round_of_learning` runs collect → process ends → retrain → gate → promote → new process serves → retrain again, and asserts round two's body contains round two's requests | — |
-| One-candidate robustness unmeasured | **Partly closed (ADR-0008).** The first fixture configured two providers but gave models to only one. `ml_multi_provider_test.rs` runs three providers on three separate upstreams and measures candidate-set shape directly: `mean_eligible_candidates` 3.00, `distinct_providers` per arm | Still open for *cross-provider promotion*: a model that prefers a different provider is harder to promote, because pairing is on the measured intersection. See §E3 |
+| One-candidate robustness unmeasured | **Partly closed (ADR-0008).** The first fixture configured two providers but gave models to only one. `ml_multi_provider_test.rs` runs three providers on three separate upstreams and measures candidate-set shape directly: `mean_eligible_candidates` 3.00, `distinct_providers` per arm. What remains open is cross-provider *promotion*, and the reason is measured: the comparator a candidate is named against can move its paired set from 2 to 40. See §E3 |
 | The cold-start window is unbounded in principle | Every new process begins with an empty observation store, so the first requests fall back until history accumulates. Measured at 1–2 requests; not characterised as a function of traffic rate | Carry the observation store across restarts, or persist it |
 | The cost axis is degenerate | `mean_cost` reports as `0.00000` for every arm in every fixture, even at 400 prompt and 120 completion tokens with prices differing 9x. Cost carries no discriminative signal, so the 0.1 cost weight in `RewardPolicy` is untested | A fixture whose token counts and prices make cost differences visible at reporting precision |
 | Exploration defaults to zero, which has a measured cost | With `exploration_probability = 0.0` a provider added to the configuration is invisible, permanently. Measured, not assumed: 0 of 60 requests | A product decision, not engineering. Either the default moves, or the cost is documented where an operator will read it before adding a provider |
@@ -474,13 +474,48 @@ choices have no recorded outcome, so the request cannot be paired.
 
 Which means **a model that genuinely prefers a different provider is harder to
 promote than one that agrees with the incumbent** — and the requests that would
-prove the model right are the requests nobody collected. Exploration is what
-breaks this, and it has to be on *before* the promotion attempt.
+prove the model right are the requests nobody collected. Exploration breaks this,
+and it has to be on *before* the promotion attempt.
 
 The gate's behaviour here is correct: `BLOCKED (paired_evidence: 2 against a
 floor of 30)`. The system is honestly reporting that it cannot measure what it
-needs to. Fixing it would mean inventing a policy for unmeasured candidates, which
-is a product decision, so it is recorded rather than guessed at.
+needs to.
+
+### And the comparator is part of the measurement
+
+Sharper than the point above, and measured afterwards. Five bodies at the
+exploration ceiling:
+
+```
+  run  providers  paired: priority  round_robin  lowest_latency  balanced
+    1          2               4           15              38        40
+    2          2               6           11              14        31
+    3          1              40           30               8         1
+    4          2               2            9              17        34
+    5          2               2            7               2        29
+```
+
+Run 3 is the clearest case: with **no** discovery the candidate pairs perfectly
+with `baseline.priority` (40) and not at all with `baseline.balanced` (1). With
+discovery, the reverse. Exploration reached the new provider by displacing
+priority's first pick, so the candidate's measured requests and priority's are
+nearly disjoint; a spreading baseline considers the same candidates and overlaps
+them.
+
+So `baseline.priority` is a **same-provider** choice. Naming it for a candidate
+that discovered a provider tends to produce `BLOCKED (paired_evidence: N)` for a
+candidate that may be perfectly good — and the blocker reads as "not enough data"
+rather than "you compared against the wrong arm".
+
+A sixth run broke even the anti-correlation (discovery *and* `paired(priority)`
+at 31, one over the floor), so this is a strong tendency and not an invariant.
+It is a diagnostic, not an assertion: a test that fails one run in three teaches
+its reader to re-run it.
+
+`pair_against_baseline` itself is verified to join on the right key, including
+when two arms choose different candidates on every request. The collapse is a
+property of the evidence, not a pairing bug — worth having checked, because the
+symptom is indistinguishable from one.
 
 ---
 
