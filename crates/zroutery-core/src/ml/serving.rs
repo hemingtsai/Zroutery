@@ -775,6 +775,7 @@ pub struct MlRouter {
     rankings: AtomicU64,
     fallbacks: AtomicU64,
     explorations: AtomicU64,
+    blind_explorations: AtomicU64,
 }
 
 impl std::fmt::Debug for MlRouter {
@@ -796,6 +797,7 @@ impl MlRouter {
             rankings: AtomicU64::new(0),
             fallbacks: AtomicU64::new(0),
             explorations: AtomicU64::new(0),
+            blind_explorations: AtomicU64::new(0),
         }
     }
 
@@ -967,17 +969,96 @@ impl MlRouter {
             rankings: self.rankings.load(Ordering::Relaxed),
             fallbacks: self.fallbacks.load(Ordering::Relaxed),
             explorations: self.explorations.load(Ordering::Relaxed),
+            blind_explorations: self.blind_explorations.load(Ordering::Relaxed),
             attached: self.is_attached(),
         }
     }
+
+    /// Try an eligible candidate the current plan would not have reached, with no
+    /// model involved.
+    ///
+    /// `None` means the draw did not fire and the caller's plan stands.
+    ///
+    /// # Why this is not inside [`MlRouter::rank`]
+    ///
+    /// Because a model cannot be trained on evidence the router never gathered.
+    /// The dataset is built from outcomes of requests that actually happened, so
+    /// the only candidates it can contain are the ones the deterministic plan
+    /// already reached. A provider sitting at the bottom of the priority order is
+    /// never tried, therefore never measured, therefore never learned about, and
+    /// therefore never preferred — and no amount of retraining breaks that.
+    ///
+    /// Measured on a three-provider fixture: with exploration configured at 30%
+    /// but no model promoted, a provider present in the plan at the lowest
+    /// priority received **zero** requests across sixty, and the model converged
+    /// on a single incumbent. Exploration that requires a promoted model can only
+    /// ever explore what the model already believes in.
+    ///
+    /// So exploration is available whenever the durable state directory is, with
+    /// or without a model. It is counted separately from
+    /// [`MlRouterCounts::explorations`], because a deliberate alternative tried
+    /// with no learned basis is not the same event as one the model chose, and an
+    /// operator reading "the model explored" when no model existed would be told
+    /// something false.
+    pub fn explore_plan(&self, input: &ShadowInput, request_id: &str) -> Option<ExploredPlan> {
+        let exploration = self.exploration();
+        if exploration.probability > EXPLORATION_CEILING {
+            // Refused rather than clamped, for the same reason `rank` refuses it:
+            // a configuration that explores more often than it exploits is a
+            // different policy from the one that was asked for.
+            self.fallbacks.fetch_add(1, Ordering::Relaxed);
+            return None;
+        }
+        let eligible: Vec<String> = input
+            .candidates
+            .iter()
+            .filter(|candidate| candidate.eligible)
+            .map(|candidate| candidate.candidate_id.clone())
+            .collect();
+        let exploitation_pick = input.production_selected.clone();
+        match explore(&exploration, request_id, &exploitation_pick, &eligible) {
+            ExplorationOutcome::Exploit => None,
+            ExplorationOutcome::Explore { candidate_id } => {
+                self.blind_explorations.fetch_add(1, Ordering::Relaxed);
+                let reason = format!(
+                    "explored {candidate_id} instead of {exploitation_pick} to gather evidence \
+                     about it; no model is attached, so there is no learned basis for this choice"
+                );
+                Some(ExploredPlan {
+                    selected: candidate_id,
+                    reason,
+                })
+            }
+        }
+    }
+}
+
+/// A plan reordered by exploration alone.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExploredPlan {
+    /// The candidate to try first.
+    pub selected: String,
+    /// Why, in a sentence an operator can read.
+    pub reason: String,
 }
 
 /// Operational counters for the serving path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MlRouterCounts {
+    /// Requests a model ranked.
     pub rankings: u64,
+    /// Requests where the deterministic plan stood.
     pub fallbacks: u64,
+    /// Deliberate alternatives tried **with a model attached**.
     pub explorations: u64,
+    /// Deliberate alternatives tried **with no model attached**, purely to gather
+    /// evidence about a candidate the current plan never reached.
+    ///
+    /// Counted apart from `explorations` because the two are different claims.
+    /// One says the model chose to try something else; the other says the router
+    /// admitted it knows nothing and went to find out. Reading the second as the
+    /// first is how a mechanism ends up reporting confidence it did not have.
+    pub blind_explorations: u64,
     pub attached: bool,
 }
 

@@ -1073,10 +1073,29 @@ pub struct MlRankingTrace {
     pub reason: String,
     /// Whether an exploration draw moved the selection off the exploitation pick.
     pub explored: bool,
+    /// Whether a model produced this trace at all.
+    ///
+    /// `false` means the router deliberately tried a different eligible candidate
+    /// to gather evidence about it, with no learned basis for the choice and no
+    /// model attached. Recorded rather than inferred from an empty `commit_id`,
+    /// because "the model chose this" and "the router went to find out" are
+    /// different facts and every consumer of this trace has to be able to tell
+    /// them apart.
+    ///
+    /// Defaults to `true`, which is right for every trace written before this
+    /// field existed: those were all model rankings.
+    #[serde(default = "modelled_by_default")]
+    pub modelled: bool,
     /// Candidate identities in the order ML would try them.
     pub order: Vec<String>,
     /// The order the router produced, for comparison.
     pub baseline_order: Vec<String>,
+}
+
+/// The value [`MlRankingTrace::modelled`] takes when it is absent from a stored
+/// document. See the field: every trace predating it was a model ranking.
+fn modelled_by_default() -> bool {
+    true
 }
 
 impl MlRankingTrace {

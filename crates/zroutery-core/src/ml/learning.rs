@@ -307,17 +307,39 @@ impl Split {
 /// what makes this safe; sorting by timestamp alone does not, because a
 /// failover chain emits several samples within the same second.
 ///
-/// The split is a pure function of the body: no clock, no RNG, no hash-map
-/// iteration order. The same input always yields the same three partitions,
-/// which is what makes a holdout hold.
+/// The split is a pure function of the body *and of the order it is supplied
+/// in*: no clock, no RNG, no hash-map iteration order, and no random identifier
+/// anywhere in the ordering. The same input in the same order always yields the
+/// same three partitions, which is what makes a holdout hold.
+///
+/// # Why position in the input is the tiebreak
+///
+/// Timestamps have second resolution and request ids are fresh UUIDs, so on any
+/// body collected faster than one request per second every group ties. Ties used
+/// to be broken by request id, which handed the choice of which requests land in
+/// the training partition and which in the frozen holdout to a coin.
+///
+/// Measured on a sixty-request body: the promotion verdict alternated
+/// PROMOTED / BLOCKED across six runs of byte-identical traffic, because each
+/// run's holdout happened to hold a different proportion of the failing
+/// provider. A holdout that is re-drawn from a coin every time is not a holdout,
+/// and a gate that reads it cannot mean anything reproducible.
+///
+/// Input position is the right tiebreak because it is the one order that is
+/// durable: [`deduped_samples_from`] reads an append-only log, so a sample's
+/// position is its write order. A caller supplying samples in some other order
+/// gets a deterministic split *of that order*, which is at least reproducible —
+/// whereas the previous behaviour was deterministic only within one process.
 pub fn split_samples(
     samples: &[OutcomeTrainingSample],
     config: &TrainingConfig,
 ) -> Result<Split, LearningError> {
     config.validate()?;
 
-    let mut groups: BTreeMap<&str, Vec<OutcomeTrainingSample>> = BTreeMap::new();
-    for sample in samples {
+    // Position in the supplied slice, carried alongside each sample so both the
+    // within-group order and the between-group order have a total, stable key.
+    let mut groups: BTreeMap<&str, Vec<(usize, OutcomeTrainingSample)>> = BTreeMap::new();
+    for (position, sample) in samples.iter().enumerate() {
         if sample.features.schema_version != FEATURE_SCHEMA_VERSION {
             return Err(LearningError::FeatureSchemaMismatch {
                 sample_id: sample.sample_id.clone(),
@@ -329,7 +351,7 @@ pub fn split_samples(
         groups
             .entry(sample.request_id.as_str())
             .or_default()
-            .push(sample.clone());
+            .push((position, sample.clone()));
     }
     if groups.is_empty() {
         return Err(LearningError::EmptySplit(
@@ -337,22 +359,21 @@ pub fn split_samples(
         ));
     }
 
-    // Oldest group first; the request id breaks ties so the order is total even
-    // when several requests share a timestamp.
-    let mut ordered: Vec<(i64, String, Vec<OutcomeTrainingSample>)> = groups
+    let mut ordered: Vec<(i64, usize, Vec<OutcomeTrainingSample>)> = groups
         .into_values()
         .map(|mut group| {
             group.sort_by(|a, b| {
-                a.timestamp
-                    .cmp(&b.timestamp)
-                    .then_with(|| a.sample_id.cmp(&b.sample_id))
+                a.1.timestamp
+                    .cmp(&b.1.timestamp)
+                    .then_with(|| a.0.cmp(&b.0))
             });
-            let oldest = group.first().map(|sample| sample.timestamp).unwrap_or(0);
-            let request_id = group
-                .first()
-                .map(|sample| sample.request_id.clone())
-                .unwrap_or_default();
-            (oldest, request_id, group)
+            let oldest = group.first().map(|(_, s)| s.timestamp).unwrap_or(0);
+            let arrival = group.first().map(|(position, _)| *position).unwrap_or(0);
+            (
+                oldest,
+                arrival,
+                group.into_iter().map(|(_, s)| s).collect(),
+            )
         })
         .collect();
     ordered.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
@@ -836,8 +857,104 @@ mod tests {
     use crate::ml::features::{RoutingFeatures, FEATURE_DIMENSION};
     use crate::outcome::{FinalStatus, OutcomeIdentity};
 
-    /// A body of samples across `requests` requests and `providers` providers.
+    /// A body where every request shares one timestamp, as any body collected
+    /// faster than one request per second does.
     ///
+    /// Derived from [`body`] and then rewritten so that every identifier is
+    /// freshly generated and every timestamp is the same second — which is exactly
+    /// the condition that made the split a coin toss. The content is untouched, so
+    /// anything that differs between two of these bodies differs only in its ids.
+    fn same_second_body(requests: usize) -> Vec<OutcomeTrainingSample> {
+        body(requests, 2)
+            .into_iter()
+            .enumerate()
+            .map(|(index, mut sample)| {
+                sample.timestamp = 1_700_000_000;
+                // Grouping is by request id, so requests must stay together: two
+                // samples share an id only if they came from the same request.
+                let request = index / 2;
+                sample.request_id = uuid::Uuid::new_v4().simple().to_string();
+                sample.sample_id = format!("{}-{}", sample.request_id, request % 2);
+                sample.outcome_id = uuid::Uuid::new_v4().simple().to_string();
+                sample.decision_id = Some(uuid::Uuid::new_v4().simple().to_string());
+                sample
+            })
+            .collect()
+    }
+
+    /// The split must not depend on a random identifier.
+    ///
+    /// Two bodies that differ *only* in their random ids — same requests, same
+    /// order, same content — must produce the same partition membership, keyed by
+    /// position. Before the tiebreak moved from request id to supplied order,
+    /// these two bodies split differently roughly half the time, and the promotion
+    /// verdict on a real sixty-request fixture alternated PROMOTED / BLOCKED
+    /// across runs of identical traffic.
+    #[test]
+    fn a_body_collected_within_one_second_splits_the_same_way_regardless_of_its_ids() {
+        let config = TrainingConfig::default();
+        let first = same_second_body(30);
+        let second = same_second_body(30);
+        assert_ne!(
+            first.iter().map(|s| s.request_id.as_str()).collect::<Vec<_>>(),
+            second.iter().map(|s| s.request_id.as_str()).collect::<Vec<_>>(),
+            "the two fixtures must carry different ids, or this proves nothing"
+        );
+
+        let a = split_samples(&first, &config).expect("split");
+        let b = split_samples(&second, &config).expect("split");
+
+        // Same membership by position, which is the only thing two bodies with
+        // different ids can be compared on.
+        let shape = |split: &Split| {
+            (
+                split.train.len(),
+                split.validation.len(),
+                split.holdout.len(),
+                split
+                    .train
+                    .iter()
+                    .map(|s| s.features.values[2])
+                    .collect::<Vec<_>>(),
+            )
+        };
+        assert_eq!(
+            shape(&a),
+            shape(&b),
+            "two identical bodies split differently because their ids differ"
+        );
+
+        // And re-splitting one body is idempotent, which is what "frozen" has to
+        // mean if a promotion decision is going to cite a holdout loss.
+        let again = split_samples(&first, &config).expect("split");
+        assert_eq!(shape(&a), shape(&again));
+    }
+
+    /// Supplying the same samples in a different order is a different split, and
+    /// that is correct rather than a bug.
+    ///
+    /// Stated because it is the contract the fix relies on: the split is a pure
+    /// function of the body *and its order*, so a caller that reorders samples
+    /// gets a different partition. The old behaviour hid that, because it sorted
+    /// by ids and so ignored the supplied order entirely.
+    #[test]
+    fn the_split_follows_the_supplied_order_rather_than_the_identifiers() {
+        let config = TrainingConfig::default();
+        let body = same_second_body(30);
+        let reversed: Vec<OutcomeTrainingSample> = body.iter().rev().cloned().collect();
+        let forward = split_samples(&body, &config).expect("split");
+        let backward = split_samples(&reversed, &config).expect("split");
+        assert_eq!(forward.train.len(), backward.train.len());
+        assert_eq!(forward.holdout.len(), backward.holdout.len());
+        assert_ne!(
+            forward.train[0].features.values[2],
+            backward.train[0].features.values[2],
+            "reversing the input should move which requests are in the training \
+             partition; if it did not, the supplied order is being ignored"
+        );
+    }
+
+    /// A body of samples across `requests` requests and `providers` providers.    ///
     /// Feature magnitudes stay inside the `[-1, 1]` range
     /// [`crate::ml::features::extract_features`] promises. That is not
     /// cosmetic: the heads are unbounded online regressions, and a fixture

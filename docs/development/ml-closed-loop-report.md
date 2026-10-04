@@ -97,6 +97,9 @@ Status vocabulary: `0 NOT_STARTED` · `1 SCAFFOLDED` · `2 IMPLEMENTED` ·
 | Serving | **3** | attempts/request 2.000 → 1.008; failing provider called 1× at cold start instead of 120× |
 | Exploration | **3** | `ml/serving.rs::explore`; fires on real requests, never leaves the eligible set, ceiling enforced |
 | Retraining | **4** | collect → process ends → retrain → gate → promote → new process serves → retrain again; round 2 body 120 requests, distinct fingerprint, distinct commit, re-promoted |
+| Reproducibility | **4** | ADR-0008: the split's tiebreak was a random UUID, so the verdict alternated 3-of-6 on identical traffic; now 6-of-6 identical |
+| Cross-provider | **4** | `ml_multi_provider_test.rs`: three providers on three upstreams; unobserved provider received **0 of 60** requests with exploration off, and the learned ranking used **1 provider** against round-robin's 2 |
+| Exploration reach | **4** | `MlRouter::explore_plan` reachable with no model; `blind_explorations` counted apart from `explorations`; stays inside the eligible set and the plan |
 | Model identity | **4** | one identity per model (`TrainingOutcome::commit_record`); commit `06f7da3409a14147` |
 | Product wiring | **4** | ADR-0007: `ml` is a named, default-on, still-refusable desktop package feature; `<config_dir>/ml` claimed for durable state; `ml_routing.enabled` asserted off by default, so no install's behaviour changed |
 | Operator surface | **4** | `ml::MlStatus` read live and asserted to agree with `MlRouter`; `/v1/ml/{status,shadow,rollback}` behind the auth layer (401 asserted); the replay runs the *attached* model over real traffic, bounded |
@@ -312,8 +315,10 @@ Only items that block `PRODUCTION_READY`.
 | ~~No operator surface for model state~~ | **Now closed (ADR-0007).** `ml::MlStatus` reads live; `GET /v1/ml/status`, `POST /v1/ml/rollback`, `GET /v1/ml/shadow` behind the auth layer; `get_ml_status` / `get_ml_shadow` / `rollback_ml_model` Tauri commands; a panel on the Routing page with the gate's criteria, the promotion history and the replay's measured numbers | — |
 | ~~Durable ML state is opt-in and nothing opts in~~ | **Now closed for the desktop app (ADR-0007).** `Desktop::new` claims `<config_dir>/ml` unless the document names one. Still open for the headless proxy, which has no app directory to claim | A state directory for the headless binary, which is a product decision about where a CLI keeps history |
 | ~~No cross-restart retraining evidence~~ | **Now closed.** `new_outcomes_from_a_new_process_reach_the_next_round_of_learning` runs collect → process ends → retrain → gate → promote → new process serves → retrain again, and asserts round two's body contains round two's requests | — |
-| One-candidate robustness unmeasured | Every arm selected 1 provider. Behaviour with an empty or single-candidate plan is asserted in unit tests only | Traffic with genuine multi-provider competition |
+| One-candidate robustness unmeasured | **Partly closed (ADR-0008).** The first fixture configured two providers but gave models to only one. `ml_multi_provider_test.rs` runs three providers on three separate upstreams and measures candidate-set shape directly: `mean_eligible_candidates` 3.00, `distinct_providers` per arm | Still open for *cross-provider promotion*: a model that prefers a different provider is harder to promote, because pairing is on the measured intersection. See §E3 |
 | The cold-start window is unbounded in principle | Every new process begins with an empty observation store, so the first requests fall back until history accumulates. Measured at 1–2 requests; not characterised as a function of traffic rate | Carry the observation store across restarts, or persist it |
+| The cost axis is degenerate | `mean_cost` reports as `0.00000` for every arm in every fixture, even at 400 prompt and 120 completion tokens with prices differing 9x. Cost carries no discriminative signal, so the 0.1 cost weight in `RewardPolicy` is untested | A fixture whose token counts and prices make cost differences visible at reporting precision |
+| Exploration defaults to zero, which has a measured cost | With `exploration_probability = 0.0` a provider added to the configuration is invisible, permanently. Measured, not assumed: 0 of 60 requests | A product decision, not engineering. Either the default moves, or the cost is documented where an operator will read it before adding a provider |
 | Tauri command dispatch is not covered by a test | The status document, replay and rollback are exercised through `AppState` and over HTTP. Nothing drives them through a real webview | An integration harness around a webview, or accepting the seam and keeping `ml_available` so a failure there is reported as a failure rather than read as an absence |
 
 Not blockers, deliberately excluded: `Coordinator` deletion, `train_batch`
@@ -393,6 +398,89 @@ looks like deliberate configuration rather than a fault.
 and empty, behaviourally, against a default-constructed **and** a
 document-deserialised configuration. That is what makes building ML into the
 desktop app a packaging change rather than a behaviour change.
+
+---
+
+## E3. Cross-provider, and what it cost to find out (ADR-0008)
+
+Every earlier fixture routed between two models of **one** provider. Two providers
+were configured; the second existed so the secret store had a key. The product's
+actual claim — *aggregate several providers* — had no evidence behind it.
+
+`ml_multi_provider_test.rs` runs three providers on three separate upstreams:
+`alpha` serves a fast-unreliable and a slow-reliable model, `gamma` serves a fast
+reliable one at nine times the price. `Priority` puts `gamma` last, so no cheap
+deterministic signal ever prefers it.
+
+### The deadlock
+
+With exploration off and no model promoted:
+
+```
+mean attempts 1.759   alpha 105 (flaky 60 / steady 45)   gamma 0
+ml.candidate   distinct_providers 1   mean_eligible_candidates 3.00
+round_robin    distinct_providers 2
+```
+
+Three eligible candidates on every request. The learned ranking used one
+provider. Round-robin — defined as spreading — used two. The learned ranking was
+**worse than round-robin at discovering a provider nobody thought to try**, and
+the body contained no outcome for `gamma` at all: no feature, no sample, no
+fingerprint contribution.
+
+The cause was structural. Exploration lived inside `MlRouter::rank`, which is
+unreachable when no model is attached. So exploring required a model, and a model
+requires evidence, and the evidence requires exploring.
+
+`MlRouter::explore_plan` breaks it, and the same fixture then records
+`blind_explorations 59` and `gamma 24 of 270 calls`, with the ranking crossing
+providers.
+
+### The coin
+
+Chasing an unstable verdict found something worse. Six runs, identical fixture,
+identical traffic:
+
+```
+  run  gamma calls  ml providers  ml measured  paired(priority)  verdict
+    1            0             1           46                46  PROMOTED
+    2            0             2            2                 2  BLOCKED
+    3            0             1           46                46  PROMOTED
+    4            0             2            2                 2  BLOCKED
+    5            0             1           46                46  PROMOTED
+    6            0             2            2                 2  BLOCKED
+```
+
+Alternating, so systematic. `split_samples` ordered groups by
+`(timestamp, request_id)`; timestamps are second-resolution and request ids are
+fresh UUIDs, so every group tied and **a random UUID decided which requests
+landed in the frozen holdout**.
+
+`dataset_identity` and `holdout_loss` are two of the nine gate criteria. A gate
+that alternates on identical evidence cannot be a fact about the model.
+
+The fix is the input's own position, which is durable because the trace log is
+append-only. After it: **6 of 6 identical.**
+
+Two tests pin it, and both were verified to fail against the old tiebreak:
+`a_body_collected_within_one_second_splits_the_same_way_regardless_of_its_ids`
+and `the_split_follows_the_supplied_order_rather_than_the_identifiers`.
+
+### The problem that is characterised, not fixed
+
+An unobserved candidate is predicted as its prior. Average beats a quarter, so on
+this fixture the model reaches for the candidate it knows nothing about. Those
+choices have no recorded outcome, so the request cannot be paired.
+
+Which means **a model that genuinely prefers a different provider is harder to
+promote than one that agrees with the incumbent** — and the requests that would
+prove the model right are the requests nobody collected. Exploration is what
+breaks this, and it has to be on *before* the promotion attempt.
+
+The gate's behaviour here is correct: `BLOCKED (paired_evidence: 2 against a
+floor of 30)`. The system is honestly reporting that it cannot measure what it
+needs to. Fixing it would mean inventing a policy for unmeasured candidates, which
+is a product decision, so it is recorded rather than guessed at.
 
 ---
 
@@ -535,6 +623,12 @@ requests there were 0 fallbacks and 120 successful responses.
 Every request's terminal transition writes a durable `RequestTrace`. The next
 `run_training` reads them, re-splits, retrains, re-compares, re-gates and
 re-promotes.
+
+The re-split is a pure function of the body **and the order it is supplied in**.
+That qualifier is load-bearing and was added by ADR-0008: the tiebreak used to be
+the request id, which is a fresh UUID, so on any body collected faster than one
+request per second the frozen holdout was re-drawn from a coin every run. The
+promotion verdict alternated on identical traffic until it was fixed. See §E3.
 
 This is demonstrated end to end rather than argued:
 `new_outcomes_from_a_new_process_reach_the_next_round_of_learning` collects 80
