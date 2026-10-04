@@ -18,6 +18,18 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
+[features]
+# `ml` puts the learned model in the routing path: the durable trace log, the
+# active-model store and the ML ranking of the provider plan.
+#
+# It is on by default and can still be turned off with `--no-default-features`,
+# which restores exactly the pre-ADR-0006 behaviour: a desktop binary that
+# contains no ML stack and routes deterministically. That is worth keeping as a
+# build rather than deleting, because "ship without learning" is a legitimate
+# choice for someone who does not want their routing history on disk.
+default = ["ml"]
+ml = ["zroutery-core/ml"]
+
 [dependencies]
 zroutery-core = { path = "../crates/zroutery-core" }
 

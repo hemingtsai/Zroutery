@@ -25,11 +25,13 @@ Zroutery from ever producing the evidence that would justify enabling ML, and th
 companion source gates actively forbade the closed loop from ever reaching
 production.
 
-ADR-0006 reverses that prohibition.  The desktop application still compiles no
-ML and ``ml_routing.enabled`` still defaults to off, so the shipped product's
-behaviour is unchanged.  What changed is that ML is no longer *forbidden* from
-the desktop path, and therefore the binary no longer has to be scanned to prove
-its absence.
+ADR-0006 reverses that prohibition.  ``ml_routing.enabled`` still defaults to off
+and no default configuration has a state directory, so an installation that has
+never promoted a model routes exactly as it did before; both of those are now
+asserted behaviourally in ``config.rs`` rather than by reading a manifest.  What
+changed is that ML is no longer *forbidden* from the desktop path, the desktop
+app depends on ``zroutery-core/ml``, and therefore the binary no longer has to be
+scanned to prove its absence — it now contains the model path on purpose.
 
 What replaced it
 ----------------
@@ -54,6 +56,19 @@ binary contains no model".  It is "a promoted model can be loaded, served,
 observed and rolled back in the desktop process" — a runtime assertion, not a
 string scan.
 
+That is now the state of affairs: ML *is* enabled in the desktop package, and the
+runtime assertion exists rather than being aspirational.  See
+``a_rollback_takes_effect_in_the_live_process_and_not_only_on_disk`` in
+``ml_closed_loop_test.rs``, which promotes two models into a *running* process
+and requires the rollback to reach the router, not only the durable pointer.  It
+was verified to fail against a pointer-only rollback.  The operator surface that
+makes this reachable from the desktop app — the status document, the on-demand
+replay and the rollback action — is covered by
+``the_operator_surface_is_served_over_http_and_behind_the_auth_layer`` and
+``the_status_document_describes_the_process_that_is_actually_serving``.  So the
+remaining gap is narrow and stated rather than assumed: those tests exercise the
+core the desktop app embeds, not a Tauri command dispatch through a webview.
+
 Deliberate behaviour of the retired entry point
 -----------------------------------------------
 
@@ -63,6 +78,13 @@ with a passing exit code it would falsely suggest the check still runs, and left
 failing it would block every release on an assertion nobody believes any more.
 ``--self-test`` still genuinely exercises the scanner against its fixtures,
 because a scanner that is never exercised rots, and this one may be revived.
+
+The step was also removed from ``.github/workflows/ci.yml`` rather than left
+parked.  Its premise inverted when the desktop package gained the feature — the
+binary is now *supposed* to contain the ML serving path — so a live byte scan
+would be asserting the opposite of the truth.  What replaced it there is
+``cargo check -p zroutery --no-default-features``, which keeps "ship without
+learning" a build someone can still choose.
 
 The scanner implementation, the forbidden-symbol list and ``self_test`` are
 otherwise unchanged, so a future decision to re-enable the check is a change to

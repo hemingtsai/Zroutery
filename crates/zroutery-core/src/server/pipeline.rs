@@ -325,6 +325,9 @@ pub(super) async fn handle_chat(
     // candidate and every observation, and a deployment with neither the shadow
     // nor an active model has no use for the result, so paying for it on every
     // request would be a cost for a record nothing would keep.
+    // Built only when something will read it, and in the non-`ml` build there is
+    // nothing that can: the shadow and the ranking are both behind the feature,
+    // so the snapshot is not taken at all and no feature vector is extracted.
     #[cfg(feature = "ml")]
     let decision_snapshot = if state.shadow().enabled() || state.ml_routing().is_attached() {
         routing_decision.as_ref().map(|decision| {
@@ -340,6 +343,7 @@ pub(super) async fn handle_chat(
     } else {
         None
     };
+    #[cfg(feature = "ml")]
     let shadow_input = decision_snapshot.clone();
     // shadow-block-end
 

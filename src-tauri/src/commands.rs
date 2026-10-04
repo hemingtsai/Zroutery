@@ -7,6 +7,8 @@ use tauri::{AppHandle, Manager, State};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use zroutery_core::config::{AppConfig, ProviderConfig, SecretStore};
 use zroutery_core::upstream::{DiscoveredModel, Upstream};
+#[cfg(feature = "ml")]
+use zroutery_core::{MlStatus, ReloadOutcome, ShadowAnalysisStatus};
 
 use crate::ccswitch;
 use crate::logs::LogBuffer;
@@ -38,6 +40,59 @@ pub fn get_activity(desktop: State<'_, Arc<Desktop>>) -> Cmd<Activity> {
 #[tauri::command]
 pub fn get_logs(logs: State<'_, LogBuffer>) -> Cmd<Vec<String>> {
     Ok(logs.lines())
+}
+
+/// What the learned model is doing, for the Routing tab.
+///
+/// Read-only and cheap: it reads live counters and the stored pointer, and
+/// installs nothing. The same document is served over HTTP at `/ml/status`, so
+/// an operator without the dashboard can answer the same question.
+///
+/// Registered only in an ML build, which is why the dashboard must consult
+/// [`Snapshot::ml_available`] rather than discovering the absence by calling
+/// this and reading an error: to the webview a command that does not exist and
+/// a command that failed look identical, and "this build has no learning stack"
+/// is a fact worth stating instead of a failure worth guessing at.
+#[cfg(feature = "ml")]
+#[tauri::command]
+pub fn get_ml_status(desktop: State<'_, Arc<Desktop>>) -> Cmd<MlStatus> {
+    Ok(desktop.ml_status())
+}
+
+/// Replay the serving model over recorded history.
+///
+/// Bounded by `limit` and capped again inside, so this is safe to call from a
+/// button press rather than only from a batch job.
+#[cfg(feature = "ml")]
+#[tauri::command]
+pub fn get_ml_shadow(
+    desktop: State<'_, Arc<Desktop>>,
+    limit: Option<usize>,
+) -> Cmd<ShadowAnalysisStatus> {
+    Ok(desktop.ml_shadow_analysis(limit.unwrap_or(5_000)))
+}
+
+/// Roll back to the previously promoted model.
+///
+/// The freshly read status travels with the outcome so the dashboard cannot
+/// render a state the process is not in, which is the entire failure mode a
+/// cosmetic rollback would have.
+#[cfg(feature = "ml")]
+#[tauri::command]
+pub fn rollback_ml_model(desktop: State<'_, Arc<Desktop>>) -> Cmd<MlRollback> {
+    let outcome = desktop.rollback_active_model();
+    Ok(MlRollback {
+        outcome,
+        status: desktop.ml_status(),
+    })
+}
+
+/// What a rollback did, and the status that resulted.
+#[cfg(feature = "ml")]
+#[derive(serde::Serialize)]
+pub struct MlRollback {
+    pub outcome: ReloadOutcome,
+    pub status: MlStatus,
 }
 
 /// The token in plain text, for the dashboard's explicit "Reveal" action. Every

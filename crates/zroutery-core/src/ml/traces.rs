@@ -487,6 +487,68 @@ impl TraceLog {
         Ok(traces)
     }
 
+    /// Read the most recent `limit` records, in write order.
+    ///
+    /// Bounded on purpose. [`TraceLog::load`] reads everything, which is what
+    /// training wants and what an operator pressing a button in a desktop app
+    /// absolutely does not: a year of traffic is hundreds of millions of records
+    /// and loading them to show a summary would take the app down.
+    ///
+    /// The file is walked backwards to find the offset of the `limit`-th line
+    /// from the end, so the cost is the tail plus one line, not the file. What
+    /// that means in practice is that the bound is on the last `limit` records
+    /// and not on the bytes read to reach them.
+    ///
+    /// Corrupt lines are an error here exactly as in [`TraceLog::load`], and the
+    /// line number reported is the real one in the whole file rather than an
+    /// offset into the window, so an operator can go and look at it.
+    pub fn tail(&self, limit: usize) -> Result<Vec<RequestTrace>, TraceError> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let bytes = match std::fs::read(&self.path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(source) => {
+                return Err(TraceError::Io {
+                    path: self.path.display().to_string(),
+                    source,
+                })
+            }
+        };
+        // Find where the last `limit` lines begin: the newline that ends the
+        // line before them. Counting backwards and stopping as soon as the
+        // window is found means the whole file is never scanned, so a large
+        // body costs roughly the size of the tail.
+        let mut start = 0usize;
+        let mut newlines_seen = 0usize;
+        for index in (0..bytes.len()).rev() {
+            if bytes[index] == b'\n' {
+                newlines_seen += 1;
+                if newlines_seen > limit {
+                    start = index + 1;
+                    break;
+                }
+            }
+        }
+        let window = String::from_utf8_lossy(&bytes[start..]).into_owned();
+        let first_line_in_file = bytes[..start].iter().filter(|byte| **byte == b'\n').count();
+        let mut traces = Vec::new();
+        for (offset, line) in window.lines().enumerate() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            let trace: RequestTrace =
+                serde_json::from_str(line).map_err(|error| TraceError::Corrupt {
+                    path: self.path.display().to_string(),
+                    line: first_line_in_file + offset + 1,
+                    reason: error.to_string(),
+                })?;
+            traces.push(trace);
+        }
+        Ok(traces)
+    }
+
     /// Load only the traces, discarding their samples, for counting and
     /// fingerprinting a body without materialising every feature vector twice.
     pub fn count(&self) -> Result<usize, TraceError> {
@@ -748,6 +810,71 @@ mod tests {
         let on_disk = log.fingerprint().expect("fingerprint");
         let in_memory = DatasetFingerprint::of(&samples_from(&traces));
         assert_eq!(on_disk, in_memory);
+    }
+
+    #[test]
+    fn a_tail_returns_the_most_recent_records_in_write_order() {
+        // The window is bounded but the order is not negotiable: an operator
+        // reading a tail is reading a history, and a history that runs backwards
+        // is a worse lie than no history at all.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let log = TraceLog::open(dir.path()).expect("open");
+        for index in 0..10 {
+            log.append(&trace(&format!("r{index}"))).expect("append");
+        }
+        let tail = log.tail(3).expect("tail");
+        let ids: Vec<&str> = tail.iter().map(|t| t.request_id.as_str()).collect();
+        assert_eq!(ids, ["r7", "r8", "r9"]);
+    }
+
+    #[test]
+    fn a_tail_larger_than_the_body_returns_everything() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let log = TraceLog::open(dir.path()).expect("open");
+        log.append(&trace("only")).expect("append");
+        let tail = log.tail(1000).expect("tail");
+        assert_eq!(tail.len(), 1);
+        assert_eq!(tail[0].request_id, "only");
+    }
+
+    #[test]
+    fn a_tail_of_nothing_reads_nothing() {
+        // `tail(0)` returning the whole body would be the worst possible
+        // answer to "read me no records": it is the one input an operator can
+        // type that must not become an unbounded read.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let log = TraceLog::open(dir.path()).expect("open");
+        for index in 0..5 {
+            log.append(&trace(&format!("r{index}"))).expect("append");
+        }
+        assert!(log.tail(0).expect("tail").is_empty());
+    }
+
+    #[test]
+    fn a_tail_of_an_absent_file_is_an_empty_body_not_an_error() {
+        // The same answer a fresh installation gets from `load`, so an operator
+        // who has not served a request yet is told there is no history rather
+        // than shown an I/O failure they cannot act on.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let log = TraceLog::open(dir.path()).expect("open");
+        assert!(log.tail(10).expect("tail").is_empty());
+    }
+
+    #[test]
+    fn a_tail_reports_a_corrupt_line_by_its_position_in_the_whole_file() {
+        // The reported line number has to be the real one, or the operator goes
+        // to look at a line that is fine.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let log = TraceLog::open(dir.path()).expect("open");
+        for index in 0..4 {
+            log.append(&trace(&format!("r{index}"))).expect("append");
+        }
+        let body = std::fs::read_to_string(log.path()).expect("read");
+        std::fs::write(log.path(), format!("{body}not json\n")).expect("write");
+        match log.tail(1) {
+            Err(TraceError::Corrupt { line, .. }) => assert_eq!(line, 5),
+            other => panic!("expected a corrupt report for line 5, got {other:?}"),
+        }
     }
 
     #[test]

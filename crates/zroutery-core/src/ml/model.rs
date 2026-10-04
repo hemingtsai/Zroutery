@@ -197,7 +197,11 @@ pub fn train_batch(
 
 /// Binary classifier for request success prediction.
 /// Uses online logistic regression with per-feature adaptive learning rate (AdaGrad).
-#[derive(Debug)]
+///
+/// `Clone` is for the operator surface: analysing the model that is serving
+/// needs the same weights traffic is being ranked by, taken as a snapshot
+/// rather than reloaded or re-trained.
+#[derive(Debug, Clone)]
 pub struct SuccessModel {
     /// Feature weights.
     weights: Vec<f64>,
@@ -376,6 +380,7 @@ impl RoutingModel for SuccessModel {
 
 /// Predicts expected total latency in ms.
 /// Uses online linear regression with EWMA for the residual.
+#[derive(Debug, Clone)]
 pub struct LatencyModel {
     weights: Vec<f64>,
     bias: f64,
@@ -500,6 +505,7 @@ impl RoutingModel for LatencyModel {
 
 /// Predicts expected TTFT in ms.
 /// Uses online linear regression with EWMA for the residual.
+#[derive(Debug, Clone)]
 pub struct TtftModel {
     weights: Vec<f64>,
     bias: f64,
@@ -623,6 +629,7 @@ impl RoutingModel for TtftModel {
 
 /// Predicts expected cost.
 /// Uses online linear regression with EWMA for the residual.
+#[derive(Debug, Clone)]
 pub struct CostModel {
     weights: Vec<f64>,
     bias: f64,
