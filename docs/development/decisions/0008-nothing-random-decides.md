@@ -225,6 +225,23 @@ explicitly alongside it.
 
 ### Open, and stated rather than assumed
 
+- A **billed failure** is unattributed. A 5xx carries no usage, so nothing in the
+  error says what that failed call cost, and the all-failed buffered path settles
+  with `Settlement::default()`. If a provider bills errors, that spend is invisible
+  to the ledger and to the cost axis alike. Fixing it means carrying usage out of
+  the failure path, which is a protocol change rather than a routing one.
+
+  What is *not* a defect: a stream that ends mid-answer after reporting usage.
+  `Error::InterruptedStream` carries it, the streaming path keeps it
+  deliberately, and it reaches the same settlement, so the attempt is priced.
+  Verified by `a_truncated_stream_that_reported_usage_is_charged_to_its_attempt`,
+  which fails with its own message when the per-attempt pricing is removed.
+
+- The **cost head is never checked**. The axis carries data and the arms separate
+  on it, but nothing trains a model on cost and checks the head predicts it. In
+  these fixtures cost is a deterministic function of a model's price, so a head
+  that ignored cost entirely would score identically.
+
 - Whether the engine's 0.1 switch threshold is crossed for an unobserved
   candidate still depends on measured latency, which is wall clock. The *split* is
   now deterministic; this decision is not, and conflating the two would be its own

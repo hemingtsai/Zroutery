@@ -320,6 +320,8 @@ Only items that block `PRODUCTION_READY`.
 | One-candidate robustness unmeasured | **Partly closed (ADR-0008).** The first fixture configured two providers but gave models to only one. `ml_multi_provider_test.rs` runs three providers on three separate upstreams and measures candidate-set shape directly: `mean_eligible_candidates` 3.00, `distinct_providers` per arm. What remains open is cross-provider *promotion*, and the reason is measured: the comparator a candidate is named against can move its paired set from 2 to 40. See §E3 |
 | The cold-start window is unbounded in principle | Every new process begins with an empty observation store, so the first requests fall back until history accumulates. Measured at 1–2 requests; not characterised as a function of traffic rate | Carry the observation store across restarts, or persist it |
 | The cost axis is inert | **Closed.** `Attempt` had no cost field and `Targets::from_attempt` read `None` unconditionally, so per-attempt spend was never recorded, every attempt-scoped sample was cost-free, and `mean_cost` was `0.0000000000` for every arm — which made `RewardPolicy::cost_weight` and the gate's cost criterion both read a constant. Now recorded and discriminating — §E4 | — |
+| A billed failure is unattributed | A 5xx carries no usage, so nothing in the error says what the failed call cost. If a provider bills errors, that spend is invisible to the ledger and to the cost axis | Carry usage out of the failure path — an upstream protocol change, not a routing one |
+| The cost head is never checked | The axis now carries data and the arms separate on it, but no test trains a model on cost and checks the head predicts it. Cost is a deterministic function of price in these fixtures, so a head that ignored it would score the same | A fixture where cost varies for reasons other than the model's price |
 | The frozen holdout was a content cluster | **Closed (ADR-0008).** `project_cohorts` sorted by `CohortOrderKey` and the holdout was a contiguous tail of that, so which decisions were held out depended on tie-breaking rather than on time; the gate refused a fifth of runs with `SingleServedCandidate` — §E5 | — |
 | Exploration defaults to zero, which has a measured cost | With `exploration_probability = 0.0` a provider added to the configuration is invisible, permanently. Measured, not assumed: 0 of 60 requests | A product decision, not engineering. Either the default moves, or the cost is documented where an operator will read it before adding a provider |
 | Tauri command dispatch is not covered by a test | The status document, replay and rollback are exercised through `AppState` and over HTTP. Nothing drives them through a real webview | An integration harness around a webview, or accepting the seam and keeping `ml_available` so a failure there is reported as a failure rather than read as an absence |
@@ -642,7 +644,40 @@ dependence is asserted explicitly beside it by
 **Not claimed:** that this ever produced a bad promotion decision. It produced a
 gate that refused roughly a fifth of the time for a reason that had nothing to do
 with the model. That is a false negative rather than a false positive — the safe
-direction — but it would have blocked a release on an unrelated ground.
+direction — but it would have blocked a release on unrelated grounds.
+
+### What "cost" means here, and one suspicion that was wrong
+
+`Targets::from_attempt` prices an attempt from what that attempt's own settlement
+carries. Two consequences worth stating precisely:
+
+- **A failed attempt with no reported usage is unattributed, not free.** A 5xx
+  carries no usage, so there is nothing to price. `None` is the honest answer; zero
+  would claim the call was free.
+- **A failed attempt that _did_ report usage is priced.** A stream that ends
+  mid-answer after the upstream reported tokens produces
+  `Error::InterruptedStream { usage }`, the streaming path keeps that usage
+  explicitly, and it reaches the same settlement — so the attempt carries the cost
+  it incurred. `a_truncated_stream_that_reported_usage_is_charged_to_its_attempt`
+  asserts the attempt figure and the request total agree, and was verified to fail
+  with exactly that message when the per-attempt pricing call is removed.
+
+I suspected the all-failed buffered path, which passes `Settlement::default()`,
+was dropping spend, and went looking. It is not a defect: a buffered HTTP failure
+carries no usage to drop, and the stream path — the only place usage can exist on a
+failure — already preserves it. Three probes before reporting something turned out
+to be wrong is cheaper than one wrong commit.
+
+### Still not measured
+
+- **A failover chain's billed failures.** If a provider bills a 5xx, that spend is
+  invisible to the ledger *and* to the cost axis, because nothing in the error
+  carries the tokens. Fixing it means getting usage out of the failure path, which
+  is an upstream protocol change rather than a routing one.
+- **Whether the cost head learns anything.** The axis now carries data and the
+  arms separate on it, but no test trains a model on cost and checks the head
+  predicts it. The fixture's cost is a deterministic function of a model's price,
+  so a head that ignored cost entirely would score just as well.
 
 ---
 
