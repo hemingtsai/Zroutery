@@ -1632,8 +1632,7 @@ mod tests {
     fn the_reported_utility_carries_the_cost_the_model_predicted() {
         let ensemble = cost_separated_ensemble();
         let router = {
-            let engine =
-                DecisionEngine::new(CoordinatorConfig::default(), RewardPolicy::default());
+            let engine = DecisionEngine::new(CoordinatorConfig::default(), RewardPolicy::default());
             let router = MlRouter::new(engine, ExplorationConfig::default());
             router.attach(predictor_for(&ensemble, FIXTURE_EVENTS));
             router
@@ -1665,7 +1664,10 @@ mod tests {
                 .find(|(candidate_id, _)| candidate_id == id)
                 .map(|(_, total)| *total)
                 .unwrap_or_else(|| {
-                    panic!("the ranking reported no utility for {id}: {:?}", plan.utilities)
+                    panic!(
+                        "the ranking reported no utility for {id}: {:?}",
+                        plan.utilities
+                    )
                 });
 
             // `expected` here was built from a prediction of {} dollars, so the

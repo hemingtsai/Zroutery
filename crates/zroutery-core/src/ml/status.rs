@@ -138,7 +138,11 @@ impl BlindCandidate {
         let mut blind: Vec<Self> = candidates
             .into_iter()
             .filter(|(model_id, provider_id)| {
-                observations.get(model_id, provider_id).health.total_requests == 0
+                observations
+                    .get(model_id, provider_id)
+                    .health
+                    .total_requests
+                    == 0
             })
             .map(|(model_id, provider_id)| Self {
                 model_id: model_id.to_string(),
@@ -226,9 +230,9 @@ impl PromotionRoundStatus {
 
     /// Whether the gate authorised a model, regardless of whether it was installed.
     pub fn gate_authorised(&self) -> bool {
-        self.decision
-            .as_ref()
-            .is_some_and(|decision| decision.verdict == crate::ml::promotion::PromotionVerdict::Promoted)
+        self.decision.as_ref().is_some_and(|decision| {
+            decision.verdict == crate::ml::promotion::PromotionVerdict::Promoted
+        })
     }
 
     /// Whether a model is serving as a result of this round.
@@ -302,11 +306,9 @@ impl MlStatus {
                  routing is deterministic",
                 model.commit_id
             ),
-            (None, true) => {
-                "ml_routing.enabled is set but no model is attached; \
+            (None, true) => "ml_routing.enabled is set but no model is attached; \
                  routing is deterministic"
-                    .to_string()
-            }
+                .to_string(),
             (None, false) => "ML routing off; routing is deterministic".to_string(),
         }
     }
@@ -512,7 +514,10 @@ mod tests {
     fn a_fresh_installation_says_so_plainly() {
         let snapshot = status(None, false);
         assert!(!snapshot.is_routing_with_a_model());
-        assert_eq!(snapshot.headline(), "ML routing off; routing is deterministic");
+        assert_eq!(
+            snapshot.headline(),
+            "ML routing off; routing is deterministic"
+        );
     }
 
     #[test]

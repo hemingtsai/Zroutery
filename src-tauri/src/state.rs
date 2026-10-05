@@ -891,7 +891,8 @@ mod tests {
     }
 
     /// A prober that answers from a policy instead of touching a socket.
-    struct PolicyProber {        running: bool,
+    struct PolicyProber {
+        running: bool,
     }
 
     impl ListenerProber for PolicyProber {
@@ -1059,27 +1060,27 @@ mod tests {
             let (desktop, dir) = desktop_with(config_on(old, "zr-occupied"));
             desktop.start().await?;
 
-        let squatter = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let busy = squatter.local_addr().unwrap().port();
+            let squatter = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let busy = squatter.local_addr().unwrap().port();
 
-        let mut next = (*desktop.core.config()).clone();
-        next.server.port = busy;
-        let err = desktop.apply_config(next).await.unwrap_err();
-        assert!(err.contains("cannot bind"), "{err}");
+            let mut next = (*desktop.core.config()).clone();
+            next.server.port = busy;
+            let err = desktop.apply_config(next).await.unwrap_err();
+            assert!(err.contains("cannot bind"), "{err}");
 
-        let seen = observe(&desktop, &dir).await;
-        assert!(seen.running);
-        // A refused save writes nothing: the in-memory configuration is the
-        // one the process started with, and the dashboard re-reads that.
-        assert_eq!(seen.persisted, None, "a refused save must not write");
-        assert_eq!(seen.memory, old);
-        seen.serves(old);
-        assert_eq!(desktop.snapshot().await.config.server.port, old);
+            let seen = observe(&desktop, &dir).await;
+            assert!(seen.running);
+            // A refused save writes nothing: the in-memory configuration is the
+            // one the process started with, and the dashboard re-reads that.
+            assert_eq!(seen.persisted, None, "a refused save must not write");
+            assert_eq!(seen.memory, old);
+            seen.serves(old);
+            assert_eq!(desktop.snapshot().await.config.server.port, old);
 
-        drop(squatter);
-        desktop.stop().await;
-        std::fs::remove_dir_all(dir).ok();
-        Ok(())
+            drop(squatter);
+            desktop.stop().await;
+            std::fs::remove_dir_all(dir).ok();
+            Ok(())
         })
         .await
         .expect("the gateway must come up on a port nobody took first");
@@ -1097,24 +1098,24 @@ mod tests {
             );
             desktop.start().await?;
 
-        // A host name that cannot resolve is not bindable, exactly like an
-        // occupied port: the address itself is the problem.
-        let mut next = (*desktop.core.config()).clone();
-        next.server.host = "host.invalid".into();
-        let err = desktop.apply_config(next).await.unwrap_err();
-        assert!(err.contains("cannot bind"), "{err}");
+            // A host name that cannot resolve is not bindable, exactly like an
+            // occupied port: the address itself is the problem.
+            let mut next = (*desktop.core.config()).clone();
+            next.server.host = "host.invalid".into();
+            let err = desktop.apply_config(next).await.unwrap_err();
+            assert!(err.contains("cannot bind"), "{err}");
 
-        let warning = desktop.warning().unwrap();
-        assert!(warning.contains("was not changed"), "{warning}");
+            let warning = desktop.warning().unwrap();
+            assert!(warning.contains("was not changed"), "{warning}");
 
-        let seen = observe(&desktop, &dir).await;
-        assert!(seen.running);
-        assert_eq!(seen.memory, old, "the in-memory configuration must be kept");
-        seen.serves(old);
+            let seen = observe(&desktop, &dir).await;
+            assert!(seen.running);
+            assert_eq!(seen.memory, old, "the in-memory configuration must be kept");
+            seen.serves(old);
 
-        desktop.stop().await;
-        std::fs::remove_dir_all(dir).ok();
-        Ok(())
+            desktop.stop().await;
+            std::fs::remove_dir_all(dir).ok();
+            Ok(())
         })
         .await
         .expect("the gateway must come up on a port nobody took first");
@@ -1256,27 +1257,27 @@ mod tests {
                 desktop_with_prober(config_on(old, "zr-rollback"), Box::new(PermissiveProber));
             desktop.start().await?;
 
-        let target = advertised_port();
-        let mut next = (*desktop.core.config()).clone();
-        next.server.port = target;
-        // The probe is permissive, so the real bind is what fails: the squatter
-        // plays the process that took the port first.
-        let squatter = std::net::TcpListener::bind(("127.0.0.1", target)).unwrap();
-        let err = desktop.apply_config(next).await.unwrap_err();
-        drop(squatter);
-        assert!(
-            err.contains("previous gateway was restored"),
-            "the message must say the old listener came back: {err}"
-        );
+            let target = advertised_port();
+            let mut next = (*desktop.core.config()).clone();
+            next.server.port = target;
+            // The probe is permissive, so the real bind is what fails: the squatter
+            // plays the process that took the port first.
+            let squatter = std::net::TcpListener::bind(("127.0.0.1", target)).unwrap();
+            let err = desktop.apply_config(next).await.unwrap_err();
+            drop(squatter);
+            assert!(
+                err.contains("previous gateway was restored"),
+                "the message must say the old listener came back: {err}"
+            );
 
-        let seen = observe(&desktop, &dir).await;
-        assert!(seen.running, "the previous gateway must be running again");
-        seen.agrees(old);
-        seen.serves(old);
+            let seen = observe(&desktop, &dir).await;
+            assert!(seen.running, "the previous gateway must be running again");
+            seen.agrees(old);
+            seen.serves(old);
 
-        desktop.stop().await;
-        std::fs::remove_dir_all(dir).ok();
-        Ok(())
+            desktop.stop().await;
+            std::fs::remove_dir_all(dir).ok();
+            Ok(())
         })
         .await
         .expect("the gateway must come up on a port nobody took first");

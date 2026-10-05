@@ -41,8 +41,7 @@ use zroutery_core::config::{
 use zroutery_core::server::{AppState, ServerHandle};
 
 use zroutery_core::ml::{
-    run_promotion_round, ActiveModelStore, PromotionConfig, PromotionVerdict, RoundConfig,
-    TraceLog,
+    run_promotion_round, ActiveModelStore, PromotionConfig, PromotionVerdict, RoundConfig, TraceLog,
 };
 
 const TOKEN: &str = "zr-multi-token";
@@ -166,7 +165,9 @@ impl Upstream {
             .filter(|(model, _)| model.starts_with(prefix))
             .map(|(model, count)| {
                 let behaviour = self.models[model.as_str()];
-                (0..*count).filter(|index| behaviour.fails_at(*index)).count()
+                (0..*count)
+                    .filter(|index| behaviour.fails_at(*index))
+                    .count()
             })
             .sum()
     }
@@ -177,7 +178,8 @@ impl Upstream {
     }
 
     /// Every model name this upstream was actually asked for.
-    fn model_names(&self) -> Vec<String> {        self.per_model
+    fn model_names(&self) -> Vec<String> {
+        self.per_model
             .lock()
             .expect("per_model")
             .keys()
@@ -279,8 +281,8 @@ fn provider(id: &str, name: &str, upstream: SocketAddr) -> ProviderConfig {
 /// what forces the trade-off to be real rather than "the best provider on every
 /// axis at once".
 fn model(provider_id: &str, name: &str, priority: i32, pricing: (f64, f64)) -> ModelEntry {
-    let mut entry =
-        ModelEntry::for_upstream(provider_id, name, Some(ModelTier::Standard)).with_priority(priority);
+    let mut entry = ModelEntry::for_upstream(provider_id, name, Some(ModelTier::Standard))
+        .with_priority(priority);
     entry.pricing = Some(Pricing::new("USD", pricing.0, pricing.1));
     entry
 }
@@ -452,8 +454,6 @@ fn promotable_gate() -> PromotionConfig {
     }
 }
 
-
-
 // ---------------------------------------------------------------------------
 // Findings
 // ---------------------------------------------------------------------------
@@ -590,8 +590,7 @@ async fn a_provider_the_plan_never_reaches_is_never_measured_and_is_reported() {
         let counts = harness.state.ml_routing().counts();
 
         assert_eq!(
-            counts.blind_explorations,
-            0,
+            counts.blind_explorations, 0,
             "exploration was configured at zero, so nothing should have explored"
         );
         assert_eq!(
@@ -652,7 +651,8 @@ async fn a_provider_the_plan_never_reaches_is_never_measured_and_is_reported() {
         body.arm("ml.candidate").mean_eligible_candidates
     );
     assert_eq!(
-        body.arm("ml.candidate").ineligible_selections, 0,
+        body.arm("ml.candidate").ineligible_selections,
+        0,
         "every candidate was eligible, so nothing was excluded for being a stranger"
     );
 
@@ -669,7 +669,8 @@ async fn a_provider_the_plan_never_reaches_is_never_measured_and_is_reported() {
     // is the finding: a learned ranking is worse than round-robin at discovering
     // a provider nobody happened to try.
     assert_eq!(
-        body.arm("baseline.round_robin").distinct_providers, 2,
+        body.arm("baseline.round_robin").distinct_providers,
+        2,
         "round robin is defined as spreading, so it should have used both providers"
     );
 }
@@ -731,7 +732,8 @@ async fn exploration_starves_the_evidence_a_promotion_needs() {
         };
         let dir = tempfile::tempdir().expect("tempdir");
         {
-            let harness = Harness::start(config_for(&topology, dir.path(), false, probability)).await;
+            let harness =
+                Harness::start(config_for(&topology, dir.path(), false, probability)).await;
             harness.drive(2 * PHASE_REQUESTS, &upstreams).await;
         }
         learn(dir.path(), "exploration-starvation")
@@ -845,8 +847,7 @@ async fn exploration_without_a_model_stays_inside_the_plan_and_keeps_requests_su
     };
 
     let dir = tempfile::tempdir().expect("tempdir");
-    let harness =
-        Harness::start(config_for(&topology, dir.path(), false, MAX_EXPLORATION)).await;
+    let harness = Harness::start(config_for(&topology, dir.path(), false, MAX_EXPLORATION)).await;
     // `drive` asserts a 200 on every request, so reaching the end is the
     // success-rate claim.
     harness.drive(2 * PHASE_REQUESTS, &upstreams).await;
@@ -872,7 +873,8 @@ async fn exploration_without_a_model_stays_inside_the_plan_and_keeps_requests_su
     // the decision-time eligibility the draw was allowed to choose from.
     let body = learn(dir.path(), "explored-safety");
     assert_eq!(
-        body.arm("ml.candidate").ineligible_selections, 0,
+        body.arm("ml.candidate").ineligible_selections,
+        0,
         "a ranking selected a candidate the decision marked ineligible"
     );
 }
@@ -956,7 +958,10 @@ async fn asking_for_a_verdict_does_not_install_anything() {
             false,
             Some(format!("judge-{attempt}")),
         );
-        assert_eq!(status.reason, None, "attempt {attempt}: the round could not run");
+        assert_eq!(
+            status.reason, None,
+            "attempt {attempt}: the round could not run"
+        );
 
         assert!(
             status.gate_authorised(),
@@ -1017,7 +1022,10 @@ async fn asking_for_the_install_attaches_the_model_to_the_live_router() {
         Some("install-me".into()),
     );
     assert_eq!(status.reason, None, "the round could not run");
-    assert!(status.gate_authorised(), "the gate should have authorised this body");
+    assert!(
+        status.gate_authorised(),
+        "the gate should have authorised this body"
+    );
     assert!(
         status.is_serving(),
         "install was asked for and the gate agreed, so a model should be serving: \
@@ -1058,9 +1066,11 @@ async fn a_verdict_names_what_the_learned_policy_chose() {
     let harness = Harness::start(config_for(&topology, dir.path(), true, 0.0)).await;
     harness.drive(AUTHORISING_REQUESTS, &upstreams).await;
 
-    let status = harness
-        .state
-        .ml_run_promotion_round(authorising_round_config(), false, Some("choices".into()));
+    let status = harness.state.ml_run_promotion_round(
+        authorising_round_config(),
+        false,
+        Some("choices".into()),
+    );
     assert_eq!(
         status.reason, None,
         "the round could not run over a body this test just served: {:?}",
@@ -1105,9 +1115,11 @@ async fn a_verdict_names_what_the_learned_policy_chose() {
     }
     // And the answer is stable, because the split is seeded and the replay is
     // deterministic. A dashboard polling this endpoint should not see it move.
-    let again = harness
-        .state
-        .ml_run_promotion_round(authorising_round_config(), false, Some("choices".into()));
+    let again = harness.state.ml_run_promotion_round(
+        authorising_round_config(),
+        false,
+        Some("choices".into()),
+    );
     assert_eq!(
         again.reason, None,
         "the second round could not run: {:?}",
@@ -1335,9 +1347,7 @@ async fn print_how_often_the_verdict_moves() {
             body.decision.verdict.as_str(),
         );
     }
-    println!(
-        "\n  promoted {promoted} of {REPEATS}; distinct providers per run: {providers:?}\n"
-    );
+    println!("\n  promoted {promoted} of {REPEATS}; distinct providers per run: {providers:?}\n");
 }
 
 /// Print what it costs to make a promotion comparison measurable when the model

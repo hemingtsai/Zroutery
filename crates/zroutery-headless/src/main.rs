@@ -53,11 +53,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         while let Some(arg) = iter.next() {
             match arg.as_str() {
                 "--state-dir" => {
-                    state_dir = PathBuf::from(
-                        iter.next()
-                            .ok_or("--state-dir needs a path")?
-                            .clone(),
-                    )
+                    state_dir =
+                        PathBuf::from(iter.next().ok_or("--state-dir needs a path")?.clone())
                 }
                 "--requests" => {
                     requests_per_phase = iter
@@ -73,9 +70,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .parse()
                         .map_err(|e| format!("--exploration: {e}"))?
                 }
-                other => {
-                    return Err(format!("unknown `--experiment` argument `{other}`").into())
-                }
+                other => return Err(format!("unknown `--experiment` argument `{other}`").into()),
             }
         }
         let report = experiment::run(&state_dir, requests_per_phase, exploration).await?;

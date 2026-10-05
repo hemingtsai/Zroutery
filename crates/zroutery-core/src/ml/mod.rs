@@ -21,8 +21,8 @@ pub mod model;
 pub mod model_identity;
 pub mod offline_gate;
 pub mod promotion;
-pub mod round;
 pub mod reward;
+pub mod round;
 pub mod serving;
 pub mod shadow;
 pub mod shadow_analysis;
@@ -127,11 +127,11 @@ pub use promotion::{
     comparison_was_improved, PromotionConfig, PromotionCriterion, PromotionDecision, PromotionGate,
     PromotionVerdict,
 };
-pub use round::{run_promotion_round, PromotionRound, RoundConfig, RoundError};
 pub use reward::{
     compute_utility, Action, ActionGuard, AttemptReward, PredictionBundle, RequestReward,
     RewardComputer, RewardPolicy, UtilityBreakdown,
 };
+pub use round::{run_promotion_round, PromotionRound, RoundConfig, RoundError};
 pub use serving::{
     candidate_ids, explore, ActiveModel, ActiveModelAction, ActiveModelAuditEntry,
     ActiveModelStore, ActivePredictor, AppliedRanking, ExplorationConfig, ExplorationOutcome,
@@ -146,17 +146,17 @@ pub use shadow::{
 pub use shadow_analysis::{
     analyse, ShadowAnalysis, ShadowEvidence, ShadowGap, ShadowKind, ShadowVerdictRecord,
 };
-pub use status::{
-    MlStatus, PromotedModelStatus, PromotionHistoryEntry, ReloadOutcome, ShadowAnalysisStatus,
-    ShadowStatus,
-};
-pub use status::BlindCandidate;
 pub use statistics::{
     holm_adjust, ln_gamma, mcnemar_exact_log_p, mcnemar_exact_p, measure_release_evidence,
     normal_quantile, required_decisions, wilson_interval, BaselinePolicy, Criterion,
     EvidenceSupport, Family, FamilyMember, FamilyMemberKind, Interval, PairedComparison,
     StatisticalConfig, StatisticalInput, StatisticalRefusal, StatisticalRelease, StatisticsError,
     STATISTICAL_SCOPE, UNMEASURABLE_LABEL,
+};
+pub use status::BlindCandidate;
+pub use status::{
+    MlStatus, PromotedModelStatus, PromotionHistoryEntry, ReloadOutcome, ShadowAnalysisStatus,
+    ShadowStatus,
 };
 pub use traces::{
     contained_append, deduped_samples_from, samples_from, DatasetFingerprint, RequestTrace,

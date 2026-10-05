@@ -315,8 +315,8 @@ impl std::fmt::Debug for MlPolicy {
 
 impl MlPolicy {
     pub fn new(outcome: &TrainingOutcome, reward_policy: RewardPolicy) -> Self {
-        let ensemble = ModelEnsemble::load_all(&outcome.checkpoint)
-            .unwrap_or_else(|_| ModelEnsemble::new());
+        let ensemble =
+            ModelEnsemble::load_all(&outcome.checkpoint).unwrap_or_else(|_| ModelEnsemble::new());
         Self::from_ensemble(ensemble, reward_policy)
     }
 

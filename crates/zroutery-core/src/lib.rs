@@ -94,9 +94,10 @@ pub use ml::{
     AttemptReward, CanonicalTrainingSample, ComparisonReport, DatasetStore, DatasetTrainingSample,
     Evaluator, ExplorationConfig, FeatureContext, FrozenHoldout, MlRouter, MlStatus,
     OutcomeDatasetSample, OutcomeTrainingSample, PredictionMetrics, PromotedModelStatus,
-    PromotionDecision, PromotionGate, PromotionVerdict, Recommendation, ReloadOutcome, RequestReward,
-    RewardComputer, RewardPolicy, RoutingDeltas, RoutingFeatures, RoutingMetrics, SampleBuilder,
-    SampleScope, ShadowAnalysisStatus, Targets, FEATURE_DIMENSION, FEATURE_SCHEMA_VERSION,
+    PromotionDecision, PromotionGate, PromotionVerdict, Recommendation, ReloadOutcome,
+    RequestReward, RewardComputer, RewardPolicy, RoutingDeltas, RoutingFeatures, RoutingMetrics,
+    SampleBuilder, SampleScope, ShadowAnalysisStatus, Targets, FEATURE_DIMENSION,
+    FEATURE_SCHEMA_VERSION,
 };
 pub use observation::{
     HealthState, LatencyObservation, ObservationFreshness, ObservationStore, RuntimeObservation,

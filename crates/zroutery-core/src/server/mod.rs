@@ -697,10 +697,9 @@ impl AppState {
                 tracing::info!("no model is promoted; routing is deterministic");
                 crate::ml::ReloadOutcome::ok(false, None)
             }
-            Err(error) => crate::ml::ReloadOutcome::fault(
-                self.ml_routing.is_attached(),
-                error.to_string(),
-            ),
+            Err(error) => {
+                crate::ml::ReloadOutcome::fault(self.ml_routing.is_attached(), error.to_string())
+            }
         };
         outcome
     }
@@ -820,8 +819,10 @@ impl AppState {
                     // part an operator asked for, so the decision travels back with
                     // the fault attached. No reload: the install failed, so the
                     // pointer is whatever it was before this call.
-                    let mut status =
-                        crate::ml::status::PromotionRoundStatus::from_round(&round, current_state());
+                    let mut status = crate::ml::status::PromotionRoundStatus::from_round(
+                        &round,
+                        current_state(),
+                    );
                     status.error = Some(format!(
                         "the gate authorised this model but it could not be installed: {error}"
                     ));
@@ -856,20 +857,19 @@ impl AppState {
     pub fn ml_shadow_analysis(&self, limit: usize) -> crate::ml::ShadowAnalysisStatus {
         const MAX_RECORDS: usize = 50_000;
         let limit = limit.min(MAX_RECORDS);
-        let traces = match self.traces.as_ref() {
-            None => {
-                return crate::ml::ShadowAnalysisStatus::unavailable(
+        let traces =
+            match self.traces.as_ref() {
+                None => return crate::ml::ShadowAnalysisStatus::unavailable(
                     0,
                     "no durable state directory is configured, so there is no history to replay",
-                )
-            }
-            Some(log) => match log.tail(limit) {
-                Ok(traces) => traces,
-                Err(error) => {
-                    return crate::ml::ShadowAnalysisStatus::unavailable(0, error.to_string())
-                }
-            },
-        };
+                ),
+                Some(log) => match log.tail(limit) {
+                    Ok(traces) => traces,
+                    Err(error) => {
+                        return crate::ml::ShadowAnalysisStatus::unavailable(0, error.to_string())
+                    }
+                },
+            };
         let read = traces.len();
         if read == 0 {
             return crate::ml::ShadowAnalysisStatus::unavailable(
@@ -892,8 +892,7 @@ impl AppState {
             }
         };
         let reward_policy = self.config().ml_routing_reward_policy();
-        let policy =
-            crate::ml::MlPolicy::from_ensemble(ensemble, reward_policy.clone());
+        let policy = crate::ml::MlPolicy::from_ensemble(ensemble, reward_policy.clone());
         let evidence = crate::ml::ShadowEvidence::from_policy(&traces, &policy, BTreeMap::new());
         let analysis = crate::ml::analyse(&traces, &evidence, &reward_policy);
         crate::ml::ShadowAnalysisStatus {
@@ -919,21 +918,23 @@ impl AppState {
             Some(store) => {
                 let pointer = store.read_pointer().ok().flatten();
                 let current = pointer.map(|pointer| pointer.current);
-                let active = current.as_ref().map(|model| crate::ml::PromotedModelStatus {
-                    model_id: model.model_id.clone(),
-                    commit_id: model.commit_id.clone(),
-                    verdict: model.promotion.verdict,
-                    dataset_fingerprint: model.promotion.dataset_fingerprint.to_string(),
-                    fitted_partition_fingerprint: model
-                        .promotion
-                        .fitted_partition_fingerprint
-                        .to_string(),
-                    gate_config_identity: model.promotion.gate_config_identity.clone(),
-                    required_baseline: model.promotion.baseline.clone(),
-                    paired_requests: model.promotion.paired_requests,
-                    holdout_loss: model.promotion.holdout_loss,
-                    promoted_at: model.promoted_at,
-                });
+                let active = current
+                    .as_ref()
+                    .map(|model| crate::ml::PromotedModelStatus {
+                        model_id: model.model_id.clone(),
+                        commit_id: model.commit_id.clone(),
+                        verdict: model.promotion.verdict,
+                        dataset_fingerprint: model.promotion.dataset_fingerprint.to_string(),
+                        fitted_partition_fingerprint: model
+                            .promotion
+                            .fitted_partition_fingerprint
+                            .to_string(),
+                        gate_config_identity: model.promotion.gate_config_identity.clone(),
+                        required_baseline: model.promotion.baseline.clone(),
+                        paired_requests: model.promotion.paired_requests,
+                        holdout_loss: model.promotion.holdout_loss,
+                        promoted_at: model.promoted_at,
+                    });
                 let decision = current.map(|model| model.promotion.clone());
                 let history = store
                     .audit()
@@ -1243,10 +1244,7 @@ pub fn build_app(state: Arc<AppState>) -> AxumRouter {
             .route(&format!("{prefix}/ml/status"), get(ml_status))
             .route(&format!("{prefix}/ml/shadow"), get(ml_shadow))
             .route(&format!("{prefix}/ml/rollback"), post(ml_rollback))
-        .route(
-            &format!("{prefix}/ml/promote"),
-            post(ml_promote),
-        );
+            .route(&format!("{prefix}/ml/promote"), post(ml_promote));
     }
 
     let mut app = api

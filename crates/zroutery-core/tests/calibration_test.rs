@@ -26,11 +26,11 @@
 use zroutery_core::failure::FailureClass;
 use zroutery_core::feedback::DataOrigin;
 use zroutery_core::ml::calibration::{
-    measure_emitted, measure_marginal, project_cohorts, run_calibration,
-    AcceptanceTolerances, CalibrationConfig, CalibrationError, CalibrationMeasure,
-    CalibrationVerdict, CandidateCalibration, CandidateInput, CohortContext, DecisionCohort,
-    DegeneracyReason, DriftConfig, DriftVerdict, EmittedDecision, FitConfig, HoldoutConfig,
-    KWayCalibrator, MarginalView, PartitionKind, ReliabilityBin, ReliabilityConfig, UnrankedReason,
+    measure_emitted, measure_marginal, project_cohorts, run_calibration, AcceptanceTolerances,
+    CalibrationConfig, CalibrationError, CalibrationMeasure, CalibrationVerdict,
+    CandidateCalibration, CandidateInput, CohortContext, DecisionCohort, DegeneracyReason,
+    DriftConfig, DriftVerdict, EmittedDecision, FitConfig, HoldoutConfig, KWayCalibrator,
+    MarginalView, PartitionKind, ReliabilityBin, ReliabilityConfig, UnrankedReason,
     DEFAULT_PROBABILITY_FLOOR, DISTRIBUTION_ROLE,
 };
 use zroutery_core::ml::dataset::{
@@ -716,7 +716,12 @@ fn the_holdout_is_the_later_slice_rather_than_a_content_cluster() {
         slice
             .iter()
             .filter_map(|cohort| cohort.served())
-            .map(|identity| (identity.provider().to_string(), identity.model().to_string()))
+            .map(|identity| {
+                (
+                    identity.provider().to_string(),
+                    identity.model().to_string(),
+                )
+            })
             .collect::<std::collections::BTreeSet<_>>()
     };
 
