@@ -436,6 +436,17 @@ struct PhaseReport {
     /// Subtracting makes the comparison about routing cost instead.
     wall_ms: f64,
     /// `wall_ms` minus the total simulated upstream sleep.
+    ///
+    /// **This is not the ML's cost, and reading it as such is a mistake this
+    /// harness has already made once.** The fake upstreams share a process with
+    /// the client, so every upstream attempt is an in-process HTTP round trip that
+    /// the subtraction does not remove. The measured symptom of that: the phase
+    /// with no model attached came out *more* expensive (19.7ms) than the phase
+    /// with one (9.1ms), because `collect` takes longer fallback chains. A cost
+    /// that falls when work is added is not a measurement of that work.
+    ///
+    /// What it does measure honestly is this harness's own per-request cost, which
+    /// is worth knowing before attributing anything to it. Report §E14.
     overhead_ms: f64,
     /// Requests the client saw succeed end to end.
     ok: usize,
@@ -839,11 +850,13 @@ impl Report {
                     .unwrap_or("none")
             ));
             out.push_str(&format!("    regime: {}\n", phase.regime.join(", ")));
-            // `overhead` is the only figure here that is attributable to this
-            // process: wall time minus the environment's own known sleeps, per
-            // request. It is what a router's cost actually looks like to a caller.
+            // Labelled `process_overhead` rather than `overhead` on purpose. It is
+            // wall time minus the environment's known sleeps, so it is this
+            // process's cost — which includes the in-process fake upstreams and is
+            // NOT the ML's cost. A shorter label invited exactly that reading and
+            // produced a wrong number; see the field's documentation.
             out.push_str(&format!(
-                "    wall={:.0}ms  simulated_upstream={:.0}ms  overhead={:.0}ms ({:.3}ms/request)\n",
+                "    wall={:.0}ms  simulated_upstream={:.0}ms  process_overhead={:.0}ms ({:.3}ms/request, NOT ml cost)\n",
                 phase.wall_ms,
                 phase.wall_ms - phase.overhead_ms,
                 phase.overhead_ms,

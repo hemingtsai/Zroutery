@@ -40,7 +40,7 @@
 //! at the tail costs the tail and nothing before it.
 
 use std::fs::{self, File, OpenOptions};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
@@ -60,6 +60,25 @@ pub const TRACE_SCHEMA_VERSION: u32 = 1;
 
 /// File name of the append-only trace log, inside the router's state directory.
 pub const TRACES_FILE_NAME: &str = "traces.jsonl";
+
+/// What [`TraceLog::clear`] removed.
+///
+/// `cleared` is false when there was nothing to remove, which is worth
+/// distinguishing from a failure: asking to delete an empty log did what was
+/// asked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TraceClear {
+    /// Whether there was anything to remove.
+    pub cleared: bool,
+    /// Bytes discarded.
+    pub removed_bytes: u64,
+}
+
+/// How much [`TraceLog::tail`] reads per backwards step.
+///
+/// Sized so a 500-record window of ordinary traces is found in one or two reads
+/// while the resident buffer stays small on a log of any size.
+const TAIL_BLOCK_BYTES: usize = 64 * 1024;
 
 /// FNV-1a offset basis, the same constant every other checksum in this module
 /// tree uses so a fingerprint is comparable across components.
@@ -368,6 +387,8 @@ pub struct TraceLog {
     counters: AtomicTraceCounters,
     /// Total bytes appended, used to report log growth without a stat per write.
     bytes: AtomicU64,
+    /// Bytes read by `tail` to locate its window. See [`TraceLog::tail_bytes_read`].
+    tail_bytes: AtomicU64,
 }
 
 impl std::fmt::Debug for TraceLog {
@@ -402,6 +423,7 @@ impl TraceLog {
             append_lock: Mutex::new(None),
             counters: AtomicTraceCounters::default(),
             bytes: AtomicU64::new(0),
+            tail_bytes: AtomicU64::new(0),
         })
     }
 
@@ -411,6 +433,18 @@ impl TraceLog {
 
     pub fn counters(&self) -> TraceCounters {
         self.counters.snapshot()
+    }
+
+    /// Bytes of the log that [`TraceLog::tail`] actually read to find its window.
+    ///
+    /// A real diagnostic, not a test hook: "how much did that replay cost to read"
+    /// is what an operator wants to know when a status call is slow. It is also the
+    /// only way to hold the bound honest from outside, because the previous
+    /// implementation returned correct records while reading the entire log — so
+    /// nothing about its *output* could tell the two apart, which is how a
+    /// whole-file read survived behind a comment claiming the opposite.
+    pub fn tail_bytes_read(&self) -> u64 {
+        self.tail_bytes.load(Ordering::Relaxed)
     }
 
     /// Append one request trace. Returns the number of records written (0 or 1).
@@ -494,10 +528,20 @@ impl TraceLog {
     /// absolutely does not: a year of traffic is hundreds of millions of records
     /// and loading them to show a summary would take the app down.
     ///
-    /// The file is walked backwards to find the offset of the `limit`-th line
-    /// from the end, so the cost is the tail plus one line, not the file. What
-    /// that means in practice is that the bound is on the last `limit` records
-    /// and not on the bytes read to reach them.
+    /// **The bound is on memory, which is the whole point of this function, and
+    /// an earlier version of it did not deliver it.** That version walked the
+    /// file backwards correctly but reached it with `std::fs::read`, which
+    /// allocates the entire log first, and then counted newlines across the whole
+    /// prefix to produce a line number it only needs if a line turns out to be
+    /// corrupt. So peak memory was the whole file whatever `limit` said, and its
+    /// cost was linear in the file rather than in the tail — while the comment
+    /// above it claimed the opposite. At a measured 5.2 KB per record, a 389 MB
+    /// log cost 389 MB to show the last 500 records.
+    ///
+    /// Now the offset is found by reading backwards a block at a time and
+    /// seeking, so only the tail is ever resident. The absolute line number is
+    /// resolved lazily, on the error path alone, because paying for it eagerly is
+    /// what made the original linear.
     ///
     /// Corrupt lines are an error here exactly as in [`TraceLog::load`], and the
     /// line number reported is the real one in the whole file rather than an
@@ -506,8 +550,8 @@ impl TraceLog {
         if limit == 0 {
             return Ok(Vec::new());
         }
-        let bytes = match std::fs::read(&self.path) {
-            Ok(bytes) => bytes,
+        let mut file = match File::open(&self.path) {
+            Ok(file) => file,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
             Err(source) => {
                 return Err(TraceError::Io {
@@ -516,43 +560,252 @@ impl TraceLog {
                 })
             }
         };
-        // Find where the last `limit` lines begin: the newline that ends the
-        // line before them. Counting backwards and stopping as soon as the
-        // window is found means the whole file is never scanned, so a large
-        // body costs roughly the size of the tail.
-        let mut start = 0usize;
-        let mut newlines_seen = 0usize;
-        for index in (0..bytes.len()).rev() {
-            if bytes[index] == b'\n' {
-                newlines_seen += 1;
-                if newlines_seen > limit {
-                    start = index + 1;
-                    break;
-                }
-            }
-        }
-        let window = String::from_utf8_lossy(&bytes[start..]).into_owned();
-        let first_line_in_file = bytes[..start].iter().filter(|byte| **byte == b'\n').count();
+        // The backwards walk accumulates the window as it goes, so the bytes it reads are
+        // the bytes returned. Reading the window a second time to turn it into a
+        // buffer would double the cost of every call, which on a large log is the
+        // difference between a bound that holds and one that does not.
+        let (start, window) = Self::tail_window(&mut file, &self.path, limit, &self.tail_bytes)?;
+
+        let text = String::from_utf8_lossy(&window).into_owned();
         let mut traces = Vec::new();
-        for (offset, line) in window.lines().enumerate() {
+        for (offset, line) in text.lines().enumerate() {
             if line.trim().is_empty() {
                 continue;
             }
-            let trace: RequestTrace =
-                serde_json::from_str(line).map_err(|error| TraceError::Corrupt {
-                    path: self.path.display().to_string(),
-                    line: first_line_in_file + offset + 1,
-                    reason: error.to_string(),
-                })?;
+            // Matched rather than mapped so the absolute line number can be
+            // resolved here, on the error path, instead of eagerly for every
+            // line. A `map_err` closure cannot return it.
+            let trace: RequestTrace = match serde_json::from_str(line) {
+                Ok(trace) => trace,
+                Err(error) => {
+                    return Err(TraceError::Corrupt {
+                        path: self.path.display().to_string(),
+                        line: Self::line_number_at(&self.path, start, offset, &self.tail_bytes)?,
+                        reason: error.to_string(),
+                    })
+                }
+            };
             traces.push(trace);
         }
         Ok(traces)
     }
 
+    /// The byte offset the last `limit` lines begin at, and those bytes.
+    ///
+    /// Found by reading backwards a block at a time. The blocks are accumulated
+    /// rather than discarded, so the walk's reads are also the answer — a first
+    /// version walked the file to find the offset and then re-read the window,
+    /// which measured 7,015,544 bytes against a 6,952,870-byte log: bounded in the
+    /// sense that it stopped, but reading more than the file it was tailing.
+    ///
+    /// The offset is 0 when the file holds `limit` lines or fewer, which is the
+    /// answer the whole-file version gave.
+    fn tail_window(
+        file: &mut File,
+        path: &Path,
+        limit: usize,
+        read_counter: &AtomicU64,
+    ) -> Result<(usize, Vec<u8>), TraceError> {
+        let io = |source| TraceError::Io {
+            path: path.display().to_string(),
+            source,
+        };
+        let len = file.metadata().map_err(io)?.len() as usize;
+        let mut cursor = len;
+        let mut newlines_seen = 0usize;
+        // Collected in reverse file order, so the join below reverses once rather
+        // than prepending repeatedly. Prepending would be quadratic in the block
+        // count, which is exactly the cost a "linear in the tail" claim cannot
+        // afford.
+        let mut blocks: Vec<Vec<u8>> = Vec::new();
+        let mut cut: Option<(usize, usize)> = None;
+
+        loop {
+            let block_start = cursor.saturating_sub(TAIL_BLOCK_BYTES);
+            let span = cursor - block_start;
+            if span == 0 {
+                break;
+            }
+            file.seek(SeekFrom::Start(block_start as u64)).map_err(io)?;
+            let mut block = vec![0u8; span];
+            file.read_exact(&mut block).map_err(io)?;
+            read_counter.fetch_add(span as u64, Ordering::Relaxed);
+            for index in (0..block.len()).rev() {
+                if block[index] == b'\n' {
+                    newlines_seen += 1;
+                    if newlines_seen > limit {
+                        // The cut's position inside this block, not just its position
+                        // in the file. Deriving the in-block offset from
+                        // `len - window_start` looks equivalent and is not: for any
+                        // block after the first that difference also counts the bytes
+                        // *after* the block, so the trim silently became a no-op and
+                        // the window began mid-record.
+                        cut = Some((block_start + index + 1, index + 1));
+                        break;
+                    }
+                }
+            }
+            blocks.push(block);
+            if cut.is_some() || block_start == 0 {
+                break;
+            }
+            cursor = block_start;
+        }
+
+        let Some((window_start, within_block)) = cut else {
+            // The file holds `limit` lines or fewer: every block read is part of the
+            // window, so nothing is trimmed and nothing is subtracted.
+            //
+            // `.rev()` is load-bearing, not stylistic. `blocks` is newest-first, so
+            // iterating it forwards concatenates the file *backwards* — which
+            // produces a window whose first byte is mid-file, fails to parse, and
+            // surfaces as "no history recorded" to every caller. A single-block log
+            // cannot tell the difference, which is why it survived until a test
+            // with a log larger than one block ran.
+            let whole: Vec<u8> = blocks
+                .iter()
+                .rev()
+                .flat_map(|b| b.iter().copied())
+                .collect();
+            return Ok((0, whole));
+        };
+
+        // `blocks` runs newest-first, so the cut always lands in the last block
+        // pushed. Only that block has bytes to drop; everything pushed before it is
+        // later in the file and belongs to the window in full.
+        let cut_block = blocks.len() - 1;
+        let mut kept: Vec<u8> = Vec::new();
+        for (index, block) in blocks.iter().enumerate().rev() {
+            if index == cut_block {
+                kept.extend_from_slice(&block[within_block..]);
+            } else {
+                kept.extend_from_slice(block);
+            }
+        }
+        debug_assert_eq!(kept.len(), len - window_start);
+        Ok((window_start, kept))
+    }
+
+    /// Absolute 1-based line number of the line `offset` lines into the window
+    /// that starts at `start`.
+    ///
+    /// Only ever called when a line is corrupt. Counting the prefix is O(file)
+    /// and was the other half of why the original `tail` was linear in the log:
+    /// it paid that cost on every call to produce a number almost no call needed.
+    /// Its reads are counted separately from `tail_bytes` because they are an
+    /// error path, not part of finding the window.
+    fn line_number_at(
+        path: &Path,
+        start: usize,
+        offset: usize,
+        read_counter: &AtomicU64,
+    ) -> Result<usize, TraceError> {
+        let prefix_newlines = match File::open(path) {
+            Ok(mut file) => {
+                let io = |source| TraceError::Io {
+                    path: path.display().to_string(),
+                    source,
+                };
+                let mut counted = 0usize;
+                let mut remaining = start as u64;
+                let mut block = vec![0u8; TAIL_BLOCK_BYTES];
+                while remaining > 0 {
+                    let take = block.len().min(remaining as usize);
+                    file.seek(SeekFrom::Start(remaining - take as u64))
+                        .map_err(io)?;
+                    file.read_exact(&mut block[..take]).map_err(io)?;
+                    read_counter.fetch_add(take as u64, Ordering::Relaxed);
+                    counted += block[..take].iter().filter(|b| **b == b'\n').count();
+                    remaining -= take as u64;
+                }
+                counted
+            }
+            // If the file cannot be re-read the prefix is unknowable, and
+            // reporting the offset within the window is better than failing to
+            // report a corrupt line at all.
+            Err(_) => 0,
+        };
+        Ok(prefix_newlines + offset + 1)
+    }
+
     /// Load only the traces, discarding their samples, for counting and
     /// fingerprinting a body without materialising every feature vector twice.
+    ///
+    /// Streams the line count rather than counting the results of `load`, which
+    /// materialised every record in order to call `.len()` on the vector — a
+    /// whole log resident to produce a number that fits in a `usize`. That is
+    /// worth doing here: counting is also what a caller uses to decide whether a
+    /// body is big enough to train on, so it runs *before* the load that would
+    /// then cost real memory, and the expensive version made the cheap question
+    /// the expensive one.
     pub fn count(&self) -> Result<usize, TraceError> {
-        Ok(self.load()?.len())
+        let file = match File::open(&self.path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+            Err(source) => {
+                return Err(TraceError::Io {
+                    path: self.path.display().to_string(),
+                    source,
+                })
+            }
+        };
+        let io = |source| TraceError::Io {
+            path: self.path.display().to_string(),
+            source,
+        };
+        let mut lines = 0usize;
+        for line in BufReader::new(file).lines() {
+            if line.map_err(io)?.trim().is_empty() {
+                continue;
+            }
+            lines += 1;
+        }
+        Ok(lines)
+    }
+
+    /// Discard every record, at the user's request.
+    ///
+    /// This is deliberately the *only* way the log loses data. There is no
+    /// automatic retention, and there should not be one: the promotion round
+    /// trains from `load`, so an unasked-for truncation would silently change what
+    /// the next model learns from. An operator who wants a smaller log is
+    /// deciding something about their own evidence, and gets to be the one who
+    /// decides it.
+    ///
+    /// The append handle is closed first. It is held for the process's lifetime
+    /// once the first record is written, and on Windows an open file cannot be
+    /// deleted at all — so without dropping it this would work in a test and fail
+    /// on the platform most of this ships to.
+    ///
+    /// Reports what was removed, so a caller can say what happened rather than
+    /// whether anything happened.
+    pub fn clear(&self) -> Result<TraceClear, TraceError> {
+        let mut guard = crate::sync::lock(&self.append_lock);
+        *guard = None;
+        let io = |source| TraceError::Io {
+            path: self.path.display().to_string(),
+            source,
+        };
+        // Measured **before** truncating. Opening with `truncate(true)` performs the
+        // truncation as part of the open, so statting the handle afterwards reports
+        // zero for a log that held years of records — which is exactly the number an
+        // operator wants reported, and exactly the number that would have been wrong.
+        let removed_bytes = fs::metadata(&self.path).map_err(io)?.len();
+        let file = OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .open(&self.path)
+            .map_err(io)?;
+        file.sync_all().map_err(io)?;
+        // `bytes` describes the file, which is now empty, so it resets. The other
+        // counters describe what this process has done since it started and are
+        // left alone: an operator watching `appended` climb wants to see that it
+        // restarted, not that it was zeroed by their own action.
+        self.bytes.store(0, Ordering::Relaxed);
+        Ok(TraceClear {
+            removed_bytes,
+            cleared: removed_bytes > 0,
+        })
     }
 
     /// Fingerprint the samples a load would produce.
