@@ -20,7 +20,7 @@ use std::time::Duration;
 use chrono::Local;
 
 use axum::extract::rejection::JsonRejection;
-use axum::extract::{DefaultBodyLimit, Path, State};
+use axum::extract::{DefaultBodyLimit, Path, Query, State};
 use axum::http::{header, HeaderName, HeaderValue, Method, StatusCode, Uri};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
@@ -757,6 +757,98 @@ impl AppState {
     /// is callable from a desktop button and an unbounded read would take the
     /// app down rather than answer a question.
     ///
+    /// Run one promotion round over the durable history, and optionally install
+    /// what the gate authorised.
+    ///
+    /// This is the product entry point the loop was missing. It is in-process rather
+    /// than a separate command because promotion has to reach the *live* router:
+    /// `reload_active_model` attaches on this `AppState`, and nothing watches the
+    /// pointer file, so a model installed by another process would sit unread until
+    /// a restart. That is a fact about the design rather than a preference, which is
+    /// why the entry point is here and not in a CLI.
+    ///
+    /// # `install` is not implied
+    ///
+    /// Judging and installing are separate acts, and the default is to judge only.
+    /// A promotion changes what every subsequent request is served by, so it should
+    /// be something an operator asked for, not something that happened because
+    /// someone polled an endpoint. A caller that wants the model live asks for it.
+    ///
+    /// That makes the third of the three open product decisions — *when* a round
+    /// happens — a property of the caller rather than of this code. Nothing here
+    /// schedules anything, retries anything, or holds a cadence; an operator's own
+    /// scheduler decides, and it decides by choosing when to call.
+    ///
+    /// The gate is still what judges. `install` only obeys a `PROMOTED` verdict; it
+    /// cannot install a refusal.
+    #[cfg(feature = "ml")]
+    pub fn ml_run_promotion_round(
+        &self,
+        config: crate::ml::RoundConfig,
+        install: bool,
+        revision: Option<String>,
+    ) -> crate::ml::status::PromotionRoundStatus {
+        if self.active_models.is_none() {
+            return crate::ml::status::PromotionRoundStatus::unavailable(
+                "no durable state directory is configured, so there is no history to learn from",
+            );
+        }
+        let round = match crate::ml::run_promotion_round(&self.ml_state_dir(), &config, revision) {
+            Ok(round) => round,
+            Err(error) => {
+                return crate::ml::status::PromotionRoundStatus::unavailable(error.to_string())
+            }
+        };
+
+        let current_state = || {
+            // Nothing was installed, so the pointer is unchanged and there is nothing
+            // to re-read. Reporting the current state keeps the response honest about
+            // whether a model is serving.
+            crate::ml::ReloadOutcome::ok(
+                self.ml_routing.is_attached(),
+                self.ml_routing.attached_commit(),
+            )
+        };
+
+        let installed = if install {
+            let store = self.active_models.as_ref().expect("checked above");
+            match round.install(store) {
+                Ok(installed) => installed,
+                Err(error) => {
+                    // The round judged fine and the store refused. Reporting this as
+                    // an unavailable round would throw away the verdict, which is the
+                    // part an operator asked for, so the decision travels back with
+                    // the fault attached. No reload: the install failed, so the
+                    // pointer is whatever it was before this call.
+                    let mut status =
+                        crate::ml::status::PromotionRoundStatus::from_round(&round, current_state());
+                    status.error = Some(format!(
+                        "the gate authorised this model but it could not be installed: {error}"
+                    ));
+                    return status;
+                }
+            }
+        } else {
+            None
+        };
+
+        let reloaded = if installed.is_some() {
+            self.reload_active_model()
+        } else {
+            current_state()
+        };
+        crate::ml::status::PromotionRoundStatus::from_round(&round, reloaded)
+    }
+
+    /// The durable state directory, derived the same way `new` derived it when it
+    /// opened the log and the store. Taken from the configuration rather than from
+    /// the open `TraceLog` so that no accessor is added to that type for this one
+    /// caller.
+    #[cfg(feature = "ml")]
+    fn ml_state_dir(&self) -> std::path::PathBuf {
+        std::path::PathBuf::from(&self.config().ml_routing.state_dir)
+    }
+
     /// Reports *why* it could not run instead of returning an empty analysis,
     /// because "no model is attached" and "the model disagreed with production on
     /// nothing" are different answers and only the first is a problem.
@@ -1150,7 +1242,11 @@ pub fn build_app(state: Arc<AppState>) -> AxumRouter {
             .route(&format!("{prefix}/status"), get(status))
             .route(&format!("{prefix}/ml/status"), get(ml_status))
             .route(&format!("{prefix}/ml/shadow"), get(ml_shadow))
-            .route(&format!("{prefix}/ml/rollback"), post(ml_rollback));
+            .route(&format!("{prefix}/ml/rollback"), post(ml_rollback))
+        .route(
+            &format!("{prefix}/ml/promote"),
+            post(ml_promote),
+        );
     }
 
     let mut app = api
@@ -1535,6 +1631,74 @@ async fn ml_rollback() -> Json<Value> {
     Json(json!({
         "error": "this build contains no ML stack, so nothing can be rolled back",
     }))
+}
+
+/// Run one promotion round over the durable history.
+///
+/// `install` is a query parameter rather than the default, because judging a model
+/// and installing it are different acts and only the second changes what every
+/// later request is served by. `POST /v1/ml/promote` with no `install` reports what
+/// the gate would decide and changes nothing, which makes the endpoint safe to poll
+/// and safe to point a dashboard at. `?install=true` asks for the model to go live,
+/// and then it is on the live router before the response is written, because
+/// `reload_active_model` attaches in-process rather than waiting for a restart.
+///
+/// Nothing here schedules. When a round happens is the caller's decision, which is
+/// why the endpoint has no timer and no cadence of its own.
+#[cfg(feature = "ml")]
+async fn ml_promote(
+    State(state): State<Arc<AppState>>,
+    Query(request): Query<PromoteRequest>,
+) -> Json<Value> {
+    // Only the baseline is the caller's to choose. The evidence floors — minimum
+    // paired requests, required utility delta, permitted regressions — stay at their
+    // shipped values, because relaxing those is not a statement about *what* to hold
+    // a model to, it is a decision to stop requiring evidence at all.
+    let mut gate = crate::ml::PromotionConfig::default();
+    if let Some(baseline) = request.baseline.as_deref() {
+        gate.required_baseline = baseline.to_string();
+    }
+    let config = crate::ml::RoundConfig {
+        gate,
+        ..crate::ml::RoundConfig::default()
+    };
+    let outcome = state.ml_run_promotion_round(config, request.install, request.revision);
+    Json(json!({
+        "round": outcome,
+        "status": state.ml_status(),
+    }))
+}
+
+#[cfg(not(feature = "ml"))]
+async fn ml_promote() -> Json<Value> {
+    Json(json!({
+        "error": "this build contains no ML stack, so there is nothing to promote",
+    }))
+}
+
+/// What to do about the round a `POST /v1/ml/promote` just ran.
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+struct PromoteRequest {
+    /// Install the model if — and only if — the gate authorised it.
+    ///
+    /// Defaults to false. A promotion is the most consequential thing this process
+    /// does on request, so it is asked for rather than inferred.
+    #[serde(default)]
+    install: bool,
+    /// Recorded on the gate decision, so a promotion or refusal can be tied back to
+    /// the round that produced it.
+    #[serde(default)]
+    revision: Option<String>,
+    /// Which baseline the model must beat.
+    ///
+    /// "Beats a baseline" is a claim about a *specific* baseline, so the endpoint
+    /// names one rather than letting the promotion quietly pick whichever it
+    /// happened to win against. The shipped default is `baseline.lowest_latency`;
+    /// `baseline.priority` is the strategy Zroutery routes by, and is what most
+    /// operators mean. This changes only which comparison is required — the evidence
+    /// floors are not caller-controlled.
+    #[serde(default)]
+    baseline: Option<String>,
 }
 
 async fn auth_layer(

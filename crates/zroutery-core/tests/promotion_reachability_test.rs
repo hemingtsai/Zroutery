@@ -51,63 +51,40 @@ use zroutery_core::config::{AppConfig, MemorySecretStore};
 use zroutery_core::ml::{run_promotion_round, ActiveModelStore, RoundConfig, RoundError};
 use zroutery_core::server::AppState;
 
-/// The modules that run in a shipped build.
+/// **A running module can start a promotion round.**
 ///
-/// `ml/round.rs` is in this list and is the interesting one: it is the *mechanism*
-/// for a promotion round, and it legitimately contains the call that installs a
-/// decision. Defining that step is not the gap. Invoking it is.
-const RUNNING_MODULES: [(&str, &str); 8] = [
-    ("server/pipeline.rs", include_str!("../src/server/pipeline.rs")),
-    ("server/mod.rs", include_str!("../src/server/mod.rs")),
-    ("ml/serving.rs", include_str!("../src/ml/serving.rs")),
-    ("ml/promotion.rs", include_str!("../src/ml/promotion.rs")),
-    ("ml/comparison.rs", include_str!("../src/ml/comparison.rs")),
-    ("ml/learning.rs", include_str!("../src/ml/learning.rs")),
-    ("ml/round.rs", include_str!("../src/ml/round.rs")),
-    ("ml/shadow.rs", include_str!("../src/ml/shadow.rs")),
-];
-
-/// **Nothing runs a promotion round.**
+/// This is the tripwire from §E9 turned around. It used to assert that *nothing* in
+/// a running build named the promotion sink, and it fired the moment
+/// `AppState::ml_run_promotion_round` appeared — which was the point. The loop was
+/// closed in code and open in the product for exactly as long as that held.
 ///
-/// `ml::round::run_promotion_round` exists, is exercised by both loop harnesses, and
-/// does the whole spine — read history, fit, replay against every baseline, analyse
-/// the counterfactual, put it to the gate, and install what the gate authorised. It
-/// installs nothing until [`PromotionRound::install`] is called on it, and no
-/// running module calls either.
-///
-/// This half is written to fail when that changes, and the failure message says
-/// what to update.
+/// It now asserts the narrower property still worth holding, and easy to lose by
+/// accident: the round is reachable **from the request path**, so it runs behind the
+/// same auth layer as `status`, `shadow` and `rollback`. Reachability *without*
+/// those two properties would be a promotion anyone who can reach the port can
+/// trigger, which is why this asserts the call lives in `server/mod.rs` and not
+/// merely somewhere in the crate.
 #[test]
-fn no_running_module_starts_a_promotion_round() {
-    for (path, source) in RUNNING_MODULES {
-        // Only the part outside `#[cfg(test)]` counts.
-        let outside_tests = match source.find("#[cfg(test)]") {
-            Some(at) => &source[..at],
-            None => source,
-        };
-        // A *call* is the thing that matters, so the token carries its paren. A bare
-        // mention of the type is not a capability: `ml/round.rs` names it in a
-        // `Debug` impl and in prose, and neither starts a round.
-        //
-        // Two exclusions, and both have bitten: a comment describing the mechanism
-        // is not an invocation, and `pub fn run_promotion_round(` is the declaration
-        // sitting in the very file that declares it.
-        let offender = outside_tests.lines().find(|line| {
-            let code = line.trim();
-            if code.starts_with("//") || code.starts_with('*') || code.starts_with("/*") {
-                return false;
-            }
-            code.contains("run_promotion_round(") && !code.contains("fn run_promotion_round(")
-        });
-        assert!(
-            offender.is_none(),
-            "{path} calls run_promotion_round in running code, so a running module can \
-             now start a promotion round. That closes the gap this test records — \
-             update it, and update the capability matrix's product-wiring row with what \
-             is now reachable and, more importantly, who decided to run it.\n  found: {}",
-            offender.unwrap_or_default().trim()
-        );
-    }
+fn a_promotion_round_is_reachable_from_the_request_path() {
+    let source = include_str!("../src/server/mod.rs");
+    let outside_tests = match source.find("#[cfg(test)]") {
+        Some(at) => &source[..at],
+        None => source,
+    };
+    let caller = outside_tests.lines().find(|line| {
+        let code = line.trim();
+        if code.starts_with("//") || code.starts_with('*') {
+            return false;
+        }
+        code.contains("run_promotion_round(") && !code.contains("fn ")
+    });
+    assert!(
+        caller.is_some(),
+        "nothing in server/mod.rs calls run_promotion_round any more, so the loop is \
+         open in the product again. That is the regression §E9 recorded and this file \
+         exists to catch: either restore the call, or record deliberately that \
+         promotion is no longer reachable."
+    );
 }
 
 // ---------------------------------------------------------------------------

@@ -123,9 +123,26 @@ Five properties are load-bearing:
   refused. Both copies now call it and all 16 tests across them pass unchanged.
 
   The gap is therefore narrower than first recorded: not a missing mechanism but one
-  missing call. `tests/promotion_reachability_test.rs` names it
-  (`no_running_module_starts_a_promotion_round`) and fails when it closes, asking who
+  missing call. `tests/promotion_reachability_test.rs` named it
+  (`no_running_module_starts_a_promotion_round`) and failed when it closed, asking who
   decided to run it — which is the product question this ADR does not answer.
+
+  **Resolved.** `AppState::ml_run_promotion_round`, exposed as
+  `POST /v1/ml/promote` behind the same auth layer as `status`, `shadow` and
+  `rollback`. In-process rather than a CLI because only in-process code can attach to
+  the *live* router — nothing watches the pointer file, so another process's install
+  would sit unread until a restart. `install` defaults to **false**, so the endpoint
+  is safe to poll; with `?install=true` the model serves before the response is
+  written. **When** a round runs is left to the caller's scheduler — nothing in the
+  code schedules or holds a cadence. The caller may name the **baseline** the model
+  must beat; the evidence floors are not caller-controlled, because relaxing those is
+  not a claim about what to compare against but a decision to stop requiring
+  evidence.
+
+  Both directions are mutation-verified: installing when not asked fails
+  `asking_for_a_verdict_does_not_install_anything`, and skipping the live reload fails
+  `asking_for_the_install_attaches_the_model_to_the_live_router`. A one-sided test
+  would have left the flag decorative.
 - An operator needs somewhere to see what is active. `RouteDecision::ml_ranking`
   makes the influence visible per request; the active model, its commit and its
   promotion history are in `ml::serving`. **ADR-0007** adds the read-only
