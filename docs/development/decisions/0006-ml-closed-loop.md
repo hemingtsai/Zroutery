@@ -89,10 +89,32 @@ Five properties are load-bearing:
 - The anti-wiring assertions in `tests/dataset_production_test.rs`,
   `tests/dataset_ingestion_test.rs` and `tests/shadow_integration_test.rs` are
   replaced by the properties they were protecting, not merely deleted.
-- A model can now influence a response, so a bug in ranking can now affect a
-  user. That risk is managed by `AppliedRanking::apply` restricting the
-  reordering to the executable plan, by the `DecisionEngine`'s own eligibility
-  filter remaining authoritative, and by the fallback. It is not eliminated.
+- A model can influence a response *when one is attached*. The mechanism is
+  complete and mutation-verified: `apply_ml_ranking` gates the reordering on
+  `applied.changed`, and removing that gate fails exactly
+  `a_promoted_model_changes_which_provider_serves_and_rollback_restores_the_plan`
+  and `new_outcomes_from_a_new_process_reach_the_next_round_of_learning`. So a bug
+  in ranking can affect a user. That risk is managed by
+  `AppliedRanking::apply` restricting the reordering to the executable plan, by the
+  `DecisionEngine`'s own eligibility filter remaining authoritative, and by the
+  fallback. It is not eliminated.
+- **Correction, added after §E9 of the report: in a shipped build, no model is ever
+  attached, so none of the above reaches a user.** Every `ActiveModelStore::promote`,
+  `PromotionGate::new`, `run_comparison` and `run_training` sits inside a
+  `#[cfg(test)]` module or a `tests/` binary; `src-tauri` names none of them, and
+  there is no endpoint that promotes. The previous bullet described the mechanism,
+  not the product, and this ADR stated the difference away.
+
+  The shape is: the **sink** is wired (`AppState::new` reads the durable pointer and
+  attaches a verified predictor) and the **source** does not exist. Everything this
+  ADR builds is reachable from a harness and from nowhere else.
+
+  This is the same failure class as the Context section above — "every training entry
+  point was reachable only from a test" — recurring one level up, at the promotion
+  seam rather than the training one. It went unnoticed because every test that closes
+  a gate in this ADR builds its own harness, so the loop is closed end to end in the
+  suite and open at both ends in the product. Recorded as a characterisation in
+  `tests/promotion_reachability_test.rs`, written to fail when the gap closes.
 - An operator needs somewhere to see what is active. `RouteDecision::ml_ranking`
   makes the influence visible per request; the active model, its commit and its
   promotion history are in `ml::serving`. **ADR-0007** adds the read-only
@@ -104,6 +126,7 @@ Five properties are load-bearing:
 - `docs/development/decisions/0002-production-ml-boundary.md` (superseded)
 - `docs/development/decisions/0007-ml-operator-surface.md`
 - `docs/development/decisions/0008-nothing-random-decides.md`
-- `docs/development/ml-closed-loop-report.md`
+- `docs/development/ml-closed-loop-report.md` (§E9 for the promotion seam)
+- `crates/zroutery-core/tests/promotion_reachability_test.rs`
 - `crates/zroutery-core/src/ml/{traces,learning,comparison,shadow_analysis,promotion,serving,status}.rs`
 - `crates/zroutery-core/tests/ml_closed_loop_test.rs`
