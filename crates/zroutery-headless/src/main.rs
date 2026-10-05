@@ -10,12 +10,25 @@
 //! API keys come from the OS credential store when available, otherwise from
 //! `ZROUTERY_KEY_PROVIDER_<ID>` environment variables.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use zroutery_lib::platform::{self, APP_ID};
 use zroutery_lib::secrets::KeychainSecrets;
 use zroutery_lib::state::Desktop;
 use zroutery_lib::store;
+
+mod experiment;
+
+/// Arguments after the program name, or an error naming what was expected.
+fn subcommand_args(name: &str) -> Result<Vec<String>, String> {
+    let mut args = std::env::args().skip(1);
+    match args.next().as_deref() {
+        Some(found) if found == name => Ok(args.collect()),
+        Some(other) => Err(format!("expected `{name}`, got `{other}`")),
+        None => Err(format!("expected `{name}`")),
+    }
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -26,6 +39,49 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .with_target(false)
         .init();
+
+    // `--experiment` is handled before any of the proxy wiring below. It builds its
+    // own `AppState` over a fake provider environment and must not inherit a
+    // developer's real configuration, real providers or real credentials, so it runs
+    // first and exits.
+    if std::env::args().any(|a| a == "--experiment") {
+        let args = subcommand_args("--experiment")?;
+        let mut state_dir = platform::default_config_dir().join("experiment");
+        let mut requests_per_phase = 120usize;
+        let mut exploration = 0.0f64;
+        let mut iter = args.iter();
+        while let Some(arg) = iter.next() {
+            match arg.as_str() {
+                "--state-dir" => {
+                    state_dir = PathBuf::from(
+                        iter.next()
+                            .ok_or("--state-dir needs a path")?
+                            .clone(),
+                    )
+                }
+                "--requests" => {
+                    requests_per_phase = iter
+                        .next()
+                        .ok_or("--requests needs a count")?
+                        .parse()
+                        .map_err(|e| format!("--requests: {e}"))?
+                }
+                "--exploration" => {
+                    exploration = iter
+                        .next()
+                        .ok_or("--exploration needs a probability")?
+                        .parse()
+                        .map_err(|e| format!("--exploration: {e}"))?
+                }
+                other => {
+                    return Err(format!("unknown `--experiment` argument `{other}`").into())
+                }
+            }
+        }
+        let report = experiment::run(&state_dir, requests_per_phase, exploration).await?;
+        print!("{}", report.render());
+        return Ok(());
+    }
 
     let dir = platform::default_config_dir();
     std::fs::create_dir_all(&dir)?;

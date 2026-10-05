@@ -25,3 +25,10 @@ zroutery-core = { path = "../zroutery-core", features = ["ml"] }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
+
+# The experiment entry point drives the real routing path and needs to stand up a
+# fake provider environment and speak HTTP to the proxy it starts. These are for that
+# surface only; nothing in the serving path uses them.
+axum = { workspace = true }
+reqwest = { workspace = true }
+serde_json = { workspace = true }
