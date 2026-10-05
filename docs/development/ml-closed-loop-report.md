@@ -114,8 +114,9 @@ Status vocabulary: `0 NOT_STARTED` · `1 SCAFFOLDED` · `2 IMPLEMENTED` ·
 
 | Capability | Status | Evidence |
 |---|---|---|
-| Runtime feedback | **4** | `pipeline.rs:2758-2765`; 120 requests → 120 traces, 360 samples, 0 refusals, 0 IO errors |
+| Runtime feedback | **4** | `pipeline.rs:2758-2765`; 120 requests → 120 traces, 360 samples, 0 refusals, 0 IO errors. **Conditional on `shadow.enabled`, which nothing declares** — see the row below |
 | Dataset | **4** | `ml/dataset.rs` bounded and ingested; `ml/traces.rs` durable, fingerprinted, survives restart |
+| **Learning has an undeclared prerequisite** | **Not fixed.** `ml_routing.enabled = true` with `shadow.enabled = false` yields `ingested 0, samples 0, no_decision_time_input = every request, traces_appended 0` and two rounds with "no verdict" — silently, with every endpoint healthy. `shadow.evaluate` returns `None` (`ml/shadow.rs:1640`), so `RequestLifecycle::decision_time` is never set and every request is discarded as `NoDecisionTimeInput`. The state is observable and distinctive, and the guide teaches the check; the dependency itself is not declared in config, in `/v1/ml/status`, or anywhere a user reads. §E13 |
 | Training | **4** | `ml/learning.rs::run_training`; 252/54/54 split, holdout log loss 0.0237 vs 0.6931 uninformed |
 | Baseline | **4** | `ml/comparison.rs::ReplayBaseline` × 4, executable, replayed over the same 120 traces |
 | ML decision | **3** | `pipeline.rs::apply_ml_ranking`; 120 rankings, 0 fallbacks, in the executable plan |
@@ -1410,6 +1411,134 @@ dimension the comparisons ignore.
 It does not license "the ML router is proven better". That would need real
 providers, a cost structure the operator did not design, and the denominator
 problem in (1) resolved so all arms are scored on one body.
+
+---
+
+## E13. `ml_routing.enabled` does not imply you can learn anything
+
+The first run of the headless harness produced this:
+
+```
+ingested 0   samples 0   no_decision_time_input 120   traces_appended 0
+round-1: no verdict
+round-2: no verdict
+```
+
+with `ml_routing.enabled = true`, every endpoint answering normally, and the
+promotion endpoint returning a well-formed response. An ML stack that is switched
+on and cannot learn a single thing.
+
+The chain is short and entirely silent:
+
+1. `ShadowEngine::evaluate` returns `None` when `!self.enabled()`
+   (`ml/shadow.rs:1640`).
+2. `RequestLifecycle` retains its `decision_time: Option<ShadowInput>` **only** on
+   the path where `evaluate` returned a record (`server/pipeline.rs:2312-2320`).
+   That retention is deliberate — it stops the dataset becoming a second source of
+   features — but it means the two are correlated with no way to say so.
+3. At the terminal transition `self.decision_time` is `None`, so ingestion
+   classifies the request `Ingestion::NoDecisionTimeInput` and discards it
+   (`server/pipeline.rs:2526`).
+
+**So `shadow.enabled` is a hard prerequisite for learning, and nothing declares
+it.** Not the config type, not `/v1/ml/status`, not the promotion endpoint. The
+flag looks independent — it lives in its own section and governs its own feature —
+and turning on `ml_routing` does not touch it.
+
+The saving grace is that the state is *observable*, and it is distinctive enough
+to be diagnostic: `no_decision_time_input` equal to the total request count means
+exactly this and nothing else. That is the check to teach an operator, and it is
+in the data-collection guide.
+
+What is **not** fixed is the dependency itself. The honest options are a startup
+warning when `ml_routing.enabled && !shadow.enabled`, a documented implication,
+or treating the dataset's need for a retained snapshot as a reason to retain one
+regardless of whether a shadow decision was produced. All three are product
+decisions — the second one at minimum is documentation, and documentation that
+`/v1/ml/status` does not surface is documentation nobody reads.
+
+---
+
+## E14. What the ML stack costs per request, and a measurement that first got it wrong
+
+The obvious end-to-end number is misleading, and the harness produced it before
+being caught. Subtracting the fake upstreams' known sleeps from wall time gave
+~10–20ms per request — but the phase with **no model attached** (`collect`,
+19.7ms) cost *more* than the phase with one (`exploit`, 9.1ms).
+
+A cost that falls when you add work is not a measurement of that work. The cause
+is that the fake upstreams live in the same process as the client, so every
+upstream attempt is an in-process HTTP round trip, and `collect` takes longer
+fallback chains than `exploit`. Subtracting the sleep removes the simulated
+*latency* and none of the round trip. The number was dominated by the harness.
+
+The fix would be to stop trying to subtract and instead **hold routing constant**:
+two runs, identical request sequence, identical deterministic plan, ML on versus ML
+off. **That A/B is not run**, so no aggregate per-request cost is claimed from
+the harness. What answers the question instead is the code: three explicit bounds,
+one unbounded structure, and §E7's per-candidate figure.
+
+The shape of the mistake is §E7's argument pointed the other way: there, a fixed
+ceiling could not separate a slow machine from a slow regression; here, a derived
+wall-clock difference could not separate routing cost from request cost. Both are
+the same error — attributing a difference to the thing under test when the
+measurement contains something else that moved.
+
+### What is actually bounded, and what is not
+
+The question worth answering is not "how expensive is the ML path" but "what
+grows without limit". Three bounds exist in code, and they are the answer to the
+memory question:
+
+| structure | bound | age window |
+|---|---|---|
+| `DatasetStore` | `PRODUCTION_MAX_SAMPLES` = 10,000 samples | 7 days |
+| `ShadowEngine` | `max_decisions` = 10,000 | 7 days |
+| `OutcomeLog` / `ProjectionLog` | `log_limit` = 500 entries | — |
+
+So **in-process ML state is capped and does not grow with uptime.** At the
+measured ~2.2 samples per request, 10,000 samples is roughly 4,500 requests of
+evidence — which covers an hour of a heavy user's traffic and about three days of
+an average one. The memory question is therefore answered by reading three
+constants, not by measuring.
+
+The trace log is the opposite. `TraceLog` is append-only by design ("nothing
+rewrites a line"), and there is **no rotation, no size cap and no retention
+window**. Measured at **5.2 KB per trace**. That is the one quantity in the ML
+subsystem that grows forever.
+
+### And the unbounded file becomes unbounded memory for any whole-file reader
+
+`TraceLog::load` returns `Vec<RequestTrace>` — the entire log materialised. That
+is fine at 500 requests and expensive at 500,000. Measured directly: 8,000 traces
+(39.8 MB on disk) cost **+202 MB** of resident memory to load, because parsing
+JSON into owned structs expands it about sevenfold.
+
+This is exactly the trap the first measurement fell into, and it is worth stating
+as a product observation rather than only as a measurement mistake: **the trace
+log's lack of a bound is not only a disk problem, it is a memory problem for every
+consumer that reads the file whole.** The `/v1/ml/status` replay is bounded by
+design; anything else that calls `load` inherits the file's absence of a bound.
+
+### What this costs in CPU
+
+§E7 already characterised the largest component: **~20µs per candidate plus ~15µs
+fixed**, flat to n=64. For a three-candidate plan that is ~75µs, plus roughly
+50µs to serialise a 5.2 KB trace. Call it **~150µs of ML-specific CPU per
+request**, against request latencies measured in the tens of milliseconds.
+
+That ratio is the whole answer for CPU: the learning path is three to four orders
+of magnitude below the request it rides on.
+
+### What is still not measured
+
+- **The durable write's cost under an fsync-ing filesystem.** The append is per
+  request and its latency is filesystem-dependent in a way nothing above is.
+- **Startup cost of loading and verifying a model**, which lands on the first
+  request after a restart rather than being spread across them.
+- **Aggregate request cost as a gate.** §E7 guards the *shape* of one path in
+  isolation. Nothing guards total per-request overhead, which is why the bad
+  measurement at the top of this section was possible at all.
 
 ---
 
