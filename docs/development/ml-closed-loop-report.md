@@ -130,7 +130,7 @@ Status vocabulary: `0 NOT_STARTED` · `1 SCAFFOLDED` · `2 IMPLEMENTED` ·
 | Cost axis | **4** | `Attempt` grew a cost field, populated at the terminal transition. 120 of 171 samples now carry a real cost; `mean_cost` separates across arms (`baseline.priority` 0.00300, `ml.candidate` 0.00702). `RewardPolicy::cost_weight` and the gate's cost budget read a real number — §E4 |
 | Holdout temporality | **4** | ADR-0008: the frozen holdout was a contiguous tail of a *content*-sorted vector, so it was a content cluster and its composition varied run to run. Now split in arrival order, ordered per partition — §E5 |
 | Model identity | **4** | one identity per model (`TrainingOutcome::commit_record`); commit `06f7da3409a14147` |
-| **Promotion is not product-wired** | **2 — the largest gap in the system.** Every mechanism from outcome to serving exists and is proven, but **nothing in a shipped build can promote a model**: every `ActiveModelStore::promote`, `PromotionGate::new`, `run_comparison` and `run_training` sits inside a `#[cfg(test)]` module or a `tests/` binary, and `src-tauri` names none of them. So `MlStatus::active` is always `None`, `is_attached()` always `false`, `apply_ml_ranking` always takes its no-model branch, and `ml_routing.enabled` is inert. The **sink** is wired (`AppState::new` attaches a verified predictor if the pointer exists); the **source** does not exist. Recorded by `promotion_reachability_test.rs` — §E9 | A product decision, not engineering: something must decide *when* to retrain and *whether* to promote without a human pressing a button, and that is a scheduling and consent question. The mechanisms it would call are built |
+| **Promotion is not product-wired** | **3 — the largest remaining gap.** Every mechanism from outcome to serving exists, is proven, and now has a single home: `ml::round::run_promotion_round` does load → fit → compare → analyse → gate, with `PromotionRound::install` separate so a round can be run without mutating the store. **Nothing runs it.** So `MlStatus::active` is always `None`, `is_attached()` always `false`, `apply_ml_ranking` always takes its no-model branch, and `ml_routing.enabled` is inert. The **sink** is wired (`AppState::new` attaches a verified predictor if the pointer exists); the **source** is one missing call — §E9 | A product decision, not engineering: something must decide *when* to run a round and *on whose authority*, which is a scheduling and consent question. The mechanism it would call is built |
 | Product wiring | **3** | Everything below the promotion source is wired and correct: `ml` is a named default-on desktop feature, `<config_dir>/ml` is claimed, the durable pointer is read and a verified predictor attached at startup, `reload_active_model` reaches the live router. Marked down from 4 because the top of the loop is not — see the row above |; `ml_routing.enabled` asserted off by default, so no install's behaviour changed |
 | Operator surface | **3** | `ml::MlStatus` read live and asserted to agree with `MlRouter`; `/v1/ml/{status,shadow,rollback}` behind the auth layer (401 asserted); the replay runs the *attached* model over real traffic, bounded; unreachable candidates are derived from config against the observation store and named, with the consequence stated rather than left to derive. Marked down from 4: correct, and reporting a **permanently empty** state — no attached model to describe, no shadow model to replay, no previous pointer to roll back to |
 | Reversibility | **4** | rollback reaches the router in a live process, verified to fail against a pointer-only implementation; refused rollback changes nothing |
@@ -989,7 +989,7 @@ predictor. The closed loop is real.
 
 **No running build can reach any of it.** Every call to `ActiveModelStore::promote`,
 every `PromotionGate::new`, every `run_comparison` and every `run_training` in the
-repository sits inside a `#[cfg(test)]` module or a `tests/` binary:
+repository sat inside a `#[cfg(test)]` module or a `tests/` binary:
 
 | File | test module starts at | promotion calls |
 |---|---|---|
@@ -1014,6 +1014,51 @@ So in a shipped build:
 - **`ml_routing.enabled` is inert.**
 
 The sink is wired and the source is missing.
+
+### The mechanism was missing too, and now is not
+
+There was a second gap underneath the first, and it explains the first. The
+*sequence* had no single home, so **every caller re-assembled it by hand** — and two
+hand-rolled copies survived, both in test files:
+
+| | `loop_over` (`ml_closed_loop_test.rs`) | `learn` (`ml_multi_provider_test.rs`) |
+|---|---|---|
+| load → dedupe → train → compare | yes | yes |
+| shadow analysis | yes | **no** |
+| gate | **no** | yes |
+| install | **no** | yes |
+
+Neither was obliged to do what the other did. Neither was the copy that runs. Two
+copies is also two places for the spine to drift.
+
+`ml/round.rs` is that spine, once: `run_promotion_round` reads the durable log, dedupes,
+fits, replays against every baseline, analyses the counterfactual and puts the result
+to the gate. Installing is a **separate call**, `PromotionRound::install`, because a
+round you can run without mutating the store is how you find out *why* a model was
+refused. It is mechanism, not policy — it does not decide when to run or on whose
+authority.
+
+Both hand-rolled copies now call it, and **all 16 tests across the two files pass
+unchanged** against it, which is the evidence that it does what they did.
+
+**What this does and does not change.** The gap in §E9's headline table is still open:
+nothing runs a round. But it is now a *narrower* and more precise gap — one missing
+call rather than a missing mechanism — and the tripwire says so by name:
+
+```
+no_running_module_starts_a_promotion_round
+```
+
+It fires on a call to `run_promotion_round` outside a test module, and its failure
+message asks the question that actually matters next: *who decided to run it?*
+
+**One honest note on the new tests.** `running_a_round_that_cannot_run_touches_nothing`
+asserts the error path — no pointer, no audit entry — and its doc comment originally
+claimed it verified that a *successful* round does not install. It does not: an empty
+log returns before there is a verdict. The property is caught by
+`new_outcomes_from_a_new_process_reach_the_next_round_of_learning`, verified by giving
+`run_promotion_round` an install side effect and watching that test fail while this
+one stayed green. The comment now says which half is which.
 
 ### What this says about the rest of this report
 
