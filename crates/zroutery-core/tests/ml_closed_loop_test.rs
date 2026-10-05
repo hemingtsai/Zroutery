@@ -24,7 +24,6 @@
 //! changes a served decision, and it is not sufficient to claim the learned
 //! weights are good for any particular upstream.
 
-use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -39,11 +38,10 @@ use zroutery_core::billing::Pricing;
 use zroutery_core::config::{
     AppConfig, MemorySecretStore, ModelEntry, ModelTier, ProviderConfig, ProviderKind,
 };
-use zroutery_core::ml::RewardPolicy;
 use zroutery_core::ml::RoutingModel;
 use zroutery_core::ml::{
-    ActiveModelStore, ExplorationConfig, MlPolicy, PromotionConfig, PromotionGate,
-    PromotionVerdict, ReplayBaseline, ShadowEvidence, TrainingConfig,
+    ActiveModelStore, ExplorationConfig, PromotionConfig, PromotionGate, PromotionVerdict,
+    ReplayBaseline,
 };
 use zroutery_core::server::{AppState, ServerHandle};
 
@@ -856,30 +854,34 @@ fn copy_state_dir(source: &std::path::Path) -> tempfile::TempDir {
     dir
 }
 
+/// The offline half of the loop over an existing state directory, leaving the
+/// directory in place.
+///
+/// Like `learn` in `ml_multi_provider_test.rs`, this used to assemble the round by
+/// hand. It now calls `ml::run_promotion_round` and reads the artefacts off the
+/// result, so the two fixtures that between them proved the loop no longer keep
+/// private copies of the spine — and so a future entry point would run this same
+/// code rather than a third version of it.
 fn loop_over(state_dir: tempfile::TempDir) -> LoopArtefacts {
-    let log = zroutery_core::ml::TraceLog::open(state_dir.path()).expect("reopen");
-    let traces = log.load().expect("load");
+    let round = zroutery_core::ml::run_promotion_round(
+        state_dir.path(),
+        &zroutery_core::ml::RoundConfig::default(),
+        None,
+    )
+    .expect("a round over a body this test just served");
+
+    let traces = zroutery_core::ml::TraceLog::open(state_dir.path())
+        .expect("reopen")
+        .load()
+        .expect("load");
     assert!(!traces.is_empty(), "there is no history to learn from");
-
-    let samples = zroutery_core::ml::deduped_samples_from(&traces);
-    let training =
-        zroutery_core::ml::run_training(&samples, &TrainingConfig::default()).expect("train");
-
-    let policy = RewardPolicy::default();
-    let candidate = MlPolicy::new(&training, policy.clone());
-    let comparison =
-        zroutery_core::ml::run_comparison(&traces, &candidate, &ReplayBaseline::ALL, &policy)
-            .expect("comparison");
-
-    let evidence = ShadowEvidence::from_policy(&traces, &candidate, BTreeMap::new());
-    let analysis = zroutery_core::ml::analyse(&traces, &evidence, &policy);
 
     LoopArtefacts {
         state_dir,
         traces,
-        training,
-        comparison,
-        analysis,
+        training: round.training,
+        comparison: round.comparison,
+        analysis: round.analysis,
     }
 }
 

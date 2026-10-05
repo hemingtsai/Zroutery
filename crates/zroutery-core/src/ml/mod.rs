@@ -21,6 +21,7 @@ pub mod model;
 pub mod model_identity;
 pub mod offline_gate;
 pub mod promotion;
+pub mod round;
 pub mod reward;
 pub mod serving;
 pub mod shadow;
@@ -126,6 +127,7 @@ pub use promotion::{
     comparison_was_improved, PromotionConfig, PromotionCriterion, PromotionDecision, PromotionGate,
     PromotionVerdict,
 };
+pub use round::{run_promotion_round, PromotionRound, RoundConfig, RoundError};
 pub use reward::{
     compute_utility, Action, ActionGuard, AttemptReward, PredictionBundle, RequestReward,
     RewardComputer, RewardPolicy, UtilityBreakdown,

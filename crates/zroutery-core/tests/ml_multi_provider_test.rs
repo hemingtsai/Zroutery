@@ -41,8 +41,8 @@ use zroutery_core::config::{
 use zroutery_core::server::{AppState, ServerHandle};
 
 use zroutery_core::ml::{
-    ActiveModelStore, PromotionConfig, PromotionGate, PromotionVerdict, ReplayBaseline,
-    TrainingConfig,
+    run_promotion_round, ActiveModelStore, PromotionConfig, PromotionVerdict, RoundConfig,
+    TraceLog,
 };
 
 const TOKEN: &str = "zr-multi-token";
@@ -507,31 +507,29 @@ const MIN_PAIRED: usize = 30;
 ///
 /// Every number a caller asserts on is produced here rather than assembled at the
 /// call site, so a test and the printed evidence cannot drift apart.
+///
+/// This used to assemble the whole round by hand — open, dedupe, train, compare,
+/// gate, promote — which is the copy §E9 of the report describes as one of two
+/// hand-rolled orchestrations that made the loop test-reachable and nothing else.
+/// It now calls `ml::run_promotion_round`, so the harness and any future entry
+/// point execute the same code, and this function only supplies the fixture's gate
+/// configuration.
 fn learn(state_dir: &std::path::Path, note: &str) -> Body {
-    let traces = zroutery_core::ml::TraceLog::open(state_dir)
-        .expect("open")
-        .load()
-        .expect("load");
-    let samples = zroutery_core::ml::deduped_samples_from(&traces);
-    let training =
-        zroutery_core::ml::run_training(&samples, &TrainingConfig::default()).expect("train");
-    let policy = zroutery_core::ml::RewardPolicy::default();
-    let candidate = zroutery_core::ml::MlPolicy::new(&training, policy.clone());
-    let comparison =
-        zroutery_core::ml::run_comparison(&traces, &candidate, &ReplayBaseline::ALL, &policy)
-            .expect("comparison");
-    let decision =
-        PromotionGate::new(promotable_gate()).evaluate(&training.report, &comparison, Some(note.into()));
-    if decision.verdict == PromotionVerdict::Promoted {
-        ActiveModelStore::open(state_dir)
-            .expect("store")
-            .promote(&decision, training.checkpoint.clone())
-            .expect("promote");
-    }
+    let config = RoundConfig {
+        gate: promotable_gate(),
+        ..RoundConfig::default()
+    };
+    let round = run_promotion_round(state_dir, &config, Some(note.to_string()))
+        .expect("a promotion round over a body this test just served");
+    let store = ActiveModelStore::open(state_dir).expect("store");
+    round.install(&store).expect("install");
     Body {
-        traces,
-        comparison,
-        decision,
+        traces: TraceLog::open(state_dir)
+            .expect("open")
+            .load()
+            .expect("load"),
+        comparison: round.comparison,
+        decision: round.decision,
     }
 }
 
