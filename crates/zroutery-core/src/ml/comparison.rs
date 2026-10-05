@@ -521,6 +521,14 @@ pub struct ArmMetrics {
     pub provider_switches: usize,
     /// Distinct providers the policy selected across the body.
     pub distinct_providers: usize,
+    /// How often the policy named each candidate, over every record that named one.
+    ///
+    /// Distinct from `distinct_providers`, which counts the identities and throws
+    /// them away. That count alone cannot distinguish a policy that sensibly split
+    /// traffic between two candidates from one that named the same candidate every
+    /// time — and the second is a learned model that has not learned a ranking,
+    /// which is exactly what a promotion decision needs to be able to see.
+    pub selections: BTreeMap<String, usize>,
     /// Mean number of candidates the policy considered per request.
     pub mean_eligible_candidates: f64,
 }
@@ -565,6 +573,16 @@ pub fn aggregate(policy: &str, records: &[ArmRecord], considered: usize) -> ArmM
         .filter_map(|r| r.outcome.and_then(|o| o.cost))
         .collect();
     let utilities: Vec<f64> = measured.iter().filter_map(|r| r.utility).collect();
+
+    let mut selections: BTreeMap<String, usize> = BTreeMap::new();
+    for record in records
+        .iter()
+        .filter(|record| !record.choice.candidate_id.is_empty())
+    {
+        *selections
+            .entry(record.choice.candidate_id.clone())
+            .or_insert(0) += 1;
+    }
 
     let mut providers: Vec<&str> = records
         .iter()
@@ -613,6 +631,7 @@ pub fn aggregate(policy: &str, records: &[ArmRecord], considered: usize) -> ArmM
         mean_observed_utility: mean(&utilities),
         provider_switches: measured.iter().filter(|r| r.fell_back).count(),
         distinct_providers: providers.len(),
+        selections,
         mean_eligible_candidates: 0.0,
     }
 }

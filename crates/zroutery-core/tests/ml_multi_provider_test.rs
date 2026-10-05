@@ -901,6 +901,225 @@ async fn exploration_without_a_model_stays_inside_the_plan_and_keeps_requests_su
 /// Nothing noticed, because every test with a non-zero `actual_cost` builds the
 /// `Outcome` by hand, and the one pipeline test that compares spend against the
 /// activity record passes just as happily with both sides at zero.
+/// A round configuration whose gate this fixture's evidence genuinely satisfies,
+/// over enough traffic to satisfy it.
+///
+/// The shipped default names `baseline.lowest_latency`, and against that baseline
+/// this candidate loses, so the default gate refuses — correctly. These tests need a
+/// gate that *authorises*, because the property under test is what happens when a
+/// model is approved and the caller still said not to install it. A refusal never
+/// reaches that branch, which is exactly how the first version of these tests came to
+/// pass under a mutation that installed anyway.
+///
+/// Twice `PHASE_REQUESTS` rather than once: at 60 requests this fixture's evidence
+/// is BLOCKED for want of paired requests, which is the traffic floor recorded in
+/// §E6 behaving correctly. Both tests below assert the gate authorised, so that a
+/// change in either would say the branch is untested rather than passing quietly.
+const AUTHORISING_REQUESTS: usize = 2 * PHASE_REQUESTS;
+
+fn authorising_round_config() -> RoundConfig {
+    RoundConfig {
+        gate: promotable_gate(),
+        ..RoundConfig::default()
+    }
+}
+
+/// **Judging a model does not install it.** Asking twice changes nothing.
+///
+/// `AppState::ml_run_promotion_round` exists so a running build can promote at all,
+/// and its `install` flag defaults to false because installing changes what every
+/// later request is served by. That default is the endpoint's safety property, and it
+/// is the thing a well-meaning refactor would drop — a caller polling
+/// `/v1/ml/promote` for a dashboard would then silently start promoting.
+///
+/// So this pins it against a gate that actually authorises, and asserts twice: once
+/// that the gate said yes, so the branch is reachable, and once that nothing was
+/// installed anyway.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn asking_for_a_verdict_does_not_install_anything() {
+    let (alpha, alpha_addr) = two_models().await;
+    let (gamma, gamma_addr) = gamma_provider().await;
+    let upstreams = [alpha.clone(), gamma.clone()];
+    let topology = Topology {
+        alpha: alpha_addr,
+        gamma: gamma_addr,
+        include_gamma: true,
+    };
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let harness = Harness::start(config_for(&topology, dir.path(), true, 0.0)).await;
+    harness.drive(AUTHORISING_REQUESTS, &upstreams).await;
+
+    for attempt in 1..=2 {
+        let status = harness.state.ml_run_promotion_round(
+            authorising_round_config(),
+            false,
+            Some(format!("judge-{attempt}")),
+        );
+        assert_eq!(status.reason, None, "attempt {attempt}: the round could not run");
+
+        assert!(
+            status.gate_authorised(),
+            "attempt {attempt}: this test is about what happens when the gate says \
+             yes, so the gate has to say it. Got {:?} — with a gate that refuses, \
+             nothing below is being tested.",
+            status.decision.map(|d| d.verdict.as_str())
+        );
+        assert!(
+            !status.is_serving(),
+            "attempt {attempt}: a round that was not asked to install left a model \
+             serving. `install` defaults to false and that default is the endpoint's \
+             safety property."
+        );
+        assert!(
+            !harness.state.ml_routing().is_attached(),
+            "attempt {attempt}: judging a model attached it"
+        );
+        let store = ActiveModelStore::open(dir.path()).expect("store");
+        assert!(
+            store.active().expect("read pointer").is_none(),
+            "attempt {attempt}: a judgement-only round wrote an active-model pointer"
+        );
+        assert!(
+            store.audit().expect("audit").is_empty(),
+            "attempt {attempt}: a judgement-only round recorded a promotion"
+        );
+    }
+}
+
+/// **And asking for the install does put it on the live router.**
+///
+/// The other half, because the two together are what make `install` a decision
+/// rather than a formality: if asking never installed anything either, the flag
+/// would be untestable in both directions and the endpoint would be decorative.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn asking_for_the_install_attaches_the_model_to_the_live_router() {
+    let (alpha, alpha_addr) = two_models().await;
+    let (gamma, gamma_addr) = gamma_provider().await;
+    let upstreams = [alpha.clone(), gamma.clone()];
+    let topology = Topology {
+        alpha: alpha_addr,
+        gamma: gamma_addr,
+        include_gamma: true,
+    };
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let harness = Harness::start(config_for(&topology, dir.path(), true, 0.0)).await;
+    harness.drive(AUTHORISING_REQUESTS, &upstreams).await;
+    assert!(
+        !harness.state.ml_routing().is_attached(),
+        "the fixture starts with nothing attached, or the install below proves nothing"
+    );
+
+    let status = harness.state.ml_run_promotion_round(
+        authorising_round_config(),
+        true,
+        Some("install-me".into()),
+    );
+    assert_eq!(status.reason, None, "the round could not run");
+    assert!(status.gate_authorised(), "the gate should have authorised this body");
+    assert!(
+        status.is_serving(),
+        "install was asked for and the gate agreed, so a model should be serving: \
+         {:?}",
+        status.reload
+    );
+    assert!(
+        harness.state.ml_routing().is_attached(),
+        "the model must be on the *live* router, not merely on disk — that is the \
+         whole reason this entry point is in-process rather than a CLI"
+    );
+    assert_eq!(
+        harness.state.ml_routing().counts().fallbacks,
+        0,
+        "attaching must not have counted as a ranking failure"
+    );
+}
+
+/// **Asking twice for a verdict gives the same answer, and names its choices.**
+///
+/// The second property is that a round reports *which* candidate the learned policy
+/// chose and how often. `ArmMetrics::distinct_providers` cannot distinguish a policy
+/// that sensibly spread traffic from one that named the same candidate every time,
+/// and the second is a learned model that has not learned a ranking — which is
+/// precisely what someone reading a promotion decision needs to see.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_verdict_names_what_the_learned_policy_chose() {
+    let (alpha, alpha_addr) = two_models().await;
+    let (gamma, gamma_addr) = gamma_provider().await;
+    let upstreams = [alpha.clone(), gamma.clone()];
+    let topology = Topology {
+        alpha: alpha_addr,
+        gamma: gamma_addr,
+        include_gamma: true,
+    };
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let harness = Harness::start(config_for(&topology, dir.path(), true, 0.0)).await;
+    harness.drive(AUTHORISING_REQUESTS, &upstreams).await;
+
+    let status = harness
+        .state
+        .ml_run_promotion_round(authorising_round_config(), false, Some("choices".into()));
+    assert_eq!(
+        status.reason, None,
+        "the round could not run over a body this test just served: {:?}",
+        status.reason
+    );
+
+    let counted: usize = status.policy_choices.values().sum();
+    assert!(
+        !status.policy_choices.is_empty(),
+        "the round reported no policy choices at all; the learned arm named a \
+         candidate on every request, so the histogram cannot be empty"
+    );
+    assert_eq!(
+        counted, status.traces_read,
+        "every trace should be attributed to exactly one policy choice; got \
+         {counted} choices across {} traces",
+        status.traces_read
+    );
+    // The claim the histogram exists to make checkable: a policy that named one
+    // candidate on *every* request has not learned a ranking, and that is visible as
+    // a single entry holding the whole body. `distinct_providers` reports `1` for
+    // both that and a policy that used one provider twice out of three requests.
+    let (widest, most) = status
+        .policy_choices
+        .iter()
+        .max_by_key(|(_, count)| **count)
+        .map(|(candidate, count)| (candidate.clone(), *count))
+        .expect("at least one choice");
+    assert!(
+        most <= status.traces_read,
+        "no single candidate can have been chosen more often than there were \
+         requests, but {widest} was chosen {most} times across {} traces",
+        status.traces_read
+    );
+    if status.policy_choices.len() == 1 {
+        assert_eq!(
+            most, status.traces_read,
+            "a single-entry histogram means the policy named one candidate every \
+             time; that is a model that has not learned a ranking, and the operator \
+             should be able to see it from the count alone"
+        );
+    }
+    // And the answer is stable, because the split is seeded and the replay is
+    // deterministic. A dashboard polling this endpoint should not see it move.
+    let again = harness
+        .state
+        .ml_run_promotion_round(authorising_round_config(), false, Some("choices".into()));
+    assert_eq!(
+        again.reason, None,
+        "the second round could not run: {:?}",
+        again.reason
+    );
+    assert_eq!(
+        status.policy_choices, again.policy_choices,
+        "two rounds over the same body reported different policy choices, so the \
+         number an operator would poll is not stable"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_served_request_carries_its_price_into_the_durable_body() {
     let (alpha, alpha_addr) = two_models().await;
