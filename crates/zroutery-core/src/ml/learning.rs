@@ -374,11 +374,7 @@ pub fn split_samples(
             });
             let oldest = group.first().map(|(_, s)| s.timestamp).unwrap_or(0);
             let arrival = group.first().map(|(position, _)| *position).unwrap_or(0);
-            (
-                oldest,
-                arrival,
-                group.into_iter().map(|(_, s)| s).collect(),
-            )
+            (oldest, arrival, group.into_iter().map(|(_, s)| s).collect())
         })
         .collect();
     ordered.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
@@ -901,8 +897,14 @@ mod tests {
         let first = same_second_body(30);
         let second = same_second_body(30);
         assert_ne!(
-            first.iter().map(|s| s.request_id.as_str()).collect::<Vec<_>>(),
-            second.iter().map(|s| s.request_id.as_str()).collect::<Vec<_>>(),
+            first
+                .iter()
+                .map(|s| s.request_id.as_str())
+                .collect::<Vec<_>>(),
+            second
+                .iter()
+                .map(|s| s.request_id.as_str())
+                .collect::<Vec<_>>(),
             "the two fixtures must carry different ids, or this proves nothing"
         );
 
@@ -952,8 +954,7 @@ mod tests {
         assert_eq!(forward.train.len(), backward.train.len());
         assert_eq!(forward.holdout.len(), backward.holdout.len());
         assert_ne!(
-            forward.train[0].features.values[2],
-            backward.train[0].features.values[2],
+            forward.train[0].features.values[2], backward.train[0].features.values[2],
             "reversing the input should move which requests are in the training \
              partition; if it did not, the supplied order is being ignored"
         );

@@ -104,7 +104,9 @@ fn a_round_over_an_empty_log_reports_nothing_to_learn() {
 
     match run_promotion_round(dir.path(), &RoundConfig::default(), None) {
         Err(RoundError::NothingToLearn) => {}
-        Err(other) => panic!("an empty state directory should report NothingToLearn, got {other:?}"),
+        Err(other) => {
+            panic!("an empty state directory should report NothingToLearn, got {other:?}")
+        }
         Ok(round) => panic!(
             "a round over an empty log produced a verdict ({}), which means it decided \
              a promotion out of no evidence",
