@@ -136,6 +136,35 @@ pub struct Snapshot {
     pub ml_available: bool,
 }
 
+/// How much durable history the operator has, as bytes and as a record count.
+///
+/// `records` is `None` when the log could not be counted, which is a different
+/// answer from zero records and must not render as one. `error` carries that
+/// reason; the counters are reported either way, because "the log is not
+/// readable" and "the log is not being written to" are separate faults and the
+/// counters are what tells them apart.
+#[cfg(feature = "ml")]
+#[derive(Debug, Clone, Serialize)]
+pub struct MlTraceInfo {
+    pub records: Option<usize>,
+    pub bytes_on_disk: u64,
+    pub path: Option<String>,
+    pub counters: Option<zroutery_core::ml::TraceCounters>,
+    pub error: Option<String>,
+}
+
+/// What discarding the durable history removed.
+///
+/// `cleared: false` with no error is a real answer rather than a failure:
+/// deleting an empty log did exactly what was asked.
+#[cfg(feature = "ml")]
+#[derive(Debug, Clone, Serialize)]
+pub struct MlTraceClear {
+    pub cleared: bool,
+    pub removed_bytes: u64,
+    pub error: Option<String>,
+}
+
 /// One budget and how much of it is gone.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BudgetStatus {
@@ -388,6 +417,97 @@ impl Desktop {
     #[cfg(feature = "ml")]
     pub fn rollback_active_model(&self) -> zroutery_core::ReloadOutcome {
         self.core.rollback_active_model()
+    }
+
+    /// Run one promotion round over the durable history.
+    ///
+    /// The baseline is the caller's to choose; the evidence floors are not, and
+    /// the shipped defaults are what this passes, so relaxing "what a model has
+    /// to beat" can never become a way of stopping requiring evidence at all.
+    #[cfg(feature = "ml")]
+    pub fn ml_run_promotion_round(
+        &self,
+        install: bool,
+        baseline: Option<String>,
+    ) -> zroutery_core::ml::status::PromotionRoundStatus {
+        let mut gate = zroutery_core::ml::PromotionConfig::default();
+        if let Some(baseline) = baseline.as_deref() {
+            gate.required_baseline = baseline.to_string();
+        }
+        let config = zroutery_core::ml::RoundConfig {
+            gate,
+            ..zroutery_core::ml::RoundConfig::default()
+        };
+        self.core.ml_run_promotion_round(config, install, None)
+    }
+
+    /// How much history is on disk, read through the log this process holds.
+    ///
+    /// The instance `AppState` owns rather than a second handle on the same path:
+    /// two `TraceLog`s would be two independent append handles, and a count read
+    /// from the wrong one describes a file nobody is writing to.
+    #[cfg(feature = "ml")]
+    pub fn ml_traces(&self) -> MlTraceInfo {
+        match self.core.traces() {
+            None => MlTraceInfo {
+                records: None,
+                bytes_on_disk: 0,
+                path: None,
+                counters: None,
+                error: Some(
+                    "no durable state directory is configured, so there is no trace log".into(),
+                ),
+            },
+            Some(log) => match log.count() {
+                // `count` streams the file, so this is a record count and not a
+                // claim that the whole log was read into memory.
+                Ok(records) => MlTraceInfo {
+                    records: Some(records),
+                    bytes_on_disk: std::fs::metadata(log.path()).map(|m| m.len()).unwrap_or(0),
+                    path: Some(log.path().display().to_string()),
+                    counters: Some(log.counters()),
+                    error: None,
+                },
+                Err(error) => MlTraceInfo {
+                    records: None,
+                    bytes_on_disk: 0,
+                    path: Some(log.path().display().to_string()),
+                    counters: Some(log.counters()),
+                    error: Some(error.to_string()),
+                },
+            },
+        }
+    }
+
+    /// Discard the operator's own history, through the handle still appending to it.
+    ///
+    /// Goes through the live log on purpose: `TraceLog` holds its append handle
+    /// for the lifetime of the process and Windows cannot delete an open file, so
+    /// truncating through a second handle would leave the serving path holding a
+    /// handle to a file it had already written.
+    #[cfg(feature = "ml")]
+    pub fn ml_clear_traces(&self) -> MlTraceClear {
+        match self.core.traces() {
+            None => MlTraceClear {
+                cleared: false,
+                removed_bytes: 0,
+                error: Some(
+                    "no durable state directory is configured, so there is no trace log".into(),
+                ),
+            },
+            Some(log) => match log.clear() {
+                Ok(outcome) => MlTraceClear {
+                    cleared: outcome.cleared,
+                    removed_bytes: outcome.removed_bytes,
+                    error: None,
+                },
+                Err(error) => MlTraceClear {
+                    cleared: false,
+                    removed_bytes: 0,
+                    error: Some(error.to_string()),
+                },
+            },
+        }
     }
 
     pub fn activity(&self) -> Activity {
