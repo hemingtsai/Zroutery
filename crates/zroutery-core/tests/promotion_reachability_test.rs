@@ -48,48 +48,127 @@
 use std::sync::Arc;
 
 use zroutery_core::config::{AppConfig, MemorySecretStore};
+use zroutery_core::ml::{run_promotion_round, ActiveModelStore, RoundConfig, RoundError};
 use zroutery_core::server::AppState;
 
-/// The modules that run in a shipped build. None of them may promote a model.
-const RUNNING_MODULES: [(&str, &str); 6] = [
+/// The modules that run in a shipped build.
+///
+/// `ml/round.rs` is in this list and is the interesting one: it is the *mechanism*
+/// for a promotion round, and it legitimately contains the call that installs a
+/// decision. Defining that step is not the gap. Invoking it is.
+const RUNNING_MODULES: [(&str, &str); 8] = [
     ("server/pipeline.rs", include_str!("../src/server/pipeline.rs")),
     ("server/mod.rs", include_str!("../src/server/mod.rs")),
     ("ml/serving.rs", include_str!("../src/ml/serving.rs")),
     ("ml/promotion.rs", include_str!("../src/ml/promotion.rs")),
     ("ml/comparison.rs", include_str!("../src/ml/comparison.rs")),
     ("ml/learning.rs", include_str!("../src/ml/learning.rs")),
+    ("ml/round.rs", include_str!("../src/ml/round.rs")),
+    ("ml/shadow.rs", include_str!("../src/ml/shadow.rs")),
 ];
 
-/// **No running module promotes a model.**
+/// **Nothing runs a promotion round.**
 ///
-/// This is the half that will fail when the gap closes, which is the point. The
-/// message says what to do then rather than leaving a silent contradiction.
+/// `ml::round::run_promotion_round` exists, is exercised by both loop harnesses, and
+/// does the whole spine — read history, fit, replay against every baseline, analyse
+/// the counterfactual, put it to the gate, and install what the gate authorised. It
+/// installs nothing until [`PromotionRound::install`] is called on it, and no
+/// running module calls either.
+///
+/// This half is written to fail when that changes, and the failure message says
+/// what to update.
 #[test]
-fn no_running_module_promotes_a_model() {
+fn no_running_module_starts_a_promotion_round() {
     for (path, source) in RUNNING_MODULES {
-        // Only the part outside `#[cfg(test)]` counts, and a *definition* is not a
-        // call: `pub fn run_comparison(` sits above the test module in the very file
-        // that defines it, so a naive substring search reports the definition as a
-        // caller. Definition lines are therefore skipped explicitly.
+        // Only the part outside `#[cfg(test)]` counts.
         let outside_tests = match source.find("#[cfg(test)]") {
             Some(at) => &source[..at],
             None => source,
         };
-        for token in [".promote(", "PromotionGate::new", "run_comparison(", "run_training("] {
-            let name = token.trim_start_matches('.').trim_end_matches('(');
-            let offender = outside_tests.lines().find(|line| {
-                line.contains(token) && !line.contains(&format!("fn {name}("))
-            });
-            assert!(
-                offender.is_none(),
-                "{path} calls {token} outside its test module, so a running module can \
-                 now produce a promotion. That closes the gap this test records — \
-                 update it, and update the capability matrix's product-wiring row with \
-                 what is now reachable.\n  found: {}",
-                offender.unwrap_or_default().trim()
-            );
-        }
+        // A *call* is the thing that matters, so the token carries its paren. A bare
+        // mention of the type is not a capability: `ml/round.rs` names it in a
+        // `Debug` impl and in prose, and neither starts a round.
+        //
+        // Two exclusions, and both have bitten: a comment describing the mechanism
+        // is not an invocation, and `pub fn run_promotion_round(` is the declaration
+        // sitting in the very file that declares it.
+        let offender = outside_tests.lines().find(|line| {
+            let code = line.trim();
+            if code.starts_with("//") || code.starts_with('*') || code.starts_with("/*") {
+                return false;
+            }
+            code.contains("run_promotion_round(") && !code.contains("fn run_promotion_round(")
+        });
+        assert!(
+            offender.is_none(),
+            "{path} calls run_promotion_round in running code, so a running module can \
+             now start a promotion round. That closes the gap this test records — \
+             update it, and update the capability matrix's product-wiring row with what \
+             is now reachable and, more importantly, who decided to run it.\n  found: {}",
+            offender.unwrap_or_default().trim()
+        );
     }
+}
+
+// ---------------------------------------------------------------------------
+// The round mechanism itself
+// ---------------------------------------------------------------------------
+
+/// **A round refuses to invent a verdict from nothing.**
+///
+/// The round is now production-resident, so its own failure modes need pinning
+/// rather than inheriting whatever a harness happened to produce. An empty log must
+/// be its own answer, distinct from a gate refusal: "no traffic yet" and "traffic
+/// arrived and the model was not good enough" call for different responses from
+/// whoever schedules rounds, and conflating them is how a scheduler retries forever.
+#[test]
+fn a_round_over_an_empty_log_reports_nothing_to_learn() {
+    let dir = tempfile::tempdir().expect("tempdir");
+
+    match run_promotion_round(dir.path(), &RoundConfig::default(), None) {
+        Err(RoundError::NothingToLearn) => {}
+        Err(other) => panic!("an empty state directory should report NothingToLearn, got {other:?}"),
+        Ok(round) => panic!(
+            "a round over an empty log produced a verdict ({}), which means it decided \
+             a promotion out of no evidence",
+            round.decision.verdict.as_str()
+        ),
+    }
+}
+
+/// **A round that cannot run leaves the store exactly as it found it.**
+///
+/// The separation between judging and installing is why a round is useful on its
+/// own: it is how you find out *why* a model was refused without mutating the store.
+///
+/// **This is the weaker half of that claim and it is worth being precise about
+/// which half it is.** An empty log means the round returns before it has a verdict,
+/// so this pins the error path — no pointer, no audit entry, no partial write — and
+/// not the property one actually cares about, which is that a *successful* round does
+/// not install either.
+///
+/// That property is caught by
+/// `ml_closed_loop_test::new_outcomes_from_a_new_process_reach_the_next_round_of_learning`,
+/// which drives two rounds over real traffic and asserts on what is installed
+/// between them. Verified by mutation: giving `run_promotion_round` an install side
+/// effect fails that test and leaves this one green. Pinning it properly here would
+/// need a body with traffic in it, which is that test's fixture and not worth
+/// duplicating.
+#[test]
+fn running_a_round_that_cannot_run_touches_nothing() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let _ = run_promotion_round(dir.path(), &RoundConfig::default(), None);
+
+    let store = ActiveModelStore::open(dir.path()).expect("store");
+    assert!(
+        store.active().expect("read pointer").is_none(),
+        "a round installed a model on its own; run and install are supposed to be \
+         separate calls"
+    );
+    assert!(
+        store.audit().expect("audit").is_empty(),
+        "a round wrote a promotion audit entry on its own"
+    );
 }
 
 /// **So a fresh product never has one, however it is configured.**

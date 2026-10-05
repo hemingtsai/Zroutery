@@ -113,8 +113,19 @@ Five properties are load-bearing:
   point was reachable only from a test" — recurring one level up, at the promotion
   seam rather than the training one. It went unnoticed because every test that closes
   a gate in this ADR builds its own harness, so the loop is closed end to end in the
-  suite and open at both ends in the product. Recorded as a characterisation in
-  `tests/promotion_reachability_test.rs`, written to fail when the gap closes.
+  suite and open at both ends in the product.
+
+  **Amended:** the *sequence* was missing too, which is what let this recur. Two
+  hand-rolled copies of load → fit → compare → gate → install survived in test files,
+  neither obliged to do what the other did, and neither the copy that runs.
+  `ml::round::run_promotion_round` is that spine once, with installation split into
+  `PromotionRound::install` so a round can be run to find out *why* a model was
+  refused. Both copies now call it and all 16 tests across them pass unchanged.
+
+  The gap is therefore narrower than first recorded: not a missing mechanism but one
+  missing call. `tests/promotion_reachability_test.rs` names it
+  (`no_running_module_starts_a_promotion_round`) and fails when it closes, asking who
+  decided to run it — which is the product question this ADR does not answer.
 - An operator needs somewhere to see what is active. `RouteDecision::ml_ranking`
   makes the influence visible per request; the active model, its commit and its
   promotion history are in `ml::serving`. **ADR-0007** adds the read-only
@@ -127,6 +138,7 @@ Five properties are load-bearing:
 - `docs/development/decisions/0007-ml-operator-surface.md`
 - `docs/development/decisions/0008-nothing-random-decides.md`
 - `docs/development/ml-closed-loop-report.md` (§E9 for the promotion seam)
+- `crates/zroutery-core/src/ml/round.rs` — the promotion round: one spine, install separate
 - `crates/zroutery-core/tests/promotion_reachability_test.rs`
 - `crates/zroutery-core/src/ml/{traces,learning,comparison,shadow_analysis,promotion,serving,status}.rs`
 - `crates/zroutery-core/tests/ml_closed_loop_test.rs`
