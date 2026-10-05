@@ -45,10 +45,12 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 use zroutery_core::billing::Pricing;
-use zroutery_core::config::{AppConfig, MemorySecretStore, ModelEntry, ModelTier, ProviderConfig, ProviderKind};
+use zroutery_core::config::{
+    AppConfig, MemorySecretStore, ModelEntry, ModelTier, ProviderConfig, ProviderKind,
+};
 use zroutery_core::ml::{
-    deduped_samples_from, run_comparison, MlPolicy, PromotionConfig, ReplayBaseline,
-    RewardPolicy, RoundConfig, TraceLog,
+    deduped_samples_from, run_comparison, MlPolicy, PromotionConfig, ReplayBaseline, RewardPolicy,
+    RoundConfig, TraceLog,
 };
 use zroutery_core::server::{AppState, ServerHandle};
 
@@ -120,14 +122,14 @@ struct Price {
 
 /// Cheapest, and the one that fails three calls in four.
 const ALPHA_PRICE: Price = Price {
-    input_per_mtok: 0.15,        // deepseek-v4-flash
+    input_per_mtok: 0.15, // deepseek-v4-flash
     output_per_mtok: 0.6,
     cache_read_per_mtok: 0.003,
 };
 
 /// Mid-priced and dependable — the choice a static policy is expected to make.
 const BRAVO_PRICE: Price = Price {
-    input_per_mtok: 1.4,         // glm-5.3
+    input_per_mtok: 1.4, // glm-5.3
     output_per_mtok: 4.4,
     cache_read_per_mtok: 0.26,
 };
@@ -136,7 +138,7 @@ const BRAVO_PRICE: Price = Price {
 /// worth having: the best provider is the expensive one, so "best" and "cheapest"
 /// disagree and utility has a real decision to make.
 const CHARLIE_PRICE: Price = Price {
-    input_per_mtok: 5.0,         // claude-opus-4-8
+    input_per_mtok: 5.0, // claude-opus-4-8
     output_per_mtok: 25.0,
     cache_read_per_mtok: 0.5,
 };
@@ -228,7 +230,10 @@ async fn fake_chat(
         .get(&model)
         .copied()
         .unwrap_or_else(|| {
-            panic!("upstream {} was asked for undeclared model {model:?}", upstream.name)
+            panic!(
+                "upstream {} was asked for undeclared model {model:?}",
+                upstream.name
+            )
         });
     let index = {
         let mut per_model = upstream.per_model.lock().expect("per_model");
@@ -337,8 +342,7 @@ impl Environment {
 
         for (index, site) in self.sites.iter().enumerate() {
             let name = ["alpha", "bravo", "charlie"][index];
-            let mut provider =
-                ProviderConfig::new(name, name, ProviderKind::OpenAICompatible);
+            let mut provider = ProviderConfig::new(name, name, ProviderKind::OpenAICompatible);
             provider.base_url = format!("http://{}", site.addr);
             provider.key_ref = format!("provider:{name}");
             provider.timeout_secs = 10;
@@ -421,6 +425,18 @@ struct PhaseReport {
     name: String,
     regime: Vec<String>,
     requests: usize,
+    /// Wall-clock time the phase took, and what was left after subtracting the
+    /// simulated upstream sleeps.
+    ///
+    /// The fake upstreams sleep a *fixed, known* duration per call, so their
+    /// contribution is exactly known and subtracting it isolates what this process
+    /// itself spent. That matters more than it sounds: arms route differently, so
+    /// they take different-length fallback chains, and comparing raw wall time
+    /// between them would mostly measure how many upstreams each one called.
+    /// Subtracting makes the comparison about routing cost instead.
+    wall_ms: f64,
+    /// `wall_ms` minus the total simulated upstream sleep.
+    overhead_ms: f64,
     /// Requests the client saw succeed end to end.
     ok: usize,
     /// Upstream calls and failures, per provider.
@@ -441,6 +457,9 @@ struct SiteReport {
     calls: u64,
     failures: u64,
     mean_latency_ms: f64,
+    /// Total simulated sleep this provider performed, so a phase can subtract the
+    /// environment's contribution from its own wall clock.
+    latency_total_ms: f64,
 }
 
 /// The whole experiment's findings, as one report.
@@ -519,7 +538,18 @@ pub async fn run(
     let mut notes = Vec::new();
 
     // -- phase 1: collect ----------------------------------------------------
-    phases.push(drive(&client, server.addr, &environment, &state, "collect", &regime_one, requests_per_phase).await);
+    phases.push(
+        drive(
+            &client,
+            server.addr,
+            &environment,
+            &state,
+            "collect",
+            &regime_one,
+            requests_per_phase,
+        )
+        .await,
+    );
 
     // -- promote -------------------------------------------------------------
     promotions.push(promote(&state, "round-1").await);
@@ -532,7 +562,18 @@ pub async fn run(
     ));
 
     // -- phase 2: exploit, same world ---------------------------------------
-    phases.push(drive(&client, server.addr, &environment, &state, "exploit", &regime_one, requests_per_phase).await);
+    phases.push(
+        drive(
+            &client,
+            server.addr,
+            &environment,
+            &state,
+            "exploit",
+            &regime_one,
+            requests_per_phase,
+        )
+        .await,
+    );
 
     // -- phase 3: the world changes -----------------------------------------
     // **bravo** is the provider the promoted model has been relying on, and it is
@@ -553,11 +594,33 @@ pub async fn run(
         Behaviour::FastReliable,
     ];
     environment.set_regime(&regime_two);
-    phases.push(drive(&client, server.addr, &environment, &state, "degrade", &regime_two, requests_per_phase).await);
+    phases.push(
+        drive(
+            &client,
+            server.addr,
+            &environment,
+            &state,
+            "degrade",
+            &regime_two,
+            requests_per_phase,
+        )
+        .await,
+    );
 
     // -- relearn, then adapt -------------------------------------------------
     promotions.push(promote(&state, "round-2").await);
-    phases.push(drive(&client, server.addr, &environment, &state, "adapt", &regime_two, requests_per_phase).await);
+    phases.push(
+        drive(
+            &client,
+            server.addr,
+            &environment,
+            &state,
+            "adapt",
+            &regime_two,
+            requests_per_phase,
+        )
+        .await,
+    );
 
     server.stop().await;
 
@@ -579,7 +642,10 @@ pub async fn run(
             samples.len()
         ));
     } else {
-        match zroutery_core::ml::run_training(&samples, &zroutery_core::ml::TrainingConfig::default()) {
+        match zroutery_core::ml::run_training(
+            &samples,
+            &zroutery_core::ml::TrainingConfig::default(),
+        ) {
             Ok(training) => {
                 let policy = RewardPolicy::default();
                 let candidate = MlPolicy::new(&training, policy.clone());
@@ -639,6 +705,7 @@ async fn drive(
     let attached = state.ml_routing().attached_commit();
 
     let mut ok = 0usize;
+    let started = std::time::Instant::now();
     for index in 0..count {
         let response = client
             .post(format!("http://{addr}/v1/messages"))
@@ -660,7 +727,7 @@ async fn drive(
         }
     }
 
-    let per_site = environment
+    let per_site: Vec<SiteReport> = environment
         .sites
         .iter()
         .enumerate()
@@ -679,15 +746,26 @@ async fn drive(
                 } else {
                     latency as f64 / calls as f64
                 },
+                latency_total_ms: latency as f64,
             }
         })
         .collect();
+
+    let wall_ms = started.elapsed().as_secs_f64() * 1000.0;
+    let simulated_upstream_ms: f64 = per_site.iter().map(|s| s.latency_total_ms).sum();
+    // A negative overhead would mean the sleeps accounted for more than the phase
+    // took, which is impossible. Clamping rather than asserting: a negative number
+    // here means the measurement is wrong, and printing it as ~0 would hide that
+    // while still reporting a plausible total.
+    let overhead_ms = (wall_ms - simulated_upstream_ms).max(0.0);
 
     let status = state.ml_status();
     PhaseReport {
         name: name.to_string(),
         regime: regime.iter().map(|b| b.label().to_string()).collect(),
         requests: count,
+        wall_ms,
+        overhead_ms,
         ok,
         per_site,
         rankings: state.ml_routing().counts().rankings - rankings_before,
@@ -761,6 +839,16 @@ impl Report {
                     .unwrap_or("none")
             ));
             out.push_str(&format!("    regime: {}\n", phase.regime.join(", ")));
+            // `overhead` is the only figure here that is attributable to this
+            // process: wall time minus the environment's own known sleeps, per
+            // request. It is what a router's cost actually looks like to a caller.
+            out.push_str(&format!(
+                "    wall={:.0}ms  simulated_upstream={:.0}ms  overhead={:.0}ms ({:.3}ms/request)\n",
+                phase.wall_ms,
+                phase.wall_ms - phase.overhead_ms,
+                phase.overhead_ms,
+                phase.overhead_ms / phase.requests.max(1) as f64
+            ));
             out.push_str(&format!(
                 "    ingested={} samples={} no_decision_time={} traces_appended={} traces_nothing={}\n",
                 phase.ingested,
@@ -808,10 +896,10 @@ impl Report {
 
         out.push_str("\nREPLAY: every arm over the same body, same constraints\n\n");
         // `cost_usd` is labelled and given six decimals because a per-request cost is a
-    // fraction of a cent: at the prices this fixture now uses the arms land
-    // between 0.001 and 0.046, so a fixed 2-decimal column would print them all as
-    // `0.00` and reintroduce exactly the unreadable axis this change exists to fix.
-    out.push_str("  policy                  n   success  fallback  lat(ms)   cost_usd  utility  providers  ineligible\n");
+        // fraction of a cent: at the prices this fixture now uses the arms land
+        // between 0.001 and 0.046, so a fixed 2-decimal column would print them all as
+        // `0.00` and reintroduce exactly the unreadable axis this change exists to fix.
+        out.push_str("  policy                  n   success  fallback  lat(ms)   cost_usd  utility  providers  ineligible\n");
         for arm in &self.replay {
             out.push_str(&format!(
                 "  {:<22} {:>3}   {:.3}     {:.3}   {:>7.1}  {:>9.6}  {:>7.4}      {:>2}        {:>2}\n",
