@@ -1244,7 +1244,11 @@ pub fn build_app(state: Arc<AppState>) -> AxumRouter {
             .route(&format!("{prefix}/ml/status"), get(ml_status))
             .route(&format!("{prefix}/ml/shadow"), get(ml_shadow))
             .route(&format!("{prefix}/ml/rollback"), post(ml_rollback))
-            .route(&format!("{prefix}/ml/promote"), post(ml_promote));
+            .route(&format!("{prefix}/ml/promote"), post(ml_promote))
+            .route(
+                &format!("{prefix}/ml/traces"),
+                get(ml_traces).delete(ml_traces_clear),
+            );
     }
 
     let mut app = api
@@ -1628,6 +1632,72 @@ async fn ml_rollback(State(state): State<Arc<AppState>>) -> Json<Value> {
 async fn ml_rollback() -> Json<Value> {
     Json(json!({
         "error": "this build contains no ML stack, so nothing can be rolled back",
+    }))
+}
+
+/// Inspect the durable trace log, and let an operator discard it.
+///
+/// `GET` reports size and record count without reading the file into memory —
+/// `count` streams, and it is the same number the promotion gate uses to decide
+/// whether a body is trainable.
+///
+/// `DELETE` exists because the log is the operator's evidence and only the
+/// operator should decide to destroy it. There is no automatic retention: the
+/// promotion round trains from the whole log, so a retention policy that fired on
+/// its own would change what the next model learns from without anyone asking.
+/// The response says what was removed *and* what it affects, because the second
+/// is the part that is not obvious.
+///
+/// It is a separate route from `status` rather than a parameter on it: this is
+/// destructive and there is no reason it should be reachable by a typo'd query
+/// string on a read.
+async fn ml_traces(State(state): State<Arc<AppState>>) -> Json<Value> {
+    // The instance `AppState` holds, not a freshly opened one. Two `TraceLog`s on
+    // one path would be two independent handles, and reporting on a second one
+    // would describe a file nobody is appending to.
+    let Some(log) = state.traces() else {
+        return Json(json!({
+            "error": "no durable state directory is configured, so there is no trace log",
+        }));
+    };
+    match log.count() {
+        Ok(records) => Json(json!({
+            "records": records,
+            "bytes_on_disk": std::fs::metadata(log.path()).map(|m| m.len()).unwrap_or(0),
+            "path": log.path().display().to_string(),
+            "counters": log.counters(),
+        })),
+        Err(error) => Json(json!({ "error": error.to_string() })),
+    }
+}
+
+#[cfg(feature = "ml")]
+async fn ml_traces_clear(State(state): State<Arc<AppState>>) -> Json<Value> {
+    // Through the live log, so `clear` drops the append handle this process is
+    // actually holding. Clearing a second handle would truncate the file and then
+    // leave the serving path holding a handle to a file it had already written.
+    let outcome = match state.traces() {
+        None => json!({
+            "error": "no durable state directory is configured, so there is no trace log",
+        }),
+        Some(log) => match log.clear() {
+            Ok(cleared) => json!({
+                "cleared": cleared.cleared,
+                "removed_bytes": cleared.removed_bytes,
+                "note": "the durable trace log is now empty; the in-memory dataset still \
+                         holds recent samples, and the next promotion round trains only \
+                         on records written from here on",
+            }),
+            Err(error) => json!({ "error": error.to_string() }),
+        },
+    };
+    Json(outcome)
+}
+
+#[cfg(not(feature = "ml"))]
+async fn ml_traces_clear() -> Json<Value> {
+    Json(json!({
+        "error": "this build contains no ML stack, so it keeps no trace log to clear",
     }))
 }
 

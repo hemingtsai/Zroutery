@@ -138,6 +138,8 @@ Status vocabulary: `0 NOT_STARTED` · `1 SCAFFOLDED` · `2 IMPLEMENTED` ·
 | Product wiring | **3** | Everything below the promotion source is wired and correct: `ml` is a named default-on desktop feature, `<config_dir>/ml` is claimed, the durable pointer is read and a verified predictor attached at startup, `reload_active_model` reaches the live router. Marked down from 4 because the top of the loop is not — see the row above |; `ml_routing.enabled` asserted off by default, so no install's behaviour changed |
 | Operator surface | **3** | `ml::MlStatus` read live and asserted to agree with `MlRouter`; `/v1/ml/{status,shadow,rollback}` behind the auth layer (401 asserted); the replay runs the *attached* model over real traffic, bounded; unreachable candidates are derived from config against the observation store and named, with the consequence stated rather than left to derive. Marked down from 4: correct, and reporting a **permanently empty** state — no attached model to describe, no shadow model to replay, no previous pointer to roll back to |
 | Reversibility | **4** | rollback reaches the router in a live process, verified to fail against a pointer-only implementation; refused rollback changes nothing |
+| Durable log read cost | **4** | `TraceLog::tail` no longer reads the whole file: `tail(5)` on a 6.95 MB / 400-record log reads **131,072 bytes** against 6,952,870 before. `count()` streams instead of `self.load()?.len()`. Mutation-verified — restoring a whole-file read fails with `tail(5) read 7083942 bytes of a 6952870-byte log`, because the returned records are identical either way and only the byte count distinguishes them. §E14 |
+| Operator control of the log | **4** | `GET`/`DELETE /v1/ml/traces`. Deletion is operator-initiated only, because `run_promotion_round` trains from the whole log and an automatic retention policy would silently change what the next model learns. Clearing must go through the live handle: `TraceLog` holds its append handle for the process's lifetime and Windows cannot delete an open file. The response states the consequence, and a test fails if that consequence stops being true. §E14 |
 | Coordinator convergence | **4** | `DecisionEngine` is the sole authority; `Coordinator` is retained deliberately as the differential oracle it is verified against, not as a second decision path. Verified by mutation: changing the engine's switch rate limit from `>=` to `>` fails `cross_check_full_matrix` and `cross_check_switch_rate_limit_reached`, which run the frozen `Coordinator::decide` over the same bundles and compare action, reason, selection and every utility term |
 
 ---
@@ -1502,23 +1504,134 @@ evidence — which covers an hour of a heavy user's traffic and about three days
 an average one. The memory question is therefore answered by reading three
 constants, not by measuring.
 
-The trace log is the opposite. `TraceLog` is append-only by design ("nothing
-rewrites a line"), and there is **no rotation, no size cap and no retention
-window**. Measured at **5.2 KB per trace**. That is the one quantity in the ML
-subsystem that grows forever.
+The trace log is the opposite, and **that is deliberate**. `TraceLog` is
+append-only by design ("nothing rewrites a line"), and there is no rotation, no
+size cap and no retention window. Measured at **5.2 KB per trace**, so a year of
+an average user's traffic is a few gigabytes on disk.
 
-### And the unbounded file becomes unbounded memory for any whole-file reader
+An earlier draft of this section called that a defect and reached for a retention
+policy. **That was the wrong conclusion, in both directions.**
 
-`TraceLog::load` returns `Vec<RequestTrace>` — the entire log materialised. That
-is fine at 500 requests and expensive at 500,000. Measured directly: 8,000 traces
-(39.8 MB on disk) cost **+202 MB** of resident memory to load, because parsing
-JSON into owned structs expands it about sevenfold.
+- It is the operator's evidence, so deleting it destroys audit history on request
+  of no one.
+- More seriously: `run_promotion_round` trains from `TraceLog::load`, so
+  **truncating the log silently changes what the next model learns from.** Any
+  retention policy that fired on its own would be editing routing behaviour in a
+  place nobody approved.
 
-This is exactly the trap the first measurement fell into, and it is worth stating
-as a product observation rather than only as a measurement mistake: **the trace
-log's lack of a bound is not only a disk problem, it is a memory problem for every
-consumer that reads the file whole.** The `/v1/ml/status` replay is bounded by
-design; anything else that calls `load` inherits the file's absence of a bound.
+So the growth is intended. The defect was never the growth — it was that the
+paths which *read* the log did not respect its size.
+
+### `tail` read the whole file and its comment said otherwise
+
+`TraceLog::tail` is what the `/v1/ml/status` replay uses, and its doc comment
+claimed:
+
+> the cost is the tail plus one line, **not the file**
+
+True of the scan, false of memory. It walked the file backwards correctly but
+reached it with `std::fs::read`, allocating the entire log first, and then counted
+newlines across the whole prefix to produce a line number it only needs when a
+line is corrupt — so it was linear in the file in both time and peak memory while
+documenting the opposite.
+
+It now finds the offset by reading backwards a block at a time and seeking, and
+resolves the line number only on the error path. Measured on a 6.95 MB log of 400
+records:
+
+| | bytes read for `tail(5)` |
+|---|---|
+| before | 6,952,870 (the whole file) |
+| after | **131,072** (two 64 KB blocks) |
+
+`count()` had the same shape for a smaller prize: it was `self.load()?.len()`,
+materialising every record to produce a number that fits in a `usize`. Counting is
+what a caller uses to decide whether a body is trainable, so the cheap question
+was the expensive one. It streams now.
+
+**The test that holds this is mutation-verified.** Asserting the returned records
+cannot distinguish the two implementations — they are identical — which is how the
+whole-file read survived. So `TraceLog` counts the bytes it actually reads and the
+test asserts on that. Restoring a whole-file read fails with
+`tail(5) read 7083942 bytes of a 6952870-byte log`. The count is a real diagnostic
+rather than a test hook: it is what an operator wants when a status call is slow.
+
+Two bugs surfaced while writing it, both from the same wrong assumption about
+offsets:
+
+- Reading the window a second time to turn the accumulated blocks into a buffer
+  measured **7,015,544 bytes against a 6,952,870-byte file** — bounded, but reading
+  more than the file it was tailing. The walk's reads are now the answer.
+- Deriving the cut's in-block offset from `len - window_start` looks equivalent to
+  recording where the cut was. It is not: for any block after the first, that
+  difference also counts the bytes *after* that block, so the trim became a no-op
+  and the window began mid-record.
+
+### A third bug that the first two were hiding
+
+Once the block walk existed, reassembling the blocks had to happen in **file
+order**, and `blocks` is collected newest-first. Joining it forwards produces the
+log backwards, which does not parse — and the failure reaches the operator as
+`"no request history has been recorded yet"`, a confidently wrong answer about a
+log that is full.
+
+It is invisible below 64 KB, because a smaller log is a single block and reversing
+one block changes nothing. Both the walk test and the correctness test used logs
+under that size, so a green suite covered the single-block case and nothing else.
+
+It was caught by `ml_closed_loop_test.rs`, not by the tests written alongside it:
+two operator-surface tests failed with `traces_read == 0` on a log that *did* have
+history. Confirmed as mine by stashing the change and watching them pass, then
+bisected to `traces.rs` by stashing `server/mod.rs` alone.
+
+The test that now covers it is
+`tail_handles_a_log_larger_than_one_block_when_the_window_is_the_whole_log`, and
+it asserts the log is several blocks long so the boundary cannot quietly move past
+it again.
+
+### Whole-file readers are still a hazard, and one remains
+
+`TraceLog::load` returns `Vec<RequestTrace>` — the whole log. That is correct for
+training and correct for the promotion round, both of which genuinely want
+everything. It is a hazard for anything that does not, and the promotion round
+inherits it: at a measured 389 MB of log, loading it costs ~389 MB of bytes plus
+about sevenfold expansion into owned structs.
+
+Bounding *that* is a real product decision rather than a defect, because the
+question "how much history should a round train on" has no answer that is right
+for everyone. It is not decided here.
+
+### Operators may delete it, and nothing else may
+
+`DELETE /v1/ml/traces`, with `GET` on the same route reporting size and record
+count. There is no automatic retention, for the reasons above, so an operator who
+wants a smaller log is the one who decides — and the endpoint exists rather than
+"delete the file yourself" for a technical reason: `TraceLog` holds its append
+handle for the process's lifetime once the first record is written, and **on
+Windows an open file cannot be deleted at all.** A version that opened a second
+handle to clear would have worked in a test and failed on the platform most of
+this ships to.
+
+The response states the consequence rather than leaving it to be discovered:
+
+> the durable trace log is now empty; the in-memory dataset still holds recent
+> samples, and the next promotion round trains only on records written from here on
+
+That is asserted, not just documented: `clearing_changes_what_a_later_round_can_
+learn_from` fails if it stops being true, because then the note is a lie.
+
+Clearing resets the byte counter but not `appended`. The byte counter describes
+the file, which is now empty; `appended` describes what this process has done, and
+an operator watching it climb wants to see it restart from their own action rather
+than jump to zero and look like a crash.
+
+§E7 already characterised the largest component: **~20µs per candidate plus ~15µs
+fixed**, flat to n=64. For a three-candidate plan that is ~75µs, plus roughly
+50µs to serialise a 5.2 KB trace. Call it **~150µs of ML-specific CPU per
+request**, against request latencies measured in the tens of milliseconds.
+
+That ratio is the whole answer for CPU: the learning path is three to four orders
+of magnitude below the request it rides on.
 
 ### What this costs in CPU
 
@@ -1529,8 +1642,6 @@ request**, against request latencies measured in the tens of milliseconds.
 
 That ratio is the whole answer for CPU: the learning path is three to four orders
 of magnitude below the request it rides on.
-
-### What is still not measured
 
 - **The durable write's cost under an fsync-ing filesystem.** The append is per
   request and its latency is filesystem-dependent in a way nothing above is.
