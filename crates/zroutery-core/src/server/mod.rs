@@ -20,7 +20,7 @@ use std::time::Duration;
 use chrono::Local;
 
 use axum::extract::rejection::JsonRejection;
-use axum::extract::{DefaultBodyLimit, Path, Query, State};
+use axum::extract::{DefaultBodyLimit, Path, State};
 use axum::http::{header, HeaderName, HeaderValue, Method, StatusCode, Uri};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
@@ -1651,6 +1651,7 @@ async fn ml_rollback() -> Json<Value> {
 /// It is a separate route from `status` rather than a parameter on it: this is
 /// destructive and there is no reason it should be reachable by a typo'd query
 /// string on a read.
+#[cfg(feature = "ml")]
 async fn ml_traces(State(state): State<Arc<AppState>>) -> Json<Value> {
     // The instance `AppState` holds, not a freshly opened one. Two `TraceLog`s on
     // one path would be two independent handles, and reporting on a second one
@@ -1669,6 +1670,18 @@ async fn ml_traces(State(state): State<Arc<AppState>>) -> Json<Value> {
         })),
         Err(error) => Json(json!({ "error": error.to_string() })),
     }
+}
+
+/// The no-ML twin. Present because the route is registered unconditionally, and
+/// because a 404 on a read would be a worse answer than "this build keeps no
+/// trace log" -- the caller asked a fair question of a build that genuinely has
+/// nothing to report.
+#[cfg(not(feature = "ml"))]
+async fn ml_traces() -> Json<Value> {
+    Json(json!({
+        "available": false,
+        "error": "this build contains no ML stack, so it keeps no trace log",
+    }))
 }
 
 #[cfg(feature = "ml")]
@@ -1716,7 +1729,10 @@ async fn ml_traces_clear() -> Json<Value> {
 #[cfg(feature = "ml")]
 async fn ml_promote(
     State(state): State<Arc<AppState>>,
-    Query(request): Query<PromoteRequest>,
+    // Fully qualified, like `ml_shadow` above. The bare `Query` would need an
+    // import that is only used from ml-gated handlers, so a `--no-default-features`
+    // build would warn about an unused import on a row CI actually runs.
+    axum::extract::Query(request): axum::extract::Query<PromoteRequest>,
 ) -> Json<Value> {
     // Only the baseline is the caller's to choose. The evidence floors — minimum
     // paired requests, required utility delta, permitted regressions — stay at their
@@ -1745,6 +1761,10 @@ async fn ml_promote() -> Json<Value> {
 }
 
 /// What to do about the round a `POST /v1/ml/promote` just ran.
+///
+/// Gated with the handler that deserialises it. Ungated it is dead code in a
+/// `--no-default-features` build, and that is a row CI runs.
+#[cfg(feature = "ml")]
 #[derive(Debug, Clone, Default, serde::Deserialize)]
 struct PromoteRequest {
     /// Install the model if — and only if — the gate authorised it.
