@@ -13,6 +13,8 @@ use zroutery_core::{MlStatus, ReloadOutcome, ShadowAnalysisStatus};
 use crate::ccswitch;
 use crate::logs::LogBuffer;
 use crate::state::{Activity, Desktop, Snapshot};
+#[cfg(feature = "ml")]
+use crate::state::{MlTraceClear, MlTraceInfo};
 use crate::store;
 use crate::tray;
 
@@ -93,6 +95,64 @@ pub fn rollback_ml_model(desktop: State<'_, Arc<Desktop>>) -> Cmd<MlRollback> {
 pub struct MlRollback {
     pub outcome: ReloadOutcome,
     pub status: MlStatus,
+}
+
+/// What one promotion round decided, and the status it left behind.
+///
+/// The two travel together for the same reason a rollback carries its own: a
+/// round that installed a model has moved the pointer and reloaded the router,
+/// so the dashboard has to read the status after that happened rather than
+/// render the one it had before.
+///
+/// `install` defaults to false and the default is load-bearing. Judging a model
+/// and installing it are separate acts, and only the second changes what every
+/// later request is served by — so a dashboard that asks once to "see what the
+/// gate would decide" cannot promote by accident.
+#[cfg(feature = "ml")]
+#[tauri::command]
+pub fn run_ml_promotion_round(
+    desktop: State<'_, Arc<Desktop>>,
+    install: Option<bool>,
+    baseline: Option<String>,
+) -> Cmd<MlPromotionRound> {
+    let round = desktop.ml_run_promotion_round(install.unwrap_or(false), baseline);
+    Ok(MlPromotionRound {
+        round,
+        status: desktop.ml_status(),
+    })
+}
+
+/// The gate's verdict for one round, plus the routing state it produced.
+#[cfg(feature = "ml")]
+#[derive(serde::Serialize)]
+pub struct MlPromotionRound {
+    pub round: zroutery_core::ml::status::PromotionRoundStatus,
+    pub status: MlStatus,
+}
+
+/// How much durable history exists, without reading it into memory.
+///
+/// `count` streams the file, so the number is a record count rather than a
+/// claim that the whole log was loaded — which matters because the promotion
+/// round trains from all of it.
+#[cfg(feature = "ml")]
+#[tauri::command]
+pub fn get_ml_traces(desktop: State<'_, Arc<Desktop>>) -> Cmd<MlTraceInfo> {
+    Ok(desktop.ml_traces())
+}
+
+/// Discard the operator's own history.
+///
+/// Operator-initiated only, and that is a deliberate absence rather than a
+/// missing feature: the promotion round trains from the whole log, so a
+/// retention policy that fired on its own would change what the next model
+/// learns from without anyone having asked. The caller is told what was removed
+/// *and* what it affects, because the second part is the one that is not
+/// obvious — see `MlTraceClear`'s use in the dashboard.
+#[cfg(feature = "ml")]
+#[tauri::command]
+pub fn clear_ml_traces(desktop: State<'_, Arc<Desktop>>) -> Cmd<MlTraceClear> {
+    Ok(desktop.ml_clear_traces())
 }
 
 /// The token in plain text, for the dashboard's explicit "Reveal" action. Every

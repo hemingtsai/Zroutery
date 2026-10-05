@@ -50,6 +50,12 @@ pub fn run() {
             commands::get_ml_shadow,
             #[cfg(feature = "ml")]
             commands::rollback_ml_model,
+            #[cfg(feature = "ml")]
+            commands::run_ml_promotion_round,
+            #[cfg(feature = "ml")]
+            commands::get_ml_traces,
+            #[cfg(feature = "ml")]
+            commands::clear_ml_traces,
             commands::reveal_token,
             commands::copy_token,
             commands::save_config,
