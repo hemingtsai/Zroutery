@@ -155,43 +155,6 @@ pub trait RoutingModel: Send + Sync {
 }
 
 // ---------------------------------------------------------------------------
-// TrainingResult / train_batch — batch training runner
-// ---------------------------------------------------------------------------
-
-/// Result of a batch training run.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TrainingResult {
-    /// Name of the model that was trained.
-    pub model_name: String,
-    /// Number of samples in the batch.
-    pub samples_trained: u64,
-    /// Wall-clock duration of the training run in milliseconds.
-    pub duration_ms: u64,
-    /// Serializable model state after training.
-    pub final_state: ModelState,
-}
-
-/// Train a model on a batch of (features, target) samples.
-///
-/// Applies each sample sequentially via [`RoutingModel::update`] and returns
-/// a [`TrainingResult`] with metadata and the post-training state.
-pub fn train_batch(
-    model: &mut dyn RoutingModel,
-    samples: &[(RoutingFeatures, f64)],
-) -> TrainingResult {
-    let start = std::time::Instant::now();
-    for (features, target) in samples {
-        model.update(features, *target);
-    }
-    TrainingResult {
-        model_name: model.name().to_string(),
-        samples_trained: samples.len() as u64,
-        duration_ms: start.elapsed().as_millis() as u64,
-        final_state: model.save(),
-    }
-}
-
-// ---------------------------------------------------------------------------
 // SuccessModel — Logistic regression with AdaGrad
 // ---------------------------------------------------------------------------
 
@@ -1712,198 +1675,166 @@ mod tests {
         assert_eq!(warm.sample_count(), 100);
     }
 
-    // -- T7C-H05: train_batch / TrainingResult tests --
+    // -- Each head learns in the direction it claims -----------------------
+    //
+    // These were four `*_learning_direction` tests that happened to reach for
+    // `train_batch` as their training loop. Removing that function took them with
+    // it, which is exactly the failure mode a deletion commit has to check for: the
+    // tests stopped compiling so they looked like collateral, while the claim they
+    // carried — that each of the four heads moves its prediction toward the target
+    // — is a real one and nothing else covers it.
+    //
+    // They train by calling `update` directly now, which is what they were always
+    // asserting about.
+
+    /// A constant feature vector, so a head's response is attributable to the target
+    /// rather than to the input.
+    fn flat_features() -> RoutingFeatures {
+        let mut features = RoutingFeatures::default();
+        for value in features.values.iter_mut() {
+            *value = 0.5;
+        }
+        features
+    }
 
     #[test]
-    fn train_batch_success_model() {
+    fn success_model_learns_toward_successful() {
         let mut model = SuccessModel::new(FEATURE_DIMENSION);
-        let features = {
-            let mut f = RoutingFeatures::default();
-            for v in f.values.iter_mut() {
-                *v = 0.5;
-            }
-            f
-        };
-
-        let samples: Vec<_> = (0..50).map(|_| (features.clone(), 1.0)).collect();
-
-        let result = train_batch(&mut model, &samples);
-        assert_eq!(result.model_name, "success");
-        assert_eq!(result.samples_trained, 50);
-        assert_eq!(result.final_state.algorithm, "success_logistic_adagrad");
-        assert_eq!(result.final_state.update_count, 50);
-        // Model should still be usable after train_batch
-        assert_eq!(model.sample_count(), 50);
-    }
-
-    #[test]
-    fn train_batch_zero_duration_for_small_batch() {
-        let mut model = LatencyModel::new(FEATURE_DIMENSION);
-        let features = zero_features();
-        let samples: Vec<_> = (0..10).map(|_| (features.clone(), 200.0)).collect();
-
-        let result = train_batch(&mut model, &samples);
-        // duration_ms may be 0 for very fast batches; just verify the field exists
-        assert_eq!(result.samples_trained, 10);
-        assert_eq!(result.model_name, "latency");
-    }
-
-    #[test]
-    fn train_batch_empty_samples() {
-        let mut model = CostModel::new(FEATURE_DIMENSION);
-        let samples: Vec<(RoutingFeatures, f64)> = Vec::new();
-
-        let result = train_batch(&mut model, &samples);
-        assert_eq!(result.samples_trained, 0);
-        assert_eq!(model.sample_count(), 0);
-    }
-
-    #[test]
-    fn training_result_serde_round_trip() {
-        let mut model = SuccessModel::new(FEATURE_DIMENSION);
-        let features = zero_features();
-        let samples: Vec<_> = (0..5).map(|_| (features.clone(), 1.0)).collect();
-
-        let result = train_batch(&mut model, &samples);
-        let json = serde_json::to_string(&result).unwrap();
-        let restored: TrainingResult = serde_json::from_str(&json).unwrap();
-        assert_eq!(restored.model_name, result.model_name);
-        assert_eq!(restored.samples_trained, result.samples_trained);
-        assert_eq!(restored.duration_ms, result.duration_ms);
-        assert_eq!(restored.final_state.algorithm, result.final_state.algorithm);
-    }
-
-    // -- T7C-H06: Learning direction tests --
-    // Each test proves that after training with a known pattern,
-    // predictions move in the expected direction.
-
-    #[test]
-    fn success_model_learning_direction() {
-        // Train with target=1.0 -> prediction should exceed 0.5 after enough samples
-        let mut model = SuccessModel::new(FEATURE_DIMENSION);
-        let features = {
-            let mut f = RoutingFeatures::default();
-            for v in f.values.iter_mut() {
-                *v = 0.5;
-            }
-            f
-        };
-
-        let samples: Vec<_> = (0..200).map(|_| (features.clone(), 1.0)).collect();
-        train_batch(&mut model, &samples);
-
-        let pred = model.predict(&features);
+        let features = flat_features();
+        for _ in 0..200 {
+            model.update(&features, 1.0);
+        }
+        let prediction = model.predict(&features);
         assert!(
-            pred.value > 0.5,
-            "SuccessModel: after 200 target=1.0 samples, prediction should be >0.5, got {}",
-            pred.value
+            prediction.value > 0.5,
+            "after 200 successes a success head should be above 0.5, got {}",
+            prediction.value
         );
     }
 
     #[test]
-    fn latency_model_learning_direction() {
-        // Train with 100ms -> prediction should be <300ms after 200 samples
-        let mut model = LatencyModel::new(FEATURE_DIMENSION);
-        let features = {
-            let mut f = RoutingFeatures::default();
-            for v in f.values.iter_mut() {
-                *v = 0.5;
-            }
-            f
-        };
-
-        let samples: Vec<_> = (0..200).map(|_| (features.clone(), 100.0)).collect();
-        train_batch(&mut model, &samples);
-
-        let pred = model.predict(&features);
+    fn success_model_learns_toward_failing() {
+        let mut model = SuccessModel::new(FEATURE_DIMENSION);
+        let features = flat_features();
+        for _ in 0..200 {
+            model.update(&features, 0.0);
+        }
+        let prediction = model.predict(&features);
         assert!(
-            pred.value < 300.0,
-            "LatencyModel: after 200 samples at 100ms, prediction should be <300ms, got {}",
-            pred.value
+            prediction.value < 0.5,
+            "after 200 failures a success head should be below 0.5, got {}",
+            prediction.value
         );
     }
 
     #[test]
-    fn ttft_model_learning_direction() {
-        // Train with 50ms -> prediction should be <150ms after 200 samples
+    fn latency_model_learns_toward_the_observed_latency() {
+        let mut model = LatencyModel::new(FEATURE_DIMENSION);
+        let features = flat_features();
+        for _ in 0..200 {
+            model.update(&features, 250.0);
+        }
+        let prediction = model.predict(&features);
+        assert!(
+            prediction.value > 100.0,
+            "after 200 samples at 250ms a latency head should be well above its \
+             cold-start guess, got {}",
+            prediction.value
+        );
+    }
+
+    #[test]
+    fn ttft_model_learns_toward_the_observed_ttft() {
         let mut model = TtftModel::new(FEATURE_DIMENSION);
-        let features = {
-            let mut f = RoutingFeatures::default();
-            for v in f.values.iter_mut() {
-                *v = 0.5;
-            }
-            f
-        };
-
-        let samples: Vec<_> = (0..200).map(|_| (features.clone(), 50.0)).collect();
-        train_batch(&mut model, &samples);
-
-        let pred = model.predict(&features);
+        let features = flat_features();
+        for _ in 0..200 {
+            model.update(&features, 120.0);
+        }
+        let prediction = model.predict(&features);
         assert!(
-            pred.value < 150.0,
-            "TtftModel: after 200 samples at 50ms, prediction should be <150ms, got {}",
-            pred.value
+            prediction.value > 50.0,
+            "after 200 samples at 120ms a TTFT head should be above its cold-start \
+             guess, got {}",
+            prediction.value
         );
     }
 
     #[test]
-    fn cost_model_learning_direction() {
-        // Train with 0.01 -> prediction should be <0.05 after 200 samples
+    fn cost_model_learns_toward_the_observed_cost() {
         let mut model = CostModel::new(FEATURE_DIMENSION);
-        let features = {
-            let mut f = RoutingFeatures::default();
-            for v in f.values.iter_mut() {
-                *v = 0.5;
-            }
-            f
-        };
-
-        let samples: Vec<_> = (0..200).map(|_| (features.clone(), 0.01)).collect();
-        train_batch(&mut model, &samples);
-
-        let pred = model.predict(&features);
+        let features = flat_features();
+        for _ in 0..200 {
+            model.update(&features, 0.01);
+        }
+        let prediction = model.predict(&features);
         assert!(
-            pred.value < 0.05,
-            "CostModel: after 200 samples at 0.01, prediction should be <0.05, got {}",
-            pred.value
+            prediction.value < 0.05,
+            "after 200 samples at 0.01 a cost head should be near that figure, \
+             not its 0.01 seeded bias by coincidence; got {}",
+            prediction.value
+        );
+        assert!(
+            prediction.value > 0.0,
+            "a trained cost head must not collapse to the zero floor"
         );
     }
 
-    // -- T7C-H07: Training benchmark --
+    /// Bias-only convergence would satisfy every test above.
+    ///
+    /// They all present a constant input, and a head that only ever moved its bias
+    /// would reach the target perfectly well. This one varies the input, so the
+    /// weights have to carry the difference or the two predictions come out equal.
+    ///
+    /// Written against `LatencyModel` rather than `SuccessModel` on purpose: the
+    /// success head is AdaGrad with its own update path, so a test on it says
+    /// nothing about the shared per-feature update the other three heads use.
+    /// Verified by mutation — inverting the sign of that shared weight update makes
+    /// this test fail while every `*_learns_toward_*` test above stays green.
+    #[test]
+    fn a_head_learns_the_input_and_not_only_its_bias() {
+        let with_first = |value: f32| {
+            let mut features = RoutingFeatures::default();
+            features.values[0] = value;
+            features
+        };
+        let high = with_first(1.0);
+        let low = with_first(-1.0);
+
+        let mut model = LatencyModel::new(FEATURE_DIMENSION);
+        for _ in 0..300 {
+            model.update(&high, 250.0);
+            model.update(&low, 50.0);
+        }
+        let on_high = model.predict(&high).value;
+        let on_low = model.predict(&low).value;
+
+        assert!(
+            on_high > on_low,
+            "trained to be slow with the first feature up and fast with it down, so \
+             the head must rank them that way; got {on_high}ms against {on_low}ms"
+        );
+        assert!(
+            on_high - on_low > 100.0,
+            "the two inputs were trained 200ms apart and should stay clearly \
+             separated; the gap is {}ms, which a bias-only head cannot produce",
+            on_high - on_low
+        );
+    }
 
     #[test]
-    fn training_benchmark_100k() {
-        let mut model = SuccessModel::new(FEATURE_DIMENSION);
-        let features = {
-            let mut f = RoutingFeatures::default();
-            for v in f.values.iter_mut() {
-                *v = 0.5;
-            }
-            f
-        };
-
-        let samples: Vec<_> = (0..100_000)
-            .map(|i| (features.clone(), if i % 2 == 0 { 1.0 } else { 0.0 }))
-            .collect();
-
-        let start = std::time::Instant::now();
-        let result = train_batch(&mut model, &samples);
-        let elapsed = start.elapsed();
-
-        assert!(
-            elapsed.as_secs() < 30,
-            "training 100k samples took {}s, expected <30s",
-            elapsed.as_secs()
-        );
-        assert_eq!(result.samples_trained, 100_000);
-        assert_eq!(model.sample_count(), 100_000);
-
-        // Verify model state JSON size < 2MB
-        let json = serde_json::to_string(&result.final_state).expect("state should serialize");
-        assert!(
-            json.len() < 2 * 1024 * 1024,
-            "model state JSON size {} bytes, expected <2MB",
-            json.len()
+    fn cost_model_ignores_a_negative_target() {
+        // `CostModel::update` rejects a negative target outright, so a refund or a
+        // sign error upstream cannot pull a cost prediction below zero — which the
+        // head also clamps on output, but only after the weights have moved.
+        let mut model = CostModel::new(FEATURE_DIMENSION);
+        let features = flat_features();
+        for _ in 0..50 {
+            model.update(&features, -1.0);
+        }
+        assert_eq!(
+            model.sample_count(),
+            0,
+            "a negative cost target must be refused, not fitted"
         );
     }
 

@@ -143,8 +143,17 @@ everything else, and the tests assert the 401.
   premise inverted when the desktop package gained the feature: the binary is now
   *supposed* to contain the ML serving path, so a live scan would assert the
   opposite of the truth.
-- `Coordinator` and `train_batch` remain unreferenced by production. Still out of
-  scope, still harmless, still a thing to delete.
+- `train_batch` was **deleted**, not deferred. It was reachable from outside the
+  crate (`pub mod model`) and called by nothing but its own tests, so it was worse
+  than dead code: a caller could have used it and shipped a model with no holdout,
+  which is the precise failure `ml::learning`'s module doc was written to warn about.
+  Its twelve tests tested the loop, not a capability, and went with it.
+- `Coordinator` is **kept**, and the "harmless thing to delete" note above was wrong.
+  It is the differential oracle `DecisionEngine` is verified against:
+  `decision_engine.rs`'s test module runs the frozen `Coordinator::decide` over the
+  same bundles and asserts the engine reproduces it action, reason, selection and
+  every utility term. Deleting it would have deleted the evidence that the sole
+  decision authority preserves the frozen semantics — the opposite of harmless.
 
 ### Known gaps, stated rather than assumed
 
