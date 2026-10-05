@@ -170,11 +170,29 @@ The following decisions are deliberately unresolved and are tracked as ADRs:
 - [ADR-0001: recoverable node record contract](decisions/0001-recoverable-node-records.md)
   — review whether the JSON schema and evidence ownership rules need a
   versioned migration before the next implementation batch.
-- [ADR-0002: production ML boundary](decisions/0002-production-ml-boundary.md)
-  — choose whether future online learning remains an optional in-process
-  library, becomes a separately owned sidecar, or is exposed only through a
-  read-only evidence service.
 
-Until those decisions are accepted, the safe architecture is the one recorded
+Until that decision is accepted, the safe architecture is the one recorded
 here: production Core authority, optional ML libraries, and parallel sidecars
 with no automatic activation or takeover.
+
+## Settled decisions that changed this posture
+
+Listed separately so the unresolved list above stays honest about what is
+actually unresolved. ADR-0002 was previously in that list; ADR-0006 answered
+its question, and leaving it there would have meant this document kept asking
+something the repository had already decided.
+
+- [ADR-0002: production ML boundary](decisions/0002-production-ml-boundary.md)
+  — **superseded by ADR-0006**. It asked whether future online learning remains
+  an optional in-process library, becomes a separately owned sidecar, or is
+  exposed only through a read-only evidence service. ADR-0006 took the first
+  option and answered it: ML reaches the routing path in-process, behind a gate,
+  with a fallback and a rollback.
+- [ADR-0006: the ML closed loop](decisions/0006-ml-closed-loop.md) — accepted;
+  the loop is real and its five load-bearing properties are enumerated there.
+- [ADR-0007: the loop is legible and reversible](decisions/0007-ml-operator-surface.md)
+  — accepted; builds on ADR-0006 without superseding it. An operator can read
+  what is routing their requests, and reverse it.
+- [ADR-0008: nothing random decides](decisions/0008-nothing-random-decides.md)
+  — accepted; builds on ADR-0006 and ADR-0007. No coin, clock, or hash decides a
+  split, a verdict, or a served model.
