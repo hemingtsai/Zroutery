@@ -264,24 +264,79 @@ curl -s -H "x-api-key: <你的 token>" \
 `targets.cost` **只在你的模型配置了 pricing 时才非空**，而且很容易小到在统计里
 看不见。
 
-我实测踩到的：pricing 设为 `0.0000005 / 0.0000015`（美元/千 token），每次请求
-400 prompt + 120 completion token，单次成本约 `0.00038`。在六位小数的报表里，
-**所有样本的成本都显示为 `0.000000`**，成本维度等于零，基线之间的 utility 差异
-完全由成功率和延迟决定。
+### 定价的单位是"每百万 token"，不是"每 token"
 
-建议：
+这是我实测踩到的，而且**没有任何报错**。`Pricing::cost_of` 内部除以 `1_000_000`，
+所以：
 
-1. **务必给每个 model 配置 `pricing`**，否则 `cost` 字段是 `null`，成本维度直接不存在
-2. 采集期确认 `cost` 不是全 0：
-   ```bash
-   # 从一条 trace 里看真实数值
-   head -1 traces.jsonl | python -c "import sys,json;d=json.load(sys.stdin);print([s['targets']['cost'] for s in d['samples']])"
-   ```
-3. **不要把 pricing 表当作 ground truth 之外的第二个真值**。它是你自己的声明，不是
+```toml
+# 错：这是"每百万 token 0.0000005 美元"，比真实价格便宜约百万倍
+input  = 0.0000005
+output = 0.0000015
+
+# 对：常见的真实量级（美元 / 百万 token）
+input  = 0.15     # 便宜的模型
+output = 0.6
+```
+
+写错单位的后果特别隐蔽：单价是百万分之一，报表按六位小数显示，**所有臂的
+`mean_cost` 都是 `0.000000`**，成本维度等于零，而 utility 差异仍然只由成功率和
+延迟决定 —— 看起来一切正常，只是成本这一维根本没参与。
+
+**一个"每臂恒定"的指标，和"还没测"的指标在报表里长得一模一样。** 这是最需要
+主动检查的地方。
+
+采集期请确认 `cost` 有实际量级：
+
+```bash
+head -1 traces.jsonl | python -c "import sys,json;d=json.load(sys.stdin);print([s['targets']['cost'] for s in d['samples']])"
+```
+
+看到 `1e-10` 量级就是单位写错了。
+
+### cache read 才是成本的大头，而且很容易漏配
+
+在真实流量里，**cache read 的 token 数是新鲜 input 的 360–595 倍**，所以一次请求
+的成本几乎全部是 cache read 成本。
+
+Zroutery 的成本公式是：
+
+```
+成本 = input单价 × (input_tokens − cache_read − cache_write)
+     + cache_read单价 × cache_read
+     + cache_write单价 × cache_write
+     + output单价 × output_tokens
+```
+
+两个容易踩的点：
+
+1. **`Pricing::new` 不会设置 cache 单价**，`cache_read_per_mtok` 留空时
+   **按 input 单价计费**。对一个 cache 占比 73% 的请求，这会把成本高估一个数量级，
+   而且**各 provider 高估的倍数不同** —— 等于凭空造出一个价格表里并不存在的成本差异。
+2. **cache 计价必须让 cache token 数占大头**，否则你测的是另一个维度。
+
+### ⚠️ 与 CC Switch 数据的语义冲突（如果你两边都有数据）
+
+`ir::Usage` 约定 `cache_read_tokens` 是 `input_tokens` 的**子集** —— 即
+`input_tokens` 是**含 cache 的总 prompt**。
+
+**CC Switch 的主流行用的是相反约定**：`input_token_semantics` 有三个取值，分布是
+17836 / 4297 / 74，占 81% 的那批 cache_read 是 input 的 **595 倍**，也就是
+`input_tokens` **不含** cache read。
+
+后果很具体：`fresh_input_tokens()` 是饱和减法，`input − cache_read` 在这批数据上
+直接变成 **0**，于是**新鲜 input 那一项被整项漏算**，成本系统性偏低。
+
+所以跨工具比较成本之前必须先对齐这一条，而"对齐"**不能**理解为"按 Zroutery 的约定
+处理"，因为多数派用的是另一套。正确做法是按 `input_token_semantics` 分组，两种
+约定分别算，不要混在一起。
+
+### 另外两件事
+
+1. **不要把 pricing 表当作 ground truth 之外的第二个真值**。它是你自己的声明，不是
    账单核对结果。
-
-另外：**失败的 attempt 可能不产生费用记录**（上游若对 5xx 计费，这笔花费在数据里
-不可见）。如果你关心这块，需要在采集期明确知道它不可得，而不是把它当成 0。
+2. **失败的 attempt 可能不产生费用记录**（上游若对 5xx 计费，这笔花费在数据里
+   不可见）。如果你关心这块，需要在采集期明确知道它不可得，而不是把它当成 0。
 
 ---
 
@@ -303,10 +358,34 @@ curl -s -H "x-api-key: <你的 token>" \
 所以：
 
 - 想要**能晋升的数据** → 采集期保持 `exploration_probability = 0`
-- 想要**能发现新 provider 的数据** → 必须开探索，且接受配对证据不足
+- 想要**能发现新 provider 的数据** → 必须开探索，且接受门控判决不可复现
 
-**这两个目前无法同时满足。** 这不是配置问题，是机制耦合（详见
-`docs/development/ml-closed-loop-report.md` 的 E6 节）。
+**这两个目前无法同时满足。** 这不是配置错误，是机制耦合。
+
+而且要特别注意第二条的准确含义 —— 我实测发现，比"探索会摧毁配对"更麻烦的是
+**判决本身变得不可复现**：
+
+| 探索概率 | 配对数（第一次） | 配对数（第二次） |
+|---|---|---|
+| 0.00 | 91 / 91 | 91 / 91 |
+| 0.02 | **6（BLOCKED）** / 73 | 53 / 53 |
+| 0.10 | 38 / 40 | **10（BLOCKED）** / 75 |
+
+探索为 0 时三次都是稳定的 91/91 晋升；探索大于 0 时，**每个设置我都拿到过
+BLOCKED 和 PROMOTED 两种结果**。原因是配对取决于"学到的模型所提名的候选，
+是否恰好在某个基线也被实测过的请求上被真正尝试过" —— 探索介入后这件事接近抛硬币。
+
+**所以如果你要拿数据去评估"能否晋升模型"，保持探索为 0，并且一次运行的结果不能
+当作结论** —— 请重复运行至少三次。
+
+### 一个反直觉的补充：盲区比"不可达"窄
+
+探索为 0 时，一个计划永不首选的 provider 确实拿不到**首选流量**，但它**仍然可能
+作为 fallback 被走到**。我实测中 `charlie` 从未成为首选（`blind_candidates=1`），
+但当 `bravo` 退化后，确定性 fallback 链走完了全程，`charlie` 拿到了 120/120 的请求。
+
+所以"新加的 provider 永远拿不到流量"这个说法是错的。准确说法是：**拿不到首选流量，
+兜底流量仍然有。**
 
 ---
 
@@ -362,9 +441,11 @@ curl -s -H "x-api-key: <你的 token>" \
 | 附带文件 | `active-model.json`、`active-model-audit.jsonl`（若有） |
 | 最低请求量 | 单配置 ≥ 120（60 实测不足） |
 | 最容易漏的坑 | `shadow.enabled` 没开 → 收不到任何样本 |
-| 成本维度 | 必须配 pricing，否则 `cost` 全为 null 或四舍五入为 0 |
+| 成本维度 | 必须配 pricing，**单位是每百万 token**，且必须显式配 cache read 单价 |
+| 成本自检 | `targets.cost` 应在 `1e-3` 量级；出现 `1e-10` 就是单位写错了 |
+| 跨工具注意 | CC Switch 主流行的 `input_tokens` **不含** cache read，与 Zroutery 约定相反，直接算会漏掉新鲜 input 项 |
 | **不要做** | 调用 `POST /v1/ml/promote`（会在生产上真实装模型） |
-| 已知不可兼得 | 「能晋升」与「能发现新 provider」目前互斥 |
+| 已知不可兼得 | 「能稳定晋升」与「能发现新 provider」目前互斥；探索 > 0 时门控判决不可复现，需重复运行 ≥ 3 次 |
 
 ---
 

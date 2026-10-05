@@ -126,8 +126,10 @@ Status vocabulary: `0 NOT_STARTED` · `1 SCAFFOLDED` · `2 IMPLEMENTED` ·
 | Retraining | **4** | collect → process ends → retrain → gate → promote → new process serves → retrain again; round 2 body 120 requests, distinct fingerprint, distinct commit, re-promoted |
 | Reproducibility | **4** | ADR-0008: the split's tiebreak was a random UUID, so the verdict alternated 3-of-6 on identical traffic; now 6-of-6 identical |
 | Cross-provider | **4** | `ml_multi_provider_test.rs`: three providers on three upstreams; unobserved provider received **0 of 60** requests with exploration off, and the learned ranking used **1 provider** against round-robin's 2 |
-| Exploration reach | **4** | `MlRouter::explore_plan` reachable with no model; `blind_explorations` counted apart from `explorations`; stays inside the eligible set and the plan. **But reaching a candidate and being promotable are in conflict** — measured: at exploration 0.25 the gate refuses at 120 *and* 240 requests for want of paired evidence. See §E6 |
-| Cost axis | **4** | `Attempt` grew a cost field, populated at the terminal transition. 120 of 171 samples now carry a real cost; `mean_cost` separates across arms (`baseline.priority` 0.00300, `ml.candidate` 0.00702). `RewardPolicy::cost_weight` and the gate's cost budget read a real number — §E4 |
+| Exploration reach | **4** | `MlRouter::explore_plan` reachable with no model; `blind_explorations` counted apart from `explorations`; stays inside the eligible set and the plan. **But reaching a candidate and being reliably promotable are in conflict** — at exploration 0.25 the gate refuses at 120 *and* 240 requests for want of paired evidence (§E6), and above 0 the paired count is unreproducible: 0.02 and 0.10 each produced both BLOCKED and PROMOTED across two runs while 0.0 was 3-for-3 stable at 91. A blind provider is also still reachable as a *fallback*, which is narrower than "unreachable". See §E6, §E11 |
+| Regime change | **4** | `zroutery-headless --experiment`: collect → promote → exploit → degrade → relearn → adapt over 480 requests on the production router. The degraded provider must be one **actually in the rotation** — degrading an unreachable one produces a phase that looks like an improvement and measures nothing. Adaptation observed: the promoted model moved 120/120 requests onto the provider that survived, `rankings` 0→120, two distinct commit ids — §E10 |
+| Promotion verdict reproducibility | **3** | Stable at exploration 0 (3 runs, paired 91/91). Above 0 the verdict is a function of which nominated candidate happened to be attempted, so it is **not** reproducible across runs. Marked 3 because the defect is characterised and bounded, not because it is fixed — §E11 |
+| Cost axis | **4** | `Attempt` grew a cost field, populated at the terminal transition. 120 of 171 samples now carry a real cost; `mean_cost` separates across arms (`baseline.priority` 0.00300, `ml.candidate` 0.00702). `RewardPolicy::cost_weight` and the gate's cost budget read a real number — §E4. Separately, the experiment *fixture* had its own inert axis from a per-token/per-million unit error, invisible because a constant across arms looks like an unmeasured one; prices now come from CC Switch's real table and `ml.candidate` is consistently **cheaper** than `baseline.balanced` — §E10 |
 | Holdout temporality | **4** | ADR-0008: the frozen holdout was a contiguous tail of a *content*-sorted vector, so it was a content cluster and its composition varied run to run. Now split in arrival order, ordered per partition — §E5 |
 | Model identity | **4** | one identity per model (`TrainingOutcome::commit_record`); commit `06f7da3409a14147` |
 | **Promotion is not product-wired** | **Closed.** `POST /v1/ml/promote` behind the same auth layer as `status`, `shadow` and `rollback`, backed by `AppState::ml_run_promotion_round`, runs the round in-process and — with `?install=true` — puts the model on the **live** router before responding. `install` defaults to **false**: judging and installing are separate acts, and a caller polling for a dashboard cannot promote by accident. Verified both ways by mutation — installing when not asked fails `asking_for_a_verdict_does_not_install_anything`, and skipping the live reload fails `asking_for_the_install_attaches_the_model_to_the_live_router` — §E9 | Two decisions remain and are **deliberately not made in code**: *when* a round runs (nothing here schedules; the caller's scheduler decides by choosing when to call) and *what an operator may hold a model to* (the caller names the **baseline**; the evidence floors — minimum paired requests, required utility delta, permitted regressions — are **not** caller-controlled, because relaxing those is not a claim about what to compare against, it is a decision to stop requiring evidence) |
@@ -607,6 +609,12 @@ ml.candidate             mean_cost 0.0070220690
 Which immediately shows something that was invisible before: **the learned router
 spends 2.3× what `baseline.priority` spends.** It buys its latency improvement
 with money, and the gate's cost budget was structurally unable to see it.
+
+> **Read this next to §E10, which measures the opposite sign.** The 2.3× here is a
+> property of *this fixture's price structure* — priority points at an expensive,
+> reasonably healthy provider here, and at the cheapest, most broken one there.
+> The direction of the ML-versus-priority cost comparison is set by the provider
+> layout, not by the model.
 
 ### What it broke, and what that turned out to be
 
@@ -1177,6 +1185,146 @@ leaving the loop closed in tests and open in the product while the matrix says 4
   is a learned model that has not learned a ranking. Declined twice before it was
   added, both times correctly: there was no product surface to read it on until
   `/v1/ml/promote` existed.
+
+---
+
+## E10. The fixture's own cost axis was inert, and it was a unit error
+
+§E4 made the cost axis real in the product. The headless experiment harness then
+reported `mean_cost = 0.000000` on **all five arms**, and the cause was in the
+harness, not the product.
+
+`Pricing::cost_of` divides by `1_000_000`. The fixture's prices were
+`0.000_000_5` and `0.000_001_5` — written as if per *single token*. A 400-token
+prompt therefore cost `2e-10`, and six decimal places printed it as zero.
+
+Nothing failed. No test caught it. The axis was simply absent from every
+comparison, which is the same failure shape as §E4 one level up: a measurement
+that is structurally constant across every arm looks exactly like a measurement
+that has not been taken yet.
+
+### Prices now come from real traffic
+
+CC Switch's own `model_pricing` table, for models that actually served its
+requests — chosen so the cheapest and the best are different providers, which is
+what gives the axis something to decide:
+
+| provider | model it copies | input | output | cache read |
+|---|---|---|---|---|
+| `alpha` | deepseek-v4-flash | 0.15 | 0.6 | 0.003 |
+| `bravo` | glm-5.3 | 1.4 | 4.4 | 0.26 |
+| `charlie` | claude-opus-4-8 | 5.0 | 25 | 0.5 |
+
+Cache reads are modelled because they dominate real cost: observed traffic ran
+**360×–595×** more cache reads than fresh input. The cache read price is also set
+explicitly, since `Pricing::new` leaves it unset and bills every cache read at
+the fresh input rate — which would have overcharged by more than an order of
+magnitude, and *unevenly across providers*, inventing a cost difference the price
+table does not contain.
+
+Price also moved off `Behaviour` onto the provider, where it belongs: a provider
+that degrades does not get cheaper. `Behaviour::FastReliableExpensive` existed
+only to carry a price and is gone.
+
+### What the cost axis changed
+
+| exploration | arm | `mean_cost` | utility |
+|---|---|---|---|
+| 0.0 | `ml.candidate` | **0.029029** | 0.9766 |
+| 0.0 | `baseline.balanced` | 0.029862 | 0.9834 |
+| 0.02 | `ml.candidate` | **0.033544** | 0.9736 |
+| 0.02 | `baseline.balanced` | 0.040763 | 0.9876 |
+| 0.10 | `ml.candidate` | 0.043990 | **0.9818** |
+| 0.10 | `baseline.balanced` | 0.044198 | 0.9817 |
+
+With cost at zero, `ml.candidate` was consistently a little *behind* `balanced`.
+With cost live it is consistently **cheaper**, at a utility gap of 0.0001–0.0140
+— 17.7% cheaper at exploration 0.02. So part of the earlier shortfall was the
+missing dimension rather than the model.
+
+And one result worth stating on its own: **`baseline.priority` is 26–40× cheaper
+than every other arm and has the worst utility in the set** (−1.0252), because it
+routes every request to the provider that fails three times in four. A pure
+cost-minimising objective picks the worst router available.
+
+### This reverses §E4's direction, and the reason matters
+
+§E4 measured the opposite sign in the multi-provider fixture: the learned router
+spent **2.3×** what `baseline.priority` spent. Here it spends **26× less**.
+
+Both are correct, and the difference is not about the model. It is about which
+provider a static priority order happens to point at:
+
+- In §E4's fixture, priority's first choice was expensive and reasonably healthy,
+  so beating it on latency meant spending more.
+- Here, priority's first choice is the **cheapest and most broken** provider, so
+  beating it means refusing to use the cheap one.
+
+So "the learned router costs more than priority" is **not a property of the
+learned router**. It is a statement about the price/quality layout of the provider
+set, and it flips sign with the layout. Any claim of the form *ML routing is more
+expensive* needs the price structure stated alongside it, or it is not a finding.
+
+### Verified by a cross-check, not an assertion
+
+`baseline.priority` routes only `alpha`, so it prices at exactly `0.001113` —
+which is `0.15 × 4000 + 0.003 × 11000 + 0.6 × 800`, per million, computed by
+hand. That one number exercises the pricing table, the cache-read path, the
+subset invariant and the OpenAI usage decoder simultaneously.
+
+### The two tools disagree about what `input_tokens` means
+
+`ir::Usage` documents `cache_read_tokens` as a **subset** of `input_tokens`, and
+`protocol::openai::decode_usage` clamps to enforce it.
+
+CC Switch's `input_token_semantics` has three values across its rows — 17,836 /
+4,297 / 74. In the 81% group, cache reads run **595×** the input count, i.e.
+`input_tokens` **excludes** cache reads. That is the opposite convention.
+
+Feeding those rows to `fresh_input_tokens()` — a saturating subtraction — drives
+fresh input to zero, so **the fresh-input term is silently dropped entirely**.
+Any cross-tool cost comparison has to reconcile this first, and "reconcile" cannot
+mean "assume the Zroutery convention", because the majority group uses the other
+one. Recorded in the data-collection guide as well, since anyone importing CC
+Switch data will hit it.
+
+---
+
+## E11. The blind spot is narrower than "unreachable", and exploration is not the fix
+
+Two claims this report previously leaned on did not survive measurement.
+
+**The blind spot is not "never reached".** With exploration at 0, `charlie` was
+never a *first* choice — `blind_candidates = 1` — but it was still reachable as a
+**fallback**. Once `bravo` degraded, the deterministic chain walked to it and it
+served 120 of 120 requests. So the accurate statement is: a provider can be
+permanently excluded from *preferred* traffic while remaining available as
+fallback. Every earlier attempt to test a regime change failed because the
+degraded provider was neither preferred nor a fallback target.
+
+**Exploration does not fix it without breaking something else.** Exploration is
+the only mechanism that can route to a candidate the plan does not already pick,
+and it does produce discovery — `blind_candidates` goes to 0, and the learned
+policy then prefers the newly-reachable provider. But the promotion gate's paired
+count becomes **unreproducible**:
+
+| exploration | paired, run A | paired, run B |
+|---|---|---|
+| 0.00 | 91 / 91 | 91 / 91 |
+| 0.02 | **6** (BLOCKED) / 73 | 53 / 53 |
+| 0.10 | 38 / 40 | **10** (BLOCKED) / 75 |
+
+At exploration 0 the gate is 3-for-3 stable. Above 0, each setting has produced
+both verdicts. §E6 recorded the conflict as exploration *blocking* promotion; the
+sharper statement is that exploration makes the **verdict itself** unreliable,
+because pairing depends on whether the candidate a learned policy nominates
+happens to have been attempted on a request where the baseline was also attempted
+— and under exploration that is close to a coin flip.
+
+So this is a real trade-off, not a misconfiguration: the only setting that
+reliably produces a promotable model is also the only setting that cannot reach a
+newly added provider. Neither is wrong; they cannot both be had from the
+configuration surface as it stands.
 
 ---
 
