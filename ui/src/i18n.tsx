@@ -501,6 +501,76 @@ const en = {
   "ml.gaps": "Unusable records:",
   "ml.rollback_action": "Roll back to the previous model",
   "ml.rolling_back": "Rolling back…",
+
+  // ----------------------------------------------- learned routing: collection
+  //
+  // The state in which the stack is switched on and learning nothing is silent,
+  // healthy everywhere, and only visible in these counters. Nothing in the
+  // configuration, the status document or the promotion endpoint declares the
+  // prerequisite, so the panel that shows the counters has to say it.
+  "ml.learning_blocked":
+    "Learned routing is on but nothing is being collected, and every endpoint looks healthy. Shadow evaluation is off, so no request retains the decision-time input a sample is built from and every one of them is discarded before ingestion — {n} so far. A promotion round now has nothing to learn from. Turn shadow evaluation on to collect evidence.",
+  "ml.learning_blocked_short": "Learning is blocked",
+  "ml.ingested": "Requests stored",
+  "ml.dropped_no_decision": "Discarded for want of a decision",
+
+  // -------------------------------------------- learned routing: promotion round
+  //
+  // Judging and installing are rendered as two buttons on purpose. A single
+  // "promote" would collapse the distinction the backend makes load-bearing,
+  // and the consequence of getting it wrong is a different model serving every
+  // request that follows.
+  "ml.round": "Promotion round",
+  "ml.round_hint":
+    "Train a candidate from the recorded history and ask the gate whether it beats the baseline. Judging installs nothing; nothing here is scheduled, so a round happens when you ask for one.",
+  "ml.round_judge": "Judge a candidate",
+  "ml.round_judging": "Judging…",
+  "ml.round_judged": "Candidate judged — not installed",
+  "ml.round_install": "Install the authorised candidate",
+  "ml.round_installing": "Installing…",
+  "ml.round_install_hint":
+    "Only offered once the gate has authorised a candidate. This changes what every later request is served by.",
+  "ml.round_none": "No round could be run.",
+  "ml.round_records": "Records read",
+  "ml.round_candidate": "Candidate",
+  "ml.round_choices": "What the candidate would have chosen",
+  "ml.round_single_choice":
+    "The candidate named one choice on every request. That is not a learned ranking, whatever the verdict above says.",
+  "ml.round_installed": "Installed and serving",
+  "ml.round_not_installed": "Judged, not installed",
+  "ml.round_serving_now": "Serving now",
+  "ml.round_deterministic": "Routing is deterministic",
+  "ml.verdict": "Verdict",
+  "ml.verdict_promoted": "promoted",
+  "ml.verdict_rejected": "rejected",
+  "ml.verdict_blocked": "blocked",
+  "ml.round_error": "The round was judged but could not be installed",
+
+  // ------------------------------------------------ learned routing: the log
+  //
+  // Deletion is an operator's decision and never automatic: the round trains
+  // from the whole log, so a retention policy firing on its own would silently
+  // change what the next model learns. The dialog states that consequence.
+  "ml.log": "Recorded history",
+  "ml.log_hint":
+    "The durable evidence the round trains from. There is no automatic retention, because a policy that fired on its own would change what the next model learns without you asking.",
+  "ml.log_records": "Records",
+  "ml.log_size": "On disk",
+  "ml.log_path": "File",
+  "ml.log_unreadable": "The log could not be counted, so this is not a count of zero.",
+  "ml.log_appended": "Appended",
+  "ml.log_nothing": "Nothing to record",
+  "ml.log_refused": "Refused",
+  "ml.log_io_errors": "Write errors",
+  "ml.log_empty": "No history has been recorded yet.",
+  "ml.log_clear": "Delete recorded history",
+  "ml.log_clearing": "Deleting…",
+  "ml.log_cleared": "Deleted {bytes} of recorded history.",
+  "ml.log_clear_nothing": "There was nothing recorded to delete.",
+  "confirm.clear_traces": "Delete recorded history",
+  "confirm.clear_traces_body":
+    "The {n} recorded requests are removed and cannot be recovered. The next promotion round trains only on records written from here on — which is what any model promoted after this learns from. Nothing is scheduled, so nothing else changes on its own.",
+  "bytes.value": "{n} bytes",
 } as const;
 
 export type TKey = keyof typeof en;
@@ -964,6 +1034,62 @@ const zh: Dict = {
   "ml.gaps": "不可用记录：",
   "ml.rollback_action": "回滚到上一个模型",
   "ml.rolling_back": "回滚中…",
+
+  // ----------------------------------------------- learned routing: collection
+  "ml.learning_blocked":
+    "学习型路由已开启，但什么都没在采集，而且各个端点看起来都正常。影子评估处于关闭状态，因此没有请求会保留生成样本所需的决策时输入，每一条都在入库前被丢弃 —— 目前已丢弃 {n} 条。此时提升轮次没有任何可学的内容。要采集证据，请打开影子评估。",
+  "ml.learning_blocked_short": "学习已被阻断",
+  "ml.ingested": "已入库请求",
+  "ml.dropped_no_decision": "因缺少决策而丢弃",
+
+  // -------------------------------------------- learned routing: promotion round
+  "ml.round": "提升轮次",
+  "ml.round_hint":
+    "用已记录的历史训练一个候选模型，并让门禁判断它是否胜过基线。仅判断不会安装任何东西；这里不做任何调度，所以轮次只在你主动触发时发生。",
+  "ml.round_judge": "判断候选模型",
+  "ml.round_judging": "判断中…",
+  "ml.round_judged": "候选模型已评判 —— 未安装",
+  "ml.round_install": "安装已获授权的候选模型",
+  "ml.round_installing": "安装中…",
+  "ml.round_install_hint":
+    "只有在门禁授权候选模型之后才会出现。安装会改变此后每一个请求由谁来服务。",
+  "ml.round_none": "无法运行轮次。",
+  "ml.round_records": "已读记录数",
+  "ml.round_candidate": "候选模型",
+  "ml.round_choices": "候选模型本会如何选择",
+  "ml.round_single_choice":
+    "候选模型在每个请求上都只选中了同一个选项。这不是学出来的排序，无论上面的结论如何。",
+  "ml.round_installed": "已安装并正在服务",
+  "ml.round_not_installed": "已评判，未安装",
+  "ml.round_serving_now": "当前正在服务",
+  "ml.round_deterministic": "路由为确定性路由",
+  "ml.verdict": "结论",
+  "ml.verdict_promoted": "已提升",
+  "ml.verdict_rejected": "已拒绝",
+  "ml.verdict_blocked": "已阻断",
+  "ml.round_error": "轮次已评判，但无法安装",
+
+  // ------------------------------------------------ learned routing: the log
+  "ml.log": "已记录的历史",
+  "ml.log_hint":
+    "提升轮次据以训练��持久化证据。这里没有自动保留策略，因为自动触发的保留策略会在你没有要求的情况下改变下一个模型所学的内容。",
+  "ml.log_records": "记录数",
+  "ml.log_size": "占用空间",
+  "ml.log_path": "文件",
+  "ml.log_unreadable": "无法统计该日志，因此这并不是零条记录。",
+  "ml.log_appended": "已追加",
+  "ml.log_nothing": "无可记录内容",
+  "ml.log_refused": "已拒绝",
+  "ml.log_io_errors": "写入错误",
+  "ml.log_empty": "尚未记录任何历史。",
+  "ml.log_clear": "删除已记录的历史",
+  "ml.log_clearing": "删除中…",
+  "ml.log_cleared": "已删除 {bytes} 的已记录历史。",
+  "ml.log_clear_nothing": "没有已记录的内容可删除。",
+  "confirm.clear_traces": "删除已记录的历史",
+  "confirm.clear_traces_body":
+    "已记录的 {n} 条请求会被删除且无法恢复。之后的提升轮次只能使用从这里开始写入的记录来训练 —— 此后被提升的任何模型都只学这些内容。这里不做任何调度，所以不会有其他东西自行改变。",
+  "bytes.value": "{n} 字节",
 };
 
 const dicts: Record<Lang, Dict> = { en: en as Dict, zh };
