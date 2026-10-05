@@ -31,6 +31,8 @@
 //! nothing about whether the model is any good, and presenting it as if it did
 //! is the confusion this whole module tree exists to avoid.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use super::dataset::IngestionCounters;
@@ -146,6 +148,92 @@ impl BlindCandidate {
         blind.sort();
         blind.dedup();
         blind
+    }
+}
+
+/// The operator-facing result of running one promotion round.
+///
+/// Split from `ShadowAnalysisStatus` because the two answer different questions and
+/// only one of them is about the live router. A shadow analysis is a measurement
+/// over history and can always be produced. A promotion round *changes* the model
+/// that will serve traffic, so its result carries the routing state it left behind.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PromotionRoundStatus {
+    /// Traces the round read.
+    pub traces_read: usize,
+    /// The commit the round fitted, when it got that far.
+    pub candidate_commit: Option<String>,
+    /// The gate's verdict in full, when there was one.
+    pub decision: Option<crate::ml::promotion::PromotionDecision>,
+    /// What the model would have done with the same traffic.
+    pub analysis: Option<crate::ml::shadow_analysis::ShadowAnalysis>,
+    /// How often the learned policy named each candidate.
+    ///
+    /// The one number from the round that is worth having at a glance: a learned
+    /// ranking that named a single candidate on every request has not learned a
+    /// ranking, whatever the gate said.
+    pub policy_choices: BTreeMap<String, usize>,
+    /// Whether the model was installed, when installation was asked for.
+    pub installed: Option<String>,
+    /// The routing state after the round.
+    pub reload: ReloadOutcome,
+    /// Why no round could be run, when none was.
+    pub reason: Option<String>,
+    /// A fault that did not prevent the round from being reported.
+    pub error: Option<String>,
+}
+
+impl PromotionRoundStatus {
+    /// A round that never got as far as a verdict, and why.
+    pub fn unavailable(reason: impl Into<String>) -> Self {
+        Self {
+            traces_read: 0,
+            candidate_commit: None,
+            decision: None,
+            analysis: None,
+            policy_choices: BTreeMap::new(),
+            installed: None,
+            reload: ReloadOutcome::ok(false, None),
+            reason: Some(reason.into()),
+            error: None,
+        }
+    }
+
+    /// A round that ran, whether or not anything was installed.
+    pub fn from_round(round: &crate::ml::round::PromotionRound, reload: ReloadOutcome) -> Self {
+        let installed = match &reload.error {
+            None => reload.commit_id.clone(),
+            Some(_) => None,
+        };
+        let mut choices: BTreeMap<String, usize> = BTreeMap::new();
+        if let Some(arm) = round.comparison.arm("ml.candidate") {
+            for (candidate, count) in &arm.selections {
+                *choices.entry(candidate.clone()).or_insert(0) += count;
+            }
+        }
+        Self {
+            traces_read: round.traces_read,
+            candidate_commit: Some(round.training.commit_id.as_str().to_string()),
+            decision: Some(round.decision.clone()),
+            analysis: Some(round.analysis.clone()),
+            policy_choices: choices,
+            installed,
+            reload,
+            reason: None,
+            error: None,
+        }
+    }
+
+    /// Whether the gate authorised a model, regardless of whether it was installed.
+    pub fn gate_authorised(&self) -> bool {
+        self.decision
+            .as_ref()
+            .is_some_and(|decision| decision.verdict == crate::ml::promotion::PromotionVerdict::Promoted)
+    }
+
+    /// Whether a model is serving as a result of this round.
+    pub fn is_serving(&self) -> bool {
+        self.installed.is_some()
     }
 }
 

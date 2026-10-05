@@ -12,13 +12,13 @@ against a real axum server on a real socket, serving real HTTP requests through
 the production pipeline, against a local in-process upstream. Regenerate rather
 than trust this file.
 
-> **Read §E9 before any row of the capability matrix.** Every mechanism from a
-> served request to a re-ordered plan exists, is exercised, and is
-> mutation-verified — and **nothing in a shipped build can promote a model**, so
-> none of it is reachable by a user. The loop is closed in the test suite and open
-> in the product. Two matrix rows are corrected downward as a result, and what this
-> report has been measuring is *test-reachable* capability rather than product
-> capability. That distinction is the most important thing in the file.
+> **§E9 was written when promotion was not product-wired, and has since been
+> fixed.** `POST /v1/ml/promote` now runs a round in-process and, with
+> `?install=true`, puts the model on the live router. What this report has been
+> measuring throughout was *test-reachable* capability rather than product
+> capability — that distinction was the most important thing in the file, and it is
+> the reason §E9 exists. Read it for the shape of the failure, not for the current
+> state.
 
 ---
 
@@ -130,7 +130,7 @@ Status vocabulary: `0 NOT_STARTED` · `1 SCAFFOLDED` · `2 IMPLEMENTED` ·
 | Cost axis | **4** | `Attempt` grew a cost field, populated at the terminal transition. 120 of 171 samples now carry a real cost; `mean_cost` separates across arms (`baseline.priority` 0.00300, `ml.candidate` 0.00702). `RewardPolicy::cost_weight` and the gate's cost budget read a real number — §E4 |
 | Holdout temporality | **4** | ADR-0008: the frozen holdout was a contiguous tail of a *content*-sorted vector, so it was a content cluster and its composition varied run to run. Now split in arrival order, ordered per partition — §E5 |
 | Model identity | **4** | one identity per model (`TrainingOutcome::commit_record`); commit `06f7da3409a14147` |
-| **Promotion is not product-wired** | **3 — the largest remaining gap.** Every mechanism from outcome to serving exists, is proven, and now has a single home: `ml::round::run_promotion_round` does load → fit → compare → analyse → gate, with `PromotionRound::install` separate so a round can be run without mutating the store. **Nothing runs it.** So `MlStatus::active` is always `None`, `is_attached()` always `false`, `apply_ml_ranking` always takes its no-model branch, and `ml_routing.enabled` is inert. The **sink** is wired (`AppState::new` attaches a verified predictor if the pointer exists); the **source** is one missing call — §E9 | A product decision, not engineering: something must decide *when* to run a round and *on whose authority*, which is a scheduling and consent question. The mechanism it would call is built |
+| **Promotion is not product-wired** | **Closed.** `POST /v1/ml/promote` behind the same auth layer as `status`, `shadow` and `rollback`, backed by `AppState::ml_run_promotion_round`, runs the round in-process and — with `?install=true` — puts the model on the **live** router before responding. `install` defaults to **false**: judging and installing are separate acts, and a caller polling for a dashboard cannot promote by accident. Verified both ways by mutation — installing when not asked fails `asking_for_a_verdict_does_not_install_anything`, and skipping the live reload fails `asking_for_the_install_attaches_the_model_to_the_live_router` — §E9 | Two decisions remain and are **deliberately not made in code**: *when* a round runs (nothing here schedules; the caller's scheduler decides by choosing when to call) and *what an operator may hold a model to* (the caller names the **baseline**; the evidence floors — minimum paired requests, required utility delta, permitted regressions — are **not** caller-controlled, because relaxing those is not a claim about what to compare against, it is a decision to stop requiring evidence) |
 | Product wiring | **3** | Everything below the promotion source is wired and correct: `ml` is a named default-on desktop feature, `<config_dir>/ml` is claimed, the durable pointer is read and a verified predictor attached at startup, `reload_active_model` reaches the live router. Marked down from 4 because the top of the loop is not — see the row above |; `ml_routing.enabled` asserted off by default, so no install's behaviour changed |
 | Operator surface | **3** | `ml::MlStatus` read live and asserted to agree with `MlRouter`; `/v1/ml/{status,shadow,rollback}` behind the auth layer (401 asserted); the replay runs the *attached* model over real traffic, bounded; unreachable candidates are derived from config against the observation store and named, with the consequence stated rather than left to derive. Marked down from 4: correct, and reporting a **permanently empty** state — no attached model to describe, no shadow model to replay, no previous pointer to roll back to |
 | Reversibility | **4** | rollback reaches the router in a live process, verified to fail against a pointer-only implementation; refused rollback changes nothing |
@@ -971,7 +971,11 @@ socket activation) rather than test scaffolding, so it is worth doing on its own
 merits; it is just not a test fix, and it is not taken here.
 
 
-## E9. The loop is closed in code and open in the product
+## E9. The loop was closed in code and open in the product
+
+**This gap is closed.** The section is kept because the *shape* of the failure is the
+most useful thing this report found, and because the fix's design decisions are only
+intelligible against it. The title is past tense deliberately.
 
 Found while chasing a much smaller question. I went to add a per-candidate choice
 histogram to `ArmMetrics` to close §E6's unmeasured link, checked who reads
@@ -1091,6 +1095,58 @@ what to update, so that wiring promotion cannot leave a test that quietly stoppe
 describing the product. Verified by mutation: adding a gate construction to
 `server/mod.rs` fails it with the offending line quoted.
 
+### What closed it
+
+**An HTTP endpoint on the running proxy, not a CLI.** That was not a preference. Only
+in-process code can attach a model to the *live* router: `reload_active_model` acts
+on this `AppState`, and nothing watches the pointer file, so a model installed by a
+separate process would sit unread until a restart. The entry point is where the
+mechanism forces it to be.
+
+So the three product decisions resolve as follows, and only the first is genuinely
+free:
+
+1. **Where** — `POST /v1/ml/promote`, in-process. Forced by the fact above.
+2. **On whose authority** — the caller, made explicit. `install` defaults to
+   **false**, so `POST /v1/ml/promote` on its own reports what the gate would decide
+   and changes nothing. That makes the endpoint safe to poll and safe to point a
+   dashboard at, and it is the reason the default is not `true`: a promotion changes
+   what every later request is served by and should be something an operator asked
+   for. With `?install=true` the model is on the live router *before the response is
+   written*.
+3. **When** — **deliberately not decided in code.** Nothing here schedules, retries
+   or holds a cadence. An operator's own scheduler decides, and it decides by
+   choosing when to call.
+
+The one product surface that *was* added is the baseline. "Beats a baseline" is a
+claim about a specific baseline, so `?baseline=baseline.priority` names one rather
+than letting a promotion quietly pick whichever it happened to win against. **Only
+the baseline is caller-controlled.** The evidence floors — minimum paired requests,
+required utility delta, permitted regressions — stay at their shipped values,
+because relaxing those is not a statement about *what* to hold a model to; it is a
+decision to stop requiring evidence at all.
+
+And the report of what the learned policy actually *chose* now rides along:
+`PromotionRoundStatus::policy_choices` is a per-candidate histogram, so an operator
+reading a promotion can see a policy that named one candidate on every request — a
+model that has not learned a ranking — which `distinct_providers: 1` cannot
+distinguish from sensible traffic.
+
+**Both directions are mutation-verified**, which is the part worth noting. Installing
+when the caller did not ask fails `asking_for_a_verdict_does_not_install_anything`;
+skipping the live reload fails `asking_for_the_install_attaches_the_model_to_the_
+live_router`. A one-sided test would have left the flag decorative.
+
+**One test that was vacuous until it wasn't.** The first version of the safety test
+passed under a mutation that installed anyway — because the *default* gate refuses
+this fixture, so the install branch was never reached. It now asserts
+`gate_authorised()` first, which failed with `BLOCKED` and pointed at the real
+cause: at 60 requests this fixture cannot produce a promotable model, which is §E6's
+traffic floor behaving correctly. Two pre-existing tests and one diagnostic had their
+traffic silently doubled by an unscoped string replace in the same edit; all three are
+restored, and the lesson is that a scoped change made unscoped reads exactly like
+correct work until the diff is read.
+
 ### What closing it actually requires
 
 Not more machinery — every mechanism is built and proven. It requires deciding:
@@ -1113,14 +1169,14 @@ leaving the loop closed in tests and open in the product while the matrix says 4
   invisible to the ledger *and* to the cost axis, because nothing in the error
   carries the tokens. Fixing it means getting usage out of the failure path, which
   is an upstream protocol change rather than a routing one.
-- **Which candidate a learned policy converges on.** `RoutingComparison` exposes
-  aggregates, so §E6's causal chain is argued from `ArmRecord::measured`'s documented
-  semantics rather than observed directly. Adding a per-candidate choice histogram to
-  `ArmMetrics` would answer it in one line — `aggregate` already collects the provider
-  ids and throws the identities away. It was not added, because §E9 established that
-  the whole comparison module has no production caller, so a field on it is closer to
-  analysis scaffolding than to an operator surface. It becomes worth adding when
-  promotion is wired and something is there to read the result.
+- ~~**Which candidate a learned policy converges on.**~~ **Closed.** `ArmMetrics`
+  gained `selections`, a per-candidate histogram, and `PromotionRoundStatus::
+  policy_choices` surfaces it on the promotion endpoint. `distinct_providers` counted
+  the identities and threw them away, which cannot distinguish a policy that sensibly
+  split traffic from one that named the same candidate every request — and the second
+  is a learned model that has not learned a ranking. Declined twice before it was
+  added, both times correctly: there was no product surface to read it on until
+  `/v1/ml/promote` existed.
 
 ---
 
