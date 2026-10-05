@@ -1169,11 +1169,7 @@ async fn a_promotion_decision_is_explainable_and_a_promoted_model_becomes_the_ac
 ///
 /// Used by the offline gate tests, which hand the gate two models, and by the
 /// operator-surface tests, which need a live rollback to have somewhere to land.
-fn second_model(
-    artefacts: &LoopArtefacts,
-    store: &ActiveModelStore,
-    label: &str,
-) -> String {
+fn second_model(artefacts: &LoopArtefacts, store: &ActiveModelStore, label: &str) -> String {
     let mut other = zroutery_core::ml::model_identity::ModelEnsemble::new();
     other.success.update(
         &zroutery_core::ml::features::RoutingFeatures {
@@ -1309,8 +1305,7 @@ async fn a_promoted_model_changes_which_provider_serves_and_rollback_restores_th
     // prior model — and asserting otherwise would be asserting a rollback into a
     // state that never existed.
     let store = ActiveModelStore::open(&state_dir).expect("store");
-    let other_commit =
-        second_model(&artefacts, &store, "second-model");
+    let other_commit = second_model(&artefacts, &store, "second-model");
 
     assert!(
         store.rollback().expect("rollback"),
@@ -1462,8 +1457,11 @@ async fn the_status_document_describes_the_process_that_is_actually_serving() {
     let store = ActiveModelStore::open(artefacts.state_dir.path()).expect("store");
     let commit = promote_trained(&store, &artefacts, promotable_gate()).candidate_commit;
 
-    let harness =
-        Harness::start(config_for(addr, artefacts.state_dir.path(), true), upstream.clone()).await;
+    let harness = Harness::start(
+        config_for(addr, artefacts.state_dir.path(), true),
+        upstream.clone(),
+    )
+    .await;
     harness.drive(20).await;
 
     // -- Now the document has to agree with the router, field by field. --------
@@ -1474,7 +1472,10 @@ async fn the_status_document_describes_the_process_that_is_actually_serving() {
         status.headline()
     );
     let active = status.active.as_ref().expect("an active model");
-    assert_eq!(active.commit_id, commit, "the status names the wrong commit");
+    assert_eq!(
+        active.commit_id, commit,
+        "the status names the wrong commit"
+    );
     assert_eq!(
         harness.state.ml_routing().attached_commit().as_deref(),
         Some(commit.as_str()),
@@ -1486,7 +1487,10 @@ async fn the_status_document_describes_the_process_that_is_actually_serving() {
 
     // The gate's own reasoning is readable, criteria and all, so "why is this
     // serving" has an answer rather than a verdict.
-    let decision = status.active_decision.as_ref().expect("the decision travels");
+    let decision = status
+        .active_decision
+        .as_ref()
+        .expect("the decision travels");
     assert_eq!(decision.verdict, PromotionVerdict::Promoted);
     assert!(
         !decision.criteria.is_empty(),
@@ -1496,8 +1500,7 @@ async fn the_status_document_describes_the_process_that_is_actually_serving() {
         assert!(
             criterion.held,
             "criterion {} did not hold on a PROMOTED decision: {}",
-            criterion.name,
-            criterion.reason
+            criterion.name, criterion.reason
         );
     }
 
@@ -1513,11 +1516,8 @@ async fn the_status_document_describes_the_process_that_is_actually_serving() {
 
     // And the history records the promotion that got here.
     assert!(
-        status
-            .history
-            .iter()
-            .any(|entry| entry.commit_id == commit && entry.action
-                == zroutery_core::ml::ActiveModelAction::Promote),
+        status.history.iter().any(|entry| entry.commit_id == commit
+            && entry.action == zroutery_core::ml::ActiveModelAction::Promote),
         "the promotion that produced the serving model is not in the history"
     );
 
@@ -1537,13 +1537,20 @@ async fn an_operator_can_replay_the_serving_model_over_their_own_traffic() {
     // returned an empty result for both would leave the operator unable to tell
     // "serve some traffic" from "promote a model".
     {
-        let harness =
-            Harness::start(config_for(addr, std::path::Path::new(""), false), upstream.clone()).await;
+        let harness = Harness::start(
+            config_for(addr, std::path::Path::new(""), false),
+            upstream.clone(),
+        )
+        .await;
         let analysis = harness.state.ml_shadow_analysis(1_000);
         assert!(!analysis.is_analysed());
         assert_eq!(analysis.traces_read, 0);
         assert!(
-            analysis.reason.as_deref().unwrap_or_default().contains("durable state"),
+            analysis
+                .reason
+                .as_deref()
+                .unwrap_or_default()
+                .contains("durable state"),
             "reason was {:?}",
             analysis.reason
         );
@@ -1561,7 +1568,11 @@ async fn an_operator_can_replay_the_serving_model_over_their_own_traffic() {
              concluding there was nothing to replay"
         );
         assert!(
-            analysis.reason.as_deref().unwrap_or_default().contains("no model is attached"),
+            analysis
+                .reason
+                .as_deref()
+                .unwrap_or_default()
+                .contains("no model is attached"),
             "reason was {:?}",
             analysis.reason
         );
@@ -1578,8 +1589,11 @@ async fn an_operator_can_replay_the_serving_model_over_their_own_traffic() {
     let store = ActiveModelStore::open(artefacts.state_dir.path()).expect("store");
     let commit = promote_trained(&store, &artefacts, promotable_gate()).candidate_commit;
 
-    let harness =
-        Harness::start(config_for(addr, artefacts.state_dir.path(), true), upstream.clone()).await;
+    let harness = Harness::start(
+        config_for(addr, artefacts.state_dir.path(), true),
+        upstream.clone(),
+    )
+    .await;
     harness.drive(20).await;
 
     let status = harness.state.ml_shadow_analysis(1_000);
@@ -1589,7 +1603,10 @@ async fn an_operator_can_replay_the_serving_model_over_their_own_traffic() {
         Some(commit.as_str()),
         "the replay judged a different model than the one serving"
     );
-    assert!(status.traces_read > 0, "it read nothing and still reported numbers");
+    assert!(
+        status.traces_read > 0,
+        "it read nothing and still reported numbers"
+    );
 
     let analysis = status.analysis.as_ref().expect("the analysis");
     assert_eq!(analysis.records, status.traces_read);
@@ -1708,7 +1725,11 @@ async fn a_rollback_takes_effect_in_the_live_process_and_not_only_on_disk() {
         "rolling back with no prior model reported success"
     );
     assert!(
-        refused.error.as_deref().unwrap_or_default().contains("earlier"),
+        refused
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("earlier"),
         "the refusal did not say why; error was {:?}",
         refused.error
     );
@@ -1791,7 +1812,10 @@ async fn the_operator_surface_is_served_over_http_and_behind_the_auth_layer() {
         .expect("json");
     assert_eq!(status["available"], serde_json::json!(true));
     assert_eq!(status["routing_with_a_model"], serde_json::json!(true));
-    assert_eq!(status["status"]["active"]["commit_id"], serde_json::json!(commit));
+    assert_eq!(
+        status["status"]["active"]["commit_id"],
+        serde_json::json!(commit)
+    );
 
     let shadow: serde_json::Value = harness
         .client

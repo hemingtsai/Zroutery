@@ -41,8 +41,8 @@ use super::comparison::{run_comparison, MlPolicy, ReplayBaseline, RoutingCompari
 use super::learning::{run_training, TrainingConfig, TrainingOutcome};
 use super::promotion::{PromotionConfig, PromotionDecision, PromotionGate, PromotionVerdict};
 use super::reward::RewardPolicy;
-use super::shadow_analysis::{analyse, ShadowAnalysis, ShadowEvidence};
 use super::serving::ActiveModelStore;
+use super::shadow_analysis::{analyse, ShadowAnalysis, ShadowEvidence};
 use super::traces::{deduped_samples_from, RequestTrace, TraceLog};
 
 /// Why a round could not be run at all.
@@ -187,13 +187,12 @@ pub fn run_promotion_round(
         return Err(RoundError::NothingToLearn);
     }
 
-    let training = run_training(&samples, &config.training).map_err(|e| RoundError::Training(e.to_string()))?;
+    let training = run_training(&samples, &config.training)
+        .map_err(|e| RoundError::Training(e.to_string()))?;
     let policy = config.reward_policy.clone();
     let candidate = MlPolicy::new(&training, policy.clone());
-    let comparison =
-        run_comparison(&traces, &candidate, &ReplayBaseline::ALL, &policy).map_err(|e| {
-            RoundError::Comparison(e.to_string())
-        })?;
+    let comparison = run_comparison(&traces, &candidate, &ReplayBaseline::ALL, &policy)
+        .map_err(|e| RoundError::Comparison(e.to_string()))?;
     let evidence = ShadowEvidence::from_policy(&traces, &candidate, Default::default());
     let analysis = analyse(&traces, &evidence, &policy);
     let decision =
@@ -210,5 +209,6 @@ pub fn run_promotion_round(
 
 fn read_traces(state_dir: &std::path::Path) -> Result<Vec<RequestTrace>, RoundError> {
     let log = TraceLog::open(state_dir).map_err(|e| RoundError::TraceUnavailable(e.to_string()))?;
-    log.load().map_err(|e| RoundError::TraceUnavailable(e.to_string()))
+    log.load()
+        .map_err(|e| RoundError::TraceUnavailable(e.to_string()))
 }

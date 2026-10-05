@@ -33,7 +33,9 @@
 //! cost tracks trained cost" means what it says.
 
 use zroutery_core::ml::dataset::Targets;
-use zroutery_core::ml::features::{RoutingFeatures, FEATURE_DIMENSION, FEATURE_SCHEMA_VERSION, UNKNOWN};
+use zroutery_core::ml::features::{
+    RoutingFeatures, FEATURE_DIMENSION, FEATURE_SCHEMA_VERSION, UNKNOWN,
+};
 use zroutery_core::ml::model_identity::ModelEnsemble;
 use zroutery_core::ml::reward::{compute_utility, PredictionBundle, RewardPolicy};
 use zroutery_core::ml::{DatasetTrainingSample, Prediction, RoutingModel};
@@ -93,12 +95,7 @@ fn trained_on_cost(cost_per_sample: f64, repeats: usize) -> ModelEnsemble {
 
 /// The cost head's prediction for a probe vector.
 fn predicted_cost(ensemble: &ModelEnsemble) -> f64 {
-    let bundle = zroutery_core::ml::predict_bundle(
-        ensemble,
-        "m",
-        "p",
-        &features(0.5),
-    );
+    let bundle = zroutery_core::ml::predict_bundle(ensemble, "m", "p", &features(0.5));
     bundle.cost.value
 }
 
@@ -238,7 +235,8 @@ fn a_learned_cost_reaches_the_ranking_utility() {
         cheap_bundle.cost.value,
         cheap_utility.cost
     );
-    let expected_gap = policy.cost_weight * (dear_bundle.cost.value - cheap_bundle.cost.value).min(1.0);
+    let expected_gap =
+        policy.cost_weight * (dear_bundle.cost.value - cheap_bundle.cost.value).min(1.0);
     let actual_gap = cheap_utility.total - dear_utility.total;
     assert!(
         (actual_gap - expected_gap).abs() < 1e-9,

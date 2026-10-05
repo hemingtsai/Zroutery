@@ -131,10 +131,7 @@ fn a_candidate_that_only_failed_is_not_blind() {
         blind.is_empty(),
         "a provider tried {n} times and failed every time has been observed; \
          listing it as unreachable would be wrong. Listed: {blind:?}",
-        n = observations
-            .get("alpha-cheap", "p1")
-            .health
-            .total_requests,
+        n = observations.get("alpha-cheap", "p1").health.total_requests,
         blind = blind
     );
 }
@@ -262,7 +259,8 @@ fn blind_spot_warning_matches_what_exploration_actually_does() {
     let at_five_percent = left_exploit(0.05);
 
     assert_eq!(
-        at_zero, 0,
+        at_zero,
+        0,
         "explore left Exploit {at_zero} times at probability 0 over {} requests. If \
          this is no longer zero the early return has changed, and \
          `blind_spots_are_permanent` is now claiming a permanence that does not \
