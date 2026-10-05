@@ -12,6 +12,14 @@ against a real axum server on a real socket, serving real HTTP requests through
 the production pipeline, against a local in-process upstream. Regenerate rather
 than trust this file.
 
+> **Read §E9 before any row of the capability matrix.** Every mechanism from a
+> served request to a re-ordered plan exists, is exercised, and is
+> mutation-verified — and **nothing in a shipped build can promote a model**, so
+> none of it is reachable by a user. The loop is closed in the test suite and open
+> in the product. Two matrix rows are corrected downward as a result, and what this
+> report has been measuring is *test-reachable* capability rather than product
+> capability. That distinction is the most important thing in the file.
+
 ---
 
 ## A. Route deviation and its correction
@@ -122,8 +130,9 @@ Status vocabulary: `0 NOT_STARTED` · `1 SCAFFOLDED` · `2 IMPLEMENTED` ·
 | Cost axis | **4** | `Attempt` grew a cost field, populated at the terminal transition. 120 of 171 samples now carry a real cost; `mean_cost` separates across arms (`baseline.priority` 0.00300, `ml.candidate` 0.00702). `RewardPolicy::cost_weight` and the gate's cost budget read a real number — §E4 |
 | Holdout temporality | **4** | ADR-0008: the frozen holdout was a contiguous tail of a *content*-sorted vector, so it was a content cluster and its composition varied run to run. Now split in arrival order, ordered per partition — §E5 |
 | Model identity | **4** | one identity per model (`TrainingOutcome::commit_record`); commit `06f7da3409a14147` |
-| Product wiring | **4** | ADR-0007: `ml` is a named, default-on, still-refusable desktop package feature; `<config_dir>/ml` claimed for durable state; `ml_routing.enabled` asserted off by default, so no install's behaviour changed |
-| Operator surface | **4** | `ml::MlStatus` read live and asserted to agree with `MlRouter`; `/v1/ml/{status,shadow,rollback}` behind the auth layer (401 asserted); the replay runs the *attached* model over real traffic, bounded; unreachable candidates are derived from config against the observation store and named, with the consequence stated rather than left to derive |
+| **Promotion is not product-wired** | **2 — the largest gap in the system.** Every mechanism from outcome to serving exists and is proven, but **nothing in a shipped build can promote a model**: every `ActiveModelStore::promote`, `PromotionGate::new`, `run_comparison` and `run_training` sits inside a `#[cfg(test)]` module or a `tests/` binary, and `src-tauri` names none of them. So `MlStatus::active` is always `None`, `is_attached()` always `false`, `apply_ml_ranking` always takes its no-model branch, and `ml_routing.enabled` is inert. The **sink** is wired (`AppState::new` attaches a verified predictor if the pointer exists); the **source** does not exist. Recorded by `promotion_reachability_test.rs` — §E9 | A product decision, not engineering: something must decide *when* to retrain and *whether* to promote without a human pressing a button, and that is a scheduling and consent question. The mechanisms it would call are built |
+| Product wiring | **3** | Everything below the promotion source is wired and correct: `ml` is a named default-on desktop feature, `<config_dir>/ml` is claimed, the durable pointer is read and a verified predictor attached at startup, `reload_active_model` reaches the live router. Marked down from 4 because the top of the loop is not — see the row above |; `ml_routing.enabled` asserted off by default, so no install's behaviour changed |
+| Operator surface | **3** | `ml::MlStatus` read live and asserted to agree with `MlRouter`; `/v1/ml/{status,shadow,rollback}` behind the auth layer (401 asserted); the replay runs the *attached* model over real traffic, bounded; unreachable candidates are derived from config against the observation store and named, with the consequence stated rather than left to derive. Marked down from 4: correct, and reporting a **permanently empty** state — no attached model to describe, no shadow model to replay, no previous pointer to roll back to |
 | Reversibility | **4** | rollback reaches the router in a live process, verified to fail against a pointer-only implementation; refused rollback changes nothing |
 | Coordinator convergence | **4** | `DecisionEngine` is the sole authority; `Coordinator` is retained deliberately as the differential oracle it is verified against, not as a second decision path. Verified by mutation: changing the engine's switch rate limit from `>=` to `>` fails `cross_check_full_matrix` and `cross_check_switch_rate_limit_reached`, which run the frozen `Coordinator::decide` over the same bundles and compare action, reason, selection and every utility term |
 
@@ -961,6 +970,98 @@ accept a pre-bound listener. That is a genuine capability (port 0 in production,
 socket activation) rather than test scaffolding, so it is worth doing on its own
 merits; it is just not a test fix, and it is not taken here.
 
+
+## E9. The loop is closed in code and open in the product
+
+Found while chasing a much smaller question. I went to add a per-candidate choice
+histogram to `ArmMetrics` to close §E6's unmeasured link, checked who reads
+`ArmMetrics`, and found that `run_comparison` has **no production caller** — only its
+own tests and the test harnesses. Following that thread is the whole finding.
+
+**Every mechanism on the path exists, is exercised, and is mutation-verified.**
+Outcomes are recorded per attempt with their cost. The trace log is durable,
+atomic and fingerprinted. `run_training` fits a model on a group-disjoint temporal
+split with a frozen holdout. `run_comparison` replays it against four executable
+baselines. `PromotionGate::evaluate` judges it on nine named criteria.
+`ActiveModelStore::promote` installs it behind a verified commit id.
+`AppState::new` reads the durable pointer on the next start and attaches a verified
+predictor. The closed loop is real.
+
+**No running build can reach any of it.** Every call to `ActiveModelStore::promote`,
+every `PromotionGate::new`, every `run_comparison` and every `run_training` in the
+repository sits inside a `#[cfg(test)]` module or a `tests/` binary:
+
+| File | test module starts at | promotion calls |
+|---|---|---|
+| `ml/promotion.rs` | 573 | 667+ |
+| `ml/serving.rs` | 1159 | 1404–2011 |
+| `ml/comparison.rs` | — | tests only |
+
+`src-tauri` contains no reference to `promote`, `PromotionGate`, `run_comparison` or
+`run_training` — the only hits are doc comments saying "promoted". `zroutery-headless`
+has none either. The HTTP surface offers `/v1/ml/status`, `/v1/ml/shadow` and
+`/v1/ml/rollback`, and nothing that promotes. The only caller of
+`AppState::active_models()` is a test.
+
+So in a shipped build:
+
+- the durable pointer is never written, so **`MlStatus::active` is always `None`**;
+- **`MlRouter::is_attached()` is always `false`**;
+- `apply_ml_ranking` always takes its no-model branch, so the model-ranking path is
+  unreachable and only blind exploration can move a plan;
+- `ml_shadow_analysis` has no attached model to replay and `rollback` has no previous
+  pointer to return to;
+- **`ml_routing.enabled` is inert.**
+
+The sink is wired and the source is missing.
+
+### What this says about the rest of this report
+
+Two matrix rows were over-reporting and are corrected: **Product wiring** 4 → 3 and
+**Operator surface** 4 → 3. The second is the more uncomfortable one — the operator
+surface is *correct* and reports a permanently empty state, which is the worst
+combination: it looks like a working feature.
+
+The rows that remain at 4 are component claims, and they are still true. What this
+report has been measuring, without saying so, is **test-reachable capability**. That
+is precisely the failure the original brief named — treating struct, trait and
+unit-test as ML capability complete — and I committed it for several rounds while
+adding tests to the components. The tests were worth adding; the claim that they
+meant the loop was live was not.
+
+### Why this was invisible
+
+Every gate in the exercise was closed by a test, and every one of those tests
+builds its own harness: `learn()` in `ml_multi_provider_test.rs` trains, compares,
+gates and promotes in-process. So the loop is closed *end to end* in the test suite
+and open *at both ends* in the product, and no test that existed could tell the
+difference — because each was exercising the same harness rather than the product.
+
+The tripwire added with this finding is deliberately a **characterisation**, not a
+wish. `promotion_reachability_test.rs` asserts both halves of today's truth — no
+running module names the promotion sink, and a maximally-configured product still
+has no attached model — so the gap is a fact in the suite rather than an impression
+in a document. It is written to **fail when the gap closes**, with a message saying
+what to update, so that wiring promotion cannot leave a test that quietly stopped
+describing the product. Verified by mutation: adding a gate construction to
+`server/mod.rs` fails it with the offending line quoted.
+
+### What closing it actually requires
+
+Not more machinery — every mechanism is built and proven. It requires deciding:
+
+1. **When** does a retrain happen? On an interval, on a sample-count threshold, on
+   operator request, on idle?
+2. **Who** authorises the promotion? The gate already judges it; something has to
+   decide to *run* the gate without a human pressing a button.
+3. **What is the entry point** — a scheduled task inside the desktop app, a CLI
+   subcommand, an HTTP endpoint, or all three? `zroutery-headless` exists and is the
+   natural home for the first two.
+
+Those are product decisions, and they are the reason this is recorded rather than
+implemented. The one thing that should not happen is what would happen by default:
+leaving the loop closed in tests and open in the product while the matrix says 4.
+
 ### Still not measured
 
 - **A failover chain's billed failures.** If a provider bills a 5xx, that spend is
@@ -969,9 +1070,12 @@ merits; it is just not a test fix, and it is not taken here.
   is an upstream protocol change rather than a routing one.
 - **Which candidate a learned policy converges on.** `RoutingComparison` exposes
   aggregates, so §E6's causal chain is argued from `ArmRecord::measured`'s documented
-  semantics rather than observed directly. Exposing per-request choices would answer
-  it and would also be useful to an operator asking "why did it pick that?", so it is
-  a reasonable feature request rather than a test-only accessor.
+  semantics rather than observed directly. Adding a per-candidate choice histogram to
+  `ArmMetrics` would answer it in one line — `aggregate` already collects the provider
+  ids and throws the identities away. It was not added, because §E9 established that
+  the whole comparison module has no production caller, so a field on it is closer to
+  analysis scaffolding than to an operator surface. It becomes worth adding when
+  promotion is wired and something is there to read the result.
 
 ---
 
