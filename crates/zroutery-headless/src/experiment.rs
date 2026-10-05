@@ -70,11 +70,14 @@ pub enum Behaviour {
     FastFlaky,
     /// Slow and always succeeds.
     SlowReliable,
-    /// Fast *and* always succeeds: the best provider on every axis at once.
+    /// Fast *and* always succeeds.
+    ///
+    /// "Best on every axis at once" was the note here once, and it was wrong in a
+    /// way that mattered: a single behaviour cannot be both best and dearest. Price
+    /// now lives on the provider (`CHARLIE_PRICE`), so the best provider is fast,
+    /// reliable, and the most expensive one — which is the trade-off the cost axis
+    /// exists to expose.
     FastReliable,
-    /// Fast, usually succeeds, and is expensive. Present so "best" and "cheapest"
-    /// are not the same provider.
-    FastReliableExpensive,
 }
 
 impl Behaviour {
@@ -83,7 +86,6 @@ impl Behaviour {
             Self::FastFlaky => 2,
             Self::SlowReliable => 40,
             Self::FastReliable => 5,
-            Self::FastReliableExpensive => 6,
         }
     }
 
@@ -94,30 +96,70 @@ impl Behaviour {
             _ => false,
         }
     }
+}
 
-    /// (prompt, completion) tokens. Enough that price differences are not rounded
-    /// away — at 20 prompt tokens every model prices to zero and the cost axis
-    /// carries no information at all.
-    fn tokens(self) -> (u64, u64) {
-        match self {
-            Self::FastReliableExpensive => (400, 120),
-            _ => (400, 120),
-        }
-    }
+/// Per-million-token prices, USD.
+///
+/// Copied from CC Switch's own `model_pricing` table, for models that actually
+/// served its traffic — not invented, and not the 40x-arbitrary ratio an earlier
+/// draft used. `Pricing::cost_of` divides by 1_000_000, so these are per-million
+/// figures: the earlier values (`0.000_000_5`) were written as if per *token*,
+/// which made every arm price to `0.000000` and deleted the cost axis from every
+/// comparison in the report without anything failing.
+///
+/// The cache-read price is not decoration. In the observed traffic the cache read
+/// count runs 360x–595x the fresh input count, so nearly all of a real request's
+/// cost is a cache read. A fixture that omits it does not measure the same axis a
+/// real router has to optimise.
+#[derive(Clone, Copy)]
+struct Price {
+    input_per_mtok: f64,
+    output_per_mtok: f64,
+    cache_read_per_mtok: f64,
+}
 
-    fn price(self) -> (f64, f64) {
-        match self {
-            Self::FastReliableExpensive => (0.000_02, 0.000_06),
-            _ => (0.000_000_5, 0.000_001_5),
-        }
-    }
+/// Cheapest, and the one that fails three calls in four.
+const ALPHA_PRICE: Price = Price {
+    input_per_mtok: 0.15,        // deepseek-v4-flash
+    output_per_mtok: 0.6,
+    cache_read_per_mtok: 0.003,
+};
 
+/// Mid-priced and dependable — the choice a static policy is expected to make.
+const BRAVO_PRICE: Price = Price {
+    input_per_mtok: 1.4,         // glm-5.3
+    output_per_mtok: 4.4,
+    cache_read_per_mtok: 0.26,
+};
+
+/// Fast, reliable, and dearest. This is the trade-off that makes the cost axis
+/// worth having: the best provider is the expensive one, so "best" and "cheapest"
+/// disagree and utility has a real decision to make.
+const CHARLIE_PRICE: Price = Price {
+    input_per_mtok: 5.0,         // claude-opus-4-8
+    output_per_mtok: 25.0,
+    cache_read_per_mtok: 0.5,
+};
+
+/// (total prompt, cache reads, completion) tokens.
+///
+/// `prompt_tokens` is cache-**inclusive** and the cache count is a subset of it,
+/// which is the invariant `ir::Usage` documents and `protocol::openai::decode_usage`
+/// enforces by clamping. The fresh portion is deliberately small, because in the
+/// observed traffic it is: one busy model averaged 2.3k fresh input against 177k
+/// cache reads.
+///
+/// Identical across all three providers on purpose. Token volume is a property of
+/// the request, not of the provider, so holding it fixed is what makes price the
+/// only thing that varies the cost.
+const TOKENS: (u64, u64, u64) = (15_000, 11_000, 800);
+
+impl Behaviour {
     fn label(self) -> &'static str {
         match self {
             Self::FastFlaky => "fast-flaky",
             Self::SlowReliable => "slow-reliable",
             Self::FastReliable => "fast-reliable",
-            Self::FastReliableExpensive => "fast-reliable-expensive",
         }
     }
 }
@@ -214,7 +256,11 @@ async fn fake_chat(
             .into_response();
     }
 
-    let (prompt, completion) = behaviour.tokens();
+    // `prompt_tokens_details.cached_tokens` is the read part of a cache-inclusive
+    // total, which is what `protocol::openai::decode_usage` reads. Without it the
+    // whole prompt bills at the fresh input price and the cache-read axis is
+    // invisible.
+    let (prompt, cache_read, completion) = TOKENS;
     axum::Json(json!({
         "id": "chatcmpl-experiment",
         "object": "chat.completion",
@@ -223,7 +269,11 @@ async fn fake_chat(
         "choices": [{"index": 0,
                      "message": {"role": "assistant", "content": "answered"},
                      "finish_reason": "stop"}],
-        "usage": {"prompt_tokens": prompt, "completion_tokens": completion}
+        "usage": {
+            "prompt_tokens": prompt,
+            "completion_tokens": completion,
+            "prompt_tokens_details": {"cached_tokens": cache_read}
+        }
     }))
     .into_response()
 }
@@ -299,17 +349,28 @@ impl Environment {
             // Distinct priorities so the deterministic plan has a defined order to
             // be wrong about, and the ML path has something to disagree with.
             entry.priority = index as i32;
-            // Price is a property of the *provider*, not of the phase. `charlie` is
-            // the expensive one throughout, which is what makes the cost axis
-            // carry information and makes "fast and good" different from "cheap".
-            // Pricing every model identically — which an earlier draft of this did by
-            // reaching for the expensive price three times — would make mean cost a
-            // constant per arm and quietly remove the trade-off.
+            // Price is a property of the *provider*, not of the phase or of its current
+            // behaviour — a provider that degrades does not get cheaper. So it is
+            // looked up by name here rather than derived from `Behaviour`, which
+            // used to conflate "how this provider behaves right now" with "what it
+            // charges".
+            //
+            // Pricing every model identically would make mean cost a constant per
+            // arm and quietly remove the trade-off. An earlier draft reached for
+            // the expensive price three times and did exactly that.
             let price = match name {
-                "charlie" => Behaviour::FastReliableExpensive.price(),
-                _ => Behaviour::FastReliable.price(),
+                "alpha" => ALPHA_PRICE,
+                "bravo" => BRAVO_PRICE,
+                _ => CHARLIE_PRICE,
             };
-            entry.pricing = Some(Pricing::new("USD", price.0, price.1));
+            let mut pricing = Pricing::new("USD", price.input_per_mtok, price.output_per_mtok);
+            // `Pricing::new` leaves both cache prices unset, which bills every cache
+            // read at the fresh input price. Given the token profile above that
+            // would overcharge each provider by more than an order of magnitude,
+            // and it would do so unevenly — so it would invent a cost difference
+            // that the price table does not contain.
+            pricing.cache_read_per_mtok = Some(price.cache_read_per_mtok);
+            entry.pricing = Some(pricing);
             config.models.push(entry);
         }
 
@@ -474,13 +535,22 @@ pub async fn run(
     phases.push(drive(&client, server.addr, &environment, &state, "exploit", &regime_one, requests_per_phase).await);
 
     // -- phase 3: the world changes -----------------------------------------
-    // charlie, the provider the promoted model should now prefer, becomes fast and
-    // broken; bravo becomes the good one. Nothing tells the router this: it has to
-    // work it out from traffic.
+    // **bravo** is the provider the promoted model has been relying on, and it is
+    // the one that degrades. An earlier draft degraded `charlie` instead, which
+    // produced a phase that looked like an *improvement* (bravo 40ms -> 5ms) and
+    // taught nothing: `charlie` was never being called, so degrading it changed no
+    // traffic at all. A regime change has to touch the candidate that is actually
+    // in the rotation, or the phase measures nothing.
+    //
+    // So bravo becomes fast *and* broken, and charlie -- unreachable without
+    // exploration -- stays the best provider in the set. That is the sharpest
+    // version of the question: the learned model now has nowhere good to go among
+    // the candidates it knows about, and the only good provider is one it may never
+    // have observed.
     let regime_two = [
         Behaviour::FastFlaky,
-        Behaviour::FastReliable,
         Behaviour::FastFlaky,
+        Behaviour::FastReliable,
     ];
     environment.set_regime(&regime_two);
     phases.push(drive(&client, server.addr, &environment, &state, "degrade", &regime_two, requests_per_phase).await);
@@ -737,7 +807,11 @@ impl Report {
         }
 
         out.push_str("\nREPLAY: every arm over the same body, same constraints\n\n");
-        out.push_str("  policy                  n   success  fallback  lat(ms)     cost  utility  providers  ineligible\n");
+        // `cost_usd` is labelled and given six decimals because a per-request cost is a
+    // fraction of a cent: at the prices this fixture now uses the arms land
+    // between 0.001 and 0.046, so a fixed 2-decimal column would print them all as
+    // `0.00` and reintroduce exactly the unreadable axis this change exists to fix.
+    out.push_str("  policy                  n   success  fallback  lat(ms)   cost_usd  utility  providers  ineligible\n");
         for arm in &self.replay {
             out.push_str(&format!(
                 "  {:<22} {:>3}   {:.3}     {:.3}   {:>7.1}  {:>9.6}  {:>7.4}      {:>2}        {:>2}\n",
