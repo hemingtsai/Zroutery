@@ -398,6 +398,14 @@ model activation is authorized by this roadmap.
   Core P1 failure/Outcome boundary; revisit only with new evidence.
 - [ADR-0005](decisions/0005-core-p1-node-boundaries.md): accepted for the
   current dispatch split and sole pipeline ownership rule.
+- [ADR-0006](decisions/0006-ml-closed-loop.md): accepted; supersedes ADR-0002 and
+  answers its deployment question. ML reaches the routing path in-process,
+  behind a gate, with a fallback and a rollback.
+- [ADR-0007](decisions/0007-ml-operator-surface.md): accepted; builds on ADR-0006.
+  The loop is legible to an operator and reversible.
+- [ADR-0008](decisions/0008-nothing-random-decides.md): accepted; builds on
+  ADR-0006 and ADR-0007. No coin, clock, or hash decides a split, a verdict, or
+  a served model.
 
 ## Acceptance rule for future nodes
 
