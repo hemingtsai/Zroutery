@@ -704,6 +704,78 @@ export interface ShadowAnalysisStatus {
   analysis: ShadowAnalysis | null;
 }
 
+/**
+ * What one promotion round decided, mirroring
+ * `zroutery_core::ml::status::PromotionRoundStatus`.
+ *
+ * The states are kept apart rather than collapsed, because each answers a
+ * different question:
+ *
+ * * `decision` set — the gate judged a candidate;
+ * * `reason` set with no decision — no round could be run, and the reason says
+ *   which precondition was missing;
+ * * `installed` set — a model is serving as a result of this round.
+ *
+ * `installed` is deliberately not implied by an authorising decision. Judging a
+ * model and installing it are separate acts, and the endpoint takes
+ * `install: false` by default for exactly that reason.
+ */
+export interface MlPromotionRoundStatus {
+  /** Traces the round read. */
+  traces_read: number;
+  candidate_commit: string | null;
+  decision: PromotionDecision | null;
+  /** What the candidate would have done with the same traffic. */
+  analysis: ShadowAnalysis | null;
+  /**
+   * How often the learned policy named each candidate.
+   *
+   * A ranking that named one candidate on every request has not learned a
+   * ranking, whatever the gate said, so this is the number from the round worth
+   * having at a glance.
+   */
+  policy_choices: Record<string, number>;
+  installed: string | null;
+  reload: ReloadOutcome;
+  reason: string | null;
+  /** A fault that did not prevent the round from being reported. */
+  error: string | null;
+}
+
+/** The round's verdict, and the status it left behind. */
+export interface MlPromotionRound {
+  round: MlPromotionRoundStatus;
+  status: MlStatus;
+}
+
+/**
+ * How much durable history exists, without reading it into memory.
+ *
+ * `records` is `null` when the log could not be counted, which is a different
+ * answer from zero records: a zero renders as "nothing collected" and a null
+ * renders as "could not tell", and conflating them is how an operator reads a
+ * permission fault as an empty install.
+ */
+export interface MlTraceInfo {
+  records: number | null;
+  bytes_on_disk: number;
+  path: string | null;
+  counters: MlStatus["traces"];
+  error: string | null;
+}
+
+/**
+ * What discarding the durable history removed.
+ *
+ * `cleared: false` with no error is a real answer rather than a failure:
+ * deleting an empty log did what was asked.
+ */
+export interface MlTraceClear {
+  cleared: boolean;
+  removed_bytes: number;
+  error: string | null;
+}
+
 /** What re-reading the durable pointer did, and the status that resulted. */
 export interface MlRollback {
   outcome: ReloadOutcome;
@@ -737,6 +809,33 @@ export const api = {
    * cannot render a state the process is not in.
    */
   rollbackMlModel: () => invoke<MlRollback>("rollback_ml_model"),
+  /**
+   * Run one promotion round over the durable history.
+   *
+   * `install` defaults to false and this side passes it explicitly rather than
+   * relying on that default: judging a model and installing it are separate
+   * acts, and only the second changes what every later request is served by.
+   * `baseline` names the comparison the gate must beat; the evidence floors are
+   * not caller-controlled in either the command or the HTTP twin.
+   */
+  mlPromote: (install: boolean, baseline?: string) =>
+    invoke<MlPromotionRound>("run_ml_promotion_round", { install, baseline }),
+  /**
+   * Size and record count of the durable trace log.
+   *
+   * Read-only and streaming inside the backend: this is a button a panel polls,
+   * not a request path, so it must not load a year of traffic into memory.
+   */
+  mlTraces: () => invoke<MlTraceInfo>("get_ml_traces"),
+  /**
+   * Discard the operator's own history.
+   *
+   * Operator-initiated only, and the absence of a retention policy is
+   * deliberate: the promotion round trains from the whole log, so a policy that
+   * fired on its own would change what the next model learns from without
+   * anyone asking.
+   */
+  clearMlTraces: () => invoke<MlTraceClear>("clear_ml_traces"),
   saveConfig: (config: AppConfig) => invoke<Snapshot>("save_config", { config }),
   setKey: (provider_id: string, api_key: string) =>
     invoke<Snapshot>("set_provider_key", { providerId: provider_id, apiKey: api_key }),
