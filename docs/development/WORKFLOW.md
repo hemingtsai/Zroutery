@@ -137,6 +137,45 @@ subjects such as `feat(7e2a): add candidate-masked decision distribution` and
 remain accepted; the new fixtures preserve both the newly authorized scopes
 and the vague-subject regression case.
 
+### A known non-conforming range on `dev`, and why rewriting it was declined
+
+The contract above is enforced over a **range**, and which range decides whether
+this is currently green.
+
+`ci.yml` derives the base from the event: `github.event.pull_request.base.sha ||
+github.event.before`. So on a **push** only the commits in that push are checked,
+and on a **pull request** everything between the PR's base tip and its head is.
+
+`origin/main` sits at `9abfada`, which predates the ML work on `dev`. So:
+
+| what | result |
+|---|---|
+| push to `dev` | checks only new commits — currently conforming |
+| PR `dev` → `main` | checks all 32 — **27 are rejected** |
+
+The 27 predate this section's enforcement in practice: they use `ml: …`,
+`docs: …`, `tests: …` with no scope, and two exceed the 72-character limit
+(`daa6783` at 76, `3f49c61` at 81). Five commits are conforming, the first being
+`d2b41bc`.
+
+Rewriting pushed history to fix them would be a force-push of `dev`, and that is
+a decision for the repository owner rather than something to do as a side effect
+of a docs change. It was therefore declined, and recorded here instead — so the
+`dev` → `main` failure is **anticipated** rather than discovered.
+
+The remedy, if it is ever taken: `git rebase --rebase-merges` onto `main` with
+each subject rewritten to a conforming `type(scope): imperative summary`, which
+is 27 rewordings and not a content change. The alternative — letting the PR carry
+the range — costs one red job on one PR.
+
+Two things this range should not be allowed to teach, because both were observed:
+
+- **Length is checked, and it is easy to miss.** `fix(ml): stop the tail read
+  from loading the whole log, and let operators clear it` reads as a reasonable
+  subject and is 81 characters. Measure it.
+- **The imperative verb set is finite and is not intuitive.** `reference` is not
+  in it; `wire` is. A rejected subject is not a judgement about the change.
+
 ## Commit Body
 
 A useful body is concise and answers only the change:
@@ -222,6 +261,62 @@ complained, while the gate it named was no longer being run.
 | toolchain | `python -B scripts/toolchain_gate.py` | the local toolchain is the build CI resolves, so a green matrix speaks to CI |
 | minimum toolchain | `cargo +1.89.0 check --workspace --locked --all-targets`, the version `Cargo.toml` declares | the declared minimum really builds the locked tree, test targets included |
 | whitespace | `git diff --check` | no trailing damage |
+
+### Run the Python rows through `uv`, not a system install
+
+Three rows above invoke `python`. **On a machine with no interpreter on `PATH`
+they cannot run, and that is not the same as failing.** `WindowsApps` ships
+`python.exe` as a zero-byte App Execution Alias, so `python --version` produces
+no output and exits 9009, which reads exactly like a missing command. The Store
+package directory contains only the same placeholders; the real interpreter is
+under `Program Files\WindowsApps` and is not visible without elevation.
+
+Nothing needs installing. Every validator in `scripts/` is **standard library
+only** — no `pip install`, no venv — so `uv` can supply an interpreter directly:
+
+```
+uv run --python 3.12 --no-project python -B scripts/orch_docs_test.py
+```
+
+Verified on a machine with no system Python at all. Two consequences worth
+stating rather than discovering:
+
+- **A gate that cannot run is not a gate.** These rows were silently skipped
+  while `orch_docs_test.py` was red over three unindexed ADRs, and over a range
+  of 27 non-conforming commits. "I could not run it" and "it passed" must never
+  be the same claim.
+- `uv` is not assumed to be present either. Check for it before relying on it,
+  and report the row as **unrun** rather than passing it.
+
+### The Rust rows must run on CI's toolchain, not yours
+
+**The section below this one already says all of this, and it was still missed.**
+The gap between this checkout's `1.97.1` and CI's `1.99.0` is recorded in *The
+toolchain the matrix is run under*, with the incident that demonstrated it. A
+later pass ran the entire matrix on `1.97.1`, reported "all gates pass", and
+concluded separately — by reading only that CI uses `@stable` — that local and CI
+were therefore the same compiler. They were not. The conclusion was right about
+the formatting fix it was applied to and wrong about the reason, which is the
+worse kind of right.
+
+So the failure mode is not absent documentation. It is a long document whose
+relevant section is eleven paragraphs below the table, read as though the table
+stood alone. The table is the thing people read.
+
+Concretely, on this repository:
+
+- **Run the Rust rows with the toolchain `toolchain_gate.py` names** — `cargo
+  +1.99.0 <row>` as of this writing. Treat "I ran it on my default toolchain" as
+  **unverified**, not as a pass.
+- Re-run the gate rather than trusting the version quoted in this file; `stable`
+  moves, and the gate resolves it over the network for exactly that reason.
+- It is deliberately not a CI step (see below), so nothing upstream will catch
+  this for you.
+
+Verified on `1.99.0` — the toolchain CI resolves — clippy `-D warnings`, `fmt`,
+default features, all features, whole workspace and the activation boundary all
+pass. So the code is verified against CI's compiler; the earlier green run on
+`1.97.1` simply was not that.
 
 The default-features row is spelled the way it is on purpose. `--workspace`
 without the exclusion runs 1733 tests; with the exclusion it runs 999, and the
