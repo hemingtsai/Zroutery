@@ -58,7 +58,7 @@ it.
 | Was | Now |
 |---|---|
 | In-memory sample ring | `ml::traces`: durable, atomic, fingerprinted traces written from the terminal transition |
-| `train_batch()` with no split | `ml::learning`: group-disjoint temporal split, frozen holdout, seed, dataset fingerprint, verified checkpoint |
+| `train_batch()` with no split | **Removed.** It was a bare loop reachable from outside the crate and called by nothing; `ml::learning` is the real training path, with a group-disjoint temporal split, frozen holdout, seed, dataset fingerprint and a verified checkpoint |
 | `Evaluator::compare_routing`, unreachable | `ml::comparison`: four executable baselines replayed over real traces, routing metrics, paired deltas, coverage |
 | Shadow records with no reader | `ml::shadow_analysis`: agreement, alternative rate, estimated vs observed delta, regret, harm |
 | No promotion | `ml::promotion`: nine named criteria, PROMOTED / REJECTED / BLOCKED, fully reproducible |
@@ -73,10 +73,29 @@ it.
 
 - The desktop package still compiles no ML. Deliberate and recorded; enabling it
   is a separate decision (see Remaining Blockers).
-- `Coordinator` still exists alongside `DecisionEngine`. `DecisionEngine` is the
-  only authority any production path reaches — `Coordinator` has no non-test
-  caller — but the duplicate semantics have not been deleted.
-- `train_batch()` still exists and is still a bare loop. It has no caller.
+- `Coordinator` still exists alongside `DecisionEngine`, and now that the deletion
+  has been argued properly the right answer is that it should. `DecisionEngine` is
+  the only authority any production path reaches; `Coordinator` has no non-test
+  caller. But it is not redundant: `decision_engine.rs`'s test module runs the
+  frozen `Coordinator::decide` over the same bundles and asserts the engine
+  reproduces it — action, reason, selection, and every utility term. The duplicate
+  semantics are the *specification* the authority is measured against.
+- `train_batch()` **has been removed.** It was `pub` inside a `pub mod`, so it was
+  reachable from outside the crate, and nothing called it but its own tests.
+  That combination is worse than dead code: a caller could have used it and shipped
+  a model with no holdout. `ml::learning`'s module doc names the shape it had, so
+  the contrast survives the removal.
+- Removing it took four `*_learning_direction` tests with it — they had used
+  `train_batch` as their training loop, so they stopped compiling and looked like
+  collateral. They carried a real claim (each head moves its prediction toward the
+  target) and nothing else covered it, so they are rewritten against `update`
+  directly and strengthened: the success head is now tested in *both* directions, a
+  negative cost target is pinned as refused, and `a_head_learns_the_input_and_not_only_its_bias`
+  closes a gap the originals had. **A deletion commit has to diff the test
+  inventory, not just the compiler output** — four tests stopping compiling reads
+  exactly like collateral until you check what they asserted.
+- `Coordinator` **stays**, and listing it as "a thing to delete" was wrong. It is
+  the differential oracle the `DecisionEngine` is verified against.
 
 ---
 
@@ -106,7 +125,7 @@ Status vocabulary: `0 NOT_STARTED` · `1 SCAFFOLDED` · `2 IMPLEMENTED` ·
 | Product wiring | **4** | ADR-0007: `ml` is a named, default-on, still-refusable desktop package feature; `<config_dir>/ml` claimed for durable state; `ml_routing.enabled` asserted off by default, so no install's behaviour changed |
 | Operator surface | **4** | `ml::MlStatus` read live and asserted to agree with `MlRouter`; `/v1/ml/{status,shadow,rollback}` behind the auth layer (401 asserted); the replay runs the *attached* model over real traffic, bounded; unreachable candidates are derived from config against the observation store and named, with the consequence stated rather than left to derive |
 | Reversibility | **4** | rollback reaches the router in a live process, verified to fail against a pointer-only implementation; refused rollback changes nothing |
-| Coordinator convergence | **2** | `DecisionEngine` authoritative; `Coordinator` unreferenced by production, not deleted |
+| Coordinator convergence | **4** | `DecisionEngine` is the sole authority; `Coordinator` is retained deliberately as the differential oracle it is verified against, not as a second decision path. Verified by mutation: changing the engine's switch rate limit from `>=` to `>` fails `cross_check_full_matrix` and `cross_check_switch_rate_limit_reached`, which run the frozen `Coordinator::decide` over the same bundles and compare action, reason, selection and every utility term |
 
 ---
 
@@ -330,9 +349,11 @@ Only items that block `PRODUCTION_READY`.
 | The status field's meaning is only asserted, not measured | **Closed.** `blind_spot_warning_matches_what_exploration_actually_does` runs `explore` over 2000 ids at each probability and requires the document's verdict to match. Mutating `explore` to explore at probability 0 fails this test and **nothing else in the workspace** — the other 2128 pass with exploration silently running | — |
 | Tauri command dispatch is not covered by a test | The status document, replay and rollback are exercised through `AppState` and over HTTP. Nothing drives them through a real webview | An integration harness around a webview, or accepting the seam and keeping `ml_available` so a failure there is reported as a failure rather than read as an absence |
 
-Not blockers, deliberately excluded: `Coordinator` deletion, `train_batch`
-removal, cost axis coverage (the fixtures price ~20 tokens, which rounds to
-zero), more baselines.
+Not blockers, deliberately excluded: cost axis coverage (the fixtures price ~20
+tokens, which rounds to zero — closed in §E4 by recording per-attempt cost instead),
+more baselines, and `ServerHandle` accepting a pre-bound listener (§E8's real fix).
+`Coordinator` deletion and `train_batch` removal were on this list and are now
+resolved — one deleted, one deliberately kept, for opposite reasons.
 
 ---
 

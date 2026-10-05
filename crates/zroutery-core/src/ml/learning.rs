@@ -2,14 +2,19 @@
 //!
 //! # What was missing
 //!
-//! A `train_batch`-shaped loop already exists in this module tree and it is not a
-//! training system. It walks samples and calls `update`. It has no split, so
-//! every sample it fits is also a sample it is judged on; no holdout, so nothing
-//! can be measured out of sample; no dataset identity, so two runs cannot be
-//! told apart; no validation, so there is nothing to select a checkpoint on; and
-//! no record of what it did, so a trained model cannot be explained after the
-//! fact. Its unit tests confirm it does what it says. That is a real capability
-//! and it is not this.
+//! A training loop that walks samples and calls `update` is not a training
+//! system. This module tree used to contain exactly that, as a public
+//! `train_batch`, and it has been removed rather than left beside this.
+//!
+//! It had no split, so every sample it fitted was also a sample it was judged on;
+//! no holdout, so nothing could be measured out of sample; no dataset identity, so
+//! two runs could not be told apart; no validation, so there was nothing to select a
+//! checkpoint on; and no record of what it did, so a trained model could not be
+//! explained after the fact. Its unit tests confirmed it did what it said, and it
+//! was still reachable from outside the crate — which made it worse than dead code,
+//! because a caller could have used it and shipped a model with no holdout.
+//!
+//! That is a real capability and it is not this.
 //!
 //! # What this module adds
 //!
