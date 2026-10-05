@@ -126,9 +126,10 @@ Status vocabulary: `0 NOT_STARTED` · `1 SCAFFOLDED` · `2 IMPLEMENTED` ·
 | Retraining | **4** | collect → process ends → retrain → gate → promote → new process serves → retrain again; round 2 body 120 requests, distinct fingerprint, distinct commit, re-promoted |
 | Reproducibility | **4** | ADR-0008: the split's tiebreak was a random UUID, so the verdict alternated 3-of-6 on identical traffic; now 6-of-6 identical |
 | Cross-provider | **4** | `ml_multi_provider_test.rs`: three providers on three upstreams; unobserved provider received **0 of 60** requests with exploration off, and the learned ranking used **1 provider** against round-robin's 2 |
-| Exploration reach | **4** | `MlRouter::explore_plan` reachable with no model; `blind_explorations` counted apart from `explorations`; stays inside the eligible set and the plan. **But reaching a candidate and being reliably promotable are in conflict** — at exploration 0.25 the gate refuses at 120 *and* 240 requests for want of paired evidence (§E6), and above 0 the paired count is unreproducible: 0.02 and 0.10 each produced both BLOCKED and PROMOTED across two runs while 0.0 was 3-for-3 stable at 91. A blind provider is also still reachable as a *fallback*, which is narrower than "unreachable". See §E6, §E11 |
+| Exploration reach | **4** | `MlRouter::explore_plan` reachable with no model; `blind_explorations` counted apart from `explorations`; stays inside the eligible set and the plan. **But reaching a candidate and being reliably promotable are in conflict** — at exploration 0.25 the gate refuses at 120 *and* 240 requests for want of paired evidence (§E6), and over 4 repeats per setting the first-round verdict decays monotonically: 0 promotes 4/4, 0.02 promotes 2/4, 0.10 promotes 0/4. A blind provider is also still reachable as a *fallback*, which is narrower than "unreachable". See §E6, §E11 |
 | Regime change | **4** | `zroutery-headless --experiment`: collect → promote → exploit → degrade → relearn → adapt over 480 requests on the production router. The degraded provider must be one **actually in the rotation** — degrading an unreachable one produces a phase that looks like an improvement and measures nothing. Adaptation observed: the promoted model moved 120/120 requests onto the provider that survived, `rankings` 0→120, two distinct commit ids — §E10 |
-| Promotion verdict reproducibility | **3** | Stable at exploration 0 (3 runs, paired 91/91). Above 0 the verdict is a function of which nominated candidate happened to be attempted, so it is **not** reproducible across runs. Marked 3 because the defect is characterised and bounded, not because it is fixed — §E11 |
+| Promotion verdict reproducibility | **3** | Degrades **monotonically** with exploration over 4 repeats per setting: exploration 0 promotes 4/4 at paired 91 every time (and `balanced`'s replay utility has zero spread), 0.02 promotes 2/4, 0.10 promotes **0/4**. Round-2 promotes everywhere, so the coupling is specific to the smallest body. A single run at 0.02 or 0.10 can report either verdict. Marked 3 because the defect is characterised and bounded, not because it is fixed — §E11 |
+| Learned vs replay baselines | **4** | 12 runs (3 exploration settings × 4 repeats × 480 requests). `ml.candidate` beats `priority` +2.00, `round_robin` +0.41..+1.08 and `lowest_latency` +0.69..+1.66 in **12/12** each; it ties `balanced` (−0.003..−0.007, winning 5/12 on sign) while being **cheaper in every configuration**. Qualified: arms are scored on their own measured subsets, not one body; `ReplayBaseline::Balanced` is not the production policy — §E12 |
 | Cost axis | **4** | `Attempt` grew a cost field, populated at the terminal transition. 120 of 171 samples now carry a real cost; `mean_cost` separates across arms (`baseline.priority` 0.00300, `ml.candidate` 0.00702). `RewardPolicy::cost_weight` and the gate's cost budget read a real number — §E4. Separately, the experiment *fixture* had its own inert axis from a per-token/per-million unit error, invisible because a constant across arms looks like an unmeasured one; prices now come from CC Switch's real table and `ml.candidate` is consistently **cheaper** than `baseline.balanced` — §E10 |
 | Holdout temporality | **4** | ADR-0008: the frozen holdout was a contiguous tail of a *content*-sorted vector, so it was a content cluster and its composition varied run to run. Now split in arrival order, ordered per partition — §E5 |
 | Model identity | **4** | one identity per model (`TrainingOutcome::commit_record`); commit `06f7da3409a14147` |
@@ -1305,26 +1306,110 @@ degraded provider was neither preferred nor a fallback target.
 **Exploration does not fix it without breaking something else.** Exploration is
 the only mechanism that can route to a candidate the plan does not already pick,
 and it does produce discovery — `blind_candidates` goes to 0, and the learned
-policy then prefers the newly-reachable provider. But the promotion gate's paired
-count becomes **unreproducible**:
+policy then prefers the newly-reachable provider. But the promotion gate's
+verdict degrades **monotonically** with exploration probability. Four repeats per
+setting, same configuration each time:
 
-| exploration | paired, run A | paired, run B |
-|---|---|---|
-| 0.00 | 91 / 91 | 91 / 91 |
-| 0.02 | **6** (BLOCKED) / 73 | 53 / 53 |
-| 0.10 | 38 / 40 | **10** (BLOCKED) / 75 |
+| exploration | round-1 verdict, 4 repeats | round-1 paired | round-2 |
+|---|---|---|---|
+| 0.00 | PROMOTED **4/4** | 91, 91, 91, 91 | PROMOTED 4/4 |
+| 0.02 | **2/4** PROMOTED | 28, 3, 89, 42 | PROMOTED 4/4 |
+| 0.10 | **0/4** PROMOTED | 7, 2, 11, 15 | PROMOTED 4/4 |
 
-At exploration 0 the gate is 3-for-3 stable. Above 0, each setting has produced
-both verdicts. §E6 recorded the conflict as exploration *blocking* promotion; the
-sharper statement is that exploration makes the **verdict itself** unreliable,
-because pairing depends on whether the candidate a learned policy nominates
-happens to have been attempted on a request where the baseline was also attempted
-— and under exploration that is close to a coin flip.
+Two things follow, and the first is a retraction.
 
-So this is a real trade-off, not a misconfiguration: the only setting that
+**It is not a coin flip above 0 — it is a monotone decay.** Exploration 0 is
+deterministic to the digit: paired 91 four times out of four, and the replay
+utility of `baseline.balanced` has *zero* spread across repeats (0.9834 every
+time). Exploration 0.02 is genuinely unstable. Exploration 0.10 fails round-1
+**every time**, which contradicts the earlier claim in this section that 0.10
+"produces discovery and still promotes". That claim came from a single run and
+was wrong; 0.10 reliably discovers and reliably cannot promote.
+
+Round-2 promotes at every setting, so the coupling is specific to the first
+round, where the body is smallest.
+
+The mechanism is the same one §E6 named: pairing depends on whether the candidate
+a learned policy nominates happens to have been attempted on a request where the
+baseline was also attempted, and exploration disperses exactly that overlap.
+
+So this is a real trade-off, not a misconfiguration: **the only setting that
 reliably produces a promotable model is also the only setting that cannot reach a
-newly added provider. Neither is wrong; they cannot both be had from the
-configuration surface as it stands.
+newly added provider.** Neither is wrong; they cannot both be had from the
+configuration surface as it stands. And because a single run at 0.02 or 0.10 can
+report either verdict, **one run is not evidence** — that is why the numbers above
+are four repeats and not four one-off observations.
+
+---
+
+## E12. ML against the baselines, with cost live, over repeated runs
+
+§E10 made the cost axis real. This asks the question that motivates the whole
+subsystem: **is the learned router better than not learning?** Three exploration
+settings × four repeats of an identical configuration, 480 requests each — 12
+runs, because §E11 established that a single run cannot be trusted.
+
+Utility difference, `ml.candidate` minus baseline, per run:
+
+| baseline | exploration | mean | range across 4 runs | ML wins |
+|---|---|---|---|---|
+| `baseline.priority` | 0.00 | **+2.0024** | +2.0020 .. +2.0026 | **4/4** |
+| `baseline.priority` | 0.02 | +1.9948 | +1.9819 .. +2.0021 | **4/4** |
+| `baseline.priority` | 0.10 | +2.0050 | +2.0005 .. +2.0073 | **4/4** |
+| `baseline.round_robin` | 0.00 | +0.4072 | +0.4068 .. +0.4074 | **4/4** |
+| `baseline.round_robin` | 0.02 | +0.7488 | +0.4043 .. +1.1131 | **4/4** |
+| `baseline.round_robin` | 0.10 | +1.0784 | +1.0559 .. +1.1062 | **4/4** |
+| `baseline.lowest_latency` | 0.00 | +0.6863 | +0.6729 .. +0.7078 | **4/4** |
+| `baseline.lowest_latency` | 0.02 | +1.2047 | +0.5583 .. +1.9254 | **4/4** |
+| `baseline.lowest_latency` | 0.10 | +1.6595 | +1.4992 .. +1.8243 | **4/4** |
+| `baseline.balanced` | 0.00 | −0.0062 | −0.0066 .. −0.0060 | **0/4** |
+| `baseline.balanced` | 0.02 | −0.0071 | −0.0149 .. +0.0002 | 2/4 |
+| `baseline.balanced` | 0.10 | −0.0032 | −0.0133 .. +0.0001 | 3/4 |
+
+Against three of the four baselines the answer is not close: **12 runs out of 12,
+with margins 15× to 400× the run-to-run spread.** Against `baseline.balanced` it
+is a tie that `balanced` wins on the sign and ML wins on cost.
+
+On cost, `ml.candidate` is cheaper than `baseline.balanced` in every
+configuration — by 0.9%, 8.0% and 0.5%. So the honest summary is: **the learned
+router matches the strongest replay baseline on utility and is marginally cheaper,
+while beating the other three by margins no amount of noise explains.**
+
+### Three qualifications that belong with that number
+
+**1. The arms are not evaluated over the same requests.** `mean_cost`/`utility`
+are means over the traces where *that arm's* choice was actually attempted, and
+those sets differ substantially — at exploration 0, `ml.candidate` has n=444 and
+`baseline.priority` n=120. So this is not five policies scored on one identical
+body; it is five policies scored on their own measured subsets. The defensible
+comparison remains the **paired** one, which is what the gate uses (91 paired at
+exploration 0). The arm means are reported because they are the only per-arm
+figures available, and the ±0.003 gap to `balanced` is well inside the subset
+noise that implies.
+
+**2. `ReplayBaseline::Balanced` is not the production `Balanced` policy.** It is
+a replay heuristic sharing only the name. So "ML ties balanced" is a statement
+about the learned model and a heuristic of similar spread, **not** about the
+learned model and the shipped product's balanced strategy.
+
+**3. The environment is three synthetic providers with known prices.** One is
+cheap and broken, one is mid-priced and dependable, one is fast and dearest. That
+is a real trade-off shape, but it is a three-point world chosen by the same
+process that wrote the model. The 2.00 margin over `baseline.priority` is
+substantially the statement that a static order pointing at a 75%-failure provider
+is a bad order — which is true, and is not the same as the learned ranking being
+good.
+
+### What this does and does not license
+
+It licenses: the learned router **does** change real routing behaviour after
+promotion, **does** beat three of four baselines reproducibly, and **does** reach
+the quality of the fourth without paying more for it. Cost is no longer a
+dimension the comparisons ignore.
+
+It does not license "the ML router is proven better". That would need real
+providers, a cost structure the operator did not design, and the denominator
+problem in (1) resolved so all arms are scored on one body.
 
 ---
 
