@@ -137,44 +137,70 @@ subjects such as `feat(7e2a): add candidate-masked decision distribution` and
 remain accepted; the new fixtures preserve both the newly authorized scopes
 and the vague-subject regression case.
 
-### A known non-conforming range on `dev`, and why rewriting it was declined
+### A rewritten range on `dev`, and how it was verified
 
-The contract above is enforced over a **range**, and which range decides whether
-this is currently green.
+The contract is enforced over a **range**, and which range decides whether this is
+currently green. `ci.yml` derives the base from the event:
+`github.event.pull_request.base.sha || github.event.before`. So on a **push** only
+that push's commits are checked, and on a **pull request** everything back to the
+PR's base tip is.
 
-`ci.yml` derives the base from the event: `github.event.pull_request.base.sha ||
-github.event.before`. So on a **push** only the commits in that push are checked,
-and on a **pull request** everything between the PR's base tip and its head is.
+`main` sat at `9abfada`, before the ML work, so a `dev` → `main` PR checked all 35
+commits and **27 were rejected**: 23 with no scope (`ml: …`, `docs: …`,
+`tests: …`), two over the 72-character limit, and two whose summary verb is not in
+the allowlist (`settle`, `price`).
 
-`origin/main` sits at `9abfada`, which predates the ML work on `dev`. So:
+The range has since been rewritten — `b86eede` → `9b97a69`, force-pushed with
+`--force-with-lease`. The pre-rewrite tip is kept on the remote at
+`backup/pre-contract-rewrite-b86eede`, so the operation is reversible:
 
-| what | result |
+```
+git push origin backup/pre-contract-rewrite-b86eede:dev --force-with-lease=dev:9b97a69
+```
+
+**Only subjects changed.** Verified, not asserted:
+
+| check | result |
 |---|---|
-| push to `dev` | checks only new commits — currently conforming |
-| PR `dev` → `main` | checks all 32 — **27 are rejected** |
+| commit count | 35 / 35 |
+| tree, compared position by position | 0 differences |
+| body, compared by SHA256 per commit | 0 differences |
+| author, author date, committer, committer date | 0 differences |
+| `git diff` between the two tips | empty |
+| merge-base with `main` | still `9abfada` — history is shared, not forked |
 
-The 27 predate this section's enforcement in practice: they use `ml: …`,
-`docs: …`, `tests: …` with no scope, and two exceed the 72-character limit
-(`daa6783` at 76, `3f49c61` at 81). Five commits are conforming, the first being
-`d2b41bc`.
+Two attempts failed first, and the failures are the reason that table has three
+rows rather than one:
 
-Rewriting pushed history to fix them would be a force-push of `dev`, and that is
-a decision for the repository owner rather than something to do as a side effect
-of a docs change. It was therefore declined, and recorded here instead — so the
-`dev` → `main` failure is **anticipated** rather than discovered.
+- **`git filter-branch --msg-filter` with `awk` emptied all 35 subjects.** Its
+  filter runs under git's `sh`, where the mapping file's Windows path was not
+  readable, so awk read stdin *as* the map file. `NR==FNR` is then true for every
+  line of a single-file read, so every message was swallowed. This one nearly
+  shipped: the output was inspected with a tail, which showed three empty subjects
+  and not the thirty-five there were. **A partial view of a failure is a different
+  claim from the failure.**
+- **`commit-tree` driven from PowerShell corrupted the em-dashes in 8 bodies.**
+  Trees and subjects came out right; the prose did not. A subject rewrite that
+  silently edits commit text is worse than one that refuses.
 
-The remedy, if it is ever taken: `git rebase --rebase-merges` onto `main` with
-each subject rewritten to a conforming `type(scope): imperative summary`, which
-is 27 rewordings and not a content change. The alternative — letting the PR carry
-the range — costs one red job on one PR.
+The working version lets git write each message to a file as raw bytes and replaces
+only the first line's bytes; the rest is copied without ever becoming a PowerShell
+string. It also trims exactly one trailing byte, because `git log --format=%B`
+terminates its own output with a newline that was never in the stored message —
+left in, every body came out one byte long.
 
-Two things this range should not be allowed to teach, because both were observed:
+Three things this range should not be allowed to forget, because all three were
+hit while fixing it:
 
-- **Length is checked, and it is easy to miss.** `fix(ml): stop the tail read
-  from loading the whole log, and let operators clear it` reads as a reasonable
-  subject and is 81 characters. Measure it.
-- **The imperative verb set is finite and is not intuitive.** `reference` is not
-  in it; `wire` is. A rejected subject is not a judgement about the change.
+- **Validate replacement subjects against the validator's own tables before
+  touching history.** `TYPES`, the scope set and `IMPERATIVE_VERBS` are importable;
+  a rewritten history is a bad place to discover that `reference` is not a verb.
+- **Length is checked and it is easy to miss.** `fix(ml): stop the tail read from
+  loading the whole log, and let operators clear it` reads as reasonable and is 81
+  characters. Measure it.
+- **The verb set is finite and unintuitive.** Not in it: `settle`, `price`,
+  `reference`, `name`, `give`, `check`, `gate`. In it: `wire`, `record`, `find`,
+  `keep`. A rejected subject is not a judgement about the change.
 
 ## Commit Body
 
