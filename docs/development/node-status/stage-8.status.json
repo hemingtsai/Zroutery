@@ -28,6 +28,7 @@
     "crates/zroutery-core/src/ml/reward.rs"
   ],
   "notes": [
-    "No production takeover or exploration is authorized."
+    "No production takeover or exploration is authorized.",
+    "AUDITED: blocked_by is correct and both entries resolve to one missing input. 7H is BLOCKED on 7G, 7G is BLOCKED on 7F, and 7F's only unresolved gate refuses on statistical volume. STAGE-7 is PARTIAL with blocked_by naming 7E-0. The unblock_condition's demand for real-traffic evidence is therefore consistent rather than aspirational: a real traffic holdout is the only legitimate source of the cohort volume 7F's gate requires. The repository does not lack the implementation on this path; it lacks the traffic."
   ]
 }

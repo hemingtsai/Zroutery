@@ -29,6 +29,7 @@
     "crates/zroutery-core/src/migration.rs"
   ],
   "notes": [
-    "No production takeover is claimed."
+    "No production takeover is claimed.",
+    "AUDITED: blocked_by is correct, and the blocker is not an unfinished implementation. 7F is PARTIAL because one of its four gates is actively refused rather than outstanding — Accepted ModelCommit rejects on statistical volume, reporting 12 effective holdout decisions against a floor of 30, with the power-based requirement being 314, 785 or 1570 for a 5-point effect at 80% power. 7F's record states that cohort must not be manufactured, and nothing in this session lowered a threshold to move the number. The ownership and rollback half of this unblock_condition is already built and gate-verified in core: agent_takeover provides a durable manifest, cross-process compare-and-swap at commit, and conflict resolution applied on release; migration provides rollback reporting that carries restore failures instead of a constant. Controlled takeover stays unauthorized, which is a recorded product decision in I3 rather than an engineering gap."
   ]
 }

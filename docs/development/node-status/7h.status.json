@@ -29,6 +29,7 @@
     "crates/zroutery-core/src/ml/reward.rs"
   ],
   "notes": [
-    "No exploration is authorized."
+    "No exploration is authorized.",
+    "AUDITED: blocked_by is correct transitively. 7G is blocked on 7F's refused-on-volume Accepted ModelCommit gate, so this node cannot reach 'Stable takeover' until that cohort exists. This audit establishes only that blocked_by is honest; it makes no claim about whether an exploration-bounds implementation already exists in the tree. Exploration remains unauthorized by record, which is a product decision rather than a defect."
   ]
 }
