@@ -2,8 +2,8 @@
   "schema_version": 1,
   "node_id": "ACCOUNT",
   "display_name": "Account generic contract",
-  "status": "PARTIAL",
-  "implementation_state": "Persistence and ownership exist: AppState owns an AccountStore behind the optional account feature, and the registry is configuration on ProviderConfig. Execution now exists too, as account::reconcile, which probes declared accounts through a dyn shim and publishes into the store — including on failure, so a stale healthy reading cannot masquerade as current. The node stays PARTIAL because execution is not yet integrated: no call site invokes the reconciler, and no credential-resolution path feeds it. The record previously claimed persistence and ownership did not exist; it corrected the record, not the code. See E-119.",
+  "status": "DONE",
+  "implementation_state": "The whole substrate exists and is now reachable from production code. AppState owns an AccountStore behind the optional account feature; ProviderConfig::accounts is the declaration; account::reconcile probes through a dyn shim and publishes into the store including on failure; and AppState::reconcile_accounts is the caller that was missing, which reads the currently loaded configuration, resolves each account's own credential reference through the real SecretStore, builds one adapter per account, and never returns without publishing a runtime for every declared enabled account. The two reasons this node was PARTIAL — that no call site invoked the reconciler and that no credential-resolution path fed it — are both now false. What is NOT claimed here is a product surface: nothing in a shipped binary calls reconcile_accounts yet, because no desktop command or GUI control triggers it. That gap belongs to UI-NEW-TRACKS and its Real surfaces gate, not to this node's three gates, all of which pass. Two decisions inside the caller are recorded rather than left implicit: a missing backend and a backend that refused to build are kept distinct, because collapsing them makes a misconfigured panel indistinguishable from a feature-gated build; and one adapter is built per account rather than per provider, because an adapter holds exactly one credential and two accounts sharing a provider credential would otherwise be probed with each other's key. See E-119 and E-120.",
   "dependencies": [
     "STAGE-5"
   ],
@@ -16,16 +16,15 @@
     "Persistence/runtime ownership",
     "Default-build compatibility"
   ],
-  "blocked_by": [
-    "STAGE-5"
-  ],
+  "blocked_by": [],
   "unblock_condition": "Revalidate Stage 5 and add an owned persistence/runtime contract without changing ML feature order.",
   "evidence": [
     "E-005",
     "E-007",
     "E-016",
     "E-115",
-    "E-119"
+    "E-119",
+    "E-120"
   ],
   "source_references": [
     "docs/development/repository-audit-2026-09-25.md",

@@ -26,7 +26,7 @@ failed node. Historical tags are not graph edges.
 | `STAGE-2` | `DONE` | `CORE-P1-REPAIR` |
 | `STAGE-3` | `DONE` | `CORE-P1-REPAIR` |
 | `STAGE-4` | `DONE` | `CORE-P1-REPAIR` |
-| `STAGE-5` | `PARTIAL` | `STAGE-1` |
+| `STAGE-5` | `DONE` | `STAGE-1` |
 | `STAGE-6` | `DONE` | `CORE-P1-REPAIR` |
 | `STAGE-7` | `PARTIAL` | `STAGE-6`, `7A`, `7B`, `7C`, `7D`, `7E-0`, `7E-1` |
 | `STAGE-8` | `BLOCKED` | `STAGE-7`, `7H` |
@@ -49,7 +49,7 @@ failed node. Historical tags are not graph edges.
 | `7F` | `PARTIAL` | `7E-3`, `TEST-PACKAGING`, `OBSERVABILITY` |
 | `7G` | `BLOCKED` | `7F` |
 | `7H` | `BLOCKED` | `7G` |
-| `ACCOUNT` | `PARTIAL` | `STAGE-5` |
+| `ACCOUNT` | `DONE` | `STAGE-5` |
 | `NEWAPI` | `PARTIAL` | `ACCOUNT` |
 | `I2` | `PARTIAL` | none |
 | `I3` | `PARTIAL` | none |
