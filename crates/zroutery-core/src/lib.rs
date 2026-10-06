@@ -85,7 +85,8 @@ pub use ir::{
     StreamEvent, SystemPart, ToolChoice, Usage,
 };
 pub use migration::{
-    MigrationAction, MigrationPlan, MigrationResult, MigrationState, MigrationStep, MigrationStore,
+    EndpointExpect, MigrationAction, MigrationExecutor, MigrationPlan, MigrationResult,
+    MigrationSnapshot, MigrationState, MigrationStep, MigrationStore,
 };
 #[cfg(feature = "ml")]
 pub use ml::{
