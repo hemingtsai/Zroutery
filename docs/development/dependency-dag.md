@@ -53,7 +53,7 @@ failed node. Historical tags are not graph edges.
 | `NEWAPI` | `PARTIAL` | `ACCOUNT` |
 | `I2` | `PARTIAL` | none |
 | `I3` | `PARTIAL` | none |
-| `I4` | `FAILED` | `I2`, `I3` |
+| `I4` | `PARTIAL` | none |
 | `UI` | `DONE` | `STAGE-1` |
 | `UI-LAYOUT` | `DONE` | `UI` |
 | `UI-NEW-TRACKS` | `BLOCKED` | `UI`, `ACCOUNT`, `NEWAPI`, `I2`, `I3`, `I4` |

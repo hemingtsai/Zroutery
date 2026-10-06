@@ -2,8 +2,8 @@
   "schema_version": 1,
   "node_id": "I4",
   "display_name": "I4 — restore and rollback",
-  "status": "FAILED",
-  "implementation_state": "Conflict resolution is disconnected from release and migration rollback can report success while restoration emits warnings.",
+  "status": "PARTIAL",
+  "implementation_state": "All four gates are met and both named defects are repaired, so this moves off FAILED; it stays PARTIAL rather than DONE because nothing in the application calls the rollback path yet. Conflict resolution being disconnected from release was repaired by I3's release_resolved, not here: resolve_conflicts had computed a resolution with no production caller since before either node was touched. The rollback defect was that MigrationResult reported state RolledBack and rolled_back true whether or not a byte went back, with restore failures pushed into warnings, errors hardcoded empty and rolled_back a constant -- so a rollback that restored nothing was indistinguishable from a clean one to every caller. rolled_back now answers whether the pre-migration state was actually put back and is false whenever any restore failed, with restored_files and failed_restores naming which file went which way. The restore failure is injected through SnapshotWriter rather than provoked with read-only permissions, because CI runs Linux, macOS and Windows and read-only semantics differ between them; a gate whose outcome depends on the OS is green until it is not. Restore failures are recorded in errors and not only in warnings, because every caller checks errors.is_empty() and none are obliged to read warnings.",
   "dependencies": [
     "I2",
     "I3"
@@ -17,20 +17,21 @@
     "Migration rollback semantics",
     "Cross-track restore fixtures"
   ],
-  "blocked_by": [
-    "I2",
-    "I3"
-  ],
+  "blocked_by": [],
   "unblock_condition": "Close I2 and I3 contracts and pass conflict-safe restore/rollback tests with explicit failure reporting.",
   "evidence": [
-    "E-016"
+    "E-016",
+    "E-118"
   ],
   "source_references": [
     "docs/development/repository-audit-2026-09-25.md",
     "crates/zroutery-core/src/agent_takeover.rs",
-    "crates/zroutery-core/src/migration.rs"
+    "crates/zroutery-core/src/migration.rs",
+    "crates/zroutery-core/tests/migration_executor_test.rs",
+    "crates/zroutery-core/tests/agent_takeover_test.rs"
   ],
   "notes": [
-    "The audit decision is preserved as FAILED."
+    "The audit decision was preserved as FAILED and is now superseded: the conditions the audit recorded were repaired, and blocked_by is empty because I2 and I3 no longer name an unresolved gate. The status is PARTIAL, not DONE, because no production caller exists.",
+    "Whether a dependency's gates being met is what satisfies an edge, or whether the dependency must additionally be INTEGRATED, is answered by the DAG's own rule rather than by preference: blocked_by is defined as a subset of dependencies naming an active unresolved gate. It keys on gates, so met and verified gates close the contract."
   ]
 }
