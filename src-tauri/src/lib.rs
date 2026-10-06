@@ -4,6 +4,7 @@
 //! item plus a dashboard window.
 
 pub mod ccswitch;
+pub mod checkin;
 mod commands;
 mod logs;
 pub mod platform;

@@ -50,17 +50,40 @@ ml = ["zroutery-core/ml"]
 # store is constructed and stays empty. That is the honest state, and it is why
 # the GUI half of this is blocked rather than merely unwritten.
 account = ["zroutery-core/account"]
+# `newapi` adds the NewAPI panel adapter, which brings the account subsystem with
+# it. Still not in `default`: enabling a feature for `zroutery-core` is declared
+# upstream, so this does not touch the `ml` switch or its position.
+newapi = ["zroutery-core/newapi"]
+# `account-maint` adds the browser-driven check-in surface: an isolated headed
+# browser per account, a pause the user can resume, and the Tauri commands that
+# start, resume, cancel and report one.
+#
+# Kept separate from `account` rather than folded into it, because a half of this
+# needs to exist without a browser: an account can be declared, probed and
+# reported on with no check-in at all, and a build that forced the browser stack
+# into that path would make the cheaper thing the expensive one.
+account-maint = ["newapi"]
 
 [dependencies]
 zroutery-core = { path = "../crates/zroutery-core" }
 
 chrono = { workspace = true }
+futures-util = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
 uuid = { workspace = true }
+
+# Driving the user's own Chromium browser over the DevTools protocol. TLS is
+# deliberately off: the debugging endpoint is on loopback, so the features that
+# would pull a TLS stack and a root store in have nothing to authenticate.
+tokio-tungstenite = { version = "0.30.0", default-features = false, features = [
+    "handshake",
+    "connect",
+    "url",
+] }
 
 # Reading CC Switch's provider database; bundled so no system SQLite is needed.
 rusqlite = { version = "0.40", features = ["bundled"] }
