@@ -6,6 +6,7 @@
 
 use super::types::*;
 use crate::error::Result;
+use std::future::Future;
 
 /// Result of an account operation.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -25,6 +26,15 @@ pub enum AccountOpResult {
 /// Uses native async fn in trait (stable since Rust 1.75).
 /// For dynamic dispatch (`dyn AccountProvider`), boxing via `async_trait`
 /// or similar will be needed when the use-case arises.
+///
+/// That use-case has arrived — `account::reconcile` dispatches over a provider it
+/// was handed — so the object-safe shim lives in [`super::reconcile`] and this
+/// trait's methods are declared as `-> impl Future + Send` rather than `async fn`.
+/// The `+ Send` is the load-bearing part: a bare `async fn` desugars to a future
+/// with no `Send` guarantee, so a shim boxing it as `dyn Future + Send` would not
+/// compile, and dropping `Send` from the shim instead would make every caller that
+/// needs to move the future across a thread unable to. Implementations still write
+/// `async fn`, which satisfies this signature unchanged.
 #[allow(async_fn_in_trait)]
 pub trait AccountProvider: Send + Sync {
     /// Provider identifier.
@@ -34,23 +44,35 @@ pub trait AccountProvider: Send + Sync {
     fn capabilities(&self) -> AccountCapabilities;
 
     /// Refresh account state from the provider.
-    async fn refresh(&self, _account_id: &AccountId) -> Result<AccountRuntime> {
-        Err(crate::Error::internal("refresh not supported"))
+    fn refresh(
+        &self,
+        _account_id: &AccountId,
+    ) -> impl Future<Output = Result<AccountRuntime>> + Send {
+        std::future::ready(Err(crate::Error::internal("refresh not supported")))
     }
 
     /// Fetch current usage.
-    async fn fetch_usage(&self, _account_id: &AccountId) -> Result<AccountUsage> {
-        Err(crate::Error::internal("fetch_usage not supported"))
+    fn fetch_usage(
+        &self,
+        _account_id: &AccountId,
+    ) -> impl Future<Output = Result<AccountUsage>> + Send {
+        std::future::ready(Err(crate::Error::internal("fetch_usage not supported")))
     }
 
     /// Fetch current quota.
-    async fn fetch_quota(&self, _account_id: &AccountId) -> Result<AccountQuota> {
-        Err(crate::Error::internal("fetch_quota not supported"))
+    fn fetch_quota(
+        &self,
+        _account_id: &AccountId,
+    ) -> impl Future<Output = Result<AccountQuota>> + Send {
+        std::future::ready(Err(crate::Error::internal("fetch_quota not supported")))
     }
 
     /// Check account health.
-    async fn health_check(&self, _account_id: &AccountId) -> Result<AccountStatus> {
-        Err(crate::Error::internal("health_check not supported"))
+    fn health_check(
+        &self,
+        _account_id: &AccountId,
+    ) -> impl Future<Output = Result<AccountStatus>> + Send {
+        std::future::ready(Err(crate::Error::internal("health_check not supported")))
     }
 
     /// Check in / ping the account (keep-alive, token refresh).
