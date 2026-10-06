@@ -3,7 +3,7 @@
   "node_id": "ACCOUNT",
   "display_name": "Account generic contract",
   "status": "PARTIAL",
-  "implementation_state": "Account types, store, and pure calculations are useful, but persistence and production ownership/execution do not exist.",
+  "implementation_state": "Persistence and ownership exist: AppState owns an AccountStore behind the optional account feature, and the registry is configuration on ProviderConfig. Execution now exists too, as account::reconcile, which probes declared accounts through a dyn shim and publishes into the store — including on failure, so a stale healthy reading cannot masquerade as current. The node stays PARTIAL because execution is not yet integrated: no call site invokes the reconciler, and no credential-resolution path feeds it. The record previously claimed persistence and ownership did not exist; it corrected the record, not the code. See E-119.",
   "dependencies": [
     "STAGE-5"
   ],
@@ -23,7 +23,8 @@
   "evidence": [
     "E-005",
     "E-007",
-    "E-016"
+    "E-016",
+    "E-119"
   ],
   "source_references": [
     "docs/development/repository-audit-2026-09-25.md",
