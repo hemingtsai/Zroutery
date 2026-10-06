@@ -12,6 +12,8 @@ pub mod reconcile;
 pub mod resource;
 pub mod store;
 pub mod types;
+pub use reconcile::{AccountProbe, AccountSyncOutcome, ReconcileReport};
+
 pub use checkin::{
     CheckinConfirmation, CheckinFailure, CheckinPhase, CheckinReport, CheckinReward, CheckinStatus,
     MaintenanceDecision, RewardSource,
