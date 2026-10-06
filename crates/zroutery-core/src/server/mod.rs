@@ -120,6 +120,23 @@ pub struct AppState {
     /// plan. Both are off by default.
     #[cfg(feature = "ml")]
     ml_routing: crate::ml::MlRouter,
+    /// Runtime state for the accounts a provider hosts.
+    ///
+    /// **Runtime, not configuration.** What an operator declares — which accounts
+    /// exist and where each credential lives — is `ProviderConfig::accounts`.
+    /// What this holds is what probing *derived*: status, capabilities, quota,
+    /// usage, rate limits, and when each last succeeded or failed. Those expire,
+    /// so they live as long as the process and are never written to `AppConfig`.
+    ///
+    /// Owned here for the same reason `shadow` and `dataset` are: the contents
+    /// come from serving, so the lifetime should be the process. It also makes the
+    /// store a delegate for the desktop layer the way `Snapshot` is, which is how
+    /// a GUI will read it.
+    ///
+    /// The field is gated on its own feature and nothing else. `account` and `ml`
+    /// are independent, so turning accounts on does not perturb ML feature order.
+    #[cfg(feature = "account")]
+    accounts: crate::account::AccountStore,
     /// The durable routing trace log. Appended from the same terminal
     /// transition that produces the sample, so the history a future training
     /// run reads is the history this process actually served.
@@ -338,6 +355,12 @@ impl AppState {
             shadow_attachment: RwLock::new(attachment),
             projections: ProjectionLog::new(log_limit),
             response_store: ResponseStore::default(),
+            // `ml` and `account` are independent features, so this constructor is
+            // reached with accounts on or off and the field must satisfy both.
+            // Found by compiling `--features account`: gating the field in `build()`
+            // alone leaves the no-ml build missing it.
+            #[cfg(feature = "account")]
+            accounts: crate::account::AccountStore::new(),
         }
     }
 
@@ -445,6 +468,12 @@ impl AppState {
             traces,
             #[cfg(feature = "ml")]
             active_models,
+            // Constructed here rather than passed in, unlike the ml pieces: it has
+            // no configuration to read and nothing to fail. The declarations live in
+            // `ProviderConfig::accounts`; this holds only what probing derived, and
+            // starts empty because nothing has been probed yet.
+            #[cfg(feature = "account")]
+            accounts: crate::account::AccountStore::new(),
             shadow_attachment: RwLock::new(attachment),
             projections: ProjectionLog::new(log_limit),
             response_store: ResponseStore::default(),
@@ -629,6 +658,17 @@ impl AppState {
     #[cfg(feature = "ml")]
     pub fn dataset(&self) -> &crate::ml::DatasetStore {
         &self.dataset
+    }
+
+    /// Runtime state for the accounts the configured providers host.
+    ///
+    /// Absent without the `account` feature rather than empty, so a build that
+    /// ships no account subsystem says so instead of reporting zero accounts —
+    /// the same distinction `ml_status` makes between "no model" and "no model
+    /// store".
+    #[cfg(feature = "account")]
+    pub fn accounts(&self) -> &crate::account::AccountStore {
+        &self.accounts
     }
 
     /// The durable routing trace log.

@@ -301,6 +301,49 @@ pub struct ProviderConfig {
     /// How to ask this provider for the remaining credit, when it can be asked.
     #[serde(default)]
     pub balance: BalanceConfig,
+    /// Accounts this provider hosts, when it hosts any.
+    ///
+    /// `#[serde(default)]` is what every optional field on this struct already
+    /// uses, so a configuration written before accounts existed deserialises with
+    /// an empty list rather than failing. That is the whole reason the account
+    /// registry is configuration rather than a new durable file: nothing has to
+    /// migrate, and there is no second store whose absence becomes a question.
+    #[serde(default)]
+    pub accounts: Vec<AccountConfig>,
+}
+
+/// One account hosted by a provider.
+///
+/// This is a **declaration**, and the distinction is the whole point of the type.
+/// It says *this provider has this account, and this is where its credential
+/// lives*. It says nothing about the account's current state: quota, usage, rate
+/// limits and last-success timestamps are derived by probing and expire, so they
+/// are held in `account::AccountStore` and are never written here.
+///
+/// A provider key does not imply an account. A relay reached with one credential
+/// can host several, and an account can exist on a provider whose own key is only
+/// for health checks — which is why this is a list rather than a flag.
+///
+/// `AccountRuntime` derives `Serialize`, so writing observations into an
+/// `AppConfig` is technically possible and wrong: it would turn a number that was
+/// true at one moment into configuration that reads as authoritative afterwards.
+/// See `docs/development/account-surface-plan.md`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AccountConfig {
+    /// Stable identifier for this account within its provider.
+    ///
+    /// Required rather than defaulted. The store is keyed on
+    /// `(provider_id, account_id)`, so two accounts that both defaulted to the
+    /// same value would collide silently and one of them would be unreachable
+    /// while the configuration still claimed both.
+    pub account_id: String,
+    /// Where this account's credential lives. Empty means "use the provider's own
+    /// key", which is the common case for a relay with a single account.
+    #[serde(default)]
+    pub key_ref: String,
+    /// Whether to probe and route to this account.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
 }
 
 impl ProviderConfig {
@@ -322,6 +365,7 @@ impl ProviderConfig {
             anthropic_version: None,
             quirks: ProviderQuirks::default(),
             balance: BalanceConfig::default(),
+            accounts: Vec::new(),
         }
     }
 
