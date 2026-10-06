@@ -11,6 +11,12 @@ mod pipeline;
 mod projection_log;
 mod shadow_candidate;
 
+// The account reconciler's production caller. Gated on its own feature and on
+// nothing else: `account` and `ml` are independent, so this cannot perturb ML
+// feature order.
+#[cfg(feature = "account")]
+mod accounts;
+
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};

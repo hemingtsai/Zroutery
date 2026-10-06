@@ -35,6 +35,8 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 
+use serde::Serialize;
+
 use crate::account::provider::AccountProvider;
 use crate::account::store::AccountStore;
 use crate::account::types::{AccountCapabilities, AccountId, AccountRuntime, AccountStatus};
@@ -135,7 +137,13 @@ pub struct AccountProbe {
 }
 
 /// What a reconcile did with one account.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `Serialize` because this is the type a panel reads: the desktop command returns
+/// the report rather than a hand-built summary, so what the UI shows and what the
+/// reconciler did are the same value by construction. The tagged shape is also what
+/// keeps `Failed { reason }` from rendering as an account with no reason.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum AccountSyncOutcome {
     /// The provider answered and the runtime was published.
     Refreshed,
@@ -161,7 +169,10 @@ impl AccountSyncOutcome {
 }
 
 /// The result of reconciling a set of accounts.
-#[derive(Debug, Clone, Default)]
+///
+/// `Serialize` for the same reason as [`AccountSyncOutcome`]: it crosses the
+/// desktop command boundary as-is.
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct ReconcileReport {
     /// One entry per probed account, in probe order, as
     /// `(provider_id, account_id, outcome)`.
