@@ -55,23 +55,114 @@ revalidation is the same class of problem as a gate that is skipped.
 **Unlocks:** slice 1. **Effort:** one run of the named tests.
 **Do not** flip any node status here.
 
-## Slice 1 — `STAGE-5`: give the store an owner and a persistence boundary
+## Slice 1 — `STAGE-5`: the determination
 
-Today `AccountStore` exists, is tested, and is constructed nowhere in the product.
-That is the whole of the gap: `new()` returns a value and nobody holds it.
+**Status: determined below. Not yet implemented.**
 
-The slice is a runtime-ownership contract, not a feature. What it has to settle,
-and what it must not do:
+`AccountStore` exists, is tested, and is constructed nowhere in the product. That
+is the whole of the gap: `new()` returns a value and nobody holds it. Two
+questions had to be answered, and both are answerable from the code rather than by
+preference.
 
-- Who constructs the store, and for how long. `AppState` is the obvious owner,
-  which makes it a `Desktop` delegate for Tauri exactly as `Snapshot` is.
-- Where it lives between runs. `AccountStore` is in-memory; the record's required
-  gate is *"Persistence/runtime ownership"*, so an in-memory-only owner does not
-  satisfy it. That means a decision about what is persisted and where.
-- Feature-gate it as `account`, non-default, alongside `ml` — never inside it.
+### Q1. Who owns the store? `AppState`.
 
-**Unlocks:** slice 2. **Gate:** the record's own three, of which
-*"Persistence/runtime ownership"* is the one that fails today.
+`AppState` already owns six stores — `ledger`, `shadow`, `outcomes`, `dataset`,
+`ml_routing`, `projections` — and already has feature-gated fields
+(`#[cfg(feature = "ml")] shadow`, `#[cfg(feature = "ml")] dataset`). So:
+
+```rust
+#[cfg(feature = "account")]
+accounts: crate::account::AccountStore,
+```
+
+`AppState` is the right owner because the store's contents are *derived from
+serving* — quota, usage, rate limits, last success and failure — and so its
+lifetime should be the process. That also makes it a `Desktop` delegate for Tauri
+exactly as `Snapshot` is, which is how the GUI will read it.
+
+`AccountStore` is in-memory and bounded like the others. It is not a durable
+store and must not become one; see Q2.
+
+The module is already gated where it belongs: `lib.rs:57` is
+`#[cfg(feature = "account")] pub mod account;`. Nothing new to add.
+
+### Q2. What is persisted? The registry is configuration, not a durable store.
+
+This is the finding that removes most of the slice. The obvious move — a
+dedicated JSON file beside `traces.jsonl`, mirroring `active-model.json` — is
+wrong, because **an account is something the user declares, not something the
+router observes.**
+
+The split the types already draw:
+
+| | belongs in | why |
+|---|---|---|
+| `provider_id`, `AccountId` | **config** | the user's declaration that this provider has this account |
+| `key_ref` | **config** | where the credential lives, by reference |
+| `status`, `capabilities` | store, runtime | re-derived on every probe |
+| `quota`, `usage`, `rate_limit` | store, runtime | `Option`, and every field expires |
+| `last_success`, `last_failure`, `last_sync` | store, runtime | timestamps of observations |
+| `metadata` | store, runtime | opaque, adapter-owned |
+| the credential itself | **keyring** | never in `AppConfig` |
+
+So the registry rides the config that already exists:
+
+```rust
+// config.rs, on ProviderConfig, which already nests `balance: BalanceConfig`
+#[serde(default)]
+pub accounts: Vec<AccountConfig>,
+```
+
+`#[serde(default)]` is what every optional field on `ProviderConfig` already
+uses, so every existing user config deserialises with an empty list. No migration,
+and no new file whose absence or presence becomes a question.
+
+The cost is smaller than it first looks. An earlier measurement of mine claimed 13
+exhaustive `ProviderConfig { ... }` literals needing a new field; that was a regex
+artefact. The tests build providers with `ProviderConfig::new(...)` followed by
+field assignment, so they are unaffected. **Exactly one exhaustive literal exists**,
+inside `ProviderConfig::new()` itself.
+
+### The hazard this shape has to name
+
+`AccountRuntime` derives `Serialize` and `Deserialize`. That makes it *possible* to
+write the observations into `AppConfig`, which is the mistake this shape exists to
+prevent — persisting `quota.used` or `rate_limit.rpm_used` turns a number that was
+true at one moment into configuration that is silently wrong later. The derive
+invites it. So the rule has to be stated rather than left to the type system:
+
+**`AccountRuntime` is never written to disk.** It is what the store holds between
+probes, and `Serialize` on it is incidental to it being a plain data type.
+
+### Credentials
+
+`SecretStore` is keyed by a single string `key_ref`, not a composite key, so an
+account's credential follows the existing convention rather than inventing one:
+
+```
+provider:{provider_id}:account:{account_id}
+```
+
+`ProviderConfig::new()` already builds `format!("provider:{id}")`, so the shape is
+established. The value goes to the keyring; the ref goes to config. `AppConfig` is
+`Deserialize` with a `config_path` the app also writes back, so a credential placed
+there is a credential in a user-editable file.
+
+### What this does not touch
+
+`ml` and `account` are independent features — `ml = []`, `account = []`,
+`newapi = ["account"]` — so enabling `account` for `src-tauri` as a non-default
+feature does not perturb ML feature order, which both node records require.
+
+**Unlocks:** slice 2. **Gate:** the record's three, of which
+*"Persistence/runtime ownership"* is the one that fails today and is satisfied by
+Q1 plus the config registry in Q2.
+
+**If this determination should be an ADR rather than a section of this plan:** the
+repository's process supports it and the numbering is free (0009, after 0008), but
+`orch_docs_test.py` requires a new ADR to be referenced from `architecture.md` or
+`roadmap.md` or the docs gate fails. That is a repo-process decision and is not
+made here.
 
 ## Slice 2 — `ACCOUNT`: decide where an account lives, and keep its credential out of config
 
