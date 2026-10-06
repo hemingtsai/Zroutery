@@ -117,7 +117,12 @@ const PROVIDER_ID: &str = "newapi";
 const REFRESH_COOKIE_NAME: &str = "new_api_refresh";
 /// Quota units per US dollar, as a fallback when `/api/status` cannot tell us
 /// (`common.QuotaPerUnit` in NewAPI).
-const DEFAULT_QUOTA_PER_UNIT: f64 = 500_000.0;
+///
+/// Public because a caller that reads an observation has to name a unit for the
+/// figure before it has an instance to ask: `common.QuotaPerUnit` is the
+/// documented default and using it is an assumption, which is why the adapter
+/// still prefers the live `quota_per_unit` from `/api/status` wherever it can.
+pub const DEFAULT_QUOTA_PER_UNIT: f64 = 500_000.0;
 /// `common.UserStatusEnabled`.
 const USER_STATUS_ENABLED: i64 = 1;
 /// `common.UserStatusDisabled`.

@@ -44,6 +44,25 @@ pub struct Desktop {
     /// The window layer's live view of the lifecycle settings: the close
     /// handler reads this synchronously, `apply_config` keeps it current.
     pub(crate) window_rules: Mutex<WindowRules>,
+    /// Browser check-in runtime, holding any live browser open across a pause.
+    ///
+    /// Owned here rather than in [`Snapshot`] for the same reason the server
+    /// handle is: a browser is a process, not a reading. Nothing about it can be
+    /// serialised into a document handed to the webview, and a snapshot that
+    /// *tried* would be the place a session leaked. The snapshot reports whether
+    /// a browser is held, which is the only thing a panel needs to decide what to
+    /// offer.
+    #[cfg(feature = "account-maint")]
+    pub(crate) checkin: crate::checkin::CheckinRuntime,
+    /// Last known check-in outcome per account, for the snapshot.
+    ///
+    /// Observations rather than the live session: they survive a browser closing,
+    /// and they are the part a panel renders between runs. The live session is
+    /// asked separately, because "is a browser open right now" and "what
+    /// happened last time" are different questions and a panel that conflates them
+    /// will offer to resume an attempt that finished hours ago.
+    #[cfg(feature = "account-maint")]
+    checkin_reports: Mutex<BTreeMap<(String, String), CheckinView>>,
 }
 
 /// Whether a listener can claim an address.
@@ -134,6 +153,15 @@ pub struct Snapshot {
     /// and conflating them is how an operator ends up reading "no learning
     /// stack" out of what is actually a broken bridge.
     pub ml_available: bool,
+    /// Whether this build contains account maintenance and browser check-in.
+    ///
+    /// Same reasoning as [`Self::ml_available`], and the same discipline: the
+    /// dashboard asks rather than discovering by calling a command that does not
+    /// exist.
+    pub account_maintenance_available: bool,
+    /// What each declared account is doing, newest observation last.
+    #[cfg(feature = "account-maint")]
+    pub checkin: Vec<CheckinView>,
 }
 
 /// How much durable history the operator has, as bytes and as a record count.
@@ -183,6 +211,83 @@ pub struct Activity {
     pub recent: Vec<RequestRecord>,
 }
 
+/// What a panel needs to know about one account's check-in.
+///
+/// Deliberately a **view** and not the runtime types. The browser's phase is a
+/// plain enum rather than `BrowserSession`, the reward is the core's
+/// `CheckinReward`, and there is no field here for a cookie, a profile path or a
+/// port — so this struct cannot leak a session even by accident, and it is the
+/// only check-in shape that reaches the webview.
+#[cfg(feature = "account-maint")]
+#[derive(Debug, Clone, Serialize)]
+pub struct CheckinView {
+    pub provider_id: String,
+    pub account_id: String,
+    /// `"idle"`, `"running"`, `"waiting_for_user"`, `"succeeded"`,
+    /// `"already_completed"`, `"not_supported"`, `"failed"` or `"cancelled"`.
+    ///
+    /// Named here rather than serialising the Rust enum so the webview has a
+    /// stable wire vocabulary that a `#[serde(rename_all)]` change cannot move
+    /// underneath it.
+    pub phase: String,
+    /// Whether a browser is held open for this account right now.
+    pub browser_held: bool,
+    /// Whether the user is being asked to finish a challenge in it.
+    pub awaiting_user: bool,
+    /// What stopped it, when it stopped, and why.
+    pub failure: Option<String>,
+    /// The reward, in the account's reported unit — only when one was observed.
+    pub reward_amount: Option<f64>,
+    pub reward_unit: Option<String>,
+    /// Where the observed reward came from.
+    ///
+    /// Carried so a panel can render a figure recovered from provider log text as
+    /// what it is, rather than as an authoritative number.
+    pub reward_source: Option<String>,
+    pub last_completed_at: Option<i64>,
+}
+
+#[cfg(feature = "account-maint")]
+impl CheckinView {
+    /// A view for an account that has never been checked in.
+    ///
+    /// Phase `idle` rather than an error, so a freshly configured account renders
+    /// as not-yet-done instead of as broken.
+    pub fn idle(provider_id: &str, account_id: &str) -> Self {
+        Self {
+            provider_id: provider_id.to_string(),
+            account_id: account_id.to_string(),
+            phase: "idle".to_string(),
+            browser_held: false,
+            awaiting_user: false,
+            failure: None,
+            reward_amount: None,
+            reward_unit: None,
+            reward_source: None,
+            last_completed_at: None,
+        }
+    }
+}
+
+/// The panel root of a relay's base URL, with any `/api` or `/v1` suffix removed.
+///
+/// Providers are configured with the *relay* base, and a panel is the same host
+/// with a different suffix. Repeated from the adapter's own normalisation rather
+/// than reusing it, because that function is private to the adapter and this
+/// only needs an origin — and because a value the adapter later refuses is
+/// caught by its validation, so a wrong guess here fails at the call rather than
+/// silently.
+#[cfg(feature = "account-maint")]
+fn panel_root(base_url: &str) -> String {
+    let trimmed = base_url.trim().trim_end_matches('/');
+    for suffix in ["/api", "/v1"] {
+        if let Some(stripped) = trimmed.strip_suffix(suffix) {
+            return stripped.to_string();
+        }
+    }
+    trimmed.to_string()
+}
+
 /// `zr-1234abcd…` -> `zr-…abcd`: enough to tell two tokens apart, useless on its
 /// own.
 pub fn token_hint(token: &str) -> String {
@@ -211,6 +316,8 @@ impl Desktop {
         let window_rules = WindowRules {
             keep_in_tray: core.config().window.keep_in_tray,
         };
+        #[cfg(feature = "account-maint")]
+        let checkin = crate::checkin::CheckinRuntime::new(config_dir.clone());
         Desktop {
             core,
             secrets,
@@ -221,6 +328,10 @@ impl Desktop {
             warning: Mutex::new(None),
             balances: Mutex::new(BTreeMap::new()),
             window_rules: Mutex::new(window_rules),
+            #[cfg(feature = "account-maint")]
+            checkin,
+            #[cfg(feature = "account-maint")]
+            checkin_reports: Mutex::new(BTreeMap::new()),
         }
     }
 
@@ -322,8 +433,158 @@ impl Desktop {
             election: self.core.router().election(),
             budgets: self.budget_status(),
             ml_available: cfg!(feature = "ml"),
+            account_maintenance_available: cfg!(feature = "account-maint"),
+            #[cfg(feature = "account-maint")]
+            checkin: self.checkin_views().await,
             config,
         }
+    }
+
+    /// One view per declared account, in configuration order.
+    ///
+    /// Built from the *declared* accounts rather than from whatever sessions
+    /// happen to exist, so an account nobody has tried yet still appears — with
+    /// phase `idle`, which is a different fact from being absent. A panel that
+    /// lists only accounts with observations is a panel that cannot show that
+    /// something was never tried.
+    #[cfg(feature = "account-maint")]
+    pub async fn checkin_views(&self) -> Vec<CheckinView> {
+        let config = self.core.config();
+        let mut views = Vec::new();
+        for provider in &config.providers {
+            for account in &provider.accounts {
+                let key = (provider.id.clone(), account.account_id.clone());
+                views.push(match lock(&self.checkin_reports).get(&key) {
+                    Some(view) => view.clone(),
+                    None => CheckinView::idle(&provider.id, &account.account_id),
+                });
+            }
+        }
+        views
+    }
+
+    /// The view for one account, if it is declared.
+    #[cfg(feature = "account-maint")]
+    pub async fn checkin_view(&self, provider_id: &str, account_id: &str) -> Option<CheckinView> {
+        let key = (provider_id.to_string(), account_id.to_string());
+        let stored = lock(&self.checkin_reports).get(&key).cloned();
+        let held = self
+            .checkin
+            .is_browser_held(&crate::checkin::SessionKey::new(provider_id, account_id))
+            .await;
+        let awaiting = self
+            .checkin
+            .phase(&crate::checkin::SessionKey::new(provider_id, account_id))
+            .await
+            .map(|phase| phase.awaiting_user())
+            .unwrap_or(false);
+
+        let declared =
+            self.core.config().providers.iter().any(|p| {
+                p.id == provider_id && p.accounts.iter().any(|a| a.account_id == account_id)
+            });
+        if !declared {
+            return None;
+        }
+        let mut view = stored.unwrap_or_else(|| CheckinView::idle(provider_id, account_id));
+        // Liveness is asked of the runtime, never read from the stored report: a
+        // report written before a pause must not claim no browser is held.
+        view.browser_held = held;
+        view.awaiting_user = awaiting;
+        Some(view)
+    }
+
+    /// Remember what a check-in did, so the next snapshot can render it.
+    #[cfg(feature = "account-maint")]
+    pub fn record_checkin_view(&self, view: CheckinView) {
+        lock(&self.checkin_reports)
+            .insert((view.provider_id.clone(), view.account_id.clone()), view);
+    }
+
+    /// The maintenance declaration for one account, if it is declared.
+    ///
+    /// Read from the live configuration rather than cached, so a check-in
+    /// cannot be started against a declaration the user has since removed.
+    #[cfg(feature = "account-maint")]
+    pub fn maintenance_for(
+        &self,
+        provider_id: &str,
+        account_id: &str,
+    ) -> Option<zroutery_core::config::MaintenanceConfig> {
+        self.core.config().providers.iter().find_map(|p| {
+            (p.id == provider_id)
+                .then(|| {
+                    p.accounts
+                        .iter()
+                        .find(|a| a.account_id == account_id)
+                        .map(|a| a.maintenance.clone())
+                })
+                .flatten()
+        })
+    }
+
+    /// Close every browser this process is holding.
+    ///
+    /// Called on shutdown. A browser left running after the app exits would keep
+    /// a profile locked and keep a window on screen that nothing owns.
+    #[cfg(feature = "account-maint")]
+    pub async fn shutdown_browsers(&self) {
+        self.checkin.shutdown_all().await;
+    }
+
+    /// A NewAPI panel adapter for one account, built from its stored credential.
+    ///
+    /// Returns `None` — rather than an adapter with no credential — when no key is
+    /// stored. That distinction matters: an adapter with an empty key would fail
+    /// every call with an authentication error, which reads as "the credential is
+    /// wrong" when the truth is that none was ever configured.
+    ///
+    /// The key is read here and goes straight into the adapter. It is never
+    /// returned, stored on `Desktop`, or put in a snapshot: the credential lives
+    /// in the keychain, and the only thing that outlives this call is an adapter
+    /// holding it in memory.
+    #[cfg(feature = "account-maint")]
+    pub fn panel_adapter(
+        &self,
+        provider_id: &str,
+        account_id: &str,
+    ) -> Option<(zroutery_core::account::adapters::newapi::NewApiAdapter, f64)> {
+        use zroutery_core::account::adapters::newapi::{NewApiAdapter, NewApiConfig};
+        use zroutery_core::config::SecretStore;
+
+        let config = self.core.config();
+        let provider = config.providers.iter().find(|p| p.id == provider_id)?;
+        let account = provider
+            .accounts
+            .iter()
+            .find(|a| a.account_id == account_id)?;
+        // An empty account key means "use the provider's own", which is the same
+        // convention `AccountConfig::key_ref` documents.
+        let key_ref = if account.key_ref.trim().is_empty() {
+            provider.key_ref.as_str()
+        } else {
+            account.key_ref.as_str()
+        };
+        let api_key = self.secrets.get(key_ref)?;
+        if api_key.trim().is_empty() {
+            return None;
+        }
+
+        // The panel root, with any relay suffix stripped, exactly as the adapter's
+        // own normalisation would do — it is repeated here only to pick the
+        // default conversion rate, and a base the adapter later refuses is caught
+        // by its own validation.
+        let base = panel_root(&provider.base_url);
+        let adapter = NewApiAdapter::new(NewApiConfig {
+            base_url: base,
+            api_key,
+            ..Default::default()
+        })
+        .ok()?;
+        Some((
+            adapter,
+            zroutery_core::account::adapters::newapi::DEFAULT_QUOTA_PER_UNIT,
+        ))
     }
 
     pub fn balances(&self) -> BTreeMap<String, BalanceStatus> {

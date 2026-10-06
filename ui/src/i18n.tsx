@@ -227,8 +227,13 @@ const en = {
   "field.connect_timeout": "Connect timeout (s)",
   "providers.f_version": "anthropic-version",
   "providers.f_version_hint": "Empty sends the standard 2023-06-01",
-  "providers.impersonate": "Send the Claude Code fingerprint",
-  "providers.impersonate_hint": "User-Agent and beta headers, for gateways that check",
+  "providers.client_profile": "Client identity",
+  "providers.client_profile_hint":
+    "Who Zroutery presents as upstream. Claude Code and Codex also forward that client's own headers.",
+  "providers.profile_auto": "Auto — detect from the client",
+  "providers.profile_native": "Native — no client identity",
+  "providers.profile_claude_code": "Claude Code — with its headers",
+  "providers.profile_codex": "Codex — with its headers",
   "providers.bearer_auth": "Also send Bearer auth",
   "providers.bearer_auth_hint":
     "For relays that read Authorization: Bearer instead of x-api-key; both headers are sent, so either check passes",
@@ -250,6 +255,39 @@ const en = {
   "providers.remove": "Remove provider",
   "providers.removed_models_notice": "Removed {n} models that belonged to that provider.",
   "providers.balance_failed": "check failed",
+
+  // ------------------------------------------------------- account maintenance
+  "account.section": "Accounts",
+  "account.section_hint":
+    "Each account checks in through its own browser window, so one account's session is never used for another.",
+  // Phase names are the vocabulary the backend publishes. Each one is a distinct
+  // state rather than a colour, because they call for different things from the
+  // person looking at them.
+  "account.phase.idle": "not checked in yet",
+  "account.phase.running": "checking in…",
+  "account.phase.waiting_for_user":
+    "needs human verification — finish it in the open window",
+  "account.phase.succeeded": "checked in",
+  "account.phase.already_completed": "already checked in today",
+  "account.phase.not_supported": "this provider does not offer check-in",
+  "account.phase.failed": "check-in failed",
+  "account.phase.cancelled": "cancelled",
+  "account.last_checkin": "last check-in",
+  "account.reward": "reward",
+  // A figure recovered from the provider's log text is weaker evidence than one
+  // it reported in a structured field, and the two are labelled differently so a
+  // panel never presents one as the other.
+  "account.reward_weak_source": "read from provider log text",
+  "account.reward_inferred": "inferred from the balance change",
+  "account.checkin": "Check in",
+  "account.resume": "Continue in the open window",
+  "account.cancel": "Cancel",
+  "account.close_browser": "Close window",
+  "account.not_enabled":
+    "Check-in is switched off for this account. Turn it on in its maintenance settings first.",
+  "account.start_failed": "Could not start the check-in",
+  "account.resume_failed": "Could not continue the check-in",
+  "account.cancel_failed": "Could not cancel the check-in",
 
   // ------------------------------------------------------------- routing
   "routing.lede":
@@ -776,8 +814,13 @@ const zh: Dict = {
   "field.connect_timeout": "连接超时 (秒)",
   "providers.f_version": "anthropic-version",
   "providers.f_version_hint": "留空发送标准 2023-06-01",
-  "providers.impersonate": "发送 Claude Code 指纹",
-  "providers.impersonate_hint": "User-Agent 与 beta 头,供网关校验",
+  "providers.client_profile": "客户端身份",
+  "providers.client_profile_hint":
+    "Zroutery 以什么身份访问上游。选 Claude Code 或 Codex 时,还会转发该客户端自己的请求头。",
+  "providers.profile_auto": "自动 — 识别调用方",
+  "providers.profile_native": "原生 — 不伪装任何客户端",
+  "providers.profile_claude_code": "Claude Code — 带其请求头",
+  "providers.profile_codex": "Codex — 带其请求头",
   "providers.bearer_auth": "同时发送 Bearer 认证",
   "providers.bearer_auth_hint":
     "用于读取 Authorization: Bearer 而非 x-api-key 的中转;两个头都会发送,任一校验均可通过",
@@ -798,6 +841,30 @@ const zh: Dict = {
   "providers.remove": "移除提供商",
   "providers.removed_models_notice": "已移除属于该提供商的 {n} 个模型。",
   "providers.balance_failed": "查询失败",
+
+  // ------------------------------------------------------- account maintenance
+  "account.section": "账户",
+  "account.section_hint": "每个账户使用各自独立的浏览器窗口签到，一个账户的会话不会被用于另一个账户。",
+  "account.phase.idle": "尚未签到",
+  "account.phase.running": "正在签到…",
+  "account.phase.waiting_for_user": "需要人工验证 — 请在已打开的窗口中完成",
+  "account.phase.succeeded": "已签到",
+  "account.phase.already_completed": "今天已签到",
+  "account.phase.not_supported": "该平台不支持签到",
+  "account.phase.failed": "签到失败",
+  "account.phase.cancelled": "已取消",
+  "account.last_checkin": "上次签到",
+  "account.reward": "奖励",
+  "account.reward_weak_source": "取自平台日志文本",
+  "account.reward_inferred": "由余额变化推断",
+  "account.checkin": "签到",
+  "account.resume": "在已打开的窗口中继续",
+  "account.cancel": "取消",
+  "account.close_browser": "关闭窗口",
+  "account.not_enabled": "该账户未开启签到，请先在其维护设置中启用。",
+  "account.start_failed": "无法开始签到",
+  "account.resume_failed": "无法继续签到",
+  "account.cancel_failed": "无法取消签到",
 
   // ------------------------------------------------------------- routing
   "routing.lede": "按请求目的决定去向。Zroutery 服务任何讲 Anthropic 或 OpenAI 协议的客户端。",

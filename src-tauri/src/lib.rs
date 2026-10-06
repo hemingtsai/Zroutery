@@ -5,6 +5,7 @@
 
 pub mod ccswitch;
 pub mod checkin;
+mod checkin_commands;
 mod commands;
 mod logs;
 pub mod platform;
@@ -77,6 +78,14 @@ pub fn run() {
             commands::quit_app,
             commands::ccswitch_preview,
             commands::ccswitch_import,
+            #[cfg(feature = "account-maint")]
+            checkin_commands::start_checkin,
+            #[cfg(feature = "account-maint")]
+            checkin_commands::resume_checkin,
+            #[cfg(feature = "account-maint")]
+            checkin_commands::cancel_checkin,
+            #[cfg(feature = "account-maint")]
+            checkin_commands::get_checkin_status,
         ])
         .setup(move |app| {
             // Menu bar only: no dock icon, no app switcher entry.

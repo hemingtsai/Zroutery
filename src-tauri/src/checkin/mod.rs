@@ -65,6 +65,12 @@ impl SessionKey {
 ///
 /// The whole surface is this plus the four verbs, and that is the point: the Tauri
 /// layer never sees a browser, a page or a socket.
+///
+/// Cloneable, because the Tauri commands hand the runtime to a background task
+/// and keep using it. What is shared is the registry — the live browsers — not a
+/// copy of it, which is what keeps one browser per account true across the task
+/// boundary.
+#[derive(Clone)]
 pub struct CheckinRuntime {
     config_dir: PathBuf,
     registry: Arc<Mutex<HashMap<SessionKey, Arc<Mutex<LiveSession>>>>>,
