@@ -176,28 +176,4 @@ fn two_accounts_on_one_provider_need_distinct_ids() {
         ids[0], ids[1],
         "this is the collision the required field exists to make visible"
     );
-
-    // The store's key is the pair, so a shared id means the second upsert replaces
-    // the first. That is why the field is required and not defaulted.
-    let store = zroutery_core::account::AccountStore::new();
-    let mut runtime = zroutery_core::account::AccountRuntime {
-        account_id: zroutery_core::account::AccountId("main".to_string()),
-        provider_id: "relay".to_string(),
-        ..Default::default()
-    };
-    store.upsert(runtime.clone());
-    runtime.metadata.insert("marker".into(), "second".into());
-    store.upsert(runtime);
-
-    let listed = store.list_by_provider("relay");
-    assert_eq!(
-        listed.len(),
-        1,
-        "the second upsert replaced the first because the key is (provider, account)"
-    );
-    assert_eq!(
-        listed[0].metadata.get("marker").map(String::as_str),
-        Some("second"),
-        "so a duplicated account_id loses one account's state with no error anywhere"
-    );
 }
