@@ -192,14 +192,53 @@ still compile and still ship no account code.
 The record's unblock condition is specific: *"Pass a local mock-server
 auth/expiry/refresh/usage/quota contract before any real protocol E2E."*
 
-Five named gates, all against a local mock: auth, expiry and refresh, usage and
-quota, and a documented protocol fixture. `probe_status` exists at
-`newapi.rs:518` and is the connection test the adapter's own doc points at.
+**Four** named gates, all local: `Local mock-server auth`, `Expiry and refresh`,
+`Usage and quota`, `Documented protocol fixture`. An earlier revision of this
+document said five; the record lists four, and the record is what the gate check
+reads. `probe_status` exists at `newapi.rs:518` and is the connection test the
+adapter's own doc points at.
 
 This is the slice where a real account can be created and read without a network.
 Until it passes, `AccountProvider` has no production caller worth naming.
 
-**Unlocks:** part of slice 7. **Gate:** the five, all local.
+**Outcome: three gates already genuinely met, the fourth claimed but not
+enforced, and now enforced.**
+
+The first three were met before this slice started, and met properly rather than
+papered over: the adapter's 57 tests run against a real `axum` server on an
+ephemeral `TcpListener`, not a stubbed transport. `Local mock-server auth` is
+`authenticate_*`; `Expiry and refresh` is `an_expired_access_token_is_renewed_once_and_the_call_retried`,
+`concurrent_401s_redeem_the_rotating_cookie_once`, `a_refresh_result_never_overwrites_a_newer_login`;
+`Usage and quota` is `fetch_usage_sums_every_page_of_consumption_logs` and the
+quota conversions.
+
+That also means the node record's `implementation_state` — *"leaves usage/quota
+unimplemented"* — is **false**, and was already false before this slice. The
+record was not edited; correcting a node record's prose is a separate, deliberate
+act and it is not this slice's to take.
+
+The fourth gate, `Documented protocol fixture`, was **prose, not enforcement**.
+`newapi.rs` said "Verified against `Calcium-Ion/new-api` at commit `c2b7a9a`" and
+no code read the cited spec. Worse, the mock panel's handlers were written by the
+same author as the parser, so a misreading of the protocol would have been
+invisible: both sides would have agreed on the same wrong shape. That is the exact
+gap the gate exists to close.
+
+It is now enforced by `UPSTREAM_ROUTES` in the adapter — `(method, path, guard)`
+per route, transcribed from `router/api-router.go` at the pinned commit — and
+`newapi_upstream_routes_test.rs`, which checks the adapter's calls against that
+table in both directions. Two mutations confirm it has teeth: renaming
+`/api/log/self/stat` fails, and silently dropping a `UserAuth` guard fails.
+
+The finding worth carrying forward is that **the upstream OpenAPI spec is not a
+usable reference for this**. It is a complete valid document of 136 paths and it
+contains neither `/api/subscription/self` nor `/api/user/checkin`, zero
+occurrences of either word anywhere in it. Both exist in the Go route table, and
+those two endpoints carry the subscription/quota rules and the whole check-in
+path. "Absent from the spec" would have read as "absent upstream", and acting on
+that would have deleted working code. See E-114.
+
+**Unlocks:** part of slice 7. **Gate:** the four, all local.
 
 ## Slices 4 and 5 — `I2` and `I3`: the unblocked lane
 

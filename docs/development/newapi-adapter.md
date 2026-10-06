@@ -13,9 +13,9 @@ side.
 | Piece | State |
 | --- | --- |
 | Panel client, auth, quota, usage, health, check-in | implemented, `#[cfg(feature = "newapi")]` |
-| Tests | 55 unit tests against an in-process fake panel, run by CI (`--all-features`) |
+| Tests | 57 unit tests against an in-process fake panel (`axum` on an ephemeral port), run by CI (`--all-features`), plus 4 route-table tests against the transcribed upstream routes |
 | Default build | untouched — `newapi = ["account"]`, `default = []` |
-| Desktop shell (`src-tauri`) | **not wired**: nothing enables `account`/`newapi`, no config or GUI surface exists for accounts |
+| Desktop shell (`src-tauri`) | **store only**: `account` is now an opt-in `src-tauri` feature and `AppState` owns the store, and `ProviderConfig.accounts` declares them. Nothing probes an account yet, so with the feature on the store is constructed and stays empty. No GUI surface. |
 
 The earlier revision of this file was a stub: `refresh`/`health_check` returned
 constants and `fetch_usage`/`fetch_quota` returned "not yet implemented". The
@@ -25,6 +25,29 @@ described more than the code did; this document is the accurate record.
 Upstream reference: `Calcium-Ion/new-api` at
 `c2b7a9a9e0b548c2051a949fceabb59029adcb49` (2026-09-25), plus its
 `docs/authentication.md` and `docs/openapi/api.json`.
+
+**The OpenAPI spec alone is not sufficient, and using it as the reference would
+have been wrong.** `docs/openapi/api.json` at that commit is a complete, valid
+document with 136 paths, and it contains **neither `/api/subscription/self` nor
+`/api/user/checkin`** — the endpoint behind the subscription/quota rules and the
+whole check-in path. Both exist in `router/api-router.go`:
+
+```go
+subscriptionRoute.GET("/self", controller.GetSubscriptionSelf)
+selfRoute.GET("/checkin",  controller.GetCheckinStatus)
+selfRoute.POST("/checkin", middleware.TurnstileCheck(), controller.DoCheckin)
+```
+
+So "absent from the spec" reads as "absent upstream", and acting on that reading
+would have deleted two working endpoints. The route table is transcribed from the
+Go source, which is authoritative; the spec is incomplete.
+
+`UPSTREAM_ROUTES` in the adapter records `(method, path, guard)` per route, and
+`newapi_upstream_routes_test.rs` checks the adapter's calls against it in both
+directions — a call with no upstream route fails, and so does a tabled route the
+adapter no longer calls. It is a fence, not a guarantee: upstream is not fetched at
+test time, because a test that needs the network fails for reasons unrelated to the
+code. Re-verify by re-reading `router/api-router.go` at a newer commit.
 
 ## Authentication
 

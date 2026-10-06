@@ -51,6 +51,39 @@
 //!   per-account ceiling, so [`RateLimitState`] carries usage with unknown
 //!   limits (its `pressure()` stays `0.0`).
 
+/// The upstream routes this adapter depends on, as `(method, path, guard)`.
+///
+/// Transcribed from `router/api-router.go` at `Calcium-Ion/new-api` commit
+/// `c2b7a9a9e0b548c2051a949fceabb59029adcb49` (2026-09-25), which is the commit
+/// the module documentation above cites. It is public and `const` so that
+/// `newapi_upstream_routes_test.rs` can check the adapter's calls against it.
+///
+/// Two properties make it worth having as data rather than as prose:
+///
+/// * **The OpenAPI spec is not a usable source for it.** `docs/openapi/api.json`
+///   at the same commit documents 136 paths and includes neither
+///   `/api/subscription/self` nor `/api/user/checkin` -- the endpoints behind the
+///   subscription/quota rules and the entire check-in path. Both are present in
+///   the Go router. Treating "absent from the spec" as "absent upstream" would
+///   have deleted two working endpoints.
+/// * **The guard is part of the entry.** Whether a route sits behind
+///   `UserAuth` decides if a request is answered or refused, so a transcription
+///   that dropped it would make an unauthenticated probe look correct.
+pub const UPSTREAM_ROUTES: &[(&str, &str, &str)] = &[
+    ("GET", "/api/status", "none"),
+    ("GET", "/api/user/self", "UserAuth"),
+    (
+        "POST",
+        "/api/user/auth/refresh",
+        "SessionCookieOriginGuard, CriticalRateLimit",
+    ),
+    ("GET", "/api/log/self", "UserAuth"),
+    ("GET", "/api/log/self/stat", "UserAuth"),
+    ("GET", "/api/subscription/self", "UserAuth"),
+    ("GET", "/api/user/checkin", "UserAuth"),
+    ("POST", "/api/user/checkin", "UserAuth, TurnstileCheck"),
+];
+
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::RwLock;
