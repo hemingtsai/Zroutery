@@ -3,7 +3,7 @@
   "node_id": "I3",
   "display_name": "I3 — agent takeover ownership",
   "status": "PARTIAL",
-  "implementation_state": "Ownership and temporary-adapter tests exist, but release does not apply computed conflict resolution and no durable manifest exists across process boundaries.",
+  "implementation_state": "All four gates now have passing fixtures and the node's two named defects are repaired. Ownership is durable across process boundaries: TakeoverStore::open persists the manifest through the existing 0600 atomic writer and refuses a corrupt one rather than reading it as empty, because starting from nothing would overwrite the only record of what was overwritten. A durable store re-reads that record before committing a release, so the compare-and-swap sees a second process and not only a competing thread. Conflict resolution is applied rather than merely computed: release_resolved detects, resolves and applies by rewriting the manifest the adapter already restores from, and writing that fixture found a second defect the record did not name, namely that last_applied was never updated after adoption, so the proxy's own writes were indistinguishable from user edits. The confirmation flow binds a proposal to a fingerprint of the config it was planned against and refuses if the config moved. Status stays PARTIAL rather than DONE for two reasons that are not gates. Nothing in the application calls TakeoverStore yet, so this is implemented and proven rather than integrated. And release_with_restore still restores the adoption-time snapshot unconditionally, so it still discards user edits; that is pinned by a test which names release_resolved as the alternative, so changing it has to be deliberate. Mutation coverage is partial: the CAS mutation was confirmed by name, and the confirmation-flow and Skip mutations were not re-run against the committed tree. See E-117.",
   "dependencies": [],
   "dependents": [
     "I4",
@@ -19,12 +19,14 @@
   "unblock_condition": "Implement durable manifest, conflict application, confirmation, and CAS restore gates.",
   "evidence": [
     "E-005",
-    "E-016"
+    "E-016",
+    "E-117"
   ],
   "source_references": [
     "docs/development/repository-audit-2026-09-25.md",
     "crates/zroutery-core/src/agent_takeover.rs",
-    "crates/zroutery-core/tests/e2e.rs"
+    "crates/zroutery-core/tests/e2e.rs",
+    "crates/zroutery-core/tests/agent_takeover_test.rs"
   ],
   "notes": [
     "Takeover is not authorized for production."
