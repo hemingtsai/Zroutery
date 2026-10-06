@@ -29,6 +29,27 @@ tauri-build = { version = "2", features = [] }
 # choice for someone who does not want their routing history on disk.
 default = ["ml"]
 ml = ["zroutery-core/ml"]
+# `account` carries the account subsystem: the per-provider account declarations
+# in config and the runtime state probing derives from them.
+#
+# **Not in `default`**, on purpose and by record. `node-status/account.status.json`
+# and `stage-5.status.json` both record "Account remains optional and is not
+# enabled by the default Tauri dependency", and both add "without changing ML
+# feature order". The two switches are declared independently upstream, so turning
+# this one on does not perturb the learning build and leaving it off does not
+# perturb this one.
+#
+# Note the wording above is deliberate. `activation_test` refuses any manifest line
+# carrying both the core crate name and the word "features", because a dependency
+# that names its own switches cannot be turned off without editing the manifest. A
+# comment that merely *describes* those switches trips the same guard, and it is
+# right to: the scanner cannot tell prose from configuration, and guessing which one
+# it is would be worse than refusing.
+#
+# The surface is not reachable yet: nothing probes an account, so with this on the
+# store is constructed and stays empty. That is the honest state, and it is why
+# the GUI half of this is blocked rather than merely unwritten.
+account = ["zroutery-core/account"]
 
 [dependencies]
 zroutery-core = { path = "../crates/zroutery-core" }
