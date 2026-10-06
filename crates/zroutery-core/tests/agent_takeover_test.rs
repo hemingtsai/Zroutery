@@ -29,6 +29,7 @@ use std::path::PathBuf;
 use zroutery_core::agent_takeover::{
     AgentAdapter, AgentConfigSnapshot, AgentType, ConflictResolution, TakeoverStore,
 };
+use zroutery_core::migration::{MigrationSnapshot, SnapshotFile};
 
 fn values(pairs: &[(&str, serde_json::Value)]) -> HashMap<String, serde_json::Value> {
     pairs
@@ -452,6 +453,95 @@ fn a_durable_release_commits_when_nothing_competes() {
         reopened.state(),
         zroutery_core::agent_takeover::OwnershipState::Released
     );
+}
+
+// ---------------------------------------------------------------------------
+// Gate: cross-track restore fixtures
+// ---------------------------------------------------------------------------
+
+/// A migration rollback writes config files. When takeover is holding those same
+/// fields, that write is an *external modification* from the takeover track's
+/// point of view, and the two tracks must not each assume they are the only thing
+/// touching the file.
+///
+/// This is the fixture neither track can write alone: `I2` owns the rollback, `I3`
+/// owns ownership, and the interesting property is what one track observes about
+/// the other.
+#[test]
+fn a_migration_rollback_is_visible_to_the_takeover_track_as_an_external_change() {
+    let sandbox = Sandbox::new("cross_track");
+    let adapter = FileAdapter::new(
+        &sandbox,
+        "config.json",
+        nested(&[("model", serde_json::json!("opus"))]),
+    );
+    let raw_path = sandbox.join("config.json");
+
+    // The takeover track adopts `model` and then rewrites it, as the proxy does.
+    let store = TakeoverStore::open(sandbox.join("ownership.json")).expect("open");
+    store
+        .adopt(
+            vec!["model".into()],
+            &values(&[("model", serde_json::json!("opus"))]),
+        )
+        .expect("adopt");
+    adapter.write_raw(&nested(&[("model", serde_json::json!("haiku"))]));
+    store
+        .record_applied(&values(&[("model", serde_json::json!("haiku"))]))
+        .expect("record the proxy write");
+
+    // The migration track snapshots the current bytes and then rolls back, which
+    // writes "sonnet" over "haiku".
+    let snapshotted = std::fs::read(&raw_path).expect("read config");
+    adapter.write_raw(&nested(&[("model", serde_json::json!("sonnet"))]));
+
+    let mig_store = zroutery_core::migration::MigrationStore::new();
+    mig_store
+        .transition(zroutery_core::migration::MigrationState::Failed)
+        .expect("reach Failed");
+    let migration = zroutery_core::migration::MigrationExecutor::new(mig_store);
+
+    let expected_bytes = snapshotted.clone();
+    let rolled = migration.rollback(Some(&MigrationSnapshot {
+        files: vec![SnapshotFile {
+            path: raw_path.to_string_lossy().into_owned(),
+            content: expected_bytes.clone(),
+            hash: 0,
+        }],
+        created_at: 0,
+    }));
+    assert!(
+        rolled.rolled_back,
+        "the rollback itself should have succeeded, got: {:?}",
+        rolled.errors
+    );
+    // Byte-for-byte, which is the right semantic for a rollback: it put back exactly
+    // what it captured rather than re-serialising the value, so formatting the
+    // original file had is preserved too.
+    assert_eq!(
+        std::fs::read_to_string(&raw_path).unwrap(),
+        String::from_utf8(expected_bytes).unwrap()
+    );
+    assert_eq!(adapter.read_raw()["model"], serde_json::json!("haiku"));
+
+    // The takeover track must now see that write as somebody else's.
+    let conflicts = store.conflicts(&values(&[("model", serde_json::json!("haiku"))]));
+    assert!(
+        conflicts.is_empty(),
+        "the rollback restored exactly what the takeover track last applied, so there is \
+         nothing to resolve — the tracks agree"
+    );
+
+    // And when the values genuinely differ, the conflict surfaces rather than
+    // being absorbed.
+    let diverged = store.conflicts(&values(&[("model", serde_json::json!("opus"))]));
+    assert_eq!(
+        diverged.len(),
+        1,
+        "a value that is neither the snapshot nor the last applied value is a conflict"
+    );
+    assert_eq!(diverged[0].field_path, "model");
+    assert_eq!(diverged[0].current_external, serde_json::json!("opus"));
 }
 
 // ---------------------------------------------------------------------------
