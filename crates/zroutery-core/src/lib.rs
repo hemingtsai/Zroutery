@@ -125,4 +125,6 @@ pub use stats_ext::{
 pub use upstream::{DiscoveredModel, Upstream};
 
 #[cfg(feature = "account")]
-pub use account::{AccountId, AccountRuntime, AccountStatus, AccountStore};
+pub use account::{
+    AccountId, AccountRuntime, AccountStatus, AccountStore, AccountSyncOutcome, ReconcileReport,
+};
