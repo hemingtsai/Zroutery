@@ -5,11 +5,23 @@
 //! routing — Provider+Model works without it.
 
 pub mod adapters;
+pub mod checkin;
+pub mod events;
 pub mod provider;
 pub mod reconcile;
+pub mod resource;
 pub mod store;
 pub mod types;
+pub use checkin::{
+    CheckinConfirmation, CheckinFailure, CheckinPhase, CheckinReport, CheckinReward, CheckinStatus,
+    MaintenanceDecision, RewardSource,
+};
+pub use events::AccountEventLog;
 pub use provider::{AccountOpResult, AccountProvider};
+pub use resource::{
+    ObservedProviderAccounting, ObservedResourceEvent, ResourceAmount, ResourceEffect,
+    ResourceEventKind, ResourceEventSource,
+};
 pub use store::AccountStore;
 pub use types::*;
 

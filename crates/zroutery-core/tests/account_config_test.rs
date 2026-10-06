@@ -16,7 +16,9 @@
 //! adding an observation field would compile, deserialise, and then sit in
 //! `AppConfig` claiming to be configuration while quietly expiring.
 
-use zroutery_core::config::{AccountConfig, AppConfig, ProviderConfig, ProviderKind};
+use zroutery_core::config::{
+    AccountConfig, AppConfig, MaintenanceConfig, ProviderConfig, ProviderKind,
+};
 
 #[test]
 fn a_configuration_written_before_accounts_existed_still_loads() {
@@ -106,6 +108,12 @@ fn an_account_config_carries_no_observation_fields() {
         account_id: "main".to_string(),
         key_ref: String::new(),
         enabled: true,
+        maintenance: MaintenanceConfig {
+            checkin_enabled: true,
+            checkin_interval_secs: Some(86_400),
+            checkin_path: Some("/console/personal".to_string()),
+            ..Default::default()
+        },
     };
 
     let json = serde_json::to_value(&declared).expect("an account serialises");
@@ -138,9 +146,82 @@ fn an_account_config_carries_no_observation_fields() {
 
     assert_eq!(
         fields.len(),
-        3,
+        4,
         "AccountConfig is a declaration and nothing else; got {fields:?}"
     );
+}
+
+#[test]
+fn a_maintenance_declaration_carries_no_observation_or_credential_fields() {
+    // The same hazard one level down. `MaintenanceConfig` says what the user
+    // asked for; whether it worked, and whether the browser still holds a live
+    // session, are runtime facts that expire. A credential field here would be a
+    // credential in a file the app also writes back to.
+    let declared = MaintenanceConfig {
+        checkin_enabled: true,
+        checkin_interval_secs: Some(86_400),
+        checkin_path: Some("/console/personal".to_string()),
+        login_path: Some("/login".to_string()),
+        browser_executable: String::new(),
+    };
+
+    let json = serde_json::to_value(&declared).expect("maintenance serialises");
+    let fields: Vec<String> = json
+        .as_object()
+        .expect("maintenance serialises to an object")
+        .keys()
+        .cloned()
+        .collect();
+
+    for forbidden in [
+        "username",
+        "password",
+        "cookie",
+        "cookies",
+        "token",
+        "access_token",
+        "session",
+        "headless",
+        "last_checkin",
+        "last_reward",
+        "phase",
+        "reward",
+    ] {
+        assert!(
+            !fields.iter().any(|field| field == forbidden),
+            "MaintenanceConfig must not carry `{forbidden}`. Observations expire and \
+             credentials must live in the keyring or the browser profile, never in a \
+             user-editable document. Present fields: {fields:?}"
+        );
+    }
+
+    // `headless` is refused rather than merely absent: the operation needs a
+    // browser a script cannot drive, so a headless switch would be a mode that
+    // cannot work offered as though it could.
+    assert!(
+        !fields.iter().any(|f| f.contains("headless")),
+        "a headless switch must not be introduced; got {fields:?}"
+    );
+}
+
+#[test]
+fn an_account_config_from_an_older_document_deserialises_with_maintenance_off() {
+    // A configuration written before maintenance existed must load rather than
+    // fail, and must not silently start checking accounts in.
+    let parsed: AppConfig = serde_json::from_str(
+        r#"{
+            "providers": [
+                { "id": "relay", "name": "Relay", "kind": "openai_compatible",
+                  "base_url": "https://relay.example/v1",
+                  "accounts": [ { "account_id": "main" } ] }
+            ]
+        }"#,
+    )
+    .expect("a document without maintenance still loads");
+
+    let account = &parsed.providers[0].accounts[0];
+    assert!(!account.maintenance.checkin_enabled);
+    assert!(!account.maintenance.is_browser_checkin_configured());
 }
 
 #[test]
