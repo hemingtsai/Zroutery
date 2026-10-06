@@ -2,8 +2,8 @@
   "schema_version": 1,
   "node_id": "UI-NEW-TRACKS",
   "display_name": "New-track UI and Tauri surfaces",
-  "status": "BLOCKED",
-  "implementation_state": "The operational UI exists, but new backend lifecycles are not real or owned enough to expose product surfaces.",
+  "status": "PARTIAL",
+  "implementation_state": "The upstream contracts this node was blocked on are now closed: ACCOUNT, NEWAPI, I2, I3 and I4 all pass their gates, so the blocked_by set is emptied and the node is no longer waiting on upstream. Its own gates are unmet: no backend lifecycle has a production caller, the verified core engines are fixtures rather than surfaces a user can drive, and there is no confirmation or rollback UI. The core now has the pieces a surface would need — durable ownership with compare-and-swap, conflict resolution applied on release, accurate rollback reporting, and an account reconciler that publishes outcomes rather than only successes — and a product surface may be built on those fixtures once the confirmation semantics are agreed.",
   "dependencies": [
     "UI",
     "ACCOUNT",
@@ -18,13 +18,7 @@
     "Real account/NewAPI/migration/takeover surfaces",
     "Product confirmation and rollback UI"
   ],
-  "blocked_by": [
-    "ACCOUNT",
-    "NEWAPI",
-    "I2",
-    "I3",
-    "I4"
-  ],
+  "blocked_by": [],
   "unblock_condition": "Close the Account, NewAPI, I2, I3, and I4 lifecycle contracts before adding user-facing controls.",
   "evidence": [
     "E-016"
@@ -38,6 +32,7 @@
     "crates/zroutery-core/src/agent_takeover.rs"
   ],
   "notes": [
-    "No placeholder control is treated as a product lifecycle."
+    "No placeholder control is treated as a product lifecycle.",
+    "No longer blocked on upstream: ACCOUNT, NEWAPI, I2, I3, and I4 all pass their gates and their blocked_by sets are empty. The status is PARTIAL because its own three gates are unmet, not because it is waiting on another node."
   ]
 }

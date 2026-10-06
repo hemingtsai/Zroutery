@@ -26,6 +26,7 @@
     "crates/zroutery-core/src/account/adapters/newapi.rs"
   ],
   "notes": [
-    "No real provider call is claimed."
+    "No real provider call is claimed.",
+    "NEWAPI's half of this unblock is satisfied: the local mock contract passed at the route-table fence and four route-table tests that pin endpoint provenance against upstream's Go source are committed. The remainder — a documented fixture from a real provider and explicit external authorization — is not an engineering gap; it is a product decision about whether to spend credentials against a real NewAPI. Keeping this node BLOCKED is a statement about that open decision, not about NEWAPI."
   ]
 }
