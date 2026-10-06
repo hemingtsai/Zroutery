@@ -59,14 +59,91 @@ pub struct MigrationStep {
     pub reversible: bool,
 }
 
+/// What counts as a healthy answer from an endpoint the migration just switched to.
+///
+/// This type exists because "the socket answered" is not evidence that the
+/// endpoint works. A 500 is an answer, a 401 is an answer, and a proxy's
+/// connection-refused page is an answer. Accepting any of them is what let a
+/// migration walk all the way to `Completed` against a service that was broken.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EndpointExpect {
+    /// Any 2xx. The floor, not the goal: it proves the right port is serving.
+    Success,
+    /// One specific status code, for an endpoint with a defined non-2xx contract.
+    Status(u16),
+    /// A 2xx whose body contains this marker.
+    ///
+    /// Stronger than [`EndpointExpect::Success`] on purpose, and the one worth
+    /// reaching for during a cutover: a 200 from the wrong service, or from a
+    /// stale process still holding the port, passes a status check and fails
+    /// this. The marker is what distinguishes "Zroutery is serving" from
+    /// "something is serving".
+    BodyContains(String),
+}
+
+impl Default for EndpointExpect {
+    /// [`EndpointExpect::Success`], so a plan serialized before this field
+    /// existed deserializes to the documented floor rather than failing to
+    /// parse. It is deliberately the *weakest* option: an old plan that named no
+    /// expectation gets the check it would have got before, and no more.
+    fn default() -> Self {
+        Self::Success
+    }
+}
+
+/// One step of a migration, as data.
+///
+/// Every variant is executable by [`MigrationExecutor::execute_step`]. There is
+/// no untyped escape hatch: [`MigrationAction::Custom`] exists on the wire for
+/// compatibility and **fails** when executed, because a step that reports success
+/// without doing anything is worse than a migration that refuses to start.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum MigrationAction {
+    /// Copy a config file, backing up any existing destination first.
+    ///
+    /// Warns when the copied bytes contain credential-shaped keys. Core has no
+    /// credential store, so it cannot route a secret anywhere -- it can only
+    /// refuse to be quiet about one. Keeping the keys out of config is the
+    /// desktop layer's job, where `ccswitch::credential_fingerprint` already
+    /// establishes the convention that a credential is referenced, never carried.
     CopyConfig { source: String, dest: String },
-    ValidateConfig,
+    /// Parse a config file and fail if it is malformed.
+    ///
+    /// Carries the path because a validator with no input cannot validate: the
+    /// earlier unit variant returned a success message unconditionally.
+    ValidateConfig { path: String },
+    /// Report whether a named external process is running.
+    ///
+    /// **Does not stop it.** This migration did not start that process, so it
+    /// does not own its lifetime and will not terminate a program the user did
+    /// not ask us to launch. Use [`MigrationAction::StopOwned`] for processes
+    /// this migration started.
     StopExternal { process_name: String },
+    /// Start a child process and take ownership of it.
+    ///
+    /// Ownership is what makes stopping safe: only a process recorded here can
+    /// be stopped by label, and it is stopped with [`MigrationAction::StopOwned`].
+    StartOwned {
+        label: String,
+        program: String,
+        args: Vec<String>,
+    },
+    /// Stop a child this migration started, and wait for it to actually exit.
+    StopOwned { label: String },
+    /// Check that a port is free, so the switch does not collide with something
+    /// already bound.
     StartZroutery { port: u16 },
-    VerifyEndpoint { url: String },
+    /// Require a real answer from `url`, judged by `expect`.
+    VerifyEndpoint {
+        url: String,
+        /// Defaults to [`EndpointExpect::Success`] so a plan written before this
+        /// field existed still parses.
+        #[serde(default)]
+        expect: EndpointExpect,
+    },
+    /// Retained for wire compatibility. Executing it is an error.
     Custom { description: String },
 }
 
@@ -172,18 +249,118 @@ impl Default for MigrationStore {
     }
 }
 
+/// The key names that suggest a value is a credential rather than configuration.
+///
+/// A deliberately small, deliberately literal list. This is not a scanner for
+/// secrets -- it cannot be, without decrypting things -- it is a way for the
+/// migration to notice that the file it just copied is the kind of file that
+/// tends to hold keys, and say so while someone is still in a position to act on
+/// it. A false positive costs a warning; a false negative costs a secret on disk
+/// in a second location nobody was tracking.
+const CREDENTIAL_KEY_NAMES: &[&str] = &[
+    "api_key",
+    "apikey",
+    "api-key",
+    "secret",
+    "token",
+    "password",
+    "passwd",
+    "authorization",
+    "access_key",
+    "private_key",
+    "client_secret",
+    "refresh_token",
+];
+
+/// Credential-shaped key names present in `bytes`, lowercased and sorted.
+///
+/// Scans for the name and not the value, so it never reports what a secret *is*
+/// -- only that a field conventionally holding one was copied. It is a textual
+/// scan, not a parse, deliberately: the point is to notice a copied `.db` or
+/// `.toml` just as readily as a copied `.json`, and a scanner that only
+/// understood JSON would miss the binary database that CC Switch actually
+/// prefers. That also means it can be fooled by a value that happens to contain
+/// the word, which is why every finding is a warning for a human rather than a
+/// verdict.
+fn credential_keys_in(bytes: &[u8]) -> Vec<String> {
+    let lowered = String::from_utf8_lossy(bytes).to_lowercase();
+
+    let mut found: Vec<String> = Vec::new();
+
+    for name in CREDENTIAL_KEY_NAMES {
+        // Delimiters on BOTH sides, so `token` does not match inside
+        // `max_tokens` (prefix is `_`) or `tokenizer` (suffix is `i`). Both of
+        // those are ordinary configuration, and a scanner that flagged them would
+        // be a scanner whose warning nobody reads.
+        let is_whole_word = |at: usize| -> bool {
+            let before_ok = at == 0 || {
+                let before = lowered.as_bytes()[at - 1];
+                !before.is_ascii_alphanumeric() && before != b'_' && before != b'-'
+            };
+            let after = at + name.len();
+            let after_ok = after >= lowered.len() || {
+                let after_byte = lowered.as_bytes()[after];
+                !after_byte.is_ascii_alphanumeric() && after_byte != b'_' && after_byte != b'-'
+            };
+            before_ok && after_ok
+        };
+
+        if lowered.match_indices(name).any(|(at, _)| is_whole_word(at))
+            && !found.iter().any(|existing| existing == name)
+        {
+            found.push((*name).to_string());
+        }
+    }
+
+    found.sort();
+    found
+}
+
 // ---------------------------------------------------------------------------
 // MigrationExecutor
 // ---------------------------------------------------------------------------
 
+/// A child process this migration started, and therefore owns.
+///
+/// Ownership is the whole point. A process in this list was launched by
+/// [`MigrationAction::StartOwned`], so stopping it cannot take down something
+/// the user was already running.
+struct OwnedProcess {
+    label: String,
+    child: std::process::Child,
+}
+
 /// Executes a migration plan step by step.
 pub struct MigrationExecutor {
     store: MigrationStore,
+    /// Children started by this migration, keyed by the label the plan gave them.
+    ///
+    /// A plain `Mutex` rather than an async lock: it is never held across an
+    /// `.await`, only around a `Vec` operation or a `kill`/`wait` pair.
+    owned: std::sync::Mutex<Vec<OwnedProcess>>,
 }
 
 impl MigrationExecutor {
     pub fn new(store: MigrationStore) -> Self {
-        Self { store }
+        Self {
+            store,
+            owned: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    /// The labels of the child processes this migration currently owns.
+    pub fn owned_labels(&self) -> Vec<String> {
+        match self.owned.lock() {
+            Ok(owned) => owned.iter().map(|p| p.label.clone()).collect(),
+            // A poisoned lock means a prior holder panicked mid-`kill`. The
+            // children are still tracked, so recovering the labels is strictly
+            // better than reporting none and orphaning them.
+            Err(poisoned) => poisoned
+                .into_inner()
+                .iter()
+                .map(|p| p.label.clone())
+                .collect(),
+        }
     }
 
     /// Execute a migration plan. Returns the result.
@@ -267,17 +444,67 @@ impl MigrationExecutor {
                 }
                 // Copy
                 std::fs::copy(source_path, dest_path).map_err(|e| format!("copy failed: {e}"))?;
-                Ok(vec![format!("copied {} -> {}", source, dest)])
+
+                let mut notes = vec![format!("copied {} -> {}", source, dest)];
+
+                // Auth policy. Core cannot move a secret anywhere -- the
+                // credential store lives in the desktop layer -- so the honest
+                // thing is to say what was just propagated instead of copying
+                // bytes that carry keys and reporting only the copy.
+                let copied = std::fs::read(dest_path).unwrap_or_default();
+                let found = credential_keys_in(&copied);
+                if !found.is_empty() {
+                    notes.push(format!(
+                        "copied config contains credential-shaped keys: {} — core cannot \
+                         store them, so the desktop layer must replace them with key \
+                         references before this file is trusted",
+                        found.join(", ")
+                    ));
+                }
+
+                Ok(notes)
             }
-            MigrationAction::ValidateConfig => {
-                // Placeholder: real validation would parse YAML/TOML/JSON
-                Ok(vec!["config validated".into()])
+            MigrationAction::ValidateConfig { path } => {
+                if path.is_empty() {
+                    return Err("config path is empty".into());
+                }
+                let config_path = std::path::Path::new(path);
+                let bytes =
+                    std::fs::read(config_path).map_err(|e| format!("cannot read {path}: {e}"))?;
+
+                let extension = config_path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
+
+                match extension.as_str() {
+                    "json" => {
+                        // A real parse. Malformed JSON is now a failure, which is
+                        // the entire point: the earlier action had no input and
+                        // so could not fail.
+                        serde_json::from_slice::<serde_json::Value>(&bytes)
+                            .map_err(|e| format!("{path} is not valid JSON: {e}"))?;
+                        Ok(vec![format!("{path} is valid JSON")])
+                    }
+                    other => Err(format!(
+                        "cannot validate a {other:?} file: the typed validator parses JSON, \
+                         and refusing is the honest answer for a format it does not read. \
+                         A validator that accepted {other:?} without reading it would be the \
+                         bug this replaced."
+                    )),
+                }
             }
             MigrationAction::StopExternal { process_name } => {
                 if process_name.is_empty() {
                     return Err("process name is empty".into());
                 }
-                // Check if process is running (read-only, no kill)
+                // Read-only, and it says so. This migration did not start that
+                // process, so it does not own the lifetime and will not kill a
+                // program the user may be relying on. The running case is a
+                // warning rather than a silent success, because "I did not stop
+                // it" must not read the same as "it needed stopping and is now
+                // stopped".
                 #[cfg(target_os = "windows")]
                 {
                     let output = std::process::Command::new("tasklist")
@@ -289,13 +516,13 @@ impl MigrationExecutor {
                         && stdout.to_lowercase().contains(&process_name.to_lowercase());
                     if found {
                         Ok(vec![format!(
-                            "external process '{}' is running (should be stopped manually)",
-                            process_name
+                            "external process '{process_name}' is running and was NOT stopped: \
+                             this migration did not start it. Stop it yourself if the config \
+                             it holds is being rewritten."
                         )])
                     } else {
                         Ok(vec![format!(
-                            "external process '{}' not found (may already be stopped)",
-                            process_name
+                            "external process '{process_name}' is not running"
                         )])
                     }
                 }
@@ -306,15 +533,110 @@ impl MigrationExecutor {
                         .output();
                     match output {
                         Ok(out) if out.status.success() => Ok(vec![format!(
-                            "external process '{}' is running (should be stopped manually)",
-                            process_name
+                            "external process '{process_name}' is running and was NOT stopped: \
+                             this migration did not start it. Stop it yourself if the config \
+                             it holds is being rewritten."
                         )]),
                         _ => Ok(vec![format!(
-                            "external process '{}' not found (may already be stopped)",
-                            process_name
+                            "external process '{process_name}' is not running"
                         )]),
                     }
                 }
+            }
+            MigrationAction::StartOwned {
+                label,
+                program,
+                args,
+            } => {
+                if label.is_empty() {
+                    return Err("owned process label is empty".into());
+                }
+                if program.is_empty() {
+                    return Err("owned process program is empty".into());
+                }
+                if self.owned_labels().iter().any(|held| held == label) {
+                    return Err(format!(
+                        "label '{label}' is already owned by this migration; a second child \
+                         under the same name would make StopOwned ambiguous about which \
+                         one it kills"
+                    ));
+                }
+
+                let child = std::process::Command::new(program)
+                    .args(args)
+                    // Detach the child's streams. A long-lived owned child that
+                    // inherits this process's stdout writes straight into
+                    // whatever is hosting the migration -- the desktop app's
+                    // console, or a test runner's captured output -- interleaved
+                    // with its own. Nothing here reads the child's output, so
+                    // there is nothing to lose.
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn()
+                    .map_err(|e| format!("cannot start '{program}': {e}"))?;
+
+                let pid = child.id();
+                self.owned
+                    .lock()
+                    .map_err(|_| "owned-process registry is poisoned".to_string())?
+                    .push(OwnedProcess {
+                        label: label.clone(),
+                        child,
+                    });
+
+                Ok(vec![format!(
+                    "started '{label}' as pid {pid} and took ownership of it"
+                )])
+            }
+            MigrationAction::StopOwned { label } => {
+                if label.is_empty() {
+                    return Err("owned process label is empty".into());
+                }
+
+                let mut owned = self
+                    .owned
+                    .lock()
+                    .map_err(|_| "owned-process registry is poisoned".to_string())?;
+
+                let index = owned
+                    .iter()
+                    .position(|p| p.label == *label)
+                    .ok_or_else(|| {
+                        format!(
+                            "no owned process labelled '{label}'; this migration only stops \
+                             what it started. Owned now: {:?}",
+                            owned.iter().map(|p| p.label.clone()).collect::<Vec<_>>()
+                        )
+                    })?;
+
+                let mut process = owned.remove(index);
+                let pid = process.child.id();
+
+                // `try_wait` first: a child that already exited needs no signal,
+                // and killing it would report a success that did no work.
+                if let Some(status) = process
+                    .child
+                    .try_wait()
+                    .map_err(|e| format!("cannot query pid {pid}: {e}"))?
+                {
+                    return Ok(vec![format!(
+                        "'{label}' (pid {pid}) had already exited on its own: {status}"
+                    )]);
+                }
+
+                process
+                    .child
+                    .kill()
+                    .map_err(|e| format!("cannot stop '{label}' (pid {pid}): {e}"))?;
+                let status = process
+                    .child
+                    .wait()
+                    .map_err(|e| format!("cannot reap '{label}' (pid {pid}): {e}"))?;
+
+                Ok(vec![format!(
+                    "stopped owned process '{label}' (pid {pid}), reaped with {status}"
+                )])
             }
             MigrationAction::StartZroutery { port } => {
                 // Verify the port is not already in use
@@ -330,27 +652,74 @@ impl MigrationExecutor {
                     )]),
                 }
             }
-            MigrationAction::VerifyEndpoint { url } => {
+            MigrationAction::VerifyEndpoint { url, expect } => {
                 if url.is_empty() {
                     return Err("endpoint URL is empty".into());
                 }
-                // Try to reach the endpoint
                 let client = reqwest::Client::builder()
                     .timeout(std::time::Duration::from_secs(5))
                     .build()
                     .map_err(|e| format!("client build failed: {e}"))?;
-                match client.get(url).send().await {
-                    Ok(resp) => Ok(vec![format!(
-                        "endpoint {} responded: {}",
-                        url,
-                        resp.status()
-                    )]),
-                    Err(e) => Err(format!("endpoint {} unreachable: {}", url, e)),
+
+                // Reaching the endpoint is only the first half. The status is
+                // judged, because a 500 or a 401 is an answer and this step
+                // exists to establish that the service works.
+                let response = client
+                    .get(url)
+                    .send()
+                    .await
+                    .map_err(|e| format!("endpoint {url} unreachable: {e}"))?;
+                let status = response.status();
+
+                match expect {
+                    EndpointExpect::Success => {
+                        if !status.is_success() {
+                            return Err(format!(
+                                "endpoint {url} answered {status}, which is not a success; \
+                                 a response is not a working service"
+                            ));
+                        }
+                        Ok(vec![format!("endpoint {url} answered {status}")])
+                    }
+                    EndpointExpect::Status(wanted) => {
+                        if status.as_u16() != *wanted {
+                            return Err(format!(
+                                "endpoint {url} answered {status}, expected exactly {wanted}"
+                            ));
+                        }
+                        Ok(vec![format!("endpoint {url} answered {status}")])
+                    }
+                    EndpointExpect::BodyContains(marker) => {
+                        if !status.is_success() {
+                            return Err(format!(
+                                "endpoint {url} answered {status} before the body could be \
+                                 checked for {marker:?}"
+                            ));
+                        }
+                        let body = response
+                            .text()
+                            .await
+                            .map_err(|e| format!("cannot read body from {url}: {e}"))?;
+                        if !body.contains(marker.as_str()) {
+                            return Err(format!(
+                                "endpoint {url} answered {status} but its body does not \
+                                 contain {marker:?}; something is serving that is not the \
+                                 service that was migrated to"
+                            ));
+                        }
+                        Ok(vec![format!(
+                            "endpoint {url} answered {status} with the expected body marker"
+                        )])
+                    }
                 }
             }
             MigrationAction::Custom { description } => {
-                // Custom steps are opaque; return success with description
-                Ok(vec![format!("custom step executed: {}", description)])
+                // Refused rather than reported as done. An opaque step that returns success is
+                // how a migration claims to have done something it never did.
+                Err(format!(
+                    "custom action {description:?} cannot be executed by the typed runner. \
+                     Express the step as a typed action, or run it outside the plan."
+                ))
             }
         }
     }
@@ -582,7 +951,9 @@ mod tests {
                 },
                 MigrationStep {
                     description: "Validate config".to_string(),
-                    action: MigrationAction::ValidateConfig,
+                    action: MigrationAction::ValidateConfig {
+                        path: valid_json("s1").to_string(),
+                    },
                     reversible: true,
                 },
                 MigrationStep {
@@ -601,6 +972,7 @@ mod tests {
                     description: "Verify endpoint".to_string(),
                     action: MigrationAction::VerifyEndpoint {
                         url: "https://localhost:443/health".to_string(),
+                        expect: EndpointExpect::Success,
                     },
                     reversible: false,
                 },
@@ -964,6 +1336,33 @@ mod tests {
         }
     }
 
+    /// Write `contents` to a uniquely named temp file and return its path.
+    ///
+    /// `ValidateConfig` parses a real file now, so a test that wants the step to
+    /// pass has to hand it something real. The pid keeps concurrent tests in the
+    /// same binary from sharing one path, and `label` keeps two calls in the
+    /// *same* test from sharing one either.
+    fn temp_file(label: &str, contents: &str) -> String {
+        let path = std::env::temp_dir().join(format!(
+            "zroutery_migration_{}_{}_{}.json",
+            std::process::id(),
+            label,
+            contents.len()
+        ));
+        std::fs::write(&path, contents).expect("write temp fixture");
+        path.to_string_lossy().into_owned()
+    }
+
+    /// A temp file holding valid JSON, for steps that must succeed.
+    fn valid_json(label: &str) -> String {
+        temp_file(label, r#"{"providers":[]}"#)
+    }
+
+    /// A temp file holding text that is definitely not JSON, for the failure path.
+    fn malformed_json(label: &str) -> String {
+        temp_file(label, r#"{"providers": [ }"#)
+    }
+
     #[tokio::test]
     async fn executor_success_all_steps_pass() {
         // Create a temp source file for CopyConfig
@@ -977,7 +1376,9 @@ mod tests {
         let plan = make_plan(vec![
             MigrationStep {
                 description: "Validate config".to_string(),
-                action: MigrationAction::ValidateConfig,
+                action: MigrationAction::ValidateConfig {
+                    path: valid_json("s2").to_string(),
+                },
                 reversible: true,
             },
             MigrationStep {
@@ -1016,7 +1417,9 @@ mod tests {
         let plan = make_plan(vec![
             MigrationStep {
                 description: "Validate".to_string(),
-                action: MigrationAction::ValidateConfig,
+                action: MigrationAction::ValidateConfig {
+                    path: valid_json("s3").to_string(),
+                },
                 reversible: true,
             },
             MigrationStep {
@@ -1093,6 +1496,7 @@ mod tests {
             description: "Empty URL".to_string(),
             action: MigrationAction::VerifyEndpoint {
                 url: "".to_string(),
+                expect: EndpointExpect::Success,
             },
             reversible: false,
         }]);
@@ -1111,7 +1515,9 @@ mod tests {
 
         let plan = make_plan(vec![MigrationStep {
             description: "Validate".to_string(),
-            action: MigrationAction::ValidateConfig,
+            action: MigrationAction::ValidateConfig {
+                path: valid_json("s4").to_string(),
+            },
             reversible: true,
         }]);
 
@@ -1208,19 +1614,101 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn validate_config_always_passes() {
+    async fn validate_config_parses_real_json() {
         let store = MigrationStore::new();
         let executor = MigrationExecutor::new(store);
 
         let plan = make_plan(vec![MigrationStep {
             description: "Validate".to_string(),
-            action: MigrationAction::ValidateConfig,
+            action: MigrationAction::ValidateConfig {
+                path: valid_json("valid"),
+            },
             reversible: true,
         }]);
 
         let result = executor.execute(&plan).await;
         assert_eq!(result.state, MigrationState::Completed);
         assert_eq!(result.steps_completed, 1);
+    }
+
+    /// The test this replaces was `validate_config_always_passes`, and its name
+    /// was the specification: a step with no input could not fail, so a green
+    /// suite asserted that validation was a no-op. The action now carries the
+    /// path it must parse, which gives malformed input somewhere to land.
+    #[tokio::test]
+    async fn validate_config_fails_on_malformed_json() {
+        let store = MigrationStore::new();
+        let executor = MigrationExecutor::new(store);
+
+        let plan = make_plan(vec![MigrationStep {
+            description: "Validate".to_string(),
+            action: MigrationAction::ValidateConfig {
+                path: malformed_json("broken"),
+            },
+            reversible: true,
+        }]);
+
+        let result = executor.execute(&plan).await;
+        assert_eq!(result.state, MigrationState::Failed);
+        assert_eq!(result.steps_completed, 0);
+        assert!(
+            result.errors[0].contains("not valid JSON"),
+            "the failure must name the real problem, got: {}",
+            result.errors[0]
+        );
+    }
+
+    /// A validator that accepted a format it cannot read would be the bug this
+    /// change set exists to remove, so an unreadable format is refused outright.
+    #[tokio::test]
+    async fn validate_config_refuses_a_format_it_cannot_parse() {
+        let store = MigrationStore::new();
+        let executor = MigrationExecutor::new(store);
+
+        // CC Switch's preferred store is a SQLite database and core has no
+        // SQLite dependency. Saying so is the honest outcome; reporting
+        // "config validated" would not be.
+        let path =
+            std::env::temp_dir().join(format!("zroutery_migration_db_{}.db", std::process::id()));
+        std::fs::write(&path, b"SQLite format 3\0").expect("write db fixture");
+
+        let plan = make_plan(vec![MigrationStep {
+            description: "Validate".to_string(),
+            action: MigrationAction::ValidateConfig {
+                path: path.to_string_lossy().into_owned(),
+            },
+            reversible: true,
+        }]);
+
+        let result = executor.execute(&plan).await;
+        assert_eq!(result.state, MigrationState::Failed);
+        assert!(
+            result.errors[0].contains("cannot validate a"),
+            "the refusal must say what it cannot do, got: {}",
+            result.errors[0]
+        );
+    }
+
+    #[tokio::test]
+    async fn validate_config_fails_when_the_file_is_absent() {
+        let store = MigrationStore::new();
+        let executor = MigrationExecutor::new(store);
+
+        let plan = make_plan(vec![MigrationStep {
+            description: "Validate".to_string(),
+            action: MigrationAction::ValidateConfig {
+                path: "zroutery_no_such_config_file_98765.json".to_string(),
+            },
+            reversible: true,
+        }]);
+
+        let result = executor.execute(&plan).await;
+        assert_eq!(result.state, MigrationState::Failed);
+        assert!(
+            result.errors[0].contains("cannot read"),
+            "got: {}",
+            result.errors[0]
+        );
     }
 
     #[tokio::test]
@@ -1250,6 +1738,7 @@ mod tests {
             description: "Verify".to_string(),
             action: MigrationAction::VerifyEndpoint {
                 url: "http://192.0.2.1:1/health".to_string(), // TEST-NET, non-routable
+                expect: EndpointExpect::Success,
             },
             reversible: false,
         }]);
@@ -1261,11 +1750,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stop_external_with_process_name() {
+    async fn stop_external_reports_a_process_that_is_not_running() {
         let store = MigrationStore::new();
         let executor = MigrationExecutor::new(store);
 
-        // Use a process name that almost certainly does not exist
+        // A name that almost certainly does not exist.
         let plan = make_plan(vec![MigrationStep {
             description: "Stop".to_string(),
             action: MigrationAction::StopExternal {
@@ -1279,8 +1768,60 @@ mod tests {
         assert_eq!(result.steps_completed, 1);
     }
 
+    /// The ownership rule, stated as a test because it is the part of this change
+    /// most likely to be quietly relaxed later: `StopExternal` observes, and
+    /// reports that it did not act. It must never be a euphemism for a kill.
     #[tokio::test]
-    async fn custom_step_executes() {
+    async fn stop_external_does_not_own_what_it_did_not_start() {
+        let store = MigrationStore::new();
+        let executor = MigrationExecutor::new(store);
+
+        let plan = make_plan(vec![MigrationStep {
+            description: "Stop".to_string(),
+            action: MigrationAction::StopExternal {
+                process_name: "zroutery_nonexistent_process_12345".to_string(),
+            },
+            reversible: false,
+        }]);
+
+        let result = executor.execute(&plan).await;
+        let message = result.warnings.join(" ");
+        assert_eq!(
+            executor.owned_labels().len(),
+            0,
+            "observing a process must never make this migration its owner"
+        );
+        assert!(
+            !message.contains("was stopped"),
+            "StopExternal must not claim to have stopped anything, got: {message:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn stop_external_rejects_an_empty_process_name() {
+        let store = MigrationStore::new();
+        let executor = MigrationExecutor::new(store);
+
+        let plan = make_plan(vec![MigrationStep {
+            description: "Stop".to_string(),
+            action: MigrationAction::StopExternal {
+                process_name: String::new(),
+            },
+            reversible: false,
+        }]);
+
+        let result = executor.execute(&plan).await;
+        assert_eq!(result.state, MigrationState::Failed);
+        assert!(result.errors[0].contains("process name is empty"));
+    }
+
+    /// The test this replaces asserted that a custom step completed. It did,
+    /// in the sense that a `format!` ran: the action did nothing and reported
+    /// success, which is the exact failure mode the typed runner exists to
+    /// prevent. It is now refused, so a plan cannot quietly contain a step
+    /// nobody performs.
+    #[tokio::test]
+    async fn a_custom_action_is_refused_rather_than_reported_as_done() {
         let store = MigrationStore::new();
         let executor = MigrationExecutor::new(store);
 
@@ -1293,8 +1834,53 @@ mod tests {
         }]);
 
         let result = executor.execute(&plan).await;
-        assert_eq!(result.state, MigrationState::Completed);
-        assert_eq!(result.steps_completed, 1);
+        assert_eq!(result.state, MigrationState::Failed);
+        assert_eq!(result.steps_completed, 0);
+        assert!(
+            result.errors[0].contains("cannot be executed by the typed runner"),
+            "got: {}",
+            result.errors[0]
+        );
+    }
+
+    /// A refused custom step must not be able to smuggle a later real step
+    /// through as completed: the plan stops at the first failure.
+    #[tokio::test]
+    async fn a_refused_custom_action_stops_the_plan() {
+        let store = MigrationStore::new();
+        let executor = MigrationExecutor::new(store);
+
+        let plan = make_plan(vec![
+            MigrationStep {
+                description: "Validate".to_string(),
+                action: MigrationAction::ValidateConfig {
+                    path: valid_json("before_custom"),
+                },
+                reversible: true,
+            },
+            MigrationStep {
+                description: "Custom".to_string(),
+                action: MigrationAction::Custom {
+                    description: "do nothing".to_string(),
+                },
+                reversible: false,
+            },
+            MigrationStep {
+                description: "Validate again".to_string(),
+                action: MigrationAction::ValidateConfig {
+                    path: valid_json("after_custom"),
+                },
+                reversible: true,
+            },
+        ]);
+
+        let result = executor.execute(&plan).await;
+        assert_eq!(result.state, MigrationState::Failed);
+        assert_eq!(
+            result.steps_completed, 1,
+            "the step after the refusal must not run"
+        );
+        assert_eq!(result.steps_total, 3);
     }
 
     #[test]
@@ -1401,7 +1987,9 @@ mod tests {
         let plan = make_plan(vec![
             MigrationStep {
                 description: "Validate config".to_string(),
-                action: MigrationAction::ValidateConfig,
+                action: MigrationAction::ValidateConfig {
+                    path: valid_json("s6").to_string(),
+                },
                 reversible: true,
             },
             MigrationStep {
