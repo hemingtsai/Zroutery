@@ -3,7 +3,7 @@
   "node_id": "NEWAPI",
   "display_name": "NewAPI adapter",
   "status": "PARTIAL",
-  "implementation_state": "The adapter treats non-empty credentials as authentication, synthesizes an active runtime, and leaves usage/quota unimplemented.",
+  "implementation_state": "Fully implemented and fixture-verified: auth, expiry/refresh, usage and quota, check-in, health. 57 unit tests run the adapter against an in-process fake panel, and 5 route-table tests fence endpoint provenance against upstream's Go source. Not integrated: no production caller. The record previously said usage/quota were unimplemented, which has not been true since before the node was re-examined. See E-114.",
   "dependencies": [
     "ACCOUNT"
   ],
@@ -23,7 +23,8 @@
   "unblock_condition": "Pass a local mock-server auth/expiry/refresh/usage/quota contract before any real protocol E2E.",
   "evidence": [
     "E-007",
-    "E-016"
+    "E-016",
+    "E-114"
   ],
   "source_references": [
     "docs/development/repository-audit-2026-09-25.md",
