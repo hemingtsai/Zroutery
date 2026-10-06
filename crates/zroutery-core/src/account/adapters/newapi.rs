@@ -92,8 +92,23 @@ use std::time::{Duration, Instant};
 use serde::Deserialize;
 use serde_json::Value;
 
+pub mod checkin;
+pub mod logs;
+
+pub use checkin::{
+    CheckinAttempt, CheckinContext, CheckinObservation, NewApiCheckinRecord, NewApiCheckinSnapshot,
+    NewApiCheckinStats, NewApiCheckinStatus, NewApiDoCheckin,
+};
+pub use logs::{
+    interpret as interpret_log, read_system_signal, LogContext, NewApiLogItem, NewApiLogOther,
+    NewApiLogPage, NewApiSystemSignal, LOG_TYPE_CONSUME, LOG_TYPE_ERROR, LOG_TYPE_LOGIN,
+    LOG_TYPE_MANAGE, LOG_TYPE_REFUND, LOG_TYPE_SYSTEM, LOG_TYPE_TOPUP, LOG_TYPE_UNKNOWN,
+};
+
 use super::super::provider::*;
 use super::super::types::*;
+use crate::account::checkin::CheckinReport;
+use crate::account::resource::ObservedResourceEvent;
 use crate::error::{Error, Result};
 
 /// `provider_id()` reported by this adapter.
@@ -107,9 +122,6 @@ const DEFAULT_QUOTA_PER_UNIT: f64 = 500_000.0;
 const USER_STATUS_ENABLED: i64 = 1;
 /// `common.UserStatusDisabled`.
 const USER_STATUS_DISABLED: i64 = 2;
-/// `model.LogTypeConsume` — consumption entries, which is what balance and
-/// token statistics are about (`topup`/`system`/`error` entries are not).
-const LOG_TYPE_CONSUME: i64 = 2;
 /// NewAPI clamps `page_size` to 100 (`common.GetPageQuery`).
 const LOG_PAGE_SIZE: u32 = 100;
 /// Default usage window for [`AccountProvider::fetch_usage`].
@@ -398,22 +410,6 @@ struct LogStatData {
     tpm: i64,
 }
 
-/// `data` of `GET /api/log/self`.
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-struct LogPage {
-    total: i64,
-    items: Vec<LogItem>,
-}
-
-/// One consumption log entry.
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-struct LogItem {
-    prompt_tokens: i64,
-    completion_tokens: i64,
-}
-
 /// `data` of `POST /api/user/auth/refresh` and of a successful login.
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
@@ -587,7 +583,7 @@ impl NewApiAdapter {
             query.push(("p", page.to_string()));
             query.push(("page_size", LOG_PAGE_SIZE.to_string()));
 
-            let logs: LogPage = self
+            let logs: NewApiLogPage = self
                 .request_typed(reqwest::Method::GET, "/api/log/self", &query)
                 .await?;
 
@@ -670,6 +666,163 @@ impl NewApiAdapter {
             // `success: false`; the message is the only useful part.
             Err(Error::Upstream { body, .. }) => Ok(AccountOpResult::Failed(body)),
             Err(e) => Err(e),
+        }
+    }
+
+    // ── check-in: execution and observation ───────────────────────────────
+
+    /// Read `GET /api/user/checkin` as a structured snapshot.
+    ///
+    /// Returns `Ok(None)` when the instance answered a payload with no `stats`
+    /// at all, which is different from "this account has checked in zero times":
+    /// the first means the instance offers no such statistics, the second is a
+    /// measurement. Collapsing them would let an unsupported instance look like
+    /// an account that has never checked in.
+    pub async fn checkin_snapshot(&self) -> Result<Option<NewApiCheckinSnapshot>> {
+        let now = chrono::Utc::now().timestamp();
+        let status: NewApiCheckinStatus = self
+            .request_typed(reqwest::Method::GET, "/api/user/checkin", &[])
+            .await?;
+        Ok(NewApiCheckinSnapshot::from_status(&status, now))
+    }
+
+    /// The account's remaining wallet quota, in credit units.
+    ///
+    /// Raw credits rather than the normalised [`AccountQuota`], because a
+    /// check-in reconciliation compares two readings of the *same* unit before
+    /// and after, and converting to a display currency in between would make the
+    /// comparison depend on a rate that can itself be re-read.
+    pub async fn wallet_quota(&self) -> Result<i64> {
+        Ok(self.self_snapshot().await?.quota)
+    }
+
+    /// Read everything an observation needs, in one call.
+    ///
+    /// Three requests, each optional in the result: check-in status, the wallet
+    /// balance, and the `type=4` system rows in `[since, until]`. Each is
+    /// reported independently rather than failing the whole observation, because
+    /// a partial observation is still evidence and reporting only the parts that
+    /// arrived is more useful than reporting nothing.
+    pub async fn observe_checkin(
+        &self,
+        account_id: &AccountId,
+        before: Option<&NewApiCheckinSnapshot>,
+        quota_before: Option<i64>,
+        since: i64,
+        until: i64,
+    ) -> Result<CheckinObservation> {
+        let after = self.checkin_snapshot().await.ok().flatten();
+        let quota_after = self.wallet_quota().await.ok();
+        let quota_per_unit = self
+            .status_cached()
+            .await
+            .map(|s| self.effective_quota_per_unit(&s))
+            .unwrap_or(DEFAULT_QUOTA_PER_UNIT);
+        let system_events = self
+            .system_events(account_id, since, until, quota_per_unit)
+            .await
+            .unwrap_or_default();
+
+        Ok(CheckinObservation {
+            after,
+            before: before.cloned(),
+            quota_after,
+            quota_before,
+            system_events,
+            observed_at: chrono::Utc::now().timestamp(),
+        })
+    }
+
+    /// Read `type=4` rows in `[since, until]` as account events.
+    ///
+    /// `type=4` specifically rather than "no type filter": an unfiltered read
+    /// would return consumption rows too, and mixing them into a check-in window
+    /// would put unrelated spend into the evidence for a grant.
+    pub async fn system_events(
+        &self,
+        account_id: &AccountId,
+        since: i64,
+        until: i64,
+        quota_per_unit: f64,
+    ) -> Result<Vec<ObservedResourceEvent>> {
+        let query = log_query(LOG_TYPE_SYSTEM, since, until);
+        let page: NewApiLogPage = self
+            .request_typed(reqwest::Method::GET, "/api/log/self", &query)
+            .await?;
+        Ok(checkin::interpret_system_rows(
+            &page.items,
+            account_id,
+            quota_per_unit,
+        ))
+    }
+
+    /// Run a check-in over HTTP and reconcile it against what was observed.
+    ///
+    /// The HTTP path, and deliberately **not** the one the product uses: a
+    /// headless client cannot solve the Turnstile challenge some instances
+    /// require, so the final check-in has to run in a real browser. This method
+    /// exists because it is the only one that works end-to-end with no browser,
+    /// which makes it the right thing to test the reconciliation against and the
+    /// right thing for an instance that has no challenge enabled.
+    ///
+    /// For the browser path, the desktop layer performs the operation and then
+    /// calls [`NewApiAdapter::observe_checkin`] plus [`checkin::reconcile`] with
+    /// a [`CheckinAttempt`] describing what the browser did.
+    pub async fn checkin_observed(&self, account_id: &AccountId) -> Result<CheckinReport> {
+        let started_at = chrono::Utc::now().timestamp();
+        let before = self.checkin_snapshot().await?;
+        let quota_before = self.wallet_quota().await.ok();
+        let attempt = self.checkin_attempt(&before).await;
+        let until = chrono::Utc::now().timestamp();
+        let observation = self
+            .observe_checkin(account_id, before.as_ref(), quota_before, started_at, until)
+            .await?;
+
+        let status = self.status_cached().await.unwrap_or_default();
+        let ctx = checkin::CheckinContext::usd(
+            PROVIDER_ID,
+            account_id,
+            self.effective_quota_per_unit(&status),
+        );
+        Ok(checkin::reconcile(attempt, observation, &ctx, started_at))
+    }
+
+    /// Perform one `POST /api/user/checkin` and describe what it did.
+    ///
+    /// `before` is the status read taken beforehand. It is authoritative for
+    /// "already completed" and the panel's own message is only corroboration —
+    /// see [`checkin::message_indicates_already_completed`] for why.
+    async fn checkin_attempt(&self, before: &Option<NewApiCheckinSnapshot>) -> CheckinAttempt {
+        let status = match self.status_cached().await {
+            Ok(status) => status,
+            Err(e) => return classify_failure(&e),
+        };
+        if status.checkin_enabled != Some(true) {
+            return CheckinAttempt::NotSupported;
+        }
+        // With Turnstile on and no challenge response there is nothing to send:
+        // a headless client cannot solve it, so this belongs to the browser path.
+        if status.turnstile_check.unwrap_or(false) {
+            return CheckinAttempt::WafBlocked;
+        }
+        if before.as_ref().and_then(|b| b.checked_in_today) == Some(true) {
+            return CheckinAttempt::AlreadyCompleted {
+                reward_quota: before
+                    .as_ref()
+                    .and_then(|b| b.records.first())
+                    .and_then(|record| record.quota_awarded),
+            };
+        }
+
+        match self
+            .request_typed::<NewApiDoCheckin>(reqwest::Method::POST, "/api/user/checkin", &[])
+            .await
+        {
+            Ok(data) => CheckinAttempt::Accepted {
+                quota_awarded: checkin::awarded_quota(&data),
+                checkin_date: data.checkin_date,
+            },
+            Err(e) => classify_failure(&e),
         }
     }
 
@@ -1240,13 +1393,76 @@ impl AccountProvider for NewApiAdapter {
 // ── helpers ──────────────────────────────────────────────────────────────
 
 /// `query` for the log endpoints, which filter on `[start, end]` unix seconds
-/// and on the `consume` log type.
-fn window_query(start: i64, end: i64) -> Vec<(&'static str, String)> {
+/// and on a single log type.
+///
+/// Every log read passes an explicit type. `GetUserLogs` reads
+/// `LogTypeUnknown` as *no type filter*, so omitting `type` returns every kind
+/// mixed together — which is how a consumption row ends up inside a window meant
+/// for system events, and how a check-in confirmation starts "explaining" itself
+/// with unrelated spend. The caller names the type it means.
+fn log_query(log_type: i64, start: i64, end: i64) -> Vec<(&'static str, String)> {
     vec![
-        ("type", LOG_TYPE_CONSUME.to_string()),
+        ("type", log_type.to_string()),
         ("start_timestamp", start.to_string()),
         ("end_timestamp", end.to_string()),
     ]
+}
+
+/// The log query for consumption rows, which is what balance and token
+/// statistics are about.
+fn window_query(start: i64, end: i64) -> Vec<(&'static str, String)> {
+    log_query(LOG_TYPE_CONSUME, start, end)
+}
+
+/// Classify a panel failure into a check-in attempt outcome.
+///
+/// Split out because the mapping is the part of check-in that decides what a
+/// user is told, and because it is easy to get wrong in the direction that
+/// retries: an `Unauthorized` is a credential problem, and reporting it as a
+/// plain failure would have a scheduler retrying forever against a credential
+/// that cannot work.
+fn classify_failure(error: &Error) -> CheckinAttempt {
+    match error {
+        Error::Unauthorized | Error::MissingApiKey(_) => CheckinAttempt::AuthenticationExpired,
+        Error::Transport { .. } => CheckinAttempt::NetworkFailure {
+            detail: error.to_string(),
+        },
+        Error::Upstream { body, .. } => {
+            // The panel answers business failures with HTTP 200 and
+            // `success: false`, so a refusal arrives as `Upstream` with the
+            // message in the body. `UserCheckin` returns `今日已签到` for a
+            // second check-in in one day, so that wording is recognised — but
+            // only as a corroborating signal, and only here where the
+            // structured `checked_in_today` has already been considered by the
+            // caller.
+            let (code, message) = split_upstream_body(body);
+            if checkin::message_indicates_already_completed(&message) {
+                CheckinAttempt::AlreadyCompleted { reward_quota: None }
+            } else {
+                CheckinAttempt::Rejected { code, message }
+            }
+        }
+        Error::BadUpstreamPayload(message) => CheckinAttempt::Unknown {
+            detail: message.clone(),
+        },
+        other => CheckinAttempt::Unknown {
+            detail: other.to_string(),
+        },
+    }
+}
+
+/// Split an `Error::Upstream` body back into its `code` and `message` halves.
+///
+/// `attempt` joins them as `code: message`, so recovering the two is a matter of
+/// the same convention read backwards. A body with no leading code is kept whole
+/// as the message, because the panel's wording is the only part a user can act on.
+fn split_upstream_body(body: &str) -> (Option<String>, String) {
+    match body.split_once(": ") {
+        Some((code, message)) if !code.is_empty() && !code.contains(' ') => {
+            (Some(code.to_string()), message.to_string())
+        }
+        _ => (None, body.to_string()),
+    }
 }
 
 fn map_user_status(status: i64) -> AccountStatus {
