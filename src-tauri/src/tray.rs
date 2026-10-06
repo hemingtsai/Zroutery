@@ -203,6 +203,11 @@ pub fn quit(app: &AppHandle) {
     tauri::async_runtime::spawn(async move {
         if let Some(desktop) = app.try_state::<Arc<Desktop>>().map(|s| s.inner().clone()) {
             desktop.stop().await;
+            // Browsers are closed before the process ends. A check-in paused on a
+            // challenge is holding a real window and a real profile lock; exiting
+            // with it open would leave both behind with nothing owning them.
+            #[cfg(feature = "account-maint")]
+            desktop.shutdown_browsers().await;
         }
         app.exit(0);
     });

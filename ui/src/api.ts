@@ -9,6 +9,10 @@ export type ModelTier = "fast" | "standard" | "reasoning" | "frontier";
 /** @deprecated Use ModelTier. */
 export type ModelClass = ModelTier;
 export type ProviderKind = "anthropic" | "openai_compatible";
+/** Mirrors `ProviderClientProfile` in `zroutery-core::config`: the client
+ * identity presented upstream, and which of that client's own headers are
+ * forwarded with it. */
+export type ProviderClientProfile = "auto" | "native" | "claude_code" | "codex";
 export type NamingStyle = "internal" | "anthropic" | "openai";
 export type RoutingStrategy =
   | "priority"
@@ -106,9 +110,9 @@ export interface Provider {
   base_url: string;
   key_ref: string;
   extra_headers: Record<string, string>;
-  /** Whether to impersonate Claude Code client (User-Agent, x-app, anthropic-beta headers
-   * and system prompt identity line). */
-  impersonate_claude_code: boolean;
+  /** The identity presented upstream. `claude_code` and `codex` also forward
+   * that client's own headers; `native` forwards none. */
+  client_profile: ProviderClientProfile;
   /** Also send the key as `Authorization: Bearer`, for Anthropic relays that
    * read the Bearer header instead of `x-api-key`. */
   bearer_auth: boolean;
@@ -118,6 +122,8 @@ export interface Provider {
   anthropic_version: string | null;
   quirks: ProviderQuirks;
   balance: BalanceConfig;
+  /** Accounts this provider hosts, when it hosts any. */
+  accounts?: Account[];
 }
 
 export interface ModelCapabilities {
@@ -490,6 +496,87 @@ export interface Snapshot {
    * has no ML".
    */
   ml_available: boolean;
+  /**
+   * Whether this build contains account maintenance and browser check-in.
+   *
+   * Asked rather than discovered, for the same reason as `ml_available`: a
+   * command that was never registered looks exactly like one that failed, and a
+   * panel that probes for it would report "no account maintenance" on a build
+   * where the bridge is merely broken.
+   */
+  account_maintenance_available: boolean;
+  /** What each declared account's check-in is doing. */
+  checkin?: CheckinView[];
+}
+
+/**
+ * One account's check-in, as the dashboard renders it.
+ *
+ * `phase` is a closed vocabulary rather than a boolean, because "never tried",
+ * "waiting for you", "already done today" and "failed" are four different things
+ * that a flag collapses into two. `reward_amount` is present only when an
+ * observation established one; an absent reward means nothing was observed, which
+ * is not the same as a reward of zero.
+ */
+/**
+ * One account hosted by a provider.
+ *
+ * A declaration, not an observation: it says the account exists and where its
+ * credential lives, never what state it is in. Quota, balance and the last
+ * check-in are readings that expire, so they live in the snapshot's `checkin`
+ * array rather than here — writing them into the configuration would turn a
+ * number that was true once into configuration that still reads as authoritative.
+ */
+export interface Account {
+  account_id: string;
+  key_ref: string;
+  enabled: boolean;
+  maintenance: Maintenance;
+}
+
+/**
+ * What the user asked to be done about an account's resources.
+ *
+ * No credential field exists here, by design. Check-in runs in a real browser
+ * which holds its own session in its own profile, so there is nothing for a
+ * password in a user-editable file to accomplish. `checkin_path` is required for
+ * browser check-in and deliberately has no default: relays host their console at
+ * different paths, and a wrong default would navigate a real browser somewhere
+ * useless while reporting progress.
+ */
+export interface Maintenance {
+  checkin_enabled: boolean;
+  checkin_interval_secs: number | null;
+  checkin_path: string | null;
+  login_path: string | null;
+  browser_executable: string;
+}
+
+export interface CheckinView {
+  provider_id: string;
+  account_id: string;
+  /**
+   * `idle` | `running` | `waiting_for_user` | `succeeded` |
+   * `already_completed` | `not_supported` | `failed` | `cancelled`.
+   */
+  phase: string;
+  /** Whether a browser window is open for this account right now. */
+  browser_held: boolean;
+  /** Whether the user is being asked to finish a challenge in that window. */
+  awaiting_user: boolean;
+  failure: string | null;
+  reward_amount: number | null;
+  reward_unit: string | null;
+  /**
+   * Where the reward figure came from: `provider_response`, `provider_record`,
+   * `event_content` or `balance_delta`.
+   *
+   * Rendered alongside the figure, because a number recovered from provider log
+   * text is weaker evidence than one the provider reported in a structured field,
+   * and a panel that shows them identically is claiming more than it knows.
+   */
+  reward_source: string | null;
+  last_completed_at: number | null;
 }
 
 /** One entry of a provider's catalogue, with prices when it publishes them. */
@@ -836,6 +923,31 @@ export const api = {
    * anyone asking.
    */
   clearMlTraces: () => invoke<MlTraceClear>("clear_ml_traces"),
+  /**
+   * Open a real browser and check this account in.
+   *
+   * `start` and `resume` are deliberately separate calls rather than one with a
+   * flag. A resume continues the browser already open — with the session that was
+   * halfway through solving a challenge — and implementing it as a fresh start
+   * would make the user authenticate again every time a WAF appears, which is the
+   * whole thing this feature exists to avoid.
+   *
+   * Call only when `snapshot.account_maintenance_available` is true.
+   */
+  startCheckin: (provider_id: string, account_id: string) =>
+    invoke<CheckinView>("start_checkin", { providerId: provider_id, accountId: account_id }),
+  /** Continue a check-in that is waiting on a human-verification challenge. */
+  resumeCheckin: (provider_id: string, account_id: string) =>
+    invoke<CheckinView>("resume_checkin", { providerId: provider_id, accountId: account_id }),
+  /** Stop a check-in and close its browser. */
+  cancelCheckin: (provider_id: string, account_id: string) =>
+    invoke<CheckinView>("cancel_checkin", { providerId: provider_id, accountId: account_id }),
+  /** Read one account's check-in state. Cheap enough to poll. */
+  checkinStatus: (provider_id: string, account_id: string) =>
+    invoke<CheckinView>("get_checkin_status", {
+      providerId: provider_id,
+      accountId: account_id,
+    }),
   saveConfig: (config: AppConfig) => invoke<Snapshot>("save_config", { config }),
   setKey: (provider_id: string, api_key: string) =>
     invoke<Snapshot>("set_provider_key", { providerId: provider_id, apiKey: api_key }),

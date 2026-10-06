@@ -11,8 +11,11 @@ import {
   type BalanceStatus,
   type CcProviderDraft,
   type CcSwitchPreview,
+  type CheckinView,
   type DiscoveredModel,
+  type Maintenance,
   type Provider,
+  type ProviderClientProfile,
   type ProviderKind,
   type Snapshot,
 } from "../api";
@@ -40,6 +43,20 @@ import { useI18n } from "../i18n";
 const KINDS: { id: ProviderKind; labelKey: "providers.openai_dialect" | "providers.anthropic_dialect" }[] = [
   { id: "openai_compatible", labelKey: "providers.openai_dialect" },
   { id: "anthropic", labelKey: "providers.anthropic_dialect" },
+];
+
+const CLIENT_PROFILES: {
+  id: ProviderClientProfile;
+  labelKey:
+    | "providers.profile_auto"
+    | "providers.profile_native"
+    | "providers.profile_claude_code"
+    | "providers.profile_codex";
+}[] = [
+  { id: "auto", labelKey: "providers.profile_auto" },
+  { id: "native", labelKey: "providers.profile_native" },
+  { id: "claude_code", labelKey: "providers.profile_claude_code" },
+  { id: "codex", labelKey: "providers.profile_codex" },
 ];
 
 function defaultBaseUrl(kind: ProviderKind): string {
@@ -118,7 +135,7 @@ export default function Providers({
         base_url: newBaseUrl.trim() || defaultBaseUrl(newKind),
         key_ref: `provider:${id}`,
         extra_headers: {},
-        impersonate_claude_code: newKind === "anthropic",
+        client_profile: newKind === "anthropic" ? "claude_code" : "auto",
         bearer_auth: false,
         enabled: true,
         timeout_secs: 600,
@@ -429,6 +446,153 @@ function BalanceChip({ status }: { status: BalanceStatus | undefined }) {
 }
 
 /**
+ * One account's resource maintenance: where it stands, when it was last
+ * checked in, and the four things a user can do about it.
+ *
+ * The phase is rendered as a word rather than a dot on purpose. A dot would have
+ * to collapse "never tried", "waiting for you", "already done today" and
+ * "failed" into a colour, and three of those want different things from the
+ * person looking at them.
+ *
+ * `resume` is a separate button from `start` and is only offered while a browser
+ * is held. That is the whole contract of a paused check-in: the button continues
+ * the browser already open, with the session that was halfway through solving a
+ * challenge, and it must never quietly begin a new one.
+ */
+function AccountMaintenanceRow({
+  view,
+  busy,
+  onStart,
+  onResume,
+  onCancel,
+}: {
+  view: CheckinView;
+  busy: boolean;
+  onStart: () => void;
+  onResume: () => void;
+  onCancel: () => void;
+}) {
+  const { t } = useI18n();
+  const paused = view.awaiting_user;
+
+  // The backend publishes a closed phase vocabulary, and a template key is not a
+  // key TypeScript can check. The fallback matters more than the cast: an
+  // unrecognised phase must read as "unknown", never as a phase that implies a
+  // reward or a success.
+  const phaseKey = `account.phase.${view.phase}` as const;
+  const phaseLabel = PHASE_KEYS.has(view.phase)
+    ? t(phaseKey as Parameters<typeof t>[0])
+    : view.phase;
+
+  return (
+    <div className="account-maint">
+      <div className="row-main">
+        <span className="row-title mono">{view.account_id}</span>
+        <span className="row-sub">
+          {phaseLabel}
+          {view.last_completed_at !== null && (
+            <span className="muted"> · {t("account.last_checkin")} {ago(view.last_completed_at)}</span>
+          )}
+        </span>
+        {view.failure && <span className="row-sub warn-text">{view.failure}</span>}
+        {/*
+          A reward is shown only when one was observed, and its source travels
+          with it. A figure recovered from provider log text is weaker evidence
+          than one the provider reported in a structured field, and printing them
+          identically would claim more than the backend knows.
+        */}
+        {view.reward_amount !== null && (
+          <span className="row-sub mono">
+            {t("account.reward")} {view.reward_amount} {view.reward_unit ?? ""}
+            {view.reward_source === "event_content" && (
+              <span className="muted"> · {t("account.reward_weak_source")}</span>
+            )}
+            {view.reward_source === "balance_delta" && (
+              <span className="muted"> · {t("account.reward_inferred")}</span>
+            )}
+          </span>
+        )}
+      </div>
+
+      <div className="controls">
+        {paused ? (
+          <>
+            <button className="primary" disabled={busy} onClick={onResume}>
+              {t("account.resume")}
+            </button>
+            <button disabled={busy} onClick={onCancel}>
+              {t("account.cancel")}
+            </button>
+          </>
+        ) : (
+          <>
+            <button disabled={busy || view.phase === "running"} onClick={onStart}>
+              {t("account.checkin")}
+            </button>
+            {view.browser_held && (
+              <button disabled={busy} onClick={onCancel}>
+                {t("account.close_browser")}
+              </button>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** The phases the backend publishes, so an unknown one can be told apart. */
+const PHASE_KEYS = new Set([
+  "idle",
+  "running",
+  "waiting_for_user",
+  "succeeded",
+  "already_completed",
+  "not_supported",
+  "failed",
+  "cancelled",
+]);
+
+/**
+ * The check-in view for one account, or a neutral one when the snapshot carries
+ * none.
+ *
+ * A fallback rather than nothing, because "the backend said nothing about this
+ * account" and "this account is idle" must not render the same way: the first is
+ * a gap in the bridge and the second is a fact about the account.
+ */
+function checkinFor(
+  views: CheckinView[] | undefined,
+  providerId: string,
+  accountId: string,
+): CheckinView {
+  return (
+    views?.find((v) => v.provider_id === providerId && v.account_id === accountId) ?? {
+      provider_id: providerId,
+      account_id: accountId,
+      phase: "idle",
+      browser_held: false,
+      awaiting_user: false,
+      failure: null,
+      reward_amount: null,
+      reward_unit: null,
+      reward_source: null,
+      last_completed_at: null,
+    }
+  );
+}
+
+/** A whole number of seconds, as a short relative phrase. */
+function ago(unix_secs: number): string {
+
+const seconds = Math.max(0, Math.floor(Date.now() / 1000) - unix_secs);
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h`;
+  return `${Math.floor(seconds / 86400)}d`;
+}
+
+/**
  * One provider in full: credential, endpoint, dialect quirks and the models
  * it offers. Saving a key never round-trips the config — it goes to the
  * credential store alone, and the drawer shows only whether one exists.
@@ -486,6 +650,36 @@ function ProviderDrawer({
     if (!value) return;
     const ok = await run(() => api.setKey(providerId, value));
     if (ok) setKeyDraft("");
+  };
+
+  // Check-in reports its own outcome rather than round-tripping the snapshot, so
+  // these three ask for a fresh view and let the next poll carry it. The failure
+  // is surfaced with the backend's own wording: every message here names the
+  // setting or the action that fixes it, and paraphrasing would throw that away.
+  const start = async (id: string, account: string, maintenance: Maintenance) => {
+    if (!maintenance.checkin_enabled) {
+      notify("error", t("account.not_enabled"));
+      return;
+    }
+    try {
+      await api.startCheckin(id, account);
+    } catch (e) {
+      notify("error", `${t("account.start_failed")}: ${errorText(e)}`);
+    }
+  };
+  const resume = async (id: string, account: string) => {
+    try {
+      await api.resumeCheckin(id, account);
+    } catch (e) {
+      notify("error", `${t("account.resume_failed")}: ${errorText(e)}`);
+    }
+  };
+  const cancel = async (id: string, account: string) => {
+    try {
+      await api.cancelCheckin(id, account);
+    } catch (e) {
+      notify("error", `${t("account.cancel_failed")}: ${errorText(e)}`);
+    }
   };
 
   const discover = async () => {
@@ -735,16 +929,18 @@ function ProviderDrawer({
               })
             }
           />
-          <Toggle
-            label={t("providers.impersonate")}
-            hint={t("providers.impersonate_hint")}
-            checked={provider.impersonate_claude_code}
-            onChange={(impersonate_claude_code) =>
-              onUpdate((p) => {
-                p.impersonate_claude_code = impersonate_claude_code;
-              })
-            }
-          />
+          <Field label={t("providers.client_profile")} hint={t("providers.client_profile_hint")}>
+            <Select
+              ariaLabel={t("providers.client_profile")}
+              value={provider.client_profile ?? "auto"}
+              onChange={(client_profile) =>
+                onUpdate((p) => {
+                  p.client_profile = client_profile;
+                })
+              }
+              options={CLIENT_PROFILES.map((c) => ({ value: c.id, label: t(c.labelKey) }))}
+            />
+          </Field>
           {provider.kind === "anthropic" && (
             <Toggle
               label={t("providers.bearer_auth")}
@@ -857,6 +1053,35 @@ function ProviderDrawer({
           />
         </div>
       </Section>
+
+      {/*
+        Account maintenance is offered only when the build actually contains it.
+        Asking first is the discipline the rest of this panel follows: a command
+        that was never registered looks exactly like one that failed, and a panel
+        that probed for it would render "unavailable" on a build whose bridge is
+        merely broken.
+      */}
+      {snapshot.account_maintenance_available && (provider.accounts ?? []).length > 0 && (
+        <Section title={t("account.section")} hint={t("account.section_hint")}>
+          <div className="list">
+            {(provider.accounts ?? []).map((account) => {
+              const view = checkinFor(snapshot.checkin, provider.id, account.account_id);
+              return (
+                <AccountMaintenanceRow
+                  key={account.account_id}
+                  view={view}
+                  busy={busy}
+                  onStart={() =>
+                    void start(provider.id, account.account_id, account.maintenance)
+                  }
+                  onResume={() => void resume(provider.id, account.account_id)}
+                  onCancel={() => void cancel(provider.id, account.account_id)}
+                />
+              );
+            })}
+          </div>
+        </Section>
+      )}
 
       <div>
         <Button kind="danger" disabled={busy} onClick={onRemove}>
