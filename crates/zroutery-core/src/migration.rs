@@ -147,6 +147,27 @@ pub enum MigrationAction {
     Custom { description: String },
 }
 
+/// Writes one snapshot file back to its original location.
+///
+/// A trait so that a restore *failure* can be exercised deterministically. The
+/// obvious way to make `std::fs::write` fail is to make the file read-only, and
+/// that does not port: CI runs Linux, macOS and Windows, and read-only semantics
+/// differ between them. A gate whose outcome depends on the OS is worse than no
+/// gate, because it is green until it is not.
+pub trait SnapshotWriter: Send + Sync {
+    /// Write `content` to `path`, or explain why it could not.
+    fn write(&self, path: &str, content: &[u8]) -> Result<(), String>;
+}
+
+/// The real filesystem. What production uses.
+pub struct StdFsWriter;
+
+impl SnapshotWriter for StdFsWriter {
+    fn write(&self, path: &str, content: &[u8]) -> Result<(), String> {
+        std::fs::write(path, content).map_err(|e| e.to_string())
+    }
+}
+
 // ---------------------------------------------------------------------------
 // MigrationResult
 // ---------------------------------------------------------------------------
@@ -159,7 +180,29 @@ pub struct MigrationResult {
     pub errors: Vec<String>,
     pub warnings: Vec<String>,
     pub duration_ms: u64,
+    /// Whether the pre-migration state was actually put back.
+    ///
+    /// Not the same question as `state`, and the distinction is the point. The
+    /// state machine records that a rollback *transition* happened. This records
+    /// whether the files were restored. They diverge exactly when a restore
+    /// fails, which is the case a caller most needs to notice: the transition says
+    /// `RolledBack` while the config on disk is half-migrated.
+    ///
+    /// A rollback that restored nothing, or restored everything, reports `true`.
+    /// A rollback with a failed restore reports `false` and carries the reason in
+    /// `errors` — a warning is the wrong place for it, because every caller
+    /// checks `errors.is_empty()` and none of them are obliged to read warnings.
     pub rolled_back: bool,
+    /// Snapshot files a rollback put back successfully.
+    #[serde(default)]
+    pub restored_files: Vec<String>,
+    /// Snapshot files a rollback could not put back.
+    ///
+    /// Non-empty leaves the installation in a state nobody can describe from the
+    /// code alone, which is why it is a first-class field rather than something
+    /// to be inferred from the length of `warnings`.
+    #[serde(default)]
+    pub failed_restores: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -383,6 +426,8 @@ impl MigrationExecutor {
                 warnings,
                 duration_ms: start.elapsed().as_millis() as u64,
                 rolled_back: false,
+                restored_files: Vec::new(),
+                failed_restores: Vec::new(),
             };
         }
 
@@ -403,6 +448,8 @@ impl MigrationExecutor {
                         warnings,
                         duration_ms: start.elapsed().as_millis() as u64,
                         rolled_back: false,
+                        restored_files: Vec::new(),
+                        failed_restores: Vec::new(),
                     };
                 }
             }
@@ -421,6 +468,8 @@ impl MigrationExecutor {
             warnings,
             duration_ms: start.elapsed().as_millis() as u64,
             rolled_back: false,
+            restored_files: Vec::new(),
+            failed_restores: Vec::new(),
         }
     }
 
@@ -751,26 +800,59 @@ impl MigrationExecutor {
     /// Rollback a failed migration. If a snapshot is provided, restores
     /// the captured files to their original locations.
     pub fn rollback(&self, snapshot: Option<&MigrationSnapshot>) -> MigrationResult {
-        let mut warnings = Vec::new();
+        self.rollback_with(snapshot, &StdFsWriter)
+    }
+
+    /// Rollback a failed migration, restoring through `writer`.
+    ///
+    /// Restores every file it can and reports every file it could not. A failure
+    /// is recorded in `errors`, not `warnings`, and clears `rolled_back`: before
+    /// this, a rollback that restored nothing at all returned
+    /// `state: RolledBack, rolled_back: true` with the reason buried in
+    /// `warnings` — indistinguishable from success to any caller that checks the
+    /// obvious fields, which is all of them.
+    pub fn rollback_with(
+        &self,
+        snapshot: Option<&MigrationSnapshot>,
+        writer: &dyn SnapshotWriter,
+    ) -> MigrationResult {
+        // Never pushed to: restore failures are errors, not warnings. Kept as an
+        // empty vec because `MigrationResult` carries it and a caller may be
+        // reading a result this produced.
+        let warnings: Vec<String> = Vec::new();
+        let mut errors = Vec::new();
+        let mut restored_files = Vec::new();
+        let mut failed_restores = Vec::new();
+
         if let Some(snap) = snapshot {
             for file in &snap.files {
-                if let Err(e) = std::fs::write(&file.path, &file.content) {
-                    tracing::warn!("rollback: failed to restore {}: {}", file.path, e);
-                    warnings.push(format!("failed to restore {}: {}", file.path, e));
-                } else {
-                    tracing::info!("rollback: restored {}", file.path);
+                match writer.write(&file.path, &file.content) {
+                    Ok(()) => {
+                        tracing::info!("rollback: restored {}", file.path);
+                        restored_files.push(file.path.clone());
+                    }
+                    Err(e) => {
+                        tracing::warn!("rollback: failed to restore {}: {}", file.path, e);
+                        errors.push(format!("failed to restore {}: {}", file.path, e));
+                        failed_restores.push(file.path.clone());
+                    }
                 }
             }
         }
+
         let _ = self.store.transition(MigrationState::RolledBack);
         MigrationResult {
             state: MigrationState::RolledBack,
             steps_completed: 0,
             steps_total: 0,
-            errors: vec![],
+            errors,
             warnings,
             duration_ms: 0,
-            rolled_back: true,
+            // Only a rollback that put everything back has rolled back. Anything
+            // else is a partial restore, and claiming otherwise is the defect.
+            rolled_back: failed_restores.is_empty(),
+            restored_files,
+            failed_restores,
         }
     }
 
@@ -1017,6 +1099,8 @@ mod tests {
             warnings: vec!["Port 443 requires root".to_string()],
             duration_ms: 1234,
             rolled_back: false,
+            restored_files: Vec::new(),
+            failed_restores: Vec::new(),
         };
 
         assert_eq!(result.state, MigrationState::Completed);
@@ -1042,6 +1126,8 @@ mod tests {
             warnings: vec![],
             duration_ms: 100,
             rolled_back: false,
+            restored_files: Vec::new(),
+            failed_restores: Vec::new(),
         });
 
         store.record_result(MigrationResult {
@@ -1052,6 +1138,8 @@ mod tests {
             warnings: vec!["minor warning".to_string()],
             duration_ms: 500,
             rolled_back: false,
+            restored_files: Vec::new(),
+            failed_restores: Vec::new(),
         });
 
         let history = store.history();
@@ -1079,6 +1167,8 @@ mod tests {
             warnings: vec!["slow response".to_string()],
             duration_ms: 4200,
             rolled_back: true,
+            restored_files: Vec::new(),
+            failed_restores: Vec::new(),
         };
 
         let json = serde_json::to_string(&result).unwrap();
@@ -1139,6 +1229,8 @@ mod tests {
             warnings: vec![],
             duration_ms: 200,
             rolled_back: false,
+            restored_files: Vec::new(),
+            failed_restores: Vec::new(),
         });
         assert_eq!(store.history().len(), 1);
 
@@ -1150,6 +1242,8 @@ mod tests {
             warnings: vec![],
             duration_ms: 800,
             rolled_back: false,
+            restored_files: Vec::new(),
+            failed_restores: Vec::new(),
         });
         assert_eq!(store.history().len(), 2);
 
@@ -1313,6 +1407,8 @@ mod tests {
                 warnings: vec![],
                 duration_ms: (i as u64 + 1) * 100,
                 rolled_back: false,
+                restored_files: Vec::new(),
+                failed_restores: Vec::new(),
             });
         }
 

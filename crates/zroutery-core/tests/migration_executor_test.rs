@@ -28,10 +28,11 @@
 use axum::http::StatusCode;
 use axum::routing::get;
 use axum::Router;
+use std::path::PathBuf;
 use tokio::net::TcpListener;
 use zroutery_core::migration::{
-    EndpointExpect, MigrationAction, MigrationExecutor, MigrationPlan, MigrationState,
-    MigrationStep, MigrationStore,
+    EndpointExpect, MigrationAction, MigrationExecutor, MigrationPlan, MigrationSnapshot,
+    MigrationState, MigrationStep, MigrationStore, SnapshotFile, SnapshotWriter,
 };
 
 /// The marker a correctly-migrated endpoint serves. Deliberately distinctive:
@@ -256,8 +257,211 @@ async fn a_plan_verifying_a_broken_endpoint_does_not_complete() {
 }
 
 // ---------------------------------------------------------------------------
-// Config and auth policy
+// Restore and rollback reporting (I4)
 // ---------------------------------------------------------------------------
+
+/// A `SnapshotWriter` that fails for chosen paths and writes the rest.
+///
+/// Injected rather than provoked. Making a file read-only is the obvious way to
+/// make `std::fs::write` fail, and it does not port — CI runs Linux, macOS and
+/// Windows, and read-only semantics differ between them. A gate whose result
+/// depends on the OS is green until it is not.
+struct SelectiveWriter {
+    fail_paths: Vec<String>,
+    written: std::sync::Mutex<Vec<String>>,
+}
+
+impl SelectiveWriter {
+    fn failing(paths: &[&str]) -> Self {
+        Self {
+            fail_paths: paths.iter().map(|p| (*p).to_string()).collect(),
+            written: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+}
+
+impl SnapshotWriter for SelectiveWriter {
+    fn write(&self, path: &str, content: &[u8]) -> Result<(), String> {
+        if self.fail_paths.iter().any(|p| p == path) {
+            return Err("injected failure".to_string());
+        }
+        std::fs::write(path, content).map_err(|e| e.to_string())?;
+        self.written
+            .lock()
+            .expect("writer lock")
+            .push(path.to_string());
+        Ok(())
+    }
+}
+
+fn snapshot_of(paths: &[PathBuf]) -> MigrationSnapshot {
+    MigrationSnapshot {
+        files: paths
+            .iter()
+            .map(|path| SnapshotFile {
+                path: path.to_string_lossy().into_owned(),
+                content: b"original\n".to_vec(),
+                hash: 0,
+            })
+            .collect(),
+        created_at: 1_700_000_000,
+    }
+}
+
+fn failing_executor() -> MigrationExecutor {
+    let store = MigrationStore::new();
+    store
+        .transition(MigrationState::Failed)
+        .expect("reach Failed");
+    MigrationExecutor::new(store)
+}
+
+#[test]
+fn a_rollback_that_restored_nothing_is_not_reported_as_success() {
+    // The defect this replaces: `rollback` put restore failures in `warnings`,
+    // hardcoded `errors` empty, and returned `rolled_back: true` regardless. A
+    // rollback that restored nothing was indistinguishable from a clean one to
+    // every caller that checks the obvious fields.
+    let dir = std::env::temp_dir().join(format!("zroutery_rb_none_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("dir");
+    let path = dir.join("config.toml");
+    std::fs::write(&path, b"migrated\n").expect("seed");
+
+    let executor = failing_executor();
+    let writer = SelectiveWriter::failing(&[&path.to_string_lossy()]);
+    let result = executor.rollback_with(Some(&snapshot_of(std::slice::from_ref(&path))), &writer);
+
+    assert!(
+        !result.rolled_back,
+        "nothing was restored, so nothing was rolled back"
+    );
+    assert_eq!(
+        result.failed_restores,
+        vec![path.to_string_lossy().into_owned()]
+    );
+    assert!(
+        result.errors.iter().any(|e| e.contains("injected failure")),
+        "the reason must be in errors, not only warnings, got: {:?}",
+        result.errors
+    );
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "migrated\n",
+        "the file must be left as the migration left it"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_partial_restore_restores_what_it_can_and_names_the_rest() {
+    let dir = std::env::temp_dir().join(format!("zroutery_rb_partial_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("dir");
+    let good = dir.join("a.toml");
+    let bad = dir.join("b.toml");
+    std::fs::write(&good, b"migrated\n").expect("seed a");
+    std::fs::write(&bad, b"migrated\n").expect("seed b");
+
+    let executor = failing_executor();
+    let writer = SelectiveWriter::failing(&[&bad.to_string_lossy()]);
+    let result = executor.rollback_with(Some(&snapshot_of(&[good.clone(), bad.clone()])), &writer);
+
+    assert!(!result.rolled_back, "one file was left migrated");
+    assert_eq!(
+        result.restored_files,
+        vec![good.to_string_lossy().into_owned()]
+    );
+    assert_eq!(
+        result.failed_restores,
+        vec![bad.to_string_lossy().into_owned()]
+    );
+    assert_eq!(std::fs::read_to_string(&good).unwrap(), "original\n");
+    assert_eq!(
+        std::fs::read_to_string(&bad).unwrap(),
+        "migrated\n",
+        "the file that could not be restored must be left alone, not half-written"
+    );
+    assert_eq!(result.errors.len(), 1);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_clean_rollback_reports_success_and_says_which_files_it_restored() {
+    // The other direction: a reporting change that made every rollback look like
+    // a failure would pass the tests above and be worse than the defect.
+    let dir = std::env::temp_dir().join(format!("zroutery_rb_clean_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("dir");
+    let path = dir.join("config.toml");
+    std::fs::write(&path, b"migrated\n").expect("seed");
+
+    let executor = failing_executor();
+    let writer = SelectiveWriter::failing(&[]);
+    let result = executor.rollback_with(Some(&snapshot_of(std::slice::from_ref(&path))), &writer);
+
+    assert!(result.rolled_back);
+    assert!(result.failed_restores.is_empty());
+    assert!(result.errors.is_empty());
+    assert_eq!(
+        result.restored_files,
+        vec![path.to_string_lossy().into_owned()]
+    );
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "original\n");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_rollback_with_nothing_to_restore_is_a_success() {
+    // Nothing to restore is not a failed restore. Reporting otherwise would make
+    // the common `recover()` path look broken.
+    let executor = failing_executor();
+    let writer = SelectiveWriter::failing(&["anything"]);
+    let result = executor.rollback_with(None, &writer);
+
+    assert!(result.rolled_back);
+    assert!(result.restored_files.is_empty());
+    assert!(result.failed_restores.is_empty());
+    assert!(result.errors.is_empty());
+}
+
+#[test]
+fn the_default_rollback_still_goes_to_the_real_filesystem() {
+    // `rollback` must keep working without an injected writer, or the seam has
+    // cost production the thing it was added to protect.
+    let dir = std::env::temp_dir().join(format!("zroutery_rb_real_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("dir");
+    let path = dir.join("config.toml");
+    std::fs::write(&path, b"migrated\n").expect("seed");
+
+    let executor = failing_executor();
+    let result = executor.rollback(Some(&snapshot_of(std::slice::from_ref(&path))));
+
+    assert!(result.rolled_back);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "original\n");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn recover_on_a_failing_restore_reports_the_failure_rather_than_success() {
+    // `recover` delegates to `rollback`, so it inherits the reporting. Pinned
+    // because a wrapper that swallows the new fields would leave the old defect
+    // in place one call away.
+    let dir = std::env::temp_dir().join(format!("zroutery_rb_recover_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("dir");
+    let path = dir.join("config.toml");
+    std::fs::write(&path, b"migrated\n").expect("seed");
+
+    let store = MigrationStore::new();
+    store
+        .transition(MigrationState::Prepared)
+        .expect("reach Prepared");
+    let executor = MigrationExecutor::new(store);
+    let result = executor.recover().expect("recover runs");
+
+    // `recover` passes no snapshot, so there is nothing to fail; this pins that it
+    // still reports honestly rather than inheriting a stale `true`.
+    assert!(result.rolled_back);
+    assert!(result.errors.is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}
 
 fn config_fixture(label: &str, body: &str) -> (String, String) {
     let stem = format!("zroutery_cfg_{}_{}", std::process::id(), label);
