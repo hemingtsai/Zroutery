@@ -30,3 +30,6 @@ default = []
 account = []
 newapi = ["account"]
 ml = []
+# OpenCode Zen gateway providers (anonymous free tier + Console OAuth). Opt-in:
+# the default build ships neither the shaping nor the provider kinds' behaviour.
+opencode = []

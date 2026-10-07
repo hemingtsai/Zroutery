@@ -16,7 +16,9 @@ use reqwest::header::{HeaderMap, HeaderName, HeaderValue, ACCEPT, AUTHORIZATION,
 use serde_json::{json, Value};
 
 use crate::billing::{Balance, BalanceProbe, Pricing};
-use crate::config::{ProviderConfig, ProviderKind};
+use crate::config::{
+    resolve_client_identity, ClientIdentity, ProviderClientProfile, ProviderConfig, ProviderKind,
+};
 use crate::error::{Error, Result};
 use crate::ir::{ChatRequest, ChatResponse, StreamEvent};
 use crate::protocol::{self, ProviderQuirks, SseDecoder, StreamParser};
@@ -122,10 +124,28 @@ impl Upstream {
         api_key: Option<&str>,
         body: &Value,
     ) -> Result<ChatResponse> {
+        let identity = anonymous_identity(provider);
+        self.send_with_identity(provider, api_key, body, &identity)
+            .await
+    }
+
+    /// Non-streaming call for one already resolved client identity.
+    ///
+    /// The identity only decides which fingerprint is presented and which of the
+    /// client's own headers are forwarded; it never controls auth. Resolving it
+    /// upstream of this call and passing it in means the handshake retries and
+    /// every candidate attempt present the identical client.
+    pub async fn send_with_identity(
+        &self,
+        provider: &ProviderConfig,
+        api_key: Option<&str>,
+        body: &Value,
+        client: &ClientIdentity,
+    ) -> Result<ChatResponse> {
         let request = self
             .client()
             .post(provider.chat_url())
-            .headers(build_headers(provider, api_key)?)
+            .headers(build_headers_for_identity(provider, api_key, client)?)
             .json(body);
 
         let response =
@@ -168,6 +188,24 @@ impl Upstream {
         body: &Value,
         upstream_model: &str,
     ) -> Result<EventStream> {
+        let identity = anonymous_identity(provider);
+        self.stream_with_identity(provider, api_key, body, upstream_model, &identity)
+            .await
+    }
+
+    /// Streaming call for one already resolved client identity.
+    ///
+    /// The identity is resolved once, before the handshake retry loop, so every
+    /// replayed attempt carries the same fingerprint and the same forwarded
+    /// client headers — a retry must not look like a different client.
+    pub async fn stream_with_identity(
+        &self,
+        provider: &ProviderConfig,
+        api_key: Option<&str>,
+        body: &Value,
+        upstream_model: &str,
+        client: &ClientIdentity,
+    ) -> Result<EventStream> {
         // The handshake (DNS, connect, TLS, request upload, response status) is
         // retried a couple of times: transient transport failures and gateway
         // blips (408/502/503/504) happen before any bytes of the answer exist,
@@ -179,7 +217,7 @@ impl Upstream {
             let request = self
                 .client()
                 .post(provider.chat_url())
-                .headers(build_headers(provider, api_key)?)
+                .headers(build_headers_for_identity(provider, api_key, client)?)
                 .json(body);
             let result =
                 tokio::time::timeout(Duration::from_secs(provider.timeout_secs), request.send())
@@ -555,9 +593,56 @@ struct StreamState {
 const CLAUDE_CODE_USER_AGENT: &str = "claude-cli/2.1.217 (external, sdk-cli)";
 const CLAUDE_CODE_SYSTEM_IDENTITY: &str =
     "You are Claude Code, Anthropic's official CLI for Claude.";
+const CODEX_USER_AGENT: &str = "codex_cli_rs/0.1.0";
+
+/// The OpenCode CLI User-Agent the gateway's free tier requires: it must contain
+/// `opencode/<ver>` with `<ver> >= 1.18.0`, and the rest is the CLI's own suffix.
+#[cfg(feature = "opencode")]
+const OPENCODE_USER_AGENT: &str =
+    "opencode/1.18.31 ai-sdk/provider-utils/4.0.23 runtime/bun/1.3.14";
+#[cfg(feature = "opencode")]
+const OPENCODE_CLIENT_ID: &str = "cli";
+#[cfg(feature = "opencode")]
+const OPENCODE_PROJECT_ID: &str = "global";
 
 /// Build the auth and content headers for a provider.
 pub fn build_headers(provider: &ProviderConfig, api_key: Option<&str>) -> Result<HeaderMap> {
+    build_headers_for_profile(provider, api_key, provider.client_profile_for(None))
+}
+
+/// Build headers with an already resolved client profile.
+///
+/// This is fabrication only: the profile is taken as fixed and there is no
+/// inbound request to forward anything from.
+pub fn build_headers_for_profile(
+    provider: &ProviderConfig,
+    api_key: Option<&str>,
+    profile: ProviderClientProfile,
+) -> Result<HeaderMap> {
+    let identity = resolve_client_identity(profile, &HeaderMap::new());
+    build_headers_for_identity(provider, api_key, &identity)
+}
+
+/// Build headers for one resolved [`ClientIdentity`]: the fabricated fingerprint
+/// first, then the profile's allowlisted client headers on top.
+///
+/// Precedence, lowest to highest: auth and content framing, `provider.extra_headers`,
+/// the fabricated profile fingerprint, the profile's allowlisted inbound
+/// passthrough. The last step is the one that matters: an allowlisted header the
+/// client genuinely sent is never replaced by a value we made up, because a
+/// fabricated `x-stainless-runtime` on top of a real one is exactly the
+/// inconsistency a strict gateway looks for.
+///
+/// This is *not* a general passthrough. Only the names the resolved profile
+/// allowlists are forwarded, and only when the client actually sent them; every
+/// other inbound header is dropped, and the denied names can never travel no
+/// matter what an allowlist says.
+pub fn build_headers_for_identity(
+    provider: &ProviderConfig,
+    api_key: Option<&str>,
+    client: &ClientIdentity,
+) -> Result<HeaderMap> {
+    let profile = client.profile;
     let mut headers = HeaderMap::new();
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
     headers.insert(
@@ -615,13 +700,18 @@ pub fn build_headers(provider: &ProviderConfig, api_key: Option<&str>) -> Result
         headers.insert(name, value);
     }
 
-    // Claude Code impersonation: minimal clean fingerprint, matching what the
+    // Client profile headers: minimal clean fingerprints, matching what the
     // real claude-cli sends (cc-switch's field-tested set). SDK-layer headers
-    // (x-stainless-*) and request IDs are deliberately NOT injected: a real
-    // CLI does not send them, and header/version inconsistencies are exactly
+    // (x-stainless-*) and request ids are deliberately NOT *fabricated*: a real
+    // CLI does not invent them, and header/version inconsistencies are exactly
     // what strict gateways look for. Gateways needing extras can use
     // provider.extra_headers.
-    if provider.impersonate_claude_code {
+    //
+    // That reasoning is about making values up, and only about making values up.
+    // A header the client really carried is not a guess — it is the truth about
+    // this request, so the profile's allowlisted ones are forwarded verbatim at
+    // the end of this function and win over anything fabricated here.
+    if profile == ProviderClientProfile::ClaudeCode {
         tracing::debug!(
             provider = %provider.name,
             "impersonation enabled – injecting Claude Code fingerprint headers"
@@ -659,9 +749,101 @@ pub fn build_headers(provider: &ProviderConfig, api_key: Option<&str>) -> Result
             HeaderValue::from_str(&beta_value)
                 .map_err(|_| Error::internal("invalid anthropic-beta value"))?,
         );
+    } else if profile == ProviderClientProfile::Codex {
+        headers.insert(
+            HeaderName::from_static("user-agent"),
+            HeaderValue::from_static(CODEX_USER_AGENT),
+        );
+        headers.insert(
+            HeaderName::from_static("originator"),
+            HeaderValue::from_static("codex_cli_rs"),
+        );
+    }
+
+    // The OpenCode identity is locked: it is the fingerprint the gateway's free
+    // tier demands, so it is emitted after the Claude Code / Codex fabricators
+    // (a fixed OpenCode profile must not be perturbed by them) and before the
+    // passthrough. The session is owned here, never forwarded verbatim.
+    #[cfg(feature = "opencode")]
+    if profile == ProviderClientProfile::OpenCodeCli {
+        headers.insert(
+            HeaderName::from_static("user-agent"),
+            HeaderValue::from_static(OPENCODE_USER_AGENT),
+        );
+        headers.insert(
+            HeaderName::from_static("x-opencode-client"),
+            HeaderValue::from_static(OPENCODE_CLIENT_ID),
+        );
+        headers.insert(
+            HeaderName::from_static("x-opencode-project"),
+            HeaderValue::from_static(OPENCODE_PROJECT_ID),
+        );
+        if let Some(session) = client.session.as_deref() {
+            headers.insert(
+                HeaderName::from_static("x-opencode-session"),
+                HeaderValue::from_str(session)
+                    .map_err(|_| Error::internal("invalid OpenCode session id"))?,
+            );
+        }
+        headers.insert(
+            HeaderName::from_static("x-opencode-request"),
+            HeaderValue::from_str(&crate::opencode::request_id())
+                .map_err(|_| Error::internal("invalid OpenCode request id"))?,
+        );
+    }
+
+    // Passthrough last: an allowlisted client header wins over the fabricated
+    // fingerprint above.
+    //
+    // Two rules hold here no matter what the allowlists say:
+    //
+    // 1. A passthrough can never change authentication. Denied names are skipped
+    //    outright, and the auth headers are captured before the loop and restored
+    //    after it, so the upstream call always authenticates with the provider's
+    //    own key no matter what the inbound request claimed.
+    // 2. An allowlisted inbound header beats a fabricated one, which is what
+    //    applying the passthrough after the fabricator does.
+    // Every entry in `client.passthrough` is a name the resolved profile already
+    // allowed and the client already sent; unlisted inbound headers never reach
+    // this loop, so this is a filtered set and not a general copy.
+    let auth: Vec<(HeaderName, HeaderValue)> = headers
+        .iter()
+        .filter(|(name, _)| is_auth_header(name.as_str()))
+        .map(|(name, value)| (name.clone(), value.clone()))
+        .collect();
+    for (name, value) in &client.passthrough {
+        if crate::config::passthrough_denied(name.as_str()) {
+            tracing::warn!(
+                provider = %provider.name,
+                header = %name,
+                "refusing to forward a denied header from the inbound request"
+            );
+            continue;
+        }
+        headers.insert(name.clone(), value.clone());
+    }
+    for (name, value) in &auth {
+        headers.insert(name.clone(), value.clone());
     }
 
     Ok(headers)
+}
+
+/// Whether a header decides who this request authenticates as.
+fn is_auth_header(name: &str) -> bool {
+    matches!(
+        name.trim().to_ascii_lowercase().as_str(),
+        "authorization" | "x-api-key" | "proxy-authorization" | "cookie"
+    )
+}
+
+/// The identity used when there is no inbound client at all: an election probe,
+/// a model-list or balance call, a classifier side query. The provider's
+/// configured profile still applies — a fixed profile is configured precisely so
+/// that these auxiliary requests look the same as real traffic — but there are
+/// no client headers to forward.
+fn anonymous_identity(provider: &ProviderConfig) -> ClientIdentity {
+    resolve_client_identity(provider.client_profile_for(None), &HeaderMap::new())
 }
 
 /// How faithfully a request must be encoded upstream.
@@ -727,10 +909,22 @@ pub fn encode_for_mode(
         &mode.apply(&provider.quirks),
     )?;
 
-    // Claude Code impersonation: inject identity line as the first system block
+    // Claude Code profile: inject identity line as the first system block
     // to pass Anthropic subscription/OAuth plan checks.
-    if provider.impersonate_claude_code {
+    if provider.client_profile_for(req.client_identity.as_deref())
+        == ProviderClientProfile::ClaudeCode
+    {
         prepend_claude_code_system_prompt(&mut body);
+    }
+
+    // OpenCode gateway: the free tier only serves a shaped request (streaming,
+    // with `bash`/`read` tools). The client profile is the shaping carrier, so a
+    // provider that selects it gets the shaping regardless of its `kind`.
+    #[cfg(feature = "opencode")]
+    if provider.client_profile_for(req.client_identity.as_deref())
+        == ProviderClientProfile::OpenCodeCli
+    {
+        crate::opencode::shape_body(&mut body, !req.tools.is_empty());
     }
 
     Ok(body)
@@ -835,6 +1029,7 @@ fn truncate(s: &str, max: usize) -> String {
 }
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
     use crate::config::ProviderQuirks;
@@ -850,6 +1045,12 @@ mod tests {
     fn anthropic_headers_use_x_api_key() {
         let mut p = provider(ProviderKind::Anthropic);
         p.impersonate_claude_code = false; // Disable impersonation for this test
+                                           // The legacy switch no longer decides anything on its own: an Anthropic
+                                           // provider is on the Claude Code profile by default, so the fingerprint
+                                           // has to be turned off through the profile to reach the beta value the
+                                           // caller configured. `the_claude_code_profile_merges_with_an_anthropic_beta_from_extra_headers`
+                                           // covers the other side of this.
+        p.client_profile = ProviderClientProfile::Native;
         p.extra_headers
             .insert("anthropic-beta".into(), "output-128k".into());
         let h = build_headers(&p, Some("sk-ant-1")).unwrap();

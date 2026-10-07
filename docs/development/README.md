@@ -19,6 +19,7 @@ design records live here, so a commit message never has to explain the roadmap
 | Record | Covers |
 |---|---|
 | [newapi-adapter.md](newapi-adapter.md) | The NewAPI account adapter: panel endpoints and auth, quota-unit semantics, what "quota exhausted" means there, test approach, and the application-side wiring that is still missing. |
+| [opencode-zen.md](opencode-zen.md) | The two OpenCode Zen upstream providers (anonymous free tier and Console OAuth), the field-verified free-tier gate, the shared shaping identity, non-streaming collapse, discovery, and what is deliberately excluded. |
 
 ## Adding a record
 

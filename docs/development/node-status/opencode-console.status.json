@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "node_id": "OPENCODE-CONSOLE",
+  "display_name": "OpenCode Console OAuth provider",
+  "status": "READY",
+  "implementation_state": "Designed, not implemented. A separate, independent provider for OpenCode's authenticated Console tier at https://opencode.ai/inference/openai/v1 - not a prerequisite of the free provider and not depending on it. Credential is device-code OAuth (POST {console}/auth/device/code then /auth/device/token, client_id opencode-cli) yielding an access token, a refresh token and an org id sent back as x-opencode-org-id. The token refresh discipline (single-flight lock, generation guard, rotating credential) follows the existing account/adapters/newapi.rs pattern; token persistence location is an open decision (keychain vs private file). Discovery is GET {server}/api/config -> config.provider.*.models. It shares the same 'opencode' shaping identity as the free provider and reuses the OpenAI Chat Completions egress. Serves main traffic only, like the free provider.",
+  "dependencies": [
+    "CLIENT-IDENTITY"
+  ],
+  "dependents": [],
+  "required_gates": [
+    "Device-code start/poll/refresh succeeds and persists a usable token",
+    "Rotating access token refreshed with single-flight discipline on 401/expiry",
+    "x-opencode-org-id attached from the resolved org",
+    "Discovery via GET /api/config parses config.provider.*.models",
+    "Shared 'opencode' shaping applied (locked identity)",
+    "Default-build compatibility (opt-in feature)"
+  ],
+  "blocked_by": [],
+  "unblock_condition": "Not blocked; design complete and ready for implementation.",
+  "evidence": [],
+  "source_references": [
+    "crates/zroutery-core/src/config.rs",
+    "crates/zroutery-core/src/upstream.rs",
+    "crates/zroutery-core/src/protocol/mod.rs",
+    "crates/zroutery-core/src/server/pipeline.rs",
+    "crates/zroutery-core/src/registry.rs",
+    "crates/zroutery-core/src/account/adapters/newapi.rs",
+    "docs/development/opencode-zen.md"
+  ],
+  "notes": [
+    "Independent of OPENCODE-ZEN-FREE: neither is the other's prerequisite.",
+    "Open item: whether the authenticated Console tier also requires the free-tier shape gate; if it does not, side queries could run over this provider unshaped."
+  ]
+}

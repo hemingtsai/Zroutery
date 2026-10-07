@@ -6,10 +6,15 @@
 //! provider works. Its outcome decides between two honest results — the
 //! description, or the failure that leaves the placeholder.
 
-use crate::config::{AppConfig, ModelEntry, ProviderConfig};
+use crate::config::{resolve_client_identity, AppConfig, ModelEntry, ProviderConfig};
 use crate::error::Result;
 use crate::ir::{ChatRequest, ChatResponse, ContentBlock, Message};
 use crate::upstream::Upstream;
+
+/// The inbound request's headers. The description is an auxiliary call on behalf
+/// of that request, so it presents the same client identity and forwards the same
+/// client headers rather than looking like a different, request-less client.
+pub type InboundHeaders = axum::http::HeaderMap;
 
 /// The prompt for the describing model. Short on purpose: the description is
 /// context for another model, not an answer to the user, and a long prompt
@@ -56,8 +61,12 @@ pub async fn describe(
     target: &VisionTarget,
     api_key: Option<&str>,
     source: &crate::ir::MediaSource,
+    client_identity: Option<&str>,
+    client_headers: &InboundHeaders,
 ) -> Result<ChatResponse> {
     let mut req = ChatRequest::new(&target.entry.upstream_model, target.provider.kind.dialect());
+    req.client_identity = client_identity.map(str::to_string);
+    req.client_headers = client_headers.clone();
     req.messages.push(Message {
         role: crate::ir::Role::User,
         content: vec![
@@ -77,7 +86,13 @@ pub async fn describe(
         &target.entry.upstream_model,
         target.entry.max_output_tokens,
     )?;
-    upstream.send(&target.provider, api_key, &body).await
+    let client = resolve_client_identity(
+        target.provider.configured_client_profile(),
+        &req.client_headers,
+    );
+    upstream
+        .send_with_identity(&target.provider, api_key, &body, &client)
+        .await
 }
 
 /// The description text from a response, trimmed of the model's own padding.

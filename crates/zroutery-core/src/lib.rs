@@ -54,10 +54,16 @@ pub mod stats_ext;
 mod sync;
 pub mod upstream;
 
+#[cfg(feature = "opencode")]
+pub mod opencode;
+
 #[cfg(feature = "account")]
 pub mod account;
 
-pub use agent_takeover::{ExternalModification, OwnershipManifest, OwnershipState, TakeoverStore};
+pub use agent_takeover::{
+    ConflictResolution, ExternalModification, FieldConflict, OwnershipManifest, OwnershipState,
+    ProposedChange, ReleaseOutcome, ResolutionReport, TakeoverProposal, TakeoverStore,
+};
 pub use billing::{
     Balance, BalanceConfig, BalancePreset, BalanceProbe, BaseDepth, Cost, CostTotals, Pricing,
 };
@@ -67,10 +73,11 @@ pub use classifier::{
     ClassifierSignature, ClassifierVerdict, Detection as ClassifierDetection, DetectionConfig,
 };
 pub use config::{
-    AppConfig, ClassifierCandidate, ClassifierConfig, ConfigIssue, IssueSeverity,
-    MemorySecretStore, ModelCapabilities, ModelEntry, ModelTier, NamingStyle, ProviderConfig,
-    ProviderKind, RectifierConfig, RoutingConfig, RoutingStrategy, SecretStore, ServerConfig,
-    VisionConfig, WindowBehavior,
+    resolve_client_identity, AppConfig, ClassifierCandidate, ClassifierConfig, ClientIdentity,
+    ConfigIssue, IssueSeverity, MemorySecretStore, ModelCapabilities, ModelEntry, ModelTier,
+    NamingStyle, ProviderClientProfile, ProviderConfig, ProviderKind, RectifierConfig,
+    RoutingConfig, RoutingStrategy, SecretStore, ServerConfig, VisionConfig, WindowBehavior,
+    PASSTHROUGH_DENIED,
 };
 pub use election::{Election, Measurement, Ranked, ScoringConfig, TierElection};
 pub use error::{Error, Result};
@@ -115,7 +122,10 @@ pub use policy::{
 };
 pub use query::{RequestKind, SideQueryKind};
 pub use registry::{Registry, Resolution};
-pub use router::{Candidate, Router};
+pub use router::{
+    tier_escalation_change, tiers_fully_cooling, Candidate, ModelHealth, Router, TierAnnouncement,
+    TierEscalationChange,
+};
 pub use server::{build_app, AppState, ServerHandle};
 pub use session::{SessionRoutingMode, SessionState, SessionStore};
 pub use stats::{RequestRecord, Stats};

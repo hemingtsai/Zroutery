@@ -172,7 +172,16 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
     }
 
     // Store fields we pass through but don't interpret yet
-    for field in ["store", "previous_response_id", "truncation", "include"] {
+    for field in [
+        "store",
+        "previous_response_id",
+        "truncation",
+        "include",
+        // The client's own prompt-cache partition. Re-deriving one would
+        // silently miss the cache the client is asking for, so it travels
+        // verbatim instead of being dropped.
+        "prompt_cache_key",
+    ] {
         if let Some(val) = obj.get(field) {
             req.passthrough.insert(field.to_string(), val.clone());
         }
@@ -997,7 +1006,14 @@ pub fn encode_request(req: &ChatRequest, upstream_model: &str) -> Result<Value> 
         );
     }
     // Pass through fields we stored but don't interpret
-    for field in ["store", "previous_response_id", "truncation", "include"] {
+    for field in [
+        "store",
+        "previous_response_id",
+        "truncation",
+        "include",
+        // See the decoder: `prompt_cache_key` belongs to the client.
+        "prompt_cache_key",
+    ] {
         if let Some(val) = req.passthrough.get(field) {
             body.insert(field.to_string(), val.clone());
         }

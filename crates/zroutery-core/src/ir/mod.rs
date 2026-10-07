@@ -10,6 +10,7 @@ pub mod response;
 
 pub use response::{ResponseStatus, ResponseStore, StoredResponse};
 
+use axum::http::HeaderMap;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
@@ -481,6 +482,16 @@ pub struct ChatRequest {
     /// Populated by the protocol decoder based on the content types present.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub required_capabilities: Vec<Capability>,
+    /// Inbound client identity used to resolve a provider's `Auto` profile.
+    /// It is request context, not protocol data, and is never serialized.
+    #[serde(skip)]
+    pub client_identity: Option<String>,
+    /// The inbound request's headers, kept as request context so every provider
+    /// attempt can resolve the active profile's passthrough set without the
+    /// pipeline having to thread the `HeaderMap` through its own call chain.
+    /// Request context, not protocol data, and never serialized.
+    #[serde(skip)]
+    pub client_headers: HeaderMap,
 }
 
 impl ChatRequest {
@@ -506,6 +517,8 @@ impl ChatRequest {
             source_dialect: dialect,
             unsupported_content_policy: UnsupportedContentPolicy::Reject,
             required_capabilities: Vec::new(),
+            client_identity: None,
+            client_headers: HeaderMap::new(),
         }
     }
 

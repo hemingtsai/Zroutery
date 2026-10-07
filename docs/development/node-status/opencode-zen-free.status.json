@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "node_id": "OPENCODE-ZEN-FREE",
+  "display_name": "OpenCode Zen free provider",
+  "status": "READY",
+  "implementation_state": "Designed, not implemented. An opt-in provider that reaches OpenCode's anonymous free tier at https://opencode.ai/zen with no login (Bearer public). Reuses the OpenAI Chat Completions egress and adds a locked 'opencode' shaping identity: the free-tier gate is satisfied by forcing stream:true, ensuring tools named bash and read, a User-Agent containing opencode/<ver>=1.18.0, and a canonical ses_ session (12 lowercase hex + 14 base62). Session/request ids port DaatLocus's opencode_identifier. Non-streaming clients get the forced SSE collapsed into a ChatResponse. Discovery is GET /zen/v1/models for ids plus the capability catalog models.opencode.ai/api.json for capabilities, windows and the free flag (cost==0). The free tier is rate-limited per egress IP (429 FreeUsageLimitError), so a proxy pool is a throughput lever. Serves main traffic only: excluded from the Auto Mode classifier and from election probes.",
+  "dependencies": [
+    "CLIENT-IDENTITY"
+  ],
+  "dependents": [],
+  "required_gates": [
+    "Shaped request passes the free-tier gate (no 403 FreeTierError)",
+    "Identifier shape ^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$ with no sequential run",
+    "bash+read tool injection for 0/1/many client tool sets",
+    "Non-streaming collapse preserves text, thinking, tool calls and usage",
+    "Parser tolerates usage-per-chunk, null deltas and the {\"choices\":[],\"cost\":\"0\"} trailer",
+    "Discovery derives ids from /v1/models and never hand-derives them",
+    "Default-build compatibility (opt-in feature)"
+  ],
+  "blocked_by": [],
+  "unblock_condition": "Not blocked; design complete and ready for implementation.",
+  "evidence": [],
+  "source_references": [
+    "crates/zroutery-core/src/config.rs",
+    "crates/zroutery-core/src/upstream.rs",
+    "crates/zroutery-core/src/protocol/mod.rs",
+    "crates/zroutery-core/src/protocol/openai.rs",
+    "crates/zroutery-core/src/ir/mod.rs",
+    "crates/zroutery-core/src/server/pipeline.rs",
+    "crates/zroutery-core/src/registry.rs",
+    "docs/development/opencode-zen.md"
+  ],
+  "notes": [
+    "Field-verified 2026-10 via a local reverse proxy capture plus per-item bisection; see docs/development/opencode-zen.md.",
+    "big-pickle is free but its id contains no 'free' substring, so free detection must use the catalog cost, not the name."
+  ]
+}
