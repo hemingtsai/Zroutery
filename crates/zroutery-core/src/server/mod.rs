@@ -1190,6 +1190,14 @@ impl AppState {
 
             let mut measurements = Vec::with_capacity(members.len());
             for entry in members {
+                // An OpenCode provider cannot be probed: the gate forces a
+                // streaming request a non-streaming probe cannot satisfy.
+                if registry
+                    .provider_of(entry)
+                    .is_ok_and(|provider| provider.kind.is_opencode())
+                {
+                    continue;
+                }
                 let exposed = entry.exposed_id();
                 let mut measurement = Measurement::new(&exposed);
                 measurement.priority = entry.priority;

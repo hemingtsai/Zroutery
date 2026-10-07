@@ -1349,6 +1349,62 @@ async fn try_rectify_stream(
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Wrap a streaming upstream so a tool call to a placeholder injected only to
+/// satisfy OpenCode's gate is not served to a client that never declared it.
+#[allow(unused_variables)] // `client`/`req` are used only under the `opencode` feature
+fn maybe_filter_stream(
+    events: crate::upstream::EventStream,
+    client: &ClientIdentity,
+    req: &ChatRequest,
+) -> crate::upstream::EventStream {
+    #[cfg(feature = "opencode")]
+    if client.profile == crate::config::ProviderClientProfile::OpenCodeCli {
+        let declared: std::collections::HashSet<String> =
+            req.tools.iter().map(|tool| tool.name.clone()).collect();
+        return crate::opencode::filter_injected_tool_calls(events, declared);
+    }
+    events
+}
+
+/// Send one buffered request, folding an SSE-only upstream back into a response.
+///
+/// OpenCode's free tier forces `stream: true` (its gate rejects a non-streaming
+/// request), so a non-streaming client's answer arrives as SSE. That case is
+/// collected back into one [`crate::ir::ChatResponse`] here; every other provider
+/// uses the plain buffered send.
+async fn buffered_upstream(
+    state: &AppState,
+    candidate: &Candidate,
+    key: Option<&str>,
+    body: &Value,
+    client: &ClientIdentity,
+) -> Result<crate::ir::ChatResponse> {
+    #[cfg(feature = "opencode")]
+    if client.profile == crate::config::ProviderClientProfile::OpenCodeCli {
+        use futures_util::StreamExt as _;
+        let mut stream = state
+            .upstream
+            .stream_with_identity(
+                &candidate.provider,
+                key,
+                body,
+                &candidate.entry.upstream_model,
+                client,
+            )
+            .await?;
+        let mut collector = protocol::StreamCollector::default();
+        while let Some(event) = stream.next().await {
+            // A mid-stream error is a real failure, not an empty answer.
+            collector.push(&event?);
+        }
+        return Ok(collector.finish());
+    }
+    state
+        .upstream
+        .send_with_identity(&candidate.provider, key, body, client)
+        .await
+}
+
 async fn buffered_chat(
     state: Arc<AppState>,
     dialect: Dialect,
@@ -1446,12 +1502,16 @@ async fn buffered_chat(
 
         lifecycle.begin_attempt(candidate, false);
         let client = client_for(&req, &candidate.provider);
-        match state
-            .upstream
-            .send_with_identity(&candidate.provider, key.as_deref(), &body, &client)
-            .await
-        {
+        match buffered_upstream(&state, candidate, key.as_deref(), &body, &client).await {
             Ok(mut resp) => {
+                // A placeholder we injected only to satisfy the gate must not
+                // reach a client that never declared it.
+                #[cfg(feature = "opencode")]
+                if client.profile == crate::config::ProviderClientProfile::OpenCodeCli {
+                    let declared: Vec<String> =
+                        req.tools.iter().map(|tool| tool.name.clone()).collect();
+                    crate::opencode::strip_injected_tool_calls(&mut resp, &declared);
+                }
                 // A classifier answer is only a success when it carries a
                 // verdict. HTTP 200 without `<block>…</block>` is not an
                 // approval — the model failed to do its job, so the attempt
@@ -1815,7 +1875,7 @@ async fn stream_chat(
                     dialect,
                     include_usage,
                     lifecycle,
-                    events,
+                    maybe_filter_stream(events, &client, &req),
                     storage,
                     response_id,
                     cancel_rx,

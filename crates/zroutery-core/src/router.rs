@@ -940,6 +940,15 @@ impl Router {
             {
                 continue;
             }
+            // OpenCode's free tier cannot answer the classifier: its gate forces
+            // an agent-shaped stream and the classifier is fail-closed, so a free
+            // model would over-block.
+            if registry
+                .provider_of(entry)
+                .is_ok_and(|provider| provider.kind.is_opencode())
+            {
+                continue;
+            }
             // The pool's own priority orders the candidate here, not the
             // model's tier priority: a model can be last in its tier and
             // first in the classifier pool.

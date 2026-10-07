@@ -362,6 +362,14 @@ impl Upstream {
             .get_json(provider, api_key, &provider.models_url(), 30)
             .await?;
         let mut models = extract_model_list(&json, &provider.name);
+        // OpenCode publishes no capabilities on `/models`; its catalog supplies
+        // them, plus the zero-cost free flag.
+        #[cfg(feature = "opencode")]
+        if provider.kind.is_opencode() {
+            if let Err(e) = crate::opencode::enrich(&mut models).await {
+                tracing::warn!(provider = %provider.name, "OpenCode catalog enrichment failed: {e}");
+            }
+        }
         models.sort_by(|a, b| a.id.cmp(&b.id));
         models.dedup_by(|a, b| a.id == b.id);
         Ok(models)
@@ -439,11 +447,23 @@ impl Upstream {
 }
 
 /// One entry of a provider's model catalogue.
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct DiscoveredModel {
     pub id: String,
     /// Present only when the catalogue publishes prices.
     pub pricing: Option<Pricing>,
+    /// Context window, when the source publishes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<u32>,
+    /// Maximum output tokens, when the source publishes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_output: Option<u32>,
+    /// Capability flags, when the source publishes them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capabilities: Option<crate::config::ModelCapabilities>,
+    /// Whether the model is served on a zero-cost (free) tier.
+    #[serde(default)]
+    pub free: bool,
 }
 
 /// Read per-token prices out of a catalogue entry.
@@ -492,6 +512,7 @@ fn extract_model_list(json: &Value, provider_name: &str) -> Vec<DiscoveredModel>
                 Some(DiscoveredModel {
                     id,
                     pricing: pricing_from_catalogue(m),
+                    ..Default::default()
                 })
             })
             .collect();
@@ -510,6 +531,7 @@ fn extract_model_list(json: &Value, provider_name: &str) -> Vec<DiscoveredModel>
                     Some(DiscoveredModel {
                         id,
                         pricing: pricing_from_catalogue(m),
+                        ..Default::default()
                     })
                 })
                 .collect();
@@ -534,6 +556,7 @@ fn extract_model_list(json: &Value, provider_name: &str) -> Vec<DiscoveredModel>
                 Some(DiscoveredModel {
                     id,
                     pricing: pricing_from_catalogue(m),
+                    ..Default::default()
                 })
             })
             .collect();
@@ -670,7 +693,9 @@ pub fn build_headers_for_identity(
                     );
                 }
             }
-            ProviderKind::OpenAICompatible => {
+            ProviderKind::OpenAICompatible
+            | ProviderKind::OpenCodeZenFree
+            | ProviderKind::OpenCodeConsole => {
                 headers.insert(
                     AUTHORIZATION,
                     HeaderValue::from_str(&format!("Bearer {key}"))
