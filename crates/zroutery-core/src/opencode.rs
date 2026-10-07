@@ -739,3 +739,180 @@ mod tests {
         );
     }
 }
+
+/// Shaping + collapse against an in-process fake gateway that mirrors a captured
+/// free-tier SSE stream, plus an opt-in live smoke. Lives in-crate so it can use
+/// `axum`/`tokio` directly, the way the NewAPI adapter's fake panel does.
+#[cfg(test)]
+mod gateway_tests {
+    use super::*;
+    use axum::body::Body;
+    use axum::extract::State;
+    use axum::http::{HeaderMap, StatusCode};
+    use axum::response::Response;
+    use axum::routing::post;
+    use axum::Router;
+    use futures_util::StreamExt as _;
+    use std::sync::{Arc, Mutex};
+    use tokio::net::TcpListener;
+
+    use crate::config::{ClientIdentity, ProviderClientProfile, ProviderConfig, ProviderKind};
+    use crate::ir::{ChatRequest, Message};
+    use crate::protocol::StreamCollector;
+    use crate::upstream::{build_headers_for_identity, encode_for_mode, EncodeMode, Upstream};
+
+    /// A captured stream: a text delta, a tool call, a usage-only chunk, `[DONE]`
+    /// and the OpenCode `cost` trailer.
+    const SSE: &str = concat!(
+        "data: {\"id\":\"c1\",\"object\":\"chat.completion.chunk\",\"model\":\"space-bunny-free\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"}}],\"usage\":null}\n\n",
+        "data: {\"id\":\"c1\",\"object\":\"chat.completion.chunk\",\"model\":\"space-bunny-free\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"pong\"},\"finish_reason\":null}],\"usage\":null}\n\n",
+        "data: {\"id\":\"c1\",\"object\":\"chat.completion.chunk\",\"model\":\"space-bunny-free\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"my_tool\",\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}],\"usage\":null}\n\n",
+        "data: {\"id\":\"c1\",\"object\":\"chat.completion.chunk\",\"model\":\"space-bunny-free\",\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":3,\"total_tokens\":13}}\n\n",
+        "data: [DONE]\n\n",
+        "data: {\"choices\":[],\"cost\":\"0\"}\n\n",
+    );
+
+    #[derive(Clone, Default)]
+    struct Seen {
+        headers: Arc<Mutex<Option<HeaderMap>>>,
+    }
+
+    async fn fake_gateway(State(seen): State<Seen>, headers: HeaderMap) -> Response {
+        *seen.headers.lock().unwrap() = Some(headers);
+        Response::builder()
+            .status(StatusCode::OK)
+            .header("content-type", "text/event-stream")
+            .body(Body::from(SSE))
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn shapes_the_request_and_collapses_the_stream() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let seen = Seen::default();
+        let app = Router::new()
+            .route("/v1/chat/completions", post(fake_gateway))
+            .with_state(seen.clone());
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+
+        let mut provider =
+            ProviderConfig::new("opencode", "OpenCode Zen Free", ProviderKind::OpenCodeZenFree);
+        provider.base_url = format!("http://{addr}");
+        assert_eq!(provider.client_profile, ProviderClientProfile::OpenCodeCli);
+
+        let mut req = ChatRequest::new("space-bunny-free", provider.kind.dialect());
+        req.messages.push(Message::user_text("hi"));
+
+        // The encoded, shaped body.
+        let body = encode_for_mode(&provider, &req, "space-bunny-free", None, EncodeMode::Normal)
+            .expect("encodes");
+        assert_eq!(body["stream"].as_bool(), Some(true));
+        let names: Vec<&str> = body["tools"]
+            .as_array()
+            .expect("tools present")
+            .iter()
+            .filter_map(|tool| tool["function"]["name"].as_str())
+            .collect();
+        assert!(names.contains(&"bash") && names.contains(&"read"));
+        assert_eq!(body["tool_choice"].as_str(), Some("none"));
+
+        let identity = ClientIdentity {
+            profile: ProviderClientProfile::OpenCodeCli,
+            passthrough: Vec::new(),
+            session: Some("ses_0123456789abcdefghijklmnop".into()),
+        };
+        let headers = build_headers_for_identity(&provider, Some("public"), &identity)
+            .expect("headers build");
+        let h = |name: &str| {
+            headers
+                .get(name)
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or("")
+        };
+        assert!(h("user-agent").starts_with("opencode/"), "ua={}", h("user-agent"));
+        assert_eq!(h("x-opencode-client"), "cli");
+        assert_eq!(h("x-opencode-project"), "global");
+        assert_eq!(h("x-opencode-session"), "ses_0123456789abcdefghijklmnop");
+        assert!(h("x-opencode-request").starts_with("msg_"));
+
+        // A forced-stream reply, folded back for a non-streaming client.
+        let upstream = Upstream::new(true, 10);
+        let mut stream = upstream
+            .stream_with_identity(
+                &provider,
+                Some("public"),
+                &body,
+                "space-bunny-free",
+                &identity,
+            )
+            .await
+            .expect("handshake");
+        let mut collector = StreamCollector::default();
+        while let Some(item) = stream.next().await {
+            collector.push(&item.expect("event"));
+        }
+        let resp = collector.finish();
+        assert_eq!(resp.text(), "pong");
+        assert_eq!(resp.usage.output_tokens, 3);
+        assert!(
+            resp.content
+                .iter()
+                .any(|block| matches!(block, ContentBlock::ToolUse { name, .. } if name == "my_tool")),
+            "the model's own tool call survives the fold"
+        );
+
+        // The gateway saw the locked fingerprint and the session.
+        let seen = seen
+            .headers
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("the gateway recorded a request");
+        assert_eq!(
+            seen.get("x-opencode-session").unwrap().to_str().unwrap(),
+            "ses_0123456789abcdefghijklmnop"
+        );
+        assert_eq!(seen.get("x-opencode-client").unwrap().to_str().unwrap(), "cli");
+    }
+
+    /// Live smoke against the real gateway. Ignored: it needs the network and is
+    /// subject to the free tier's per-IP rate limit.
+    #[tokio::test]
+    #[ignore = "live: hits https://opencode.ai/zen and needs network"]
+    async fn live_anonymous_smoke() {
+        let provider =
+            ProviderConfig::new("opencode", "OpenCode Zen Free", ProviderKind::OpenCodeZenFree);
+        let mut req = ChatRequest::new("space-bunny-free", provider.kind.dialect());
+        req.messages
+            .push(Message::user_text("Reply with the single word: pong"));
+        let body = encode_for_mode(&provider, &req, "space-bunny-free", None, EncodeMode::Normal)
+            .expect("encodes");
+        let identity = ClientIdentity {
+            profile: ProviderClientProfile::OpenCodeCli,
+            passthrough: Vec::new(),
+            session: Some(session_id()),
+        };
+        let upstream = Upstream::new(false, 15);
+        let mut stream = upstream
+            .stream_with_identity(
+                &provider,
+                Some("public"),
+                &body,
+                "space-bunny-free",
+                &identity,
+            )
+            .await
+            .expect("handshake");
+        let mut collector = StreamCollector::default();
+        while let Some(item) = stream.next().await {
+            collector.push(&item.expect("event"));
+        }
+        assert!(
+            !collector.finish().content.is_empty(),
+            "expected a non-empty turn"
+        );
+    }
+}
