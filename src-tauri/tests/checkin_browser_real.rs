@@ -55,11 +55,33 @@ fn browser() -> Option<std::path::PathBuf> {
     }
 }
 
-fn scratch(tag: &str) -> std::path::PathBuf {
+/// A scratch profile directory that removes itself.
+///
+/// A guard rather than a cleanup call at the end of each test: a test that fails or
+/// panics before its last line leaves a *real browser profile* behind, which is the
+/// expensive kind of leftover — tens of megabytes each, and a directory that looks
+/// like a user's data.
+struct Scratch(std::path::PathBuf);
+
+/// Derefs to the path so a scratch directory can be passed anywhere a path is
+/// wanted without every call site unwrapping it.
+impl std::ops::Deref for Scratch {
+    type Target = std::path::Path;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn scratch(tag: &str) -> Scratch {
     let dir = std::env::temp_dir().join(format!("zroutery-real-{tag}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("scratch directory");
-    dir
+    Scratch(dir)
 }
 
 async fn launch(executable: &std::path::Path, dir: &std::path::Path) -> BrowserSession {
@@ -120,7 +142,7 @@ async fn wait_for(
 async fn a_headed_browser_reports_a_debugging_endpoint() {
     let Some(executable) = browser() else { return };
     let dir = scratch("endpoint");
-    let session = launch(&executable, &dir).await;
+    let session = launch(&executable, &dir.0).await;
 
     // The endpoint file is the only thing the launch depends on, and it exists
     // precisely because the browser chose its own port.
@@ -142,7 +164,6 @@ async fn a_headed_browser_reports_a_debugging_endpoint() {
         "the browser is serving its port"
     );
     let _ = session.shutdown().await;
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[tokio::test]
@@ -150,7 +171,7 @@ async fn a_headed_browser_reports_a_debugging_endpoint() {
 async fn a_navigated_page_can_be_read_back() {
     let Some(executable) = browser() else { return };
     let dir = scratch("navigate");
-    let mut session = launch(&executable, &dir).await;
+    let mut session = launch(&executable, &dir.0).await;
 
     let url = page("Zroutery check-in", "Sign in");
     let binding = session.open_page(&url).await.expect("opens a page");
@@ -176,7 +197,6 @@ async fn a_navigated_page_can_be_read_back() {
     assert_eq!(waf::classify(&evidence), waf::Verdict::Clear);
 
     let _ = session.shutdown().await;
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[tokio::test]
@@ -234,8 +254,6 @@ async fn two_accounts_get_separate_browsers_and_separate_sessions() {
 
     let _ = first.shutdown().await;
     let _ = second.shutdown().await;
-    let _ = std::fs::remove_dir_all(&a);
-    let _ = std::fs::remove_dir_all(&b);
 }
 
 fn cookie_names(jar: &serde_json::Value) -> Vec<String> {
@@ -256,7 +274,7 @@ fn cookie_names(jar: &serde_json::Value) -> Vec<String> {
 async fn a_browser_held_through_a_pause_is_the_same_browser() {
     let Some(executable) = browser() else { return };
     let dir = scratch("resume");
-    let mut session = launch(&executable, &dir).await;
+    let mut session = launch(&executable, &dir.0).await;
 
     // A page that rewrites itself, so a second look can tell whether it is the
     // same document or a freshly loaded one.
@@ -296,7 +314,6 @@ async fn a_browser_held_through_a_pause_is_the_same_browser() {
     );
 
     let _ = session.shutdown().await;
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[tokio::test]
@@ -304,7 +321,7 @@ async fn a_browser_held_through_a_pause_is_the_same_browser() {
 async fn a_clicked_control_really_runs_the_pages_own_handler() {
     let Some(executable) = browser() else { return };
     let dir = scratch("click");
-    let mut session = launch(&executable, &dir).await;
+    let mut session = launch(&executable, &dir.0).await;
 
     // The button reports whether the event it received was *trusted*, and nothing
     // but the page's own handler writes that. This is the whole claim under test:
@@ -344,7 +361,6 @@ async fn a_clicked_control_really_runs_the_pages_own_handler() {
     assert_eq!(waf::classify(&evidence), waf::Verdict::Clear);
 
     let _ = session.shutdown().await;
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[tokio::test]
@@ -352,7 +368,7 @@ async fn a_clicked_control_really_runs_the_pages_own_handler() {
 async fn a_disabled_control_is_reported_rather_than_clicked() {
     let Some(executable) = browser() else { return };
     let dir = scratch("disabled");
-    let mut session = launch(&executable, &dir).await;
+    let mut session = launch(&executable, &dir.0).await;
 
     // The shape of "already checked in today": the control is there and carries
     // its label, but it cannot be activated. Reporting this as a dispatched click
@@ -374,7 +390,6 @@ async fn a_disabled_control_is_reported_rather_than_clicked() {
     assert!(!outcome.dispatched());
 
     let _ = session.shutdown().await;
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[tokio::test]
@@ -382,7 +397,7 @@ async fn a_disabled_control_is_reported_rather_than_clicked() {
 async fn a_selector_that_matches_nothing_is_reported_not_silently_ok() {
     let Some(executable) = browser() else { return };
     let dir = scratch("missing");
-    let mut session = launch(&executable, &dir).await;
+    let mut session = launch(&executable, &dir.0).await;
 
     let url = page("no control", "nothing here");
     let page = session.open_page(&url).await.expect("opens a page");
@@ -400,7 +415,6 @@ async fn a_selector_that_matches_nothing_is_reported_not_silently_ok() {
     assert!(!outcome.dispatched());
 
     let _ = session.shutdown().await;
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[tokio::test]
@@ -408,7 +422,7 @@ async fn a_selector_that_matches_nothing_is_reported_not_silently_ok() {
 async fn shutdown_closes_the_browser_and_leaves_no_process() {
     let Some(executable) = browser() else { return };
     let dir = scratch("shutdown");
-    let session = launch(&executable, &dir).await;
+    let session = launch(&executable, &dir.0).await;
     assert!(session.is_running().await);
 
     session.shutdown().await.expect("shuts down cleanly");
@@ -416,10 +430,9 @@ async fn shutdown_closes_the_browser_and_leaves_no_process() {
     // A second launch on the same profile proves no browser survived: one that did
     // would have left the profile locked, and the relaunch would fail or attach
     // to the old one.
-    let second = launch(&executable, &dir).await;
+    let second = launch(&executable, &dir.0).await;
     assert!(second.is_running().await);
     let _ = second.shutdown().await;
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[tokio::test]
@@ -432,7 +445,7 @@ async fn a_second_driver_is_refused_the_same_browser() {
     let Some(executable) = browser() else { return };
     let dir = scratch("two-drivers");
     let key = SessionKey::new("relay", "main");
-    let runtime = CheckinRuntime::new(dir.parent().expect("scratch parent").to_path_buf());
+    let runtime = CheckinRuntime::new(dir.0.parent().expect("scratch parent").to_path_buf());
 
     runtime.begin(key.clone()).await.expect("begins");
     let session = launch(&executable, runtime.profile_dir(&key).as_path()).await;
@@ -465,7 +478,7 @@ async fn a_second_driver_is_refused_the_same_browser() {
         "the first driver's browser closes cleanly: {outcome:?}"
     );
     runtime.finish(&key).await;
-    let _ = std::fs::remove_dir_all(dir.parent().expect("scratch parent"));
+    let _ = std::fs::remove_dir_all(dir.0.parent().expect("scratch parent"));
 }
 
 #[tokio::test]
@@ -479,7 +492,7 @@ async fn a_finished_attempt_releases_the_account_so_the_next_one_can_start() {
     let Some(executable) = browser() else { return };
     let dir = scratch("release");
     let key = SessionKey::new("relay", "main");
-    let runtime = CheckinRuntime::new(dir.parent().expect("scratch parent").to_path_buf());
+    let runtime = CheckinRuntime::new(dir.0.parent().expect("scratch parent").to_path_buf());
 
     runtime.begin(key.clone()).await.expect("begins");
     let session = launch(&executable, runtime.profile_dir(&key).as_path()).await;
@@ -505,5 +518,5 @@ async fn a_finished_attempt_releases_the_account_so_the_next_one_can_start() {
         "the same profile reopens once the previous browser is gone"
     );
     runtime.finish(&key).await;
-    let _ = std::fs::remove_dir_all(dir.parent().expect("scratch parent"));
+    let _ = std::fs::remove_dir_all(dir.0.parent().expect("scratch parent"));
 }

@@ -59,34 +59,31 @@ use crate::state::Desktop;
 /// account and would make a configuration edit restart them all.
 pub const SCAN_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
 
-/// What one pass over the accounts decided, for logging and for tests.
+/// What one pass decided, before anything was opened.
 ///
-/// A summary rather than a list of launches, because the interesting figure is
-/// usually zero and "the scan ran and did nothing" has to be sayable without
-/// reading a per-account log.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub struct ScanOutcome {
+/// **Splitting this from [`ScanOutcome`] is what makes the scheduler testable, and
+/// the reason it was split is a defect this module caused.** Deciding and launching
+/// were one function, so a test that asserted only on the decision still ran the
+/// launch: `find_browser` succeeds on a developer machine, so asserting "this
+/// account is due" opened a real Chrome window thirty times across a suite run and
+/// left thirty profile directories behind in the temporary directory. A test that
+/// cannot be run hermetically is a test whose cost is invisible until it is paid,
+/// and this one was paid in disk.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct ScanPlan {
     /// Accounts the scan looked at.
     pub considered: usize,
-    /// Accounts that came back [`MaintenanceDecision::Due`].
-    pub due: usize,
-    /// Of those, attempts actually opened.
-    pub started: usize,
-    /// Accounts skipped because a session is live or waiting for a human.
-    pub skipped_busy: usize,
-    /// Attempts the launch refused, most often because a session appeared first.
-    pub refused: usize,
+    /// The accounts a decision called due, in configuration order.
+    pub due: Vec<SessionKey>,
 }
 
-/// Walk the declared accounts and start the ones that are due.
+/// Decide which accounts are due, and open nothing.
 ///
-/// `now` is unix seconds and is a parameter rather than read from the clock, for
-/// the same reason the reconciliation code takes an injected clock: the decision
-/// this feeds is one a panel will eventually render as "last checked in …", and a
-/// timestamp asserted against a value the test cannot predict is a test that
-/// cannot pass.
-pub async fn scan(desktop: &Arc<Desktop>, now: i64) -> ScanOutcome {
-    let mut outcome = ScanOutcome::default();
+/// Free of side effects beyond reading the configuration and the durable schedule,
+/// which is the whole reason it is separate. Every scheduling rule is decided here
+/// and can therefore be asserted without a browser on the machine.
+pub async fn scan(desktop: &Arc<Desktop>, now: i64) -> ScanPlan {
+    let mut plan = ScanPlan::default();
 
     // Snapshot the declaration first and work from that. Reading the live config
     // per account would mean an account added halfway through the walk is seen and
@@ -115,37 +112,53 @@ pub async fn scan(desktop: &Arc<Desktop>, now: i64) -> ScanOutcome {
     }
 
     for (provider_id, account_id) in declared {
-        outcome.considered += 1;
+        plan.considered += 1;
         let Some(maintenance) = desktop.maintenance_for(&provider_id, &account_id) else {
             continue;
         };
-        let decision = decide(
+        if decide(
             &maintenance,
             desktop
                 .checkin_schedule
                 .last_settled_at(&provider_id, &account_id),
             now,
-        );
-        if !decision.should_run() {
-            continue;
+        )
+        .should_run()
+        {
+            plan.due.push(SessionKey::new(&provider_id, &account_id));
         }
-        outcome.due += 1;
+    }
+    plan
+}
 
+/// Decide and then act: open a browser for each account a decision called due.
+///
+/// The only part of this module that opens anything, and it is the only part that
+/// needs a browser to exist on the machine.
+pub async fn run(desktop: &Arc<Desktop>, now: i64) -> ScanOutcome {
+    let plan = scan(desktop, now).await;
+    let mut outcome = ScanOutcome {
+        considered: plan.considered,
+        due: plan.due.len(),
+        ..ScanOutcome::default()
+    };
+
+    for key in plan.due {
         // The guard that keeps a WAF pause from becoming a spawn loop. Asked about
         // the live runtime, never inferred from a stored report: a report written
         // before a pause must not be read as "nothing is running".
-        let key = SessionKey::new(&provider_id, &account_id);
         if desktop.checkin.phase(&key).await.is_some() {
             outcome.skipped_busy += 1;
             continue;
         }
-
-        match crate::checkin_commands::launch_attempt(desktop, &provider_id, &account_id).await {
+        match crate::checkin_commands::launch_attempt(desktop, &key.provider_id, &key.account_id)
+            .await
+        {
             Ok(_) => {
                 outcome.started += 1;
                 tracing::debug!(
-                    provider = %provider_id,
-                    account = %account_id,
+                    provider = %key.provider_id,
+                    account = %key.account_id,
                     "scheduler started a due check-in"
                 );
             }
@@ -155,8 +168,8 @@ pub async fn scan(desktop: &Arc<Desktop>, now: i64) -> ScanOutcome {
                 // the walk continues.
                 outcome.refused += 1;
                 tracing::debug!(
-                    provider = %provider_id,
-                    account = %account_id,
+                    provider = %key.provider_id,
+                    account = %key.account_id,
                     error = %e,
                     "scheduler could not start a due check-in"
                 );
@@ -164,6 +177,25 @@ pub async fn scan(desktop: &Arc<Desktop>, now: i64) -> ScanOutcome {
         }
     }
     outcome
+}
+
+/// What one pass over the accounts did, for logging and for tests.
+///
+/// A summary rather than a list of launches, because the interesting figure is
+/// usually zero and "the scan ran and did nothing" has to be sayable without
+/// reading a per-account log.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct ScanOutcome {
+    /// Accounts the scan looked at.
+    pub considered: usize,
+    /// Accounts that came back [`MaintenanceDecision::Due`].
+    pub due: usize,
+    /// Of those, attempts actually opened.
+    pub started: usize,
+    /// Accounts skipped because a session is live or waiting for a human.
+    pub skipped_busy: usize,
+    /// Attempts the launch refused, most often because a session appeared first.
+    pub refused: usize,
 }
 
 /// Record that an account settled, for the scheduler's next decision.
@@ -234,10 +266,7 @@ mod tests {
     use zroutery_core::config::{AppConfig, MaintenanceConfig};
 
     fn account(id: &str, maintenance: &MaintenanceConfig) -> serde_json::Value {
-        serde_json::json!({
-            "account_id": id,
-            "maintenance": maintenance,
-        })
+        serde_json::json!({ "account_id": id, "maintenance": maintenance })
     }
 
     /// A configuration built through its own deserialiser.
@@ -260,14 +289,39 @@ mod tests {
         serde_json::from_value(document).expect("the fixture is a valid configuration")
     }
 
-    fn desktop(config: AppConfig) -> Arc<Desktop> {
-        let dir = std::env::temp_dir().join(format!("zroutery-scan-{}", uuid::Uuid::new_v4()));
+    /// A desktop over a scratch directory that cleans itself up when it is dropped.
+    ///
+    /// The cleanup is not tidiness. Before it existed, one suite run left a hundred
+    /// and seventy megabytes of temporary directories behind, thirty of them
+    /// containing a real browser profile, because a test that asserted only on a
+    /// decision still executed the launch. A fixture whose leak is invisible is a
+    /// fixture that gets paid for in somebody else's disk.
+    struct Scratch(std::path::PathBuf);
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn scratch(tag: &str) -> Scratch {
+        let dir =
+            std::env::temp_dir().join(format!("zroutery-sched-{tag}-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).expect("scratch dir");
-        let secrets = Arc::new(crate::secrets::KeychainSecrets::new(format!(
+        Scratch(dir)
+    }
+
+    fn secrets() -> Arc<crate::secrets::KeychainSecrets> {
+        Arc::new(crate::secrets::KeychainSecrets::new(format!(
             "app.zroutery.test.{}",
             uuid::Uuid::new_v4()
-        )));
-        Arc::new(Desktop::new(dir, config, secrets))
+        )))
+    }
+
+    fn desktop(config: AppConfig) -> (Arc<Desktop>, Scratch) {
+        let dir = scratch("run");
+        let desktop = Arc::new(Desktop::new(dir.0.clone(), config, secrets()));
+        (desktop, dir)
     }
 
     /// A declaration that can be acted on, so each fixture varies one field.
@@ -281,38 +335,60 @@ mod tests {
         }
     }
 
-    fn one_account(interval: Option<u64>) -> Arc<Desktop> {
+    fn one_account(interval: Option<u64>) -> (Arc<Desktop>, Scratch) {
         desktop(config_with(vec![account("a", &daily(interval))]))
     }
 
     #[tokio::test]
-    async fn an_account_with_no_history_is_not_started() {
+    async fn an_account_with_no_history_is_not_due() {
         // The conservative branch, and the one that stops every configured account
-        // opening a browser within seconds of launch.
-        let desktop = one_account(Some(60));
-        let outcome = scan(&desktop, 1_000).await;
-        assert_eq!(outcome.considered, 1);
+        // being opened within seconds of launch.
+        let (desktop, _dir) = one_account(Some(60));
+        let plan = scan(&desktop, 1_000).await;
+        assert_eq!(plan.considered, 1);
         assert_eq!(
-            outcome.due, 0,
+            plan.due.len(),
+            0,
             "no history means no evidence about when to act"
         );
-        assert_eq!(outcome.started, 0);
     }
 
     #[tokio::test]
     async fn an_account_that_settled_long_enough_ago_is_due() {
-        let desktop = one_account(Some(3_600));
+        let (desktop, _dir) = one_account(Some(3_600));
         record_settlement(&desktop, "prov", "a", 1_000);
         assert_eq!(
-            scan(&desktop, 1_999).await.due,
+            scan(&desktop, 1_999).await.due.len(),
             0,
             "still inside the interval"
         );
-        let outcome = scan(&desktop, 1_000 + 3_600).await;
-        assert_eq!(outcome.due, 1, "the interval elapsed");
-        // Whether it actually opens depends on a browser being present, which is
-        // why this asserts the decision and not the window.
-        assert!(outcome.started <= 1);
+        assert_eq!(
+            scan(&desktop, 1_000 + 3_600).await.due.len(),
+            1,
+            "the interval elapsed"
+        );
+    }
+
+    #[tokio::test]
+    async fn deciding_never_opens_a_browser() {
+        // **The regression that keeps this module honest.** Deciding and launching
+        // were one function, so asserting "this account is due" ran the launch too:
+        // `find_browser` succeeds on a developer machine, and a suite run opened
+        // thirty real browsers and left thirty profiles in the temporary directory.
+        // This asserts the split rather than the scheduling rules, because the rules
+        // are all tested above and this is the property that makes them testable.
+        let (desktop, dir) = one_account(Some(1));
+        record_settlement(&desktop, "prov", "a", 0);
+        assert_eq!(
+            scan(&desktop, 1_000_000).await.due.len(),
+            1,
+            "the account is due"
+        );
+        assert!(
+            !dir.0.join("browser-profiles").exists(),
+            "deciding must not create a browser profile, so this suite cannot open \
+             windows or leave state behind"
+        );
     }
 
     #[tokio::test]
@@ -320,24 +396,14 @@ mod tests {
         // What a relaunch looks like. Without the durable schedule every account
         // would come back with no history, and the launch would open a browser for
         // every one of them.
-        let dir =
-            std::env::temp_dir().join(format!("zroutery-scan-restart-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).expect("scratch dir");
-
+        let dir = scratch("restart");
         let config = config_with(vec![account("a", &daily(Some(3_600)))]);
-        let secrets = || {
-            Arc::new(crate::secrets::KeychainSecrets::new(format!(
-                "app.zroutery.test.{}",
-                uuid::Uuid::new_v4()
-            )))
-        };
-
-        let first = Arc::new(Desktop::new(dir.clone(), config.clone(), secrets()));
+        let first = Arc::new(Desktop::new(dir.0.clone(), config.clone(), secrets()));
         record_settlement(&first, "prov", "a", 1_000);
 
-        let second = Arc::new(Desktop::new(dir, config, secrets()));
+        let second = Arc::new(Desktop::new(dir.0.clone(), config, secrets()));
         assert_eq!(
-            scan(&second, 1_000 + 3_599).await.due,
+            scan(&second, 1_000 + 3_599).await.due.len(),
             0,
             "a relaunched application must not treat a settled account as untried"
         );
@@ -351,9 +417,9 @@ mod tests {
             checkin_path: Some("/console/personal".into()),
             ..Default::default()
         };
-        let desktop = desktop(config_with(vec![account("a", &not_configured)]));
+        let (desktop, _dir) = desktop(config_with(vec![account("a", &not_configured)]));
         record_settlement(&desktop, "prov", "a", 0);
-        assert_eq!(scan(&desktop, 1_000_000).await.due, 0);
+        assert_eq!(scan(&desktop, 1_000_000).await.due.len(), 0);
     }
 
     #[tokio::test]
@@ -362,17 +428,18 @@ mod tests {
             checkin_enabled: false,
             ..daily(Some(60))
         };
-        let desktop = desktop(config_with(vec![account("a", &off)]));
+        let (desktop, _dir) = desktop(config_with(vec![account("a", &off)]));
         record_settlement(&desktop, "prov", "a", 0);
-        assert_eq!(scan(&desktop, 1_000_000).await.due, 0);
+        assert_eq!(scan(&desktop, 1_000_000).await.due.len(), 0);
     }
 
     #[tokio::test]
-    async fn a_paused_or_live_account_is_never_restarted_by_the_scan() {
+    async fn a_live_session_is_skipped_by_the_launch_not_by_the_decision() {
         // The serious one: a WAF pause holds its session for as long as the human
-        // takes, and a scan that restarted it would open a fresh browser every tick
-        // for the same unverified endpoint.
-        let desktop = one_account(Some(1));
+        // takes, and a launch that restarted it would open a fresh browser every
+        // tick for the same unverified endpoint. The decision still says due — that
+        // is correct — and the guard is the launch's job.
+        let (desktop, _dir) = one_account(Some(1));
         record_settlement(&desktop, "prov", "a", 0);
         let key = SessionKey::new("prov", "a");
         desktop
@@ -381,11 +448,10 @@ mod tests {
             .await
             .expect("occupy the key");
 
-        let outcome = scan(&desktop, 1_000_000).await;
-        assert_eq!(
-            outcome.due, 1,
-            "the decision is due — only the launch is guarded"
-        );
+        assert_eq!(scan(&desktop, 1_000_000).await.due.len(), 1);
+
+        let outcome = run(&desktop, 1_000_000).await;
+        assert_eq!(outcome.due, 1);
         assert_eq!(
             outcome.skipped_busy, 1,
             "a live session must be skipped, not restarted"
@@ -398,10 +464,10 @@ mod tests {
     async fn a_failed_attempt_still_counts_as_a_settlement() {
         // Otherwise an account that cannot check in is due on every single tick,
         // and one broken account turns the scheduler into a loop.
-        let desktop = one_account(Some(3_600));
+        let (desktop, _dir) = one_account(Some(3_600));
         record_settlement(&desktop, "prov", "a", 1_000);
-        assert_eq!(scan(&desktop, 1_000 + 10).await.due, 0);
-        assert_eq!(scan(&desktop, 1_000 + 3_601).await.due, 1);
+        assert_eq!(scan(&desktop, 1_000 + 10).await.due.len(), 0);
+        assert_eq!(scan(&desktop, 1_000 + 3_601).await.due.len(), 1);
     }
 
     #[tokio::test]
@@ -415,7 +481,7 @@ mod tests {
             checkin_path: Some("/console/personal".into()),
             ..Default::default()
         };
-        let desktop = desktop(config_with(vec![
+        let (desktop, _dir) = desktop(config_with(vec![
             account(
                 "off",
                 &MaintenanceConfig {
@@ -457,17 +523,14 @@ mod tests {
 
     #[tokio::test]
     async fn the_scan_considers_every_declared_account_exactly_once() {
-        let outcome = scan(
-            &desktop(config_with(vec![
-                account("a", &daily(Some(3_600))),
-                account("b", &daily(Some(3_600))),
-                account("c", &daily(Some(3_600))),
-            ])),
-            1_000,
-        )
-        .await;
-        assert_eq!(outcome.considered, 3);
-        assert_eq!(outcome.due, 0);
+        let (desktop, _dir) = desktop(config_with(vec![
+            account("a", &daily(Some(3_600))),
+            account("b", &daily(Some(3_600))),
+            account("c", &daily(Some(3_600))),
+        ]));
+        let plan = scan(&desktop, 1_000).await;
+        assert_eq!(plan.considered, 3);
+        assert_eq!(plan.due.len(), 0);
     }
 
     #[tokio::test]
@@ -478,17 +541,9 @@ mod tests {
             account("kept", &daily(Some(3_600))),
             account("removed", &daily(Some(3_600))),
         ]);
-        let dir =
-            std::env::temp_dir().join(format!("zroutery-scan-prune-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).expect("scratch dir");
-        let secrets = || {
-            Arc::new(crate::secrets::KeychainSecrets::new(format!(
-                "app.zroutery.test.{}",
-                uuid::Uuid::new_v4()
-            )))
-        };
+        let dir = scratch("prune");
 
-        let first = Arc::new(Desktop::new(dir.clone(), config.clone(), secrets()));
+        let first = Arc::new(Desktop::new(dir.0.clone(), config.clone(), secrets()));
         record_settlement(&first, "prov", "kept", 10);
         record_settlement(&first, "prov", "removed", 20);
         drop(first);
@@ -496,7 +551,7 @@ mod tests {
         config.providers[0]
             .accounts
             .retain(|a| a.account_id == "kept");
-        let second = Arc::new(Desktop::new(dir, config, secrets()));
+        let second = Arc::new(Desktop::new(dir.0.clone(), config, secrets()));
         scan(&second, 100).await;
         assert_eq!(
             second.checkin_schedule.last_settled_at("prov", "removed"),

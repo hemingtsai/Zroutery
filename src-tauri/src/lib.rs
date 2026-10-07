@@ -234,7 +234,7 @@ pub fn run() {
                         loop {
                             tokio::select! {
                                 _ = tick.tick() => {
-                                    let outcome = checkin::scheduler::scan(
+                                    let outcome = checkin::scheduler::run(
                                         &scheduler,
                                         chrono::Utc::now().timestamp(),
                                     )
