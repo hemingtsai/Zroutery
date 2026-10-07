@@ -276,6 +276,12 @@ pub enum ProviderClientProfile {
     Native,
     ClaudeCode,
     Codex,
+    /// The OpenCode CLI identity. Unlike the others this is a *gateway* target,
+    /// not a client to imitate: it is fixed, never auto-detected, and carries the
+    /// fingerprint OpenCode's free tier demands (an `opencode/<ver>` User-Agent,
+    /// the `x-opencode-*` headers, a canonical session).
+    #[serde(rename = "opencode_cli")]
+    OpenCodeCli,
 }
 
 impl ProviderClientProfile {
@@ -309,6 +315,7 @@ impl ProviderClientProfile {
             Self::Native => "native",
             Self::ClaudeCode => "claude_code",
             Self::Codex => "codex",
+            Self::OpenCodeCli => "opencode_cli",
         }
     }
 
@@ -325,6 +332,10 @@ impl ProviderClientProfile {
         match self {
             // Fabrication-only: the native identity carries nothing of its own.
             Self::Auto | Self::Native => &[],
+            // The OpenCode identity is fabricated by the profile arm; its session
+            // header is owned there too, never forwarded verbatim (a non-canonical
+            // client value would be refused upstream with 403).
+            Self::OpenCodeCli => &[],
             Self::Codex => &[
                 "originator",
                 "session_id",
@@ -392,6 +403,10 @@ pub struct ClientIdentity {
     /// Empty when the profile forwards nothing (or the client sent none of the
     /// allowlisted names).
     pub passthrough: Vec<(HeaderName, HeaderValue)>,
+    /// The canonical `ses_…` OpenCode session for this request. `Some` only when
+    /// the resolved profile is [`ProviderClientProfile::OpenCodeCli`]; `None`
+    /// otherwise, and for auxiliary calls that carry no conversation.
+    pub session: Option<String>,
 }
 
 /// Resolve the client profile for one request and collect its forwarding set.
@@ -442,6 +457,7 @@ pub fn resolve_client_identity(
     ClientIdentity {
         profile,
         passthrough,
+        session: None,
     }
 }
 
@@ -1465,6 +1481,33 @@ impl Default for WindowBehavior {
     }
 }
 
+/// Desktop notifications. Like [`WindowBehavior`], the gateway never reads this;
+/// it belongs to the window layer.
+///
+/// Nothing here affects routing. It decides only whether a fact the router has
+/// already produced is also raised at the user, and a notification that is not
+/// raised changes nothing about the request it was about.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct NotificationConfig {
+    /// Raise an OS notification when a tier's members all trip and requests
+    /// start being escalated away from it, and again when it recovers.
+    ///
+    /// **Off by default, and the escalation is the reason.** Being answered from
+    /// a tier you did not ask for costs more, so this is a billing signal rather
+    /// than an emergency, and this app is built to sit in a menu bar all day.
+    ///
+    /// Fires on the transition, not per request: one notification per outage
+    /// episode and one on recovery. A provider flapping cannot produce a stream
+    /// of them, because the trigger is breaker state entering and leaving "fully
+    /// cooling" rather than a request being escalated.
+    ///
+    /// Delivery is best effort and dependency-free — each platform's own
+    /// mechanism, no plugin — so a failure is a missing notification and nothing
+    /// else. See `tray::notify`.
+    #[serde(default)]
+    pub notify_on_tier_escalation: bool,
+}
+
 /// Root persisted document.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct AppConfig {
@@ -1480,6 +1523,10 @@ pub struct AppConfig {
     /// it belongs to the window layer.
     #[serde(default)]
     pub window: WindowBehavior,
+    /// OS notifications. Also the window layer's, and also not something the
+    /// gateway reads.
+    #[serde(default)]
+    pub notifications: NotificationConfig,
     /// Vision fallback for non-vision models.
     #[serde(default)]
     pub vision: VisionConfig,

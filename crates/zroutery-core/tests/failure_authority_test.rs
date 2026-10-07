@@ -98,6 +98,53 @@ fn generic_402_412_statuses_need_explicit_local_markers() {
     assert!(generic_upstream.counts_against_health());
 }
 
+#[test]
+fn an_exhausted_upstream_budget_pool_is_its_own_failure_class() {
+    // A provider can report that one of its own upstream budget pools is empty
+    // (AgentRouter batching grants and running out between them, for example).
+    // That is a per-group, time-bounded exhaustion belonging to the provider —
+    // not this install's budget — so it must not be read as the local
+    // `OverBudget`, which never recovers by waiting and must not be treated as
+    // a provider fault. The old generic `budget` marker would have caught this
+    // message; it is now a distinct class.
+    let quota = "budget pool quota has been exhausted";
+
+    // Both classification entry points agree on the class.
+    assert_eq!(
+        FailureClass::from_status_with_body(402, quota),
+        FailureClass::QuotaExhausted
+    );
+    assert_eq!(
+        FailureClass::from_error_message(quota),
+        FailureClass::QuotaExhausted
+    );
+
+    // It is distinct from the local budget denial, on the very status path
+    // where the old marker would have collapsed the two.
+    assert_ne!(
+        FailureClass::from_status_with_body(402, quota),
+        FailureClass::OverBudget
+    );
+    assert_eq!(
+        FailureClass::from_status_with_body(402, "daily budget exceeded"),
+        FailureClass::OverBudget,
+        "narrowing the OverBudget marker must not lose the real over-budget case"
+    );
+
+    // The impact is the provider-recovery shape: observable and fallbackable,
+    // but the circuit stays closed (the pool comes back) and it is not retried
+    // against the same group.
+    let classified = ClassifiedFailure::from_status(402, quota.to_string());
+    assert_eq!(classified.class, FailureClass::QuotaExhausted);
+    assert!(classified.affects_observation());
+    assert!(!classified.affects_circuit());
+    assert!(!classified.retryable());
+    assert!(classified.fallbackable());
+    assert!(classified.provider_fault());
+    assert!(classified.records_stats());
+    assert!(!classified.is_success());
+}
+
 #[tokio::test]
 async fn every_error_variant_has_one_canonical_classification() {
     // An invalid URL gives us a real reqwest::Error without making a network
@@ -310,6 +357,20 @@ fn one_impact_table_covers_routing_health_stats_and_fault_effects() {
                 retryable: false,
                 fallbackable: false,
                 provider_fault: false,
+            },
+        ),
+        (
+            FailureClass::QuotaExhausted,
+            FailureImpact {
+                // The provider's pool is empty, so the attempt is observable and
+                // another group or provider may be eligible — but the circuit is
+                // not opened, because the pool recovers on its own schedule, and
+                // the same group on the same provider will still fail.
+                affects_observation: true,
+                affects_circuit: false,
+                retryable: false,
+                fallbackable: true,
+                provider_fault: true,
             },
         ),
         (

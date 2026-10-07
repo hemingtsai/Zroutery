@@ -20,7 +20,9 @@ use tokio::sync::watch;
 use super::{error_response, AdmissionGuard, AppState};
 use crate::billing::{Cost, Pricing};
 use crate::budget::{Budget, BudgetScope, OnExceeded, Verdict};
-use crate::config::{AppConfig, ModelTier, RoutingConfig};
+use crate::config::{
+    resolve_client_identity, AppConfig, ClientIdentity, ModelTier, ProviderConfig, RoutingConfig,
+};
 use crate::error::{Error, Result};
 use crate::failure::ClassifiedFailure;
 use crate::ir::{
@@ -49,6 +51,12 @@ pub(super) async fn handle_chat(
         Ok(r) => r,
         Err(e) => return error_response(dialect, &e),
     };
+    // Client identity is request context. It is carried alongside the IR so
+    // every provider attempt, including retries and auxiliary calls, can use
+    // the provider's resolved client profile, and so that the profile's
+    // passthrough set can be resolved from the real inbound headers.
+    req.client_identity = client_identity(&headers);
+    req.client_headers = headers.clone();
 
     // Retention policy, read from the decoded request rather than the raw
     // body, and honoured by every path that could write a response snapshot.
@@ -1012,8 +1020,15 @@ async fn apply_vision_fallback_inner(state: &AppState, req: &mut ChatRequest, re
         }
 
         let started = std::time::Instant::now();
-        let outcome =
-            crate::media::vision::describe(&state.upstream, &target, key.as_deref(), source).await;
+        let outcome = crate::media::vision::describe(
+            &state.upstream,
+            &target,
+            key.as_deref(),
+            source,
+            req.client_identity.as_deref(),
+            &req.client_headers,
+        )
+        .await;
         let latency_ms = started.elapsed().as_millis() as f64;
         let model_id = target.entry.exposed_id();
         let replacement = match outcome {
@@ -1112,11 +1127,12 @@ async fn try_rectify_buffered(
         apply_vision_fallback(state, req, "upstream rejected media").await;
         let key_owned = key.map(str::to_string);
         if let Some(body) = reencode(candidate, req) {
+            let client = client_for(req, &candidate.provider);
             let started = Instant::now();
             lifecycle.begin_attempt(candidate, true);
             match state
                 .upstream
-                .send(&candidate.provider, key_owned.as_deref(), &body)
+                .send_with_identity(&candidate.provider, key_owned.as_deref(), &body, &client)
                 .await
             {
                 Ok(resp) => return Ok(Some(resp)),
@@ -1157,6 +1173,7 @@ async fn try_rectify_buffered(
             if !result.applied {
                 break;
             }
+            let client = client_for(req, &candidate.provider);
             tracing::info!(
                 model = candidate.model_id(),
                 provider = candidate.provider.name.as_str(),
@@ -1167,7 +1184,7 @@ async fn try_rectify_buffered(
             lifecycle.begin_attempt(candidate, true);
             match state
                 .upstream
-                .send(&candidate.provider, key, &modified)
+                .send_with_identity(&candidate.provider, key, &modified, &client)
                 .await
             {
                 Ok(resp) => return Ok(Some(resp)),
@@ -1233,15 +1250,17 @@ async fn try_rectify_stream(
         apply_vision_fallback(state, req, "upstream rejected media").await;
         let key_owned = key.map(str::to_string);
         if let Some(body) = reencode(candidate, req) {
+            let client = client_for(req, &candidate.provider);
             let started = Instant::now();
             lifecycle.begin_attempt(candidate, true);
             match state
                 .upstream
-                .stream(
+                .stream_with_identity(
                     &candidate.provider,
                     key_owned.as_deref(),
                     &body,
                     &candidate.entry.upstream_model,
+                    &client,
                 )
                 .await
             {
@@ -1283,6 +1302,7 @@ async fn try_rectify_stream(
             if !result.applied {
                 break;
             }
+            let client = client_for(req, &candidate.provider);
             tracing::info!(
                 model = candidate.model_id(),
                 provider = candidate.provider.name.as_str(),
@@ -1293,11 +1313,12 @@ async fn try_rectify_stream(
             lifecycle.begin_attempt(candidate, true);
             match state
                 .upstream
-                .stream(
+                .stream_with_identity(
                     &candidate.provider,
                     key,
                     &modified,
                     &candidate.entry.upstream_model,
+                    &client,
                 )
                 .await
             {
@@ -1424,9 +1445,10 @@ async fn buffered_chat(
         }
 
         lifecycle.begin_attempt(candidate, false);
+        let client = client_for(&req, &candidate.provider);
         match state
             .upstream
-            .send(&candidate.provider, key.as_deref(), &body)
+            .send_with_identity(&candidate.provider, key.as_deref(), &body, &client)
             .await
         {
             Ok(mut resp) => {
@@ -1752,13 +1774,15 @@ async fn stream_chat(
         // has already seen part of the answer. The attempt stays open: its
         // verdict is the stream's terminal state, not the handshake.
         lifecycle.begin_attempt(candidate, false);
+        let client = client_for(&req, &candidate.provider);
         match state
             .upstream
-            .stream(
+            .stream_with_identity(
                 &candidate.provider,
                 key.as_deref(),
                 &body,
                 &candidate.entry.upstream_model,
+                &client,
             )
             .await
         {
@@ -1992,6 +2016,16 @@ fn inject_routing_headers(headers: &mut HeaderMap, candidate: &Candidate, kind: 
     if let Ok(v) = HeaderValue::from_str(&candidate.provider.name) {
         headers.insert("x-zroutery-provider", v);
     }
+    // The tier the answer actually came from, as a tier name rather than a
+    // virtual id: naming style changes what `standard-class` is called, but the
+    // client can compare this against what it asked for either way. A request
+    // that was escalated up reports the tier it landed in, which is the fact a
+    // caller billing against tiers cannot otherwise see.
+    if let Some(tier) = candidate.entry.tier {
+        if let Ok(v) = HeaderValue::from_str(tier.as_str()) {
+            headers.insert("x-zroutery-tier", v);
+        }
+    }
     if candidate.degraded {
         headers.insert("x-zroutery-degraded", HeaderValue::from_static("1"));
     }
@@ -2027,6 +2061,67 @@ fn build_client_context<'a>(
         headers: header_pairs,
         model,
     }
+}
+
+fn client_identity(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get("x-zroutery-client")
+        .or_else(|| headers.get(header::USER_AGENT))
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string)
+}
+
+/// The resolved client identity for one candidate provider.
+///
+/// Resolved here, at the top of each attempt, rather than inside
+/// [`Upstream::send_with_identity`], so that the profile detection and the
+/// validated passthrough set happen exactly once per attempt and the handshake
+/// retry loop inside the transport replays the identical client.
+fn client_for(req: &ChatRequest, provider: &ProviderConfig) -> ClientIdentity {
+    #[allow(unused_mut)]
+    let mut identity = resolve_client_identity(
+        provider.client_profile_for(req.client_identity.as_deref()),
+        &req.client_headers,
+    );
+    // The OpenCode gateway needs a canonical session. Resolve it once here, from
+    // the client's own header when it already carries one, else from the
+    // conversation — one session per conversation keeps the upstream prompt cache
+    // warm across a multi-turn history.
+    #[cfg(feature = "opencode")]
+    if identity.profile == crate::config::ProviderClientProfile::OpenCodeCli {
+        let inbound = req
+            .client_headers
+            .get("x-opencode-session")
+            .and_then(|value| value.to_str().ok());
+        identity.session = Some(crate::opencode::session_from_signal(
+            inbound,
+            conversation_seed(req).as_deref(),
+        ));
+    }
+    identity
+}
+
+/// A stable per-conversation seed: the first user turn's text.
+///
+/// A multi-turn conversation keeps one session as its history grows, while
+/// conversations with different openings separate — the same rule the reference
+/// OpenCode clients use. `None` when the request carries no user text.
+#[cfg(feature = "opencode")]
+fn conversation_seed(req: &ChatRequest) -> Option<String> {
+    let text: String = req
+        .messages
+        .iter()
+        .find(|message| message.role == crate::ir::Role::User)
+        .map(|message| {
+            message
+                .content
+                .iter()
+                .filter_map(crate::ir::ContentBlock::as_text)
+                .collect::<Vec<_>>()
+                .join("")
+        })
+        .unwrap_or_default();
+    (!text.trim().is_empty()).then_some(text)
 }
 
 /// Resolve the routing policy for this request.

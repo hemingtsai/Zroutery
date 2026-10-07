@@ -41,6 +41,10 @@ pub enum FailureClass {
     /// another provider may be usable, but this provider's health must not be
     /// poisoned by a local configuration problem.
     MissingApiKey,
+    /// A provider's upstream budget pool has been exhausted. This is a
+    /// per-model-group, time-bounded exhaustion (e.g. AgentRouter's daily
+    /// 10:00/19:00 batch grants), not a local account-level budget denial.
+    QuotaExhausted,
     /// A local budget/policy denied the request.
     OverBudget,
     /// Routing found no eligible candidate for the request.
@@ -55,7 +59,7 @@ pub enum FailureClass {
 
 impl FailureClass {
     /// Every canonical class, useful for exhaustive table tests and adapters.
-    pub const ALL: [Self; 16] = [
+    pub const ALL: [Self; 17] = [
         Self::Transport,
         Self::Timeout,
         Self::RateLimit,
@@ -70,6 +74,7 @@ impl FailureClass {
         Self::OverBudget,
         Self::NoCandidate,
         Self::Configuration,
+        Self::QuotaExhausted,
         Self::Interrupted,
         Self::Unknown,
     ];
@@ -167,6 +172,13 @@ impl FailureClass {
                 fallbackable: false,
                 provider_fault: false,
             },
+            Self::QuotaExhausted => FailureImpact {
+                affects_observation: true, // degraded, not dead: upstream pool is empty
+                affects_circuit: false,    // do not open the circuit for quota (will recover)
+                retryable: false,          // same group on same provider will still fail
+                fallbackable: true,        // another group or provider may be eligible
+                provider_fault: true,      // the pool belongs to the provider
+            },
             Self::NoCandidate => FailureImpact {
                 affects_observation: false,
                 affects_circuit: false,
@@ -237,6 +249,9 @@ impl FailureClass {
                 if is_missing_key_message(body) {
                     return Self::MissingApiKey;
                 }
+                if is_quota_exhausted_message(body) {
+                    return Self::QuotaExhausted;
+                }
                 if is_over_budget_message(body) {
                     return Self::OverBudget;
                 }
@@ -301,6 +316,8 @@ impl FailureClass {
             Self::Authentication
         } else if is_capability_message(&lower) {
             Self::Capability
+        } else if is_quota_exhausted_message(&lower) {
+            Self::QuotaExhausted
         } else if is_over_budget_message(&lower) {
             Self::OverBudget
         } else if is_no_candidate_message(&lower) {
@@ -346,9 +363,13 @@ fn is_missing_key_message(message: &str) -> bool {
 }
 
 fn is_over_budget_message(message: &str) -> bool {
-    message.contains("over budget")
+    message.contains("budget_exceeded")
+        || message.contains("over budget")
         || message.contains("budget exceeded")
-        || message.contains("budget")
+}
+
+fn is_quota_exhausted_message(message: &str) -> bool {
+    message.contains("budget pool quota has been exhausted")
 }
 
 fn is_no_candidate_message(message: &str) -> bool {

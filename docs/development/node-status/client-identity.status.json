@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "node_id": "CLIENT-IDENTITY",
+  "display_name": "Provider client identity",
+  "status": "DONE",
+  "implementation_state": "A provider names a ProviderClientProfile (auto, native, claude_code, codex) that decides both the fingerprint Zroutery presents upstream and which of the inbound client's own headers may travel with it. Auto detects the client from the leading token of `x-zroutery-client` (else the User-Agent), and falls back to the native identity rather than inventing a fingerprint. The legacy `impersonate_claude_code` boolean migrates to the Claude Code profile in AppConfig::normalize, one-way and idempotent, and is skipped on serialisation. Forwarding is an allowlist per profile, resolved once per attempt into a ClientIdentity and applied after the fabricator so a real client header beats a fabricated one; authentication and framing headers are excluded by the allowlist and again by PASSTHROUGH_DENIED. prompt_cache_key survives the /v1/responses dialect round trip. The failure authority also gained QuotaExhausted for an exhausted upstream budget pool, distinct from the local OverBudget.",
+  "dependencies": [],
+  "dependents": [
+    "OPENCODE-CONSOLE",
+    "OPENCODE-ZEN-FREE"
+  ],
+  "required_gates": [
+    "Profile resolution and one-way legacy migration",
+    "Per-profile upstream header fingerprint, exclusive between profiles",
+    "Allowlisted client-header forwarding that never touches authentication",
+    "prompt_cache_key survives the Responses dialect round trip",
+    "Default-build compatibility"
+  ],
+  "blocked_by": [],
+  "unblock_condition": "Not blocked; the capability is complete and every gate passes.",
+  "evidence": [
+    "E-120"
+  ],
+  "source_references": [
+    "crates/zroutery-core/src/config.rs",
+    "crates/zroutery-core/src/upstream.rs",
+    "crates/zroutery-core/src/media/vision.rs",
+    "crates/zroutery-core/src/server/pipeline.rs",
+    "crates/zroutery-core/src/ir/mod.rs",
+    "crates/zroutery-core/src/protocol/responses.rs",
+    "crates/zroutery-core/src/failure.rs",
+    "crates/zroutery-core/tests/client_profile_headers_test.rs",
+    "crates/zroutery-core/tests/client_profile_resolution_test.rs",
+    "crates/zroutery-core/tests/client_profile_migration_test.rs",
+    "crates/zroutery-core/tests/prompt_cache_key_passthrough_test.rs"
+  ],
+  "notes": [
+    "Forwarding is an allowlist, not a general passthrough; a header the client really sent is forwarded only if the resolved profile names it."
+  ]
+}

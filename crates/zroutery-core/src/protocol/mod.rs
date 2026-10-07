@@ -12,7 +12,8 @@ pub mod responses;
 
 use crate::error::{Error, Result};
 use crate::ir::{
-    ChatRequest, ChatResponse, ContentBlock, Dialect, StreamEvent, UnsupportedContentPolicy, Usage,
+    ChatRequest, ChatResponse, ContentBlock, Dialect, StopReason, StreamEvent,
+    UnsupportedContentPolicy, Usage,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -435,6 +436,275 @@ pub fn stream_encoder(
         }
         Dialect::OpenAIResponses => Box::new(responses::ResponsesStreamEncoder::new(model)),
         Dialect::Gemini => Box::new(gemini::GeminiStreamEncoder::new(model)),
+    }
+}
+
+/// Folds a stream of canonical [`StreamEvent`]s back into one [`ChatResponse`].
+///
+/// A client that asked for a non-streaming reply from an upstream that only
+/// streams (OpenCode's free tier forces `stream: true`) still gets a single JSON
+/// body: the events are collected here and the result encoded for the client's
+/// dialect by [`encode_response`]. Blocks are placed by their stream index, so
+/// text, thinking and tool calls interleave in the order they arrived.
+#[derive(Debug, Default)]
+pub struct StreamCollector {
+    id: String,
+    model: String,
+    usage: Usage,
+    blocks: std::collections::BTreeMap<u32, PartialBlock>,
+    stop_reason: Option<StopReason>,
+    stop_sequence: Option<String>,
+}
+
+#[derive(Debug)]
+enum PartialBlock {
+    Text(String),
+    Thinking {
+        text: String,
+        signature: Option<String>,
+    },
+    Redacted(String),
+    ToolUse {
+        id: String,
+        name: String,
+        json: String,
+    },
+}
+
+impl StreamCollector {
+    /// Absorb one canonical event.
+    pub fn push(&mut self, event: &StreamEvent) {
+        use std::collections::btree_map::Entry;
+        match event {
+            StreamEvent::Start { id, model, usage } => {
+                self.id = id.clone();
+                self.model = model.clone();
+                self.usage = *usage;
+            }
+            StreamEvent::TextDelta { index, text } => match self.blocks.entry(*index) {
+                Entry::Occupied(mut slot) => {
+                    if let PartialBlock::Text(existing) = slot.get_mut() {
+                        existing.push_str(text);
+                    }
+                }
+                Entry::Vacant(slot) => {
+                    slot.insert(PartialBlock::Text(text.clone()));
+                }
+            },
+            StreamEvent::ThinkingDelta { index, text } => match self.blocks.entry(*index) {
+                Entry::Occupied(mut slot) => {
+                    if let PartialBlock::Thinking { text: existing, .. } = slot.get_mut() {
+                        existing.push_str(text);
+                    }
+                }
+                Entry::Vacant(slot) => {
+                    slot.insert(PartialBlock::Thinking {
+                        text: text.clone(),
+                        signature: None,
+                    });
+                }
+            },
+            StreamEvent::ThinkingSignature { index, signature } => {
+                if let Some(PartialBlock::Thinking {
+                    signature: slot, ..
+                }) = self.blocks.get_mut(index)
+                {
+                    *slot = Some(signature.clone());
+                }
+            }
+            StreamEvent::RedactedThinking { index, data } => {
+                self.blocks
+                    .insert(*index, PartialBlock::Redacted(data.clone()));
+            }
+            StreamEvent::ToolUseStart { index, id, name } => {
+                self.blocks.insert(
+                    *index,
+                    PartialBlock::ToolUse {
+                        id: id.clone(),
+                        name: name.clone(),
+                        json: String::new(),
+                    },
+                );
+            }
+            StreamEvent::ToolUseDelta { index, partial_json } => {
+                if let Some(PartialBlock::ToolUse { json, .. }) = self.blocks.get_mut(index) {
+                    json.push_str(partial_json);
+                }
+            }
+            StreamEvent::BlockStop { .. } | StreamEvent::Ping => {}
+            StreamEvent::Stop {
+                stop_reason,
+                stop_sequence,
+                usage,
+            } => {
+                self.stop_reason = Some(*stop_reason);
+                self.stop_sequence = stop_sequence.clone();
+                self.usage = *usage;
+            }
+        }
+    }
+
+    /// The assembled response.
+    pub fn finish(self) -> ChatResponse {
+        ChatResponse {
+            id: self.id,
+            model: self.model,
+            content: self.blocks.into_values().map(PartialBlock::into_block).collect(),
+            stop_reason: self.stop_reason.unwrap_or(StopReason::Unknown),
+            stop_sequence: self.stop_sequence,
+            usage: self.usage,
+            passthrough: Default::default(),
+        }
+    }
+}
+
+impl PartialBlock {
+    fn into_block(self) -> ContentBlock {
+        match self {
+            PartialBlock::Text(text) => ContentBlock::Text {
+                text,
+                cache_control: None,
+            },
+            PartialBlock::Thinking { text, signature } => {
+                ContentBlock::Thinking { text, signature }
+            }
+            PartialBlock::Redacted(data) => ContentBlock::RedactedThinking { data },
+            PartialBlock::ToolUse { id, name, json } => ContentBlock::ToolUse {
+                id,
+                name,
+                // Arguments stream as a JSON string; an unparseable tail becomes
+                // Null rather than a fabricated object.
+                input: serde_json::from_str(&json).unwrap_or(Value::Null),
+            },
+        }
+    }
+}
+
+/// Fold a whole event sequence into one response.
+pub fn collect_stream(events: impl IntoIterator<Item = StreamEvent>) -> ChatResponse {
+    let mut collector = StreamCollector::default();
+    for event in events {
+        collector.push(&event);
+    }
+    collector.finish()
+}
+
+#[cfg(test)]
+mod collector_tests {
+    use super::*;
+
+    #[test]
+    fn collects_text_thinking_and_usage() {
+        let events = vec![
+            StreamEvent::Start {
+                id: "id1".into(),
+                model: "m".into(),
+                usage: Usage::default(),
+            },
+            StreamEvent::ThinkingDelta {
+                index: 0,
+                text: "think".into(),
+            },
+            StreamEvent::ThinkingSignature {
+                index: 0,
+                signature: "sig".into(),
+            },
+            StreamEvent::TextDelta {
+                index: 1,
+                text: "hello ".into(),
+            },
+            StreamEvent::TextDelta {
+                index: 1,
+                text: "world".into(),
+            },
+            StreamEvent::Stop {
+                stop_reason: StopReason::EndTurn,
+                stop_sequence: None,
+                usage: Usage {
+                    input_tokens: 10,
+                    output_tokens: 5,
+                    ..Usage::default()
+                },
+            },
+        ];
+        let resp = collect_stream(events);
+        assert_eq!(resp.id, "id1");
+        assert_eq!(resp.model, "m");
+        assert_eq!(resp.stop_reason, StopReason::EndTurn);
+        assert_eq!(resp.usage.output_tokens, 5);
+        assert_eq!(resp.content.len(), 2);
+        assert_eq!(
+            resp.content[0],
+            ContentBlock::Thinking {
+                text: "think".into(),
+                signature: Some("sig".into())
+            }
+        );
+        assert_eq!(
+            resp.content[1],
+            ContentBlock::Text {
+                text: "hello world".into(),
+                cache_control: None
+            }
+        );
+    }
+
+    #[test]
+    fn collects_a_tool_call() {
+        let events = vec![
+            StreamEvent::ToolUseStart {
+                index: 0,
+                id: "call_1".into(),
+                name: "bash".into(),
+            },
+            StreamEvent::ToolUseDelta {
+                index: 0,
+                partial_json: "{\"cmd\":".into(),
+            },
+            StreamEvent::ToolUseDelta {
+                index: 0,
+                partial_json: "\"ls\"}".into(),
+            },
+            StreamEvent::Stop {
+                stop_reason: StopReason::ToolUse,
+                stop_sequence: None,
+                usage: Usage::default(),
+            },
+        ];
+        let resp = collect_stream(events);
+        assert_eq!(resp.stop_reason, StopReason::ToolUse);
+        assert_eq!(resp.content.len(), 1);
+        match &resp.content[0] {
+            ContentBlock::ToolUse { id, name, input } => {
+                assert_eq!(id, "call_1");
+                assert_eq!(name, "bash");
+                assert_eq!(input["cmd"], "ls");
+            }
+            other => panic!("expected a tool call, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_missing_stop_event_defaults_to_unknown() {
+        let resp = collect_stream(vec![StreamEvent::TextDelta {
+            index: 0,
+            text: "hi".into(),
+        }]);
+        assert_eq!(resp.stop_reason, StopReason::Unknown);
+    }
+
+    #[test]
+    fn a_redacted_thinking_block_is_preserved() {
+        let resp = collect_stream(vec![StreamEvent::RedactedThinking {
+            index: 0,
+            data: "opaque".into(),
+        }]);
+        assert_eq!(
+            resp.content[0],
+            ContentBlock::RedactedThinking {
+                data: "opaque".into()
+            }
+        );
     }
 }
 

@@ -318,6 +318,7 @@ real-provider E2E, or automatic model activation is authorized by this roadmap.
 | `UI-LAYOUT` | `DONE` | Current fixture, real browser assertions, and fail-closed missing-browser behavior pass. |
 | `UI-NEW-TRACKS` | `BLOCKED` | Backend lifecycles must be real and owned before Account, migration, takeover, shadow, or ML surfaces are exposed. |
 | `OBSERVABILITY` | `DONE` | One addressable record per request joins decision, failure and usage, correlated on UUID-derived identifiers and refusing rather than guessing. |
+| `CLIENT-IDENTITY` | `DONE` | A provider's client profile decides the fingerprint presented upstream and which of the client's own headers travel with it, as an allowlist that can never carry an auth header. Independent of the ML path. |
 
 ## Gate inventory
 

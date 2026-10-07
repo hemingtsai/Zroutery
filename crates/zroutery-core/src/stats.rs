@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use crate::billing::{Cost, CostTotals};
 use crate::ir::{Dialect, Usage};
 use crate::outcome::Outcome;
-use crate::policy::RouteDecision;
+use crate::policy::{DecisionReason, RouteDecision};
 use crate::query::RequestKind;
 
 /// One completed (or failed) client request.
@@ -49,6 +49,22 @@ pub struct RequestRecord {
     pub cost: Option<Cost>,
     /// How many upstream attempts it took (>1 means failover happened).
     pub attempts: u32,
+    /// The tier this request was escalated *away from*.
+    ///
+    /// The client named a tier, every member of that tier was unusable, and the
+    /// configured fallback policy escalated instead of answering from what was
+    /// left. The answer therefore came from a tier the caller did not ask for,
+    /// which is a billing event as much as a routing one.
+    ///
+    /// Projected from [`RouteDecision::reason`] at the moment the decision is
+    /// recorded rather than decided again, so the two cannot disagree — there is
+    /// no way to set one without the other.
+    ///
+    /// `None` for every request served from the tier it asked for, for every
+    /// direct model-id request, and for every request that never reached a
+    /// routing decision.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub escalated_from: Option<String>,
     /// Routing decision trace (for diagnostics).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub routing_decision: Option<RouteDecision>,
@@ -353,6 +369,7 @@ impl RecordBuilder {
                 usage: Usage::default(),
                 cost: None,
                 attempts: 0,
+                escalated_from: None,
                 routing_decision: None,
             },
         }
@@ -430,7 +447,16 @@ impl RecordBuilder {
     }
 
     /// Attach a routing decision trace for diagnostics.
+    ///
+    /// This is also where the record's own `escalated_from` comes from. The two
+    /// are set together or not at all: a caller that hands over a decision
+    /// cannot produce a record whose escalation field disagrees with it, and a
+    /// record with an escalation field always carries the decision that explains
+    /// it.
     pub fn routing_decision(&mut self, decision: RouteDecision) -> &mut Self {
+        if let DecisionReason::Escalated { from_tier } = &decision.reason {
+            self.record.escalated_from = Some(from_tier.clone());
+        }
         self.record.routing_decision = Some(decision);
         self
     }
