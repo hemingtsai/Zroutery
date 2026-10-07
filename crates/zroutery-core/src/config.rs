@@ -230,14 +230,35 @@ pub enum ProviderKind {
     /// OpenAI Chat Completions API and every compatible clone (DeepSeek, Groq,
     /// Ollama, vLLM, OpenRouter, ...).
     OpenAICompatible,
+    /// OpenCode's anonymous free tier (Zen). OpenAI wire format at `/zen/v1`;
+    /// the locked [`ProviderClientProfile::OpenCodeCli`] shaping identity and no
+    /// login. Serves main traffic only.
+    #[serde(rename = "opencode_zen_free")]
+    OpenCodeZenFree,
+    /// OpenCode's authenticated Console tier. OpenAI wire format; a device-code
+    /// OAuth token is the credential and the shaping identity is
+    /// [`ProviderClientProfile::OpenCodeCli`]. Serves main traffic only.
+    #[serde(rename = "opencode_console")]
+    OpenCodeConsole,
 }
 
 impl ProviderKind {
     pub fn dialect(&self) -> Dialect {
         match self {
             ProviderKind::Anthropic => Dialect::Anthropic,
-            ProviderKind::OpenAICompatible => Dialect::OpenAI,
+            ProviderKind::OpenAICompatible
+            | ProviderKind::OpenCodeZenFree
+            | ProviderKind::OpenCodeConsole => Dialect::OpenAI,
         }
+    }
+
+    /// Whether this provider targets OpenCode's gateway, which needs the locked
+    /// `opencode` shaping identity and is served main traffic only.
+    pub fn is_opencode(&self) -> bool {
+        matches!(
+            self,
+            ProviderKind::OpenCodeZenFree | ProviderKind::OpenCodeConsole
+        )
     }
 
     /// Default base url shown in the GUI when creating a provider.
@@ -245,6 +266,8 @@ impl ProviderKind {
         match self {
             ProviderKind::Anthropic => "https://api.anthropic.com",
             ProviderKind::OpenAICompatible => "https://api.openai.com/v1",
+            ProviderKind::OpenCodeZenFree => "https://opencode.ai/zen",
+            ProviderKind::OpenCodeConsole => "https://opencode.ai/inference/openai/v1",
         }
     }
 }
@@ -723,10 +746,12 @@ impl ProviderConfig {
             // compatibility with relays imported from CC Switch.
             #[allow(deprecated)]
             impersonate_claude_code: false,
-            client_profile: if kind == ProviderKind::Anthropic {
-                ProviderClientProfile::ClaudeCode
-            } else {
-                ProviderClientProfile::Auto
+            client_profile: match kind {
+                ProviderKind::Anthropic => ProviderClientProfile::ClaudeCode,
+                ProviderKind::OpenCodeZenFree | ProviderKind::OpenCodeConsole => {
+                    ProviderClientProfile::OpenCodeCli
+                }
+                ProviderKind::OpenAICompatible => ProviderClientProfile::Auto,
             },
             bearer_auth: false,
             enabled: true,
@@ -787,7 +812,9 @@ impl ProviderConfig {
         };
         match self.kind {
             ProviderKind::Anthropic => format!("{with_v1}/messages"),
-            ProviderKind::OpenAICompatible => format!("{with_v1}/chat/completions"),
+            ProviderKind::OpenAICompatible
+            | ProviderKind::OpenCodeZenFree
+            | ProviderKind::OpenCodeConsole => format!("{with_v1}/chat/completions"),
         }
     }
 
@@ -802,7 +829,9 @@ impl ProviderConfig {
                     format!("{base}/v1/models")
                 }
             }
-            ProviderKind::OpenAICompatible => {
+            ProviderKind::OpenAICompatible
+            | ProviderKind::OpenCodeZenFree
+            | ProviderKind::OpenCodeConsole => {
                 // Standard OpenAI gateways serve models at /v1/models.
                 // If the base_url already ends with /v1, just append /models;
                 // otherwise append /v1/models so gateways like ps.air-outer.com work.
@@ -1709,6 +1738,20 @@ impl AppConfig {
         }
 
         for p in &self.providers {
+            if p.kind.is_opencode()
+                && p.configured_client_profile() != ProviderClientProfile::OpenCodeCli
+            {
+                issues.push(ConfigIssue {
+                    severity: IssueSeverity::Error,
+                    code: "provider.opencode_profile_locked".into(),
+                    message: format!(
+                        "Provider `{}` targets OpenCode and must use the `opencode_cli` client \
+                         profile; its fingerprint is locked",
+                        p.name
+                    ),
+                    subject: Some(p.id.clone()),
+                });
+            }
             if p.base_url.trim().is_empty() {
                 issues.push(ConfigIssue {
                     severity: IssueSeverity::Error,

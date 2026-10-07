@@ -15,9 +15,15 @@
 //!
 //! See `docs/development/opencode-zen.md` for the field-verified gate.
 
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
+
 use serde_json::{json, Map, Value};
 
-use std::sync::atomic::{AtomicI64, Ordering};
+use crate::error::{Error, Result};
+use crate::ir::{ChatResponse, ContentBlock};
 
 /// The base62 alphabet OpenCode's identifiers use.
 const BASE62: &[u8] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
@@ -150,6 +156,19 @@ pub fn session_from_signal(inbound: Option<&str>, seed: Option<&str>) -> String 
     }
 }
 
+/// Drop a tool call to a placeholder we injected only to satisfy the gate, when
+/// the client never declared that tool. A call to a tool the client itself
+/// declared is kept — only our fabricated `bash`/`read` are noise.
+pub fn strip_injected_tool_calls(resp: &mut ChatResponse, declared: &[String]) {
+    const INJECTED: [&str; 2] = ["bash", "read"];
+    resp.content.retain(|block| match block {
+        ContentBlock::ToolUse { name, .. } => {
+            !(INJECTED.contains(&name.as_str()) && !declared.iter().any(|tool| tool == name))
+        }
+        _ => true,
+    });
+}
+
 /// Shape an already-encoded OpenAI Chat Completions body for the OpenCode
 /// gateway's free tier.
 ///
@@ -213,6 +232,156 @@ fn minimal_tool(name: &str) -> Value {
             "parameters": {"type": "object", "properties": {}}
         }
     })
+}
+
+/// `provider_id` reported in errors from this module.
+const PROVIDER_ID: &str = "opencode";
+
+/// OpenCode's public capability catalog (models.dev shape).
+const CATALOG_URL: &str = "https://models.opencode.ai/api.json";
+/// How long a fetched catalog is reused before it is fetched again.
+const CATALOG_TTL: Duration = Duration::from_secs(3600);
+
+/// One model's capabilities, mapped from the catalog.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CatalogModel {
+    pub context_window: Option<u32>,
+    pub max_output: Option<u32>,
+    /// Served at zero cost on both input and output.
+    pub free: bool,
+    pub capabilities: crate::config::ModelCapabilities,
+}
+
+static CATALOG_CACHE: Mutex<Option<(Instant, HashMap<String, CatalogModel>)>> = Mutex::new(None);
+
+/// The catalog, fetched once per [`CATALOG_TTL`] and cached in memory.
+///
+/// It is ~5 MB, so it is never fetched per request; the enrichment of a
+/// discovered model list pays for it at most once an hour.
+pub async fn catalog() -> Result<HashMap<String, CatalogModel>> {
+    if let Some((at, cached)) = CATALOG_CACHE.lock().unwrap().as_ref() {
+        if at.elapsed() < CATALOG_TTL {
+            return Ok(cached.clone());
+        }
+    }
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|e| Error::internal(format!("opencode catalog client: {e}")))?;
+    let json: Value = client
+        .get(CATALOG_URL)
+        .send()
+        .await
+        .map_err(|source| Error::Transport {
+            provider: PROVIDER_ID.into(),
+            source,
+        })?
+        .json()
+        .await
+        .map_err(|e| Error::BadUpstreamPayload(format!("opencode catalog decode: {e}")))?;
+    let parsed = parse_catalog(&json);
+    *CATALOG_CACHE.lock().unwrap() = Some((Instant::now(), parsed.clone()));
+    Ok(parsed)
+}
+
+/// Fill discovered models with the catalog's capabilities, windows and free
+/// flag. Ids the catalog does not describe are left untouched.
+pub async fn enrich(models: &mut [crate::upstream::DiscoveredModel]) -> Result<()> {
+    let catalog = catalog().await?;
+    for model in models {
+        if let Some(entry) = catalog.get(&model.id) {
+            model.context_window = entry.context_window;
+            model.max_output = entry.max_output;
+            model.free = entry.free;
+            model.capabilities = Some(entry.capabilities.clone());
+        }
+    }
+    Ok(())
+}
+
+/// Parse the `opencode.models` map out of the catalog document.
+pub fn parse_catalog(json: &Value) -> HashMap<String, CatalogModel> {
+    let Some(models) = json
+        .get("opencode")
+        .and_then(|provider| provider.get("models"))
+        .and_then(Value::as_object)
+    else {
+        return HashMap::new();
+    };
+    models
+        .iter()
+        .map(|(id, entry)| (id.clone(), catalog_model(entry)))
+        .collect()
+}
+
+fn catalog_model(entry: &Value) -> CatalogModel {
+    let limit = entry.get("limit");
+    let limit_field = |name: &str| -> Option<u32> {
+        limit
+            .and_then(|limit| limit.get(name))
+            .and_then(Value::as_u64)
+            .and_then(|value| u32::try_from(value).ok())
+    };
+    let input_modalities = entry
+        .get("modalities")
+        .and_then(|modalities| modalities.get("input"))
+        .and_then(Value::as_array);
+    let has_input = |name: &str| {
+        input_modalities.is_some_and(|list| list.iter().any(|value| value.as_str() == Some(name)))
+    };
+    let flag = |name: &str| entry.get(name).and_then(Value::as_bool).unwrap_or(false);
+    let cost = entry.get("cost");
+    let zero_cost = |name: &str| {
+        cost.and_then(|cost| cost.get(name)).and_then(Value::as_f64) == Some(0.0)
+    };
+
+    CatalogModel {
+        context_window: limit_field("context"),
+        max_output: limit_field("output"),
+        free: zero_cost("input") && zero_cost("output"),
+        capabilities: crate::config::ModelCapabilities {
+            vision: has_input("image"),
+            video: has_input("video"),
+            audio: has_input("audio"),
+            files: flag("attachment"),
+            tools: flag("tool_call"),
+            thinking: flag("reasoning"),
+            structured_output: flag("structured_output"),
+        },
+    }
+}
+
+/// Wrap a stream so a tool call to an injected placeholder the client never
+/// declared is dropped — the gate's `bash`/`read` must not leak to a client that
+/// did not ask for them. The `ToolUseStart` is dropped and its index muted, so
+/// the deltas and the block-stop that follow are dropped too.
+pub fn filter_injected_tool_calls(
+    stream: crate::upstream::EventStream,
+    declared: std::collections::HashSet<String>,
+) -> crate::upstream::EventStream {
+    use futures_util::StreamExt as _;
+    const INJECTED: [&str; 2] = ["bash", "read"];
+    let mut muted: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    Box::pin(stream.filter_map(move |item| {
+        let event = match item {
+            Ok(event) => event,
+            Err(error) => return std::future::ready(Some(Err(error))),
+        };
+        let drop_event = match &event {
+            crate::ir::StreamEvent::ToolUseStart { index, name, .. } => {
+                if INJECTED.contains(&name.as_str()) && !declared.contains(name) {
+                    muted.insert(*index);
+                    true
+                } else {
+                    false
+                }
+            }
+            crate::ir::StreamEvent::ToolUseDelta { index, .. }
+            | crate::ir::StreamEvent::BlockStop { index } => muted.contains(index),
+            _ => false,
+        };
+        std::future::ready(if drop_event { None } else { Some(Ok(event)) })
+    }))
 }
 
 #[cfg(test)]
@@ -445,5 +614,128 @@ mod tests {
             "tools={names:?}"
         );
         assert_eq!(body["tool_choice"].as_str(), Some("none"));
+    }
+
+    #[test]
+    fn injected_placeholder_calls_are_stripped_when_undeclared() {
+        use crate::ir::{StopReason, Usage};
+        let tool = |name: &str| ContentBlock::ToolUse {
+            id: format!("call_{name}"),
+            name: name.into(),
+            input: json!({}),
+        };
+        let names = |resp: &ChatResponse| -> Vec<String> {
+            resp.content
+                .iter()
+                .filter_map(|block| match block {
+                    ContentBlock::ToolUse { name, .. } => Some(name.clone()),
+                    _ => None,
+                })
+                .collect()
+        };
+        let response = |content: Vec<ContentBlock>| ChatResponse {
+            id: "x".into(),
+            model: "m".into(),
+            content,
+            stop_reason: StopReason::ToolUse,
+            stop_sequence: None,
+            usage: Usage::default(),
+            passthrough: Default::default(),
+        };
+
+        // Client declared nothing: the injected bash/read are dropped; a name we
+        // never inject stays.
+        let mut resp = response(vec![tool("bash"), tool("read"), tool("my_tool")]);
+        strip_injected_tool_calls(&mut resp, &[]);
+        assert_eq!(names(&resp), vec!["my_tool".to_string()]);
+
+        // Client declared `bash`: its own bash call is kept.
+        let mut resp = response(vec![tool("bash")]);
+        strip_injected_tool_calls(&mut resp, &["bash".to_string()]);
+        assert_eq!(names(&resp), vec!["bash".to_string()]);
+    }
+
+    #[test]
+    fn parses_a_catalog_entry_into_capabilities() {
+        let json = json!({
+            "opencode": {"models": {
+                "space-bunny-free": {
+                    "attachment": true,
+                    "reasoning": true,
+                    "tool_call": true,
+                    "structured_output": true,
+                    "modalities": {"input": ["text", "image", "video"], "output": ["text"]},
+                    "limit": {"context": 1048576, "output": 524288},
+                    "cost": {"input": 0, "output": 0}
+                },
+                "claude-opus-5": {
+                    "modalities": {"input": ["text"], "output": ["text"]},
+                    "limit": {"context": 200000, "output": 64000},
+                    "cost": {"input": 3, "output": 15}
+                }
+            }}
+        });
+        let catalog = parse_catalog(&json);
+        let free = &catalog["space-bunny-free"];
+        assert!(free.free);
+        assert_eq!(free.context_window, Some(1048576));
+        assert_eq!(free.max_output, Some(524288));
+        assert!(free.capabilities.vision);
+        assert!(free.capabilities.video);
+        assert!(free.capabilities.tools);
+        assert!(free.capabilities.thinking);
+        assert!(free.capabilities.structured_output);
+
+        let paid = &catalog["claude-opus-5"];
+        assert!(!paid.free);
+        assert!(!paid.capabilities.vision);
+        assert_eq!(paid.context_window, Some(200000));
+    }
+
+    #[test]
+    fn a_missing_catalog_section_is_empty() {
+        assert!(parse_catalog(&json!({})).is_empty());
+    }
+
+    #[tokio::test]
+    async fn streaming_filter_drops_undeclared_injected_calls() {
+        use crate::ir::StreamEvent;
+        use futures_util::StreamExt as _;
+        let events = vec![
+            StreamEvent::ToolUseStart {
+                index: 0,
+                id: "1".into(),
+                name: "bash".into(),
+            },
+            StreamEvent::ToolUseDelta {
+                index: 0,
+                partial_json: "{}".into(),
+            },
+            StreamEvent::BlockStop { index: 0 },
+            StreamEvent::ToolUseStart {
+                index: 1,
+                id: "2".into(),
+                name: "my_tool".into(),
+            },
+            StreamEvent::ToolUseDelta {
+                index: 1,
+                partial_json: "{}".into(),
+            },
+        ];
+        let stream: crate::upstream::EventStream = Box::pin(futures_util::stream::iter(
+            events.into_iter().map(Ok),
+        ));
+        let filtered = filter_injected_tool_calls(stream, std::collections::HashSet::new());
+        let out: Vec<StreamEvent> = filtered.map(|item| item.unwrap()).collect().await;
+        assert!(
+            !out.iter()
+                .any(|e| matches!(e, StreamEvent::ToolUseStart { name, .. } if name == "bash")),
+            "bash block must be dropped entirely"
+        );
+        assert!(
+            out.iter()
+                .any(|e| matches!(e, StreamEvent::ToolUseStart { name, .. } if name == "my_tool")),
+            "a non-injected tool call survives"
+        );
     }
 }
