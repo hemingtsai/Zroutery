@@ -548,6 +548,15 @@ export interface Maintenance {
   checkin_enabled: boolean;
   checkin_interval_secs: number | null;
   checkin_path: string | null;
+  /**
+   * CSS selector for the check-in control on that page.
+   *
+   * Required alongside `checkin_path`. The browser activates the panel's own
+   * button rather than posting the request itself, so this is what the operation
+   * clicks — and it has no default because the markup of any particular relay's
+   * console is not something this file can know.
+   */
+  checkin_trigger_selector: string | null;
   login_path: string | null;
   browser_executable: string;
 }

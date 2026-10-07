@@ -285,6 +285,10 @@ const en = {
   "account.close_browser": "Close window",
   "account.not_enabled":
     "Check-in is switched off for this account. Turn it on in its maintenance settings first.",
+  "account.need_path":
+    "This account has no check-in page. Set maintenance.checkin_path to the panel page that carries the check-in control.",
+  "account.need_selector":
+    "This account has no check-in control. Set maintenance.checkin_trigger_selector to a CSS selector for the button, such as button.checkin.",
   "account.start_failed": "Could not start the check-in",
   "account.resume_failed": "Could not continue the check-in",
   "account.cancel_failed": "Could not cancel the check-in",
@@ -862,6 +866,9 @@ const zh: Dict = {
   "account.cancel": "取消",
   "account.close_browser": "关闭窗口",
   "account.not_enabled": "该账户未开启签到，请先在其维护设置中启用。",
+  "account.need_path": "该账户没有配置签到页面。请将 maintenance.checkin_path 设为承载签到按钮的面板页面。",
+  "account.need_selector":
+    "该账户没有配置签到控件。请将 maintenance.checkin_trigger_selector 设为按钮的 CSS 选择器，例如 button.checkin。",
   "account.start_failed": "无法开始签到",
   "account.resume_failed": "无法继续签到",
   "account.cancel_failed": "无法取消签到",

@@ -6,8 +6,6 @@
 
 use std::collections::BTreeMap;
 
-use axum::http::HeaderMap;
-use reqwest::header::{HeaderName, HeaderValue};
 use serde::{Deserialize, Serialize};
 
 use crate::billing::{BalanceConfig, BaseDepth, Pricing};
@@ -262,244 +260,6 @@ fn default_connect_timeout() -> u64 {
     15
 }
 
-/// The upstream client identity used for a provider.
-///
-/// `Auto` derives the identity from the inbound client's User-Agent (or the
-/// explicit `x-zroutery-client` hint). It falls back to the native Zroutery
-/// identity when the client is unknown. Fixed profiles apply equally to normal
-/// traffic, probes and metadata requests.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ProviderClientProfile {
-    #[default]
-    Auto,
-    Native,
-    ClaudeCode,
-    Codex,
-}
-
-impl ProviderClientProfile {
-    /// Select a concrete profile for one inbound client identity.
-    ///
-    /// The identity is classified by its *leading* client token, not by whether
-    /// a client name appears anywhere in it. Every real client starts its
-    /// User-Agent (and its `x-zroutery-client` hint) with its own token —
-    /// `claude-cli/…`, `codex_cli_rs/…` — so a leading match is what the wire
-    /// actually carries. A substring rule would mis-classify a relay that
-    /// advertises itself as one client while naming another in a compatibility
-    /// string: `codex_cli_rs/0.1.0 (claude-code-compat)` is a Codex client, and
-    /// must not be relayed as Claude Code.
-    pub fn resolve(self, identity: Option<&str>) -> Self {
-        if !matches!(self, Self::Auto) {
-            return self;
-        }
-        let identity = identity.unwrap_or_default().trim().to_ascii_lowercase();
-        if identity.starts_with("claude") {
-            Self::ClaudeCode
-        } else if identity.starts_with("codex") {
-            Self::Codex
-        } else {
-            Self::Native
-        }
-    }
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Auto => "auto",
-            Self::Native => "native",
-            Self::ClaudeCode => "claude_code",
-            Self::Codex => "codex",
-        }
-    }
-
-    /// Inbound headers forwarded verbatim when this profile is active.
-    /// An empty slice means "fabricate only".
-    ///
-    /// These are the clients' own fingerprint headers, not ours. Everything on
-    /// them is something the real CLI puts on the wire itself, so forwarding it
-    /// can only make the request *more* faithful — which is the opposite of the
-    /// argument that keeps [`Self::Native`] and the fabricated fingerprints
-    /// minimal. Nothing here may influence authentication; see
-    /// [`PASSTHROUGH_DENIED`].
-    pub fn passthrough_headers(self) -> &'static [&'static str] {
-        match self {
-            // Fabrication-only: the native identity carries nothing of its own.
-            Self::Auto | Self::Native => &[],
-            Self::Codex => &[
-                "originator",
-                "session_id",
-                "x-session-id",
-                "x-codex-beta-features",
-                "x-codex-turn-metadata",
-            ],
-            Self::ClaudeCode => &[
-                "x-app",
-                "x-stainless-arch",
-                "x-stainless-lang",
-                "x-stainless-os",
-                "x-stainless-package-version",
-                "x-stainless-retry-count",
-                "x-stainless-runtime",
-                "x-stainless-runtime-version",
-                "x-stainless-timeout",
-                "x-stainless-helper-method",
-                "anthropic-beta",
-                "anthropic-dangerous-direct-browser-access",
-                "anthropic-version",
-            ],
-        }
-    }
-}
-
-/// Headers a passthrough may never carry, whatever any allowlist says.
-///
-/// A passthrough forwards what the *client* sent. Anything on this list decides
-/// who the request authenticates as, or how it is framed on the wire, and letting
-/// an inbound request choose that would let it redirect Zroutery's own
-/// credential or rewrite the framing it is about to send. The allowlists above
-/// already exclude every one of these — this list is the belt to their braces,
-/// so that widening an allowlist later cannot quietly open an auth hole.
-pub const PASSTHROUGH_DENIED: &[&str] = &[
-    "authorization",
-    "x-api-key",
-    "content-length",
-    "host",
-    "cookie",
-    "proxy-authorization",
-];
-
-/// Whether `name` may never be forwarded from an inbound request.
-pub fn passthrough_denied(name: &str) -> bool {
-    let name = name.trim().to_ascii_lowercase();
-    PASSTHROUGH_DENIED.iter().any(|denied| *denied == name)
-}
-
-/// Detection result plus the already-validated forwarding set.
-///
-/// Built once per inbound request by [`resolve_client_identity`] and then handed
-/// to every upstream attempt, so a retry, a second candidate or a handshake
-/// replay all present the identical client.
-///
-/// Forwarding is an *allowlist*: this carries only the client headers the
-/// resolved profile names, each one actually sent by the client, and never a
-/// general copy of the inbound request. Authentication and framing headers are
-/// excluded both by the allowlist and by [`PASSTHROUGH_DENIED`].
-#[derive(Debug, Clone)]
-pub struct ClientIdentity {
-    /// The profile that won: detected when `Auto`, otherwise the configured one.
-    pub profile: ProviderClientProfile,
-    /// Real inbound header values, in allowlist order, already denied-checked.
-    /// Empty when the profile forwards nothing (or the client sent none of the
-    /// allowlisted names).
-    pub passthrough: Vec<(HeaderName, HeaderValue)>,
-}
-
-/// Resolve the client profile for one request and collect its forwarding set.
-///
-/// This is the single entry point shared by election probes, real traffic,
-/// retries and auxiliary (model-list / balance / vision) requests. The profile is
-/// detected from the inbound headers when `configured` is
-/// [`ProviderClientProfile::Auto`]; a fixed profile skips detection but still
-/// builds the passthrough set, because an operator who pins Claude Code wants the
-/// real CLI's headers just as much as an auto-detected one does.
-///
-/// Only the resolved profile's allowlisted headers are collected. This is
-/// deliberately not a general passthrough: the profile is the contract for which
-/// of the client's own headers may travel, and everything outside it is dropped.
-pub fn resolve_client_identity(
-    configured: ProviderClientProfile,
-    headers: &HeaderMap,
-) -> ClientIdentity {
-    let profile = if matches!(configured, ProviderClientProfile::Auto) {
-        detect_client_profile(headers)
-    } else {
-        configured
-    };
-
-    let mut passthrough = Vec::new();
-    for header in profile.passthrough_headers() {
-        // Defence in depth: an allowlist entry that reaches this point with a
-        // denied name is dropped, never forwarded.
-        if passthrough_denied(header) {
-            tracing::warn!(
-                profile = profile.as_str(),
-                header,
-                "dropping a passthrough header that is never forwarded upstream"
-            );
-            continue;
-        }
-        let Ok(name) = HeaderName::from_bytes(header.as_bytes()) else {
-            continue;
-        };
-        // Only a value the client really sent is forwarded. With no real value
-        // the fabricator keeps the field; inventing one here would be a second
-        // place where the fingerprint is made up.
-        if let Some(value) = headers.get(&name) {
-            passthrough.push((name.clone(), value.clone()));
-        }
-    }
-
-    ClientIdentity {
-        profile,
-        passthrough,
-    }
-}
-
-/// Read one inbound header as text, ignoring a value that is not valid text.
-fn header_text<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
-    headers.get(name)?.to_str().ok()
-}
-
-/// Identify the inbound client from its own headers.
-///
-/// The order is the whole contract, and each step is something a real client
-/// actually sends — no fingerprint guessing, no substring matching on a value
-/// that could be anything:
-/// 1. `x-zroutery-client`, the operator-facing override.
-/// 2. `originator: codex_cli_rs`, which only the Codex CLI sends.
-/// 3. `x-app: cli` together with an `anthropic-beta` carrying `claude-code-`,
-///    the Claude Code CLI pairing.
-/// 4. `User-Agent` starting with `claude-cli/`.
-/// 5. `User-Agent` starting with `codex_cli_rs/` or `codex/`.
-/// 6. Nothing matched: the client is unknown and gets the native identity.
-fn detect_client_profile(headers: &HeaderMap) -> ProviderClientProfile {
-    if let Some(hint) = header_text(headers, "x-zroutery-client") {
-        match hint.trim().to_ascii_lowercase().as_str() {
-            "claude_code" => return ProviderClientProfile::ClaudeCode,
-            "codex" => return ProviderClientProfile::Codex,
-            // Not an override we know: keep detecting rather than guessing.
-            _ => {}
-        }
-    }
-
-    if let Some(originator) = header_text(headers, "originator") {
-        if originator.trim().eq_ignore_ascii_case("codex_cli_rs") {
-            return ProviderClientProfile::Codex;
-        }
-    }
-
-    let app_is_cli =
-        header_text(headers, "x-app").is_some_and(|app| app.trim().eq_ignore_ascii_case("cli"));
-    let beta_is_claude_code =
-        header_text(headers, "anthropic-beta").is_some_and(|beta| beta.contains("claude-code-"));
-    if app_is_cli && beta_is_claude_code {
-        return ProviderClientProfile::ClaudeCode;
-    }
-
-    if let Some(agent) = header_text(headers, "user-agent") {
-        let agent = agent.trim();
-        if agent.to_ascii_lowercase().starts_with("claude-cli/") {
-            return ProviderClientProfile::ClaudeCode;
-        }
-        let agent = agent.to_ascii_lowercase();
-        if agent.starts_with("codex_cli_rs/") || agent.starts_with("codex/") {
-            return ProviderClientProfile::Codex;
-        }
-    }
-
-    ProviderClientProfile::Native
-}
-
 /// One upstream account/endpoint.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProviderConfig {
@@ -526,15 +286,10 @@ pub struct ProviderConfig {
     /// Anthropic API version header. Ignored for OpenAI compatible providers.
     #[serde(default)]
     pub anthropic_version: Option<String>,
-    /// Legacy Claude Code impersonation switch. New configurations use
-    /// `client_profile`; this field is accepted for old documents and folded
-    /// into that profile during normalization.
-    #[serde(default, skip_serializing)]
-    #[deprecated(note = "use client_profile")]
-    pub impersonate_claude_code: bool,
-    /// Client identity presented to this upstream.
+    /// Whether to impersonate Claude Code client (User-Agent, x-app, anthropic-beta headers
+    /// and system prompt identity line).
     #[serde(default)]
-    pub client_profile: ProviderClientProfile,
+    pub impersonate_claude_code: bool,
     /// Send the key as `Authorization: Bearer <key>` in addition to
     /// `x-api-key`, for Anthropic-protocol relays whose gateway reads the
     /// Bearer header — some reject a request carrying only `x-api-key` with
@@ -557,22 +312,6 @@ pub struct ProviderConfig {
     pub accounts: Vec<AccountConfig>,
 }
 
-/// One account hosted by a provider.
-///
-/// This is a **declaration**, and the distinction is the whole point of the type.
-/// It says *this provider has this account, and this is where its credential
-/// lives*. It says nothing about the account's current state: quota, usage, rate
-/// limits and last-success timestamps are derived by probing and expire, so they
-/// are held in `account::AccountStore` and are never written here.
-///
-/// A provider key does not imply an account. A relay reached with one credential
-/// can host several, and an account can exist on a provider whose own key is only
-/// for health checks — which is why this is a list rather than a flag.
-///
-/// `AccountRuntime` derives `Serialize`, so writing observations into an
-/// `AppConfig` is technically possible and wrong: it would turn a number that was
-/// true at one moment into configuration that reads as authoritative afterwards.
-/// See `docs/development/account-surface-plan.md`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AccountConfig {
     /// Stable identifier for this account within its provider.
@@ -606,10 +345,9 @@ pub struct AccountConfig {
 /// There is no username, no password and no cookie field here, and that is a
 /// design decision rather than an oversight. Check-in is performed in a real
 /// browser against a real page, which means the browser is where credentials
-/// belong: it holds them in its own profile, under the same keychain-backed
-/// setup as every other credential, and the account signs in once by hand. A
-/// password in this struct would be a password in a user-editable file, which
-/// `docs/development/account-surface-plan.md` already rules out for the
+/// belong: it holds them in its own profile, and the account signs in once by
+/// hand. A password in this struct would be a password in a user-editable file,
+/// which `docs/development/account-surface-plan.md` already rules out for the
 /// credential itself.
 ///
 /// # No headless switch
@@ -641,6 +379,15 @@ pub struct MaintenanceConfig {
     /// real browser somewhere useless while reporting progress.
     #[serde(default)]
     pub checkin_path: Option<String>,
+    /// CSS selector for the check-in control on that page.
+    ///
+    /// Required alongside [`Self::checkin_path`], and also not defaulted. The
+    /// browser activates the panel's own button rather than posting the request
+    /// itself, because that is what carries the panel's session and its challenge
+    /// token; a default selector would mean clicking an arbitrary element on a
+    /// page whose markup nobody here has seen.
+    #[serde(default)]
+    pub checkin_trigger_selector: Option<String>,
     /// Panel-relative path of the sign-in page, when signing in needs one.
     #[serde(default)]
     pub login_path: Option<String>,
@@ -668,28 +415,52 @@ impl MaintenanceConfig {
             // A path is joined onto a base URL, so an absolute or
             // scheme-carrying value would send the browser somewhere the panel
             // does not host.
-            if path.starts_with('/') && path.contains("://") {
+            if path.contains("://") {
                 return Err(format!("{field} must be a panel-relative path, not a URL"));
             }
             if !path.starts_with('/') {
                 return Err(format!("{field} must start with '/'"));
             }
         }
+        // A path with no control means navigating somewhere and stopping there,
+        // which is a check-in that silently does nothing. That is exactly the
+        // failure this declaration exists to prevent, so it is refused at load
+        // rather than discovered later as "the control was not found".
+        if self.checkin_enabled && self.has_checkin_page() && self.checkin_selector().is_none() {
+            return Err(
+                "checkin_trigger_selector must be set when checkin is enabled with a \
+                 checkin_path"
+                    .into(),
+            );
+        }
         Ok(())
+    }
+
+    /// Whether a panel-relative check-in page is declared.
+    fn has_checkin_page(&self) -> bool {
+        self.checkin_path
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|p| !p.is_empty())
+    }
+
+    /// The configured check-in control selector, when it is usable.
+    pub fn checkin_selector(&self) -> Option<&str> {
+        self.checkin_trigger_selector
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
     }
 
     /// Whether browser check-in is fully specified.
     ///
-    /// Distinct from `checkin_enabled`: a user can legitimately want check-in
-    /// reported as unsupported rather than attempted against a path that is not
-    /// there, and the panel needs to be able to say which of those is the case.
+    /// Requires the selector as well as the page, because the browser's job is to
+    /// activate the panel's own control. Distinct from `checkin_enabled`: a user
+    /// can legitimately want check-in reported as unsupported rather than
+    /// attempted against a page that is not there, and the panel needs to be able
+    /// to say which of those is the case.
     pub fn is_browser_checkin_configured(&self) -> bool {
-        self.checkin_enabled
-            && self
-                .checkin_path
-                .as_deref()
-                .map(str::trim)
-                .is_some_and(|p| !p.is_empty())
+        self.checkin_enabled && self.has_checkin_page() && self.checkin_selector().is_some()
     }
 }
 
@@ -703,15 +474,8 @@ impl ProviderConfig {
             base_url: kind.default_base_url().to_string(),
             kind,
             extra_headers: BTreeMap::new(),
-            // Anthropic providers default to the Claude Code profile for
-            // compatibility with relays imported from CC Switch.
-            #[allow(deprecated)]
-            impersonate_claude_code: false,
-            client_profile: if kind == ProviderKind::Anthropic {
-                ProviderClientProfile::ClaudeCode
-            } else {
-                ProviderClientProfile::Auto
-            },
+            // Anthropic providers default to impersonation enabled for gateway compatibility
+            impersonate_claude_code: kind == ProviderKind::Anthropic,
             bearer_auth: false,
             enabled: true,
             timeout_secs: default_timeout(),
@@ -720,27 +484,6 @@ impl ProviderConfig {
             quirks: ProviderQuirks::default(),
             balance: BalanceConfig::default(),
             accounts: Vec::new(),
-        }
-    }
-
-    /// Resolve the profile for one inbound request. The legacy boolean wins
-    /// while old configurations are still in memory; normalized documents use
-    /// only `client_profile`.
-    pub fn client_profile_for(&self, identity: Option<&str>) -> ProviderClientProfile {
-        self.configured_client_profile().resolve(identity)
-    }
-
-    /// The configured profile with the legacy boolean folded in, before any
-    /// detection from inbound headers.
-    ///
-    /// This is what [`resolve_client_identity`] takes: it is the operator's
-    /// choice, and it is the only place the deprecated switch is still honoured.
-    pub fn configured_client_profile(&self) -> ProviderClientProfile {
-        #[allow(deprecated)]
-        if self.impersonate_claude_code {
-            ProviderClientProfile::ClaudeCode
-        } else {
-            self.client_profile
         }
     }
 
@@ -1560,17 +1303,6 @@ impl AppConfig {
     pub fn normalize(&mut self) -> Vec<String> {
         let mut notes = Vec::new();
         self.routing.apply_legacy();
-        for provider in &mut self.providers {
-            #[allow(deprecated)]
-            if provider.impersonate_claude_code {
-                provider.client_profile = ProviderClientProfile::ClaudeCode;
-                provider.impersonate_claude_code = false;
-                notes.push(format!(
-                    "Provider `{}` migrated from the Claude Code impersonation switch to the client profile",
-                    provider.name
-                ));
-            }
-        }
         for model in &mut self.models {
             let exposed = qualified_id(&model.provider_id, &model.upstream_model);
             if let Some(legacy) = model.legacy_id.take() {

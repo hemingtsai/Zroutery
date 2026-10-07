@@ -49,6 +49,15 @@ const SETTLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 /// function of time rather than of anything Zroutery sends, so this polls.
 const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(500);
 
+/// How long the panel is given to act on an activated control before the account
+/// is read.
+///
+/// The click and the grant are separate events: the panel's handler has to run
+/// before a reward exists to observe. Without this grace an observation can land
+/// in the gap and report `ObservationPending` for a check-in that then succeeds,
+/// which is the one wrong answer this design is supposed to make hard to reach.
+const POST_TRIGGER_GRACE: std::time::Duration = std::time::Duration::from_millis(1_500);
+
 /// Start a browser check-in for one account.
 ///
 /// Asynchronous on purpose: a check-in opens a visible browser and may pause on
@@ -137,8 +146,19 @@ pub async fn start_checkin(
     let runtime = desktop.checkin.clone();
     let task_key = key.clone();
     let desktop_for_task = Arc::clone(&desktop);
+    // Resolved before the browser opens, so a missing selector is a configuration
+    // error returned to the caller rather than something a background task
+    // discovers after a window has already appeared.
+    let Some(selector) = maintenance.checkin_selector().map(str::to_string) else {
+        release(desktop.checkin.clone(), &key);
+        return Err(
+            "checkin_trigger_selector is not set for this account, so there is no control \
+             to activate"
+                .to_string(),
+        );
+    };
     tauri::async_runtime::spawn(async move {
-        drive(runtime, desktop_for_task, task_key, binding).await;
+        drive(runtime, desktop_for_task, task_key, binding, selector).await;
     });
 
     desktop
@@ -201,8 +221,21 @@ pub async fn resume_checkin(
     let runtime = desktop.checkin.clone();
     let task_key = key.clone();
     let desktop_for_task = Arc::clone(&desktop);
+    // Taken from the live configuration rather than from whatever was declared
+    // when the session opened, so an operator who corrected the selector while the
+    // challenge was pending gets the corrected one.
+    let Some(selector) = desktop
+        .maintenance_for(&provider_id, &account_id)
+        .and_then(|m| m.checkin_selector().map(str::to_string))
+    else {
+        return Err(
+            "checkin_trigger_selector is not set for this account, so there is no control \
+             to activate"
+                .to_string(),
+        );
+    };
     tauri::async_runtime::spawn(async move {
-        drive(runtime, desktop_for_task, task_key, binding).await;
+        drive(runtime, desktop_for_task, task_key, binding, selector).await;
     });
 
     desktop
@@ -334,6 +367,7 @@ async fn drive(
     desktop: Arc<Desktop>,
     key: SessionKey,
     binding: cdp::PageBinding,
+    selector: String,
 ) {
     let started_at = chrono::Utc::now().timestamp();
     if runtime.advance(&key, Event::Start).await.is_err()
@@ -374,23 +408,75 @@ async fn drive(
         }
     }
 
+    // Activate the panel's own control, once the page has settled.
+    //
+    // This is the execution the feature exists for, and it happens here and
+    // nowhere else. It is deliberately *not* a request Zroutery sends itself: the
+    // page holds the session and the challenge token, so a request built outside
+    // it would be the "sign in, take the cookies, post over HTTP" path this
+    // design rules out.
+    let mut activated = false;
+    let mut control_problem: Option<String> = None;
+    if clear {
+        match browser.click(&binding, &selector).await {
+            Ok(cdp::ClickOutcome::Clicked { text }) => {
+                activated = true;
+                tracing::debug!(
+                    provider = %key.provider_id,
+                    account = %key.account_id,
+                    control = %text,
+                    "check-in control activated"
+                );
+                // The panel needs a moment to act before the account is read: the
+                // click and the grant are separate events, and an observation
+                // landing in the gap would report `ObservationPending` for a
+                // check-in that then succeeded.
+                tokio::time::sleep(POST_TRIGGER_GRACE).await;
+            }
+            Ok(cdp::ClickOutcome::Disabled { text }) => {
+                // Neither a failure nor a success. A disabled control is the usual
+                // shape of "already done today", and only the observation can turn
+                // that into `already_completed` — or into a genuine refusal.
+                control_problem = Some(format!(
+                    "the check-in control is not active ({text}); the panel may already show \
+                     today as checked in"
+                ));
+            }
+            Ok(cdp::ClickOutcome::NotFound) => {
+                control_problem = Some(format!(
+                    "no check-in control matched {selector:?} on the page; check \
+                     maintenance.checkin_trigger_selector"
+                ));
+            }
+            Err(e) => {
+                control_problem = Some(format!("the check-in control could not be activated: {e}"));
+            }
+        }
+    }
+
     let (phase, failure) = if paused {
         let _ = runtime.advance(&key, Event::WafBlocked).await;
         let _ = runtime.advance(&key, Event::AwaitingUser).await;
         ("waiting_for_user", None)
-    } else if clear {
-        // The panel's own page is up. Whether the check-in was performed and what
-        // it awarded is not established here; the observation half does that over
-        // HTTP. What is established is that the browser got through, which is a
-        // real and reportable fact — and the phase is `running` rather than
-        // `succeeded` precisely because no reward has been observed.
-        ("running", None)
-    } else {
+    } else if !clear {
         let _ = runtime.advance(&key, Event::Failed).await;
         (
             "failed",
             Some("the panel did not load before the check-in timed out".to_string()),
         )
+    } else if let Some(problem) = control_problem {
+        // A control that cannot be activated is something the operator can see and
+        // fix, and the message names the setting — except when it merely was
+        // inactive, where the observation may still resolve it into "already
+        // checked in", which is why the observation runs either way below.
+        let _ = runtime.advance(&key, Event::OperationRunning).await;
+        let _ = runtime.advance(&key, Event::Failed).await;
+        ("failed", Some(problem))
+    } else {
+        // The control was activated. That is the execution; what it awarded is
+        // still unobserved, so the phase stays `running` until the observation
+        // half says otherwise.
+        ("running", None)
     };
 
     // The browser goes back either way. A pause leaves it open; the caller closes
@@ -411,13 +497,24 @@ async fn drive(
         last_completed_at: None,
     });
 
-    // Only when the browser got through. A paused attempt has not happened yet, so
-    // asking the provider what it granted would read the *previous* day's reward
-    // and render it as this one's.
+    // Observe whenever the browser reached the panel, whether or not a control was
+    // activated. An inactive control is exactly the case where the provider's
+    // `checked_in_today` is the only thing that can say what happened, so
+    // skipping the observation there would leave the common "already done" outcome
+    // unreported. A *paused* attempt is excluded: it has not happened yet, and
+    // asking now would read the previous day's reward as this one's.
     if clear {
         let account = zroutery_core::account::AccountId(key.account_id.clone());
         observe(&desktop, &key, &account, started_at).await;
     }
+
+    tracing::debug!(
+        provider = %key.provider_id,
+        account = %key.account_id,
+        activated,
+        paused,
+        "check-in browser phase finished"
+    );
 }
 
 /// Ask the provider what the attempt actually did, and record that instead.

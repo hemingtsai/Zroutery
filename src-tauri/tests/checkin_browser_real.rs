@@ -68,8 +68,34 @@ async fn launch(executable: &std::path::Path, dir: &std::path::Path) -> BrowserS
 }
 
 /// A page the browser can render with no network involved.
+///
+/// Percent-encoded rather than pasted raw. A raw `data:` URL is silently
+/// truncated at the first character the URL parser claims — a space, a quote, a
+/// `#` — and the symptom is an element that quietly fails to exist, which is a
+/// miserable thing to debug. Encoding makes the fixture unambiguous.
+///
+/// Kept free of `#` and `"` handling by encoding everything outside
+/// `A-Za-z0-9` and the few punctuation characters that carry no meaning here.
+fn page_encoded(html: &str) -> String {
+    let mut out = String::from("data:text/html;charset=utf-8,");
+    for byte in html.bytes() {
+        if byte.is_ascii_alphanumeric()
+            || matches!(byte, b'/' | b':' | b',' | b'=' | b'.' | b'(' | b')')
+        {
+            out.push(byte as char);
+        } else {
+            out.push('%');
+            out.push_str(&format!("{byte:02X}"));
+        }
+    }
+    out
+}
+
+/// A page the browser can render with no network involved.
 fn page(title: &str, body: &str) -> String {
-    format!("data:text/html,<title>{title}</title><body><main id=root>{body}</main></body>")
+    page_encoded(&format!(
+        "<title>{title}</title><main id=root>{body}</main>"
+    ))
 }
 
 /// Poll until the page is showing `url`, or give up.
@@ -233,10 +259,12 @@ async fn a_browser_held_through_a_pause_is_the_same_browser() {
 
     // A page that rewrites itself, so a second look can tell whether it is the
     // same document or a freshly loaded one.
-    let url = "data:text/html,<title>held</title><body><main id=root>before</main>\
-               <script>setTimeout(function(){document.getElementById('root')\
-               .textContent='after'},400)</script></body>";
-    let binding = session.open_page(url).await.expect("opens a page");
+    let url = page_encoded(
+        "<title>held</title><main id=root>before</main>\
+         <script>setTimeout(function(){document.getElementById('root')\
+         .textContent='after'},400)</script>",
+    );
+    let binding = session.open_page(&url).await.expect("opens a page");
     wait_for(&mut session, &binding, "data:").await;
 
     // The state machine says a pause keeps the browser, and it does: the same
@@ -265,6 +293,110 @@ async fn a_browser_held_through_a_pause_is_the_same_browser() {
         session.is_running().await,
         "a pause must leave the browser alive, not merely open"
     );
+
+    let _ = session.shutdown().await;
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+#[ignore = "needs a real Chromium browser and opens a visible window"]
+async fn a_clicked_control_really_runs_the_pages_own_handler() {
+    let Some(executable) = browser() else { return };
+    let dir = scratch("click");
+    let mut session = launch(&executable, &dir).await;
+
+    // The button reports whether the event it received was *trusted*, and nothing
+    // but the page's own handler writes that. This is the whole claim under test:
+    // `Input.dispatchMouseEvent` goes through Chrome's real input pipeline, so the
+    // page sees `isTrusted === true`, whereas `element.click()` would deliver an
+    // untrusted event a challenge vendor can tell apart from a person pressing.
+    let url = page_encoded(
+        "<title>click</title><main id=root>ready</main>\
+         <button id=go onclick=\"this.textContent=event.isTrusted\">Check in</button>",
+    );
+    let page = session.open_page(&url).await.expect("opens a page");
+    wait_for(&mut session, &page, "data:").await;
+
+    assert_eq!(
+        session.click(&page, "#go").await.expect("clicks"),
+        zroutery_lib::checkin::cdp::ClickOutcome::Clicked {
+            text: "Check in".into()
+        },
+        "the control should be found and activated"
+    );
+
+    // Let the handler run.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let evidence = session.page_evidence(&page).await.expect("readable");
+    assert!(
+        evidence.body_text.contains("true"),
+        "the page's own handler must have run and seen a trusted event: {:?}",
+        evidence.body_text
+    );
+    assert!(
+        !evidence.body_text.contains("false"),
+        "an untrusted event is exactly what a challenge vendor can distinguish: {:?}",
+        evidence.body_text
+    );
+    // And the page is no longer a challenge — a click cannot have worked at all
+    // without getting here first.
+    assert_eq!(waf::classify(&evidence), waf::Verdict::Clear);
+
+    let _ = session.shutdown().await;
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+#[ignore = "needs a real Chromium browser and opens a visible window"]
+async fn a_disabled_control_is_reported_rather_than_clicked() {
+    let Some(executable) = browser() else { return };
+    let dir = scratch("disabled");
+    let mut session = launch(&executable, &dir).await;
+
+    // The shape of "already checked in today": the control is there and carries
+    // its label, but it cannot be activated. Reporting this as a dispatched click
+    // would leave an operator waiting for a reward that never arrives.
+    let url = page_encoded(
+        "<title>done</title><main id=root>ready</main><button id=go disabled>Checked in</button>",
+    );
+    let page = session.open_page(&url).await.expect("opens a page");
+    wait_for(&mut session, &page, "data:").await;
+
+    let outcome = session.click(&page, "#go").await.expect("probes");
+    assert!(
+        matches!(
+            outcome,
+            zroutery_lib::checkin::cdp::ClickOutcome::Disabled { .. }
+        ),
+        "a disabled control must not report as clicked: {outcome:?}"
+    );
+    assert!(!outcome.dispatched());
+
+    let _ = session.shutdown().await;
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+#[ignore = "needs a real Chromium browser and opens a visible window"]
+async fn a_selector_that_matches_nothing_is_reported_not_silently_ok() {
+    let Some(executable) = browser() else { return };
+    let dir = scratch("missing");
+    let mut session = launch(&executable, &dir).await;
+
+    let url = page("no control", "nothing here");
+    let page = session.open_page(&url).await.expect("opens a page");
+    wait_for(&mut session, &page, "data:").await;
+
+    let outcome = session
+        .click(&page, "#does-not-exist")
+        .await
+        .expect("probes");
+    assert_eq!(
+        outcome,
+        zroutery_lib::checkin::cdp::ClickOutcome::NotFound,
+        "an unmatched selector is a configuration problem and must say so"
+    );
+    assert!(!outcome.dispatched());
 
     let _ = session.shutdown().await;
     let _ = std::fs::remove_dir_all(&dir);

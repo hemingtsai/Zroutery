@@ -661,6 +661,19 @@ function ProviderDrawer({
       notify("error", t("account.not_enabled"));
       return;
     }
+    // Checked here as well as in the backend so the operator is told which of the
+    // two settings is missing, rather than receiving "not configured" for a page
+    // they already set.
+    const missing =
+      !maintenance.checkin_path?.trim()
+        ? t("account.need_path")
+        : !maintenance.checkin_trigger_selector?.trim()
+          ? t("account.need_selector")
+          : null;
+    if (missing) {
+      notify("error", missing);
+      return;
+    }
     try {
       await api.startCheckin(id, account);
     } catch (e) {
