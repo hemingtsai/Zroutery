@@ -239,8 +239,8 @@ pub async fn refresh_tokens(
         }),
     )
     .await?;
-    let token: TokenResponse =
-        serde_json::from_str(&body).map_err(|e| Error::BadUpstreamPayload(format!("opencode token refresh payload: {e}")))?;
+    let token: TokenResponse = serde_json::from_str(&body)
+        .map_err(|e| Error::BadUpstreamPayload(format!("opencode token refresh payload: {e}")))?;
     let access_token = token.access_token.ok_or_else(|| {
         Error::BadUpstreamPayload("opencode refresh returned no access token".into())
     })?;
@@ -265,10 +265,10 @@ fn absolute_verification_url(server: &str, value: Option<&str>) -> String {
     if value.starts_with("http://") || value.starts_with("https://") {
         return value.to_string();
     }
-    match reqwest::Url::parse(server)
-        .ok()
-        .and_then(|url| url.host_str().map(|host| (url.scheme().to_string(), host.to_string())))
-    {
+    match reqwest::Url::parse(server).ok().and_then(|url| {
+        url.host_str()
+            .map(|host| (url.scheme().to_string(), host.to_string()))
+    }) {
         Some((scheme, host)) => format!("{scheme}://{host}{value}"),
         None => fallback,
     }
@@ -305,20 +305,21 @@ mod tests {
     #[test]
     fn verification_url_is_made_absolute() {
         assert_eq!(
-            absolute_verification_url("https://opencode.ai/console", Some("https://example.com/verify")),
+            absolute_verification_url(
+                "https://opencode.ai/console",
+                Some("https://example.com/verify")
+            ),
             "https://example.com/verify"
         );
         assert_eq!(
             absolute_verification_url("https://opencode.ai/console", None),
             "https://opencode.ai/console/device"
         );
-        assert!(
-            absolute_verification_url(
-                "https://opencode.ai/console",
-                Some("/console/device?user_code=ABCD")
-            )
-            .ends_with("/console/device?user_code=ABCD")
-        );
+        assert!(absolute_verification_url(
+            "https://opencode.ai/console",
+            Some("/console/device?user_code=ABCD")
+        )
+        .ends_with("/console/device?user_code=ABCD"));
     }
 
     #[tokio::test]
@@ -361,10 +362,14 @@ mod tests {
         assert_eq!(device.device_code, "device-1");
         assert_eq!(device.user_code, "ABCD");
         assert_eq!(device.interval_secs, 5);
-        assert!(device.verification_url.contains("/console/device?user_code=ABCD"));
+        assert!(device
+            .verification_url
+            .contains("/console/device?user_code=ABCD"));
 
         assert_eq!(
-            poll_device_token(&server, "pending-code").await.expect("poll"),
+            poll_device_token(&server, "pending-code")
+                .await
+                .expect("poll"),
             Poll::Pending
         );
 
