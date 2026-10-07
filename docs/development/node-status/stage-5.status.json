@@ -2,8 +2,8 @@
   "schema_version": 1,
   "node_id": "STAGE-5",
   "display_name": "Stage 5 — optional account component",
-  "status": "PARTIAL",
-  "implementation_state": "Account types, store, and pure calculations have useful tests; persistence and production ownership/execution are absent.",
+  "status": "DONE",
+  "implementation_state": "All three of this node's gates are met and were measured rather than inherited: the account contract and its pure calculations are five test targets and 47 tests, persistence and runtime ownership are AppState holding an AccountStore behind the optional feature with a store-keying fixture that runs in the default build, and default-build compatibility is a property of the feature tables — zroutery-core is declared by the desktop package with no features at all, and account, newapi and account-maint are declared and none of them is in default. ML feature order is untouched: default remains [\"ml\"]. The previous text said persistence and production ownership/execution were absent, which has been untrue since before E-119 corrected the identical sentence on ACCOUNT; this row is the second time that clause was found false, and the fix was to measure the gates rather than to correct the prose again. THIS NODE IS SUPERSEDED BY ACCOUNT AND SAYING DONE DOES NOT MEAN THE ACCOUNT WORK IS DONE: ACCOUNT stays PARTIAL because no call site invokes the reconciler, no credential path feeds it, the maintenance declaration has no scheduler and the resource-event log has no consumer. Stage 5's gates were about existence, not integration. See E-133.",
   "dependencies": [
     "STAGE-1"
   ],
@@ -21,7 +21,8 @@
   "evidence": [
     "E-005",
     "E-007",
-    "E-016"
+    "E-016",
+    "E-133"
   ],
   "source_references": [
     "docs/development/repository-audit-2026-09-25.md",
@@ -31,6 +32,7 @@
     "crates/zroutery-core/Cargo.toml"
   ],
   "notes": [
-    "Account remains optional and is not enabled by the default Tauri dependency."
+    "Account remains optional and is not enabled by the default Tauri dependency.",
+    "Revalidated rather than advanced. DONE here is a claim about this node's three gates and nothing wider: ACCOUNT remains PARTIAL for the unchanged reason that execution is not integrated, and a reader who takes this row as 'accounts work' would be wrong."
   ]
 }

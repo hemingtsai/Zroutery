@@ -26,7 +26,7 @@ failed node. Historical tags are not graph edges.
 | `STAGE-2` | `DONE` | `CORE-P1-REPAIR` |
 | `STAGE-3` | `DONE` | `CORE-P1-REPAIR` |
 | `STAGE-4` | `DONE` | `CORE-P1-REPAIR` |
-| `STAGE-5` | `PARTIAL` | `STAGE-1` |
+| `STAGE-5` | `DONE` | `STAGE-1` |
 | `STAGE-6` | `DONE` | `CORE-P1-REPAIR` |
 | `STAGE-7` | `PARTIAL` | `STAGE-6`, `7A`, `7B`, `7C`, `7D`, `7E-0`, `7E-1` |
 | `STAGE-8` | `BLOCKED` | `STAGE-7`, `7H` |
@@ -140,9 +140,13 @@ stays blocked on `7E-1B`.
   acceptance shortcut.
 - `STAGE-8` depends on both the aggregate learning surface and `7H`, so a
   library test cannot close continual policy learning.
-- `UI` is independent of new backend sidecars. `UI-NEW-TRACKS` is blocked
-  until those lifecycles are real; the current operational UI can remain
-  `DONE` without implying that the new surfaces exist.
+- `UI` is independent of new backend sidecars. `UI-NEW-TRACKS` is no longer
+  blocked on upstream — `ACCOUNT`, `NEWAPI`, `I2`, `I3` and `I4` all pass their
+  gates and its `blocked_by` is empty — but it is `PARTIAL` on its own three
+  gates, because migration and takeover rollback surfaces do not exist, and the
+  one surface that was built has never been driven by a person in a running
+  app. The current operational UI can remain `DONE` without implying that the
+  new surfaces exist.
 
 ## Parallel-track edges
 
@@ -168,8 +172,11 @@ claimed until both ownership and migration inputs are real and conflict-safe.
   dependency. Their scope is recorded in the evidence registry.
 - `TEST-PACKAGING` and `OBSERVABILITY` are both `DONE`, so every recorded
   blocker on `7F` is cleared.
-- `TEST-REAL-E2E` is `BLOCKED` behind the NewAPI contract and external
-  protocol/credential evidence.
+- `TEST-REAL-E2E` is `BLOCKED` behind external protocol and credential
+  evidence. The NewAPI half of that blocker is satisfied: the contract passes
+  its gates. What is missing is a real credential and a real panel, so the
+  adapter's integration is unproven rather than unimplemented, and those are
+  different sentences.
 - `TEST-COMMIT-CONTRACT` is `QUEUED` behind the separate
   `COMMIT-CONTRACT` repair node.
 
