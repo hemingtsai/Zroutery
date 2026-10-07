@@ -815,6 +815,14 @@ pub fn build_headers_for_identity(
             HeaderValue::from_str(&crate::opencode::request_id())
                 .map_err(|_| Error::internal("invalid OpenCode request id"))?,
         );
+        // The Console-issued inference endpoint needs the billing org.
+        if let Some(org_id) = client.org_id.as_deref() {
+            headers.insert(
+                HeaderName::from_static("x-opencode-org-id"),
+                HeaderValue::from_str(org_id)
+                    .map_err(|_| Error::internal("invalid OpenCode org id"))?,
+            );
+        }
     }
 
     // Passthrough last: an allowlisted client header wins over the fabricated
