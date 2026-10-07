@@ -1168,6 +1168,16 @@ impl AppState {
         }
     }
 
+    /// Resolve the OpenCode Console credential (access token + billing org),
+    /// refreshing it if needed. Only meaningful for an `OpenCodeConsole` provider.
+    #[cfg(feature = "opencode")]
+    pub async fn console_credential(
+        &self,
+        provider: &ProviderConfig,
+    ) -> Result<(String, Option<String>)> {
+        crate::opencode::console::resolve(self.secrets.as_ref(), &provider.key_ref).await
+    }
+
     /// Probe every tier member, rank the results, and pin the outcome.
     ///
     /// The runner lives here rather than in [`crate::election`] because it needs the

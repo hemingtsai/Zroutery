@@ -54,6 +54,10 @@ account = ["zroutery-core/account"]
 # it. Still not in `default`: enabling a feature for `zroutery-core` is declared
 # upstream, so this does not touch the `ml` switch or its position.
 newapi = ["zroutery-core/newapi"]
+# `opencode` adds the OpenCode Zen gateway providers: the anonymous free tier
+# and the Console OAuth tier, plus its `/api/config` model discovery. Not in
+# `default`.
+opencode = ["zroutery-core/opencode"]
 # `account-maint` adds the browser-driven check-in surface: an isolated headed
 # browser per account, a pause the user can resume, and the Tauri commands that
 # start, resume, cancel and report one.

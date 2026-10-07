@@ -317,6 +317,14 @@ pub async fn fetch_provider_models(
     desktop: State<'_, Arc<Desktop>>,
     provider: ProviderConfig,
 ) -> Cmd<Vec<DiscoveredModel>> {
+    // The Console tier publishes no `/models` route; its catalog comes from the
+    // Console config endpoint, which needs the stored OAuth token.
+    #[cfg(feature = "opencode")]
+    if provider.kind == zroutery_core::config::ProviderKind::OpenCodeConsole {
+        return zroutery_core::opencode::console::discover(desktop.secrets.as_ref(), &provider)
+            .await
+            .map_err(|e| e.to_string());
+    }
     // Keychain I/O blocks; keep it off the async worker thread.
     let secrets = Arc::clone(&desktop.secrets);
     let key_ref = provider.key_ref.clone();

@@ -1118,6 +1118,14 @@ async fn try_rectify_buffered(
     error: &Error,
     lifecycle: &mut RequestLifecycle,
 ) -> std::result::Result<Option<crate::ir::ChatResponse>, Error> {
+    // Resolve the provider credential once; every retry below reuses it.
+    let mut client = client_for(req, &candidate.provider);
+    let key = match console_key(state, candidate, key.map(str::to_string), &mut client).await {
+        Ok(key) => key,
+        Err(e) => return Err(e),
+    };
+    let key = key.as_deref();
+
     // The reactive vision path: only when the upstream said "no images" and
     // the request still carries them.
     if state.config().vision.enabled
@@ -1127,7 +1135,6 @@ async fn try_rectify_buffered(
         apply_vision_fallback(state, req, "upstream rejected media").await;
         let key_owned = key.map(str::to_string);
         if let Some(body) = reencode(candidate, req) {
-            let client = client_for(req, &candidate.provider);
             let started = Instant::now();
             lifecycle.begin_attempt(candidate, true);
             match state
@@ -1173,7 +1180,6 @@ async fn try_rectify_buffered(
             if !result.applied {
                 break;
             }
-            let client = client_for(req, &candidate.provider);
             tracing::info!(
                 model = candidate.model_id(),
                 provider = candidate.provider.name.as_str(),
@@ -1241,6 +1247,14 @@ async fn try_rectify_stream(
     error: &Error,
     lifecycle: &mut RequestLifecycle,
 ) -> std::result::Result<Option<crate::upstream::EventStream>, Error> {
+    // Resolve the provider credential once; every retry below reuses it.
+    let mut client = client_for(req, &candidate.provider);
+    let key = match console_key(state, candidate, key.map(str::to_string), &mut client).await {
+        Ok(key) => key,
+        Err(e) => return Err(e),
+    };
+    let key = key.as_deref();
+
     // The reactive vision path: only when the upstream said "no images" and
     // the request still carries them.
     if state.config().vision.enabled
@@ -1250,7 +1264,6 @@ async fn try_rectify_stream(
         apply_vision_fallback(state, req, "upstream rejected media").await;
         let key_owned = key.map(str::to_string);
         if let Some(body) = reencode(candidate, req) {
-            let client = client_for(req, &candidate.provider);
             let started = Instant::now();
             lifecycle.begin_attempt(candidate, true);
             match state
@@ -1302,7 +1315,6 @@ async fn try_rectify_stream(
             if !result.applied {
                 break;
             }
-            let client = client_for(req, &candidate.provider);
             tracing::info!(
                 model = candidate.model_id(),
                 provider = candidate.provider.name.as_str(),
@@ -1364,6 +1376,25 @@ fn maybe_filter_stream(
         return crate::opencode::filter_injected_tool_calls(events, declared);
     }
     events
+}
+
+/// Replace a request's key with the resolved OpenCode Console access token and
+/// set the billing org on the identity. A no-op for every other provider, so the
+/// key the secret store produced is used unchanged.
+#[allow(unused_variables, unused_mut)] // used only under the `opencode` feature
+async fn console_key(
+    state: &AppState,
+    candidate: &Candidate,
+    key: Option<String>,
+    client: &mut ClientIdentity,
+) -> Result<Option<String>> {
+    #[cfg(feature = "opencode")]
+    if candidate.provider.kind == crate::config::ProviderKind::OpenCodeConsole {
+        let (token, org) = state.console_credential(&candidate.provider).await?;
+        client.org_id = org;
+        return Ok(Some(token));
+    }
+    Ok(key)
 }
 
 /// Send one buffered request, folding an SSE-only upstream back into a response.
@@ -1501,7 +1532,21 @@ async fn buffered_chat(
         }
 
         lifecycle.begin_attempt(candidate, false);
-        let client = client_for(&req, &candidate.provider);
+        let mut client = client_for(&req, &candidate.provider);
+        let key = match console_key(&state, candidate, key, &mut client).await {
+            Ok(key) => key,
+            Err(e) => {
+                lifecycle.failed_attempt(attempt_start, &e);
+                state.router.record_classified_attempt(
+                    candidate.model_id(),
+                    &candidate.provider.id,
+                    &e.classified(),
+                    lifecycle.routing(),
+                );
+                last_error = e;
+                continue;
+            }
+        };
         match buffered_upstream(&state, candidate, key.as_deref(), &body, &client).await {
             Ok(mut resp) => {
                 // A placeholder we injected only to satisfy the gate must not
@@ -1834,7 +1879,21 @@ async fn stream_chat(
         // has already seen part of the answer. The attempt stays open: its
         // verdict is the stream's terminal state, not the handshake.
         lifecycle.begin_attempt(candidate, false);
-        let client = client_for(&req, &candidate.provider);
+        let mut client = client_for(&req, &candidate.provider);
+        let key = match console_key(&state, candidate, key, &mut client).await {
+            Ok(key) => key,
+            Err(e) => {
+                lifecycle.failed_attempt(attempt_start, &e);
+                state.router.record_classified_attempt(
+                    candidate.model_id(),
+                    &candidate.provider.id,
+                    &e.classified(),
+                    lifecycle.routing(),
+                );
+                last_error = e;
+                continue;
+            }
+        };
         match state
             .upstream
             .stream_with_identity(
