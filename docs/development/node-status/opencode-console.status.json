@@ -2,8 +2,8 @@
   "schema_version": 1,
   "node_id": "OPENCODE-CONSOLE",
   "display_name": "OpenCode Console OAuth provider",
-  "status": "READY",
-  "implementation_state": "Designed, not implemented. A separate, independent provider for OpenCode's authenticated Console tier at https://opencode.ai/inference/openai/v1 - not a prerequisite of the free provider and not depending on it. Credential is device-code OAuth (POST {console}/auth/device/code then /auth/device/token, client_id opencode-cli) yielding an access token, a refresh token and an org id sent back as x-opencode-org-id. The token refresh discipline (single-flight lock, generation guard, rotating credential) follows the existing account/adapters/newapi.rs pattern; token persistence location is an open decision (keychain vs private file). Discovery is GET {server}/api/config -> config.provider.*.models. It shares the same 'opencode' shaping identity as the free provider and reuses the OpenAI Chat Completions egress. Serves main traffic only, like the free provider.",
+  "status": "DONE",
+  "implementation_state": "Implemented. src/opencode/oauth.rs runs the Console device-code flow (start at POST /auth/device/code, poll POST /auth/device/token with grant_type device_code, refresh with refresh_token) and models the tokens (access, refresh, expiry, server, org). src/opencode/console.rs resolves the stored token, refreshing it in memory when it is expired or within 60s of expiry (single-flight per key_ref; the read-only secret store is not written back), and discovers the Console model catalog via GET {server}/api/config, dropping disabled models and mapping the capability/limit/cost fields like the published catalog. The pipeline (buffered, streaming and both rectifier retries) swaps an OpenCodeConsole provider's request key for the resolved access token and attaches the x-opencode-org-id billing header. ProviderKind::OpenCodeConsole carries the OpenAI dialect, the /inference/openai/v1 base and the locked OpenCodeCli shaping profile, and the desktop fetch-models command routes Console providers to the discovery path behind the new `opencode` feature. Verified by unit tests and fake-console integration tests (device-code login, refresh, /api/config discovery).",
   "dependencies": [
     "CLIENT-IDENTITY"
   ],
@@ -17,19 +17,20 @@
     "Default-build compatibility (opt-in feature)"
   ],
   "blocked_by": [],
-  "unblock_condition": "Not blocked; design complete and ready for implementation.",
+  "unblock_condition": "Not blocked; implemented and tested against a fake Console.",
   "evidence": [],
   "source_references": [
+    "crates/zroutery-core/src/opencode/oauth.rs",
+    "crates/zroutery-core/src/opencode/console.rs",
+    "crates/zroutery-core/src/opencode/mod.rs",
     "crates/zroutery-core/src/config.rs",
-    "crates/zroutery-core/src/upstream.rs",
-    "crates/zroutery-core/src/protocol/mod.rs",
     "crates/zroutery-core/src/server/pipeline.rs",
-    "crates/zroutery-core/src/registry.rs",
-    "crates/zroutery-core/src/account/adapters/newapi.rs",
+    "src-tauri/src/commands.rs",
     "docs/development/opencode-zen.md"
   ],
   "notes": [
-    "Independent of OPENCODE-ZEN-FREE: neither is the other's prerequisite.",
-    "Open item: whether the authenticated Console tier also requires the free-tier shape gate; if it does not, side queries could run over this provider unshaped."
+    "Shipped in 409f0c7 (device-code OAuth, console resolver, x-opencode-org-id) and the B2b/B3 work that follows it (pipeline key wiring, /api/config discovery, the src-tauri opencode feature).",
+    "No live smoke: the Console tier needs a real Console login, which the field testing did not obtain; verification is unit + fake-console only.",
+    "Evidence rows for the evidence-registry are still to be added (the registry already has a pre-existing gap: CLIENT-IDENTITY cites E-120, which is undefined)."
   ]
 }

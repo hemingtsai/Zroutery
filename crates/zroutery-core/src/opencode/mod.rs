@@ -317,7 +317,7 @@ pub fn parse_catalog(json: &Value) -> HashMap<String, CatalogModel> {
         .collect()
 }
 
-fn catalog_model(entry: &Value) -> CatalogModel {
+pub(super) fn catalog_model(entry: &Value) -> CatalogModel {
     let limit = entry.get("limit");
     let limit_field = |name: &str| -> Option<u32> {
         limit
@@ -334,9 +334,8 @@ fn catalog_model(entry: &Value) -> CatalogModel {
     };
     let flag = |name: &str| entry.get(name).and_then(Value::as_bool).unwrap_or(false);
     let cost = entry.get("cost");
-    let zero_cost = |name: &str| {
-        cost.and_then(|cost| cost.get(name)).and_then(Value::as_f64) == Some(0.0)
-    };
+    let zero_cost =
+        |name: &str| cost.and_then(|cost| cost.get(name)).and_then(Value::as_f64) == Some(0.0);
 
     CatalogModel {
         context_window: limit_field("context"),
@@ -520,7 +519,12 @@ mod tests {
         let headers =
             crate::upstream::build_headers_for_identity(&provider, Some("public"), &identity)
                 .expect("headers build");
-        let get = |name: &str| headers.get(name).and_then(|value| value.to_str().ok()).unwrap_or("");
+        let get = |name: &str| {
+            headers
+                .get(name)
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or("")
+        };
         assert!(
             get("user-agent").starts_with("opencode/"),
             "ua={}",
@@ -541,7 +545,10 @@ mod tests {
         let mut body = json!({"model": "m", "messages": [], "stream": false, "tools": []});
         shape_body(&mut body, true);
         assert_eq!(body["stream"].as_bool(), Some(true));
-        assert_eq!(body["stream_options"]["include_usage"].as_bool(), Some(true));
+        assert_eq!(
+            body["stream_options"]["include_usage"].as_bool(),
+            Some(true)
+        );
     }
 
     #[test]
@@ -592,7 +599,7 @@ mod tests {
 
     #[test]
     fn encode_for_mode_shapes_an_opencode_provider() {
-        use crate::config::{ProviderConfig, ProviderClientProfile, ProviderKind};
+        use crate::config::{ProviderClientProfile, ProviderConfig, ProviderKind};
         use crate::ir::{ChatRequest, Message};
         let mut provider = ProviderConfig::new("oc", "OpenCode", ProviderKind::OpenAICompatible);
         provider.client_profile = ProviderClientProfile::OpenCodeCli;
@@ -726,9 +733,8 @@ mod tests {
                 partial_json: "{}".into(),
             },
         ];
-        let stream: crate::upstream::EventStream = Box::pin(futures_util::stream::iter(
-            events.into_iter().map(Ok),
-        ));
+        let stream: crate::upstream::EventStream =
+            Box::pin(futures_util::stream::iter(events.into_iter().map(Ok)));
         let filtered = filter_injected_tool_calls(stream, std::collections::HashSet::new());
         let out: Vec<StreamEvent> = filtered.map(|item| item.unwrap()).collect().await;
         assert!(
@@ -802,8 +808,11 @@ mod gateway_tests {
             let _ = axum::serve(listener, app).await;
         });
 
-        let mut provider =
-            ProviderConfig::new("opencode", "OpenCode Zen Free", ProviderKind::OpenCodeZenFree);
+        let mut provider = ProviderConfig::new(
+            "opencode",
+            "OpenCode Zen Free",
+            ProviderKind::OpenCodeZenFree,
+        );
         provider.base_url = format!("http://{addr}");
         assert_eq!(provider.client_profile, ProviderClientProfile::OpenCodeCli);
 
@@ -811,8 +820,14 @@ mod gateway_tests {
         req.messages.push(Message::user_text("hi"));
 
         // The encoded, shaped body.
-        let body = encode_for_mode(&provider, &req, "space-bunny-free", None, EncodeMode::Normal)
-            .expect("encodes");
+        let body = encode_for_mode(
+            &provider,
+            &req,
+            "space-bunny-free",
+            None,
+            EncodeMode::Normal,
+        )
+        .expect("encodes");
         assert_eq!(body["stream"].as_bool(), Some(true));
         let names: Vec<&str> = body["tools"]
             .as_array()
@@ -837,7 +852,11 @@ mod gateway_tests {
                 .and_then(|value| value.to_str().ok())
                 .unwrap_or("")
         };
-        assert!(h("user-agent").starts_with("opencode/"), "ua={}", h("user-agent"));
+        assert!(
+            h("user-agent").starts_with("opencode/"),
+            "ua={}",
+            h("user-agent")
+        );
         assert_eq!(h("x-opencode-client"), "cli");
         assert_eq!(h("x-opencode-project"), "global");
         assert_eq!(h("x-opencode-session"), "ses_0123456789abcdefghijklmnop");
@@ -864,9 +883,9 @@ mod gateway_tests {
         assert_eq!(resp.text(), "pong");
         assert_eq!(resp.usage.output_tokens, 3);
         assert!(
-            resp.content
-                .iter()
-                .any(|block| matches!(block, ContentBlock::ToolUse { name, .. } if name == "my_tool")),
+            resp.content.iter().any(
+                |block| matches!(block, ContentBlock::ToolUse { name, .. } if name == "my_tool")
+            ),
             "the model's own tool call survives the fold"
         );
 
@@ -881,7 +900,10 @@ mod gateway_tests {
             seen.get("x-opencode-session").unwrap().to_str().unwrap(),
             "ses_0123456789abcdefghijklmnop"
         );
-        assert_eq!(seen.get("x-opencode-client").unwrap().to_str().unwrap(), "cli");
+        assert_eq!(
+            seen.get("x-opencode-client").unwrap().to_str().unwrap(),
+            "cli"
+        );
     }
 
     /// Live smoke against the real gateway. Ignored: it needs the network and is
@@ -889,13 +911,22 @@ mod gateway_tests {
     #[tokio::test]
     #[ignore = "live: hits https://opencode.ai/zen and needs network"]
     async fn live_anonymous_smoke() {
-        let provider =
-            ProviderConfig::new("opencode", "OpenCode Zen Free", ProviderKind::OpenCodeZenFree);
+        let provider = ProviderConfig::new(
+            "opencode",
+            "OpenCode Zen Free",
+            ProviderKind::OpenCodeZenFree,
+        );
         let mut req = ChatRequest::new("space-bunny-free", provider.kind.dialect());
         req.messages
             .push(Message::user_text("Reply with the single word: pong"));
-        let body = encode_for_mode(&provider, &req, "space-bunny-free", None, EncodeMode::Normal)
-            .expect("encodes");
+        let body = encode_for_mode(
+            &provider,
+            &req,
+            "space-bunny-free",
+            None,
+            EncodeMode::Normal,
+        )
+        .expect("encodes");
         let identity = ClientIdentity {
             profile: ProviderClientProfile::OpenCodeCli,
             passthrough: Vec::new(),
