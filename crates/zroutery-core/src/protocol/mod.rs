@@ -526,7 +526,10 @@ impl StreamCollector {
                     },
                 );
             }
-            StreamEvent::ToolUseDelta { index, partial_json } => {
+            StreamEvent::ToolUseDelta {
+                index,
+                partial_json,
+            } => {
                 if let Some(PartialBlock::ToolUse { json, .. }) = self.blocks.get_mut(index) {
                     json.push_str(partial_json);
                 }
@@ -549,7 +552,11 @@ impl StreamCollector {
         ChatResponse {
             id: self.id,
             model: self.model,
-            content: self.blocks.into_values().map(PartialBlock::into_block).collect(),
+            content: self
+                .blocks
+                .into_values()
+                .map(PartialBlock::into_block)
+                .collect(),
             stop_reason: self.stop_reason.unwrap_or(StopReason::Unknown),
             stop_sequence: self.stop_sequence,
             usage: self.usage,
