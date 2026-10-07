@@ -15,6 +15,9 @@
 //!
 //! See `docs/development/opencode-zen.md` for the field-verified gate.
 
+pub mod console;
+pub mod oauth;
+
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Mutex;
@@ -512,6 +515,7 @@ mod tests {
             profile: ProviderClientProfile::OpenCodeCli,
             passthrough: Vec::new(),
             session: Some("ses_0123456789abcdefghijklmnop".into()),
+            org_id: None,
         };
         let headers =
             crate::upstream::build_headers_for_identity(&provider, Some("public"), &identity)
@@ -823,6 +827,7 @@ mod gateway_tests {
             profile: ProviderClientProfile::OpenCodeCli,
             passthrough: Vec::new(),
             session: Some("ses_0123456789abcdefghijklmnop".into()),
+            org_id: Some("wrk_test".into()),
         };
         let headers = build_headers_for_identity(&provider, Some("public"), &identity)
             .expect("headers build");
@@ -837,6 +842,7 @@ mod gateway_tests {
         assert_eq!(h("x-opencode-project"), "global");
         assert_eq!(h("x-opencode-session"), "ses_0123456789abcdefghijklmnop");
         assert!(h("x-opencode-request").starts_with("msg_"));
+        assert_eq!(h("x-opencode-org-id"), "wrk_test");
 
         // A forced-stream reply, folded back for a non-streaming client.
         let upstream = Upstream::new(true, 10);
@@ -894,6 +900,7 @@ mod gateway_tests {
             profile: ProviderClientProfile::OpenCodeCli,
             passthrough: Vec::new(),
             session: Some(session_id()),
+            org_id: None,
         };
         let upstream = Upstream::new(false, 15);
         let mut stream = upstream

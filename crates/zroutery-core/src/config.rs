@@ -430,6 +430,9 @@ pub struct ClientIdentity {
     /// the resolved profile is [`ProviderClientProfile::OpenCodeCli`]; `None`
     /// otherwise, and for auxiliary calls that carry no conversation.
     pub session: Option<String>,
+    /// The OpenCode Console billing org, sent back as `x-opencode-org-id`. `Some`
+    /// only for an `OPENCODE-CONSOLE` provider with a resolved token.
+    pub org_id: Option<String>,
 }
 
 /// Resolve the client profile for one request and collect its forwarding set.
@@ -481,6 +484,7 @@ pub fn resolve_client_identity(
         profile,
         passthrough,
         session: None,
+        org_id: None,
     }
 }
 

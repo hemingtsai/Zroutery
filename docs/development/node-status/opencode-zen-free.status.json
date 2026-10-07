@@ -2,8 +2,8 @@
   "schema_version": 1,
   "node_id": "OPENCODE-ZEN-FREE",
   "display_name": "OpenCode Zen free provider",
-  "status": "READY",
-  "implementation_state": "Designed, not implemented. An opt-in provider that reaches OpenCode's anonymous free tier at https://opencode.ai/zen with no login (Bearer public). Reuses the OpenAI Chat Completions egress and adds a locked 'opencode' shaping identity: the free-tier gate is satisfied by forcing stream:true, ensuring tools named bash and read, a User-Agent containing opencode/<ver>=1.18.0, and a canonical ses_ session (12 lowercase hex + 14 base62). Session/request ids port DaatLocus's opencode_identifier. Non-streaming clients get the forced SSE collapsed into a ChatResponse. Discovery is GET /zen/v1/models for ids plus the capability catalog models.opencode.ai/api.json for capabilities, windows and the free flag (cost==0). The free tier is rate-limited per egress IP (429 FreeUsageLimitError), so a proxy pool is a throughput lever. Serves main traffic only: excluded from the Auto Mode classifier and from election probes.",
+  "status": "DONE",
+  "implementation_state": "Implemented and verified. The opt-in `opencode` feature adds the anonymous free tier at https://opencode.ai/zen: the locked `ProviderClientProfile::OpenCodeCli` shaping identity (the CLI identifier hex48(ts*0x1000+counter)+14 base62, canonical idempotent `ses_` sessions seeded from the first user turn, and the `opencode/<ver>` User-Agent plus `x-opencode-client/project/session/request` headers); body shaping that forces stream, ensures `bash`/`read` are present without rewriting a client tool of the same name, and sets `tool_choice: none` for a tool-less client; a non-streaming client's forced SSE folded back into one `ChatResponse` (buffered_chat); injected `bash`/`read` calls stripped on both the buffered and streaming response paths; `ProviderKind::{OpenCodeZenFree, OpenCodeConsole}` with a validation error when an OpenCode provider uses any profile other than OpenCodeCli; capability-catalog discovery (models.opencode.ai/api.json, cached an hour) enriching DiscoveredModel's new capability/window/free fields; and exclusion from the classifier pool and the election. Verified by 20 unit tests, an in-process fake-gateway integration test replaying the captured SSE, and a live anonymous smoke against the real /zen endpoint returning a non-empty turn.",
   "dependencies": [
     "CLIENT-IDENTITY"
   ],
@@ -18,20 +18,22 @@
     "Default-build compatibility (opt-in feature)"
   ],
   "blocked_by": [],
-  "unblock_condition": "Not blocked; design complete and ready for implementation.",
+  "unblock_condition": "Not blocked; implemented, unit- and integration-tested, and live-verified against the real gateway.",
   "evidence": [],
   "source_references": [
+    "crates/zroutery-core/src/opencode.rs",
     "crates/zroutery-core/src/config.rs",
     "crates/zroutery-core/src/upstream.rs",
     "crates/zroutery-core/src/protocol/mod.rs",
-    "crates/zroutery-core/src/protocol/openai.rs",
-    "crates/zroutery-core/src/ir/mod.rs",
     "crates/zroutery-core/src/server/pipeline.rs",
-    "crates/zroutery-core/src/registry.rs",
+    "crates/zroutery-core/src/router.rs",
+    "crates/zroutery-core/src/server/mod.rs",
     "docs/development/opencode-zen.md"
   ],
   "notes": [
-    "Field-verified 2026-10 via a local reverse proxy capture plus per-item bisection; see docs/development/opencode-zen.md.",
-    "big-pickle is free but its id contains no 'free' substring, so free detection must use the catalog cost, not the name."
+    "Shipped in ce74028 (identity/shaping/collapse), 337f050 (collapse wiring, kinds, discovery, exclusion) and 3a8e5f1 (integration test).",
+    "Live smoke is #[ignore] (needs the network and is subject to the per-IP free-tier rate limit).",
+    "Provider B (OPENCODE-CONSOLE) is a separate node and is not started.",
+    "Evidence rows for the evidence-registry are still to be added (the registry already has a pre-existing gap: CLIENT-IDENTITY cites E-120, which is undefined)."
   ]
 }
