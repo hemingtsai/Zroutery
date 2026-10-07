@@ -588,8 +588,10 @@ pub fn to_zroutery(
     provider.base_url = draft.base_url.trim_end_matches('/').to_string();
     // Claude Code relays expect the client fingerprint; that is Zroutery's
     // default for Anthropic providers, and an import that silently disabled
-    // it would break strict gateways.
-    provider.impersonate_claude_code = true;
+    // it would break strict gateways. Stated as the client profile rather than
+    // through the deprecated `impersonate_claude_code` switch, which is what the
+    // serving path reads now.
+    provider.client_profile = zroutery_core::config::ProviderClientProfile::ClaudeCode;
     // CC Switch's API_TIMEOUT_MS is milliseconds against our seconds. Values
     // outside the accepted range never reach here through the reader; a caller
     // that supplies one directly is still held to the same bounds.
@@ -951,7 +953,10 @@ mod tests {
         assert_eq!(provider.id, "stepfun");
         assert_eq!(provider.base_url, "https://api.stepfun.com/step_plan");
         assert_eq!(provider.kind, ProviderKind::Anthropic);
-        assert!(provider.impersonate_claude_code);
+        assert_eq!(
+            provider.client_profile,
+            zroutery_core::config::ProviderClientProfile::ClaudeCode
+        );
         // 3,000,000 ms is 3000 s: within the clamp, carried over as-is.
         assert_eq!(provider.timeout_secs, 3000);
         // Beyond the hour it is clamped, not carried literally.
