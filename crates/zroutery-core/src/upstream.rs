@@ -16,7 +16,7 @@ use reqwest::header::{HeaderMap, HeaderName, HeaderValue, ACCEPT, AUTHORIZATION,
 use serde_json::{json, Value};
 
 use crate::billing::{Balance, BalanceProbe, Pricing};
-use crate::config::{ProviderConfig, ProviderKind};
+use crate::config::{ProviderClientProfile, ProviderConfig, ProviderKind};
 use crate::error::{Error, Result};
 use crate::ir::{ChatRequest, ChatResponse, StreamEvent};
 use crate::protocol::{self, ProviderQuirks, SseDecoder, StreamParser};
@@ -621,7 +621,15 @@ pub fn build_headers(provider: &ProviderConfig, api_key: Option<&str>) -> Result
     // CLI does not send them, and header/version inconsistencies are exactly
     // what strict gateways look for. Gateways needing extras can use
     // provider.extra_headers.
-    if provider.impersonate_claude_code {
+    //
+    // Keyed on `configured_client_profile` rather than on the deprecated
+    // `impersonate_claude_code`, which is what makes `client_profile` reach the
+    // serving path at all. Before this the field existed on the configuration and
+    // was honoured only by its own accessor, so a provider configured with
+    // `client_profile: claude_code` and no legacy boolean sent a native
+    // fingerprint. `configured_client_profile` folds the boolean in, so a
+    // configuration written before the migration still behaves exactly as it did.
+    if provider.configured_client_profile() == ProviderClientProfile::ClaudeCode {
         tracing::debug!(
             provider = %provider.name,
             "impersonation enabled – injecting Claude Code fingerprint headers"
@@ -729,7 +737,13 @@ pub fn encode_for_mode(
 
     // Claude Code impersonation: inject identity line as the first system block
     // to pass Anthropic subscription/OAuth plan checks.
-    if provider.impersonate_claude_code {
+    //
+    // The same profile the headers key on, read the same way, so the fingerprint
+    // and the identity line cannot disagree about whether this request is a Claude
+    // Code request. A provider that got the headers but not the identity line would
+    // be the worst of the two: it claims a client in the header and then sends a
+    // body the plan check does not recognise.
+    if provider.configured_client_profile() == ProviderClientProfile::ClaudeCode {
         prepend_claude_code_system_prompt(&mut body);
     }
 
@@ -849,7 +863,7 @@ mod tests {
     #[test]
     fn anthropic_headers_use_x_api_key() {
         let mut p = provider(ProviderKind::Anthropic);
-        p.impersonate_claude_code = false; // Disable impersonation for this test
+        p.client_profile = ProviderClientProfile::Native; // Disable impersonation for this test
         p.extra_headers
             .insert("anthropic-beta".into(), "output-128k".into());
         let h = build_headers(&p, Some("sk-ant-1")).unwrap();
@@ -865,7 +879,7 @@ mod tests {
     #[test]
     fn bearer_auth_sends_both_headers_for_anthropic_relays() {
         let mut p = provider(ProviderKind::Anthropic);
-        p.impersonate_claude_code = false;
+        p.client_profile = ProviderClientProfile::Native;
         p.bearer_auth = true;
         let h = build_headers(&p, Some("sk-relay")).unwrap();
         // Both headers: the relay reads Authorization, the standard API still
@@ -914,10 +928,64 @@ mod tests {
         assert!(build_headers(&p, None).is_err());
     }
 
+    /// A provider built by `ProviderConfig::new` sends the Claude Code
+    /// fingerprint, and did not before the deprecated switch was migrated.
+    ///
+    /// This is a behaviour change, not a refactor, and it is asserted here so it
+    /// cannot be reverted by accident. `ProviderConfig::new` has defaulted an
+    /// Anthropic provider to `ProviderClientProfile::ClaudeCode` since the profile
+    /// field landed, with a comment saying so; the header path keyed on
+    /// `impersonate_claude_code` instead, so the default was inert and every
+    /// freshly created Anthropic provider sent a native fingerprint. Migrating the
+    /// call site is what makes the documented default real.
+    ///
+    /// What must NOT change with it is asserted below rather than assumed, because
+    /// a migration that turned "native by default" into "Claude Code everywhere"
+    /// would be a different and much worse change than the one intended.
     #[test]
-    fn impersonate_claude_code_injects_clean_fingerprint() {
+    fn a_new_anthropic_provider_sends_the_claude_code_fingerprint() {
+        let p = provider(ProviderKind::Anthropic);
+        let h = build_headers(&p, Some("sk-ant-1")).unwrap();
+        assert_eq!(
+            h.get("user-agent").unwrap(),
+            CLAUDE_CODE_USER_AGENT,
+            "the documented default profile is not reaching the header path"
+        );
+        assert_eq!(h.get("x-app").unwrap(), "cli");
+    }
+
+    /// The opt-out still works, and still means native.
+    #[test]
+    fn an_explicit_native_profile_sends_no_fingerprint() {
         let mut p = provider(ProviderKind::Anthropic);
-        p.impersonate_claude_code = true;
+        p.client_profile = ProviderClientProfile::Native;
+        let h = build_headers(&p, Some("sk-ant-1")).unwrap();
+        assert!(h.get("x-app").is_none(), "Native must inject nothing");
+        assert_ne!(
+            h.get("user-agent").map(|v| v.as_bytes()),
+            Some(CLAUDE_CODE_USER_AGENT.as_bytes()),
+            "Native must not send the Claude Code user agent"
+        );
+    }
+
+    /// A provider that never opted in keeps sending no fingerprint.
+    ///
+    /// A document written before the profile field existed deserialises
+    /// `client_profile` as its default, `Auto`, which is not `ClaudeCode`. That is
+    /// the case this assertion protects: an existing installation must not start
+    /// impersonating because its configuration was merely re-read.
+    #[test]
+    fn an_auto_profile_sends_no_fingerprint() {
+        let mut p = provider(ProviderKind::Anthropic);
+        p.client_profile = ProviderClientProfile::Auto;
+        let h = build_headers(&p, Some("sk-ant-1")).unwrap();
+        assert!(h.get("x-app").is_none(), "Auto must inject nothing here");
+    }
+
+    #[test]
+    fn client_profile_claude_code_injects_clean_fingerprint() {
+        let mut p = provider(ProviderKind::Anthropic);
+        p.client_profile = ProviderClientProfile::ClaudeCode;
         let h = build_headers(&p, Some("sk-ant-1")).unwrap();
 
         // User-Agent must be claude-cli style.
@@ -945,9 +1013,9 @@ mod tests {
     }
 
     #[test]
-    fn impersonate_claude_code_merges_existing_anthropic_beta() {
+    fn client_profile_claude_code_merges_existing_anthropic_beta() {
         let mut p = provider(ProviderKind::Anthropic);
-        p.impersonate_claude_code = true;
+        p.client_profile = ProviderClientProfile::ClaudeCode;
         p.extra_headers
             .insert("anthropic-beta".into(), "output-128k".into());
         let h = build_headers(&p, Some("sk-ant-1")).unwrap();
@@ -991,7 +1059,7 @@ mod tests {
         let mut req = ChatRequest::new("m", Dialect::Anthropic);
         req.messages.push(Message::user_text("hi"));
         let mut p = provider(ProviderKind::Anthropic);
-        p.impersonate_claude_code = true;
+        p.client_profile = ProviderClientProfile::ClaudeCode;
         let body = encode_for(&p, &req, "claude-sonnet-4-5", None).unwrap();
         let system = body["system"].as_array().unwrap();
         assert_eq!(system[0]["text"], CLAUDE_CODE_SYSTEM_IDENTITY);
