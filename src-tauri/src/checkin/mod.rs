@@ -159,18 +159,48 @@ impl CheckinRuntime {
     /// logged rather than propagated: the caller asked for the session to end, and
     /// refusing to end it because the window would not close would leave the user
     /// with no way to proceed.
-    pub async fn finish(&self, key: &SessionKey) {
-        let session = {
-            let mut guard = self.registry.lock().await;
-            guard.remove(key)
+    pub async fn finish(&self, key: &SessionKey) -> FinishOutcome {
+        // **Lock order matters here and this function got it wrong first.** The
+        // registry lock is taken only to resolve the session; it is released before
+        // the session lock is awaited. Holding the registry lock across a session
+        // lock inverts the order every other method uses — `advance` and `attach`
+        // take the session lock while holding nothing — and the result is a
+        // deadlock that hangs the runtime rather than failing a test loudly. That is
+        // exactly the hazard this module's own header warns about, reached from
+        // inside it.
+        let Some(session) = self.session(key).await else {
+            return FinishOutcome::AlreadyGone;
         };
-        let Some(session) = session else { return };
+
+        // A browser is out with a driver. Removing the key here would free the
+        // account while a Chrome was still running and still holding the profile
+        // directory, so the request is recorded and the driver performs it instead.
+        // This is the fix for the corrupted-profile report: the key is never
+        // released while something owns it.
+        if session.lock().await.driving {
+            session.lock().await.cancel_requested = true;
+            return FinishOutcome::DeferredToDriver;
+        }
+
+        // Removed only if it is still the *same* session, so a `begin` that raced
+        // this call is not clobbered by removing somebody else's entry.
+        let removed = {
+            let mut guard = self.registry.lock().await;
+            match guard.get(key) {
+                Some(current) if Arc::ptr_eq(current, &session) => guard.remove(key).is_some(),
+                _ => false,
+            }
+        };
+        if !removed {
+            return FinishOutcome::AlreadyGone;
+        }
         let browser = session.lock().await.browser.take();
         if let Some(browser) = browser {
             if let Err(e) = browser.shutdown().await {
                 tracing::debug!(?e, %key.provider_id, %key.account_id, "browser close failed");
             }
         }
+        FinishOutcome::ClosedNow
     }
 
     /// Attach a live browser to a session.
@@ -195,7 +225,50 @@ impl CheckinRuntime {
     pub async fn take_browser(&self, key: &SessionKey) -> Option<cdp::BrowserSession> {
         let session = self.session(key).await?;
         let mut guard = session.lock().await;
+        // Refuses a second driver rather than handing the same browser to two tasks,
+        // which would be two `drive` loops clicking the same control. Worth saying
+        // plainly that `Option::take` below would already return `None` for the
+        // second caller, so this check is not what prevents that — it is what lets
+        // `finish` tell "the browser is out with a task" from "there is no browser",
+        // which is the defect this flag exists for.
+        if guard.driving {
+            return None;
+        }
+        guard.driving = true;
         guard.browser.take()
+    }
+
+    /// Whether a task is currently driving this account's browser.
+    ///
+    /// Distinct from [`CheckinRuntime::is_browser_held`], and the distinction is the
+    /// whole point: for most of a check-in the browser is *not* held by the session,
+    /// it is out with a task, and a caller asking "is anything running for this
+    /// account" must hear about both. Answering only from the session would report
+    /// an account as idle while a Chrome is on the user's desktop driving it.
+    pub async fn is_being_driven(&self, key: &SessionKey) -> bool {
+        let Some(session) = self.session(key).await else {
+            return false;
+        };
+        let driving = session.lock().await.driving;
+        driving
+    }
+
+    /// The browser was put down; give the key back.
+    ///
+    /// Returns whether a cancel arrived while the browser was out, so the caller
+    /// closes it rather than handing it back. Handing it back after a cancel would
+    /// leave a window on the user's desktop for an attempt they explicitly stopped.
+    pub async fn end_driving(&self, key: &SessionKey) -> bool {
+        let Some(session) = self.session(key).await else {
+            // The session is gone — shutdown drained it. The caller still owns the
+            // browser, so it must close it rather than look for somewhere to put it.
+            return true;
+        };
+        let mut guard = session.lock().await;
+        guard.driving = false;
+        let cancelled = guard.cancel_requested;
+        guard.cancel_requested = false;
+        cancelled
     }
 
     /// Every account with a live or paused session.
@@ -235,6 +308,25 @@ struct LiveSession {
     state: State,
     /// `None` before the browser is attached, and after it has been closed.
     browser: Option<cdp::BrowserSession>,
+    /// A task has taken the browser out of this session and is driving it.
+    ///
+    /// This is the field whose absence caused a corrupted profile. For most of a
+    /// check-in the browser lives *outside* the registry, in the `drive` task,
+    /// because that is the only thing that can call it. So `browser: None` used to
+    /// mean two entirely different things — "nothing has been opened" and "a live
+    /// browser is out there that this session cannot see" — and `finish` acted on
+    /// both the same way: it removed the key without closing anything. The key then
+    /// became free while a Chrome was still running and still holding the profile
+    /// directory, so the next attempt passed `begin`, launched a second
+    /// `chrome.exe` onto a profile already in use, and Chrome reported the profile
+    /// as damaged.
+    ///
+    /// With the flag, a session whose browser is being driven cannot be finished
+    /// underneath the driver: a cancel arriving mid-drive is recorded and honoured
+    /// by the driver when it puts the browser down.
+    driving: bool,
+    /// A cancel arrived while the browser was being driven.
+    cancel_requested: bool,
 }
 
 impl LiveSession {
@@ -242,8 +334,27 @@ impl LiveSession {
         Self {
             state: State::Pending,
             browser: None,
+            driving: false,
+            cancel_requested: false,
         }
     }
+}
+
+/// What a [`CheckinRuntime::finish`] actually did.
+///
+/// Returned rather than unit so a caller cannot assume it closed something. The
+/// case that matters is [`FinishOutcome::DeferredToDriver`]: a cancel that arrives
+/// while a browser is being driven has not closed a browser, and a command that
+/// reports "cancelled" without saying so leaves the operator with a window they
+/// believe they dismissed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FinishOutcome {
+    /// The browser was closed here and the key is free.
+    ClosedNow,
+    /// A driver owns the browser; it was told to close it and will.
+    DeferredToDriver,
+    /// There was no session for this account.
+    AlreadyGone,
 }
 
 /// Why a check-in could not be started.
@@ -302,6 +413,18 @@ mod tests {
 
     fn runtime() -> CheckinRuntime {
         CheckinRuntime::new(std::env::temp_dir().join("zroutery-checkin-registry-test"))
+    }
+
+    /// Put a session into the driving state without a browser.
+    ///
+    /// A test seam, and honestly labelled as one: in production `driving` is set by
+    /// [`CheckinRuntime::take_browser`] handing a real browser to a task. The promise
+    /// under test is the registry's bookkeeping, not Chrome, so these tests exercise
+    /// the bookkeeping directly rather than opening windows to reach it.
+    async fn mark_driving(runtime: &CheckinRuntime, key: &SessionKey) {
+        if let Some(session) = runtime.session(key).await {
+            session.lock().await.driving = true;
+        }
     }
 
     fn key() -> SessionKey {
@@ -526,5 +649,94 @@ mod tests {
             AttachError::AlreadyAttached.to_string(),
             "this check-in already has a browser"
         );
+    }
+    #[tokio::test]
+    async fn a_key_with_its_browser_being_driven_is_not_finished_underneath_the_driver() {
+        // **This is the corrupted-profile bug, in the shape it took.** For most of
+        // a check-in the browser lives in the `drive` task, not in the registry, so
+        // `finish` used to remove the key while a Chrome was still running and still
+        // holding the profile directory. The account then looked startable, the next
+        // attempt passed `begin`, and a second `chrome.exe` landed on a profile
+        // already in use — which Chrome answers by damaging it.
+        //
+        // No browser is needed to prove it: the registry's promise is that a key
+        // whose browser is out there is never handed back.
+        let runtime = runtime();
+        runtime.begin(key()).await.expect("begins");
+
+        // Stand in for the driver: the browser has been taken out of the session.
+        mark_driving(&runtime, &key()).await;
+
+        let outcome = runtime.finish(&key()).await;
+        assert_eq!(
+            outcome,
+            FinishOutcome::DeferredToDriver,
+            "finishing a session whose browser is being driven must not free the key"
+        );
+        assert!(
+            runtime.phase(&key()).await.is_some(),
+            "the key must still be held, or the next attempt opens a second browser \
+             on the same profile"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_cancel_that_arrives_mid_drive_is_honoured_when_the_browser_is_put_down() {
+        let runtime = runtime();
+        runtime.begin(key()).await.expect("begins");
+        mark_driving(&runtime, &key()).await;
+
+        assert_eq!(
+            runtime.finish(&key()).await,
+            FinishOutcome::DeferredToDriver
+        );
+        // The driver puts the browser down and learns the cancel was asked for, so
+        // it closes the window instead of handing it back for the user to dismiss.
+        assert!(
+            runtime.end_driving(&key()).await,
+            "a cancel recorded during the drive must be reported to the driver"
+        );
+        // And it is reported once, not sticky: a later pause must not inherit it.
+        assert!(
+            !runtime.end_driving(&key()).await,
+            "the cancel must not be reported twice"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_session_nobody_is_driving_is_finished_immediately() {
+        // The ordinary path must not start deferring: a cancel on a paused attempt
+        // has its browser attached and must close it there and then.
+        let runtime = runtime();
+        runtime.begin(key()).await.expect("begins");
+        assert_eq!(runtime.finish(&key()).await, FinishOutcome::ClosedNow);
+        assert_eq!(
+            runtime.finish(&key()).await,
+            FinishOutcome::AlreadyGone,
+            "finishing nothing is reported, not assumed"
+        );
+        assert!(runtime.phase(&key()).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn driving_is_visible_while_a_task_owns_the_browser() {
+        // The question this exists to answer: is anything running for this account?
+        // While the browser is out with a task the session holds nothing, so a caller
+        // asking only the session would report the account as idle with a Chrome on
+        // the user's desktop.
+        let runtime = runtime();
+        runtime.begin(key()).await.expect("begins");
+        assert!(!runtime.is_being_driven(&key()).await);
+        mark_driving(&runtime, &key()).await;
+        assert!(
+            runtime.is_being_driven(&key()).await,
+            "a task holding the browser must be visible"
+        );
+        assert!(
+            !runtime.is_browser_held(&key()).await,
+            "and it must not also claim the session holds it"
+        );
+        assert!(!runtime.end_driving(&key()).await);
+        assert!(!runtime.is_being_driven(&key()).await);
     }
 }

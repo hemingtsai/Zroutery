@@ -24,7 +24,8 @@
     "E-016",
     "E-131",
     "E-132",
-    "E-134"
+    "E-134",
+    "E-135"
   ],
   "source_references": [
     "docs/development/repository-audit-2026-09-25.md",
@@ -40,6 +41,6 @@
   "notes": [
     "No placeholder control is treated as a product lifecycle.",
     "No longer blocked on upstream: ACCOUNT, NEWAPI, I2, I3, and I4 all pass their gates and their blocked_by sets are empty. The status is PARTIAL because its own three gates are unmet, not because it is waiting on another node.",
-    "The check-in row is the one surface here that has been driven by a real browser, and its check-in control has been shown to receive a trusted event. It has still never been exercised by a person in a running app, and the scheduler has never run against a real relay console or had an interval elapse against a live panel, so everything asserted about it is asserted against fixtures."
+    "The check-in row is the one surface here that has been driven by a real browser, and its check-in control has been shown to receive a trusted event. It has now been exercised by a person in the running application, and doing so found three browser-lifecycle defects that no unit test and no mock could have: a finished attempt never closed its browser, a cancel arriving mid-attempt freed the account while a browser was still holding its profile directory, and shutdown reported success while the browser survived. Two Chrome processes on one user-data-dir is what Chrome answers by damaging the profile, which is the dialog the operator saw. All three are fixed with tests that fail by name when the fix is inverted. What is still unexercised: the scheduler against a real relay console, an interval elapsing against a live panel, and any WAF challenge, so everything asserted about those is asserted against fixtures."
   ]
 }

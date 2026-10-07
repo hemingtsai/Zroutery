@@ -286,12 +286,24 @@ pub async fn cancel_checkin(
     // guarded on being live: cancelling something already finished is a no-op the
     // panel can render as "done", not an error.
     let _ = desktop.checkin.advance(&key, Event::Cancelled).await;
-    desktop.checkin.finish(&key).await;
+    // Whether a browser was closed *here* is asked rather than assumed. A cancel
+    // that lands while the `drive` task has the browser out cannot close it — that
+    // task owns it — so it is recorded and closed when the driver puts it down.
+    // Reporting "cancelled" either way would be the same class of lie as a panel
+    // claiming a reward nobody observed: the operator would be told the window is
+    // gone while it is still on their desktop.
+    let outcome = desktop.checkin.finish(&key).await;
 
     let mut view = desktop
         .checkin_view(&provider_id, &account_id)
         .await
         .ok_or_else(|| format!("no account {account_id} on provider {provider_id}"))?;
+    if matches!(outcome, crate::checkin::FinishOutcome::DeferredToDriver) {
+        view.browser_held = true;
+        view.awaiting_user = false;
+        view.phase = "cancelling".to_string();
+        return Ok(view);
+    }
     view.browser_held = false;
     view.awaiting_user = false;
     if view.phase == "running" || view.phase == "waiting_for_user" {
@@ -504,17 +516,56 @@ async fn drive(
         ("running", None)
     };
 
-    // The browser goes back either way. A pause leaves it open; the caller closes
-    // it when the attempt is cancelled or observed to have finished.
-    let _ = runtime.attach(&key, browser).await;
+    // **Only a pause keeps the browser.** This used to put it back "either way",
+    // on the understanding that the caller would close it once the attempt was
+    // cancelled or observed to have finished. There is no such caller: the only
+    // paths that closed a browser were an explicit cancel and application
+    // shutdown. So every succeeded, failed or already-completed check-in left a
+    // Chrome running, and that Chrome holds a lock on this account's profile
+    // directory. The next attempt then launched a second `chrome.exe` against a
+    // profile already in use, which Chrome answers by handing the command line to
+    // the running instance — a new window in the old browser — or by damaging the
+    // profile, whichever the timing produced. Both were reported as a corrupted
+    // profile or as windows that would not reuse, and neither named the cause.
+    //
+    // So the disposition is decided here, where the outcome is known, rather than
+    // left to a caller that does not exist.
+    // Give the key back before deciding where the browser goes, so a cancel that
+    // arrived while it was being driven is visible here rather than lost.
+    let cancelled = runtime.end_driving(&key).await;
+
+    let browser_held = match browser_disposition(paused && !cancelled) {
+        BrowserDisposition::KeepForUser => {
+            let _ = runtime.attach(&key, browser).await;
+            true
+        }
+        BrowserDisposition::Close => {
+            if let Err(e) = browser.shutdown().await {
+                // Surfaced rather than swallowed: a browser that will not close is
+                // what corrupts the next attempt's profile, and a silent failure here
+                // is exactly how that happened unnoticed.
+                tracing::debug!(
+                    %e,
+                    provider = %key.provider_id,
+                    account = %key.account_id,
+                    "the finished check-in's browser did not close"
+                );
+            }
+            // The session is released too, so the account is startable again. Leaving
+            // it registered would make `begin` refuse the next attempt as a
+            // duplicate of an attempt that is over.
+            runtime.finish(&key).await;
+            false
+        }
+    };
 
     let settled = phase.to_string();
     desktop.record_checkin_view(CheckinView {
         provider_id: key.provider_id.clone(),
         account_id: key.account_id.clone(),
         phase: settled,
-        browser_held: true,
-        awaiting_user: paused,
+        browser_held,
+        awaiting_user: paused && !cancelled,
         failure,
         reward_amount: None,
         reward_unit: None,
@@ -628,6 +679,29 @@ async fn observe(
     let phase = report.phase;
     desktop.record_checkin_view(view_from_report(&key.provider_id, &key.account_id, &report));
     Some(phase)
+}
+
+/// What happens to the browser once an attempt has stopped driving it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BrowserDisposition {
+    /// A human still needs this window; it must outlive the attempt.
+    KeepForUser,
+    /// Nothing is driving it any more, so it must be closed and the key released.
+    Close,
+}
+
+/// Whether the browser stays open after an attempt.
+///
+/// One bit, and it is extracted for the same reason [`counts_as_settlement`] is: it
+/// decides whether a visible window on somebody's desktop is left behind, and
+/// getting it wrong is invisible until a profile is damaged. Pure, so it is tested
+/// rather than asserted.
+fn browser_disposition(paused: bool) -> BrowserDisposition {
+    if paused {
+        BrowserDisposition::KeepForUser
+    } else {
+        BrowserDisposition::Close
+    }
 }
 
 /// Whether an attempt that ended this way counts as settled for the scheduler.
@@ -955,5 +1029,22 @@ mod tests {
                 "{phase:?} has not concluded"
             );
         }
+    }
+    #[test]
+    fn only_a_pause_keeps_the_browser_open() {
+        // The defect this encodes. Leaving the window open after a finished attempt
+        // is what let a stale Chrome hold a profile directory and turn the next
+        // attempt into a corrupted profile, so the rule is stated rather than left
+        // implicit in the branch that happens to handle a pause.
+        assert_eq!(
+            browser_disposition(true),
+            BrowserDisposition::KeepForUser,
+            "a pause exists for the human looking at that window"
+        );
+        assert_eq!(
+            browser_disposition(false),
+            BrowserDisposition::Close,
+            "a finished attempt has nobody looking at its window"
+        );
     }
 }

@@ -590,6 +590,7 @@ const PHASE_KEYS = new Set([
   "not_supported",
   "failed",
   "cancelled",
+  "cancelling"
 ]);
 
 /**

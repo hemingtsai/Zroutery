@@ -104,6 +104,20 @@ pub enum BrowserError {
     Exited,
     /// The command was cancelled before it answered.
     Cancelled,
+    /// The browser would not close, and it is still serving its debugging port.
+    ///
+    /// Exists so a surviving browser is a reportable fact rather than a silent
+    /// leak. It carries the port and the profile directory because the two things
+    /// an operator needs are which browser to close and which account's session it
+    /// is still holding — a leaked browser holds a profile lock, and relaunching
+    /// onto a locked profile is what makes the next attempt corrupt it.
+    StillRunning { port: u16, profile: String },
+    /// Another browser is still using this account's profile directory.
+    ///
+    /// A refusal rather than a launch, because launching here damages the profile
+    /// and then reports a damage the operator did not cause and cannot see the cause
+    /// of. The message names the port so the browser can be closed by hand.
+    ProfileInUse { port: u16, profile: String },
 }
 
 impl std::fmt::Display for BrowserError {
@@ -122,6 +136,16 @@ impl std::fmt::Display for BrowserError {
                 write!(f, "the browser refused {method}: {message}")
             }
             Self::Exited => write!(f, "the browser exited during the operation"),
+            Self::ProfileInUse { port, profile } => write!(
+                f,
+                "another browser is still using the profile at {profile} (devtools port {port}); \
+                 close it before checking in again"
+            ),
+            Self::StillRunning { port, profile } => write!(
+                f,
+                "the browser on port {port} did not close and is still holding the profile at \
+                 {profile}; close it by hand before retrying"
+            ),
             Self::Cancelled => write!(f, "the operation was cancelled"),
         }
     }
@@ -201,6 +225,23 @@ pub async fn launch(
 ) -> Result<BrowserSession, BrowserError> {
     tokio::fs::create_dir_all(profile_dir).await?;
 
+    // **Refuse a profile a live browser still owns.** Launching a second
+    // `chrome.exe` against a `--user-data-dir` already in use does not give you a
+    // second browser: the new process hands its command line to the running
+    // instance and exits, or two processes race over `Local State` and
+    // `Preferences` and the profile comes back damaged. Either way the operator
+    // sees a dialog about a corrupted profile and a window that opened in the wrong
+    // place, and neither names the real cause: an earlier attempt is still running.
+    //
+    // Asked before the port file is deleted, because deleting it first would destroy
+    // the only evidence of who owns the profile.
+    if let Some(owner) = live_owner(profile_dir).await {
+        return Err(BrowserError::ProfileInUse {
+            port: owner,
+            profile: profile_dir.display().to_string(),
+        });
+    }
+
     let child = tokio::process::Command::new(executable)
         .args(build_args(profile_dir, start_url))
         // A browser's own standard streams are not ours to read, and inheriting
@@ -219,12 +260,7 @@ pub async fn launch(
     let _ = tokio::fs::remove_file(profile_dir.join(profile::DEVTOOLS_PORT_FILE)).await;
 
     let endpoint = wait_for_endpoint(profile_dir).await?;
-    let port = endpoint
-        .split("127.0.0.1:")
-        .nth(1)
-        .and_then(|rest| rest.split('/').next())
-        .and_then(|p| p.parse::<u16>().ok())
-        .unwrap_or(0);
+    let port = port_of(&endpoint).unwrap_or(0);
     let socket = connect(&endpoint).await?;
 
     Ok(BrowserSession {
@@ -234,6 +270,27 @@ pub async fn launch(
         next_id: 0,
         profile_dir: profile_dir.to_path_buf(),
     })
+}
+
+/// The debugging port of a browser still holding this profile, if any.
+///
+/// Reads the port file and then asks the port, because the file alone is not
+/// evidence: a browser that closed cleanly leaves it behind, and treating that as
+/// "occupied" would refuse every account forever after its first check-in. Asking
+/// the port is what separates "a browser was here" from "a browser is here".
+async fn live_owner(profile_dir: &Path) -> Option<u16> {
+    let port_file = profile_dir.join(profile::DEVTOOLS_PORT_FILE);
+    let port = port_of(&read_endpoint(&port_file).await?)?;
+    port_is_open(port).await.then_some(port)
+}
+
+/// The port out of a `ws://127.0.0.1:PORT/path` endpoint.
+fn port_of(endpoint: &str) -> Option<u16> {
+    endpoint
+        .split("127.0.0.1:")
+        .nth(1)
+        .and_then(|rest| rest.split('/').next())
+        .and_then(|p| p.parse::<u16>().ok())
 }
 
 /// Wait for the browser to publish its debugging endpoint.
@@ -743,8 +800,28 @@ impl BrowserSession {
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
+
+        // Escalate. The process handle is the only fallback available and it is
+        // often useless, because on Windows the handle has usually already exited
+        // while the browser it started keeps running — which is why the port is
+        // asked again afterwards rather than assumed closed.
         let _ = self.child.kill().await;
-        Ok(())
+        for _ in 0..25 {
+            if !port_is_open(self.port).await {
+                return Ok(());
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+
+        // **Refused rather than reported as closed.** An earlier version returned
+        // `Ok(())` here unconditionally, which made a surviving browser invisible:
+        // every caller logs a failure only on `Err`, so a browser that would not
+        // close was silently leaked and went on holding its profile directory. This
+        // is the only way that failure can become visible at all.
+        Err(BrowserError::StillRunning {
+            port: self.port,
+            profile: self.profile_dir.display().to_string(),
+        })
     }
 
     /// Whether the browser is still serving its debugging port.
@@ -753,6 +830,14 @@ impl BrowserSession {
     /// and only the port reflects the browser that is actually running.
     pub async fn is_running(&self) -> bool {
         port_is_open(self.port).await
+    }
+
+    /// The debugging port this browser published.
+    ///
+    /// Public because it is the one fact an operator needs when a browser has to be
+    /// closed by hand, and because a leaked browser is identified by its port.
+    pub fn port(&self) -> u16 {
+        self.port
     }
 
     /// The isolated profile this session uses.

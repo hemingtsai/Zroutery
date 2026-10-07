@@ -39,6 +39,7 @@ use zroutery_lib::checkin::cdp::{self, BrowserSession};
 use zroutery_lib::checkin::profile;
 use zroutery_lib::checkin::state::{self, Event, State};
 use zroutery_lib::checkin::waf;
+use zroutery_lib::checkin::{CheckinRuntime, SessionKey};
 
 /// Skip rather than fail when no browser is installed.
 ///
@@ -419,4 +420,90 @@ async fn shutdown_closes_the_browser_and_leaves_no_process() {
     assert!(second.is_running().await);
     let _ = second.shutdown().await;
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+#[ignore = "needs a real Chromium browser and opens a visible window"]
+async fn a_second_driver_is_refused_the_same_browser() {
+    // The only rule here that cannot be proven without a browser, because it turns
+    // on what `take_browser` hands back when a browser really exists. Two drive
+    // loops on one browser would each click the check-in control, and a panel that
+    // credits a reward for one click would be reporting two.
+    let Some(executable) = browser() else { return };
+    let dir = scratch("two-drivers");
+    let key = SessionKey::new("relay", "main");
+    let runtime = CheckinRuntime::new(dir.parent().expect("scratch parent").to_path_buf());
+
+    runtime.begin(key.clone()).await.expect("begins");
+    let session = launch(&executable, runtime.profile_dir(&key).as_path()).await;
+    runtime.attach(&key, session).await.expect("attaches");
+
+    assert!(!runtime.is_being_driven(&key).await);
+    let taken = runtime
+        .take_browser(&key)
+        .await
+        .expect("first driver takes it");
+    assert!(
+        runtime.is_being_driven(&key).await,
+        "the driver now owns the browser, and the account must say so"
+    );
+    assert!(
+        runtime.take_browser(&key).await.is_none(),
+        "a second driver must be refused the browser rather than handed the same one"
+    );
+    // And the session must not claim to hold a browser it has already given away.
+    assert!(
+        !runtime.is_browser_held(&key).await,
+        "the browser is with the driver, not with the session"
+    );
+
+    assert!(!runtime.end_driving(&key).await, "no cancel was requested");
+    // The refused second driver must not have disturbed the first one's browser.
+    let outcome = taken.shutdown().await;
+    assert!(
+        outcome.is_ok(),
+        "the first driver's browser closes cleanly: {outcome:?}"
+    );
+    runtime.finish(&key).await;
+    let _ = std::fs::remove_dir_all(dir.parent().expect("scratch parent"));
+}
+
+#[tokio::test]
+#[ignore = "needs a real Chromium browser and opens a visible window"]
+async fn a_finished_attempt_releases_the_account_so_the_next_one_can_start() {
+    // The other half of the report: after a check-in ends, the account must be
+    // startable again and no browser may be left behind. Both were false at once —
+    // the session stayed registered and the browser stayed open — so the next
+    // attempt was either refused or, once the key was freed, launched a second
+    // browser onto a profile the first still held.
+    let Some(executable) = browser() else { return };
+    let dir = scratch("release");
+    let key = SessionKey::new("relay", "main");
+    let runtime = CheckinRuntime::new(dir.parent().expect("scratch parent").to_path_buf());
+
+    runtime.begin(key.clone()).await.expect("begins");
+    let session = launch(&executable, runtime.profile_dir(&key).as_path()).await;
+    runtime.attach(&key, session).await.expect("attaches");
+
+    // Finishing with nothing driving closes the browser here and now.
+    assert_eq!(
+        runtime.finish(&key).await,
+        zroutery_lib::checkin::FinishOutcome::ClosedNow
+    );
+    assert!(
+        runtime.phase(&key).await.is_none(),
+        "the key is free, so the next attempt is not a duplicate"
+    );
+    assert!(!runtime.is_browser_held(&key).await);
+
+    // And the account really is startable again, which is the claim the corrupted
+    // profile report turned on: a free key must mean no browser is still out there.
+    runtime.begin(key.clone()).await.expect("starts again");
+    let reopened = launch(&executable, runtime.profile_dir(&key).as_path()).await;
+    assert!(
+        runtime.attach(&key, reopened).await.is_ok(),
+        "the same profile reopens once the previous browser is gone"
+    );
+    runtime.finish(&key).await;
+    let _ = std::fs::remove_dir_all(dir.parent().expect("scratch parent"));
 }
