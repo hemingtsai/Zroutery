@@ -3,7 +3,7 @@
   "node_id": "UI-NEW-TRACKS",
   "display_name": "New-track UI and Tauri surfaces",
   "status": "PARTIAL",
-  "implementation_state": "The upstream contracts this node was blocked on are closed: ACCOUNT, NEWAPI, I2, I3 and I4 all pass their gates, so the blocked_by set is emptied and the node is no longer waiting on upstream. Its own gates are still unmet, but the reason has changed and the previous text is now false. There is one backend lifecycle with a production caller: the check-in runtime owns a headed browser session per (provider, account), and a WAF challenge holds that session rather than destroying it, so a resume continues the same session and never asks the operator to authenticate twice. There is one real product surface driving it: four Tauri commands and a per-account maintenance row with start, resume, cancel and a written record of what was observed rather than what was hoped for. Migration and takeover rollback surfaces still do not exist, and a check-in confirmation is not a rollback confirmation — one interrupts a human and resumes, the other has to undo a half-applied change, and only the first is built. The surface has never been click-tested in a running application: it compiles, it is unit-tested, and no person has watched it work end to end. The other core engines remain fixtures rather than surfaces a user can drive. See E-131 and E-132.",
+  "implementation_state": "The upstream contracts this node was blocked on are closed: ACCOUNT, NEWAPI, I2, I3 and I4 all pass their gates, so the blocked_by set is emptied and the node is no longer waiting on upstream. Its own gates are still unmet, but the reason has changed and the previous text is now false. There is one backend lifecycle with a production caller: the check-in runtime owns a headed browser session per (provider, account), and a WAF challenge holds that session rather than destroying it, so a resume continues the same session and never asks the operator to authenticate twice. There is one real product surface driving it: four Tauri commands and a per-account maintenance row with start, resume, cancel and a written record of what was observed rather than what was hoped for. It now also schedules: a minute timer walks the declared accounts and starts the ones a pure decision function calls due, the row carries that decision and the next due time in its own words, and the settlement history is durable across restarts. The row renders the six scheduler answers separately on purpose, because \"nothing happened\" would send an operator to change a setting that is not the problem — one of them is the user's own choice, one is a gap in their declaration, and only two mean a schedule is quietly counting down. Migration and takeover rollback surfaces still do not exist, and a check-in confirmation is not a rollback confirmation — one interrupts a human and resumes, the other has to undo a half-applied change, and only the first is built. The surface has never been click-tested in a running application: it compiles, it is unit-tested, and no person has watched it work end to end. The other core engines remain fixtures rather than surfaces a user can drive. See E-131 and E-132.",
   "dependencies": [
     "UI",
     "ACCOUNT",
@@ -23,7 +23,8 @@
   "evidence": [
     "E-016",
     "E-131",
-    "E-132"
+    "E-132",
+    "E-134"
   ],
   "source_references": [
     "docs/development/repository-audit-2026-09-25.md",
@@ -39,6 +40,6 @@
   "notes": [
     "No placeholder control is treated as a product lifecycle.",
     "No longer blocked on upstream: ACCOUNT, NEWAPI, I2, I3, and I4 all pass their gates and their blocked_by sets are empty. The status is PARTIAL because its own three gates are unmet, not because it is waiting on another node.",
-    "The check-in row is the one surface here that has been driven by a real browser, and its check-in control has been shown to receive a trusted event. It has still never been exercised by a person in a running app, and the account maintenance panel has no scheduler behind it, so a check-in exists only when someone presses the button."
+    "The check-in row is the one surface here that has been driven by a real browser, and its check-in control has been shown to receive a trusted event. It has still never been exercised by a person in a running app, and the scheduler has never run against a real relay console or had an interval elapse against a live panel, so everything asserted about it is asserted against fixtures."
   ]
 }

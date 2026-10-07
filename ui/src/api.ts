@@ -586,6 +586,26 @@ export interface CheckinView {
    */
   reward_source: string | null;
   last_completed_at: number | null;
+  /**
+   * Why the scheduler did or did not act, and when it next will.
+   *
+   * `decision` is one of `disabled`, `not_applicable`, `needs_first_observation`,
+   * `no_policy`, `not_due` or `due`. Each is a different sentence for the user, and
+   * collapsing them would leave somebody staring at an account that looks broken
+   * because they never turned anything on.
+   *
+   * `next_due_at` is null whenever the decision names no time, which is not the same
+   * as zero: an account that has never run has no future due time, and rendering 0
+   * as a date would claim 1970.
+   */
+  schedule: CheckinScheduleView;
+}
+
+/** The scheduler's answer for one account. */
+export interface CheckinScheduleView {
+  decision: string;
+  next_due_at: number | null;
+  last_settled_at: number | null;
 }
 
 /** One entry of a provider's catalogue, with prices when it publishes them. */

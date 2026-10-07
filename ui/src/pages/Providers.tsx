@@ -496,6 +496,14 @@ function AccountMaintenanceRow({
         </span>
         {view.failure && <span className="row-sub warn-text">{view.failure}</span>}
         {/*
+          Why the scheduler is or is not acting, in its own words. Without this an
+          operator who sets an interval sees a row that never changes and cannot
+          tell a policy that is working from a policy that is doing nothing — and
+          the reasons differ enough that "nothing happened" would send them to
+          change a setting that is not the problem.
+        */}
+        <span className="row-sub muted">{scheduleLabel(view)}</span>
+        {/*
           A reward is shown only when one was observed, and its source travels
           with it. A figure recovered from provider log text is weaker evidence
           than one the provider reported in a structured field, and printing them
@@ -541,6 +549,37 @@ function AccountMaintenanceRow({
   );
 }
 
+/** The scheduler decisions the backend publishes. */
+const SCHEDULE_KEYS = new Set([
+  "disabled",
+  "not_applicable",
+  "needs_first_observation",
+  "no_policy",
+  "not_due",
+  "due",
+  "unknown",
+]);
+
+/**
+ * One sentence saying why the scheduler did or did not act on this account.
+ *
+ * An unrecognised decision renders as itself rather than as a neighbouring reason,
+ * for the same reason `PHASE_KEYS` exists below: two reasons merged into one would
+ * send the reader to change a setting that is not the problem.
+ */
+function scheduleLabel(view: CheckinView): string {
+  const { t } = useI18n();
+  const decision = view.schedule?.decision ?? "unknown";
+  const reason = SCHEDULE_KEYS.has(decision)
+    ? t(`account.schedule.${decision}` as Parameters<typeof t>[0])
+    : decision;
+  const next = view.schedule?.next_due_at;
+  if (next !== null && next !== undefined) {
+    return `${reason} · ${t("account.next_run")} ${ago(next)}`;
+  }
+  return reason;
+}
+
 /** The phases the backend publishes, so an unknown one can be told apart. */
 const PHASE_KEYS = new Set([
   "idle",
@@ -578,6 +617,10 @@ function checkinFor(
       reward_unit: null,
       reward_source: null,
       last_completed_at: null,
+      // "unknown" rather than a guess. The backend is the only thing that knows this
+      // account's declaration and history, and inventing a decision here would
+      // render as a scheduler answer nobody actually computed.
+      schedule: { decision: "unknown", next_due_at: null, last_settled_at: null },
     }
   );
 }

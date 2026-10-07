@@ -384,6 +384,15 @@ pub enum MaintenanceDecision {
     /// history there is no evidence about when to act, and guessing "now" would
     /// make every freshly configured account check in immediately.
     NeedsFirstObservation,
+    /// A previous attempt is recorded but no interval is declared.
+    ///
+    /// Separate from [`MaintenanceDecision::NeedsFirstObservation`] because the
+    /// two say opposite things about the same absence. That one means "nothing
+    /// has happened yet"; this one means "something has, and there is still no
+    /// rule about when the next is due". Folding them together would report a
+    /// known history as an unknown one, and the fix for each is different — the
+    /// first needs an attempt, the second needs an interval.
+    NoPolicy,
     /// Due now, having been `since_last_secs` since the last completed attempt.
     Due { since_last_secs: i64 },
     /// Not due until `next_due_at` (unix seconds).
@@ -394,6 +403,99 @@ impl MaintenanceDecision {
     /// Whether this decision authorises running check-in now.
     pub fn should_run(self) -> bool {
         matches!(self, Self::Due { .. })
+    }
+
+    /// Whether the reason nothing will run is something the operator declared.
+    ///
+    /// Distinct from [`MaintenanceDecision::should_run`], and the reason this is
+    /// worth a method: `Disabled` and `NotApplicable` are both *answered*
+    /// questions — the operator said no, or said yes without finishing the
+    /// sentence — while `NotDue` and `NeedsFirstObservation` are a question that
+    /// has simply not come due yet. A panel that renders both as "nothing
+    /// happened" leaves an operator staring at an account that looks broken
+    /// because nobody enabled anything.
+    pub fn is_declared(self) -> bool {
+        matches!(self, Self::Disabled | Self::NotApplicable)
+    }
+}
+
+/// Decide whether one account's check-in should run now.
+///
+/// Pure, and pure for a reason that has nothing to do with taste: the scheduler
+/// that calls this runs unattended on a timer, so a decision made here is a
+/// decision nobody is watching. Given the same configuration, the same history
+/// and the same instant it must always return the same answer, or an operator
+/// cannot tell a check-in that ran from one that did not.
+///
+/// # Why history is an argument and not looked up
+///
+/// `last_settled_at` is passed in rather than read from a store. A scheduler
+/// decision that read a clock or a store itself would be untestable at exactly
+/// the boundary where a mistake launches a visible browser window, and the
+/// reconciliation code already learned this: every timestamp a panel renders as
+/// "last seen" has to come from an injected source or the test cannot predict it.
+///
+/// # Why no history means no run
+///
+/// [`MaintenanceDecision::NeedsFirstObservation`] is the conservative branch and
+/// it is deliberate. Nothing is known about when a given relay's daily reset
+/// falls — local midnight, UTC midnight, or a rolling window — and a scheduler
+/// that guesses "now" for every account at startup opens one visible browser per
+/// account within a few seconds of launch. The first attempt is therefore
+/// something a person starts, and the schedule takes over from what that attempt
+/// recorded. The cost is real and is not hidden: an operator who declares an
+/// interval still has to start one check-in by hand per account before
+/// automation begins.
+///
+/// A failure counts as history. An account whose check-in failed has still been
+/// attempted, and the interval is measured from the attempt rather than from a
+/// success — otherwise an account that cannot check in would be retried on every
+/// tick, which is how a scheduler turns one broken account into a loop.
+pub fn decide(
+    maintenance: &crate::config::MaintenanceConfig,
+    last_settled_at: Option<i64>,
+    now: i64,
+) -> MaintenanceDecision {
+    // Order matters, and the first branch is the one an operator most likely
+    // needs. A check-in that is switched off is not applicable *because* it is
+    // off; reporting "not applicable" instead would send someone to fill in a
+    // path and selector for an account they deliberately turned off.
+    if !maintenance.checkin_enabled {
+        return MaintenanceDecision::Disabled;
+    }
+    // Switched on but not actionable: no page, or a page with no control. This is
+    // a configuration gap rather than a runtime failure, and the decision says so
+    // rather than falling through to a due-time computed from a declaration that
+    // cannot be acted on.
+    if !maintenance.is_browser_checkin_configured() {
+        return MaintenanceDecision::NotApplicable;
+    }
+    let Some(last) = last_settled_at else {
+        return MaintenanceDecision::NeedsFirstObservation;
+    };
+    // Some(interval) rather than an unchecked unwrap: a declared interval of zero
+    // is rejected at configuration load, but `decide` is reachable from tests and
+    // from any future caller, and treating zero as "always due" would be a
+    // per-tick browser launch rather than an error.
+    let Some(interval) = maintenance
+        .checkin_interval_secs
+        .filter(|i| *i > 0)
+        .map(|i| i as i64)
+    else {
+        return MaintenanceDecision::NoPolicy;
+    };
+    // Saturating rather than wrapping: `last + interval` with a hostile or
+    // clock-skewed `last` must not overflow into a due time in the past, which
+    // would read as "due immediately" on every scan.
+    let next_due = last.saturating_add(interval);
+    if now >= next_due {
+        MaintenanceDecision::Due {
+            since_last_secs: now.saturating_sub(last),
+        }
+    } else {
+        MaintenanceDecision::NotDue {
+            next_due_at: next_due,
+        }
     }
 }
 
@@ -536,5 +638,187 @@ mod tests {
         // A default that meant "confirmed" would let an uninitialised report
         // claim a reward nobody observed.
         assert_eq!(CheckinPhase::default(), CheckinPhase::ObservationPending);
+    }
+
+    /// A maintenance declaration that can be acted on, so the fixtures below vary
+    /// one field at a time instead of re-listing all of them.
+    fn actionable(interval: Option<u64>) -> crate::config::MaintenanceConfig {
+        crate::config::MaintenanceConfig {
+            checkin_enabled: true,
+            checkin_interval_secs: interval,
+            checkin_path: Some("/console/personal".into()),
+            checkin_trigger_selector: Some("button.checkin".into()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_declared_schedule_runs_when_the_interval_has_elapsed() {
+        let m = actionable(Some(86_400));
+        // Exactly at the boundary counts as due, not a second early: `>=` is the
+        // rule, and an operator reading "every 24 hours" means every 24 hours.
+        assert_eq!(
+            decide(&m, Some(1_000), 1_000 + 86_400),
+            MaintenanceDecision::Due {
+                since_last_secs: 86_400
+            }
+        );
+        assert_eq!(
+            decide(&m, Some(1_000), 1_000 + 86_399),
+            MaintenanceDecision::NotDue {
+                next_due_at: 1_000 + 86_400
+            },
+            "a second early is still not due, and the report must say when it will be"
+        );
+    }
+
+    #[test]
+    fn no_history_means_no_run_even_with_an_interval_declared() {
+        // The conservative branch, and the one that stops every account opening a
+        // browser within seconds of launch. Flipping it to Due fails this test by
+        // name, which is the point: the policy is a claim, not a default.
+        assert_eq!(
+            decide(&actionable(Some(86_400)), None, 1_000),
+            MaintenanceDecision::NeedsFirstObservation
+        );
+        // And it is the *absence of history* that stops it, not the absence of an
+        // interval: without both, the two reasons would be indistinguishable.
+        assert_eq!(
+            decide(&actionable(None), None, 1_000),
+            MaintenanceDecision::NeedsFirstObservation
+        );
+    }
+
+    #[test]
+    fn history_without_an_interval_is_not_the_same_answer_as_no_history() {
+        // Both decline, for opposite reasons: nothing has happened yet, versus
+        // something has and there is still no rule for the next one.
+        assert_eq!(
+            decide(&actionable(None), Some(1_000), 1_000 + 999_999),
+            MaintenanceDecision::NoPolicy,
+            "an interval is what makes a history schedulable"
+        );
+        assert_ne!(
+            decide(&actionable(None), Some(1_000), 1_000),
+            decide(&actionable(None), None, 1_000)
+        );
+    }
+
+    #[test]
+    fn switched_off_wins_over_every_other_reason() {
+        // Checked first on purpose: an account deliberately turned off must not
+        // be told to fill in a path and selector, because turning it off is
+        // exactly what the operator did.
+        let off = crate::config::MaintenanceConfig {
+            checkin_enabled: false,
+            ..actionable(Some(86_400))
+        };
+        assert_eq!(
+            decide(&off, Some(1_000), 1_000 + 999_999),
+            MaintenanceDecision::Disabled
+        );
+        // Including when it is switched off AND has never run AND has no interval:
+        // every one of those is true, and only one of them is the answer.
+        assert_eq!(
+            decide(
+                &crate::config::MaintenanceConfig {
+                    checkin_enabled: false,
+                    ..Default::default()
+                },
+                None,
+                1_000
+            ),
+            MaintenanceDecision::Disabled
+        );
+    }
+
+    #[test]
+    fn switched_on_but_not_actionable_is_not_applicable_rather_than_due() {
+        // Falling through to a due-time here would compute a schedule from a
+        // declaration that cannot be acted on, which is the "silently does
+        // nothing" case the configuration validation already refuses at load.
+        for m in [
+            crate::config::MaintenanceConfig {
+                checkin_enabled: true,
+                checkin_interval_secs: Some(86_400),
+                ..Default::default()
+            },
+            crate::config::MaintenanceConfig {
+                checkin_enabled: true,
+                checkin_interval_secs: Some(86_400),
+                checkin_path: Some("/console/personal".into()),
+                ..Default::default()
+            },
+        ] {
+            assert_eq!(
+                decide(&m, Some(1_000), 1_000 + 999_999),
+                MaintenanceDecision::NotApplicable
+            );
+        }
+    }
+
+    #[test]
+    fn a_zero_interval_is_never_treated_as_always_due() {
+        // Rejected at configuration load, but `decide` is reachable from tests and
+        // from any future caller. Falling back to "due" would launch a browser on
+        // every single scan tick rather than failing.
+        let zero = crate::config::MaintenanceConfig {
+            checkin_interval_secs: Some(0),
+            ..actionable(None)
+        };
+        assert_eq!(
+            decide(&zero, Some(1_000), 1_000),
+            MaintenanceDecision::NoPolicy
+        );
+    }
+
+    #[test]
+    fn a_hostile_history_cannot_wrap_into_a_due_time_in_the_past() {
+        let m = actionable(Some(86_400));
+        // Saturating arithmetic: an overflow would produce a negative `next_due`,
+        // which reads as due on every scan forever.
+        assert!(matches!(
+            decide(&m, Some(i64::MAX), 0),
+            MaintenanceDecision::NotDue { .. }
+        ));
+        // And the reported gap is clamped rather than wrapped negative.
+        let past = decide(&m, Some(i64::MIN), i64::MAX);
+        assert!(
+            matches!(past, MaintenanceDecision::Due { since_last_secs } if since_last_secs > 0)
+        );
+    }
+
+    #[test]
+    fn a_declined_answer_that_is_not_the_operator_s_own_choice_says_so() {
+        // What the panel needs to tell apart: nothing is wrong yet, versus
+        // something is wrong with the declaration.
+        assert!(MaintenanceDecision::Disabled.is_declared());
+        assert!(MaintenanceDecision::NotApplicable.is_declared());
+        assert!(!MaintenanceDecision::NotDue { next_due_at: 0 }.is_declared());
+        assert!(!MaintenanceDecision::NeedsFirstObservation.is_declared());
+        assert!(!MaintenanceDecision::NoPolicy.is_declared());
+        assert!(!MaintenanceDecision::Due { since_last_secs: 0 }.is_declared());
+    }
+
+    #[test]
+    fn every_declining_answer_is_distinguishable_from_every_other() {
+        // A scheduler reports these to a person. If two of them compared equal,
+        // one reason would be rendered as another, and the operator would be sent
+        // to fix something that is not the problem.
+        let all = [
+            MaintenanceDecision::NotApplicable,
+            MaintenanceDecision::Disabled,
+            MaintenanceDecision::NeedsFirstObservation,
+            MaintenanceDecision::NoPolicy,
+            MaintenanceDecision::NotDue { next_due_at: 5 },
+            MaintenanceDecision::Due { since_last_secs: 5 },
+        ];
+        for (i, a) in all.iter().enumerate() {
+            for (j, b) in all.iter().enumerate() {
+                assert_eq!(i == j, a == b, "{a:?} and {b:?} must be distinguishable");
+            }
+        }
+        assert!(all.iter().filter(|d| d.should_run()).count() == 1);
+        assert!(all.iter().filter(|d| d.is_declared()).count() == 2);
     }
 }

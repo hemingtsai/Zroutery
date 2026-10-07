@@ -63,6 +63,17 @@ pub struct Desktop {
     /// will offer to resume an attempt that finished hours ago.
     #[cfg(feature = "account-maint")]
     checkin_reports: Mutex<BTreeMap<(String, String), CheckinView>>,
+    /// When each account's last check-in settled, across restarts.
+    ///
+    /// Deliberately a *different* thing from `checkin_reports`, and the
+    /// distinction is the reason the scheduler works at all. `checkin_reports`
+    /// answers "what happened last time" and starts empty on every launch, which is
+    /// correct for a panel: an account with no history should read as untried. The
+    /// scheduler instead needs "when did this account last settle", and reading
+    /// that from an in-memory map would make every account look untried after every
+    /// restart — so one visible browser window per account, seconds after launch.
+    #[cfg(feature = "account-maint")]
+    pub(crate) checkin_schedule: crate::checkin::schedule::Schedule,
 }
 
 /// Whether a listener can claim an address.
@@ -245,6 +256,46 @@ pub struct CheckinView {
     /// what it is, rather than as an authoritative number.
     pub reward_source: Option<String>,
     pub last_completed_at: Option<i64>,
+    /// Why the scheduler did or did not act on this account, and when it next will.
+    ///
+    /// Carried per account rather than as a panel-wide summary because the six
+    /// reasons are per-account facts: one account switched off, another missing a
+    /// selector and a third simply not due yet all need different words, and a count
+    /// per kind would tell an operator how many are broken without telling them which.
+    ///
+    /// `next_due_at` is set only when a decision names a time, so its absence is
+    /// informative rather than a zero: there is no future time for an account that
+    /// needs a first run, and rendering 0 as a date would be a lie about the epoch.
+    pub schedule: CheckinScheduleView,
+}
+
+/// The scheduler's answer for one account.
+#[derive(Debug, Clone, Serialize)]
+pub struct CheckinScheduleView {
+    /// `disabled`, `not_applicable`, `needs_first_observation`, `no_policy`,
+    /// `not_due` or `due`.
+    pub decision: String,
+    /// When the next attempt is due, when the decision names one.
+    pub next_due_at: Option<i64>,
+    /// When the last attempt ended, which is what the interval is measured from.
+    pub last_settled_at: Option<i64>,
+}
+
+impl CheckinScheduleView {
+    /// The placeholder a stored report carries before it is read.
+    ///
+    /// The schedule is *derived* from the live configuration and the durable
+    /// history, never stored, because a stored copy would be stale the moment the
+    /// operator edits an interval. Both read paths overwrite this before returning,
+    /// so it is never what a caller sees — it exists so the write paths do not each
+    /// have to know how to compute it.
+    pub fn unknown() -> Self {
+        Self {
+            decision: "unknown".into(),
+            next_due_at: None,
+            last_settled_at: None,
+        }
+    }
 }
 
 #[cfg(feature = "account-maint")]
@@ -265,6 +316,8 @@ impl CheckinView {
             reward_unit: None,
             reward_source: None,
             last_completed_at: None,
+            // Overwritten on every read; see `CheckinScheduleView::unknown`.
+            schedule: CheckinScheduleView::unknown(),
         }
     }
 }
@@ -318,6 +371,11 @@ impl Desktop {
         };
         #[cfg(feature = "account-maint")]
         let checkin = crate::checkin::CheckinRuntime::new(config_dir.clone());
+        // Read before the struct literal, which moves `config_dir` into the field.
+        #[cfg(feature = "account-maint")]
+        let checkin_schedule = crate::checkin::schedule::Schedule::load(
+            crate::checkin::schedule::Schedule::path_in(&config_dir),
+        );
         Desktop {
             core,
             secrets,
@@ -332,6 +390,8 @@ impl Desktop {
             checkin,
             #[cfg(feature = "account-maint")]
             checkin_reports: Mutex::new(BTreeMap::new()),
+            #[cfg(feature = "account-maint")]
+            checkin_schedule,
         }
     }
 
@@ -454,10 +514,13 @@ impl Desktop {
         for provider in &config.providers {
             for account in &provider.accounts {
                 let key = (provider.id.clone(), account.account_id.clone());
-                views.push(match lock(&self.checkin_reports).get(&key) {
+                let mut view = match lock(&self.checkin_reports).get(&key) {
                     Some(view) => view.clone(),
                     None => CheckinView::idle(&provider.id, &account.account_id),
-                });
+                };
+                // Derived at read time, never stored: see `CheckinScheduleView::unknown`.
+                view.schedule = self.schedule_view(&provider.id, &account.account_id);
+                views.push(view);
             }
         }
         views
@@ -491,6 +554,7 @@ impl Desktop {
         // report written before a pause must not claim no browser is held.
         view.browser_held = held;
         view.awaiting_user = awaiting;
+        view.schedule = self.schedule_view(provider_id, account_id);
         Some(view)
     }
 
@@ -521,6 +585,57 @@ impl Desktop {
                 })
                 .flatten()
         })
+    }
+
+    /// The scheduler's answer for one account, computed now.
+    ///
+    /// Derived rather than stored, so it cannot disagree with the configuration the
+    /// operator is looking at: an interval edited a second ago is reflected here
+    /// immediately, and no cached copy can promise a time that is already wrong.
+    ///
+    /// An account that is not declared gets [`CheckinScheduleView::unknown`] rather
+    /// than a fabricated decision. The alternative — deciding against whatever
+    /// declaration happens to be at hand — would answer for an account that does not
+    /// exist, and a panel showing that would be showing a panel failure as an
+    /// account state.
+    #[cfg(feature = "account-maint")]
+    pub fn schedule_view(&self, provider_id: &str, account_id: &str) -> CheckinScheduleView {
+        let Some(maintenance) = self.maintenance_for(provider_id, account_id) else {
+            return CheckinScheduleView::unknown();
+        };
+        let last_settled_at = self
+            .checkin_schedule
+            .last_settled_at(provider_id, account_id);
+        let now = chrono::Utc::now().timestamp();
+        let decision = zroutery_core::account::checkin::decide(&maintenance, last_settled_at, now);
+        CheckinScheduleView {
+            decision: match decision {
+                zroutery_core::account::checkin::MaintenanceDecision::NotApplicable => {
+                    "not_applicable"
+                }
+                zroutery_core::account::checkin::MaintenanceDecision::Disabled => "disabled",
+                zroutery_core::account::checkin::MaintenanceDecision::NeedsFirstObservation => {
+                    "needs_first_observation"
+                }
+                zroutery_core::account::checkin::MaintenanceDecision::NoPolicy => "no_policy",
+                zroutery_core::account::checkin::MaintenanceDecision::NotDue { next_due_at } => {
+                    return CheckinScheduleView {
+                        decision: "not_due".into(),
+                        next_due_at: Some(next_due_at),
+                        last_settled_at,
+                    };
+                }
+                zroutery_core::account::checkin::MaintenanceDecision::Due { .. } => "due",
+            }
+            .into(),
+            next_due_at: match decision {
+                zroutery_core::account::checkin::MaintenanceDecision::NotDue { next_due_at } => {
+                    Some(next_due_at)
+                }
+                _ => None,
+            },
+            last_settled_at,
+        }
     }
 
     /// Close every browser this process is holding.
@@ -2028,5 +2143,84 @@ mod tests {
         );
 
         std::fs::remove_dir_all(dir).ok();
+    }
+    /// A configuration built through its own deserialiser, for the schedule tests.
+    ///
+    /// JSON rather than a struct literal because `ProviderConfig` names a private
+    /// type and cannot be built that way from outside the core crate at all.
+    #[cfg(feature = "account-maint")]
+    fn config_with_account(maintenance: zroutery_core::config::MaintenanceConfig) -> AppConfig {
+        let document = serde_json::json!({
+            "providers": [{
+                "id": "prov",
+                "name": "prov",
+                "kind": "openai_compatible",
+                "base_url": "https://example.invalid",
+                "accounts": [{ "account_id": "a", "maintenance": maintenance }],
+            }]
+        });
+        serde_json::from_value(document).expect("the fixture is a valid configuration")
+    }
+
+    #[cfg(feature = "account-maint")]
+    fn daily(interval: Option<u64>) -> zroutery_core::config::MaintenanceConfig {
+        zroutery_core::config::MaintenanceConfig {
+            checkin_enabled: true,
+            checkin_interval_secs: interval,
+            checkin_path: Some("/console/personal".into()),
+            checkin_trigger_selector: Some("button.checkin".into()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "account-maint")]
+    fn the_schedule_view_names_the_reason_nothing_will_run() {
+        let (desktop, _dir) = desktop_with(config_with_account(daily(Some(3_600))));
+        // Nothing has ever run, so there is no future time to name.
+        let view = desktop.schedule_view("prov", "a");
+        assert_eq!(view.decision, "needs_first_observation");
+        assert_eq!(
+            view.next_due_at, None,
+            "there is no due time for an account that has never run"
+        );
+        assert_eq!(view.last_settled_at, None);
+    }
+
+    #[test]
+    #[cfg(feature = "account-maint")]
+    fn an_undeclared_account_is_unknown_rather_than_decided() {
+        let (desktop, _dir) = desktop_with(config_with_account(daily(Some(3_600))));
+        // Deciding against whatever declaration happens to be at hand would answer
+        // for an account that does not exist, and a panel would render that answer.
+        assert_eq!(desktop.schedule_view("prov", "nope").decision, "unknown");
+        assert_eq!(desktop.schedule_view("nope", "a").decision, "unknown");
+    }
+
+    #[test]
+    #[cfg(feature = "account-maint")]
+    fn the_schedule_view_is_derived_and_never_a_cached_copy() {
+        let (desktop, _dir) = desktop_with(config_with_account(daily(Some(3_600))));
+        desktop
+            .checkin_schedule
+            .record_settled("prov", "a", chrono::Utc::now().timestamp() - 60);
+
+        let view = desktop.schedule_view("prov", "a");
+        assert_eq!(view.decision, "not_due");
+        assert!(
+            view.next_due_at.expect("a not-due decision names a time")
+                > chrono::Utc::now().timestamp(),
+            "the named time must be in the future, not the last settlement"
+        );
+
+        // A deadline that has already passed is due rather than a time in the past
+        // being rendered as a schedule. Verified by moving the recorded settlement
+        // rather than by waiting an hour.
+        assert!(desktop.checkin_schedule.record_settled(
+            "prov",
+            "a",
+            chrono::Utc::now().timestamp() - 7_200
+        ));
+        assert_eq!(desktop.schedule_view("prov", "a").decision, "due");
     }
 }

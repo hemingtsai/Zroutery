@@ -4,7 +4,9 @@
 //! item plus a dashboard window.
 
 pub mod ccswitch;
+#[cfg(feature = "account-maint")]
 pub mod checkin;
+#[cfg(feature = "account-maint")]
 mod checkin_commands;
 mod commands;
 mod logs;
@@ -193,7 +195,7 @@ pub fn run() {
                 // Spend is flushed on a timer as well as at shutdown, so a hard kill
                 // loses seconds of history rather than the whole run.
                 let ledger_keeper = Arc::clone(&desktop);
-                let mut shutdown_rx = shutdown_rx;
+                let mut ledger_shutdown = shutdown_rx.clone();
                 tauri::async_runtime::spawn(async move {
                     let mut tick = tokio::time::interval(std::time::Duration::from_secs(10));
                     loop {
@@ -201,13 +203,61 @@ pub fn run() {
                             _ = tick.tick() => {
                                 ledger_keeper.flush_ledger();
                             }
-                            _ = shutdown_rx.changed() => {
+                            _ = ledger_shutdown.changed() => {
                                 ledger_keeper.flush_ledger();
                                 break;
                             }
                         }
                     }
                 });
+
+                // Accounts whose check-in interval has elapsed are started from a
+                // timer, behind an opt-in feature. Separate from the ledger tick
+                // above because it does a different kind of thing: that one writes
+                // local history, this one can open a visible browser window on a
+                // remote panel, and it must be skippable without stopping anything
+                // else. Kept-in-tray and quit both reach here, and neither leaves a
+                // browser running behind a closed window — the runtime shuts every
+                // held session down on the shutdown signal.
+                #[cfg(feature = "account-maint")]
+                {
+                    let scheduler = Arc::clone(&desktop);
+                    let mut shutdown_rx = shutdown_rx;
+                    tauri::async_runtime::spawn(async move {
+                        // The first tick fires immediately, and that is deliberate:
+                        // an account that settled before a restart is due the moment
+                        // the application comes back, and waiting a minute would only
+                        // delay it. It cannot start a browser by itself, because an
+                        // account with no recorded settlement is refused until a
+                        // person starts its first attempt.
+                        let mut tick = tokio::time::interval(checkin::scheduler::SCAN_INTERVAL);
+                        loop {
+                            tokio::select! {
+                                _ = tick.tick() => {
+                                    let outcome = checkin::scheduler::scan(
+                                        &scheduler,
+                                        chrono::Utc::now().timestamp(),
+                                    )
+                                    .await;
+                                    if outcome.started > 0 || outcome.refused > 0 {
+                                        tracing::debug!(
+                                            considered = outcome.considered,
+                                            due = outcome.due,
+                                            started = outcome.started,
+                                            skipped_busy = outcome.skipped_busy,
+                                            refused = outcome.refused,
+                                            "check-in scan finished"
+                                        );
+                                    }
+                                }
+                                _ = shutdown_rx.changed() => {
+                                    scheduler.checkin.shutdown_all().await;
+                                    break;
+                                }
+                            }
+                        }
+                    });
+                }
             });
 
             Ok(())
