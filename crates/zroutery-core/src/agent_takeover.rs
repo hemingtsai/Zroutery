@@ -1500,7 +1500,7 @@ fn config_dir_override(env_key: &str) -> Option<std::path::PathBuf> {
 /// already exists, its permission bits are re-applied to the staged file
 /// before the rename: replacing an existing 0600 config must not silently
 /// widen it to the umask default of 0644.
-fn write_config_atomic(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
+pub(crate) fn write_config_atomic(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("failed to create dir {}: {e}", parent.display()))?;
@@ -1534,7 +1534,7 @@ fn write_config_atomic(path: &std::path::Path, bytes: &[u8]) -> Result<(), Strin
 
 /// Create `path` with restrictive permissions and write `bytes` into it.
 #[cfg(unix)]
-fn write_restricted(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
+pub(crate) fn write_restricted(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
 
@@ -1553,13 +1553,13 @@ fn write_restricted(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> 
 
 /// Create `path` and write `bytes` into it.
 #[cfg(not(unix))]
-fn write_restricted(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
+pub(crate) fn write_restricted(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
     std::fs::write(path, bytes).map_err(|e| format!("failed to write {}: {e}", path.display()))
 }
 
 /// A unique temporary file name next to `path`, in the same directory so the
 /// final rename cannot cross a filesystem boundary.
-fn temp_sibling(path: &std::path::Path) -> std::path::PathBuf {
+pub(crate) fn temp_sibling(path: &std::path::Path) -> std::path::PathBuf {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static COUNTER: AtomicU64 = AtomicU64::new(0);
