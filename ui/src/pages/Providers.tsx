@@ -40,27 +40,82 @@ import {
 } from "../components";
 import { useI18n } from "../i18n";
 
-const KINDS: { id: ProviderKind; labelKey: "providers.openai_dialect" | "providers.anthropic_dialect" }[] = [
+type KindLabelKey =
+  | "providers.openai_dialect"
+  | "providers.anthropic_dialect"
+  | "providers.opencode_zen_dialect"
+  | "providers.opencode_console_dialect";
+
+type ProfileLabelKey =
+  | "providers.profile_auto"
+  | "providers.profile_native"
+  | "providers.profile_claude_code"
+  | "providers.profile_codex"
+  | "providers.profile_opencode_cli";
+
+const KINDS: { id: ProviderKind; labelKey: KindLabelKey }[] = [
   { id: "openai_compatible", labelKey: "providers.openai_dialect" },
   { id: "anthropic", labelKey: "providers.anthropic_dialect" },
+  { id: "opencode_zen_free", labelKey: "providers.opencode_zen_dialect" },
+  { id: "opencode_console", labelKey: "providers.opencode_console_dialect" },
 ];
 
-const CLIENT_PROFILES: {
-  id: ProviderClientProfile;
-  labelKey:
-    | "providers.profile_auto"
-    | "providers.profile_native"
-    | "providers.profile_claude_code"
-    | "providers.profile_codex";
-}[] = [
+const CLIENT_PROFILES: { id: ProviderClientProfile; labelKey: ProfileLabelKey }[] = [
   { id: "auto", labelKey: "providers.profile_auto" },
   { id: "native", labelKey: "providers.profile_native" },
   { id: "claude_code", labelKey: "providers.profile_claude_code" },
   { id: "codex", labelKey: "providers.profile_codex" },
+  { id: "opencode_cli", labelKey: "providers.profile_opencode_cli" },
 ];
 
+/**
+ * Whether this kind targets OpenCode's gateway.
+ *
+ * Mirrors `ProviderKind::is_opencode`. Such a provider speaks the OpenAI
+ * dialect but is not an OpenAI-compatible endpoint: the gateway checks a fixed
+ * fingerprint and rejects anything else, which is why both the profile and the
+ * discovery surface behave differently for these two kinds.
+ */
+function isOpencodeKind(kind: ProviderKind): boolean {
+  return kind === "opencode_zen_free" || kind === "opencode_console";
+}
+
+/** Mirrors `ProviderKind::default_base_url` in `zroutery-core::config`. */
 function defaultBaseUrl(kind: ProviderKind): string {
-  return kind === "anthropic" ? "https://api.anthropic.com" : "https://api.openai.com/v1";
+  switch (kind) {
+    case "anthropic":
+      return "https://api.anthropic.com";
+    case "opencode_zen_free":
+      return "https://opencode.ai/zen";
+    case "opencode_console":
+      return "https://opencode.ai/inference/openai/v1";
+    default:
+      return "https://api.openai.com/v1";
+  }
+}
+
+/**
+ * Mirrors the `client_profile` arm of `ProviderConfig::new`.
+ *
+ * The OpenCode arm is not a preference: `config.rs` rejects any OpenCode
+ * provider whose configured profile is not `opencode_cli`, so creating or
+ * re-kinding one without it produces a config that will not validate.
+ */
+function defaultClientProfile(kind: ProviderKind): ProviderClientProfile {
+  switch (kind) {
+    case "anthropic":
+      return "claude_code";
+    case "opencode_zen_free":
+    case "opencode_console":
+      return "opencode_cli";
+    default:
+      return "auto";
+  }
+}
+
+/** The label `KINDS` gives a kind, for the places that show one directly. */
+function kindLabelKey(kind: ProviderKind): KindLabelKey {
+  return KINDS.find((k) => k.id === kind)?.labelKey ?? "providers.openai_dialect";
 }
 
 /**
@@ -135,7 +190,7 @@ export default function Providers({
         base_url: newBaseUrl.trim() || defaultBaseUrl(newKind),
         key_ref: `provider:${id}`,
         extra_headers: {},
-        client_profile: newKind === "anthropic" ? "claude_code" : "auto",
+        client_profile: defaultClientProfile(newKind),
         bearer_auth: false,
         enabled: true,
         timeout_secs: 600,
@@ -256,7 +311,11 @@ export default function Providers({
                     {models.length > 0 && ` · ${t("count.models", { n: models.length })}`}
                     {p.kind === "anthropic"
                       ? ` · ${t("providers.anthropic_dialect")}`
-                      : ` · ${t("providers.openai_dialect")}`}
+                      : p.kind === "opencode_zen_free"
+                        ? ` · ${t("providers.opencode_zen_dialect")}`
+                        : p.kind === "opencode_console"
+                          ? ` · ${t("providers.opencode_console_dialect")}`
+                          : ` · ${t("providers.openai_dialect")}`}
                   </span>
                 </div>
                 {p.balance.preset !== "none" && (
@@ -625,6 +684,10 @@ function ProviderDrawer({
   const [discovered, setDiscovered] = useState<DiscoveredModel[] | null>(null);
   const [discovering, setDiscovering] = useState(false);
   const [checkingBalance, setCheckingBalance] = useState(false);
+  // The free tier's catalogue is the whole Zen list, paid models included, so
+  // this defaults on for that one kind: the operator is looking for the free
+  // models and the paid ones can only fail on an unauthenticated provider.
+  const [freeOnly, setFreeOnly] = useState(provider.kind === "opencode_zen_free");
   // Which catalogue request is allowed to answer. Switching providers (or
   // closing the drawer) bumps it, so a slow response for the provider that was
   // open a moment ago cannot land in the current one's list.
@@ -644,6 +707,15 @@ function ProviderDrawer({
    * same render keeps the two guarantees in one place.
    */
   const providerId = provider.id;
+
+  /**
+   * What the catalogue table shows.
+   *
+   * The filter reads `free` off the entry rather than inferring it from a price:
+   * a source that publishes no price for a genuinely free model leaves
+   * `pricing` null, so "no price" and "free" are not the same test.
+   */
+  const visibleDiscovered = (discovered ?? []).filter((d) => !freeOnly || d.free);
 
   const saveKey = async () => {
     const value = keyDraft.trim();
@@ -749,7 +821,7 @@ function ProviderDrawer({
       <KeyValue
         rows={[
           [t("providers.endpoint"), <span className="mono">{provider.base_url}</span>],
-          [t("providers.dialect"), provider.kind === "anthropic" ? t("providers.anthropic_dialect") : t("providers.openai_dialect")],
+          [t("providers.dialect"), t(kindLabelKey(provider.kind))],
           [
             t("providers.auth"),
             hasKey ? (
@@ -813,36 +885,62 @@ function ProviderDrawer({
           </Button>
         </div>
         {discovered && discovered.length > 0 && (
-          <table className="table">
-            <thead>
-              <tr>
-                <th>{t("field.model_name")}</th>
-                <th>{t("models.price")}</th>
-                <th />
-              </tr>
-            </thead>
-            <tbody>
-              {discovered.map((d) => (
-                <tr key={d.id}>
-                  <td className="mono">{d.id}</td>
-                  <td className="muted">
-                    {d.pricing
-                      ? `${d.pricing.input_per_mtok} / ${d.pricing.output_per_mtok} ${d.pricing.currency}`
-                      : "—"}
-                  </td>
-                  <td>
-                    <Button
-                      kind="ghost"
-                      onClick={() => addDiscovered(d)}
-                      disabled={models.some((m) => m.upstream_model === d.id)}
-                    >
-                      {t("cc.add")}
-                    </Button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <>
+            <div className="controls">
+              <Toggle
+                label={t("providers.free_only")}
+                hint={t("providers.free_only_hint")}
+                checked={freeOnly}
+                onChange={setFreeOnly}
+              />
+            </div>
+            <p className="muted">
+              {freeOnly
+                ? t("providers.catalogue_shown", {
+                    shown: visibleDiscovered.length,
+                    total: discovered.length,
+                  })
+                : t("providers.catalogue_total", { total: discovered.length })}
+            </p>
+            {visibleDiscovered.length > 0 ? (
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>{t("field.model_name")}</th>
+                    <th>{t("models.price")}</th>
+                    <th />
+                  </tr>
+                </thead>
+                <tbody>
+                  {visibleDiscovered.map((d) => (
+                    <tr key={d.id}>
+                      <td className="mono">
+                        {d.id} {d.free && <Badge tone="ok">{t("providers.free_badge")}</Badge>}
+                      </td>
+                      <td className="muted">
+                        {d.pricing
+                          ? `${d.pricing.input_per_mtok} / ${d.pricing.output_per_mtok} ${d.pricing.currency}`
+                          : "—"}
+                      </td>
+                      <td>
+                        <Button
+                          kind="ghost"
+                          onClick={() => addDiscovered(d)}
+                          disabled={models.some((m) => m.upstream_model === d.id)}
+                        >
+                          {t("cc.add")}
+                        </Button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : (
+              <div className="empty-state">
+                <p>{t("providers.catalogue_no_free", { total: discovered.length })}</p>
+              </div>
+            )}
+          </>
         )}
       </Section>
 
@@ -876,7 +974,20 @@ function ProviderDrawer({
               value={provider.kind}
               onChange={(kind) =>
                 onUpdate((p) => {
+                  const previousDefault = defaultBaseUrl(p.kind);
                   p.kind = kind;
+                  // The profile is not free alongside the kind: config.rs
+                  // refuses an OpenCode provider that is not `opencode_cli`,
+                  // and Claude Code is only the sensible pairing for an
+                  // Anthropic endpoint. Re-derive it so switching kind in the
+                  // drawer cannot leave a config that will not validate.
+                  p.client_profile = defaultClientProfile(kind);
+                  // Follow the new endpoint only if the base URL is still the
+                  // one the old kind defaulted to; a hand-edited one is left
+                  // alone.
+                  if (p.base_url.trim() === previousDefault) {
+                    p.base_url = defaultBaseUrl(kind);
+                  }
                 })
               }
               options={KINDS.map((k) => ({ value: k.id, label: t(k.labelKey) }))}
@@ -929,16 +1040,34 @@ function ProviderDrawer({
               })
             }
           />
-          <Field label={t("providers.client_profile")} hint={t("providers.client_profile_hint")}>
+          <Field
+            label={t("providers.client_profile")}
+            hint={
+              isOpencodeKind(provider.kind)
+                ? t("providers.client_profile_locked_hint")
+                : t("providers.client_profile_hint")
+            }
+          >
             <Select
               ariaLabel={t("providers.client_profile")}
               value={provider.client_profile ?? "auto"}
+              // The OpenCode gateway checks a fixed fingerprint, so config.rs
+              // refuses any other profile on these kinds. Offering the others
+              // here would only offer a choice that fails to save.
+              disabled={isOpencodeKind(provider.kind)}
               onChange={(client_profile) =>
                 onUpdate((p) => {
                   p.client_profile = client_profile;
                 })
               }
-              options={CLIENT_PROFILES.map((c) => ({ value: c.id, label: t(c.labelKey) }))}
+              options={
+                isOpencodeKind(provider.kind)
+                  ? CLIENT_PROFILES.filter((c) => c.id === "opencode_cli").map((c) => ({
+                      value: c.id,
+                      label: t(c.labelKey),
+                    }))
+                  : CLIENT_PROFILES.map((c) => ({ value: c.id, label: t(c.labelKey) }))
+              }
             />
           </Field>
           {provider.kind === "anthropic" && (
