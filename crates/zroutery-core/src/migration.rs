@@ -188,10 +188,20 @@ pub struct MigrationResult {
     /// fails, which is the case a caller most needs to notice: the transition says
     /// `RolledBack` while the config on disk is half-migrated.
     ///
-    /// A rollback that restored nothing, or restored everything, reports `true`.
-    /// A rollback with a failed restore reports `false` and carries the reason in
-    /// `errors` — a warning is the wrong place for it, because every caller
-    /// checks `errors.is_empty()` and none of them are obliged to read warnings.
+    /// **CORRECTED.** This documentation previously said "a rollback that
+    /// restored nothing, or restored everything, reports `true`", which
+    /// contradicted the two sentences above it and undid the field's own reason
+    /// for existing. Under that wording an interrupted migration recovered with no
+    /// snapshot reported `true`: the transition said `RolledBack`, no file came
+    /// back, and a caller asking "is the installation safe" was told yes.
+    ///
+    /// It now reports `true` only when at least one file was restored and none
+    /// failed. A rollback with a failed restore reports `false` and carries the
+    /// reason in `errors` — a warning is the wrong place for it, because every
+    /// caller checks `errors.is_empty()` and none of them are obliged to read
+    /// warnings. **This is a public-field semantic change** and the seven fixtures
+    /// that asserted the old wording were updated rather than deleted; each keeps
+    /// the state-transition assertion it was actually written for.
     pub rolled_back: bool,
     /// Snapshot files a rollback put back successfully.
     #[serde(default)]
@@ -351,6 +361,58 @@ impl MigrationStore {
     /// written.
     pub fn persist_error(&self) -> Option<String> {
         self.last_persist_error.lock().unwrap().clone()
+    }
+
+    /// Where a durable store keeps its rollback snapshot.
+    ///
+    /// Beside the manifest rather than inside it: a snapshot holds the verbatim
+    /// bytes of the user's configuration files, and a manifest that is rewritten
+    /// on every state transition should not have to rewrite those bytes each time.
+    fn snapshot_path(&self) -> Option<std::path::PathBuf> {
+        self.path
+            .as_ref()
+            .map(|p| p.with_extension("snapshot.json"))
+    }
+
+    /// Write a rollback snapshot beside the manifest, if this store is durable.
+    ///
+    /// The snapshot is what [`MigrationExecutor::recover`] restores from after a
+    /// restart. Persisting the state without it would turn recovery from an honest
+    /// refusal into a silent no-op: the store would know it was interrupted and
+    /// restore none of the files it had captured. `rolled_back` would be `false`,
+    /// so it would not *claim* success — but nothing would come back either, and a
+    /// caller that only checks the state machine would see `RolledBack`.
+    pub fn save_snapshot(&self, snapshot: &MigrationSnapshot) -> Result<(), String> {
+        let Some(path) = self.snapshot_path() else {
+            return Ok(());
+        };
+        let bytes = serde_json::to_vec(snapshot).map_err(|e| e.to_string())?;
+        crate::agent_takeover::write_config_atomic(&path, &bytes)
+    }
+
+    /// Read the persisted rollback snapshot, if there is one.
+    ///
+    /// A snapshot that exists but cannot be read returns `Err` rather than `None`:
+    /// returning `None` would mean "nothing was captured", which sends
+    /// [`MigrationExecutor::recover`] down the same path as having captured
+    /// nothing, when in fact files were captured and the record of them is damaged.
+    pub fn load_snapshot(&self) -> Result<Option<MigrationSnapshot>, String> {
+        let Some(path) = self.snapshot_path() else {
+            return Ok(None);
+        };
+        match std::fs::read(&path) {
+            Ok(bytes) => serde_json::from_slice::<MigrationSnapshot>(&bytes)
+                .map(Some)
+                .map_err(|e| {
+                    format!(
+                        "rollback snapshot at {} is unreadable: {e}. Refusing to report a \
+                         recovery that restores nothing.",
+                        path.display()
+                    )
+                }),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(format!("cannot read {}: {e}", path.display())),
+        }
     }
 
     /// Write the current state and history, if this store is durable.
@@ -932,10 +994,16 @@ impl MigrationExecutor {
                 }
             }
         }
-        Ok(MigrationSnapshot {
+        let snapshot = MigrationSnapshot {
             files,
             created_at: chrono::Utc::now().timestamp(),
-        })
+        };
+        // Persisted when the store is durable, so that a `recover` in a later
+        // process has the captured bytes to put back rather than nothing. A store
+        // that is memory-only returns `Ok` here and keeps the old behaviour, which
+        // is why no existing fixture changed.
+        self.store.save_snapshot(&snapshot)?;
+        Ok(snapshot)
     }
 
     /// Rollback a failed migration. If a snapshot is provided, restores
@@ -989,9 +1057,19 @@ impl MigrationExecutor {
             errors,
             warnings,
             duration_ms: 0,
-            // Only a rollback that put everything back has rolled back. Anything
-            // else is a partial restore, and claiming otherwise is the defect.
-            rolled_back: failed_restores.is_empty(),
+            // Only a rollback that actually put something back has rolled back.
+            //
+            // Both halves matter, and the second was the one missing until a
+            // durability gate found it. Testing only `failed_restores.is_empty()`
+            // says a rollback with no snapshot rolled back, because restoring
+            // nothing fails nothing. That was not hypothetical: `recover` passed
+            // `None` on every call, so every interrupted migration reported
+            // `rolled_back: true` while putting no file back.
+            //
+            // A snapshot that captured no files is the same case by another route
+            // — `create_snapshot` skips unreadable paths with a warning — and it
+            // must not read as a successful restore either.
+            rolled_back: !restored_files.is_empty() && failed_restores.is_empty(),
             restored_files,
             failed_restores,
         }
@@ -1010,11 +1088,29 @@ impl MigrationExecutor {
             MigrationState::Prepared | MigrationState::Verified | MigrationState::Switched => {
                 // Transition through Failed before rolling back.
                 let _ = self.store.transition(MigrationState::Failed);
-                Ok(self.rollback(None))
+                // Restored from the persisted snapshot rather than from `None`.
+                // Passing `None` is what made this method a no-op that reported
+                // `RolledBack`: the state machine advanced, the files did not come
+                // back, and a caller checking only the state saw a recovery that
+                // never happened.
+                let snapshot = self.store.load_snapshot()?;
+                Ok(self.rollback(snapshot.as_ref()))
             }
-            MigrationState::Failed => Ok(self.rollback(None)),
+            MigrationState::Failed => {
+                let snapshot = self.store.load_snapshot()?;
+                Ok(self.rollback(snapshot.as_ref()))
+            }
             _ => Err(format!("cannot recover from state {:?}", state)),
         }
+    }
+
+    /// The rollback snapshot as persisted, if this executor's store is durable.
+    ///
+    /// Exists so a caller driving a real restore — a test, or the desktop layer
+    /// when one is built — reads the snapshot the same way [`Self::recover`] does,
+    /// rather than reconstructing the decision about whether one exists.
+    pub fn snapshot_from_disk(&self) -> Option<MigrationSnapshot> {
+        self.store.load_snapshot().ok().flatten()
     }
 
     /// Check if migration is already complete (idempotent).
@@ -1699,7 +1795,13 @@ mod tests {
 
         let result = executor.rollback(None);
         assert_eq!(result.state, MigrationState::RolledBack);
-        assert!(result.rolled_back);
+        // No snapshot was captured, so no file came back. See the field's
+        // documentation: olled_back records whether files were restored, and a
+        // rollback that restored nothing has not rolled anything back.
+        assert!(
+            !result.rolled_back,
+            "a rollback with nothing captured must not report a successful restore"
+        );
         assert_eq!(executor.store.current_state(), MigrationState::RolledBack);
     }
 
@@ -2190,7 +2292,13 @@ mod tests {
 
         let result = executor.rollback(None);
         assert_eq!(result.state, MigrationState::RolledBack);
-        assert!(result.rolled_back);
+        // No snapshot was captured, so no file came back. See the field's
+        // documentation: olled_back records whether files were restored, and a
+        // rollback that restored nothing has not rolled anything back.
+        assert!(
+            !result.rolled_back,
+            "a rollback with nothing captured must not report a successful restore"
+        );
         assert!(result.warnings.is_empty());
         assert_eq!(executor.store.current_state(), MigrationState::RolledBack);
     }
@@ -2275,7 +2383,13 @@ mod tests {
         let result = executor.recover().unwrap();
 
         assert_eq!(result.state, MigrationState::RolledBack);
-        assert!(result.rolled_back);
+        // No snapshot was captured, so no file came back. See the field's
+        // documentation: olled_back records whether files were restored, and a
+        // rollback that restored nothing has not rolled anything back.
+        assert!(
+            !result.rolled_back,
+            "a rollback with nothing captured must not report a successful restore"
+        );
         assert_eq!(executor.store.current_state(), MigrationState::RolledBack);
     }
 
@@ -2290,7 +2404,13 @@ mod tests {
         let result = executor.recover().unwrap();
 
         assert_eq!(result.state, MigrationState::RolledBack);
-        assert!(result.rolled_back);
+        // No snapshot was captured, so no file came back. See the field's
+        // documentation: olled_back records whether files were restored, and a
+        // rollback that restored nothing has not rolled anything back.
+        assert!(
+            !result.rolled_back,
+            "a rollback with nothing captured must not report a successful restore"
+        );
         assert_eq!(executor.store.current_state(), MigrationState::RolledBack);
     }
 
@@ -2306,7 +2426,13 @@ mod tests {
         let result = executor.recover().unwrap();
 
         assert_eq!(result.state, MigrationState::RolledBack);
-        assert!(result.rolled_back);
+        // No snapshot was captured, so no file came back. See the field's
+        // documentation: olled_back records whether files were restored, and a
+        // rollback that restored nothing has not rolled anything back.
+        assert!(
+            !result.rolled_back,
+            "a rollback with nothing captured must not report a successful restore"
+        );
         assert_eq!(executor.store.current_state(), MigrationState::RolledBack);
     }
 
@@ -2319,7 +2445,13 @@ mod tests {
         let result = executor.recover().unwrap();
 
         assert_eq!(result.state, MigrationState::RolledBack);
-        assert!(result.rolled_back);
+        // No snapshot was captured, so no file came back. See the field's
+        // documentation: olled_back records whether files were restored, and a
+        // rollback that restored nothing has not rolled anything back.
+        assert!(
+            !result.rolled_back,
+            "a rollback with nothing captured must not report a successful restore"
+        );
         assert_eq!(executor.store.current_state(), MigrationState::RolledBack);
     }
 

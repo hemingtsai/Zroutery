@@ -409,16 +409,30 @@ fn a_clean_rollback_reports_success_and_says_which_files_it_restored() {
 }
 
 #[test]
-fn a_rollback_with_nothing_to_restore_is_a_success() {
-    // Nothing to restore is not a failed restore. Reporting otherwise would make
-    // the common `recover()` path look broken.
+fn a_rollback_with_nothing_to_restore_does_not_claim_success() {
+    // RESTATED, because the name of this test used to state the opposite and the
+    // old assertion was wrong. It read "a rollback with nothing to restore is a
+    // success", justified by "reporting otherwise would make the common `recover()`
+    // path look broken".
+    //
+    // That justification rested on `recover` passing `None` on every call, which was
+    // the defect rather than a fact about rollbacks: a restore that puts no file
+    // back has not restored anything, and `rolled_back` is the field a caller reads
+    // to decide whether the system is safe. `recover` now loads a persisted
+    // snapshot, so the ordinary path has something to put back and reports success
+    // honestly; the no-snapshot path is the one that has to admit nothing happened.
     let executor = failing_executor();
     let writer = SelectiveWriter::failing(&["anything"]);
     let result = executor.rollback_with(None, &writer);
 
-    assert!(result.rolled_back);
+    assert!(
+        !result.rolled_back,
+        "a rollback that restored nothing must not report that it did"
+    );
     assert!(result.restored_files.is_empty());
     assert!(result.failed_restores.is_empty());
+    // Still not an *error*: nothing was attempted, so nothing failed. The
+    // distinction a caller needs is "did it come back", not "was there an error".
     assert!(result.errors.is_empty());
 }
 
@@ -440,10 +454,13 @@ fn the_default_rollback_still_goes_to_the_real_filesystem() {
 }
 
 #[test]
-fn recover_on_a_failing_restore_reports_the_failure_rather_than_success() {
-    // `recover` delegates to `rollback`, so it inherits the reporting. Pinned
-    // because a wrapper that swallows the new fields would leave the old defect
-    // in place one call away.
+fn recover_with_no_captured_snapshot_does_not_claim_it_restored() {
+    // Was named `recover_on_a_failing_restore_reports_the_failure_rather_than_success`
+    // and asserted `rolled_back` was true while the fixture had captured nothing, so
+    // the name contradicted the assertion. `recover` is covered end to end with a
+    // real snapshot by `migration_durability_test.rs`, which is where the "does it
+    // come back" question is actually decidable; this gate pins the opposite case,
+    // which is the one that was lying.
     let dir = std::env::temp_dir().join(format!("zroutery_rb_recover_{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("dir");
     let path = dir.join("config.toml");
@@ -456,9 +473,13 @@ fn recover_on_a_failing_restore_reports_the_failure_rather_than_success() {
     let executor = MigrationExecutor::new(store);
     let result = executor.recover().expect("recover runs");
 
-    // `recover` passes no snapshot, so there is nothing to fail; this pins that it
-    // still reports honestly rather than inheriting a stale `true`.
-    assert!(result.rolled_back);
+    // Nothing was captured, so nothing can come back, so this must not claim it
+    // did. Still not an error: nothing was attempted, so nothing failed.
+    assert!(
+        !result.rolled_back,
+        "a recovery with nothing captured must not report a successful restore"
+    );
+    assert!(result.restored_files.is_empty());
     assert!(result.errors.is_empty());
     let _ = std::fs::remove_dir_all(&dir);
 }

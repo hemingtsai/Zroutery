@@ -34,7 +34,9 @@
 
 use std::path::PathBuf;
 
-use zroutery_core::migration::{MigrationResult, MigrationState, MigrationStore};
+use zroutery_core::migration::{
+    MigrationExecutor, MigrationResult, MigrationState, MigrationStore, SnapshotWriter,
+};
 
 fn result(state: MigrationState) -> MigrationResult {
     MigrationResult {
@@ -309,5 +311,158 @@ fn the_manifest_is_created_with_restrictive_permissions() {
         mode & 0o777,
         0o600,
         "the manifest must not be readable more widely than its owner"
+    );
+}
+
+/// A writer that records what it was asked to write, standing in for the disk.
+///
+/// The point of this gate is *which bytes reach the writer*, not whether a real
+/// file changed, so a recorder makes the assertion exact rather than dependent on
+/// filesystem timing.
+#[derive(Default)]
+struct Recorder {
+    written: std::sync::Mutex<Vec<(String, Vec<u8>)>>,
+}
+
+impl SnapshotWriter for Recorder {
+    fn write(&self, path: &str, content: &[u8]) -> Result<(), String> {
+        self.written
+            .lock()
+            .unwrap()
+            .push((path.to_string(), content.to_vec()));
+        Ok(())
+    }
+}
+
+/// GATE 10: a snapshot survives the process that captured it.
+///
+/// Persisting the state without persisting the snapshot would make `recover` an
+/// honest-looking no-op: it would find the interrupted state, transition, and
+/// restore nothing. This is the gate that distinguishes "the store remembers it
+/// was interrupted" from "the store can undo it".
+#[test]
+fn a_captured_snapshot_survives_a_restart() {
+    let (_dir, path) = fresh_path("snapshot");
+
+    {
+        let store = MigrationStore::open(&path).expect("open");
+        let executor = MigrationExecutor::new(store);
+        // A snapshot of files that do not exist captures nothing, so the gate
+        // writes one for real rather than trusting an empty vector to round-trip.
+        let source = _dir.path().join("source.txt");
+        std::fs::write(&source, b"the original bytes").expect("write the source file");
+
+        let snapshot = executor
+            .create_snapshot(&[source.to_str().expect("a utf-8 path")])
+            .expect("capture a snapshot");
+        assert_eq!(
+            snapshot.files.len(),
+            1,
+            "the fixture must actually capture a file, or it proves nothing"
+        );
+    } // the process ends here
+
+    let reopened = MigrationStore::open(&path).expect("reopen");
+    let loaded = reopened
+        .load_snapshot()
+        .expect("the snapshot must load")
+        .expect("a snapshot was captured, so one must be there");
+    assert_eq!(loaded.files.len(), 1);
+    assert_eq!(loaded.files[0].content, b"the original bytes");
+}
+
+/// GATE 11: `recover` after a restart restores the captured bytes.
+///
+/// This is the whole point of the two halves together. Before this change `recover`
+/// passed `None` to `rollback`, so it transitioned to `RolledBack` and wrote
+/// nothing: the state machine said recovered and no file came back.
+#[test]
+fn recover_after_a_restart_actually_restores_the_files() {
+    let (_dir, path) = fresh_path("recover");
+    let source = _dir.path().join("source.txt");
+    std::fs::write(&source, b"the original bytes").expect("write the source file");
+    let source_path = source.to_str().expect("a utf-8 path").to_string();
+
+    {
+        let store = MigrationStore::open(&path).expect("open");
+        // The executor holds the store, so the transitions that follow the capture
+        // are made through a second handle to the same manifest rather than by
+        // keeping a clone alive for the sake of the test.
+        MigrationExecutor::new(MigrationStore::open(&path).expect("reopen"))
+            .create_snapshot(&[&source_path])
+            .expect("capture a snapshot");
+        store
+            .transition(MigrationState::Prepared)
+            .expect("prepared");
+        store
+            .transition(MigrationState::Verified)
+            .expect("verified");
+        store
+            .transition(MigrationState::Switched)
+            .expect("switched");
+    } // the process dies mid-migration
+
+    let reopened = MigrationStore::open(&path).expect("reopen");
+    let executor = MigrationExecutor::new(reopened);
+
+    let recorder = Recorder::default();
+    let snapshot = executor.snapshot_from_disk();
+    let result = executor.rollback_with(snapshot.as_ref(), &recorder);
+
+    assert!(
+        result.rolled_back,
+        "a rollback that restored the captured file must report it"
+    );
+    assert_eq!(
+        result.restored_files,
+        vec![source_path.clone()],
+        "the captured file must be the one restored"
+    );
+    let written = recorder.written.lock().unwrap().clone();
+    assert_eq!(written.len(), 1, "exactly one restore write");
+    assert_eq!(written[0].0, source_path);
+    assert_eq!(
+        written[0].1, b"the original bytes",
+        "the restored bytes must be the captured ones, not empty"
+    );
+}
+
+/// GATE 12: recovery with no captured snapshot restores nothing and says so.
+///
+/// The control for GATE 11. If this also reported `rolled_back`, then GATE 11
+/// would be asserting nothing and the distinction the two halves draw would be
+/// untested.
+#[test]
+fn a_recovery_with_no_snapshot_restores_nothing_and_says_so() {
+    let (_dir, path) = fresh_path("no-snapshot");
+
+    {
+        let store = MigrationStore::open(&path).expect("open");
+        store
+            .transition(MigrationState::Prepared)
+            .expect("prepared");
+        store
+            .transition(MigrationState::Verified)
+            .expect("verified");
+        store
+            .transition(MigrationState::Switched)
+            .expect("switched");
+    }
+
+    let reopened = MigrationStore::open(&path).expect("reopen");
+    let executor = MigrationExecutor::new(reopened);
+    let recorder = Recorder::default();
+
+    let snapshot = executor.snapshot_from_disk();
+    let result = executor.rollback_with(snapshot.as_ref(), &recorder);
+
+    assert!(
+        !result.rolled_back,
+        "a rollback that restored nothing must not report that it did"
+    );
+    assert!(result.restored_files.is_empty());
+    assert!(
+        recorder.written.lock().unwrap().is_empty(),
+        "nothing must be written when nothing was captured"
     );
 }
