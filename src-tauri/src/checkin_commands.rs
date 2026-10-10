@@ -677,6 +677,19 @@ async fn observe(
         started_at,
     );
     let phase = report.phase;
+
+    // The one place a check-in becomes a resource event. It lives here rather than
+    // in the scheduler because this is the only place that holds both a finished
+    // report and the account it belongs to — and because the conversion is the
+    // whole discipline in one call: only a confirmed reward may claim the balance
+    // moved, and the weaker answers say so rather than borrowing the strong one.
+    //
+    // An event that nobody constructs is a type, not a feature, so this line is
+    // what makes the observation layer reachable at all.
+    if let Some(event) = zroutery_core::account::checkin::as_resource_event(&report) {
+        desktop.account_events.record(event);
+    }
+
     desktop.record_checkin_view(view_from_report(&key.provider_id, &key.account_id, &report));
     Some(phase)
 }

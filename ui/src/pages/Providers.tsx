@@ -12,6 +12,7 @@ import {
   type CcProviderDraft,
   type CcSwitchPreview,
   type CheckinView,
+  type AccountEvent,
   type DiscoveredModel,
   type Maintenance,
   type Provider,
@@ -461,12 +462,15 @@ function BalanceChip({ status }: { status: BalanceStatus | undefined }) {
  */
 function AccountMaintenanceRow({
   view,
+  events,
   busy,
   onStart,
   onResume,
   onCancel,
 }: {
   view: CheckinView;
+  /** Observed resource events for the whole snapshot, newest first. */
+  events: AccountEvent[];
   busy: boolean;
   onStart: () => void;
   onResume: () => void;
@@ -503,6 +507,17 @@ function AccountMaintenanceRow({
           change a setting that is not the problem.
         */}
         <span className="row-sub muted">{scheduleLabel(view)}</span>
+        {latestEventFor(events, view.provider_id, view.account_id) && (
+          /*
+           * What the provider said actually happened, with the evidence it came
+           * from. Rendered as the event rather than as a running total, because a
+           * sum of partially-observed events drifts from the truth and the truth
+           * is available from the provider directly.
+           */
+          <span className="row-sub mono">
+            {eventLabel(latestEventFor(events, view.provider_id, view.account_id)!)}
+          </span>
+        )}
         {/*
           A reward is shown only when one was observed, and its source travels
           with it. A figure recovered from provider log text is weaker evidence
@@ -547,6 +562,44 @@ function AccountMaintenanceRow({
       </div>
     </div>
   );
+}
+
+/**
+ * The most recent observed event for one account, if there is one.
+ *
+ * Picks the newest rather than the first in the list because the snapshot is
+ * already ordered but a caller should not have to know that.
+ */
+function latestEventFor(
+  events: AccountEvent[] | undefined,
+  providerId: string,
+  accountId: string,
+): AccountEvent | undefined {
+  let newest: AccountEvent | undefined;
+  for (const event of events ?? []) {
+    if (event.provider_id !== providerId || event.account_id !== accountId) continue;
+    if (!newest || event.observed_at > newest.observed_at) newest = event;
+  }
+  return newest;
+}
+
+/**
+ * One line saying what the provider established, and how well.
+ *
+ * The `no_change` and `unobserved` cases are spelled differently on purpose. One is
+ * a finding — we looked and nothing moved — and the other is an absence of
+ * information, and rendering both as "no change" would state as fact something the
+ * provider never said.
+ */
+function eventLabel(event: AccountEvent): string {
+  if (event.effect === "credited" && event.amount !== null) {
+    return `+${event.amount} ${event.unit ?? ""} (${event.source})`;
+  }
+  if (event.effect === "debited" && event.amount !== null) {
+    return `-${event.amount} ${event.unit ?? ""} (${event.source})`;
+  }
+  if (event.effect === "no_change") return "observed: nothing moved";
+  return "established: unknown";
 }
 
 /** The scheduler decisions the backend publishes. */
@@ -1127,6 +1180,7 @@ function ProviderDrawer({
                 <AccountMaintenanceRow
                   key={account.account_id}
                   view={view}
+                  events={snapshot.account_events ?? []}
                   busy={busy}
                   onStart={() =>
                     void start(provider.id, account.account_id, account.maintenance)

@@ -37,8 +37,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::resource::ObservedResourceEvent;
 use super::resource::ResourceAmount;
+use super::resource::{ObservedResourceEvent, ResourceEventSource};
 use super::types::AccountId;
 
 /// Where a check-in has got to.
@@ -257,6 +257,137 @@ pub enum CheckinConfirmation {
     /// granted by this operation, and its absence here says nothing about
     /// whether the earlier one landed.
     AlreadyCompleted { reward: Option<CheckinReward> },
+}
+
+/// Turn a finished check-in into the resource event it actually was.
+///
+/// This is the missing link between the check-in lifecycle and the resource-event
+/// layer, and it exists because **an event that nobody constructs is a type, not a
+/// feature.** `ObservedResourceEvent` and `AccountEventLog` were written, tested and
+/// then held by nothing: no check-in ever produced an event, so the log was always
+/// empty and nothing downstream could be exercised.
+///
+/// # What each outcome becomes, and why
+///
+/// | confirmation | effect | why not something stronger |
+/// |---|---|---|
+/// | `Confirmed` | `Credited` with the amount | a structured surface established it |
+/// | `AlreadyCompleted` | `NoChange` | the provider says nothing settled; that is a *finding*, not missing information |
+/// | `ObservationPending` | `Unobserved` | the operation may have been granted; nothing observed says so |
+/// | any non-terminal or failure | *nothing* | an attempt that did not end established nothing about the balance |
+///
+/// `NoChange` for an already-completed check-in is the case worth stating. It is
+/// tempting to record the earlier reward it reports, and that would be wrong twice
+/// over: the grant belongs to the earlier attempt and is already in the log, and a
+/// second entry would make the same credit look like it happened twice.
+///
+/// # Why the source travels with the event
+///
+/// [`ResourceEventSource`] is derived from [`RewardSource`] rather than defaulted,
+/// because a figure recovered from provider log text and one the provider reported
+/// in a structured field must not render identically. A consumer that cannot tell
+/// them apart will eventually add them up.
+///
+/// Returns `None` for anything that has not ended, so a caller cannot record an
+/// event for an attempt that is still running or waiting on a person.
+pub fn as_resource_event(report: &CheckinReport) -> Option<ObservedResourceEvent> {
+    use super::resource::{ResourceEffect, ResourceEventKind};
+
+    if !report.phase.is_terminal() {
+        return None;
+    }
+    // A terminal phase with no confirmation at all is a failure or a cancellation.
+    // It established nothing about the balance, so there is no event to record —
+    // and that is different from an event that says "nothing moved".
+    let confirmation = report.confirmation.as_ref()?;
+
+    let observed_at = report.completed_at.unwrap_or(report.started_at);
+    let event_kind = ResourceEventKind::SystemGrant;
+    let source = match confirmation {
+        // No structured surface answered, so nothing establishes the effect. The
+        // honest answer is carried rather than replaced by a figure from the report.
+        CheckinConfirmation::ObservationPending => ResourceEventSource::AccountState,
+        CheckinConfirmation::Confirmed { reward } => source_for(reward.source),
+        CheckinConfirmation::AlreadyCompleted { .. } => ResourceEventSource::AccountLog,
+    };
+
+    let resource_effect = match confirmation {
+        CheckinConfirmation::Confirmed { reward } => ResourceEffect::Credited {
+            amount: reward.amount.clone(),
+        },
+        CheckinConfirmation::AlreadyCompleted { .. } => ResourceEffect::NoChange,
+        CheckinConfirmation::ObservationPending => ResourceEffect::Unobserved,
+    };
+
+    let mut metadata = std::collections::BTreeMap::new();
+    if let Some(reward) = report.reward() {
+        metadata.insert(
+            "checkin_source".to_string(),
+            reward_source_name(reward.source).to_string(),
+        );
+        if let Some(value) = reward.amount.provider_value {
+            metadata.insert("checkin_provider_value".to_string(), value.to_string());
+        }
+    }
+
+    Some(ObservedResourceEvent {
+        event_id: None,
+        provider_id: report.provider_id.clone(),
+        account_id: report.account_id.clone(),
+        observed_at,
+        event_kind,
+        raw_type: None,
+        description: description_for(report),
+        resource_effect,
+        source,
+        request_id: None,
+        channel_id: None,
+        model: None,
+        accounting: None,
+        metadata,
+    })
+}
+
+/// Where a reward figure was read from, in the resource layer's vocabulary.
+fn source_for(source: RewardSource) -> ResourceEventSource {
+    match source {
+        // The adapter derived it from the answer to the operation we sent.
+        RewardSource::ProviderResponse => ResourceEventSource::OperationResponse,
+        // Read from a structured account-state endpoint rather than from a log.
+        RewardSource::ProviderRecord => ResourceEventSource::AccountState,
+        // Recovered from the text of an observed log row.
+        RewardSource::EventContent => ResourceEventSource::AccountLog,
+        // Inferred from two balance readings, so it is not a log and not a response.
+        RewardSource::BalanceDelta => ResourceEventSource::AccountState,
+    }
+}
+
+/// The stable name of a reward source, for the event's metadata.
+fn reward_source_name(source: RewardSource) -> &'static str {
+    match source {
+        RewardSource::ProviderResponse => "provider_response",
+        RewardSource::ProviderRecord => "provider_record",
+        RewardSource::EventContent => "event_content",
+        RewardSource::BalanceDelta => "balance_delta",
+    }
+}
+
+/// One line saying what happened, in the provider's own terms.
+///
+/// Carried as text and never parsed: the event layer treats a description as
+/// something to display, and this is where the interpretation stops.
+fn description_for(report: &CheckinReport) -> String {
+    match report.confirmation.as_ref() {
+        Some(CheckinConfirmation::Confirmed { .. }) => "account check-in granted a reward",
+        Some(CheckinConfirmation::AlreadyCompleted { .. }) => {
+            "account check-in had already been completed for this period"
+        }
+        Some(CheckinConfirmation::ObservationPending) => {
+            "account check-in was accepted; no observation established its effect"
+        }
+        None => "account check-in did not establish any resource effect",
+    }
+    .to_string()
 }
 
 impl CheckinConfirmation {

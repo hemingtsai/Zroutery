@@ -507,6 +507,8 @@ export interface Snapshot {
   account_maintenance_available: boolean;
   /** What each declared account's check-in is doing. */
   checkin?: CheckinView[];
+  /** Observed resource events, newest first. */
+  account_events?: AccountEvent[];
 }
 
 /**
@@ -606,6 +608,30 @@ export interface CheckinScheduleView {
   decision: string;
   next_due_at: number | null;
   last_settled_at: number | null;
+}
+/**
+ * One observed thing that happened to an account's resources.
+ *
+ * `effect` is `credited`, `debited`, `no_change` or `unobserved`, and the last two
+ * are different facts rather than synonyms: one says the provider established that
+ * nothing moved, the other says nothing established either way.
+ *
+ * `source` is where the figure came from — `operation_response`, `account_state` or
+ * `account_log`. The log is the weakest of the three, because its text is localised
+ * and forks reword it, so a figure read from it is a fallback rather than a
+ * confirmation.
+ */
+export interface AccountEvent {
+  provider_id: string;
+  account_id: string;
+  observed_at: number;
+  kind: string;
+  effect: string;
+  /** Present only when an amount is established. */
+  amount: number | null;
+  unit: string | null;
+  source: string;
+  description: string;
 }
 
 /** One entry of a provider's catalogue, with prices when it publishes them. */

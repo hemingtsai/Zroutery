@@ -74,6 +74,17 @@ pub struct Desktop {
     /// restart — so one visible browser window per account, seconds after launch.
     #[cfg(feature = "account-maint")]
     pub(crate) checkin_schedule: crate::checkin::schedule::Schedule,
+    /// What has actually been observed happening to accounts' resources.
+    ///
+    /// Bounded and in memory, on purpose: this is a record of what the providers
+    /// said, kept so an operator can see why a balance moved and how strongly that
+    /// was established. It is deliberately not the source of a balance — the
+    /// provider is — and a running sum of partially-observed events drifts.
+    ///
+    /// It exists because the observation layer was written, tested and then held by
+    /// nothing. Holding it here is what makes the events reachable at all.
+    #[cfg(feature = "account-maint")]
+    pub(crate) account_events: zroutery_core::account::AccountEventLog,
 }
 
 /// Whether a listener can claim an address.
@@ -173,6 +184,14 @@ pub struct Snapshot {
     /// What each declared account is doing, newest observation last.
     #[cfg(feature = "account-maint")]
     pub checkin: Vec<CheckinView>,
+    /// Observed resource events, newest first.
+    ///
+    /// Carried so an operator can see *why* a balance moved and, for each entry,
+    /// how strongly that was established. The amount and the evidence travel
+    /// together on purpose: a figure the provider reported in a structured field
+    /// and one recovered out of log text must not read the same.
+    #[cfg(feature = "account-maint")]
+    pub account_events: Vec<AccountEventView>,
 }
 
 /// How much durable history the operator has, as bytes and as a record count.
@@ -269,6 +288,34 @@ pub struct CheckinView {
     pub schedule: CheckinScheduleView,
 }
 
+/// One observed resource event, as a panel receives it.
+///
+/// A projection rather than the core type itself, for the same reason the phase is
+/// a named string rather than a serialised enum: the webview gets a vocabulary that
+/// a `#[serde(rename_all)]` change cannot move underneath it.
+#[derive(Debug, Clone, Serialize)]
+pub struct AccountEventView {
+    pub provider_id: String,
+    pub account_id: String,
+    /// When the provider says it happened, in unix seconds.
+    pub observed_at: i64,
+    /// What kind of thing it was: `system_grant`, `replenishment`, and so on.
+    pub kind: String,
+    /// What it did to the balance, in the layer's own words.
+    ///
+    /// `credited`, `debited`, `no_change` or `unobserved` — and the last two are
+    /// different facts, not synonyms: one says nothing moved and the other says we
+    /// could not find out.
+    pub effect: String,
+    /// The amount, only when one is established.
+    pub amount: Option<f64>,
+    pub unit: Option<String>,
+    /// Where the figure came from: `operation_response`, `account_state` or
+    /// `account_log`. The weakest of these is the log.
+    pub source: String,
+    pub description: String,
+}
+
 /// The scheduler's answer for one account.
 #[derive(Debug, Clone, Serialize)]
 pub struct CheckinScheduleView {
@@ -280,6 +327,13 @@ pub struct CheckinScheduleView {
     /// When the last attempt ended, which is what the interval is measured from.
     pub last_settled_at: Option<i64>,
 }
+
+/// How many observed events a snapshot carries.
+///
+/// Bounded so a long-running application cannot grow its snapshot without limit. The
+/// log is bounded too; this is the smaller of the two bounds and is about the wire.
+#[cfg(feature = "account-maint")]
+pub const ACCOUNT_EVENT_SNAPSHOT_LIMIT: usize = 50;
 
 impl CheckinScheduleView {
     /// The placeholder a stored report carries before it is read.
@@ -391,6 +445,10 @@ impl Desktop {
             #[cfg(feature = "account-maint")]
             checkin_reports: Mutex::new(BTreeMap::new()),
             #[cfg(feature = "account-maint")]
+            account_events: zroutery_core::account::AccountEventLog::new(
+                zroutery_core::account::events::DEFAULT_EVENT_CAPACITY,
+            ),
+            #[cfg(feature = "account-maint")]
             checkin_schedule,
         }
     }
@@ -496,6 +554,8 @@ impl Desktop {
             account_maintenance_available: cfg!(feature = "account-maint"),
             #[cfg(feature = "account-maint")]
             checkin: self.checkin_views().await,
+            #[cfg(feature = "account-maint")]
+            account_events: self.account_event_views(),
             config,
         }
     }
@@ -585,6 +645,62 @@ impl Desktop {
                 })
                 .flatten()
         })
+    }
+
+    /// Observed resource events for the snapshot, newest first.
+    ///
+    /// Bounded by the log itself rather than here, so a long-running application
+    /// cannot grow its snapshot without limit. Reversed so a panel can render the
+    /// most recent without sorting, and the ordering is by what the provider said
+    /// happened rather than by when Zroutery read it.
+    #[cfg(feature = "account-maint")]
+    pub fn account_event_views(&self) -> Vec<AccountEventView> {
+        use zroutery_core::account::resource::{ResourceEffect, ResourceEventSource};
+        let mut views: Vec<AccountEventView> = self
+            .account_events
+            .recent(ACCOUNT_EVENT_SNAPSHOT_LIMIT)
+            .iter()
+            .map(|event| AccountEventView {
+                provider_id: event.provider_id.clone(),
+                account_id: event.account_id.0.clone(),
+                observed_at: event.observed_at,
+                kind: match event.event_kind {
+                    zroutery_core::account::resource::ResourceEventKind::Consumption => {
+                        "consumption"
+                    }
+                    zroutery_core::account::resource::ResourceEventKind::Replenishment => {
+                        "replenishment"
+                    }
+                    zroutery_core::account::resource::ResourceEventKind::Refund => "refund",
+                    zroutery_core::account::resource::ResourceEventKind::SystemGrant => {
+                        "system_grant"
+                    }
+                    zroutery_core::account::resource::ResourceEventKind::Management => "management",
+                    zroutery_core::account::resource::ResourceEventKind::Error => "error",
+                    zroutery_core::account::resource::ResourceEventKind::Login => "login",
+                    zroutery_core::account::resource::ResourceEventKind::Unknown => "unknown",
+                }
+                .to_string(),
+                effect: match &event.resource_effect {
+                    ResourceEffect::Credited { .. } => "credited",
+                    ResourceEffect::Debited { .. } => "debited",
+                    ResourceEffect::NoChange => "no_change",
+                    ResourceEffect::Unobserved => "unobserved",
+                }
+                .to_string(),
+                amount: event.resource_effect.amount().map(|a| a.value),
+                unit: event.resource_effect.amount().map(|a| a.unit.clone()),
+                source: match event.source {
+                    ResourceEventSource::AccountLog => "account_log",
+                    ResourceEventSource::AccountState => "account_state",
+                    ResourceEventSource::OperationResponse => "operation_response",
+                }
+                .to_string(),
+                description: event.description.clone(),
+            })
+            .collect();
+        views.sort_by_key(|v| std::cmp::Reverse(v.observed_at));
+        views
     }
 
     /// The scheduler's answer for one account, computed now.
@@ -2222,5 +2338,121 @@ mod tests {
             chrono::Utc::now().timestamp() - 7_200
         ));
         assert_eq!(desktop.schedule_view("prov", "a").decision, "due");
+    }
+    /// One observed event, so the projection can be exercised without a provider.
+    #[cfg(feature = "account-maint")]
+    fn observed(
+        account: &str,
+        amount: Option<f64>,
+        effect: zroutery_core::account::resource::ResourceEffect,
+    ) -> zroutery_core::account::resource::ObservedResourceEvent {
+        use zroutery_core::account::resource::{
+            ObservedResourceEvent, ResourceEventKind, ResourceEventSource,
+        };
+        ObservedResourceEvent {
+            event_id: None,
+            provider_id: "prov".into(),
+            account_id: zroutery_core::account::AccountId(account.into()),
+            observed_at: 1_000,
+            event_kind: ResourceEventKind::SystemGrant,
+            raw_type: None,
+            description: "check-in".into(),
+            resource_effect: effect,
+            source: ResourceEventSource::AccountState,
+            request_id: None,
+            channel_id: None,
+            model: None,
+            accounting: None,
+            metadata: Default::default(),
+        }
+        .tap_amount(amount)
+    }
+
+    #[cfg(feature = "account-maint")]
+    trait TapAmount {
+        fn tap_amount(self, amount: Option<f64>) -> Self;
+    }
+
+    #[cfg(feature = "account-maint")]
+    impl TapAmount for zroutery_core::account::resource::ObservedResourceEvent {
+        fn tap_amount(mut self, amount: Option<f64>) -> Self {
+            if let (
+                Some(value),
+                zroutery_core::account::resource::ResourceEffect::Credited { amount },
+            ) = (amount, &mut self.resource_effect)
+            {
+                amount.value = value;
+            }
+            self
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "account-maint")]
+    fn an_observed_event_reaches_the_snapshot_with_its_effect_and_source() {
+        use zroutery_core::account::resource::{ResourceAmount, ResourceEffect};
+
+        let (desktop, _dir) = desktop_with(AppConfig::default());
+        assert!(
+            desktop.account_event_views().is_empty(),
+            "a fresh application has observed nothing, and must not invent an entry"
+        );
+
+        desktop.account_events.record(observed(
+            "a",
+            Some(25.0),
+            ResourceEffect::Credited {
+                amount: ResourceAmount::normalised(0.0, "USD"),
+            },
+        ));
+        desktop
+            .account_events
+            .record(observed("b", None, ResourceEffect::NoChange));
+
+        let views = desktop.account_event_views();
+        assert_eq!(views.len(), 2, "both accounts reach the snapshot");
+        let credited = views
+            .iter()
+            .find(|v| v.account_id == "a")
+            .expect("the credited event");
+        assert_eq!(credited.effect, "credited");
+        assert_eq!(credited.amount, Some(25.0));
+        assert_eq!(credited.unit.as_deref(), Some("USD"));
+        assert_eq!(credited.source, "account_state");
+        assert_eq!(credited.kind, "system_grant");
+
+        // The distinction a panel most needs: "we looked and nothing moved" and
+        // "we could not find out" are different sentences.
+        let unchanged = views
+            .iter()
+            .find(|v| v.account_id == "b")
+            .expect("the unchanged event");
+        assert_eq!(unchanged.effect, "no_change");
+        assert_eq!(
+            unchanged.amount, None,
+            "an event that moved nothing must not carry a figure"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "account-maint")]
+    fn the_snapshot_carries_at_most_the_documented_number_of_events() {
+        use zroutery_core::account::resource::{ResourceAmount, ResourceEffect};
+
+        let (desktop, _dir) = desktop_with(AppConfig::default());
+        for i in 0..(ACCOUNT_EVENT_SNAPSHOT_LIMIT + 10) {
+            desktop.account_events.record(observed(
+                "a",
+                Some(i as f64),
+                ResourceEffect::Credited {
+                    amount: ResourceAmount::normalised(0.0, "USD"),
+                },
+            ));
+        }
+        assert_eq!(
+            desktop.account_event_views().len(),
+            ACCOUNT_EVENT_SNAPSHOT_LIMIT,
+            "a long-running application must not grow its snapshot without limit"
+        );
     }
 }
