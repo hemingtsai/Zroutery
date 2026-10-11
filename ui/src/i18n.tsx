@@ -279,6 +279,7 @@ const en = {
    * user's own choice, one is a gap in their declaration, and only two mean a
    * schedule is quietly counting down.
    */
+  "account.balance": "balance",
   "account.schedule.disabled": "Check-in is switched off for this account",
   "account.schedule.not_applicable":
     "Check-in is switched on but cannot be acted on — set checkin_path and checkin_trigger_selector",
@@ -880,7 +881,8 @@ const zh: Dict = {
    * 人引去改一个本来没错的设置：其中一个是用户自己的选择，一个是声明缺了一块，只有
    * 两个才表示一个日程正在安静地倒数。
    */
-  "account.schedule.disabled": "该账户未开启签到",
+    "account.balance": "余额",
+"account.schedule.disabled": "该账户未开启签到",
   "account.schedule.not_applicable":
     "该账户已开启签到但无法执行——请设置 checkin_path 与 checkin_trigger_selector",
   "account.schedule.needs_first_observation":

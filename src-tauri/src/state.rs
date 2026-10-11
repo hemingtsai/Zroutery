@@ -192,6 +192,9 @@ pub struct Snapshot {
     /// and one recovered out of log text must not read the same.
     #[cfg(feature = "account-maint")]
     pub account_events: Vec<AccountEventView>,
+    /// Per-account balances, for providers that declare more than one account.
+    #[cfg(feature = "newapi")]
+    pub account_balances: Vec<AccountBalanceView>,
 }
 
 /// How much durable history the operator has, as bytes and as a record count.
@@ -334,6 +337,33 @@ pub struct CheckinScheduleView {
 /// log is bounded too; this is the smaller of the two bounds and is about the wire.
 #[cfg(feature = "account-maint")]
 pub const ACCOUNT_EVENT_SNAPSHOT_LIMIT: usize = 50;
+
+/// One account's probed state, as a panel receives it.
+///
+/// Only carried for providers that declare more than one account, because with a
+/// single account the provider-level balance is the same fact and two panels would
+/// say it twice. With several, the provider figure is a total that hides which
+/// account is empty and which is suspended — which is the whole reason to look.
+#[cfg(feature = "newapi")]
+#[derive(Debug, Clone, Serialize)]
+pub struct AccountBalanceView {
+    pub provider_id: String,
+    pub account_id: String,
+    /// `active`, `suspended`, `quota_exhausted`, `rate_limited`,
+    /// `authentication_expired`, `unknown` or `unprobed`.
+    pub status: String,
+    /// Present only when the provider reported a quota at all.
+    pub remaining: Option<f64>,
+    pub total: Option<f64>,
+    pub used: Option<f64>,
+    pub unit: Option<String>,
+    /// When the provider says this was true, in unix seconds.
+    pub last_sync: Option<i64>,
+    /// When the last attempt failed. Carried separately from `status` because a
+    /// provider that stopped answering leaves the previous reading in place, and
+    /// showing that reading as current is the failure this whole layer prevents.
+    pub last_failure: Option<i64>,
+}
 
 impl CheckinScheduleView {
     /// The placeholder a stored report carries before it is read.
@@ -556,6 +586,8 @@ impl Desktop {
             checkin: self.checkin_views().await,
             #[cfg(feature = "account-maint")]
             account_events: self.account_event_views(),
+            #[cfg(feature = "newapi")]
+            account_balances: self.account_balance_views(),
             config,
         }
     }
@@ -884,6 +916,165 @@ impl Desktop {
             }
         }
         problems
+    }
+
+    /// Ask every declared account how it is doing, and publish what each answered.
+    ///
+    /// This is the account subsystem's first production caller, and it is
+    /// deliberately attached to the **same trigger as the provider-level balance
+    /// refresh** rather than given a timer of its own. Two reasons, and the first
+    /// is the important one: there is no balance timer in this application — both
+    /// levels are refreshed when an operator presses refresh — so a timer here would
+    /// mean inventing a schedule nobody asked for, and a per-account probe hits a
+    /// provider's API once per account, which is exactly the traffic a fresh timer
+    /// would multiply.
+    ///
+    /// The account store is read back, never assumed: a provider with no resolvable
+    /// credential for an account contributes nothing rather than an empty reading,
+    /// and a provider that answers records both its success and its failure, so a
+    /// panel cannot show a previous healthy account as though it were current.
+    #[cfg(feature = "newapi")]
+    pub async fn reconcile_accounts(&self) -> Vec<String> {
+        use zroutery_core::account::reconcile::{AccountProbe, AccountReconciler};
+
+        let now = chrono::Utc::now().timestamp();
+        let reconciler = AccountReconciler::with_clock(self.core.accounts(), move || now);
+        let mut problems = Vec::new();
+
+        // Snapshot the declaration so a configuration edit part-way through cannot
+        // leave one provider reconciled against two different account lists.
+        let declared: Vec<(String, Vec<String>)> = self
+            .core
+            .config()
+            .providers
+            .iter()
+            .filter(|p| !p.accounts.is_empty())
+            .map(|p| {
+                (
+                    p.id.clone(),
+                    p.accounts.iter().map(|a| a.account_id.clone()).collect(),
+                )
+            })
+            .collect();
+
+        for (provider_id, account_ids) in declared {
+            let probes: Vec<AccountProbe> = account_ids
+                .iter()
+                .map(|id| AccountProbe {
+                    provider_id: provider_id.clone(),
+                    account_id: zroutery_core::account::AccountId(id.clone()),
+                })
+                .collect();
+
+            // One adapter per account, because the credential can be per account.
+            // Grouping by provider would silently probe one account's key against
+            // another's balance, which is the failure this subsystem exists to make
+            // impossible.
+            let mut adapters = Vec::with_capacity(probes.len());
+            let mut skipped = Vec::new();
+            for probe in &probes {
+                match self.panel_adapter(&probe.provider_id, &probe.account_id.0) {
+                    Some((adapter, _)) => adapters.push((probe.clone(), adapter)),
+                    None => skipped.push(probe.account_id.0.clone()),
+                }
+            }
+
+            for (probe, adapter) in &adapters {
+                let report = reconciler
+                    .reconcile(adapter, std::slice::from_ref(probe))
+                    .await;
+                for (_, account_id, outcome) in &report.outcomes {
+                    // A failure is reported; the other three are not. `Unsupported` is
+                    // explicitly not a failure — the provider declined, which is an
+                    // answer, and listing it as a problem would train an operator to
+                    // ignore the list.
+                    if let zroutery_core::account::reconcile::AccountSyncOutcome::Failed {
+                        reason,
+                    } = outcome
+                    {
+                        problems.push(format!("{provider_id}/{account_id}: {reason}"));
+                    }
+                }
+            }
+
+            for account_id in skipped {
+                // Named rather than silent. A credential that will not resolve is the
+                // single most likely reason an operator sees an account missing, and
+                // an empty list would leave them with nothing to act on.
+                problems.push(format!(
+                    "{provider_id}/{account_id}: no stored credential for this account, \
+                     so it was not probed"
+                ));
+            }
+        }
+        problems
+    }
+
+    /// One account's state, as a panel receives it.
+    ///
+    /// A projection rather than the core type, for the reason the check-in phase is a
+    /// named string: the webview gets a vocabulary that a `#[serde(rename_all)]`
+    /// change cannot move underneath it.
+    #[cfg(feature = "newapi")]
+    pub fn account_balance_views(&self) -> Vec<AccountBalanceView> {
+        use zroutery_core::account::AccountStatus;
+        let store = self.core.accounts();
+        let mut views = Vec::new();
+        for provider in &self.core.config().providers {
+            // **Only where the provider-level figure is not the whole truth.** With
+            // one account the two levels say the same thing, and showing both is
+            // noise; with several, the provider-level number is a total that hides
+            // which account is empty and which is suspended.
+            if provider.accounts.len() < 2 {
+                continue;
+            }
+            for declared in &provider.accounts {
+                let Some(runtime) = store.get(
+                    &provider.id,
+                    &zroutery_core::account::AccountId(declared.account_id.clone()),
+                ) else {
+                    // Declared but never probed. Rendered as absent rather than as a
+                    // zero balance, because "we do not know" and "it is empty" are
+                    // different facts and a zero would claim the second.
+                    views.push(AccountBalanceView {
+                        provider_id: provider.id.clone(),
+                        account_id: declared.account_id.clone(),
+                        status: "unprobed".into(),
+                        remaining: None,
+                        total: None,
+                        used: None,
+                        unit: None,
+                        last_sync: None,
+                        last_failure: None,
+                    });
+                    continue;
+                };
+                let quota = runtime.quota.as_ref();
+                views.push(AccountBalanceView {
+                    provider_id: provider.id.clone(),
+                    account_id: declared.account_id.clone(),
+                    status: match runtime.status {
+                        AccountStatus::Active => "active",
+                        AccountStatus::Suspended => "suspended",
+                        AccountStatus::QuotaExhausted => "quota_exhausted",
+                        AccountStatus::RateLimited => "rate_limited",
+                        AccountStatus::AuthenticationExpired => "authentication_expired",
+                        // `Unknown` is carried through as itself rather than as a
+                        // failure: the reconciler publishes Unknown for "did not
+                        // answer", which is not evidence that anything is wrong.
+                        AccountStatus::Unknown => "unknown",
+                    }
+                    .to_string(),
+                    remaining: quota.map(|q| q.remaining),
+                    total: quota.map(|q| q.total),
+                    used: quota.map(|q| q.used),
+                    unit: quota.map(|q| q.unit.clone()),
+                    last_sync: runtime.last_sync,
+                    last_failure: runtime.last_failure,
+                });
+            }
+        }
+        views
     }
 
     /// Only the counters and the log, for the Activity tab's polling.
@@ -2260,6 +2451,25 @@ mod tests {
 
         std::fs::remove_dir_all(dir).ok();
     }
+    /// A provider declaring the given account ids, for the account-projection tests.
+    #[cfg(feature = "newapi")]
+    fn multi_provider(account_ids: &[&str]) -> AppConfig {
+        let accounts: Vec<serde_json::Value> = account_ids
+            .iter()
+            .map(|id| serde_json::json!({ "account_id": id }))
+            .collect();
+        let document = serde_json::json!({
+            "providers": [{
+                "id": "prov",
+                "name": "prov",
+                "kind": "openai_compatible",
+                "base_url": "https://example.invalid",
+                "accounts": accounts,
+            }]
+        });
+        serde_json::from_value(document).expect("the fixture is a valid configuration")
+    }
+
     /// A configuration built through its own deserialiser, for the schedule tests.
     ///
     /// JSON rather than a struct literal because `ProviderConfig` names a private
@@ -2454,5 +2664,54 @@ mod tests {
             ACCOUNT_EVENT_SNAPSHOT_LIMIT,
             "a long-running application must not grow its snapshot without limit"
         );
+    }
+    #[test]
+    #[cfg(feature = "newapi")]
+    fn account_balances_appear_only_where_the_provider_total_hides_something() {
+        // The rule under test: one account means the two levels say the same thing,
+        // and saying it twice is noise. Several accounts mean the provider figure is
+        // a total that hides which account is empty and which is suspended, which is
+        // the only reason to look at the second level at all.
+        let (one, _d1) = desktop_with(multi_provider(&["only"]));
+        assert!(
+            one.account_balance_views().is_empty(),
+            "a single account must not produce a second panel saying the same thing"
+        );
+
+        let (several, _d2) = desktop_with(multi_provider(&["a", "b", "c"]));
+        let views = several.account_balance_views();
+        assert_eq!(views.len(), 3, "every declared account appears");
+        assert!(views
+            .iter()
+            .all(|v| v.provider_id == "prov" && v.status == "unprobed"));
+        assert!(
+            views.iter().all(|v| v.remaining.is_none()),
+            "an account that was never probed must not be rendered as a balance"
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "newapi")]
+    async fn an_account_with_no_credential_is_named_rather_than_silently_absent() {
+        // The single most likely reason an operator sees an account missing is a
+        // credential that will not resolve, and an empty list would leave them with
+        // nothing to act on. The outcome is a name and a reason, not a zero.
+        let (desktop, _dir) = desktop_with(multi_provider(&["a", "b"]));
+        let problems = desktop.reconcile_accounts().await;
+        assert_eq!(
+            problems.len(),
+            2,
+            "both accounts are reported, not one and not none"
+        );
+        for problem in &problems {
+            assert!(
+                problem.contains("no stored credential"),
+                "the reason must say what is missing: {problem}"
+            );
+            assert!(
+                !problem.contains("Unknown") && !problem.contains("failed"),
+                "an unresolved credential is not a provider failure: {problem}"
+            );
+        }
     }
 }

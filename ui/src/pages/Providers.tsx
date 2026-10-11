@@ -12,6 +12,7 @@ import {
   type CcProviderDraft,
   type CcSwitchPreview,
   type CheckinView,
+  type AccountBalance,
   type AccountEvent,
   type DiscoveredModel,
   type Maintenance,
@@ -462,6 +463,7 @@ function BalanceChip({ status }: { status: BalanceStatus | undefined }) {
  */
 function AccountMaintenanceRow({
   view,
+  balance,
   events,
   busy,
   onStart,
@@ -471,6 +473,8 @@ function AccountMaintenanceRow({
   view: CheckinView;
   /** Observed resource events for the whole snapshot, newest first. */
   events: AccountEvent[];
+  /** This account's probed balance, when the provider has more than one. */
+  balance: AccountBalance | undefined;
   busy: boolean;
   onStart: () => void;
   onResume: () => void;
@@ -506,7 +510,16 @@ function AccountMaintenanceRow({
           the reasons differ enough that "nothing happened" would send them to
           change a setting that is not the problem.
         */}
-        <span className="row-sub muted">{scheduleLabel(view)}</span>
+        <span className="row-sub muted">{scheduleLabel(view)}</span>        {balance && (
+          /*
+           * The account's own figure, shown only where the provider's total hides
+           * which account is empty and which is suspended. The backend decides that,
+           * so a panel cannot present one number twice.
+           */
+          <span className="row-sub mono">
+            {t("account.balance")} {accountBalanceLabel(balance, ago)}
+          </span>
+        )}
         {latestEventFor(events, view.provider_id, view.account_id) && (
           /*
            * What the provider said actually happened, with the evidence it came
@@ -570,6 +583,34 @@ function AccountMaintenanceRow({
  * Picks the newest rather than the first in the list because the snapshot is
  * already ordered but a caller should not have to know that.
  */
+/**
+ * Per-account balances for one provider, or none when the provider declares one.
+ *
+ * The backend already filters, so an empty list here means "this provider has a
+ * single account and the provider-level figure is the whole truth" rather than
+ * "nothing was probed". Rendering nothing in that case is the point: two panels
+ * saying one number is how an operator stops trusting either.
+ */
+function balancesFor(
+  balances: AccountBalance[] | undefined,
+  providerId: string,
+): AccountBalance[] {
+  return (balances ?? []).filter((b) => b.provider_id === providerId);
+}
+
+/** One account's line: who it is, what it has left, and how well that is known. */
+function accountBalanceLabel(balance: AccountBalance, ago: (at: number) => string): string {
+  if (balance.status === "unprobed") {
+    // Not a balance of zero. Nobody has asked this account yet.
+    return "not probed yet";
+  }
+  if (balance.remaining === null) {
+    return balance.status.replace(/_/g, " ");
+  }
+  const stale = balance.last_failure !== null ? ` · last attempt failed ${ago(balance.last_failure!)}` : "";
+  return `${balance.remaining} ${balance.unit ?? ""} of ${balance.total ?? "?"}${stale}`;
+}
+
 function latestEventFor(
   events: AccountEvent[] | undefined,
   providerId: string,
@@ -1180,7 +1221,9 @@ function ProviderDrawer({
                 <AccountMaintenanceRow
                   key={account.account_id}
                   view={view}
-                  events={snapshot.account_events ?? []}
+                  events={snapshot.account_events ?? []}                  balance={balancesFor(snapshot.account_balances, provider.id).find(
+                    (b) => b.account_id === account.account_id,
+                  )}
                   busy={busy}
                   onStart={() =>
                     void start(provider.id, account.account_id, account.maintenance)

@@ -509,6 +509,15 @@ export interface Snapshot {
   checkin?: CheckinView[];
   /** Observed resource events, newest first. */
   account_events?: AccountEvent[];
+  /**
+   * Per-account balances.
+   *
+   * Present only for providers declaring more than one account, because with a
+   * single account this is the same figure the provider-level `balances` already
+   * carries. The backend filters rather than the panel, so an operator cannot end up
+   * with two panels saying one thing.
+   */
+  account_balances?: AccountBalance[];
 }
 
 /**
@@ -1207,4 +1216,23 @@ export function slugify(value: string): string {
       .replace(/[^a-z0-9._-]+/g, "-")
       .replace(/^-+|-+$/g, "") || "provider"
   );
+}
+/**
+ * One account's probed state.
+ *
+ * `status` is `active`, `suspended`, `quota_exhausted`, `rate_limited`,
+ * `authentication_expired`, `unknown` or `unprobed`. `unprobed` is not a status the
+ * provider reported: it means nobody has asked this account yet, which is not the
+ * same as an account with nothing left, and a zero balance would claim the second.
+ */
+export interface AccountBalance {
+  provider_id: string;
+  account_id: string;
+  status: string;
+  remaining: number | null;
+  total: number | null;
+  used: number | null;
+  unit: string | null;
+  last_sync: number | null;
+  last_failure: number | null;
 }
