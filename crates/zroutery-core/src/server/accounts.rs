@@ -68,6 +68,12 @@ enum Unreachable {
     /// A backend was selected and refused to be built, so the declaration is what
     /// is wrong. Carried into the store as a failure so the reason survives to the
     /// panel instead of being logged and forgotten.
+    ///
+    /// Gated on `newapi`, because it is only reachable when an adapter is selected
+    /// at all. In an `account`-only build every provider takes the
+    /// [`Unreachable::NoBackend`] path, so this variant would be constructed
+    /// nowhere and clippy is right to call it dead.
+    #[cfg(feature = "newapi")]
     Construction(String),
 }
 
@@ -91,6 +97,7 @@ impl UnreachableProvider {
         }
     }
 
+    #[cfg(feature = "newapi")]
     fn construction_failed(
         provider_id: &str,
         capabilities: AccountCapabilities,
@@ -108,6 +115,7 @@ impl UnreachableProvider {
             Unreachable::NoBackend => {
                 Error::internal("no account backend in this build speaks to this provider")
             }
+            #[cfg(feature = "newapi")]
             Unreachable::Construction(reason) => {
                 Error::invalid(format!("account backend could not be built: {reason}"))
             }

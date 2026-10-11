@@ -61,6 +61,28 @@ pub fn get_ml_status(desktop: State<'_, Arc<Desktop>>) -> Cmd<MlStatus> {
     Ok(desktop.ml_status())
 }
 
+/// Probe every declared account and return what the reconciler did.
+///
+/// Registered only in an account build, which is why the dashboard must consult
+/// [`Snapshot::account_available`] rather than discovering the absence by calling
+/// this and reading an error: to the webview a command that does not exist and a
+/// command that failed look identical, and "this build has no account subsystem"
+/// is a fact worth stating rather than a failure to guess at.
+///
+/// The returned report is Core's own `ReconcileReport`, not a summary shaped for
+/// the dashboard. One entry per declared enabled account, including the ones no
+/// backend could reach, because an account absent from the report is one that is
+/// disabled while an account present as `Unknown` is one that was probed and
+/// established nothing. A panel that collapses the two renders a deliberately
+/// disabled account as an unhealthy one.
+#[cfg(feature = "account")]
+#[tauri::command]
+pub async fn reconcile_accounts(
+    desktop: State<'_, Arc<Desktop>>,
+) -> Cmd<zroutery_core::ReconcileReport> {
+    Ok(desktop.reconcile_accounts().await)
+}
+
 /// Replay the serving model over recorded history.
 ///
 /// Bounded by `limit` and capped again inside, so this is safe to call from a
