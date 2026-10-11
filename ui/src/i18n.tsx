@@ -234,6 +234,19 @@ const en = {
   "providers.profile_native": "Native — no client identity",
   "providers.profile_claude_code": "Claude Code — with its headers",
   "providers.profile_codex": "Codex — with its headers",
+  "providers.profile_opencode_cli": "OpenCode CLI — locked for OpenCode providers",
+  "providers.client_profile_locked_hint":
+    "Locked. OpenCode's gateway checks this fingerprint and the config refuses any other profile.",
+  "providers.opencode_zen_dialect": "OpenCode Zen (free)",
+  "providers.opencode_console_dialect": "OpenCode Console",
+  "providers.free_badge": "free",
+  "providers.free_only": "Free models only",
+  "providers.free_only_hint":
+    "Marks entries the provider's own catalogue lists at zero cost. It does not promise the model will answer: a free model can still be region-blocked or shut down upstream.",
+  "providers.catalogue_shown": "Showing {shown} of {total} models",
+  "providers.catalogue_total": "{total} models",
+  "providers.catalogue_no_free":
+    "The catalogue lists {total} models and none of them is marked free. Turn the filter off to see them.",
   "providers.bearer_auth": "Also send Bearer auth",
   "providers.bearer_auth_hint":
     "For relays that read Authorization: Bearer instead of x-api-key; both headers are sent, so either check passes",
@@ -821,6 +834,19 @@ const zh: Dict = {
   "providers.profile_native": "原生 — 不伪装任何客户端",
   "providers.profile_claude_code": "Claude Code — 带其请求头",
   "providers.profile_codex": "Codex — 带其请求头",
+  "providers.profile_opencode_cli": "OpenCode CLI — OpenCode 提供商固定使用",
+  "providers.client_profile_locked_hint":
+    "已锁定。OpenCode 网关会校验该指纹,配置校验也不接受其他取值。",
+  "providers.opencode_zen_dialect": "OpenCode Zen(免费)",
+  "providers.opencode_console_dialect": "OpenCode Console",
+  "providers.free_badge": "免费",
+  "providers.free_only": "仅显示免费模型",
+  "providers.free_only_hint":
+    "依据提供商自己的目录标注为零成本。不代表该模型一定能用:免费模型仍可能被地区屏蔽或在上游下线。",
+  "providers.catalogue_shown": "显示 {total} 个中的 {shown} 个",
+  "providers.catalogue_total": "共 {total} 个模型",
+  "providers.catalogue_no_free":
+    "目录共 {total} 个模型,其中没有一个标记为免费。关闭筛选即可查看。",
   "providers.bearer_auth": "同时发送 Bearer 认证",
   "providers.bearer_auth_hint":
     "用于读取 Authorization: Bearer 而非 x-api-key 的中转;两个头都会发送,任一校验均可通过",
