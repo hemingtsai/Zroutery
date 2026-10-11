@@ -39,6 +39,7 @@ use zroutery_lib::checkin::cdp::{self, BrowserSession};
 use zroutery_lib::checkin::profile;
 use zroutery_lib::checkin::state::{self, Event, State};
 use zroutery_lib::checkin::waf;
+use zroutery_lib::checkin::{CheckinRuntime, SessionKey};
 
 /// Skip rather than fail when no browser is installed.
 ///
@@ -54,11 +55,33 @@ fn browser() -> Option<std::path::PathBuf> {
     }
 }
 
-fn scratch(tag: &str) -> std::path::PathBuf {
+/// A scratch profile directory that removes itself.
+///
+/// A guard rather than a cleanup call at the end of each test: a test that fails or
+/// panics before its last line leaves a *real browser profile* behind, which is the
+/// expensive kind of leftover — tens of megabytes each, and a directory that looks
+/// like a user's data.
+struct Scratch(std::path::PathBuf);
+
+/// Derefs to the path so a scratch directory can be passed anywhere a path is
+/// wanted without every call site unwrapping it.
+impl std::ops::Deref for Scratch {
+    type Target = std::path::Path;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn scratch(tag: &str) -> Scratch {
     let dir = std::env::temp_dir().join(format!("zroutery-real-{tag}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("scratch directory");
-    dir
+    Scratch(dir)
 }
 
 async fn launch(executable: &std::path::Path, dir: &std::path::Path) -> BrowserSession {
@@ -68,8 +91,34 @@ async fn launch(executable: &std::path::Path, dir: &std::path::Path) -> BrowserS
 }
 
 /// A page the browser can render with no network involved.
+///
+/// Percent-encoded rather than pasted raw. A raw `data:` URL is silently
+/// truncated at the first character the URL parser claims — a space, a quote, a
+/// `#` — and the symptom is an element that quietly fails to exist, which is a
+/// miserable thing to debug. Encoding makes the fixture unambiguous.
+///
+/// Kept free of `#` and `"` handling by encoding everything outside
+/// `A-Za-z0-9` and the few punctuation characters that carry no meaning here.
+fn page_encoded(html: &str) -> String {
+    let mut out = String::from("data:text/html;charset=utf-8,");
+    for byte in html.bytes() {
+        if byte.is_ascii_alphanumeric()
+            || matches!(byte, b'/' | b':' | b',' | b'=' | b'.' | b'(' | b')')
+        {
+            out.push(byte as char);
+        } else {
+            out.push('%');
+            out.push_str(&format!("{byte:02X}"));
+        }
+    }
+    out
+}
+
+/// A page the browser can render with no network involved.
 fn page(title: &str, body: &str) -> String {
-    format!("data:text/html,<title>{title}</title><body><main id=root>{body}</main></body>")
+    page_encoded(&format!(
+        "<title>{title}</title><main id=root>{body}</main>"
+    ))
 }
 
 /// Poll until the page is showing `url`, or give up.
@@ -93,7 +142,7 @@ async fn wait_for(
 async fn a_headed_browser_reports_a_debugging_endpoint() {
     let Some(executable) = browser() else { return };
     let dir = scratch("endpoint");
-    let session = launch(&executable, &dir).await;
+    let session = launch(&executable, &dir.0).await;
 
     // The endpoint file is the only thing the launch depends on, and it exists
     // precisely because the browser chose its own port.
@@ -115,7 +164,6 @@ async fn a_headed_browser_reports_a_debugging_endpoint() {
         "the browser is serving its port"
     );
     let _ = session.shutdown().await;
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[tokio::test]
@@ -123,7 +171,7 @@ async fn a_headed_browser_reports_a_debugging_endpoint() {
 async fn a_navigated_page_can_be_read_back() {
     let Some(executable) = browser() else { return };
     let dir = scratch("navigate");
-    let mut session = launch(&executable, &dir).await;
+    let mut session = launch(&executable, &dir.0).await;
 
     let url = page("Zroutery check-in", "Sign in");
     let binding = session.open_page(&url).await.expect("opens a page");
@@ -149,7 +197,6 @@ async fn a_navigated_page_can_be_read_back() {
     assert_eq!(waf::classify(&evidence), waf::Verdict::Clear);
 
     let _ = session.shutdown().await;
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[tokio::test]
@@ -207,8 +254,6 @@ async fn two_accounts_get_separate_browsers_and_separate_sessions() {
 
     let _ = first.shutdown().await;
     let _ = second.shutdown().await;
-    let _ = std::fs::remove_dir_all(&a);
-    let _ = std::fs::remove_dir_all(&b);
 }
 
 fn cookie_names(jar: &serde_json::Value) -> Vec<String> {
@@ -229,14 +274,16 @@ fn cookie_names(jar: &serde_json::Value) -> Vec<String> {
 async fn a_browser_held_through_a_pause_is_the_same_browser() {
     let Some(executable) = browser() else { return };
     let dir = scratch("resume");
-    let mut session = launch(&executable, &dir).await;
+    let mut session = launch(&executable, &dir.0).await;
 
     // A page that rewrites itself, so a second look can tell whether it is the
     // same document or a freshly loaded one.
-    let url = "data:text/html,<title>held</title><body><main id=root>before</main>\
-               <script>setTimeout(function(){document.getElementById('root')\
-               .textContent='after'},400)</script></body>";
-    let binding = session.open_page(url).await.expect("opens a page");
+    let url = page_encoded(
+        "<title>held</title><main id=root>before</main>\
+         <script>setTimeout(function(){document.getElementById('root')\
+         .textContent='after'},400)</script>",
+    );
+    let binding = session.open_page(&url).await.expect("opens a page");
     wait_for(&mut session, &binding, "data:").await;
 
     // The state machine says a pause keeps the browser, and it does: the same
@@ -267,7 +314,107 @@ async fn a_browser_held_through_a_pause_is_the_same_browser() {
     );
 
     let _ = session.shutdown().await;
-    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+#[ignore = "needs a real Chromium browser and opens a visible window"]
+async fn a_clicked_control_really_runs_the_pages_own_handler() {
+    let Some(executable) = browser() else { return };
+    let dir = scratch("click");
+    let mut session = launch(&executable, &dir.0).await;
+
+    // The button reports whether the event it received was *trusted*, and nothing
+    // but the page's own handler writes that. This is the whole claim under test:
+    // `Input.dispatchMouseEvent` goes through Chrome's real input pipeline, so the
+    // page sees `isTrusted === true`, whereas `element.click()` would deliver an
+    // untrusted event a challenge vendor can tell apart from a person pressing.
+    let url = page_encoded(
+        "<title>click</title><main id=root>ready</main>\
+         <button id=go onclick=\"this.textContent=event.isTrusted\">Check in</button>",
+    );
+    let page = session.open_page(&url).await.expect("opens a page");
+    wait_for(&mut session, &page, "data:").await;
+
+    assert_eq!(
+        session.click(&page, "#go").await.expect("clicks"),
+        zroutery_lib::checkin::cdp::ClickOutcome::Clicked {
+            text: "Check in".into()
+        },
+        "the control should be found and activated"
+    );
+
+    // Let the handler run.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let evidence = session.page_evidence(&page).await.expect("readable");
+    assert!(
+        evidence.body_text.contains("true"),
+        "the page's own handler must have run and seen a trusted event: {:?}",
+        evidence.body_text
+    );
+    assert!(
+        !evidence.body_text.contains("false"),
+        "an untrusted event is exactly what a challenge vendor can distinguish: {:?}",
+        evidence.body_text
+    );
+    // And the page is no longer a challenge — a click cannot have worked at all
+    // without getting here first.
+    assert_eq!(waf::classify(&evidence), waf::Verdict::Clear);
+
+    let _ = session.shutdown().await;
+}
+
+#[tokio::test]
+#[ignore = "needs a real Chromium browser and opens a visible window"]
+async fn a_disabled_control_is_reported_rather_than_clicked() {
+    let Some(executable) = browser() else { return };
+    let dir = scratch("disabled");
+    let mut session = launch(&executable, &dir.0).await;
+
+    // The shape of "already checked in today": the control is there and carries
+    // its label, but it cannot be activated. Reporting this as a dispatched click
+    // would leave an operator waiting for a reward that never arrives.
+    let url = page_encoded(
+        "<title>done</title><main id=root>ready</main><button id=go disabled>Checked in</button>",
+    );
+    let page = session.open_page(&url).await.expect("opens a page");
+    wait_for(&mut session, &page, "data:").await;
+
+    let outcome = session.click(&page, "#go").await.expect("probes");
+    assert!(
+        matches!(
+            outcome,
+            zroutery_lib::checkin::cdp::ClickOutcome::Disabled { .. }
+        ),
+        "a disabled control must not report as clicked: {outcome:?}"
+    );
+    assert!(!outcome.dispatched());
+
+    let _ = session.shutdown().await;
+}
+
+#[tokio::test]
+#[ignore = "needs a real Chromium browser and opens a visible window"]
+async fn a_selector_that_matches_nothing_is_reported_not_silently_ok() {
+    let Some(executable) = browser() else { return };
+    let dir = scratch("missing");
+    let mut session = launch(&executable, &dir.0).await;
+
+    let url = page("no control", "nothing here");
+    let page = session.open_page(&url).await.expect("opens a page");
+    wait_for(&mut session, &page, "data:").await;
+
+    let outcome = session
+        .click(&page, "#does-not-exist")
+        .await
+        .expect("probes");
+    assert_eq!(
+        outcome,
+        zroutery_lib::checkin::cdp::ClickOutcome::NotFound,
+        "an unmatched selector is a configuration problem and must say so"
+    );
+    assert!(!outcome.dispatched());
+
+    let _ = session.shutdown().await;
 }
 
 #[tokio::test]
@@ -275,7 +422,7 @@ async fn a_browser_held_through_a_pause_is_the_same_browser() {
 async fn shutdown_closes_the_browser_and_leaves_no_process() {
     let Some(executable) = browser() else { return };
     let dir = scratch("shutdown");
-    let session = launch(&executable, &dir).await;
+    let session = launch(&executable, &dir.0).await;
     assert!(session.is_running().await);
 
     session.shutdown().await.expect("shuts down cleanly");
@@ -283,8 +430,93 @@ async fn shutdown_closes_the_browser_and_leaves_no_process() {
     // A second launch on the same profile proves no browser survived: one that did
     // would have left the profile locked, and the relaunch would fail or attach
     // to the old one.
-    let second = launch(&executable, &dir).await;
+    let second = launch(&executable, &dir.0).await;
     assert!(second.is_running().await);
     let _ = second.shutdown().await;
-    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+#[ignore = "needs a real Chromium browser and opens a visible window"]
+async fn a_second_driver_is_refused_the_same_browser() {
+    // The only rule here that cannot be proven without a browser, because it turns
+    // on what `take_browser` hands back when a browser really exists. Two drive
+    // loops on one browser would each click the check-in control, and a panel that
+    // credits a reward for one click would be reporting two.
+    let Some(executable) = browser() else { return };
+    let dir = scratch("two-drivers");
+    let key = SessionKey::new("relay", "main");
+    let runtime = CheckinRuntime::new(dir.0.parent().expect("scratch parent").to_path_buf());
+
+    runtime.begin(key.clone()).await.expect("begins");
+    let session = launch(&executable, runtime.profile_dir(&key).as_path()).await;
+    runtime.attach(&key, session).await.expect("attaches");
+
+    assert!(!runtime.is_being_driven(&key).await);
+    let taken = runtime
+        .take_browser(&key)
+        .await
+        .expect("first driver takes it");
+    assert!(
+        runtime.is_being_driven(&key).await,
+        "the driver now owns the browser, and the account must say so"
+    );
+    assert!(
+        runtime.take_browser(&key).await.is_none(),
+        "a second driver must be refused the browser rather than handed the same one"
+    );
+    // And the session must not claim to hold a browser it has already given away.
+    assert!(
+        !runtime.is_browser_held(&key).await,
+        "the browser is with the driver, not with the session"
+    );
+
+    assert!(!runtime.end_driving(&key).await, "no cancel was requested");
+    // The refused second driver must not have disturbed the first one's browser.
+    let outcome = taken.shutdown().await;
+    assert!(
+        outcome.is_ok(),
+        "the first driver's browser closes cleanly: {outcome:?}"
+    );
+    runtime.finish(&key).await;
+    let _ = std::fs::remove_dir_all(dir.0.parent().expect("scratch parent"));
+}
+
+#[tokio::test]
+#[ignore = "needs a real Chromium browser and opens a visible window"]
+async fn a_finished_attempt_releases_the_account_so_the_next_one_can_start() {
+    // The other half of the report: after a check-in ends, the account must be
+    // startable again and no browser may be left behind. Both were false at once —
+    // the session stayed registered and the browser stayed open — so the next
+    // attempt was either refused or, once the key was freed, launched a second
+    // browser onto a profile the first still held.
+    let Some(executable) = browser() else { return };
+    let dir = scratch("release");
+    let key = SessionKey::new("relay", "main");
+    let runtime = CheckinRuntime::new(dir.0.parent().expect("scratch parent").to_path_buf());
+
+    runtime.begin(key.clone()).await.expect("begins");
+    let session = launch(&executable, runtime.profile_dir(&key).as_path()).await;
+    runtime.attach(&key, session).await.expect("attaches");
+
+    // Finishing with nothing driving closes the browser here and now.
+    assert_eq!(
+        runtime.finish(&key).await,
+        zroutery_lib::checkin::FinishOutcome::ClosedNow
+    );
+    assert!(
+        runtime.phase(&key).await.is_none(),
+        "the key is free, so the next attempt is not a duplicate"
+    );
+    assert!(!runtime.is_browser_held(&key).await);
+
+    // And the account really is startable again, which is the claim the corrupted
+    // profile report turned on: a free key must mean no browser is still out there.
+    runtime.begin(key.clone()).await.expect("starts again");
+    let reopened = launch(&executable, runtime.profile_dir(&key).as_path()).await;
+    assert!(
+        runtime.attach(&key, reopened).await.is_ok(),
+        "the same profile reopens once the previous browser is gone"
+    );
+    runtime.finish(&key).await;
+    let _ = std::fs::remove_dir_all(dir.0.parent().expect("scratch parent"));
 }

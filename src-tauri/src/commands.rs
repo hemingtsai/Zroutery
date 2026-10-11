@@ -329,6 +329,12 @@ pub async fn refresh_balance(
 #[tauri::command]
 pub async fn refresh_balances(app: AppHandle, desktop: State<'_, Arc<Desktop>>) -> Cmd<Snapshot> {
     let _ = desktop.refresh_all_balances().await;
+    // The same press refreshes both levels, and deliberately so. Attaching account
+    // probing here rather than to a timer of its own is what stops it from
+    // multiplying one provider's API traffic by the number of its accounts every
+    // minute, unasked. One button, one reading per account, one snapshot back.
+    #[cfg(feature = "newapi")]
+    let _ = desktop.reconcile_accounts().await;
     Ok(refreshed(&app, &desktop).await)
 }
 

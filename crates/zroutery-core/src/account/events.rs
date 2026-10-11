@@ -152,6 +152,20 @@ impl AccountEventLog {
         self.for_account_matching(provider_id, account_id, |event| event.observed_at >= since)
     }
 
+    /// The most recent events across every account, newest first, capped at `limit`.
+    ///
+    /// Exists because every other reader is per-account and a snapshot is not: a
+    /// panel asking "what has happened recently" cannot enumerate accounts, and an
+    /// unbounded read of a long-running application's log would grow its snapshot
+    /// without limit. The cap is therefore part of the signature rather than left to
+    /// the caller, so the bound cannot be forgotten at a call site.
+    pub fn recent(&self, limit: usize) -> Vec<ObservedResourceEvent> {
+        let guard = self.guard();
+        let mut events: Vec<ObservedResourceEvent> = guard.iter().rev().cloned().collect();
+        events.truncate(limit);
+        events
+    }
+
     /// How many events are held, across all accounts.
     pub fn len(&self) -> usize {
         self.guard().len()

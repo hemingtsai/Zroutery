@@ -3,7 +3,7 @@
   "node_id": "STAGE-5",
   "display_name": "Stage 5 — optional account component",
   "status": "DONE",
-  "implementation_state": "All three gates pass. The account contract and its pure calculations have tests; the persistence/runtime boundary landed as an AccountStore owned by AppState behind the optional account feature, with ProviderConfig::accounts as the declaration side; and default-build compatibility holds, verified by the account feature staying out of the desktop package's default set with no change to ML feature order. Execution was the missing third of that boundary and now exists too, as AppState::reconcile_accounts. The line this record used to carry — 'persistence and production ownership/execution are absent' — stopped being true when the ownership boundary landed and was left in place after that, which is the failure mode this repository keeps catching: a stale record that understates what exists is as wrong as one that overstates it.",
+  "implementation_state": "All three of this node's gates are met and were measured rather than inherited: the account contract and its pure calculations are five test targets and 47 tests, persistence and runtime ownership are AppState holding an AccountStore behind the optional feature with a store-keying fixture that runs in the default build, and default-build compatibility is a property of the feature tables — zroutery-core is declared by the desktop package with no features at all, and account, newapi and account-maint are declared and none of them is in default. ML feature order is untouched: default remains [\"ml\"]. Execution, the missing third of that boundary, now exists too as AppState::reconcile_accounts, with the maintenance declaration's scheduler and the observation layer's consumer on top of it. The previous text said persistence and production ownership/execution were absent, which has been untrue since before E-119 corrected the identical sentence on ACCOUNT; this row is the second time that clause was found false, and the fix was to measure the gates rather than to correct the prose again. THIS NODE IS SUPERSEDED BY ACCOUNT AND SAYING DONE DOES NOT MEAN THE ACCOUNT WORK IS DONE: Stage 5's gates were about existence, not integration, and what is still unexercised and still unwired is recorded on ACCOUNT and UI-NEW-TRACKS rather than folded into this row. See E-133.",
   "dependencies": [
     "STAGE-1"
   ],
@@ -22,7 +22,8 @@
     "E-005",
     "E-007",
     "E-016",
-    "E-120"
+    "E-120",
+    "E-133"
   ],
   "source_references": [
     "docs/development/repository-audit-2026-09-25.md",
@@ -32,6 +33,7 @@
     "crates/zroutery-core/Cargo.toml"
   ],
   "notes": [
-    "Account remains optional and is not enabled by the default Tauri dependency."
+    "Account remains optional and is not enabled by the default Tauri dependency.",
+    "Revalidated rather than advanced. DONE here is a claim about this node's three gates and nothing wider: a reader who takes this row as 'accounts work' would be wrong, because the account node's remaining surface and integration gaps are recorded on ACCOUNT and UI-NEW-TRACKS, not here."
   ]
 }

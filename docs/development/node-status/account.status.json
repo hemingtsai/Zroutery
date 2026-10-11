@@ -3,7 +3,7 @@
   "node_id": "ACCOUNT",
   "display_name": "Account generic contract",
   "status": "DONE",
-  "implementation_state": "The whole substrate exists and is now reachable from production code. AppState owns an AccountStore behind the optional account feature; ProviderConfig::accounts is the declaration; account::reconcile probes through a dyn shim and publishes into the store including on failure; and AppState::reconcile_accounts is the caller that was missing, which reads the currently loaded configuration, resolves each account's own credential reference through the real SecretStore, builds one adapter per account, and never returns without publishing a runtime for every declared enabled account. The two reasons this node was PARTIAL — that no call site invoked the reconciler and that no credential-resolution path fed it — are both now false. What is NOT claimed here is a product surface: nothing in a shipped binary calls reconcile_accounts yet, because no desktop command or GUI control triggers it. That gap belongs to UI-NEW-TRACKS and its Real surfaces gate, not to this node's three gates, all of which pass. Two decisions inside the caller are recorded rather than left implicit: a missing backend and a backend that refused to build are kept distinct, because collapsing them makes a misconfigured panel indistinguishable from a feature-gated build; and one adapter is built per account rather than per provider, because an adapter holds exactly one credential and two accounts sharing a provider credential would otherwise be probed with each other's key. See E-119 and E-120.",
+  "implementation_state": "The whole substrate exists and is reachable from production code. AppState owns an AccountStore behind the optional account feature; ProviderConfig::accounts is the declaration; account::reconcile probes through a dyn shim and publishes into the store including on failure; and AppState::reconcile_accounts is the caller that was missing, which reads the currently loaded configuration, resolves each account's own credential reference through the real SecretStore, builds one adapter per account, and never returns without publishing a runtime for every declared enabled account. The two reasons this node was PARTIAL — that no call site invoked the reconciler and that no credential-resolution path fed it — are both now false. Two decisions inside the caller are recorded rather than left implicit: a missing backend and a backend that refused to build are kept distinct, because collapsing them makes a misconfigured panel indistinguishable from a feature-gated build; and one adapter is built per account rather than per provider, because an adapter holds exactly one credential and two accounts sharing a provider credential would otherwise be probed with each other's key. Check-in is the second account-owned execution surface and the only one that can run without a person: the maintenance block on AccountConfig — checkin_enabled, checkin_interval_secs, checkin_path and checkin_trigger_selector — is consumed by account::checkin::decide, a pure function of the declaration, the last settlement and an injected instant, and a minute timer in the desktop shell walks the declared accounts and starts the ones it calls Due. The settlement history that decision reads is durable, because the in-memory view a panel renders is empty on every launch and reading a schedule from it would make every account look untried after every restart. The scheduler deliberately does not guess: an account with no recorded settlement is refused as NeedsFirstObservation even when an interval is declared, because nothing is known about when a given relay's daily reset falls and opening one browser per account at launch is the failure being guarded against, so automation begins only after a person has started one check-in per account. A provider-neutral observation layer (ObservedResourceEvent, ResourceEffect, ObservedProviderAccounting) records what a finished check-in actually did into a bounded AccountEventLog and carries it to the snapshot through a bounded projection, so an observed event reaches something that reads it. What is NOT claimed here is a product surface for the reconciler: the account feature now exposes a desktop command that reaches reconcile_accounts, but no webview control calls it, so nothing a user drives reconciles accounts yet — that gap belongs to UI-NEW-TRACKS and its Real surfaces gate, not to this node's three gates, all of which pass. Two limits are stated rather than hidden: the event log is in memory, so its contents do not survive a restart, and the reconciler runs on the same manual refresh that updates provider-level balances rather than on a timer of its own, because there is no balance timer in this application and one account is one provider API call that nobody asked to repeat every minute. See E-119, E-120, E-130, E-131, E-132, E-134.",
   "dependencies": [
     "STAGE-5"
   ],
@@ -24,7 +24,11 @@
     "E-016",
     "E-115",
     "E-119",
-    "E-120"
+    "E-120",
+    "E-130",
+    "E-131",
+    "E-132",
+    "E-134"
   ],
   "source_references": [
     "docs/development/repository-audit-2026-09-25.md",
@@ -33,6 +37,7 @@
     "crates/zroutery-core/src/account/provider.rs"
   ],
   "notes": [
-    "Account remains optional."
+    "Account remains optional.",
+    "Check-in is the second account-owned execution surface and the only one that can now run without a person, behind an opt-in feature. The reconciler is called by the manual refresh command and its credential path resolves per account, so both of the things that used to be missing are present. The observation layer is no longer a type without a consumer: a confirmed check-in reaches the account event log and the snapshot. The event log is in memory and bounded, so it explains a balance rather than surviving a restart to explain it later. What is unexercised is named rather than implied: the scheduler has never run against a real relay console, the interval has never elapsed against a live panel, and no real panel has produced one of these events, so every claim about them is a claim about fixtures."
   ]
 }

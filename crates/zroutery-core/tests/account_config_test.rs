@@ -161,6 +161,7 @@ fn a_maintenance_declaration_carries_no_observation_or_credential_fields() {
         checkin_enabled: true,
         checkin_interval_secs: Some(86_400),
         checkin_path: Some("/console/personal".to_string()),
+        checkin_trigger_selector: Some("button.checkin".to_string()),
         login_path: Some("/login".to_string()),
         browser_executable: String::new(),
     };
@@ -201,6 +202,88 @@ fn a_maintenance_declaration_carries_no_observation_or_credential_fields() {
     assert!(
         !fields.iter().any(|f| f.contains("headless")),
         "a headless switch must not be introduced; got {fields:?}"
+    );
+}
+
+#[test]
+fn browser_checkin_needs_a_control_as_well_as_a_page() {
+    use zroutery_core::config::MaintenanceConfig;
+
+    // A page with no control means the browser navigates somewhere and stops,
+    // which is a check-in that silently does nothing — the exact failure this
+    // declaration exists to prevent.
+    let page_only = MaintenanceConfig {
+        checkin_enabled: true,
+        checkin_path: Some("/console/personal".into()),
+        ..Default::default()
+    };
+    assert!(
+        !page_only.is_browser_checkin_configured(),
+        "a page without a control is not an actionable check-in"
+    );
+    let refused = page_only.validate().expect_err("this cannot be acted on");
+    assert!(refused.contains("checkin_trigger_selector"), "{refused}");
+
+    let both = MaintenanceConfig {
+        checkin_enabled: true,
+        checkin_path: Some("/console/personal".into()),
+        checkin_trigger_selector: Some("button.checkin".into()),
+        ..Default::default()
+    };
+    assert!(both.validate().is_ok());
+    assert!(both.is_browser_checkin_configured());
+    assert_eq!(both.checkin_selector(), Some("button.checkin"));
+}
+
+#[test]
+fn a_blank_selector_is_the_same_as_no_selector() {
+    use zroutery_core::config::MaintenanceConfig;
+
+    // Whitespace is what an editor leaves behind; treating it as a configured
+    // control would send an empty selector to the browser and report "no control
+    // matched" for a configuration that looks complete.
+    let blank = MaintenanceConfig {
+        checkin_enabled: true,
+        checkin_path: Some("/console/personal".into()),
+        checkin_trigger_selector: Some("   ".into()),
+        ..Default::default()
+    };
+    assert_eq!(blank.checkin_selector(), None);
+    assert!(!blank.is_browser_checkin_configured());
+}
+
+#[test]
+fn a_disabled_checkin_needs_no_control() {
+    use zroutery_core::config::MaintenanceConfig;
+
+    // Refusing to load a document that has check-in switched off would make the
+    // selector requirement a reason a working configuration would not load.
+    let off = MaintenanceConfig {
+        checkin_enabled: false,
+        checkin_path: Some("/console/personal".into()),
+        ..Default::default()
+    };
+    assert!(off.validate().is_ok());
+}
+
+#[test]
+fn a_selector_is_carried_verbatim_for_the_browser_to_interpret() {
+    use zroutery_core::config::MaintenanceConfig;
+
+    // Not validated as a URL and not validated as CSS here. A value that is not a
+    // selector is a selector that matches nothing, and the browser says so
+    // precisely — which is a better answer than this layer guessing at syntax it
+    // does not own.
+    let odd = MaintenanceConfig {
+        checkin_enabled: true,
+        checkin_path: Some("/console/personal".into()),
+        checkin_trigger_selector: Some("https://example.invalid/button".into()),
+        ..Default::default()
+    };
+    assert!(odd.validate().is_ok());
+    assert_eq!(
+        odd.checkin_selector(),
+        Some("https://example.invalid/button")
     );
 }
 

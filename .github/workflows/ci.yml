@@ -98,6 +98,22 @@ jobs:
           set -euo pipefail
           python3 scripts/commit_contract_test.py --self-test
           python3 scripts/orch_docs_test.py --self-test
+          # The mutation gate is the one validator here that is not wired to any
+          # pipeline, because a mutation is chosen per task rather than per run.
+          # What CI can do is refuse to let the tool rot into a rubber stamp, which
+          # is the same argument as the two above: a gate that can no longer reject
+          # is worse than no gate, because it is trusted.
+          #
+          # Its self-test also answers "could this tool see a failure?" — a
+          # harness that cannot distinguish caught from missed reports confidence
+          # it never measured, which is how this project's failing test names were
+          # lost five times.
+          python3 -B scripts/mutation_gate.py --self-test
+          # Same argument again, for the feature matrix: the thing that proves this
+          # tool is not a rubber stamp is that it can still go red. The self-test
+          # asserts a failing combination becomes a non-zero exit and that a stale
+          # exemption ratchets rather than passing quietly.
+          python3 -B scripts/feature_matrix_gate.py --self-test
 
       - name: Commit contract over the change range
         env:
@@ -139,6 +155,29 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Check workspace
         run: cargo check --workspace
+      # Every feature combination, not the one this step already chose.
+      #
+      # This job's other steps all build with features *on*: `--workspace` resolves
+      # the headless proxy's unconditional `ml`, the test steps run whole-workspace,
+      # and the reachability job builds the shipped binary. So a defect that exists
+      # only when a feature is **off** cannot change any of them, and the project
+      # has shipped that defect twice: E-115 records a test file naming
+      # `zroutery_core::account::{...}` with no crate-level
+      # `#![cfg(feature = "account")]`, and the account maintenance work later
+      # gated `panel_adapter` and `panel_root` on `account-maint` while their
+      # caller was gated on `newapi`, so `--features newapi` alone did not compile.
+      # Both times every gate run was green, because every gate was feature-enabled.
+      #
+      # The matrix is derived from each manifest rather than written down, so a
+      # feature added next month is covered the day it is added instead of on the
+      # day someone remembers this file.
+      #
+      # It lives here rather than in `core` for the same reason `cargo check
+      # --workspace` does: the desktop package needs this platform's frameworks,
+      # and the matrix walks its combinations. `--package zroutery-core` covers the
+      # core matrix without them.
+      - name: Every feature combination builds
+        run: python3 -B scripts/feature_matrix_gate.py
       # The project's own mandatory gate, run as exactly the command
       # package.json declares. It lives here and not in `core` because
       # `--workspace` includes the Tauri package, which needs this platform's
