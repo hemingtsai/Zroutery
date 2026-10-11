@@ -3,7 +3,7 @@
   "node_id": "UI-NEW-TRACKS",
   "display_name": "New-track UI and Tauri surfaces",
   "status": "PARTIAL",
-  "implementation_state": "The upstream contracts this node was blocked on are now closed: ACCOUNT, NEWAPI, I2, I3 and I4 all pass their gates, so the blocked_by set is emptied and the node is no longer waiting on upstream. One of its three own gates has moved. Backend lifecycle ownership is no longer wholly unmet: the account reconciler now has a real production caller in AppState::reconcile_accounts, which is the first of the four engines to leave the fixture world. The other three engines — MigrationExecutor, TakeoverStore, and the rollback path — still have no caller, and none of them has a desktop command or GUI control that triggers it. The account caller is itself not yet triggered by anything a user can press, so nothing here is a product surface yet. Real account/NewAPI/migration/takeover surfaces and the product confirmation and rollback UI remain unmet. The core has the pieces a surface would need — durable ownership with compare-and-swap, conflict resolution applied on release, accurate rollback reporting, and an account reconciler that publishes outcomes rather than only successes — and a product surface may be built on those once the confirmation semantics are agreed.",
+  "implementation_state": "The upstream contracts this node was blocked on are now closed: ACCOUNT, NEWAPI, I2, I3 and I4 all pass their gates, so the blocked_by set is emptied and the node is no longer waiting on upstream. One of its three own gates has moved further than the previous revision of this record said. Backend lifecycle ownership: the account reconciler is not only called from core, it now has a desktop command behind the account feature, and Snapshot carries an account_available flag so a dashboard can ask whether this build has the subsystem at all rather than discovering the absence from a failed call. That flag is separate from account_maintenance_available because the two answer different questions and account-maint implies account. The account feature was declared in src-tauri and gated nothing before this; a reconciler with a core caller that no shipped build could reach is not reachable. The other three engines — MigrationExecutor, TakeoverStore, and the rollback path — still have no caller and no command. Real surfaces: one real command exists and it is not a placeholder, but no control in the webview calls it, so nothing here is a product surface a user can drive yet. The product confirmation and rollback UI remains unmet, and the rollback semantics now carry an open question of their own: whether a rollback that restored nothing should report success was decided in code as false, flagged as a semantic change to a public field, and is one of the confirmation decisions this node needs rather than one it inherits. The core has the pieces a surface would need — durable ownership with compare-and-swap, conflict resolution applied on release, accurate rollback reporting, and an account reconciler that publishes outcomes rather than only successes — and a product surface may be built on those once the confirmation semantics are agreed.",
   "dependencies": [
     "UI",
     "ACCOUNT",
@@ -22,7 +22,8 @@
   "unblock_condition": "Close the Account, NewAPI, I2, I3, and I4 lifecycle contracts before adding user-facing controls.",
   "evidence": [
     "E-016",
-    "E-120"
+    "E-120",
+    "E-122"
   ],
   "source_references": [
     "docs/development/repository-audit-2026-09-25.md",
