@@ -48,6 +48,8 @@ pub fn run() {
             commands::get_logs,
             #[cfg(feature = "ml")]
             commands::get_ml_status,
+            #[cfg(feature = "account")]
+            commands::reconcile_accounts,
             #[cfg(feature = "ml")]
             commands::get_ml_shadow,
             #[cfg(feature = "ml")]
