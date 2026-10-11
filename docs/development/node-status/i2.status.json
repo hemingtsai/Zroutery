@@ -3,7 +3,7 @@
   "node_id": "I2",
   "display_name": "I2 — migration execution",
   "status": "PARTIAL",
-  "implementation_state": "All five gates now have passing fixtures, mutation-verified: the endpoint check judges the answer rather than accepting any HTTP response, actions own the processes they start, config validation parses a real file and refuses a format it cannot read, and CopyConfig reports credential-shaped keys it propagated. Status is held at PARTIAL rather than DONE for one reason that is not a gate: nothing in the application calls MigrationExecutor yet, so this is implemented and proven but not integrated. Two boundaries are deliberate rather than pending. StopExternal observes and never kills, because this migration did not start that process. Core cannot route a copied secret to a credential store -- that is the desktop layer's job, where ccswitch::credential_fingerprint already sets the convention -- so CopyConfig warns instead of pretending to protect the secret.",
+  "implementation_state": "All five gates now have passing fixtures, mutation-verified: the endpoint check judges the answer rather than accepting any HTTP response, actions own the processes they start, config validation parses a real file and refuses a format it cannot read, and CopyConfig reports credential-shaped keys it propagated. Status is held at PARTIAL rather than DONE for one reason that is not a gate: nothing in the application calls MigrationExecutor yet, so this is implemented and proven but not integrated. Two boundaries are deliberate rather than pending. StopExternal observes and never kills, because this migration did not start that process. Core cannot route a copied secret to a credential store -- that is the desktop layer's job, where ccswitch::credential_fingerprint already sets the convention -- so CopyConfig warns instead of pretending to protect the secret. A SIXTH CONDITION WAS FOUND THAT NO GATE EXPRESSED, and it is the reason wiring MigrationExecutor was deliberately not the next step: MigrationStore held its state and history in memory only, so the seven-state machine lost exactly the three states that mean work was started and not finished (Prepared, Verified, Switched) on every restart. check_already_migrated then reported false for a system that had already been migrated, and recover refused the very states it exists to recover from. Every fixture builds its store with MigrationStore::new and runs the whole story in one process, which is why nothing caught it. State and snapshot are now persisted through the same 0600 atomic writer the takeover manifest uses, a corrupt manifest is refused rather than read as absent, and a caller can ask whether a store is durable. The node stays PARTIAL and its reason is now stated in two parts rather than one: there is still no production caller, and there is also no place in the configuration where a migration plan is declared, which is a shape decision rather than an implementation gap.",
   "dependencies": [],
   "dependents": [
     "I4",
@@ -20,7 +20,8 @@
   "unblock_condition": "Implement the typed runner and pass local child-process, config, auth, and endpoint fixtures.",
   "evidence": [
     "E-005",
-    "E-016"
+    "E-016",
+    "E-121"
   ],
   "source_references": [
     "docs/development/repository-audit-2026-09-25.md",
