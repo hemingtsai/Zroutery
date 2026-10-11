@@ -414,7 +414,11 @@ impl CheckinView {
 /// only needs an origin — and because a value the adapter later refuses is
 /// caught by its validation, so a wrong guess here fails at the call rather than
 /// silently.
-#[cfg(feature = "account-maint")]
+// Gated on `newapi` for the same reason as `panel_adapter`: this normalises a
+// base URL and nothing else, and gating it on the browser maintenance surface
+// made `--features newapi` alone uncompilable — a build that ships the NewAPI
+// adapter without the browser surface could not use the adapter at all.
+#[cfg(feature = "newapi")]
 fn panel_root(base_url: &str) -> String {
     let trimmed = base_url.trim().trim_end_matches('/');
     for suffix in ["/api", "/v1"] {
@@ -806,7 +810,15 @@ impl Desktop {
     /// returned, stored on `Desktop`, or put in a snapshot: the credential lives
     /// in the keychain, and the only thing that outlives this call is an adapter
     /// holding it in memory.
-    #[cfg(feature = "account-maint")]
+    // Gated on `newapi` rather than on `account-maint`, because nothing in this
+    // function touches the browser half of the maintenance surface: it builds an
+    // adapter, reads one credential, and hands the adapter back. It was gated on
+    // `account-maint` because that is where it was first needed, which left
+    // `--features newapi` without `--features account-maint` uncompilable — and
+    // every gate run for the change was feature-enabled, so nothing could see it.
+    // That is the same shape as the defect E-115 records: a build the
+    // verification never visits.
+    #[cfg(feature = "newapi")]
     pub fn panel_adapter(
         &self,
         provider_id: &str,
