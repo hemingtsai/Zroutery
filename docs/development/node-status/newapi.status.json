@@ -3,7 +3,7 @@
   "node_id": "NEWAPI",
   "display_name": "NewAPI adapter",
   "status": "PARTIAL",
-  "implementation_state": "Fully implemented and fixture-verified: auth, expiry/refresh, usage and quota, check-in, health. 57 unit tests run the adapter against an in-process fake panel, and 5 route-table tests fence endpoint provenance against upstream's Go source. Not integrated: no production caller. The record previously said usage/quota were unimplemented, which has not been true since before the node was re-examined. See E-114.",
+  "implementation_state": "Fully implemented and fixture-verified: auth, expiry/refresh, usage and quota, check-in, health. 57 unit tests run the adapter against an in-process fake panel, and 5 route-table tests fence endpoint provenance against upstream's Go source. The previous record said 'Not integrated: no production caller', and that statement is now false rather than merely dated: Desktop builds this adapter behind the opt-in account-maint feature, and checkin_commands::observe calls its check-in observation, so the adapter has a production caller that is reached whenever an operator starts a check-in. It stays PARTIAL for two reasons that replaced the old one. The integration has never been exercised against a real panel, so every claim here is still a claim about a fake. And it is reachable only under an opt-in feature, not in the default build, so no operator meets it unless they go looking for it. Log-type interpretation is now transcribed from model/log.go at QuantumNous/new-api main instead of inferred from the constants, and the write sites there disagree with each other about what the quota column means — which is why a log row is never read as a balance delta. The record previously said usage/quota were unimplemented, which has not been true since before the node was re-examined. See E-114 and E-130.",
   "dependencies": [
     "ACCOUNT"
   ],
@@ -24,7 +24,8 @@
   "evidence": [
     "E-007",
     "E-016",
-    "E-114"
+    "E-114",
+    "E-130"
   ],
   "source_references": [
     "docs/development/repository-audit-2026-09-25.md",
@@ -33,6 +34,7 @@
     "crates/zroutery-core/src/account/types.rs"
   ],
   "notes": [
-    "No real NewAPI credential or provider call is evidence."
+    "No real NewAPI credential or provider call is evidence.",
+    "A production caller now exists and has still never touched a real panel. Reaching one in this repository's tests requires a credential nobody here has, so the gap is named rather than closed."
   ]
 }

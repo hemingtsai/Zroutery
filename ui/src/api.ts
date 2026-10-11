@@ -520,6 +520,17 @@ export interface Snapshot {
   account_maintenance_available: boolean;
   /** What each declared account's check-in is doing. */
   checkin?: CheckinView[];
+  /** Observed resource events, newest first. */
+  account_events?: AccountEvent[];
+  /**
+   * Per-account balances.
+   *
+   * Present only for providers declaring more than one account, because with a
+   * single account this is the same figure the provider-level `balances` already
+   * carries. The backend filters rather than the panel, so an operator cannot end up
+   * with two panels saying one thing.
+   */
+  account_balances?: AccountBalance[];
 }
 
 /**
@@ -561,6 +572,15 @@ export interface Maintenance {
   checkin_enabled: boolean;
   checkin_interval_secs: number | null;
   checkin_path: string | null;
+  /**
+   * CSS selector for the check-in control on that page.
+   *
+   * Required alongside `checkin_path`. The browser activates the panel's own
+   * button rather than posting the request itself, so this is what the operation
+   * clicks — and it has no default because the markup of any particular relay's
+   * console is not something this file can know.
+   */
+  checkin_trigger_selector: string | null;
   login_path: string | null;
   browser_executable: string;
 }
@@ -590,6 +610,50 @@ export interface CheckinView {
    */
   reward_source: string | null;
   last_completed_at: number | null;
+  /**
+   * Why the scheduler did or did not act, and when it next will.
+   *
+   * `decision` is one of `disabled`, `not_applicable`, `needs_first_observation`,
+   * `no_policy`, `not_due` or `due`. Each is a different sentence for the user, and
+   * collapsing them would leave somebody staring at an account that looks broken
+   * because they never turned anything on.
+   *
+   * `next_due_at` is null whenever the decision names no time, which is not the same
+   * as zero: an account that has never run has no future due time, and rendering 0
+   * as a date would claim 1970.
+   */
+  schedule: CheckinScheduleView;
+}
+
+/** The scheduler's answer for one account. */
+export interface CheckinScheduleView {
+  decision: string;
+  next_due_at: number | null;
+  last_settled_at: number | null;
+}
+/**
+ * One observed thing that happened to an account's resources.
+ *
+ * `effect` is `credited`, `debited`, `no_change` or `unobserved`, and the last two
+ * are different facts rather than synonyms: one says the provider established that
+ * nothing moved, the other says nothing established either way.
+ *
+ * `source` is where the figure came from — `operation_response`, `account_state` or
+ * `account_log`. The log is the weakest of the three, because its text is localised
+ * and forks reword it, so a figure read from it is a fallback rather than a
+ * confirmation.
+ */
+export interface AccountEvent {
+  provider_id: string;
+  account_id: string;
+  observed_at: number;
+  kind: string;
+  effect: string;
+  /** Present only when an amount is established. */
+  amount: number | null;
+  unit: string | null;
+  source: string;
+  description: string;
 }
 
 /** One entry of a provider's catalogue, with prices when it publishes them. */
@@ -1175,4 +1239,23 @@ export function slugify(value: string): string {
       .replace(/[^a-z0-9._-]+/g, "-")
       .replace(/^-+|-+$/g, "") || "provider"
   );
+}
+/**
+ * One account's probed state.
+ *
+ * `status` is `active`, `suspended`, `quota_exhausted`, `rate_limited`,
+ * `authentication_expired`, `unknown` or `unprobed`. `unprobed` is not a status the
+ * provider reported: it means nobody has asked this account yet, which is not the
+ * same as an account with nothing left, and a zero balance would claim the second.
+ */
+export interface AccountBalance {
+  provider_id: string;
+  account_id: string;
+  status: string;
+  remaining: number | null;
+  total: number | null;
+  used: number | null;
+  unit: string | null;
+  last_sync: number | null;
+  last_failure: number | null;
 }

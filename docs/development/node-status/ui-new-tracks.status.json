@@ -3,7 +3,7 @@
   "node_id": "UI-NEW-TRACKS",
   "display_name": "New-track UI and Tauri surfaces",
   "status": "PARTIAL",
-  "implementation_state": "The upstream contracts this node was blocked on are now closed: ACCOUNT, NEWAPI, I2, I3 and I4 all pass their gates, so the blocked_by set is emptied and the node is no longer waiting on upstream. One of its three own gates has moved further than the previous revision of this record said. Backend lifecycle ownership: the account reconciler is not only called from core, it now has a desktop command behind the account feature, and Snapshot carries an account_available flag so a dashboard can ask whether this build has the subsystem at all rather than discovering the absence from a failed call. That flag is separate from account_maintenance_available because the two answer different questions and account-maint implies account. The account feature was declared in src-tauri and gated nothing before this; a reconciler with a core caller that no shipped build could reach is not reachable. The other three engines — MigrationExecutor, TakeoverStore, and the rollback path — still have no caller and no command. Real surfaces: one real command exists and it is not a placeholder, but no control in the webview calls it, so nothing here is a product surface a user can drive yet. The product confirmation and rollback UI remains unmet, and the rollback semantics now carry an open question of their own: whether a rollback that restored nothing should report success was decided in code as false, flagged as a semantic change to a public field, and is one of the confirmation decisions this node needs rather than one it inherits. The core has the pieces a surface would need — durable ownership with compare-and-swap, conflict resolution applied on release, accurate rollback reporting, and an account reconciler that publishes outcomes rather than only successes — and a product surface may be built on those once the confirmation semantics are agreed.",
+  "implementation_state": "The upstream contracts this node was blocked on are now closed: ACCOUNT, NEWAPI, I2, I3 and I4 all pass their gates, so the blocked_by set is emptied and the node is no longer waiting on upstream. One of its three own gates has moved further than the previous revision of this record said. Backend lifecycle ownership: the account reconciler is not only called from core, it now has a desktop command behind the account feature, and Snapshot carries an account_available flag so a dashboard can ask whether this build has the subsystem at all rather than discovering the absence from a failed call — that flag is separate from account_maintenance_available because the two answer different questions and account-maint implies account. The check-in runtime goes further and owns a headed browser session per (provider, account): a WAF challenge holds that session rather than destroying it, so a resume continues the same session and never asks the operator to authenticate twice, and a minute timer walks the declared accounts and starts the ones a pure decision function calls due, with the settlement history durable across restarts. Real surfaces: four Tauri commands and a per-account maintenance row with start, resume, cancel and a written record of what was observed rather than what was hoped for, and the row renders the six scheduler answers separately on purpose, because \"nothing happened\" would send an operator to change a setting that is not the problem — one of them is the user's own choice, one is a gap in their declaration, and only two mean a schedule is quietly counting down. The other three engines — MigrationExecutor, TakeoverStore, and the rollback path — still have no caller and no command, so they remain fixtures rather than surfaces a user can drive. The product confirmation and rollback UI remains unmet, and a check-in confirmation is not a rollback confirmation — one interrupts a human and resumes, the other has to undo a half-applied change, and only the first is built. The rollback semantics also carry an open question of their own: whether a rollback that restored nothing should report success was decided in code as false, flagged as a semantic change to a public field, and is one of the confirmation decisions this node needs rather than one it inherits. The core has the pieces a surface would need — durable ownership with compare-and-swap, conflict resolution applied on release, accurate rollback reporting, and an account reconciler that publishes outcomes rather than only successes. What is unexercised is named rather than gestural: the check-in row is the one surface here that a person has driven in the running application, and doing so found three browser-lifecycle defects no mock could have, fixed with tests that fail by name when inverted; the scheduler against a real relay console, an interval elapsing against a live panel and any WAF challenge are still asserted against fixtures only. See E-120, E-122, E-131, E-132, E-134, E-135.",
   "dependencies": [
     "UI",
     "ACCOUNT",
@@ -23,18 +23,26 @@
   "evidence": [
     "E-016",
     "E-120",
-    "E-122"
+    "E-122",
+    "E-131",
+    "E-132",
+    "E-134",
+    "E-135"
   ],
   "source_references": [
     "docs/development/repository-audit-2026-09-25.md",
     "ui/src/App.tsx",
     "src-tauri/src/commands.rs",
+    "src-tauri/src/checkin_commands.rs",
+    "src-tauri/src/checkin/mod.rs",
+    "ui/src/pages/Providers.tsx",
     "crates/zroutery-core/src/account/adapters/newapi.rs",
     "crates/zroutery-core/src/migration.rs",
     "crates/zroutery-core/src/agent_takeover.rs"
   ],
   "notes": [
     "No placeholder control is treated as a product lifecycle.",
-    "No longer blocked on upstream: ACCOUNT, NEWAPI, I2, I3, and I4 all pass their gates and their blocked_by sets are empty. The status is PARTIAL because its own three gates are unmet, not because it is waiting on another node."
+    "No longer blocked on upstream: ACCOUNT, NEWAPI, I2, I3, and I4 all pass their gates and their blocked_by sets are empty. The status is PARTIAL because its own three gates are unmet, not because it is waiting on another node.",
+    "The check-in row is the one surface here that has been driven by a real browser, and its check-in control has been shown to receive a trusted event. It has now been exercised by a person in the running application, and doing so found three browser-lifecycle defects that no unit test and no mock could have: a finished attempt never closed its browser, a cancel arriving mid-attempt freed the account while a browser was still holding its profile directory, and shutdown reported success while the browser survived. Two Chrome processes on one user-data-dir is what Chrome answers by damaging the profile, which is the dialog the operator saw. All three are fixed with tests that fail by name when the fix is inverted. What is still unexercised: the scheduler against a real relay console, an interval elapsing against a live panel, and any WAF challenge, so everything asserted about those is asserted against fixtures."
   ]
 }

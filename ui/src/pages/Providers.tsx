@@ -12,6 +12,8 @@ import {
   type CcProviderDraft,
   type CcSwitchPreview,
   type CheckinView,
+  type AccountBalance,
+  type AccountEvent,
   type DiscoveredModel,
   type Maintenance,
   type Provider,
@@ -520,12 +522,18 @@ function BalanceChip({ status }: { status: BalanceStatus | undefined }) {
  */
 function AccountMaintenanceRow({
   view,
+  balance,
+  events,
   busy,
   onStart,
   onResume,
   onCancel,
 }: {
   view: CheckinView;
+  /** Observed resource events for the whole snapshot, newest first. */
+  events: AccountEvent[];
+  /** This account's probed balance, when the provider has more than one. */
+  balance: AccountBalance | undefined;
   busy: boolean;
   onStart: () => void;
   onResume: () => void;
@@ -554,6 +562,34 @@ function AccountMaintenanceRow({
           )}
         </span>
         {view.failure && <span className="row-sub warn-text">{view.failure}</span>}
+        {/*
+          Why the scheduler is or is not acting, in its own words. Without this an
+          operator who sets an interval sees a row that never changes and cannot
+          tell a policy that is working from a policy that is doing nothing — and
+          the reasons differ enough that "nothing happened" would send them to
+          change a setting that is not the problem.
+        */}
+        <span className="row-sub muted">{scheduleLabel(view)}</span>        {balance && (
+          /*
+           * The account's own figure, shown only where the provider's total hides
+           * which account is empty and which is suspended. The backend decides that,
+           * so a panel cannot present one number twice.
+           */
+          <span className="row-sub mono">
+            {t("account.balance")} {accountBalanceLabel(balance, ago)}
+          </span>
+        )}
+        {latestEventFor(events, view.provider_id, view.account_id) && (
+          /*
+           * What the provider said actually happened, with the evidence it came
+           * from. Rendered as the event rather than as a running total, because a
+           * sum of partially-observed events drifts from the truth and the truth
+           * is available from the provider directly.
+           */
+          <span className="row-sub mono">
+            {eventLabel(latestEventFor(events, view.provider_id, view.account_id)!)}
+          </span>
+        )}
         {/*
           A reward is shown only when one was observed, and its source travels
           with it. A figure recovered from provider log text is weaker evidence
@@ -600,6 +636,103 @@ function AccountMaintenanceRow({
   );
 }
 
+/**
+ * The most recent observed event for one account, if there is one.
+ *
+ * Picks the newest rather than the first in the list because the snapshot is
+ * already ordered but a caller should not have to know that.
+ */
+/**
+ * Per-account balances for one provider, or none when the provider declares one.
+ *
+ * The backend already filters, so an empty list here means "this provider has a
+ * single account and the provider-level figure is the whole truth" rather than
+ * "nothing was probed". Rendering nothing in that case is the point: two panels
+ * saying one number is how an operator stops trusting either.
+ */
+function balancesFor(
+  balances: AccountBalance[] | undefined,
+  providerId: string,
+): AccountBalance[] {
+  return (balances ?? []).filter((b) => b.provider_id === providerId);
+}
+
+/** One account's line: who it is, what it has left, and how well that is known. */
+function accountBalanceLabel(balance: AccountBalance, ago: (at: number) => string): string {
+  if (balance.status === "unprobed") {
+    // Not a balance of zero. Nobody has asked this account yet.
+    return "not probed yet";
+  }
+  if (balance.remaining === null) {
+    return balance.status.replace(/_/g, " ");
+  }
+  const stale = balance.last_failure !== null ? ` · last attempt failed ${ago(balance.last_failure!)}` : "";
+  return `${balance.remaining} ${balance.unit ?? ""} of ${balance.total ?? "?"}${stale}`;
+}
+
+function latestEventFor(
+  events: AccountEvent[] | undefined,
+  providerId: string,
+  accountId: string,
+): AccountEvent | undefined {
+  let newest: AccountEvent | undefined;
+  for (const event of events ?? []) {
+    if (event.provider_id !== providerId || event.account_id !== accountId) continue;
+    if (!newest || event.observed_at > newest.observed_at) newest = event;
+  }
+  return newest;
+}
+
+/**
+ * One line saying what the provider established, and how well.
+ *
+ * The `no_change` and `unobserved` cases are spelled differently on purpose. One is
+ * a finding — we looked and nothing moved — and the other is an absence of
+ * information, and rendering both as "no change" would state as fact something the
+ * provider never said.
+ */
+function eventLabel(event: AccountEvent): string {
+  if (event.effect === "credited" && event.amount !== null) {
+    return `+${event.amount} ${event.unit ?? ""} (${event.source})`;
+  }
+  if (event.effect === "debited" && event.amount !== null) {
+    return `-${event.amount} ${event.unit ?? ""} (${event.source})`;
+  }
+  if (event.effect === "no_change") return "observed: nothing moved";
+  return "established: unknown";
+}
+
+/** The scheduler decisions the backend publishes. */
+const SCHEDULE_KEYS = new Set([
+  "disabled",
+  "not_applicable",
+  "needs_first_observation",
+  "no_policy",
+  "not_due",
+  "due",
+  "unknown",
+]);
+
+/**
+ * One sentence saying why the scheduler did or did not act on this account.
+ *
+ * An unrecognised decision renders as itself rather than as a neighbouring reason,
+ * for the same reason `PHASE_KEYS` exists below: two reasons merged into one would
+ * send the reader to change a setting that is not the problem.
+ */
+function scheduleLabel(view: CheckinView): string {
+  const { t } = useI18n();
+  const decision = view.schedule?.decision ?? "unknown";
+  const reason = SCHEDULE_KEYS.has(decision)
+    ? t(`account.schedule.${decision}` as Parameters<typeof t>[0])
+    : decision;
+  const next = view.schedule?.next_due_at;
+  if (next !== null && next !== undefined) {
+    return `${reason} · ${t("account.next_run")} ${ago(next)}`;
+  }
+  return reason;
+}
+
 /** The phases the backend publishes, so an unknown one can be told apart. */
 const PHASE_KEYS = new Set([
   "idle",
@@ -610,6 +743,7 @@ const PHASE_KEYS = new Set([
   "not_supported",
   "failed",
   "cancelled",
+  "cancelling"
 ]);
 
 /**
@@ -637,6 +771,10 @@ function checkinFor(
       reward_unit: null,
       reward_source: null,
       last_completed_at: null,
+      // "unknown" rather than a guess. The backend is the only thing that knows this
+      // account's declaration and history, and inventing a decision here would
+      // render as a scheduler answer nobody actually computed.
+      schedule: { decision: "unknown", next_due_at: null, last_settled_at: null },
     }
   );
 }
@@ -731,6 +869,19 @@ function ProviderDrawer({
   const start = async (id: string, account: string, maintenance: Maintenance) => {
     if (!maintenance.checkin_enabled) {
       notify("error", t("account.not_enabled"));
+      return;
+    }
+    // Checked here as well as in the backend so the operator is told which of the
+    // two settings is missing, rather than receiving "not configured" for a page
+    // they already set.
+    const missing =
+      !maintenance.checkin_path?.trim()
+        ? t("account.need_path")
+        : !maintenance.checkin_trigger_selector?.trim()
+          ? t("account.need_selector")
+          : null;
+    if (missing) {
+      notify("error", missing);
       return;
     }
     try {
@@ -1199,6 +1350,9 @@ function ProviderDrawer({
                 <AccountMaintenanceRow
                   key={account.account_id}
                   view={view}
+                  events={snapshot.account_events ?? []}                  balance={balancesFor(snapshot.account_balances, provider.id).find(
+                    (b) => b.account_id === account.account_id,
+                  )}
                   busy={busy}
                   onStart={() =>
                     void start(provider.id, account.account_id, account.maintenance)

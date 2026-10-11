@@ -3,18 +3,20 @@
   "node_id": "TEST-ALL-FEATURES",
   "display_name": "Local all-feature tests",
   "status": "DONE",
-  "implementation_state": "The audited Core, Account, ML, and NewAPI feature suites passed.",
+  "implementation_state": "The audited Core, Account, ML, and NewAPI feature suites passed. This node covers one point in the feature matrix — every feature switched on — and until the matrix gate existed it was the only feature-shaped check in the project, which is how two separate defects lived in the combinations it never reached.",
   "dependencies": [
     "TEST-ML"
   ],
   "dependents": [],
   "required_gates": [
-    "cargo test --workspace --all-features"
+    "cargo test --workspace --all-features",
+    "python3 -B scripts/feature_matrix_gate.py"
   ],
   "blocked_by": [],
   "unblock_condition": "Rerun after any feature or contract change.",
   "evidence": [
-    "E-007"
+    "E-007",
+    "E-140"
   ],
   "source_references": [
     "docs/development/repository-audit-2026-09-25.md",
@@ -23,6 +25,8 @@
     "src-tauri/Cargo.toml"
   ],
   "notes": [
-    "Feature-enabled tests do not prove external lifecycle."
+    "Feature-enabled tests do not prove external lifecycle.",
+    "`cargo test --workspace --all-features` enables everything and therefore cannot see a defect that exists only when a feature is off. E-115 was one such defect and the account maintenance work introduced a second (`--features newapi` alone did not compile, because `panel_adapter` and `panel_root` were gated on `account-maint`). Both times every gate was green. The matrix gate closes that gap; this node's own command cannot, and saying otherwise here is what the record must not do.",
+    "`zroutery-core` does not compile without `ml`: `server/mod.rs` reads `config.ml_routing` unconditionally. Pre-existing, verified against the branch point, recorded as an exemption in the matrix gate rather than fixed, because the fix is a `#[cfg]` decision about the learning stack."
   ]
 }

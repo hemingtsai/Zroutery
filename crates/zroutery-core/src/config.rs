@@ -684,6 +684,15 @@ pub struct MaintenanceConfig {
     /// real browser somewhere useless while reporting progress.
     #[serde(default)]
     pub checkin_path: Option<String>,
+    /// CSS selector for the check-in control on that page.
+    ///
+    /// Required alongside [`Self::checkin_path`], and also not defaulted. The
+    /// browser activates the panel's own button rather than posting the request
+    /// itself, because that is what carries the panel's session and its challenge
+    /// token; a default selector would mean clicking an arbitrary element on a
+    /// page whose markup nobody here has seen.
+    #[serde(default)]
+    pub checkin_trigger_selector: Option<String>,
     /// Panel-relative path of the sign-in page, when signing in needs one.
     #[serde(default)]
     pub login_path: Option<String>,
@@ -718,21 +727,45 @@ impl MaintenanceConfig {
                 return Err(format!("{field} must start with '/'"));
             }
         }
+        // A path with no control means navigating somewhere and stopping there,
+        // which is a check-in that silently does nothing. That is exactly the
+        // failure this declaration exists to prevent, so it is refused at load
+        // rather than discovered later as "the control was not found".
+        if self.checkin_enabled && self.has_checkin_page() && self.checkin_selector().is_none() {
+            return Err(
+                "checkin_trigger_selector must be set when checkin is enabled with a \
+                 checkin_path"
+                    .into(),
+            );
+        }
         Ok(())
+    }
+
+    /// Whether a panel-relative check-in page is declared.
+    fn has_checkin_page(&self) -> bool {
+        self.checkin_path
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|p| !p.is_empty())
+    }
+
+    /// The configured check-in control selector, when it is usable.
+    pub fn checkin_selector(&self) -> Option<&str> {
+        self.checkin_trigger_selector
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
     }
 
     /// Whether browser check-in is fully specified.
     ///
-    /// Distinct from `checkin_enabled`: a user can legitimately want check-in
-    /// reported as unsupported rather than attempted against a path that is not
-    /// there, and the panel needs to be able to say which of those is the case.
+    /// Requires the selector as well as the page, because the browser's job is to
+    /// activate the panel's own control. Distinct from `checkin_enabled`: a user
+    /// can legitimately want check-in reported as unsupported rather than
+    /// attempted against a page that is not there, and the panel needs to be able
+    /// to say which of those is the case.
     pub fn is_browser_checkin_configured(&self) -> bool {
-        self.checkin_enabled
-            && self
-                .checkin_path
-                .as_deref()
-                .map(str::trim)
-                .is_some_and(|p| !p.is_empty())
+        self.checkin_enabled && self.has_checkin_page() && self.checkin_selector().is_some()
     }
 }
 

@@ -63,6 +63,28 @@ pub struct Desktop {
     /// will offer to resume an attempt that finished hours ago.
     #[cfg(feature = "account-maint")]
     checkin_reports: Mutex<BTreeMap<(String, String), CheckinView>>,
+    /// When each account's last check-in settled, across restarts.
+    ///
+    /// Deliberately a *different* thing from `checkin_reports`, and the
+    /// distinction is the reason the scheduler works at all. `checkin_reports`
+    /// answers "what happened last time" and starts empty on every launch, which is
+    /// correct for a panel: an account with no history should read as untried. The
+    /// scheduler instead needs "when did this account last settle", and reading
+    /// that from an in-memory map would make every account look untried after every
+    /// restart — so one visible browser window per account, seconds after launch.
+    #[cfg(feature = "account-maint")]
+    pub(crate) checkin_schedule: crate::checkin::schedule::Schedule,
+    /// What has actually been observed happening to accounts' resources.
+    ///
+    /// Bounded and in memory, on purpose: this is a record of what the providers
+    /// said, kept so an operator can see why a balance moved and how strongly that
+    /// was established. It is deliberately not the source of a balance — the
+    /// provider is — and a running sum of partially-observed events drifts.
+    ///
+    /// It exists because the observation layer was written, tested and then held by
+    /// nothing. Holding it here is what makes the events reachable at all.
+    #[cfg(feature = "account-maint")]
+    pub(crate) account_events: zroutery_core::account::AccountEventLog,
 }
 
 /// Whether a listener can claim an address.
@@ -174,6 +196,17 @@ pub struct Snapshot {
     /// What each declared account is doing, newest observation last.
     #[cfg(feature = "account-maint")]
     pub checkin: Vec<CheckinView>,
+    /// Observed resource events, newest first.
+    ///
+    /// Carried so an operator can see *why* a balance moved and, for each entry,
+    /// how strongly that was established. The amount and the evidence travel
+    /// together on purpose: a figure the provider reported in a structured field
+    /// and one recovered out of log text must not read the same.
+    #[cfg(feature = "account-maint")]
+    pub account_events: Vec<AccountEventView>,
+    /// Per-account balances, for providers that declare more than one account.
+    #[cfg(feature = "newapi")]
+    pub account_balances: Vec<AccountBalanceView>,
 }
 
 /// How much durable history the operator has, as bytes and as a record count.
@@ -257,6 +290,108 @@ pub struct CheckinView {
     /// what it is, rather than as an authoritative number.
     pub reward_source: Option<String>,
     pub last_completed_at: Option<i64>,
+    /// Why the scheduler did or did not act on this account, and when it next will.
+    ///
+    /// Carried per account rather than as a panel-wide summary because the six
+    /// reasons are per-account facts: one account switched off, another missing a
+    /// selector and a third simply not due yet all need different words, and a count
+    /// per kind would tell an operator how many are broken without telling them which.
+    ///
+    /// `next_due_at` is set only when a decision names a time, so its absence is
+    /// informative rather than a zero: there is no future time for an account that
+    /// needs a first run, and rendering 0 as a date would be a lie about the epoch.
+    pub schedule: CheckinScheduleView,
+}
+
+/// One observed resource event, as a panel receives it.
+///
+/// A projection rather than the core type itself, for the same reason the phase is
+/// a named string rather than a serialised enum: the webview gets a vocabulary that
+/// a `#[serde(rename_all)]` change cannot move underneath it.
+#[derive(Debug, Clone, Serialize)]
+pub struct AccountEventView {
+    pub provider_id: String,
+    pub account_id: String,
+    /// When the provider says it happened, in unix seconds.
+    pub observed_at: i64,
+    /// What kind of thing it was: `system_grant`, `replenishment`, and so on.
+    pub kind: String,
+    /// What it did to the balance, in the layer's own words.
+    ///
+    /// `credited`, `debited`, `no_change` or `unobserved` — and the last two are
+    /// different facts, not synonyms: one says nothing moved and the other says we
+    /// could not find out.
+    pub effect: String,
+    /// The amount, only when one is established.
+    pub amount: Option<f64>,
+    pub unit: Option<String>,
+    /// Where the figure came from: `operation_response`, `account_state` or
+    /// `account_log`. The weakest of these is the log.
+    pub source: String,
+    pub description: String,
+}
+
+/// The scheduler's answer for one account.
+#[derive(Debug, Clone, Serialize)]
+pub struct CheckinScheduleView {
+    /// `disabled`, `not_applicable`, `needs_first_observation`, `no_policy`,
+    /// `not_due` or `due`.
+    pub decision: String,
+    /// When the next attempt is due, when the decision names one.
+    pub next_due_at: Option<i64>,
+    /// When the last attempt ended, which is what the interval is measured from.
+    pub last_settled_at: Option<i64>,
+}
+
+/// How many observed events a snapshot carries.
+///
+/// Bounded so a long-running application cannot grow its snapshot without limit. The
+/// log is bounded too; this is the smaller of the two bounds and is about the wire.
+#[cfg(feature = "account-maint")]
+pub const ACCOUNT_EVENT_SNAPSHOT_LIMIT: usize = 50;
+
+/// One account's probed state, as a panel receives it.
+///
+/// Only carried for providers that declare more than one account, because with a
+/// single account the provider-level balance is the same fact and two panels would
+/// say it twice. With several, the provider figure is a total that hides which
+/// account is empty and which is suspended — which is the whole reason to look.
+#[cfg(feature = "newapi")]
+#[derive(Debug, Clone, Serialize)]
+pub struct AccountBalanceView {
+    pub provider_id: String,
+    pub account_id: String,
+    /// `active`, `suspended`, `quota_exhausted`, `rate_limited`,
+    /// `authentication_expired`, `unknown` or `unprobed`.
+    pub status: String,
+    /// Present only when the provider reported a quota at all.
+    pub remaining: Option<f64>,
+    pub total: Option<f64>,
+    pub used: Option<f64>,
+    pub unit: Option<String>,
+    /// When the provider says this was true, in unix seconds.
+    pub last_sync: Option<i64>,
+    /// When the last attempt failed. Carried separately from `status` because a
+    /// provider that stopped answering leaves the previous reading in place, and
+    /// showing that reading as current is the failure this whole layer prevents.
+    pub last_failure: Option<i64>,
+}
+
+impl CheckinScheduleView {
+    /// The placeholder a stored report carries before it is read.
+    ///
+    /// The schedule is *derived* from the live configuration and the durable
+    /// history, never stored, because a stored copy would be stale the moment the
+    /// operator edits an interval. Both read paths overwrite this before returning,
+    /// so it is never what a caller sees — it exists so the write paths do not each
+    /// have to know how to compute it.
+    pub fn unknown() -> Self {
+        Self {
+            decision: "unknown".into(),
+            next_due_at: None,
+            last_settled_at: None,
+        }
+    }
 }
 
 #[cfg(feature = "account-maint")]
@@ -277,6 +412,8 @@ impl CheckinView {
             reward_unit: None,
             reward_source: None,
             last_completed_at: None,
+            // Overwritten on every read; see `CheckinScheduleView::unknown`.
+            schedule: CheckinScheduleView::unknown(),
         }
     }
 }
@@ -289,7 +426,11 @@ impl CheckinView {
 /// only needs an origin — and because a value the adapter later refuses is
 /// caught by its validation, so a wrong guess here fails at the call rather than
 /// silently.
-#[cfg(feature = "account-maint")]
+// Gated on `newapi` for the same reason as `panel_adapter`: this normalises a
+// base URL and nothing else, and gating it on the browser maintenance surface
+// made `--features newapi` alone uncompilable — a build that ships the NewAPI
+// adapter without the browser surface could not use the adapter at all.
+#[cfg(feature = "newapi")]
 fn panel_root(base_url: &str) -> String {
     let trimmed = base_url.trim().trim_end_matches('/');
     for suffix in ["/api", "/v1"] {
@@ -330,6 +471,11 @@ impl Desktop {
         };
         #[cfg(feature = "account-maint")]
         let checkin = crate::checkin::CheckinRuntime::new(config_dir.clone());
+        // Read before the struct literal, which moves `config_dir` into the field.
+        #[cfg(feature = "account-maint")]
+        let checkin_schedule = crate::checkin::schedule::Schedule::load(
+            crate::checkin::schedule::Schedule::path_in(&config_dir),
+        );
         Desktop {
             core,
             secrets,
@@ -344,6 +490,12 @@ impl Desktop {
             checkin,
             #[cfg(feature = "account-maint")]
             checkin_reports: Mutex::new(BTreeMap::new()),
+            #[cfg(feature = "account-maint")]
+            account_events: zroutery_core::account::AccountEventLog::new(
+                zroutery_core::account::events::DEFAULT_EVENT_CAPACITY,
+            ),
+            #[cfg(feature = "account-maint")]
+            checkin_schedule,
         }
     }
 
@@ -449,6 +601,10 @@ impl Desktop {
             account_available: cfg!(feature = "account"),
             #[cfg(feature = "account-maint")]
             checkin: self.checkin_views().await,
+            #[cfg(feature = "account-maint")]
+            account_events: self.account_event_views(),
+            #[cfg(feature = "newapi")]
+            account_balances: self.account_balance_views(),
             config,
         }
     }
@@ -467,10 +623,13 @@ impl Desktop {
         for provider in &config.providers {
             for account in &provider.accounts {
                 let key = (provider.id.clone(), account.account_id.clone());
-                views.push(match lock(&self.checkin_reports).get(&key) {
+                let mut view = match lock(&self.checkin_reports).get(&key) {
                     Some(view) => view.clone(),
                     None => CheckinView::idle(&provider.id, &account.account_id),
-                });
+                };
+                // Derived at read time, never stored: see `CheckinScheduleView::unknown`.
+                view.schedule = self.schedule_view(&provider.id, &account.account_id);
+                views.push(view);
             }
         }
         views
@@ -504,6 +663,7 @@ impl Desktop {
         // report written before a pause must not claim no browser is held.
         view.browser_held = held;
         view.awaiting_user = awaiting;
+        view.schedule = self.schedule_view(provider_id, account_id);
         Some(view)
     }
 
@@ -536,6 +696,113 @@ impl Desktop {
         })
     }
 
+    /// Observed resource events for the snapshot, newest first.
+    ///
+    /// Bounded by the log itself rather than here, so a long-running application
+    /// cannot grow its snapshot without limit. Reversed so a panel can render the
+    /// most recent without sorting, and the ordering is by what the provider said
+    /// happened rather than by when Zroutery read it.
+    #[cfg(feature = "account-maint")]
+    pub fn account_event_views(&self) -> Vec<AccountEventView> {
+        use zroutery_core::account::resource::{ResourceEffect, ResourceEventSource};
+        let mut views: Vec<AccountEventView> = self
+            .account_events
+            .recent(ACCOUNT_EVENT_SNAPSHOT_LIMIT)
+            .iter()
+            .map(|event| AccountEventView {
+                provider_id: event.provider_id.clone(),
+                account_id: event.account_id.0.clone(),
+                observed_at: event.observed_at,
+                kind: match event.event_kind {
+                    zroutery_core::account::resource::ResourceEventKind::Consumption => {
+                        "consumption"
+                    }
+                    zroutery_core::account::resource::ResourceEventKind::Replenishment => {
+                        "replenishment"
+                    }
+                    zroutery_core::account::resource::ResourceEventKind::Refund => "refund",
+                    zroutery_core::account::resource::ResourceEventKind::SystemGrant => {
+                        "system_grant"
+                    }
+                    zroutery_core::account::resource::ResourceEventKind::Management => "management",
+                    zroutery_core::account::resource::ResourceEventKind::Error => "error",
+                    zroutery_core::account::resource::ResourceEventKind::Login => "login",
+                    zroutery_core::account::resource::ResourceEventKind::Unknown => "unknown",
+                }
+                .to_string(),
+                effect: match &event.resource_effect {
+                    ResourceEffect::Credited { .. } => "credited",
+                    ResourceEffect::Debited { .. } => "debited",
+                    ResourceEffect::NoChange => "no_change",
+                    ResourceEffect::Unobserved => "unobserved",
+                }
+                .to_string(),
+                amount: event.resource_effect.amount().map(|a| a.value),
+                unit: event.resource_effect.amount().map(|a| a.unit.clone()),
+                source: match event.source {
+                    ResourceEventSource::AccountLog => "account_log",
+                    ResourceEventSource::AccountState => "account_state",
+                    ResourceEventSource::OperationResponse => "operation_response",
+                }
+                .to_string(),
+                description: event.description.clone(),
+            })
+            .collect();
+        views.sort_by_key(|v| std::cmp::Reverse(v.observed_at));
+        views
+    }
+
+    /// The scheduler's answer for one account, computed now.
+    ///
+    /// Derived rather than stored, so it cannot disagree with the configuration the
+    /// operator is looking at: an interval edited a second ago is reflected here
+    /// immediately, and no cached copy can promise a time that is already wrong.
+    ///
+    /// An account that is not declared gets [`CheckinScheduleView::unknown`] rather
+    /// than a fabricated decision. The alternative — deciding against whatever
+    /// declaration happens to be at hand — would answer for an account that does not
+    /// exist, and a panel showing that would be showing a panel failure as an
+    /// account state.
+    #[cfg(feature = "account-maint")]
+    pub fn schedule_view(&self, provider_id: &str, account_id: &str) -> CheckinScheduleView {
+        let Some(maintenance) = self.maintenance_for(provider_id, account_id) else {
+            return CheckinScheduleView::unknown();
+        };
+        let last_settled_at = self
+            .checkin_schedule
+            .last_settled_at(provider_id, account_id);
+        let now = chrono::Utc::now().timestamp();
+        let decision = zroutery_core::account::checkin::decide(&maintenance, last_settled_at, now);
+        CheckinScheduleView {
+            decision: match decision {
+                zroutery_core::account::checkin::MaintenanceDecision::NotApplicable => {
+                    "not_applicable"
+                }
+                zroutery_core::account::checkin::MaintenanceDecision::Disabled => "disabled",
+                zroutery_core::account::checkin::MaintenanceDecision::NeedsFirstObservation => {
+                    "needs_first_observation"
+                }
+                zroutery_core::account::checkin::MaintenanceDecision::NoPolicy => "no_policy",
+                zroutery_core::account::checkin::MaintenanceDecision::NotDue { next_due_at } => {
+                    return CheckinScheduleView {
+                        decision: "not_due".into(),
+                        next_due_at: Some(next_due_at),
+                        last_settled_at,
+                    };
+                }
+                zroutery_core::account::checkin::MaintenanceDecision::Due { .. } => "due",
+            }
+            .into(),
+            next_due_at: match decision {
+                zroutery_core::account::checkin::MaintenanceDecision::NotDue { next_due_at } => {
+                    Some(next_due_at)
+                }
+                _ => None,
+            },
+            last_settled_at,
+        }
+    }
+
     /// Close every browser this process is holding.
     ///
     /// Called on shutdown. A browser left running after the app exits would keep
@@ -556,7 +823,15 @@ impl Desktop {
     /// returned, stored on `Desktop`, or put in a snapshot: the credential lives
     /// in the keychain, and the only thing that outlives this call is an adapter
     /// holding it in memory.
-    #[cfg(feature = "account-maint")]
+    // Gated on `newapi` rather than on `account-maint`, because nothing in this
+    // function touches the browser half of the maintenance surface: it builds an
+    // adapter, reads one credential, and hands the adapter back. It was gated on
+    // `account-maint` because that is where it was first needed, which left
+    // `--features newapi` without `--features account-maint` uncompilable — and
+    // every gate run for the change was feature-enabled, so nothing could see it.
+    // That is the same shape as the defect E-115 records: a build the
+    // verification never visits.
+    #[cfg(feature = "newapi")]
     pub fn panel_adapter(
         &self,
         provider_id: &str,
@@ -666,6 +941,73 @@ impl Desktop {
             }
         }
         problems
+    }
+
+    /// One account's state, as a panel receives it.
+    ///
+    /// A projection rather than the core type, for the reason the check-in phase is a
+    /// named string: the webview gets a vocabulary that a `#[serde(rename_all)]`
+    /// change cannot move underneath it.
+    #[cfg(feature = "newapi")]
+    pub fn account_balance_views(&self) -> Vec<AccountBalanceView> {
+        use zroutery_core::account::AccountStatus;
+        let store = self.core.accounts();
+        let mut views = Vec::new();
+        for provider in &self.core.config().providers {
+            // **Only where the provider-level figure is not the whole truth.** With
+            // one account the two levels say the same thing, and showing both is
+            // noise; with several, the provider-level number is a total that hides
+            // which account is empty and which is suspended.
+            if provider.accounts.len() < 2 {
+                continue;
+            }
+            for declared in &provider.accounts {
+                let Some(runtime) = store.get(
+                    &provider.id,
+                    &zroutery_core::account::AccountId(declared.account_id.clone()),
+                ) else {
+                    // Declared but never probed. Rendered as absent rather than as a
+                    // zero balance, because "we do not know" and "it is empty" are
+                    // different facts and a zero would claim the second.
+                    views.push(AccountBalanceView {
+                        provider_id: provider.id.clone(),
+                        account_id: declared.account_id.clone(),
+                        status: "unprobed".into(),
+                        remaining: None,
+                        total: None,
+                        used: None,
+                        unit: None,
+                        last_sync: None,
+                        last_failure: None,
+                    });
+                    continue;
+                };
+                let quota = runtime.quota.as_ref();
+                views.push(AccountBalanceView {
+                    provider_id: provider.id.clone(),
+                    account_id: declared.account_id.clone(),
+                    status: match runtime.status {
+                        AccountStatus::Active => "active",
+                        AccountStatus::Suspended => "suspended",
+                        AccountStatus::QuotaExhausted => "quota_exhausted",
+                        AccountStatus::RateLimited => "rate_limited",
+                        AccountStatus::AuthenticationExpired => "authentication_expired",
+                        // `Unknown` is carried through as itself rather than as a
+                        // failure: the reconciler publishes Unknown for "did not
+                        // answer", which is not evidence that anything is wrong.
+                        AccountStatus::Unknown => "unknown",
+                    }
+                    .to_string(),
+                    remaining: quota.map(|q| q.remaining),
+                    total: quota.map(|q| q.total),
+                    used: quota.map(|q| q.used),
+                    unit: quota.map(|q| q.unit.clone()),
+                    last_sync: runtime.last_sync,
+                    last_failure: runtime.last_failure,
+                });
+            }
+        }
+        views
     }
 
     /// Only the counters and the log, for the Activity tab's polling.
@@ -2121,5 +2463,272 @@ mod tests {
         );
 
         std::fs::remove_dir_all(dir).ok();
+    }
+    /// A provider declaring the given account ids, for the account-projection tests.
+    #[cfg(feature = "newapi")]
+    fn multi_provider(account_ids: &[&str]) -> AppConfig {
+        let accounts: Vec<serde_json::Value> = account_ids
+            .iter()
+            .map(|id| serde_json::json!({ "account_id": id }))
+            .collect();
+        let document = serde_json::json!({
+            "providers": [{
+                "id": "prov",
+                "name": "prov",
+                "kind": "openai_compatible",
+                "base_url": "https://example.invalid",
+                "accounts": accounts,
+            }]
+        });
+        serde_json::from_value(document).expect("the fixture is a valid configuration")
+    }
+
+    /// A configuration built through its own deserialiser, for the schedule tests.
+    ///
+    /// JSON rather than a struct literal because `ProviderConfig` names a private
+    /// type and cannot be built that way from outside the core crate at all.
+    #[cfg(feature = "account-maint")]
+    fn config_with_account(maintenance: zroutery_core::config::MaintenanceConfig) -> AppConfig {
+        let document = serde_json::json!({
+            "providers": [{
+                "id": "prov",
+                "name": "prov",
+                "kind": "openai_compatible",
+                "base_url": "https://example.invalid",
+                "accounts": [{ "account_id": "a", "maintenance": maintenance }],
+            }]
+        });
+        serde_json::from_value(document).expect("the fixture is a valid configuration")
+    }
+
+    #[cfg(feature = "account-maint")]
+    fn daily(interval: Option<u64>) -> zroutery_core::config::MaintenanceConfig {
+        zroutery_core::config::MaintenanceConfig {
+            checkin_enabled: true,
+            checkin_interval_secs: interval,
+            checkin_path: Some("/console/personal".into()),
+            checkin_trigger_selector: Some("button.checkin".into()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "account-maint")]
+    fn the_schedule_view_names_the_reason_nothing_will_run() {
+        let (desktop, _dir) = desktop_with(config_with_account(daily(Some(3_600))));
+        // Nothing has ever run, so there is no future time to name.
+        let view = desktop.schedule_view("prov", "a");
+        assert_eq!(view.decision, "needs_first_observation");
+        assert_eq!(
+            view.next_due_at, None,
+            "there is no due time for an account that has never run"
+        );
+        assert_eq!(view.last_settled_at, None);
+    }
+
+    #[test]
+    #[cfg(feature = "account-maint")]
+    fn an_undeclared_account_is_unknown_rather_than_decided() {
+        let (desktop, _dir) = desktop_with(config_with_account(daily(Some(3_600))));
+        // Deciding against whatever declaration happens to be at hand would answer
+        // for an account that does not exist, and a panel would render that answer.
+        assert_eq!(desktop.schedule_view("prov", "nope").decision, "unknown");
+        assert_eq!(desktop.schedule_view("nope", "a").decision, "unknown");
+    }
+
+    #[test]
+    #[cfg(feature = "account-maint")]
+    fn the_schedule_view_is_derived_and_never_a_cached_copy() {
+        let (desktop, _dir) = desktop_with(config_with_account(daily(Some(3_600))));
+        desktop
+            .checkin_schedule
+            .record_settled("prov", "a", chrono::Utc::now().timestamp() - 60);
+
+        let view = desktop.schedule_view("prov", "a");
+        assert_eq!(view.decision, "not_due");
+        assert!(
+            view.next_due_at.expect("a not-due decision names a time")
+                > chrono::Utc::now().timestamp(),
+            "the named time must be in the future, not the last settlement"
+        );
+
+        // A deadline that has already passed is due rather than a time in the past
+        // being rendered as a schedule. Verified by moving the recorded settlement
+        // rather than by waiting an hour.
+        assert!(desktop.checkin_schedule.record_settled(
+            "prov",
+            "a",
+            chrono::Utc::now().timestamp() - 7_200
+        ));
+        assert_eq!(desktop.schedule_view("prov", "a").decision, "due");
+    }
+    /// One observed event, so the projection can be exercised without a provider.
+    #[cfg(feature = "account-maint")]
+    fn observed(
+        account: &str,
+        amount: Option<f64>,
+        effect: zroutery_core::account::resource::ResourceEffect,
+    ) -> zroutery_core::account::resource::ObservedResourceEvent {
+        use zroutery_core::account::resource::{
+            ObservedResourceEvent, ResourceEventKind, ResourceEventSource,
+        };
+        ObservedResourceEvent {
+            event_id: None,
+            provider_id: "prov".into(),
+            account_id: zroutery_core::account::AccountId(account.into()),
+            observed_at: 1_000,
+            event_kind: ResourceEventKind::SystemGrant,
+            raw_type: None,
+            description: "check-in".into(),
+            resource_effect: effect,
+            source: ResourceEventSource::AccountState,
+            request_id: None,
+            channel_id: None,
+            model: None,
+            accounting: None,
+            metadata: Default::default(),
+        }
+        .tap_amount(amount)
+    }
+
+    #[cfg(feature = "account-maint")]
+    trait TapAmount {
+        fn tap_amount(self, amount: Option<f64>) -> Self;
+    }
+
+    #[cfg(feature = "account-maint")]
+    impl TapAmount for zroutery_core::account::resource::ObservedResourceEvent {
+        fn tap_amount(mut self, amount: Option<f64>) -> Self {
+            if let (
+                Some(value),
+                zroutery_core::account::resource::ResourceEffect::Credited { amount },
+            ) = (amount, &mut self.resource_effect)
+            {
+                amount.value = value;
+            }
+            self
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "account-maint")]
+    fn an_observed_event_reaches_the_snapshot_with_its_effect_and_source() {
+        use zroutery_core::account::resource::{ResourceAmount, ResourceEffect};
+
+        let (desktop, _dir) = desktop_with(AppConfig::default());
+        assert!(
+            desktop.account_event_views().is_empty(),
+            "a fresh application has observed nothing, and must not invent an entry"
+        );
+
+        desktop.account_events.record(observed(
+            "a",
+            Some(25.0),
+            ResourceEffect::Credited {
+                amount: ResourceAmount::normalised(0.0, "USD"),
+            },
+        ));
+        desktop
+            .account_events
+            .record(observed("b", None, ResourceEffect::NoChange));
+
+        let views = desktop.account_event_views();
+        assert_eq!(views.len(), 2, "both accounts reach the snapshot");
+        let credited = views
+            .iter()
+            .find(|v| v.account_id == "a")
+            .expect("the credited event");
+        assert_eq!(credited.effect, "credited");
+        assert_eq!(credited.amount, Some(25.0));
+        assert_eq!(credited.unit.as_deref(), Some("USD"));
+        assert_eq!(credited.source, "account_state");
+        assert_eq!(credited.kind, "system_grant");
+
+        // The distinction a panel most needs: "we looked and nothing moved" and
+        // "we could not find out" are different sentences.
+        let unchanged = views
+            .iter()
+            .find(|v| v.account_id == "b")
+            .expect("the unchanged event");
+        assert_eq!(unchanged.effect, "no_change");
+        assert_eq!(
+            unchanged.amount, None,
+            "an event that moved nothing must not carry a figure"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "account-maint")]
+    fn the_snapshot_carries_at_most_the_documented_number_of_events() {
+        use zroutery_core::account::resource::{ResourceAmount, ResourceEffect};
+
+        let (desktop, _dir) = desktop_with(AppConfig::default());
+        for i in 0..(ACCOUNT_EVENT_SNAPSHOT_LIMIT + 10) {
+            desktop.account_events.record(observed(
+                "a",
+                Some(i as f64),
+                ResourceEffect::Credited {
+                    amount: ResourceAmount::normalised(0.0, "USD"),
+                },
+            ));
+        }
+        assert_eq!(
+            desktop.account_event_views().len(),
+            ACCOUNT_EVENT_SNAPSHOT_LIMIT,
+            "a long-running application must not grow its snapshot without limit"
+        );
+    }
+    #[test]
+    #[cfg(feature = "newapi")]
+    fn account_balances_appear_only_where_the_provider_total_hides_something() {
+        // The rule under test: one account means the two levels say the same thing,
+        // and saying it twice is noise. Several accounts mean the provider figure is
+        // a total that hides which account is empty and which is suspended, which is
+        // the only reason to look at the second level at all.
+        let (one, _d1) = desktop_with(multi_provider(&["only"]));
+        assert!(
+            one.account_balance_views().is_empty(),
+            "a single account must not produce a second panel saying the same thing"
+        );
+
+        let (several, _d2) = desktop_with(multi_provider(&["a", "b", "c"]));
+        let views = several.account_balance_views();
+        assert_eq!(views.len(), 3, "every declared account appears");
+        assert!(views
+            .iter()
+            .all(|v| v.provider_id == "prov" && v.status == "unprobed"));
+        assert!(
+            views.iter().all(|v| v.remaining.is_none()),
+            "an account that was never probed must not be rendered as a balance"
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "newapi")]
+    async fn an_account_with_no_credential_is_reported_rather_than_silently_absent() {
+        // The single most likely reason an operator sees an account missing is a
+        // credential that will not resolve, and a report that omitted it would leave
+        // them with nothing to act on. The caller delegates to Core, which answers
+        // this by putting one entry in the report for every declared, enabled
+        // account — present with an outcome, never absent — so a panel can tell an
+        // account that was probed and established nothing from one that was not
+        // declared at all.
+        let (desktop, _dir) = desktop_with(multi_provider(&["a", "b"]));
+        let report = desktop.reconcile_accounts().await;
+        assert_eq!(
+            report.outcomes.len(),
+            2,
+            "both accounts are reported, not one and not none"
+        );
+        let mut ids: Vec<&str> = Vec::new();
+        for (provider_id, account_id, _) in &report.outcomes {
+            assert_eq!(
+                provider_id, "prov",
+                "the provider id is carried in the report, not looked up later"
+            );
+            ids.push(account_id.0.as_str());
+        }
+        ids.sort_unstable();
+        assert_eq!(ids, ["a", "b"], "both account ids survive into the report");
     }
 }

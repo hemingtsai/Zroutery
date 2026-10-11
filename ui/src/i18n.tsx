@@ -285,6 +285,25 @@ const en = {
   "account.phase.not_supported": "this provider does not offer check-in",
   "account.phase.failed": "check-in failed",
   "account.phase.cancelled": "cancelled",
+  /*
+   * Six scheduler decisions, six sentences. The reasons an account does not run
+   * on a timer are different enough that a shared "nothing happened" would send
+   * the reader to change a setting that is not the problem: one of these is the
+   * user's own choice, one is a gap in their declaration, and only two mean a
+   * schedule is quietly counting down.
+   */
+  "account.balance": "balance",
+  "account.schedule.disabled": "Check-in is switched off for this account",
+  "account.schedule.not_applicable":
+    "Check-in is switched on but cannot be acted on — set checkin_path and checkin_trigger_selector",
+  "account.schedule.needs_first_observation":
+    "No check-in has run for this account yet, so there is no due time to count down from. Start one once to hand it over to the schedule",
+  "account.schedule.no_policy":
+    "No checkin_interval_secs is declared, so nothing will run automatically even though this account has been checked in before",
+  "account.schedule.not_due": "Scheduled",
+  "account.schedule.due": "Due now",
+  "account.schedule.unknown": "Schedule not known",
+  "account.next_run": "next run",
   "account.last_checkin": "last check-in",
   "account.reward": "reward",
   // A figure recovered from the provider's log text is weaker evidence than one
@@ -298,6 +317,10 @@ const en = {
   "account.close_browser": "Close window",
   "account.not_enabled":
     "Check-in is switched off for this account. Turn it on in its maintenance settings first.",
+  "account.need_path":
+    "This account has no check-in page. Set maintenance.checkin_path to the panel page that carries the check-in control.",
+  "account.need_selector":
+    "This account has no check-in control. Set maintenance.checkin_trigger_selector to a CSS selector for the button, such as button.checkin.",
   "account.start_failed": "Could not start the check-in",
   "account.resume_failed": "Could not continue the check-in",
   "account.cancel_failed": "Could not cancel the check-in",
@@ -879,6 +902,23 @@ const zh: Dict = {
   "account.phase.not_supported": "该平台不支持签到",
   "account.phase.failed": "签到失败",
   "account.phase.cancelled": "已取消",
+  /*
+   * 六个决策，六句话。账户不自动运行的原因彼此差别足够大，共用一个「没有动作」会把
+   * 人引去改一个本来没错的设置：其中一个是用户自己的选择，一个是声明缺了一块，只有
+   * 两个才表示一个日程正在安静地倒数。
+   */
+    "account.balance": "余额",
+"account.schedule.disabled": "该账户未开启签到",
+  "account.schedule.not_applicable":
+    "该账户已开启签到但无法执行——请设置 checkin_path 与 checkin_trigger_selector",
+  "account.schedule.needs_first_observation":
+    "该账户还没有跑过一次签到，因此没有可倒数的到期时间。手动跑一次，之后交给日程",
+  "account.schedule.no_policy":
+    "该账户没有声明 checkin_interval_secs，即使以前签到过也不会自动运行",
+  "account.schedule.not_due": "已排期",
+  "account.schedule.due": "现在到期",
+  "account.schedule.unknown": "日程未知",
+  "account.next_run": "下次运行",
   "account.last_checkin": "上次签到",
   "account.reward": "奖励",
   "account.reward_weak_source": "取自平台日志文本",
@@ -888,6 +928,9 @@ const zh: Dict = {
   "account.cancel": "取消",
   "account.close_browser": "关闭窗口",
   "account.not_enabled": "该账户未开启签到，请先在其维护设置中启用。",
+  "account.need_path": "该账户没有配置签到页面。请将 maintenance.checkin_path 设为承载签到按钮的面板页面。",
+  "account.need_selector":
+    "该账户没有配置签到控件。请将 maintenance.checkin_trigger_selector 设为按钮的 CSS 选择器，例如 button.checkin。",
   "account.start_failed": "无法开始签到",
   "account.resume_failed": "无法继续签到",
   "account.cancel_failed": "无法取消签到",

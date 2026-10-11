@@ -49,6 +49,15 @@ const SETTLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 /// function of time rather than of anything Zroutery sends, so this polls.
 const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(500);
 
+/// How long the panel is given to act on an activated control before the account
+/// is read.
+///
+/// The click and the grant are separate events: the panel's handler has to run
+/// before a reward exists to observe. Without this grace an observation can land
+/// in the gap and report `ObservationPending` for a check-in that then succeeds,
+/// which is the one wrong answer this design is supposed to make hard to reach.
+const POST_TRIGGER_GRACE: std::time::Duration = std::time::Duration::from_millis(1_500);
+
 /// Start a browser check-in for one account.
 ///
 /// Asynchronous on purpose: a check-in opens a visible browser and may pause on
@@ -61,27 +70,52 @@ pub async fn start_checkin(
     provider_id: String,
     account_id: String,
 ) -> Cmd<CheckinView> {
-    let key = SessionKey::new(&provider_id, &account_id);
-    let Some(maintenance) = desktop.maintenance_for(&provider_id, &account_id) else {
+    launch_attempt(&desktop, &provider_id, &account_id).await
+}
+
+/// Open a browser for one account and drive one attempt.
+///
+/// Shared by the command and the scheduler, and the reason it is a plain function
+/// rather than living inside the command: a second copy of this sequence would
+/// drift, and the drift would be invisible — the manual path would keep working
+/// while the automatic one quietly stopped doing what the manual one does. Both
+/// callers therefore get the same configuration checks, the same duplicate guard
+/// and the same failure messages.
+///
+/// Returns the view as soon as the browser is up and the page has loaded. The
+/// attempt itself continues on a background task.
+pub(crate) async fn launch_attempt(
+    desktop: &Arc<Desktop>,
+    provider_id: &str,
+    account_id: &str,
+) -> Cmd<CheckinView> {
+    let key = SessionKey::new(provider_id, account_id);
+    let Some(maintenance) = desktop.maintenance_for(provider_id, account_id) else {
         return Err(format!("no account {account_id} on provider {provider_id}"));
     };
     if !maintenance.is_browser_checkin_configured() {
         // Said as configuration rather than as a runtime failure, because the fix
-        // is a line in the config file and not anything the user retries.
-        return Err(
-            "check-in is not configured for this account: set maintenance.checkin_enabled \
-             and maintenance.checkin_path"
-                .to_string(),
-        );
+        // is a line in the config file and not anything the user retries. All
+        // three settings are named because "not configured" without saying which
+        // one is missing sends the reader hunting through the whole block.
+        return Err(format!(
+            "check-in is not actionable for {account_id}: set maintenance.checkin_enabled, \
+             maintenance.checkin_path, and maintenance.checkin_trigger_selector \
+             (got enabled={}, path={}, selector={})",
+            maintenance.checkin_enabled,
+            maintenance.checkin_path.as_deref().unwrap_or("unset"),
+            maintenance
+                .checkin_trigger_selector
+                .as_deref()
+                .unwrap_or("unset"),
+        ));
     }
-    let Some(path) = maintenance
+    let path = maintenance
         .checkin_path
         .as_deref()
         .map(str::trim)
         .filter(|p| !p.is_empty())
-    else {
-        return Err("this account has no check-in path configured".to_string());
-    };
+        .expect("is_browser_checkin_configured requires a non-empty path");
     let base = desktop
         .core
         .config()
@@ -136,13 +170,24 @@ pub async fn start_checkin(
 
     let runtime = desktop.checkin.clone();
     let task_key = key.clone();
-    let desktop_for_task = Arc::clone(&desktop);
+    let desktop_for_task = Arc::clone(desktop);
+    // Resolved before the browser opens, so a missing selector is a configuration
+    // error returned to the caller rather than something a background task
+    // discovers after a window has already appeared.
+    let Some(selector) = maintenance.checkin_selector().map(str::to_string) else {
+        release(desktop.checkin.clone(), &key);
+        return Err(
+            "checkin_trigger_selector is not set for this account, so there is no control \
+             to activate"
+                .to_string(),
+        );
+    };
     tauri::async_runtime::spawn(async move {
-        drive(runtime, desktop_for_task, task_key, binding).await;
+        drive(runtime, desktop_for_task, task_key, binding, selector).await;
     });
 
     desktop
-        .checkin_view(&provider_id, &account_id)
+        .checkin_view(provider_id, account_id)
         .await
         .ok_or_else(|| format!("no account {account_id} on provider {provider_id}"))
 }
@@ -201,8 +246,21 @@ pub async fn resume_checkin(
     let runtime = desktop.checkin.clone();
     let task_key = key.clone();
     let desktop_for_task = Arc::clone(&desktop);
+    // Taken from the live configuration rather than from whatever was declared
+    // when the session opened, so an operator who corrected the selector while the
+    // challenge was pending gets the corrected one.
+    let Some(selector) = desktop
+        .maintenance_for(&provider_id, &account_id)
+        .and_then(|m| m.checkin_selector().map(str::to_string))
+    else {
+        return Err(
+            "checkin_trigger_selector is not set for this account, so there is no control \
+             to activate"
+                .to_string(),
+        );
+    };
     tauri::async_runtime::spawn(async move {
-        drive(runtime, desktop_for_task, task_key, binding).await;
+        drive(runtime, desktop_for_task, task_key, binding, selector).await;
     });
 
     desktop
@@ -228,12 +286,24 @@ pub async fn cancel_checkin(
     // guarded on being live: cancelling something already finished is a no-op the
     // panel can render as "done", not an error.
     let _ = desktop.checkin.advance(&key, Event::Cancelled).await;
-    desktop.checkin.finish(&key).await;
+    // Whether a browser was closed *here* is asked rather than assumed. A cancel
+    // that lands while the `drive` task has the browser out cannot close it — that
+    // task owns it — so it is recorded and closed when the driver puts it down.
+    // Reporting "cancelled" either way would be the same class of lie as a panel
+    // claiming a reward nobody observed: the operator would be told the window is
+    // gone while it is still on their desktop.
+    let outcome = desktop.checkin.finish(&key).await;
 
     let mut view = desktop
         .checkin_view(&provider_id, &account_id)
         .await
         .ok_or_else(|| format!("no account {account_id} on provider {provider_id}"))?;
+    if matches!(outcome, crate::checkin::FinishOutcome::DeferredToDriver) {
+        view.browser_held = true;
+        view.awaiting_user = false;
+        view.phase = "cancelling".to_string();
+        return Ok(view);
+    }
     view.browser_held = false;
     view.awaiting_user = false;
     if view.phase == "running" || view.phase == "waiting_for_user" {
@@ -334,6 +404,7 @@ async fn drive(
     desktop: Arc<Desktop>,
     key: SessionKey,
     binding: cdp::PageBinding,
+    selector: String,
 ) {
     let started_at = chrono::Utc::now().timestamp();
     if runtime.advance(&key, Event::Start).await.is_err()
@@ -374,50 +445,180 @@ async fn drive(
         }
     }
 
+    // Activate the panel's own control, once the page has settled.
+    //
+    // This is the execution the feature exists for, and it happens here and
+    // nowhere else. It is deliberately *not* a request Zroutery sends itself: the
+    // page holds the session and the challenge token, so a request built outside
+    // it would be the "sign in, take the cookies, post over HTTP" path this
+    // design rules out.
+    let mut activated = false;
+    let mut control_problem: Option<String> = None;
+    if clear {
+        match browser.click(&binding, &selector).await {
+            Ok(cdp::ClickOutcome::Clicked { text }) => {
+                activated = true;
+                tracing::debug!(
+                    provider = %key.provider_id,
+                    account = %key.account_id,
+                    control = %text,
+                    "check-in control activated"
+                );
+                // The panel needs a moment to act before the account is read: the
+                // click and the grant are separate events, and an observation
+                // landing in the gap would report `ObservationPending` for a
+                // check-in that then succeeded.
+                tokio::time::sleep(POST_TRIGGER_GRACE).await;
+            }
+            Ok(cdp::ClickOutcome::Disabled { text }) => {
+                // Neither a failure nor a success. A disabled control is the usual
+                // shape of "already done today", and only the observation can turn
+                // that into `already_completed` — or into a genuine refusal.
+                control_problem = Some(format!(
+                    "the check-in control is not active ({text}); the panel may already show \
+                     today as checked in"
+                ));
+            }
+            Ok(cdp::ClickOutcome::NotFound) => {
+                control_problem = Some(format!(
+                    "no check-in control matched {selector:?} on the page; check \
+                     maintenance.checkin_trigger_selector"
+                ));
+            }
+            Err(e) => {
+                control_problem = Some(format!("the check-in control could not be activated: {e}"));
+            }
+        }
+    }
+
     let (phase, failure) = if paused {
         let _ = runtime.advance(&key, Event::WafBlocked).await;
         let _ = runtime.advance(&key, Event::AwaitingUser).await;
         ("waiting_for_user", None)
-    } else if clear {
-        // The panel's own page is up. Whether the check-in was performed and what
-        // it awarded is not established here; the observation half does that over
-        // HTTP. What is established is that the browser got through, which is a
-        // real and reportable fact — and the phase is `running` rather than
-        // `succeeded` precisely because no reward has been observed.
-        ("running", None)
-    } else {
+    } else if !clear {
         let _ = runtime.advance(&key, Event::Failed).await;
         (
             "failed",
             Some("the panel did not load before the check-in timed out".to_string()),
         )
+    } else if let Some(problem) = control_problem {
+        // A control that cannot be activated is something the operator can see and
+        // fix, and the message names the setting — except when it merely was
+        // inactive, where the observation may still resolve it into "already
+        // checked in", which is why the observation runs either way below.
+        let _ = runtime.advance(&key, Event::OperationRunning).await;
+        let _ = runtime.advance(&key, Event::Failed).await;
+        ("failed", Some(problem))
+    } else {
+        // The control was activated. That is the execution; what it awarded is
+        // still unobserved, so the phase stays `running` until the observation
+        // half says otherwise.
+        ("running", None)
     };
 
-    // The browser goes back either way. A pause leaves it open; the caller closes
-    // it when the attempt is cancelled or observed to have finished.
-    let _ = runtime.attach(&key, browser).await;
+    // **Only a pause keeps the browser.** This used to put it back "either way",
+    // on the understanding that the caller would close it once the attempt was
+    // cancelled or observed to have finished. There is no such caller: the only
+    // paths that closed a browser were an explicit cancel and application
+    // shutdown. So every succeeded, failed or already-completed check-in left a
+    // Chrome running, and that Chrome holds a lock on this account's profile
+    // directory. The next attempt then launched a second `chrome.exe` against a
+    // profile already in use, which Chrome answers by handing the command line to
+    // the running instance — a new window in the old browser — or by damaging the
+    // profile, whichever the timing produced. Both were reported as a corrupted
+    // profile or as windows that would not reuse, and neither named the cause.
+    //
+    // So the disposition is decided here, where the outcome is known, rather than
+    // left to a caller that does not exist.
+    // Give the key back before deciding where the browser goes, so a cancel that
+    // arrived while it was being driven is visible here rather than lost.
+    let cancelled = runtime.end_driving(&key).await;
+
+    let browser_held = match browser_disposition(paused && !cancelled) {
+        BrowserDisposition::KeepForUser => {
+            let _ = runtime.attach(&key, browser).await;
+            true
+        }
+        BrowserDisposition::Close => {
+            if let Err(e) = browser.shutdown().await {
+                // Surfaced rather than swallowed: a browser that will not close is
+                // what corrupts the next attempt's profile, and a silent failure here
+                // is exactly how that happened unnoticed.
+                tracing::debug!(
+                    %e,
+                    provider = %key.provider_id,
+                    account = %key.account_id,
+                    "the finished check-in's browser did not close"
+                );
+            }
+            // The session is released too, so the account is startable again. Leaving
+            // it registered would make `begin` refuse the next attempt as a
+            // duplicate of an attempt that is over.
+            runtime.finish(&key).await;
+            false
+        }
+    };
 
     let settled = phase.to_string();
     desktop.record_checkin_view(CheckinView {
         provider_id: key.provider_id.clone(),
         account_id: key.account_id.clone(),
         phase: settled,
-        browser_held: true,
-        awaiting_user: paused,
+        browser_held,
+        awaiting_user: paused && !cancelled,
         failure,
         reward_amount: None,
         reward_unit: None,
         reward_source: None,
         last_completed_at: None,
+        // Overwritten on every read; see `CheckinScheduleView::unknown`.
+        schedule: crate::state::CheckinScheduleView::unknown(),
     });
 
-    // Only when the browser got through. A paused attempt has not happened yet, so
-    // asking the provider what it granted would read the *previous* day's reward
-    // and render it as this one's.
-    if clear {
+    // Observe whenever the browser reached the panel, whether or not a control was
+    // activated. An inactive control is exactly the case where the provider's
+    // `checked_in_today` is the only thing that can say what happened, so
+    // skipping the observation there would leave the common "already done" outcome
+    // unreported. A *paused* attempt is excluded: it has not happened yet, and
+    // asking now would read the previous day's reward as this one's.
+    let observed = if clear {
         let account = zroutery_core::account::AccountId(key.account_id.clone());
-        observe(&desktop, &key, &account, started_at).await;
+        observe(&desktop, &key, &account, started_at).await
+    } else {
+        None
+    };
+
+    // Record the settlement for the scheduler, here and nowhere else.
+    //
+    // The rule is "an attempt ended", not "a check-in succeeded", and the
+    // difference is what keeps the scheduler from becoming a loop: an account whose
+    // check-in fails, or whose observation could not be made, must not be due again
+    // on the next tick. A *pause* records nothing, because nothing ended — the human
+    // still has a session to resume or cancel, and recording now would let the
+    // scheduler treat an unfinished attempt as a finished one.
+    //
+    // `observed` being `None` after a control was activated means the attempt
+    // happened but nothing could be learned about it. That counts as ended: the
+    // operation was performed against the panel, and retrying it a minute later
+    // would hammer the same endpoint for the same unreadable answer.
+    let ended = counts_as_settlement(observed, paused);
+    if ended {
+        crate::checkin::scheduler::record_settlement(
+            &desktop,
+            &key.provider_id,
+            &key.account_id,
+            chrono::Utc::now().timestamp(),
+        );
     }
+
+    tracing::debug!(
+        provider = %key.provider_id,
+        account = %key.account_id,
+        activated,
+        paused,
+        ended,
+        "check-in browser phase finished"
+    );
 }
 
 /// Ask the provider what the attempt actually did, and record that instead.
@@ -441,7 +642,7 @@ async fn observe(
     key: &SessionKey,
     account_id: &zroutery_core::account::AccountId,
     started_at: i64,
-) {
+) -> Option<CheckinPhase> {
     let Some((adapter, quota_per_unit)) = desktop.panel_adapter(&key.provider_id, &key.account_id)
     else {
         tracing::debug!(
@@ -449,7 +650,7 @@ async fn observe(
             account = %key.account_id,
             "no stored credential for this account; the browser record stands unconfirmed"
         );
-        return;
+        return None;
     };
     let until = chrono::Utc::now().timestamp();
     let observation = match adapter
@@ -459,7 +660,7 @@ async fn observe(
         Ok(observation) => observation,
         Err(e) => {
             tracing::debug!(?e, "check-in observation failed; the browser record stands");
-            return;
+            return None;
         }
     };
     let ctx = CheckinContext::usd(&key.provider_id, account_id, quota_per_unit);
@@ -475,7 +676,71 @@ async fn observe(
         &ctx,
         started_at,
     );
+    let phase = report.phase;
+
+    // The one place a check-in becomes a resource event. It lives here rather than
+    // in the scheduler because this is the only place that holds both a finished
+    // report and the account it belongs to — and because the conversion is the
+    // whole discipline in one call: only a confirmed reward may claim the balance
+    // moved, and the weaker answers say so rather than borrowing the strong one.
+    //
+    // An event that nobody constructs is a type, not a feature, so this line is
+    // what makes the observation layer reachable at all.
+    if let Some(event) = zroutery_core::account::checkin::as_resource_event(&report) {
+        desktop.account_events.record(event);
+    }
+
     desktop.record_checkin_view(view_from_report(&key.provider_id, &key.account_id, &report));
+    Some(phase)
+}
+
+/// What happens to the browser once an attempt has stopped driving it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BrowserDisposition {
+    /// A human still needs this window; it must outlive the attempt.
+    KeepForUser,
+    /// Nothing is driving it any more, so it must be closed and the key released.
+    Close,
+}
+
+/// Whether the browser stays open after an attempt.
+///
+/// One bit, and it is extracted for the same reason [`counts_as_settlement`] is: it
+/// decides whether a visible window on somebody's desktop is left behind, and
+/// getting it wrong is invisible until a profile is damaged. Pure, so it is tested
+/// rather than asserted.
+fn browser_disposition(paused: bool) -> BrowserDisposition {
+    if paused {
+        BrowserDisposition::KeepForUser
+    } else {
+        BrowserDisposition::Close
+    }
+}
+
+/// Whether an attempt that ended this way counts as settled for the scheduler.
+///
+/// The rule is "an attempt ended", not "a check-in succeeded", and the difference
+/// is what stops the scheduler becoming a loop: an account whose check-in failed, or
+/// whose observation could not be made, must not come due again on the next tick.
+///
+/// A **pause** records nothing, because nothing ended — the human still holds a
+/// session to resume or cancel, and recording now would let the scheduler treat an
+/// unfinished attempt as a finished one.
+///
+/// `observed` being `None` after a control was activated means the attempt happened
+/// and nothing could be learned about it. That still counts as ended: the operation
+/// was performed against the panel, and retrying it a minute later would hammer the
+/// same endpoint for the same unreadable answer.
+///
+/// Pure, and extracted rather than left inline in [`drive`] so it can be tested
+/// without a browser. This is a scheduling rule that decides whether a timer opens a
+/// window on somebody's machine, which is not a thing to leave asserted only by
+/// inspection.
+fn counts_as_settlement(observed: Option<CheckinPhase>, paused: bool) -> bool {
+    match observed {
+        Some(phase) => phase.is_terminal(),
+        None => !paused,
+    }
 }
 
 /// Turn an adapter report into the view a panel renders.
@@ -513,6 +778,8 @@ pub fn view_from_report(
         reward_unit: reward.map(|r| r.amount.unit.clone()),
         reward_source: reward.map(|r| reward_source(r.source).to_string()),
         last_completed_at: report.completed_at,
+        // Overwritten on every read; see `CheckinScheduleView::unknown`.
+        schedule: crate::state::CheckinScheduleView::unknown(),
     }
 }
 
@@ -713,6 +980,84 @@ mod tests {
         assert!(
             text.contains("check-in is closed for maintenance"),
             "{text}"
+        );
+    }
+    #[test]
+    fn a_pause_settles_nothing_because_nothing_ended() {
+        // The one case that must not record. A pause holds a session for the human;
+        // recording now would let the scheduler treat an unfinished attempt as a
+        // finished one and leave the operator with a browser nobody is watching.
+        assert!(
+            !counts_as_settlement(None, true),
+            "a paused attempt is not a settlement"
+        );
+    }
+
+    #[test]
+    fn an_attempt_with_nothing_to_learn_from_still_counts_as_ended() {
+        // The operation was performed against the panel. Retrying it a minute later
+        // hammers the same endpoint for the same unreadable answer, so this counts.
+        assert!(counts_as_settlement(None, false));
+    }
+
+    #[test]
+    fn a_terminal_phase_settles_and_a_waiting_one_does_not() {
+        for phase in [
+            CheckinPhase::Confirmed,
+            CheckinPhase::AlreadyCompleted,
+            CheckinPhase::NotSupported,
+            CheckinPhase::Failed,
+            CheckinPhase::Cancelled,
+        ] {
+            assert!(
+                counts_as_settlement(Some(phase), false),
+                "{phase:?} ended the attempt"
+            );
+        }
+        // Neither of these may settle, whatever the pause flag says: an observation
+        // that has not concluded has not finished, and a terminal phase is the only
+        // thing that overrides the browser's own opinion.
+        for phase in [CheckinPhase::BlockedByWaf, CheckinPhase::NeedsUserAction] {
+            assert!(
+                !counts_as_settlement(Some(phase), false),
+                "{phase:?} is waiting on a person, not ended"
+            );
+            assert!(
+                !counts_as_settlement(Some(phase), true),
+                "{phase:?} is waiting on a person, not ended"
+            );
+        }
+    }
+
+    #[test]
+    fn an_attempt_still_running_has_not_settled() {
+        for phase in [
+            CheckinPhase::Requested,
+            CheckinPhase::Executing,
+            CheckinPhase::ProviderAccepted,
+            CheckinPhase::ObservationPending,
+        ] {
+            assert!(
+                !counts_as_settlement(Some(phase), false),
+                "{phase:?} has not concluded"
+            );
+        }
+    }
+    #[test]
+    fn only_a_pause_keeps_the_browser_open() {
+        // The defect this encodes. Leaving the window open after a finished attempt
+        // is what let a stale Chrome hold a profile directory and turn the next
+        // attempt into a corrupted profile, so the rule is stated rather than left
+        // implicit in the branch that happens to handle a pause.
+        assert_eq!(
+            browser_disposition(true),
+            BrowserDisposition::KeepForUser,
+            "a pause exists for the human looking at that window"
+        );
+        assert_eq!(
+            browser_disposition(false),
+            BrowserDisposition::Close,
+            "a finished attempt has nobody looking at its window"
         );
     }
 }
