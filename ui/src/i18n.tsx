@@ -35,8 +35,8 @@ const en = {
   "common.yes": "yes",
   "common.no": "no",
   "common.dash": "—",
-  "count.models": "{n} model | {n} models",
-  "count.providers": "{n} provider | {n} providers",
+  "count.models": "{n} models",
+  "count.providers": "{n} providers",
 
   // ------------------------------------------------------------------ app
   "app.live_stopped": "Live updates stopped: {err}",
@@ -628,8 +628,8 @@ const zh: Dict = {
   "common.yes": "是",
   "common.no": "否",
   "common.dash": "—",
-  "count.models": "{n} 个模型 | {n} 个模型",
-  "count.providers": "{n} 个提供商 | {n} 个提供商",
+  "count.models": "{n} 个模型",
+  "count.providers": "{n} 个提供商",
 
   // ------------------------------------------------------------------ app
   "app.live_stopped": "实时更新已停止:{err}",

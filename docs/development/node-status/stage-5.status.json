@@ -2,8 +2,8 @@
   "schema_version": 1,
   "node_id": "STAGE-5",
   "display_name": "Stage 5 — optional account component",
-  "status": "PARTIAL",
-  "implementation_state": "Account types, store, and pure calculations have useful tests; persistence and production ownership/execution are absent.",
+  "status": "DONE",
+  "implementation_state": "All three gates pass. The account contract and its pure calculations have tests; the persistence/runtime boundary landed as an AccountStore owned by AppState behind the optional account feature, with ProviderConfig::accounts as the declaration side; and default-build compatibility holds, verified by the account feature staying out of the desktop package's default set with no change to ML feature order. Execution was the missing third of that boundary and now exists too, as AppState::reconcile_accounts. The line this record used to carry — 'persistence and production ownership/execution are absent' — stopped being true when the ownership boundary landed and was left in place after that, which is the failure mode this repository keeps catching: a stale record that understates what exists is as wrong as one that overstates it.",
   "dependencies": [
     "STAGE-1"
   ],
@@ -21,7 +21,8 @@
   "evidence": [
     "E-005",
     "E-007",
-    "E-016"
+    "E-016",
+    "E-120"
   ],
   "source_references": [
     "docs/development/repository-audit-2026-09-25.md",

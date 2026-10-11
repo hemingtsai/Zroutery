@@ -1,393 +1,193 @@
 # Zroutery
 
-把多个 LLM provider 聚合成**一个**本地端点，入口同时支持 Anthropic Messages、OpenAI Chat
-Completions、OpenAI Responses 三种方言，外加 Gemini 原生 `generateContent`。除了真实模型 id，
-还额外暴露 `fast-class` / `standard-class` / `reasoning-class` 三个虚拟模型（名字随设置里的
-**层级命名**变，见下），后端按你**手动指定**的级别去选模型。
+把多个大模型供应商聚合成**一个本地端点**。
 
-macOS 桌面应用：常驻菜单栏，无 Dock 图标，关窗不退出。
+客户端说 Anthropic、OpenAI Chat、OpenAI Responses 还是 Gemini 协议都行；Zroutery 负责把它们翻译成同一套内部表示、挑一个模型、失败就换一个、把账记清楚，最后再用客户端本来说的那种协议讲回去。
 
-```
-客户端 ──┬─ POST /v1/messages           (Anthropic 方言)
-         ├─ POST /v1/chat/completions   (OpenAI 方言)
-         ├─ POST /v1/responses          (OpenAI Responses 方言)
-         └─ POST /v1/generateContent    (Gemini 方言)
-                    │
-              统一 IR + 路由 + 失败转移
-                    │
-         ┌──────────┴──────────┐
-    DeepSeek (OpenAI 兼容)   OpenAI / Anthropic / Ollama / vLLM …
-```
+macOS 和 Windows 上它是一个常驻菜单栏 / 托盘的桌面应用，关掉窗口也不退出；不想开界面时，也可以只跑代理进程。
+
+![总览](docs/images/overview.png)
+
+## 它实际解决的事
+
+- **一套配置，服务所有客户端。** Claude Code、Codex、Chatbox、任意 SDK 或脚本，指同一个本地地址就行。
+- **模型分档，而不是写死。** 每个模型归到 fast / standard / reasoning / frontier 之一，客户端只写 `standard-class`；具体谁来接，由你排的优先级、路由策略和实时健康状态决定。
+- **失败不糊弄。** 超时、限流、上游半截流、协议不兼容，各自有分类；熔断、半开探针、请求整流和失败转移按同一张表决策，过程进请求记录。
+- **钱有上限。** 按总量 / 供应商 / 档位设日或月预算，超额可以拒绝或降级到便宜档；花费落盘，重启不丢。
+- **密钥不进配置文件。** API key 存在系统凭据库，配置里只留一个引用。
 
 ## 快速开始
 
-前置：Rust 1.89+、Node 20.19+（或 22.12+）、pnpm、Xcode Command Line Tools。
+### 环境
+
+- Rust 1.89 或更新（`Cargo.toml` 的 `rust-version`，CI 用 1.89.0 验证过锁定依赖能编）
+- Node 20.19+ 或 22.12+，pnpm
+- macOS 11+ 与 Xcode Command Line Tools，或 Windows 与 WebView2 运行时
+
+### 跑起来
 
 ```sh
-pnpm install                # 装 tauri CLI 和前端依赖
-pnpm dev                    # 开发模式（热更新）
-pnpm build                  # 产出 target/release/bundle/{macos,dmg}
-pnpm test                   # cargo test --workspace
-pnpm smoke                  # 起一个假 provider，端到端跑通两种方言、流式、计费、选举
-pnpm test:layout            # 先自检判定逻辑，再用无头 Chromium 量真实界面的控件
+pnpm install
+pnpm dev      # 开发模式
+pnpm build    # 打包：macOS 出 .app/.dmg，Windows 出 .msi 和 NSIS 安装器
 ```
 
-> `pnpm build` 里的 DMG 步骤用 `hdiutil` + Finder，需要在正常桌面会话里跑；只要 `.app`
-> 的话用 `pnpm tauri build --bundles app`。打出来的 `.app` 约 13MB，里面同时带了
-> `zroutery-headless`，可以直接从 bundle 里启动无界面代理。
+桌面版启动后没有 Dock 图标，只在菜单栏 / 托盘里：从这里打开窗口、启停网关、复制地址和 token，退出也在这一份菜单里。网关默认跟着应用一起开始监听（设置里可以关掉），关掉窗口只是把窗口藏起来，代理继续跑。
 
-首次运行会在 `~/Library/Application Support/app.zroutery.desktop/config.json`
-生成配置和一个本地 token。API key 存 **macOS 钥匙串**，不落配置文件。
-
-无图形环境时可以只跑代理：
+不想要界面，只要代理：
 
 ```sh
-cargo run -p zroutery --bin zroutery-headless
-# 可选：ZROUTERY_CONFIG_DIR=/path/to/dir  ZROUTERY_KEY_PROVIDER_DEEPSEEK=sk-xxx
+cargo run -p zroutery-headless
 ```
 
-## 三步配置
+无界面运行时 key 从环境变量读，例如 `ZROUTERY_KEY_PROVIDER_DEEPSEEK=sk-...`（`provider:deepseek` 对应 `ZROUTERY_KEY_PROVIDER_DEEPSEEK`）。配置目录可以用 `ZROUTERY_CONFIG_DIR` 指到别处。
 
-1. **Providers**：加一个 provider（选 OpenAI 兼容或 Anthropic），填 base URL，粘 API key。
-   点 “Fetch models” 可以把上游模型列表拉下来。
-2. **Models**：给每个模型选一个 class。**级别永远由你指定，程序不猜**。没选级别的模型仍可以用
-   精确 id 调用，但不参与 `*-class` 路由，界面会一直提醒你。
-3. **Routing**：选类内策略（下面详述）、失败转移次数、熔断阈值。
+### 第一次配置
 
-### 类内怎么选模型
+1. **供应商**页加一个上游：名字、协议（OpenAI 兼容或 Anthropic）、Base URL，然后粘贴 API key。key 直接写进系统凭据库，不落配置文件。已经用 CC Switch 管着一堆中转站的话，这里能直接导入。
 
-Routing 面板里五种策略：
+   ![供应商](docs/images/providers.png)
 
-| 策略 | 行为 |
+2. 在供应商详情里拉一次模型目录，把要用的模型加进来。
+
+3. **模型**页给每个模型指定层级。这一步没有猜测：没指定层级的模型照样能用完整 id 调用，只是不参与 `*-class` 路由，页面会一直提醒你。层级 id 的写法（`fast-class`，还是 Anthropic 的 `haiku-class`、OpenAI 的 `luna-class`）可以在设置里换。
+
+   ![模型](docs/images/models.png)
+
+4. **路由**页排出每个层级的顺序——默认按优先级数字，也可以改成按实测延迟和价格选举——顺便设失败转移次数和熔断参数。排好之后，这一页会按路由真实会尝试的顺序把每个层级展开给你看。
+
+   ![路由](docs/images/routing.png)
+
+### 接上客户端
+
+网关默认在 `http://127.0.0.1:8787`，端口和监听地址都能改。四种方言各有一个入口：
+
+| 客户端说的协议 | 入口 |
 | --- | --- |
-| **Balanced（选举）** | 按实测延迟 + 价格综合排序，见下 |
-| Priority | 优先级数字小的先用，同级按权重随机 |
-| Weighted random | 按权重随机分摊 |
-| Round robin | 轮流，忽略优先级 |
-| Lowest latency | 谁历史上快用谁 |
+| Anthropic Messages | `POST /v1/messages` |
+| OpenAI Chat Completions | `POST /v1/chat/completions` |
+| OpenAI Responses | `POST /v1/responses` |
+| Gemini generateContent | `POST /v1/generateContent` |
 
-#### 选举（Balanced）
+另外还有 `GET /v1/models`（列出所有可调用的 id）、`GET /v1/status` 和 `GET /health`（唯一免鉴权的接口）。
 
-手动排优先级的问题是：同一个 class 里三个模型谁该当默认，取决于它们今天的价格和响应速度，
-而这两件事配置文件里看不出来。所以 Balanced 靠一次**选举**：
+鉴权用 `x-api-key` 或 `Authorization: Bearer`，token 在右上角「网关」菜单里复制。
 
-1. 给每个 class 的每个成员发一个 **1 token** 的最小请求，量往返延迟；
-2. 用延迟和价格一起打分，**排好序钉住**；
-3. 之后一直用这个顺序，直到下次选举。
-
-**不是每个请求重算**——探测要花一个请求，而且路由如果随负载漂移就没法排查问题了。什么时候跑：
-
-- 启动时跑一次（Routing 里可关，默认开）；
-- 界面上点 **Re-run now**；
-- 命令行 `zroutery-headless --elect`，打印顺序然后退出。
-
-打分的几个刻意决定：
-
-- **每个轴都按「是类内最好的几倍」算分**（1.0 就是最好），这样倍数关系不会丢：贵 50 倍会压过慢 2 倍，
-  而不是两者都糊成「差一点」。单轴最多算到 100 倍封顶——否则「免费 vs 收费」是无穷倍，
-  另一个轴就再也说不上话了；免费模型也因此不会除零。
-- **价格只有在「每个应答的成员都有价格」且「币种一致」时才参与**。没法诚实地比较 2 CNY 和 3 USD，
-  也没法猜一个没标价模型的成本，所以这种情况退化成只看延迟，并且**把原因写在界面上**，
-  而不是偷偷编一个数。
-- 价格是每百万 token 的，要能比较必须先定一个**参照请求**（默认 1000 in / 500 out，可改）。
-- 权重是相对值，填 `3` 和 `1` 等于填 `0.75` 和 `0.25`。
-- 探测失败的模型排最后、不给分，错误原因留着。
-- 完全平手时退回手填的优先级，再退回 id，保证两次跑结果一致。
-
-选举没见过的模型（之后新加的，或者当时没应答的）排在见过的后面，按优先级。
-也就是说新模型立刻可用，但不会悄悄拿到它从没被测过的首选位。
-
-探测本身是走正常编码路径的真实请求，所以它同时也是最新的健康信号，会记进健康表。
-
-### 模型 id 规则
-
-模型的身份是 **(provider, 上游模型名)**，对外 id 由这两者推导：`<provider>-<模型名>`，不单独存储，
-所以不会漂移，也不会因为两个 provider 提供同名模型而冲突：
-
-```
-deepseek + deepseek-v4-pro    →  deepseek-deepseek-v4-pro
-openrouter + deepseek-v4-pro  →  openrouter-deepseek-v4-pro
-openrouter + deepseek/r1:free →  openrouter-deepseek-r1-free   （/ 和 : 会变成 -）
-```
-
-发给上游的仍然是原始模型名（`deepseek-v4-pro`），只有对外的 id 带前缀。嫌长可以在模型详情里加
-**aliases**，任意短名都能解析到同一个模型。
-
-从 0.1.x 升级：旧配置里手写的 `id` 会自动变成 alias，老客户端不用改；界面会提示一次新 id 是什么。
-
-按简报里的例子配完之后，对外可用的模型是（第二行是同一个 class 的成员）：
-
-```
-fast-class                    standard-class                 reasoning-class
-deepseek-deepseek-v4-flash    deepseek-deepseek-v4-pro       openai-gpt-5.3-sol
-```
-
-虚拟模型的名字由设置里的**层级命名**（`routing.naming_style`）决定，默认 `internal` 就是上面这
-三个；换成 `anthropic` 是 `haiku-class` / `sonnet-class` / `opus-class`，换成 `openai` 是
-`luna-class` / `terra-class` / `sol-class`。另外两套名字**仍然能解析**（老配置、老客户端不用改），
-只是模型列表里只出现当前那套。
-
-## 接客户端
-
-Anthropic 风格（含 Claude Code）：
+读环境变量的客户端，比如 Claude Code：
 
 ```sh
 export ANTHROPIC_BASE_URL=http://127.0.0.1:8787
-export ANTHROPIC_AUTH_TOKEN=zr-…        # 界面里 Copy token
+export ANTHROPIC_AUTH_TOKEN=<粘贴 token>
 export ANTHROPIC_MODEL=standard-class
 ```
 
-OpenAI 风格：
+OpenAI 系的客户端：
 
 ```sh
 export OPENAI_BASE_URL=http://127.0.0.1:8787/v1
-export OPENAI_API_KEY=zr-…
+export OPENAI_API_KEY=<粘贴 token>
 ```
+
+## 架构
+
+一条请求穿过四道边界：**客户端协议 → 统一 IR → 路由 → 上游**，回来时再反着走一遍。
+
+```
+客户端 ── Anthropic Messages / OpenAI Chat / Responses / Gemini
+  │
+  ├─ 解码为 IR：ChatRequest / ChatResponse / StreamEvent
+  ├─ 鉴权，预算准入，识别自动审查侧请求，匹配路由策略
+  ├─ 解析客户端给的 id：直连某个模型，或落进某个 *-class 层级
+  ├─ 排序候选：策略顺序、能力过滤、熔断与半开状态、可选的选举/学习重排
+  ├─ 逐个尝试：编码成上游方言 → 发送 → 失败则分类、整流、换候选
+  └─ 按客户端方言编码回去，同时结算：预算账本、请求记录、
+     健康观测、Outcome、影子决策
+```
+
+**为什么要中间那层 IR。** 客户端有四种方言，上游目前有两种（Anthropic、OpenAI 兼容），两两直连就是 8 套翻译代码；有了 IR 只需要每边一组编解码器，上游侧只用到两个。Responses 和 Gemini 的编解码器已经写好并有测试，但还没有对应的上游类型，所以它们现在只作为入口方言存在。
+
+几个贯穿全局的选择：
+
+- **一次请求一条生命周期。** 尝试、失败分类、整流重试、结算、统计、终态结果都挂在同一个生命周期对象上，只在终态结算一次——流式也一样，客户端中途断开也是一种明确的终态。
+- **失败有一张分类表。** 某个错误是否影响健康、是否触发熔断、能否重试、能否换候选、算不算供应商的问题，由一张表统一决定，而不是散落的条件分支。
+- **准入先于检查。** 请求进来时先对涉及的预算 scope 取许可，结算后释放，所以「最多超出一笔请求」这句话是成立的；没配预算的 scope 彼此不阻塞。
+- **观察与决策分开。** 健康与延迟观测喂给路由；影子决策和数据集只负责记录，默认没有任何自动训练会改变线上选路。
+
+## 模块
+
+**`crates/zroutery-core`** — 引擎本体，不依赖 GUI。
+
+| 模块 | 负责 |
+| --- | --- |
+| `protocol/` | 四种方言的请求/响应编解码与 SSE 解析；`ProviderQuirks` 处理各家兼容差异 |
+| `ir/` | 统一的请求、响应、流事件；Responses 的内存会话存储与取消 |
+| `server/` | HTTP 路由、鉴权、请求管线（尝试循环、整流、终态结算、影子采集） |
+| `router` `policy` `election` `registry` `circuit_breaker` | 候选解析与排序、策略匹配、按实测延迟/价格的选举、逐模型熔断与半开探针 |
+| `budget` `billing` | 预算 scope 与落盘账本、价格与成本、余额探针 |
+| `stats` `stats_ext` `observation` `outcome` `failure` | 请求记录、EWMA 与分位延迟、健康观测、唯一的终态结果与失败分类 |
+| `media/` `rectifier/` | 视觉兜底（图片转描述）；请求被上游拒绝后的就地修复 |
+| `classifier` `query` `session` | 自动审查侧请求的识别与判定、会话亲和 |
+| `ml/` | 学习栈：影子决策、数据集、特征、训练/校准/bandit、离线发布门禁、晋升与回滚、轨迹日志 |
+| `account/` | 账号身份、额度、用量与签到（可选 feature，默认不编进构建） |
+| `migration` `agent_takeover` | 从别的路由器迁出、接管客户端配置——目前只有库和测试在调用 |
+
+**`src-tauri`** — 桌面外壳，包名 `zroutery`：进程内跑上面的引擎，提供 Tauri 命令、托盘菜单、窗口与开机启动、凭据库读写、CC Switch 导入。
+**`crates/zroutery-headless`** — 无界面代理二进制，复用桌面库；key 支持环境变量，另有 `--elect`、`--balances`、`--experiment` 几个子命令。
+**`ui/`** — Vite + React 仪表盘，构建产物由 Tauri 加载；中英双语，主题跟随系统。
+**`scripts/`** — 验证脚本：端到端 smoke、UI 布局回归、UI 交互回归、提交信息契约、工具链门。
+
+## 数据放在哪
+
+| 内容 | 位置 | 说明 |
+| --- | --- | --- |
+| 配置 | `config.json`：macOS 在 `~/Library/Application Support/app.zroutery.desktop/`，Windows 在 `%APPDATA%\app.zroutery.desktop\`，可用 `ZROUTERY_CONFIG_DIR` 覆盖 | 不含密钥；文件损坏时先复制一份备份，再用默认值起来 |
+| API key | 系统凭据库（macOS 钥匙串 / Windows 凭据管理器） | 配置里只有 `key_ref` |
+| 预算账本 | 配置目录下的 `spend.json` | 定时与退出时写盘 |
+| 学习轨迹 | 配置目录下的 `ml/traces.jsonl` | 只有开启影子后才追加 |
+| 请求记录、健康、延迟统计、Responses 会话 | 内存 | 都有上限；重启清空，不落盘 |
+
+## 平台与发布边界
+
+- **macOS 11+**：出 `.app` 和 `.dmg`；常驻菜单栏，没有 Dock 图标；开机启动用 LaunchAgent。签名是 ad-hoc，仓库里没有公证流程。
+- **Windows**：出 `.msi` 和 NSIS 安装器；凭据走 Windows 凭据管理器。CI 每晚会真的装一次、重装、卸载，验证安装器。
+- **Linux**：代码里有几处平台分支，但凭据库依赖在 Linux 上不参与构建，也没有 Linux 打包目标或 CI 任务——目前不支持。
+- **上游**：当前只有 Anthropic 和 OpenAI 兼容两种供应商类型；Gemini 与 Responses 作为入口可用，作为上游还没接线。
+
+## 看得见的状态
+
+界面不是只看配置。**活动**页把每个请求的入口方言、实际走的模型、尝试次数、延迟、token 和花费列出来；下面按模型汇总成功率和支出，熔断计数可以单独清零，也能整体重置统计。自动审查的侧请求分开统计，免得混进主流量里看不清。
+
+请求正文不会被记下来：记录里只有元数据，上游返回的错误正文也会在写进记录前截断，免得把凭据或内部地址留在内存里。
+
+![请求记录](docs/images/activity.png)
+
+预算在**设置**页配置：按总量、供应商或档位设日/月上限，超额选择直接拒绝或者降级到更便宜的档位。已用量和限额同屏显示，账本落在 `spend.json` 里。
+
+## 学习型路由（默认关闭）
+
+桌面构建默认把 `ml` 编进去，但**默认什么都不做**：影子记录和学习型重排都关着，所以新装的应用不采集、不训练、也不会因为模型而改变选路。
+
+打开影子之后，每个走策略路由的请求会多记一条反事实决策——「如果按模型打分，会选谁」。内置了一个经过校验的候选模型用来算这个决策，它只能写记录，碰不到真正发出去的请求。
+
+完整的闭环是：采集 → 训练 → 离线门禁 → 晋升 → 重排与回滚。目前走在产品路径上的只有采集、轨迹、晋升和回滚；校准、bandit、warmup、离线发布门禁、激活快照这些仍然是库和测试的接口，没有生产调用者，也没有任何自动调度——晋升轮次只在你在界面里主动触发时才发生。
+
+![学习型路由](docs/images/learning.png)
+
+## 开发与验证
 
 ```sh
-curl http://127.0.0.1:8787/v1/messages -H "x-api-key: $TOKEN" \
-  -H 'content-type: application/json' -d '{
-    "model": "reasoning-class", "max_tokens": 256, "stream": true,
-    "messages": [{"role": "user", "content": "hi"}]
-  }'
+pnpm test                                 # cargo test --workspace
+pnpm smoke                                # 起假上游，跑端到端
+pnpm test:layout                          # 真实构建的 UI 布局回归
+python3 scripts/ui_interaction_test.py    # 真实 UI 交互回归（假 IPC + 无头 Chromium）
+cargo clippy --workspace --all-features --all-targets -- -D warnings
+cargo fmt --all -- --check
 ```
 
-响应头里会带 `x-zroutery-model` / `x-zroutery-provider`，告诉你这次实际是谁答的（`x-zroutery-model`
-就是 `<provider>-<模型名>` 那个 id）；`x-zroutery-degraded: 1` 表示所有候选都在熔断中，属于兜底调用；
-配了价格的模型还会带 `x-zroutery-cost`，例如 `CNY 0.000048`。
+提交信息用 Conventional Commits：`<type>(<scope>): <summary>`，CI 会逐条校验。
 
-Claude 系命名（`claude-sonnet-4-5-…`、`claude-3-5-haiku-…`）默认按名字里的
-opus/sonnet/haiku 映射到对应 class，可以在 Routing 里关掉或用精确别名覆盖。
+架构决策、各阶段状态和审查记录都在 `docs/development/` 里，这里不重复。
 
-## 花费估算
+## 许可
 
-在 Models 里给模型填价格（**每百万 token**，币种就填 provider 计费用的那个），Zroutery 会用上游返回的
-usage 算出每次请求的花费：
-
-- 请求日志、按模型汇总、总计都带金额，并且**按币种分开**统计，绝不把 USD 和 CNY 加到一起。
-- 缓存命中按「缓存读价」计，并且不会再按输入价重复算一遍（各家的 `cached_tokens` 都含在 prompt 总数里）；
-  不填缓存价就退回输入价，只会高估不会低估。
-- 没填价格的模型记为「无价格」而不是 0，所以总计是下限，不是账单。
-- `POST /v1/messages/count_tokens` 除了 `input_tokens`，还在 `zroutery` 字段里给出这次会由谁回答、
-  以及**发送之前**的 prompt 花费估算：
-
-```json
-{ "input_tokens": 42,
-  "zroutery": { "estimated": true, "model": "deepseek-deepseek-v4-pro",
-                "estimated_input_cost": { "currency": "CNY", "amount": 0.000084 },
-                "input_per_mtok": 2.0, "output_per_mtok": 8.0 } }
-```
-
-从 provider 拉模型列表时，如果目录里带价格（OpenRouter 那种按单 token 计价的字符串），会自动换算成
-每百万 token 填好，之后仍可修改。流式请求拿不到 `x-zroutery-cost`（响应头早就发出去了），
-但 Activity 里照样记账。
-
-## 预算护栏
-
-给「全部 / 某个 provider / 某个 class」设日或月上限，在 Routing 面板里加。到额之后两种处理：
-**拒绝**（返回 402 并说明是哪条限额），或者**降级到便宜的 class**。
-
-三件事决定了它的行为，值得先说清楚：
-
-- **一次请求的花费只有跑完才知道**，所以预算依然是「越线检测」而不是「预授权」，绝不做 token 估算。
-  真正让「最多超出一次」成立的是准入：每个有配额的 scope（全部 / provider / class，以及降级可能到达的
-  class）同时只放一个请求进去——请求在检查之前就按固定顺序拿好自己可能用到的全部 scope 的准入位，直到结账
-  （流式请求也一样，客户端断开也会释放）才交还。于是下一个请求读到的是上一个请求已经记上的账，最多超出
-  一个请求的量。没有配额的 scope 不加准入限制，流量照常并发。唯一例外是替请求顺带发出的辅助调用
-  （目前是 vision 描述）：它按主请求的准入位走，全局配额照样管得住它，但不会被 vision provider 自己的
-  配额单独串行化。
-- **花费会落盘**（`spend.json`，在配置目录旁边）。重启就忘的护栏不算护栏——请求日志是刻意只放内存的，
-  所以它不适合用来记账。落盘是定时（10 秒）+ 退出时，硬杀最多丢几秒，不会丢整轮。
-- **依然不换算币种**。USD 的预算只统计 USD 花费；如果限额的币种你的模型压根不用，那它永远不会触发，
-  校验里会直接警告，而不是假装在保护你。
-
-降级不能用来绕开限额：便宜 class 自己的预算照样生效，一圈降级绕回来会变成拒绝而不是死循环。
-被预算拦下的请求不重试、不失败转移、也不计入模型健康度——重试就等于把刚拒掉的钱花出去。
-
-```
-$ curl ... -d '{"model":"standard-class",...}'
-{"error":{"type":"budget_exceeded",
-          "message":"stopped by a budget: the today limit for everything (5.00 USD) is used up"}}
-```
-
-## Classifier Routing（Auto Mode 分类器路由）
-
-Claude Code 的 Auto Mode 在执行 Bash / Edit 之前会发一个独立的**侧查询**：一个很小的判定请求，
-让模型回答 `<block>yes|no</block>`。这个请求和主对话走同一个端点，甚至经常带同一个模型名
-（比如 `claude-opus-4-8[1m]`）——但它们是两种完全不同的流量。
-
-Zroutery 按**请求形态**而不是模型名来区分它们：温度 0、`max_tokens` 64、`stop_sequences` 里
-有 `</block>`、加上判定 prompt 的标记，这些一起构成分类器的指纹（打分制，参数相似但 prompt
-不符的普通小请求不会被误判）。识别出来之后送进一个独立的候选池：
-
-```json
-"classifier": {
-  "enabled": true,
-  "strategy": "priority",
-  "failover": true,
-  "max_attempts": 2,
-  "candidates": [
-    {"model": "zai-glm-5.3", "priority": 10},
-    {"model": "deepseek-deepseek-v4", "priority": 20}
-  ],
-  "detection": {"enabled": true, "minimum_confidence": 0.85}
-}
-```
-
-几条边界值得知道：
-
-- **候选引用的是已有的模型**（`<provider>-<upstream model>`）。provider、密钥、协议、价格、健康度全部复用，
-  不存在第二套 provider 配置。
-- **主请求永远不进分类器池，分类器请求永远不进主池**——这是被集成测试锁死的不变量。
-- **模型健康度两个池共享**：provider 挂了就是挂了。但请求统计按 main / auto_mode 分开，
-  Activity 面板里「审批慢」和「模型慢」能分得清。
-- **判定协议必须保真**：`stop_sequences` 跨方言保持数组，provider 上「兼容性」quirks
-  （drop_stop 之类）对分类器请求不生效。
-- **fail closed**。候选全部失败、或者返回的东西里没有 `<block>` 判定，就把错误原样还给
-  Claude Code——它会退回人工审批。Zroutery 绝不把「看起来安全」翻译成放行：输出解析器
-  不参与审批决策。
-- Claude Code 的判定 prompt / 参数随版本变化，所以指纹是可配置的
-  （`detection.signatures`），新版本来了改配置就行，不用等 Zroutery 发版。
-
-## 余额查询
-
-各家余额接口没有统一标准，所以 provider 上挂一个 *probe*：一个路径加几个 JSON pointer。内置这些预设：
-
-| 预设 | 端点 | 说明 |
-| --- | --- | --- |
-| DeepSeek | `/user/balance` | 挂在 API 根而不是 `/v1` 下，所以预设里写的是绝对 URL |
-| Moonshot | `/users/me/balance` | |
-| SiliconFlow | `/user/info` | |
-| OpenRouter | `/credits` | 只给 total 和 usage，相减得余额 |
-| **Sub2API** | `/v1/usage` | 中转站，见下 |
-| Custom | 自己填 | 路径 + JSON pointer |
-
-OpenAI 和 Anthropic 根本没有这种接口，预设里就是「not supported」，不装样子。
-
-**添加 provider 时就能选**：Providers 面板的新增表单里有 Name / API dialect / Base URL / Balance endpoint
-四项，选好直接建好，不用建完再回去改。已有的 provider 也能随时在卡片上改。
-
-### Sub2API
-
-[Sub2API](https://github.com/Wei-Shaw/sub2api) 中转站有 `GET /v1/usage`，返回内容取决于 key 的类型，
-但三种情况都带 `remaining` 和 `unit`，所以一个 probe 全覆盖：
-
-- **钱包 key**：`remaining` 就是账户余额；
-- **限额 key**：额外给 `quota.limit` / `quota.used`，界面显示成「余额 of 总额」；
-- **订阅 key**：`remaining` 是日/周/月里最紧的那个窗口还剩多少。
-
-只配了速率限制（没有金额）的 key 会返回「读不到金额」而不是 0——这是实话，不是余额为零。
-
-它同时提供 Anthropic 和 OpenAI 两套接口，两种 dialect 的 base URL 深度不同（OpenAI 兼容的 base 已经
-以 `/v1` 结尾，Anthropic 的 base 是根），所以这个预设的路径**跟着 dialect 变**：前者用 `/usage`，
-后者用 `/v1/usage`。鉴权头也各按各的方言发（`Authorization: Bearer` 或 `x-api-key`），Sub2API 两个都收。
-
-它是自托管的，所以 base URL 必须你自己填，界面在选了这个预设且 URL 还空着时会提示。
-
-Providers 面板里每个 provider 一行：选预设 → 点 Check，旁边显示余额和检查时间，失败会留下原因。
-**不做定时轮询**——查一次要花一个请求，有些厂商还限流，所以只在你点的时候查。
-
-命令行也能查：
-
-```sh
-zroutery-headless --balances     # 逐个查、打印、退出，适合塞进 cron
-# deepseek: 48.75 CNY remaining
-
-zroutery-headless --elect        # 跑一次选举，打印每个 class 的排序然后退出
-# standard-class:
-#   deepseek-deepseek-v4-pro     primary: 640 ms, 0.0060 CNY per reference request
-#   openai-gpt-sonnet            fallback 1: 710 ms, 0.0600 CNY per reference request
-```
-
-## 端点
-
-| 方法 | 路径 | 说明 |
-| --- | --- | --- |
-| POST | `/v1/messages` | Anthropic Messages，支持 SSE |
-| POST | `/v1/messages/count_tokens` | 本地 token 估算 + 价格估算，不打上游 |
-| POST | `/v1/chat/completions` | OpenAI Chat Completions，支持 SSE |
-| POST | `/v1/responses` | OpenAI Responses，支持 SSE；答案会存进内存供取回 |
-| GET/DELETE | `/v1/responses/{id}` | 取回或删除已存响应 |
-| POST | `/v1/responses/{id}/cancel` | 取消一个响应，留下 `cancelled` 占位 |
-| POST | `/v1/generateContent` | Gemini 原生入口（非流式，见下） |
-| GET | `/v1/models`、`/v1/models/{id}` | 同一份 JSON 同时满足 Anthropic 和 OpenAI 两种客户端 |
-| GET | `/v1/status` | 版本、模型数、provider 数（需要 token） |
-| GET | `/health` | 只回 `{"status":"ok"}`，唯一免鉴权的路由 |
-
-花费超预算时返回 **402**（`budget_exceeded`）。
-
-**`/v1` 前缀可有可无**：上面每个路径去掉 `/v1` 也一样能用（`/models`、`/chat/completions`、
-`/messages` …），因为各家客户端对「base URL 要不要带 `/v1`」的约定并不一致。所以
-`OPENAI_BASE_URL` 填 `http://127.0.0.1:8787` 或 `http://127.0.0.1:8787/v1` 都行。
-
-路径写错时不会给你一个空的 404，而是返回 JSON 列出真实可用的端点；如果是 `/v1/v1/...`
-这种重复前缀（把带 `/v1` 的 base URL 配给了会自己拼 `/v1` 的 SDK，Anthropic 系最常见），
-会直接告诉你去掉 base URL 里的 `/v1`。方法用错（比如 GET 打 `/v1/chat/completions`）会返回 405
-并说明该用哪个方法。
-
-## 安全
-
-- 默认只监听 `127.0.0.1`，并且要求 `x-api-key` 或 `Authorization: Bearer <token>`。
-  能访问这个端口的进程就能花你的额度。
-- 改成 `0.0.0.0` 会让同网段的人可用你的 key，界面会红色告警；这种情况下别关鉴权。
-- token 比较用的是定长比较，避免时序泄露。
-- **token 不进前端**：界面拿到的只有 `zr-…后四位`，点 Reveal 才单独取一次，Copy 是在 Rust 侧
-  直接写剪贴板。快照里的 `auth_token` 一律为空，回存时为空表示「保持不变」。
-- **API key 只从钥匙串读**。`ZROUTERY_KEY_*` 环境变量只有 `zroutery-headless` 认，GUI 不认
-  （环境变量同机可见，还会进崩溃报告和 CI 日志）。
-- 请求体上限默认 32 MiB（Routing 面板可调），超限直接 413，不会转发给上游。
-- CORS 默认关闭；打开后不填 origin 列表会红色告警（校验里也有对应 warning），填了就只允许
-  列出的 origin，方法和请求头也收敛到两个 API 真正用到的那些。
-- 请求日志只在内存里（环形缓冲，默认 500 条），进程退出即消失；配置文件里不含任何密钥。
-
-## 项目结构
-
-```
-crates/zroutery-core/     协议转换、模型注册表、路由、计费、预算、HTTP 服务（无 GUI 依赖，879 个测试）
-  src/ir/                 统一中间表示：每个方言一套 decoder + encoder（4 套），避免 N×M
-  src/protocol/           anthropic.rs / openai.rs / responses.rs / gemini.rs + SSE 状态机
-  src/billing.rs          价格计算（按币种分开）、余额 probe 与五个内置预设
-  src/budget.rs           支出账本（落盘）与限额判定：拒绝或降级
-  src/config.rs           provider、模型身份与 id 推导、路由策略、配置迁移
-  src/registry.rs         模型 id 解析：id/别名走一次哈希，class 成员表预先算好
-  src/election.rs         按延迟+价格给类内成员打分排序（纯函数，17 个测试）
-  src/router.rs           类内候选排序、健康度、熔断、失败转移
-  src/server/mod.rs       axum 路由、鉴权、请求体上限、CORS、选举执行
-  src/server/pipeline.rs  单次请求的候选轮询、计费记账、SSE 管道
-  src/sync.rs             容忍中毒的锁封装（一个线程 panic 不该拖垮整个代理）
-  src/account/            可选账号子系统（feature = "account"）：额度/用量/限流状态与 provider trait
-    adapters/newapi.rs    NewAPI 面板适配器（feature = "newapi"）：登录态与令牌、额度、用量、签到、健康检查（尚未接入桌面外壳的配置与界面）
-src-tauri/                桌面外壳：菜单栏、钥匙串、配置持久化、Tauri 命令
-ui/                       React + TypeScript 仪表盘
-scripts/smoke_test.py     端到端冒烟测试（假 provider → 真二进制 → 真 HTTP）
-scripts/ui_layout_test.py 无头 Chromium 量界面控件的高度和基线
-```
-
-## 协议转换支持情况
-
-四个入口方言（Anthropic Messages、OpenAI Chat Completions、OpenAI Responses、Gemini
-`generateContent`）走同一套转换，已覆盖：文本、system prompt、多轮、工具调用（含流式增量 JSON）、
-工具结果、图片、extended thinking ↔ `reasoning_content`、停止原因、usage（含缓存命中和
-reasoning tokens）、`stop_sequences` ↔ `stop`、`reasoning_effort` ↔ thinking budget。
-
-已知限制：
-
-- `n > 1` 只取第一个 choice（Anthropic 方言没有对应概念）。
-- `count_tokens` 是估算：各家 tokenizer 不同，没有可共用的实现。
-- Anthropic 的 `signature` / `redacted_thinking` 在转成 OpenAI 方言时会丢失，反向没问题。
-- 流式一旦开始就不再转移：握手失败可以换下一个候选，中途断了只能把错误透传给客户端。
-- 音频、文件、server-side tools 这类块会被丢掉而不是报错。
-- Gemini 只接了 `generateContent`：它的流式接口是 `:streamGenerateContent`，本代理没有这个路径，
-  所以 Gemini 客户端拿不到 SSE（其他三种方言都有）。
-- `/v1/responses` 的存储是内存 + 有界（默认 1000 条，超出淘汰最早的），不是持久化；进程退出即
-  取不回。
-
-## 开发提示
-
-- provider 的 “Compatibility” 开关用来对付 “OpenAI 兼容” 的方言差异：推理模型拒绝
-  `max_tokens` / `temperature`，部分网关不认 `stream_options`。
-- `cargo test -p zroutery-core` 只跑纯逻辑，879 个测试，秒级；加 `--all-features` 会把 `ml` /
-  `account` 一起编译测试，1294 个。`pnpm smoke` 验证真实进程。
-- 开发流程、历史处理记录和子系统设计记录都在 [docs/development/](docs/development/README.md)。
-- 想看请求细节：`ZROUTERY_LOG=debug`。
-- 价格是每百万 token，不是每 token；从目录里自动填的价格已经换算过了。
+MIT（见 `Cargo.toml` 的 `license`）。
