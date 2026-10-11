@@ -98,6 +98,17 @@ jobs:
           set -euo pipefail
           python3 scripts/commit_contract_test.py --self-test
           python3 scripts/orch_docs_test.py --self-test
+          # The mutation gate is the one validator here that is not wired to any
+          # pipeline, because a mutation is chosen per task rather than per run.
+          # What CI can do is refuse to let the tool rot into a rubber stamp, which
+          # is the same argument as the two above: a gate that can no longer reject
+          # is worse than no gate, because it is trusted.
+          #
+          # Its self-test also answers "could this tool see a failure?" — a
+          # harness that cannot distinguish caught from missed reports confidence
+          # it never measured, which is how this project's failing test names were
+          # lost five times.
+          python3 -B scripts/mutation_gate.py --self-test
 
       - name: Commit contract over the change range
         env:

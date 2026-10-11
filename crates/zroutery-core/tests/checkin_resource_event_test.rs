@@ -234,3 +234,47 @@ fn the_amount_comes_from_the_structured_surface_and_not_from_the_description() {
     // can decide it is not worth as much as a structured one.
     assert_eq!(event.source, ResourceEventSource::AccountLog);
 }
+
+#[test]
+fn each_outcome_says_a_different_thing() {
+    use zroutery_core::account::checkin::as_resource_event;
+
+    // Found by `scripts/mutation_gate.py`, which reported MISSED when the wording of
+    // the confirmed description was changed and nothing objected. The distinction
+    // between "granted a reward", "nothing moved" and "nothing established it" is
+    // the entire content of this mapping, and it was unpinned: a panel could be
+    // handed the same sentence for all three and no test would notice.
+    //
+    // Pinned by asserting that they differ rather than by asserting exact strings,
+    // so a rewording does not fail — collapsing three into one does.
+    let confirmed = as_resource_event(&report_with(Some(confirmed(
+        25.0,
+        RewardSource::ProviderRecord,
+    ))))
+    .expect("a confirmed check-in produces an event");
+    let already = as_resource_event(&report_with(Some(CheckinConfirmation::AlreadyCompleted {
+        reward: None,
+    })))
+    .expect("an already-completed check-in produces an event");
+    let pending = as_resource_event(&report_with(Some(CheckinConfirmation::ObservationPending)))
+        .expect("an accepted check-in produces an event");
+
+    let three = [
+        confirmed.description.as_str(),
+        already.description.as_str(),
+        pending.description.as_str(),
+    ];
+    for (i, a) in three.iter().enumerate() {
+        assert!(!a.is_empty(), "every outcome must say something");
+        for (j, b) in three.iter().enumerate() {
+            if i == j {
+                continue;
+            }
+            assert!(
+                a != b,
+                "two outcomes render as the same sentence ({a:?}); the difference \
+                 between them is the whole content of the mapping"
+            );
+        }
+    }
+}
