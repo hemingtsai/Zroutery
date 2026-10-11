@@ -159,6 +159,18 @@ pub struct Snapshot {
     /// dashboard asks rather than discovering by calling a command that does not
     /// exist.
     pub account_maintenance_available: bool,
+    /// Whether this build contains the account subsystem at all.
+    ///
+    /// Distinct from [`Self::account_maintenance_available`] on purpose.
+    /// `account-maint` implies `account`, so a build can have one without the
+    /// other, and the two answer different questions: this one says whether
+    /// declared accounts can be probed at all, the other whether they can be
+    /// checked in through a browser. A dashboard that reads one for the other
+    /// offers a control the build cannot serve.
+    ///
+    /// Same reasoning as [`Self::ml_available`]: a command that was never
+    /// registered and a command that failed are the same event to the webview.
+    pub account_available: bool,
     /// What each declared account is doing, newest observation last.
     #[cfg(feature = "account-maint")]
     pub checkin: Vec<CheckinView>,
@@ -434,6 +446,7 @@ impl Desktop {
             budgets: self.budget_status(),
             ml_available: cfg!(feature = "ml"),
             account_maintenance_available: cfg!(feature = "account-maint"),
+            account_available: cfg!(feature = "account"),
             #[cfg(feature = "account-maint")]
             checkin: self.checkin_views().await,
             config,
@@ -666,6 +679,22 @@ impl Desktop {
     #[cfg(feature = "ml")]
     pub fn ml_status(&self) -> zroutery_core::MlStatus {
         self.core.ml_status()
+    }
+
+    /// Probe every declared account and return what the reconciler did.
+    ///
+    /// Delegates to Core rather than re-deriving anything here, for the same
+    /// reason [`Self::ml_status`] does: the dashboard and the store must not be
+    /// able to disagree about what an account is doing. The report is Core's own
+    /// value, not a summary rebuilt in the desktop layer — a hand-built summary is
+    /// how an absent quota starts rendering as a zero.
+    ///
+    /// Not called on a timer and not called at startup. Probing costs a network
+    /// request per declared account, so the caller decides when; this is the
+    /// operation to call, not a policy about when.
+    #[cfg(feature = "account")]
+    pub async fn reconcile_accounts(&self) -> zroutery_core::ReconcileReport {
+        self.core.reconcile_accounts().await
     }
 
     /// Replay the serving model over recorded history.
@@ -1146,6 +1175,70 @@ pub fn needs_rebind(a: &ServerConfig, b: &ServerConfig) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The two account flags answer different questions and must not collapse.
+    ///
+    /// Asserted on a built `Snapshot` rather than on `cfg!` compared with itself,
+    /// which is what the first draft of this gate did: it restated the feature
+    /// table and could not fail on anything but a broken feature graph.
+    #[tokio::test]
+    async fn account_availability_is_a_separate_answer_from_the_other_availability_flags() {
+        let (desktop, dir) = desktop_with(AppConfig::default());
+        let snapshot = desktop.snapshot().await;
+
+        if snapshot.account_maintenance_available {
+            assert!(
+                snapshot.account_available,
+                "account-maint is declared as depending on newapi, which depends on account; a \
+                 build with maintenance and no subsystem is a broken feature graph"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The snapshot the dashboard reads must carry both account flags, with the
+    /// values this build actually has.
+    ///
+    /// Built from a real `Desktop` rather than from `cfg!` compared to itself,
+    /// which is what the first draft of this gate did and which could not fail.
+    #[tokio::test]
+    async fn the_snapshot_reports_this_build_s_account_availability() {
+        let (desktop, dir) = desktop_with(AppConfig::default());
+        let snapshot = desktop.snapshot().await;
+
+        assert_eq!(
+            snapshot.account_available,
+            cfg!(feature = "account"),
+            "the snapshot must report the account subsystem exactly as this build has it"
+        );
+        assert_eq!(
+            snapshot.account_maintenance_available,
+            cfg!(feature = "account-maint")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// And the two must be able to disagree, or declaring them separately is
+    /// decoration.
+    ///
+    /// In a build with neither, both are `false`; in one with only the subsystem,
+    /// they differ. What must never happen is the maintenance flag standing in for
+    /// the subsystem, because `account-maint` implies `account` and a dashboard
+    /// reading one for the other would offer a probe control the build cannot
+    /// serve.
+    #[tokio::test]
+    async fn maintenance_availability_never_stands_in_for_the_account_subsystem() {
+        let (desktop, dir) = desktop_with(AppConfig::default());
+        let snapshot = desktop.snapshot().await;
+
+        if snapshot.account_maintenance_available {
+            assert!(
+                snapshot.account_available,
+                "a build with account-maint must have the account subsystem it depends on"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn rebind_only_on_transport_changes() {
