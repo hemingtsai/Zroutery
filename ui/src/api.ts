@@ -8,11 +8,24 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 export type ModelTier = "fast" | "standard" | "reasoning" | "frontier";
 /** @deprecated Use ModelTier. */
 export type ModelClass = ModelTier;
-export type ProviderKind = "anthropic" | "openai_compatible";
+/** Mirrors the serde names of `ProviderKind` in `zroutery-core::config`. The
+ * two `opencode_*` kinds are gateway targets rather than wire dialects: both
+ * speak the OpenAI dialect and both lock their client identity to
+ * `opencode_cli`. */
+export type ProviderKind =
+  | "anthropic"
+  | "openai_compatible"
+  | "opencode_zen_free"
+  | "opencode_console";
 /** Mirrors `ProviderClientProfile` in `zroutery-core::config`: the client
  * identity presented upstream, and which of that client's own headers are
  * forwarded with it. */
-export type ProviderClientProfile = "auto" | "native" | "claude_code" | "codex";
+export type ProviderClientProfile =
+  | "auto"
+  | "native"
+  | "claude_code"
+  | "codex"
+  | "opencode_cli";
 export type NamingStyle = "internal" | "anthropic" | "openai";
 export type RoutingStrategy =
   | "priority"
@@ -583,6 +596,16 @@ export interface CheckinView {
 export interface DiscoveredModel {
   id: string;
   pricing: Pricing | null;
+  /**
+   * Whether the provider's source marks this model as served on a zero-cost
+   * tier. Always present — the Rust side defaults it to `false` rather than
+   * omitting it.
+   *
+   * This is a property of the source's catalogue, not a promise that the model
+   * will answer: a paid id, a region-blocked id and a deprecated id can all be
+   * free, and a free id can stop serving without the catalogue changing.
+   */
+  free: boolean;
 }
 
 /** A CC Switch provider reduced to what an import decision needs. */
