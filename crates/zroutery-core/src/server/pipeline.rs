@@ -105,6 +105,7 @@ pub(super) async fn handle_chat(
                     req.stream,
                     kind,
                     &req.model,
+                    &req.client_headers,
                     &e,
                 );
                 return error_response(dialect, &e);
@@ -216,6 +217,7 @@ pub(super) async fn handle_chat(
                         req.stream,
                         kind,
                         &req.model,
+                        &req.client_headers,
                         &e,
                     );
                     return error_response(dialect, &e);
@@ -277,6 +279,7 @@ pub(super) async fn handle_chat(
                             req.stream,
                             kind,
                             &req.model,
+                            &req.client_headers,
                             &e,
                         );
                         return error_response(dialect, &e);
@@ -291,6 +294,7 @@ pub(super) async fn handle_chat(
                         req.stream,
                         kind,
                         &req.model,
+                        &req.client_headers,
                         &e,
                     );
                     return error_response(dialect, &e);
@@ -1452,7 +1456,14 @@ async fn buffered_chat(
     _admission: AdmissionGuard,
     #[cfg(feature = "ml")] shadow_input: Option<ShadowInput>,
 ) -> Response {
-    let mut lifecycle = RequestLifecycle::new(Arc::clone(&state), dialect, false, kind, &req.model);
+    let mut lifecycle = RequestLifecycle::new(
+        Arc::clone(&state),
+        dialect,
+        false,
+        kind,
+        &req.model,
+        &req.client_headers,
+    );
     // The router's own decision supplies the planned identity, before any
     // attempt is made and before anything can fail.
     lifecycle.planned_from(routing_decision.as_ref(), &plan);
@@ -1806,7 +1817,14 @@ async fn stream_chat(
     admission: AdmissionGuard,
     #[cfg(feature = "ml")] shadow_input: Option<ShadowInput>,
 ) -> Response {
-    let mut lifecycle = RequestLifecycle::new(Arc::clone(&state), dialect, true, kind, &req.model);
+    let mut lifecycle = RequestLifecycle::new(
+        Arc::clone(&state),
+        dialect,
+        true,
+        kind,
+        &req.model,
+        &req.client_headers,
+    );
     // Same correlation as the buffered path: the router's decision fixes the
     // planned identity before the first handshake.
     lifecycle.planned_from(routing_decision.as_ref(), &plan);
@@ -2474,9 +2492,11 @@ fn reject(
     streaming: bool,
     kind: RequestKind,
     requested_model: &str,
+    headers: &HeaderMap,
     error: &Error,
 ) {
-    let mut lifecycle = RequestLifecycle::new(state, dialect, streaming, kind, requested_model);
+    let mut lifecycle =
+        RequestLifecycle::new(state, dialect, streaming, kind, requested_model, headers);
     lifecycle.finalize(TerminalKind::failed(error), Settlement::default());
 }
 
@@ -2549,15 +2569,29 @@ struct RequestLifecycle {
 }
 
 impl RequestLifecycle {
+    /// Start one lifecycle for one client request.
+    ///
+    /// `headers` is the inbound set, and it is a parameter rather than
+    /// something read later because the client fingerprint has to be decided
+    /// *once*, at the moment the request enters, and then carried. Deciding it
+    /// per attempt would mean a failover could re-attribute the same request to
+    /// a different client, and the Activity log would show one client for a
+    /// request that another log line called something else.
     fn new(
         state: Arc<AppState>,
         dialect: Dialect,
         streaming: bool,
         kind: RequestKind,
         requested_model: &str,
+        headers: &HeaderMap,
     ) -> Self {
         let mut record = RecordBuilder::new(dialect, requested_model, streaming);
         record.kind(kind);
+        // Attribution is separate from the routing client profile resolved
+        // later per attempt. This one answers "who is calling", and is fixed at
+        // ingress; that one answers "who should the upstream see", and may
+        // differ when a profile is pinned in configuration.
+        record.client(crate::client::identify(headers, None));
         let routing = state.config().routing.clone();
         RequestLifecycle {
             state,

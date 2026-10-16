@@ -16,6 +16,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::billing::{Cost, CostTotals};
+use crate::client::{ClientFingerprint, Confidence};
 use crate::ir::{Dialect, Usage};
 use crate::outcome::Outcome;
 use crate::policy::{DecisionReason, RouteDecision};
@@ -68,6 +69,21 @@ pub struct RequestRecord {
     /// Routing decision trace (for diagnostics).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub routing_decision: Option<RouteDecision>,
+    /// Who sent this request, and how sure we are.
+    ///
+    /// `#[serde(default)]` because records written before client attribution
+    /// existed have no such field, and a missing one must load as
+    /// [`ClientFingerprint::unknown`] rather than failing: the record log is
+    /// the thing that has to keep working across a version bump. A record that
+    /// deserialises into a *known* client because of a default would be worse,
+    /// which is why the default is the explicit unknown bucket and not `None`.
+    ///
+    /// The id stored here is the one the [`crate::client::ClientRegistry`]
+    /// actually filed the fingerprint under, including the overflow bucket. If
+    /// the two could differ, the request list and the per-client aggregate
+    /// would show different clients for the same traffic.
+    #[serde(default)]
+    pub client: ClientFingerprint,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -78,6 +94,9 @@ pub struct ModelTotals {
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub reasoning_tokens: u64,
+    /// Prompt tokens served from the cache. **Read only** — cache *writes* are
+    /// counted separately in [`ClientTotals::cache_write_tokens`] and were not
+    /// tracked per model before client attribution existed.
     pub cached_tokens: u64,
     /// Spend per currency. Empty while the model has no price.
     pub cost: CostTotals,
@@ -85,7 +104,112 @@ pub struct ModelTotals {
     pub avg_latency_ms: f64,
 }
 
-/// Counters for one request kind (`main` / `auto_mode`).
+/// Counters for one client.
+///
+/// The identity is carried on every row rather than looked up, so a reader of
+/// `StatsSummary` never has to join against a table that may have been trimmed
+/// or folded into the overflow bucket.
+///
+/// # The token columns
+///
+/// `input_tokens` is the cache-**inclusive** total: it already contains
+/// `cache_read_tokens` and `cache_write_tokens`, which is the convention
+/// [`crate::ir::Usage`] documents. They are broken out for display and are
+/// **not** added to the input total again — summing the three would triple-count
+/// every cached prompt. See [`ClientTotals::total_input_tokens`] for the
+/// arithmetic that stays correct.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ClientTotals {
+    /// The canonical client id this row aggregates.
+    pub client_id: String,
+    /// The name to show, captured at the moment the row was created.
+    pub client_name: String,
+    /// The application family.
+    pub family: String,
+    /// How the id was arrived at.
+    pub source: String,
+    /// How much the answer can be trusted.
+    pub confidence: String,
+    pub requests: u64,
+    pub failures: u64,
+    /// Total prompt tokens, cache-inclusive. See the note above.
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    /// Prompt tokens served from the prompt cache; a subset of `input_tokens`.
+    pub cache_read_tokens: u64,
+    /// Prompt tokens written to the prompt cache; a subset of `input_tokens`.
+    pub cache_write_tokens: u64,
+    /// Reasoning tokens, already counted inside `output_tokens`.
+    pub reasoning_tokens: u64,
+    /// Spend per currency. Never summed across currencies.
+    pub cost: CostTotals,
+    /// Average end to end latency in milliseconds.
+    pub avg_latency_ms: f64,
+    /// Average time to first streamed token, over the requests that streamed.
+    ///
+    /// Averaged over *streamed* requests only, because a non-streamed request
+    /// has no first token and folding its `None` in as a zero would drag the
+    /// average toward zero and make the number look better than the client is.
+    pub avg_ttft_ms: Option<f64>,
+    /// How many of this client's requests actually streamed, and therefore how
+    /// many rows `avg_ttft_ms` is averaged over.
+    pub streamed: u64,
+}
+
+impl ClientTotals {
+    fn observe(&mut self, record: &RequestRecord) {
+        self.requests += 1;
+        if !record.ok {
+            self.failures += 1;
+        }
+        self.input_tokens += record.usage.input_tokens as u64;
+        self.output_tokens += record.usage.output_tokens as u64;
+        self.cache_read_tokens += record.usage.cache_read_tokens as u64;
+        self.cache_write_tokens += record.usage.cache_write_tokens as u64;
+        self.reasoning_tokens += record.usage.reasoning_tokens as u64;
+        if let Some(cost) = &record.cost {
+            self.cost.add(cost);
+        }
+        let n = self.requests as f64;
+        self.avg_latency_ms += (record.latency_ms as f64 - self.avg_latency_ms) / n;
+        if let Some(ttft) = record.ttft_ms {
+            let seen = self.streamed;
+            self.avg_ttft_ms = Some(match self.avg_ttft_ms {
+                None => ttft as f64,
+                Some(current) => current + (ttft as f64 - current) / (seen + 1) as f64,
+            });
+            self.streamed += 1;
+        }
+    }
+
+    /// Prompt tokens that were neither read from nor written to the cache.
+    ///
+    /// The one figure that can be compared against a model's *fresh input* price
+    /// without double-counting the cache columns.
+    pub fn fresh_input_tokens(&self) -> u64 {
+        self.input_tokens
+            .saturating_sub(self.cache_read_tokens)
+            .saturating_sub(self.cache_write_tokens)
+    }
+
+    /// Prompt plus completion tokens.
+    ///
+    /// Reasoning is already inside `output_tokens`, so it is not added again.
+    pub fn total_tokens(&self) -> u64 {
+        self.input_tokens + self.output_tokens
+    }
+
+    /// Requests that succeeded, out of all of them.
+    pub fn success_rate(&self) -> f64 {
+        if self.requests == 0 {
+            0.0
+        } else {
+            (self.requests - self.failures) as f64 / self.requests as f64
+        }
+    }
+}
+
+/// Counters for one client kind (`main` / `auto_mode`).
 ///
 /// Model health says whether a *model* is responsive; this says how a kind of
 /// traffic is doing. The same GLM endpoint can carry the main conversation and
@@ -127,6 +251,69 @@ pub struct StatsSummary {
     pub per_model: Vec<ModelTotals>,
     /// Counters per request kind, sorted by kind name.
     pub per_kind: Vec<KindTotals>,
+    /// Counters per client, sorted by client id.
+    ///
+    /// Sums to the same totals as the top-level fields for the same window, and
+    /// to `per_model` as well. That equality is the point of the table: a
+    /// dashboard that shows per-client spend which does not add up to the
+    /// headline number is worse than one that shows no split at all.
+    pub per_client: Vec<ClientTotals>,
+    /// How well traffic is being attributed, as a share of `requests`.
+    ///
+    /// Three buckets rather than one percentage, because "we recognised 90%"
+    /// is a very different claim depending on whether the 10% was
+    /// `python-requests` — which we identified as a library — or a private
+    /// script we have never heard of.
+    ///
+    /// These are shares of `requests`, not of tokens: a few large requests from
+    /// an unrecognised client would dominate a token-weighted ratio and make
+    /// the identified share look far worse than the request count justifies.
+    pub attribution: AttributionSummary,
+}
+
+/// How much of the traffic could be attributed to a client.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct AttributionSummary {
+    /// Requests attributed to a named client with strong or probable evidence.
+    pub recognised: u64,
+    /// Requests attributed to a runtime or library but not to a product.
+    pub weak: u64,
+    /// Requests nothing could be attributed to.
+    pub unknown: u64,
+}
+
+impl AttributionSummary {
+    /// Share of `requests` that reached strong or probable, `0.0..=1.0`.
+    ///
+    /// `0.0` when there is no traffic at all, so a dashboard shows 0% rather
+    /// than `NaN` from `0/0`.
+    pub fn recognised_share(&self) -> f64 {
+        self.share(self.recognised)
+    }
+
+    /// Share of `requests` that reached a weak runtime family, `0.0..=1.0`.
+    pub fn weak_share(&self) -> f64 {
+        self.share(self.weak)
+    }
+
+    /// Share of `requests` that could not be attributed, `0.0..=1.0`.
+    pub fn unknown_share(&self) -> f64 {
+        self.share(self.unknown)
+    }
+
+    /// Total requests the three buckets account for.
+    pub fn total(&self) -> u64 {
+        self.recognised + self.weak + self.unknown
+    }
+
+    fn share(&self, part: u64) -> f64 {
+        let total = self.total();
+        if total == 0 {
+            0.0
+        } else {
+            part as f64 / total as f64
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -150,6 +337,8 @@ struct Inner {
     records: VecDeque<RequestRecord>,
     per_model: BTreeMap<String, ModelTotals>,
     per_kind: BTreeMap<String, KindTotals>,
+    per_client: BTreeMap<String, ClientTotals>,
+    attribution: AttributionSummary,
     requests: u64,
     failures: u64,
     input_tokens: u64,
@@ -166,6 +355,8 @@ impl Stats {
                 records: VecDeque::new(),
                 per_model: BTreeMap::new(),
                 per_kind: BTreeMap::new(),
+                per_client: BTreeMap::new(),
+                attribution: AttributionSummary::default(),
                 requests: 0,
                 failures: 0,
                 input_tokens: 0,
@@ -233,6 +424,32 @@ impl Stats {
             })
             .observe(&record);
 
+        // The client bucket is the id actually stored on the record, not the
+        // registry's canonical form re-derived here. They agree by
+        // construction, and re-deriving would break the moment a caller folded
+        // a high-cardinality id into the overflow bucket: the record would say
+        // `unknown-agent-4417` while the aggregate said `custom-other`, and the
+        // two totals would look like they did not match.
+        let client_key = record.client.client_id.as_str().to_string();
+        inner
+            .per_client
+            .entry(client_key.clone())
+            .or_insert_with(|| ClientTotals {
+                client_id: client_key,
+                client_name: record.client.client_name.clone(),
+                family: record.client.family.as_str().to_string(),
+                source: record.client.source.as_str().to_string(),
+                confidence: record.client.confidence.as_str().to_string(),
+                ..ClientTotals::default()
+            })
+            .observe(&record);
+
+        match record.client.confidence {
+            Confidence::Strong | Confidence::Probable => inner.attribution.recognised += 1,
+            Confidence::Weak => inner.attribution.weak += 1,
+            Confidence::Unknown => inner.attribution.unknown += 1,
+        }
+
         let limit = inner.limit;
         inner.records.push_back(record);
         while inner.records.len() > limit {
@@ -257,6 +474,8 @@ impl Stats {
             cost: inner.cost.clone(),
             per_model: inner.per_model.values().cloned().collect(),
             per_kind: inner.per_kind.values().cloned().collect(),
+            per_client: inner.per_client.values().cloned().collect(),
+            attribution: inner.attribution.clone(),
         }
     }
 
@@ -265,6 +484,8 @@ impl Stats {
         inner.records.clear();
         inner.per_model.clear();
         inner.per_kind.clear();
+        inner.per_client.clear();
+        inner.attribution = AttributionSummary::default();
         inner.requests = 0;
         inner.failures = 0;
         inner.input_tokens = 0;
@@ -371,8 +592,16 @@ impl RecordBuilder {
                 attempts: 0,
                 escalated_from: None,
                 routing_decision: None,
+                client: ClientFingerprint::unknown(),
             },
         }
+    }
+
+    /// Stamp the request's client fingerprint. Set once, before the record is
+    /// finished.
+    pub fn client(&mut self, client: ClientFingerprint) -> &mut Self {
+        self.record.client = client;
+        self
     }
 
     /// Stamp the request's kind. Set once, before the record is finished.
