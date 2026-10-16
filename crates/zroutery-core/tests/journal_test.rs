@@ -1264,6 +1264,43 @@ fn the_module_derives_no_location_and_schedules_nothing() {
     }
 }
 
+/// Every file of the routing policy, spelled out.
+///
+/// `policy.rs` became `policy/` and this tripwire has to follow it. A child
+/// that reached `ml::journal` would be invisible if only the barrel were
+/// scanned, and a tripwire that cannot see a moved file is indistinguishable
+/// from one that does not exist. Adding a file here is the cost of keeping it
+/// honest.
+const POLICY_SOURCES: &[(&str, &str)] = &[
+    ("policy/mod.rs", include_str!("../src/policy/mod.rs")),
+    (
+        "policy/capabilities.rs",
+        include_str!("../src/policy/capabilities.rs"),
+    ),
+    (
+        "policy/clients.rs",
+        include_str!("../src/policy/clients.rs"),
+    ),
+    (
+        "policy/decision.rs",
+        include_str!("../src/policy/decision.rs"),
+    ),
+    (
+        "policy/eligibility.rs",
+        include_str!("../src/policy/eligibility.rs"),
+    ),
+    ("policy/policy.rs", include_str!("../src/policy/policy.rs")),
+    (
+        "policy/profile.rs",
+        include_str!("../src/policy/profile.rs"),
+    ),
+    (
+        "policy/scoring.rs",
+        include_str!("../src/policy/scoring.rs"),
+    ),
+    ("policy/tests.rs", include_str!("../src/policy/tests.rs")),
+];
+
 /// GATE 6, third part: the inert trap. Nothing outside this node names the
 /// journal, so no running surface can read it, apply it, or schedule it — the
 /// claim stated as a property of the repository rather than a promise.
@@ -1275,13 +1312,15 @@ fn nothing_in_the_running_product_can_reach_this_journal() {
             include_str!("../../../src-tauri/src/main.rs"),
         ),
         ("src/router.rs", include_str!("../src/router.rs")),
-        ("src/policy.rs", include_str!("../src/policy.rs")),
         (
             "src/ml/coordinator.rs",
             include_str!("../src/ml/coordinator.rs"),
         ),
         ("src/ml/dataset.rs", include_str!("../src/ml/dataset.rs")),
-    ] {
+    ]
+    .into_iter()
+    .chain(POLICY_SOURCES.iter().copied())
+    {
         let source = source.to_lowercase();
         assert!(
             !source.contains("ml::journal"),
