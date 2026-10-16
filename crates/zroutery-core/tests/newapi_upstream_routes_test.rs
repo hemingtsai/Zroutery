@@ -59,9 +59,66 @@
 
 use zroutery_core::account::adapters::newapi::UPSTREAM_ROUTES;
 
-/// The adapter's own source, so the call side of this comparison is read rather
-/// than written. Compiled in, so editing the adapter recompiles this too.
-const ADAPTER_SOURCE: &str = include_str!("../src/account/adapters/newapi.rs");
+/// The adapter's own production source, so the call side of this comparison is
+/// read rather than written. Compiled in, so editing the adapter recompiles this
+/// too.
+///
+/// `newapi.rs` became `newapi/`, so the scan follows it. `tests.rs` is left out
+/// on purpose: its mock panel serves whatever the fixtures declare, so counting
+/// its calls would register routes the adapter never uses in production. Every
+/// other file is listed, because a file that moved out of this list would be a
+/// call site this test could no longer see - which is the failure mode a
+/// route-table tripwire must not have.
+const ADAPTER_SOURCES: &[(&str, &str)] = &[
+    (
+        "newapi/mod.rs",
+        include_str!("../src/account/adapters/newapi/mod.rs"),
+    ),
+    (
+        "newapi/auth.rs",
+        include_str!("../src/account/adapters/newapi/auth.rs"),
+    ),
+    (
+        "newapi/checkin.rs",
+        include_str!("../src/account/adapters/newapi/checkin.rs"),
+    ),
+    (
+        "newapi/checkin_ops.rs",
+        include_str!("../src/account/adapters/newapi/checkin_ops.rs"),
+    ),
+    (
+        "newapi/helpers.rs",
+        include_str!("../src/account/adapters/newapi/helpers.rs"),
+    ),
+    (
+        "newapi/http.rs",
+        include_str!("../src/account/adapters/newapi/http.rs"),
+    ),
+    (
+        "newapi/logs.rs",
+        include_str!("../src/account/adapters/newapi/logs.rs"),
+    ),
+    (
+        "newapi/panel.rs",
+        include_str!("../src/account/adapters/newapi/panel.rs"),
+    ),
+    (
+        "newapi/provider.rs",
+        include_str!("../src/account/adapters/newapi/provider.rs"),
+    ),
+    (
+        "newapi/session.rs",
+        include_str!("../src/account/adapters/newapi/session.rs"),
+    ),
+    (
+        "newapi/types.rs",
+        include_str!("../src/account/adapters/newapi/types.rs"),
+    ),
+    (
+        "newapi/wire.rs",
+        include_str!("../src/account/adapters/newapi/wire.rs"),
+    ),
+];
 
 const METHOD_MARKER: &str = "reqwest::Method::";
 
@@ -83,34 +140,40 @@ const TEST_MODULE_MARKER: &str = "#[cfg(test)]";
 /// marker, so only real call sites match. The module doc's endpoint table is
 /// likewise skipped, being backtick-quoted rather than a quoted literal.
 fn calls_the_adapter_makes() -> Vec<(&'static str, &'static str)> {
-    let production = ADAPTER_SOURCE
-        .split_once(TEST_MODULE_MARKER)
-        .map_or(ADAPTER_SOURCE, |(head, _)| head);
-
     let mut calls = Vec::new();
-    let mut rest = production;
 
-    while let Some(at) = rest.find(METHOD_MARKER) {
-        let after = &rest[at + METHOD_MARKER.len()..];
-        rest = after;
+    // One file at a time on purpose. Concatenating first would let a
+    // `reqwest::Method::GET,` at the end of one file pair with a string literal
+    // at the top of the next, inventing a request that was never made.
+    for (_, source) in ADAPTER_SOURCES {
+        let production = source
+            .split_once(TEST_MODULE_MARKER)
+            .map_or(*source, |(head, _)| head);
 
-        let method = if after.starts_with("GET") {
-            "GET"
-        } else if after.starts_with("POST") {
-            "POST"
-        } else {
-            continue;
-        };
-        let tail = &after[method.len()..];
+        let mut rest = production;
 
-        let Some(open) = tail.find('"') else { continue };
-        let literal = &tail[open + 1..];
-        let Some(close) = literal.find('"') else {
-            continue;
-        };
-        let path = &literal[..close];
-        if path.starts_with("/api/") {
-            calls.push((method, path));
+        while let Some(at) = rest.find(METHOD_MARKER) {
+            let after = &rest[at + METHOD_MARKER.len()..];
+            rest = after;
+
+            let method = if after.starts_with("GET") {
+                "GET"
+            } else if after.starts_with("POST") {
+                "POST"
+            } else {
+                continue;
+            };
+            let tail = &after[method.len()..];
+
+            let Some(open) = tail.find('"') else { continue };
+            let literal = &tail[open + 1..];
+            let Some(close) = literal.find('"') else {
+                continue;
+            };
+            let path = &literal[..close];
+            if path.starts_with("/api/") {
+                calls.push((method, path));
+            }
         }
     }
 
