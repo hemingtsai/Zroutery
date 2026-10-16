@@ -1159,11 +1159,23 @@ fn shadow_respects_coordinator_semantics() {
 // Structural purity tripwires
 // ---------------------------------------------------------------------------
 
+/// Every source file the shadow path can live in.
+///
+/// The pipeline is now a module with a barrel and a child. `include_str!` needs
+/// a literal, so the list is written out — and that is the point: a tripwire
+/// that read only the barrel would silently stop seeing a shadow block the day
+/// one moved into a child, which is indistinguishable from the tripwire not
+/// existing. Adding a file here is the cost of keeping it honest.
+const PIPELINE_SOURCES: &[(&str, &str)] = &[
+    ("mod.rs", include_str!("../src/server/pipeline/mod.rs")),
+    ("sse.rs", include_str!("../src/server/pipeline/sse.rs")),
+];
+
 /// Extract every `// shadow-block-begin` .. `// shadow-block-end` region from
-/// pipeline.rs. The marked blocks are the complete production surface of the
+/// one source file. The marked blocks are the complete production surface of the
 /// shadow path: the snapshot construction in `handle_chat` plus the two
 /// record-only evaluate hooks (buffered and streaming).
-fn shadow_blocks(pipeline_src: &str) -> Vec<&str> {
+fn shadow_blocks<'a>(name: &str, pipeline_src: &'a str) -> Vec<&'a str> {
     const BEGIN: &str = "// shadow-block-begin";
     const END: &str = "// shadow-block-end";
     let mut blocks = Vec::new();
@@ -1171,16 +1183,32 @@ fn shadow_blocks(pipeline_src: &str) -> Vec<&str> {
     while let Some(start) = rest.find(BEGIN) {
         let after_begin = &rest[start + BEGIN.len()..];
         let Some(end) = after_begin.find(END) else {
-            panic!("pipeline.rs has a // shadow-block-begin without its end");
+            panic!("{name} has a // shadow-block-begin without its end");
         };
         blocks.push(&after_begin[..end]);
         rest = &after_begin[end + END.len()..];
     }
-    assert!(
-        !blocks.is_empty(),
-        "pipeline.rs must mark its shadow blocks with // shadow-block-begin/end"
-    );
     blocks
+}
+
+/// Every marked shadow block across the pipeline, with the file it came from.
+fn all_shadow_blocks() -> Vec<(&'static str, &'static str)> {
+    let total: usize = PIPELINE_SOURCES
+        .iter()
+        .map(|(name, src)| shadow_blocks(name, src).len())
+        .sum();
+    assert!(
+        total > 0,
+        "the pipeline must mark its shadow blocks with // shadow-block-begin/end"
+    );
+    PIPELINE_SOURCES
+        .iter()
+        .flat_map(|(name, src)| {
+            shadow_blocks(name, src)
+                .into_iter()
+                .map(move |block| (*name, block))
+        })
+        .collect()
 }
 
 /// GATE 7E-1 (structural purity): the shadow modules must not reference any
@@ -1228,13 +1256,12 @@ fn shadow_modules_reference_no_mutation_surface() {
         }
     }
 
-    // The production side: the marked shadow blocks in pipeline.rs are the
-    // entire server-side surface of the shadow path, and they must not touch
-    // any mutation surface either. (`state.upstream` / `Upstream::` are the
-    // precise egress tokens — pipeline.rs legitimately mentions upstream
+    // The production side: the marked shadow blocks across the pipeline module
+    // are the entire server-side surface of the shadow path, and they must not
+    // touch any mutation surface either. (`state.upstream` / `Upstream::` are the
+    // precise egress tokens — the pipeline legitimately mentions upstream
     // transports elsewhere, just never from the shadow blocks.)
-    let pipeline_src = include_str!("../src/server/pipeline.rs");
-    for block in shadow_blocks(pipeline_src) {
+    for (file, block) in all_shadow_blocks() {
         for forbidden in [
             "plan_with_policy",
             "plan_classifier",
@@ -1253,7 +1280,7 @@ fn shadow_modules_reference_no_mutation_surface() {
         ] {
             assert!(
                 !block.contains(forbidden),
-                "pipeline shadow block must not reference {forbidden}"
+                "pipeline shadow block in {file} must not reference {forbidden}"
             );
         }
     }
@@ -1267,12 +1294,11 @@ fn shadow_modules_reference_no_mutation_surface() {
 /// [`shadow_modules_reference_no_mutation_surface`]).
 #[test]
 fn production_shadow_path_touches_no_session_or_account_state() {
-    let pipeline_src = include_str!("../src/server/pipeline.rs");
-    for block in shadow_blocks(pipeline_src) {
+    for (file, block) in all_shadow_blocks() {
         for forbidden in ["session", "account", "takeover", "migration"] {
             assert!(
                 !block.contains(forbidden),
-                "pipeline shadow block must not reference {forbidden}"
+                "pipeline shadow block in {file} must not reference {forbidden}"
             );
         }
     }

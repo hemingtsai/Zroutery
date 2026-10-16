@@ -935,7 +935,7 @@ fn the_dataset_module_references_no_mutation_surface() {
 /// after the outcome exists, and it returns nothing.
 #[test]
 fn the_pipeline_dataset_surface_is_ingestion_only() {
-    let source = include_str!("../src/server/pipeline.rs");
+    let source = include_str!("../src/server/pipeline/mod.rs");
     const BEGIN: &str = "// dataset-block-begin";
     const END: &str = "// dataset-block-end";
     let mut blocks = Vec::new();

@@ -875,7 +875,7 @@ async fn a_config_change_reaches_the_running_shadow_engine() {
 /// would silently reintroduce the REG-009 defect.
 #[test]
 fn the_decision_time_input_is_built_once_and_never_rebuilt() {
-    let source = include_str!("../src/server/pipeline.rs");
+    let source = include_str!("../src/server/pipeline/mod.rs");
     assert_eq!(
         source.matches("ShadowInput::from_policy_plan").count(),
         1,
@@ -899,7 +899,7 @@ fn the_decision_time_input_is_built_once_and_never_rebuilt() {
 /// activation seam. This node observes; it does not act.
 #[test]
 fn the_production_shadow_surface_is_record_only() {
-    let source = include_str!("../src/server/pipeline.rs");
+    let source = include_str!("../src/server/pipeline/mod.rs");
     let begin = "// shadow-block-begin";
     let end = "// shadow-block-end";
     let mut blocks = Vec::new();
