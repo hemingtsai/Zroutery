@@ -1927,6 +1927,12 @@ async fn the_sub2api_preset_reads_a_relay_of_either_dialect() {
             ProviderKind::OpenAICompatible => {
                 assert_eq!(headers["authorization"], format!("Bearer {key}"))
             }
+            // `config_for` only builds the two dialects above, so this arm cannot
+            // be reached today. It is written out rather than folded into a
+            // wildcard so that adding a provider kind here fails this test
+            // instead of silently leaving the Sub2API preset claim about
+            // credential headers unverified for that dialect.
+            other => panic!("the Sub2API preset test does not cover {other:?}"),
         }
     }
 

@@ -39,6 +39,18 @@ pub enum OwnershipState {
     Released,
 }
 
+impl OwnershipState {
+    /// Whether a release may be attempted from this state.
+    ///
+    /// `Releasing` is excluded deliberately. A release already in flight has
+    /// claimed its transition and is writing the config right now; a second one
+    /// would race it. The state is short-lived, and a caller that lands here is
+    /// looking at an operation already under way rather than at a failure.
+    pub fn may_release(&self) -> bool {
+        matches!(self, OwnershipState::Adopted)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // ExternalModification
 // ---------------------------------------------------------------------------
@@ -59,7 +71,7 @@ pub struct ExternalModification {
 // ---------------------------------------------------------------------------
 
 /// Conflict detected when a managed field was externally modified.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FieldConflict {
     /// Dotted path to the conflicting field.
     pub field_path: String,
@@ -175,7 +187,12 @@ impl TakeoverProposal {
 /// write an explicit null.
 ///
 /// Segments address object keys, and a numeric segment addresses an array index.
-fn extract_field_values(
+///
+/// Public so a caller that has to plan a takeover — the desktop command layer —
+/// reads a config the same way the store does. A second implementation of this
+/// walk would be free to disagree about whether a path exists, and that
+/// disagreement would surface as a conflict that is not one.
+pub fn extract_field_values(
     raw: &serde_json::Value,
     paths: &[String],
 ) -> HashMap<String, serde_json::Value> {
@@ -725,23 +742,32 @@ impl TakeoverStore {
         };
 
         let mut conflicts = Vec::new();
-        for (field, original) in &manifest.field_snapshots {
+        // Iterate `managed_fields`, not `field_snapshots`. The ownership unit is
+        // the managed set, and the two are not the same list: a field that did
+        // not exist at adoption is recorded in `absent_fields` and has no
+        // snapshot. Iterating snapshots alone meant every field Zroutery
+        // *created* — which is most of what a takeover writes, since the point
+        // is to point a client at a gateway it has never heard of — was never
+        // conflict-checked at all. A user who then edited the base URL Zroutery
+        // had just added was reported as a clean, verified takeover.
+        for field in &manifest.managed_fields {
+            let original = manifest.field_snapshots.get(field);
             let current = current_values.get(field);
             let differs = match current {
                 Some(value) => baseline.get(field).is_none_or(|last| *last != value),
-                // Removed externally: a conflict, because restoring means
-                // recreating a field the user deleted.
-                None => true,
+                // Absent on disk when Zroutery wrote it: a conflict, because
+                // restoring means recreating a field somebody deleted.
+                None => baseline.contains_key(field),
             };
             if differs {
                 conflicts.push(FieldConflict {
                     field_path: field.clone(),
-                    original_value: Some(original.clone()),
+                    original_value: original.cloned(),
                     last_applied: inner
                         .last_applied
                         .get(field)
                         .cloned()
-                        .or_else(|| Some(original.clone())),
+                        .or_else(|| original.cloned()),
                     current_external: current.cloned().unwrap_or(serde_json::Value::Null),
                 });
             }
@@ -797,6 +823,15 @@ impl TakeoverStore {
                             conflict.field_path.clone(),
                             conflict.current_external.clone(),
                         );
+                        // Leaving the path in `absent_fields` would make
+                        // `restore_fields` delete it: that function checks
+                        // `absent_fields` first, so a path in both lists is
+                        // removed rather than restored. "Keep the user's edit"
+                        // would then quietly discard the edit for every field
+                        // Zroutery had *created* — which is most of what a
+                        // takeover writes, since the point is to point a client
+                        // at a gateway it has never heard of.
+                        manifest.absent_fields.retain(|f| f != &conflict.field_path);
                     }
                     report.kept_external.push(conflict.field_path.clone());
                 }
@@ -805,6 +840,8 @@ impl TakeoverStore {
                         manifest
                             .field_snapshots
                             .insert(conflict.field_path.clone(), value.clone());
+                        // Same reason as the `KeepExternal` arm above.
+                        manifest.absent_fields.retain(|f| f != &conflict.field_path);
                     }
                     report.overwritten.push(conflict.field_path.clone());
                 }
@@ -1181,6 +1218,201 @@ impl TakeoverStore {
         }
         self.release_with_restore(adapter)
     }
+
+    // -- surface status --------------------------------------------------------
+
+    /// Work out what this client surface is allowed to claim, right now.
+    ///
+    /// This is the function a UI, a tray menu or a startup check calls, and it
+    /// is deliberately the *only* place a takeover state is decided. Reading
+    /// [`OwnershipState`] directly and reporting it is the mistake this exists to
+    /// prevent: `Adopted` says Zroutery wrote a file, not that the file is still
+    /// in effect.
+    ///
+    /// The derivation, in order:
+    ///
+    /// 1. No adapter, or [`takeover_fields`] refuses the agent →
+    ///    [`TakeoverStatus::Unsupported`].
+    /// 2. The store is not holding ownership, the config file is missing →
+    ///    [`TakeoverStatus::NotDetected`], carrying the paths tried.
+    /// 3. The store is not holding ownership, the config parses →
+    ///    [`TakeoverStatus::Available`], or [`TakeoverStatus::Ready`] when a
+    ///    [`GatewayTarget`] was supplied and yields a field set.
+    /// 4. The store is holding ownership, but the live config no longer matches
+    ///    what Zroutery recorded → [`TakeoverStatus::Conflict`].
+    /// 5. The store is holding ownership and the config matches. If `verified`
+    ///    is absent or does not confirm, the result is
+    ///    [`TakeoverStatus::Degraded`], never [`TakeoverStatus::Active`].
+    /// 6. The store is `Released` → [`TakeoverStatus::Released`].
+    ///
+    /// Anything the adapter cannot do (unreadable home, a corrupt file, a
+    /// refused config shape) becomes [`TakeoverStatus::Error`] with the
+    /// adapter's own reason, rather than an exception the caller has to
+    /// translate. A status a UI cannot render is a status nobody acts on.
+    ///
+    /// `target` is `None` when the caller cannot supply a gateway credential —
+    /// most often because the desktop shell has no token yet. That is not an
+    /// error: the result is `available` rather than `ready`, which is the
+    /// honest answer for a client Zroutery has not yet been given anything to
+    /// offer.
+    pub fn inspect(
+        &self,
+        adapter: Option<&dyn AgentAdapter>,
+        target: Option<&GatewayTarget>,
+        verified: Option<&VerificationReport>,
+    ) -> TakeoverStatus {
+        // (1) Is there anything to take over with?
+        let Some(adapter) = adapter else {
+            return TakeoverStatus::Unsupported {
+                reason: format!(
+                    "this build has no takeover adapter for {}",
+                    AgentType::Gemini.client_name()
+                ),
+            };
+        };
+
+        let owned = self.state() == OwnershipState::Adopted;
+        let config_path = match adapter.config_path() {
+            Ok(path) => path,
+            Err(reason) => return TakeoverStatus::Error { reason },
+        };
+        let path_text = config_path.display().to_string();
+
+        // A manifest written by an older build may name an agent this build has
+        // no adapter for. Releasing it is still the priority — but `adapter` is
+        // `None` there, so this only reaches the owned branch when an adapter
+        // does exist for the recorded agent.
+        if owned {
+            let Some(manifest) = self.manifest() else {
+                return TakeoverStatus::Error {
+                    reason: "ownership is held but no manifest survived, so there is nothing safe \
+                             to restore from. Reinstall the client to get its defaults back."
+                        .into(),
+                };
+            };
+
+            // (4) Does the live config still match what we recorded?
+            let snapshot = match adapter.read_config() {
+                Ok(snapshot) => snapshot,
+                Err(reason) => {
+                    return TakeoverStatus::Error {
+                        reason: format!(
+                            "ownership is held but the config at {path_text} cannot be read: \
+                             {reason}"
+                        ),
+                    }
+                }
+            };
+            let live: HashMap<String, serde_json::Value> =
+                extract_field_values(&snapshot.raw, &manifest.managed_fields);
+            let conflicts = self.conflicts(&live);
+            if !conflicts.is_empty() {
+                return TakeoverStatus::Conflict {
+                    config_path: path_text,
+                    conflicts,
+                };
+            }
+
+            // (5) Matches on disk. Does anything vouch that the client reloaded?
+            let confirmed = verified.is_some_and(|v| {
+                v.config_matches && v.credential_ok && v.request_confirmed == Some(true)
+            });
+            if confirmed {
+                return TakeoverStatus::Active {
+                    config_path: path_text,
+                    generation: manifest.generation,
+                };
+            }
+            let mut reasons: Vec<String> = verified
+                .map(|v| v.notes.clone())
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|note| !note.is_empty())
+                .collect();
+            if reasons.is_empty() {
+                reasons.push(
+                    "the config was written, but no request from this client has been seen \
+                     reaching Zroutery, so the takeover is not confirmed"
+                        .into(),
+                );
+            }
+            return TakeoverStatus::Degraded {
+                config_path: path_text,
+                generation: manifest.generation,
+                reasons,
+            };
+        }
+
+        // Not holding ownership. (6) A released manifest still reports as such.
+        if self.state() == OwnershipState::Released {
+            if let Some(manifest) = self.manifest() {
+                return TakeoverStatus::Released {
+                    config_path: path_text,
+                    generation: manifest.generation,
+                };
+            }
+        }
+
+        // (2) No file at all.
+        if !config_path.exists() {
+            return TakeoverStatus::NotDetected {
+                searched: vec![path_text],
+                reason: format!(
+                    "no {} config was found. Install and run {} once, or point Zroutery at an \
+                     existing config.",
+                    adapter.agent_type().client_name(),
+                    adapter.agent_type().client_name()
+                ),
+            };
+        }
+
+        // (3) A file that parses. Anything else is an error the user must see.
+        let snapshot = match adapter.read_config() {
+            Ok(snapshot) => snapshot,
+            Err(reason) => {
+                return TakeoverStatus::Error {
+                    reason: format!("the config at {path_text} cannot be used: {reason}"),
+                }
+            }
+        };
+
+        let fields = match target {
+            Some(target) => match takeover_fields(adapter.agent_type(), target) {
+                Ok(fields) => fields,
+                // The client is fine; Zroutery is not ready to serve it. That is
+                // `available`, not an error — the user may be mid-setup.
+                Err(reason) => {
+                    return TakeoverStatus::Available {
+                        config_path: path_text,
+                        blocker: reason,
+                    }
+                }
+            },
+            None => {
+                return TakeoverStatus::Available {
+                    config_path: path_text,
+                    blocker: "Zroutery has no local gateway token yet, so there is nothing for \
+                              this client to be pointed at."
+                        .into(),
+                }
+            }
+        };
+
+        let managed_values: HashMap<String, serde_json::Value> = fields
+            .iter()
+            .map(|f| (f.path.clone(), f.value.clone()))
+            .collect();
+        let paths: Vec<String> = fields.iter().map(|f| f.path.clone()).collect();
+        let current = extract_field_values(&snapshot.raw, &paths);
+
+        match self.plan_adopt(&paths, &current, &managed_values) {
+            Ok(proposal) => TakeoverStatus::Ready {
+                config_path: path_text,
+                proposal: Box::new(proposal),
+            },
+            Err(reason) => TakeoverStatus::Error { reason },
+        }
+    }
 }
 
 impl Default for TakeoverStore {
@@ -1193,13 +1425,293 @@ impl Default for TakeoverStore {
 // AgentType
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// TakeoverStatus — what a client surface is allowed to claim
+// ---------------------------------------------------------------------------
+
+/// Where one client's takeover stands, right now.
+///
+/// # Why this exists separately from `OwnershipState`
+///
+/// [`OwnershipState`] is the manifest's four-state bookkeeping: verified,
+/// adopted, releasing, released. It answers "what may this store do next". It
+/// cannot answer the question a user actually asks, which is *is this client
+/// really using Zroutery?* — and getting that wrong is the failure mode that
+/// produced the `~/.claude.json` bug: a write that succeeded, a state machine
+/// that said `Adopted`, and a client still talking to `api.anthropic.com`.
+///
+/// So the surface state is derived from the manifest **plus the live config on
+/// disk** **plus whatever the caller could verify**, and the two are never
+/// collapsed. `Active` requires the config to still match; `Degraded` is what a
+/// takeover becomes the moment that stops being provable.
+///
+/// The transitions a user sees:
+///
+/// ```text
+/// unsupported ─▶ not_detected ─▶ available ─▶ ready
+///                                     │          │
+///                                     │          ▼
+///                                     └──────▶ active ◀──┐
+///                                                │  ▲      │
+///                              ┌─────────────────┤  │      │
+///                              ▼                 ▼  │      │
+///                          conflict ──resolve──▶ degraded  │
+///                              │                 │  │      │
+///                              └──────release────┴──┴──────┘
+///                                               │
+///                                               ▼
+///                                            released
+/// ```
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum TakeoverStatus {
+    /// This build has no adapter for the client.
+    ///
+    /// The only current case is Gemini CLI. The reason is carried so a UI can
+    /// explain *why* rather than showing an inert control.
+    Unsupported {
+        /// Human-readable reason, safe to show.
+        reason: String,
+    },
+
+    /// An adapter exists, but no usable client config was found.
+    ///
+    /// `searched` lists the paths that were tried, which is the only thing that
+    /// lets a user fix this themselves.
+    NotDetected {
+        /// Paths that were checked, in priority order.
+        searched: Vec<String>,
+        /// Why none of them was usable.
+        reason: String,
+    },
+
+    /// A config was found and parses, but Zroutery cannot yet serve it.
+    ///
+    /// Distinct from [`TakeoverStatus::Ready`] because the blocker is on
+    /// Zroutery's side, not the client's: there is no gateway token, no base URL
+    /// or no model class to offer. `blocker` says which, because "not ready" with
+    /// no reason is a dead end the user cannot act on.
+    Available {
+        /// The config that would be taken over.
+        config_path: String,
+        /// What Zroutery is missing.
+        blocker: String,
+    },
+
+    /// Everything needed to take over is present; the user has not confirmed.
+    ///
+    /// The difference from [`TakeoverStatus::Available`] is the gateway target:
+    /// `available` with no token, no base URL or no model classes is a client
+    /// Zroutery cannot actually serve, and reporting it as `ready` would set up
+    /// a button that fails when pressed.
+    Ready {
+        /// The config that would be taken over.
+        config_path: String,
+        /// What the takeover would change, for the confirmation dialog.
+        proposal: Box<TakeoverProposal>,
+    },
+
+    /// Taken over, and the live config still matches what Zroutery wrote.
+    Active {
+        /// The config under management.
+        config_path: String,
+        /// The manifest generation, so a caller can tell two takeovers apart.
+        generation: u64,
+    },
+
+    /// Taken over, but the live config no longer matches the record.
+    ///
+    /// This is never auto-resolved. Someone else changed a field Zroutery owns,
+    /// and overwriting it without asking is how a takeover destroys work.
+    Conflict {
+        /// The config under management.
+        config_path: String,
+        /// Fields whose live value differs from what Zroutery wrote.
+        conflicts: Vec<FieldConflict>,
+    },
+
+    /// Taken over and the config matches, but the takeover is not provably working.
+    ///
+    /// The honest state for a config that was written and never confirmed by a
+    /// real request. Presenting this as `active` is exactly the lie this
+    /// subsystem is meant to stop telling.
+    Degraded {
+        /// The config under management.
+        config_path: String,
+        /// The manifest generation.
+        generation: u64,
+        /// What could not be confirmed, phrased for a user.
+        reasons: Vec<String>,
+    },
+
+    /// Not held; a previous takeover was released and the config restored.
+    Released {
+        /// The config that was restored.
+        config_path: String,
+        /// The manifest generation, so a re-adopt is distinguishable.
+        generation: u64,
+    },
+
+    /// An operation failed for a reason the user can act on.
+    Error {
+        /// Human-readable reason, safe to show.
+        reason: String,
+    },
+}
+
+impl TakeoverStatus {
+    /// The short state name, for logs and for a UI that switches on it.
+    pub fn name(&self) -> &'static str {
+        match self {
+            TakeoverStatus::Unsupported { .. } => "unsupported",
+            TakeoverStatus::NotDetected { .. } => "not_detected",
+            TakeoverStatus::Available { .. } => "available",
+            TakeoverStatus::Ready { .. } => "ready",
+            TakeoverStatus::Active { .. } => "active",
+            TakeoverStatus::Conflict { .. } => "conflict",
+            TakeoverStatus::Degraded { .. } => "degraded",
+            TakeoverStatus::Released { .. } => "released",
+            TakeoverStatus::Error { .. } => "error",
+        }
+    }
+
+    /// Whether Zroutery currently holds managed fields for this client.
+    ///
+    /// `true` for `active`, `conflict` and `degraded` — all three still hold
+    /// ownership and all three need the release path available. A caller that
+    /// used `== Active` here would hide the release button exactly when the user
+    /// most needs it.
+    pub fn holds_ownership(&self) -> bool {
+        matches!(
+            self,
+            TakeoverStatus::Active { .. }
+                | TakeoverStatus::Conflict { .. }
+                | TakeoverStatus::Degraded { .. }
+        )
+    }
+
+    /// Whether the takeover can be confirmed as genuinely in effect.
+    ///
+    /// Only [`TakeoverStatus::Active`] qualifies. `Degraded` and `Conflict` do
+    /// not, which is the whole point of having them.
+    pub fn is_verified_effective(&self) -> bool {
+        matches!(self, TakeoverStatus::Active { .. })
+    }
+}
+
+/// What a caller could actually prove about a client that was told to reload.
+///
+/// The core cannot start a Claude Code process and watch its traffic, so this is
+/// the seam: the command layer observes what it can and passes it in, and the
+/// status machine refuses to say `Active` on an unproven report.
+///
+/// `request_confirmed` is three-valued on purpose. `None` means "not
+/// observable here" — no real request was seen — and that is *not* the same as
+/// `Some(false)`, which means a request was seen and did not arrive. Collapsing
+/// them would let an environment that cannot observe clients claim `Active`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct VerificationReport {
+    /// The live config still carries the values Zroutery wrote.
+    pub config_matches: bool,
+    /// The credential Zroutery handed out still authenticates.
+    pub credential_ok: bool,
+    /// A real request from the client was observed reaching Zroutery.
+    pub request_confirmed: Option<bool>,
+    /// Anything a user should be told, phrased for them.
+    pub notes: Vec<String>,
+}
+
+impl VerificationReport {
+    /// A report for a takeover nobody has checked yet.
+    ///
+    /// Deliberately `None` rather than `Some(false)`: not knowing is not the
+    /// same as knowing it failed, and it keeps the status at `Degraded` rather
+    /// than `Conflict`.
+    pub fn unchecked() -> Self {
+        Self {
+            config_matches: false,
+            credential_ok: false,
+            request_confirmed: None,
+            notes: vec!["this takeover has not been verified yet".into()],
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// AgentType
+// ---------------------------------------------------------------------------
+
 /// Supported external agent types.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentType {
     Claude,
     Codex,
     Gemini,
+    /// OpenCode.
+    ///
+    /// Spelled `opencode` rather than `open_code`: it is the client's own name
+    /// for itself (it puts `opencode/<version>` in its User-Agent), and this
+    /// serialized form is what the command layer and any persisted manifest
+    /// carry across restarts.
+    ///
+    /// Not to be confused with `ProviderKind::OpenCodeZenFree` /
+    /// `OpenCodeConsole`, which are *upstream providers Zroutery calls*. This
+    /// variant is the *client Zroutery takes over*.
+    #[serde(rename = "opencode")]
+    OpenCode,
+}
+
+impl AgentType {
+    /// Every agent, in a fixed order.
+    ///
+    /// A surface that lists agents — a panel, a set of ownership stores, a
+    /// sweep — iterates this rather than writing the variants out again, so
+    /// adding an agent cannot leave one of them quietly missing.
+    pub const ALL: [AgentType; 4] = [
+        AgentType::Claude,
+        AgentType::Codex,
+        AgentType::Gemini,
+        AgentType::OpenCode,
+    ];
+
+    /// The client-facing name, for a path or a label.
+    ///
+    /// Separate from the serde form on purpose: the serde form is a wire value
+    /// and changing it would break persisted manifests, while this one names a
+    /// file on disk.
+    pub fn client_name(&self) -> &'static str {
+        match self {
+            AgentType::Claude => "claude",
+            AgentType::Codex => "codex",
+            AgentType::Gemini => "gemini",
+            AgentType::OpenCode => "opencode",
+        }
+    }
+
+    /// Whether this build can take the client over.
+    ///
+    /// `Gemini` is [`AgentType`]'s one variant with no adapter. It stays in the
+    /// enum because persisted manifests may still carry it, and dropping the
+    /// variant would make those manifests fail to parse — taking away the only
+    /// path that could release a Gemini config a previous build had adopted.
+    /// What is withdrawn is *new* takeover: see [`takeover_fields`], which
+    /// refuses Gemini outright, and [`adapter_for`], which returns `None`.
+    pub fn is_takeover_supported(&self) -> bool {
+        !matches!(self, AgentType::Gemini)
+    }
+}
+
+/// The adapter that can take `agent` over, or `None` if this build has none.
+///
+/// Gemini is the deliberate `None`; see [`AgentType::is_takeover_supported`].
+pub fn adapter_for(agent: AgentType) -> Option<Box<dyn AgentAdapter>> {
+    match agent {
+        AgentType::Claude => Some(Box::new(ClaudeAdapter)),
+        AgentType::Codex => Some(Box::new(CodexAdapter)),
+        AgentType::OpenCode => Some(Box::new(OpenCodeAdapter)),
+        AgentType::Gemini => None,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1276,9 +1788,23 @@ pub trait AgentAdapter: Send + Sync {
 // ClaudeAdapter
 // ---------------------------------------------------------------------------
 
-/// Agent adapter for Claude CLI.
+/// Agent adapter for Claude Code.
 ///
-/// Config location: `~/.claude.json`
+/// Config location: `$CLAUDE_CONFIG_DIR/settings.json` (default
+/// `~/.claude/settings.json`).
+///
+/// # Why not `~/.claude.json`
+///
+/// The first version of this adapter read `~/.claude.json`. Claude Code writes
+/// that file for itself — it holds the sign-in session, MCP server
+/// configurations, per-project trust decisions and the global config keys that
+/// `/config` writes — and it is **not** one of the settings files in Claude
+/// Code's precedence stack. The `env` block it is supposed to carry lives in
+/// `~/.claude/settings.json`, so writing to `~/.claude.json` would have
+/// succeeded and changed nothing: the client would keep talking to
+/// `api.anthropic.com` while Zroutery reported the agent as taken over. That is
+/// the worst shape of failure this subsystem has — a successful write, a
+/// reported success, and no effect.
 pub struct ClaudeAdapter;
 
 impl AgentAdapter for ClaudeAdapter {
@@ -1287,8 +1813,11 @@ impl AgentAdapter for ClaudeAdapter {
     }
 
     fn config_path(&self) -> Result<std::path::PathBuf, String> {
+        if let Some(dir) = config_dir_override("CLAUDE_CONFIG_DIR") {
+            return Ok(dir.join("settings.json"));
+        }
         let home = home_dir()?;
-        Ok(home.join(".claude.json"))
+        Ok(home.join(".claude").join("settings.json"))
     }
 
     fn read_config(&self) -> Result<AgentConfigSnapshot, String> {
@@ -1370,8 +1899,32 @@ impl AgentAdapter for CodexAdapter {
 /// Config location: `$GEMINI_CLI_HOME/.gemini/settings.json`
 /// (default `~/.gemini/settings.json`), the user settings file Gemini CLI
 /// documents.
+///
+/// # Retained for release only
+///
+/// New Gemini takeovers are withdrawn (B6): its endpoint is only settable
+/// through `GOOGLE_GEMINI_BASE_URL`, an environment variable rather than a
+/// file field, so taking over the settings file redirects the key and leaves
+/// the client still talking to Google — a takeover that reports success and
+/// does nothing.
+///
+/// This adapter is **not** in [`adapter_for`]. It stays because a manifest
+/// written by an older build may still name `AgentType::Gemini` and may still
+/// hold the only record of what was overwritten. Removing the variant or the
+/// adapter would leave that record unreadable and the user's config
+/// unrecoverable. The release path is the part worth keeping; see
+/// [`takeover_fields`] for the refusal.
+///
+/// Nothing about the Gemini *protocol* is affected: `protocol::gemini`, its
+/// `generateContent` ingress, its usage decoder and its routing are separate
+/// code and are untouched by removing CLI takeover.
+#[deprecated(
+    since = "0.8.0",
+    note = "new Gemini CLI takeovers are withdrawn; retained so an older manifest can still be released"
+)]
 pub struct GeminiAdapter;
 
+#[allow(deprecated)] // the release path is the reason this is kept
 impl AgentAdapter for GeminiAdapter {
     fn agent_type(&self) -> AgentType {
         AgentType::Gemini
@@ -1407,6 +1960,548 @@ impl AgentAdapter for GeminiAdapter {
 }
 
 // ---------------------------------------------------------------------------
+// OpenCodeAdapter
+// ---------------------------------------------------------------------------
+
+/// Agent adapter for the OpenCode CLI.
+///
+/// Config location: `$XDG_CONFIG_HOME/opencode/opencode.json` (default
+/// `~/.config/opencode/opencode.json`).
+///
+/// # Not the same thing as `crates/zroutery-core/src/opencode/`
+///
+/// That module is Zroutery's **upstream provider** integration: it calls
+/// OpenCode Zen and the OpenCode Console and shapes their responses. This
+/// adapter is the opposite direction — OpenCode is the *client*, and we point
+/// it at Zroutery. Keeping the two apart matters because they claim
+/// neighbouring names (`opencode-zen-free`, `opencode-console`,
+/// `opencode_cli`) and a takeover that guessed from the wrong one would write
+/// an upstream key into a client config, or a gateway token into an upstream
+/// provider definition.
+///
+/// # What it manages
+///
+/// Exactly one file: the global config. `OPENCODE_CONFIG` and the project-level
+/// `opencode.json` are read by the client too and can shadow the global file,
+/// but Zroutery does not write them — see [`OpenCodeAdapter::effective_source`]
+/// for what is reported instead.
+///
+/// Note that OpenCode forwards `options.apiKey` as
+/// `Authorization: Bearer <key>` on every request, which is the same credential
+/// route Zroutery already serves, so the token this adapter writes is a **local
+/// gateway** credential and nothing here ever holds an upstream provider key.
+pub struct OpenCodeAdapter;
+
+impl OpenCodeAdapter {
+    /// Where a JSONC-only config would live beside `config_path`.
+    fn jsonc_sibling(config_path: &std::path::Path) -> std::path::PathBuf {
+        config_path.with_extension("jsonc")
+    }
+
+    /// Refuse a config whose *text* this adapter cannot round-trip.
+    ///
+    /// Runs **before** the file is parsed, and that ordering is the whole
+    /// point: `serde_json` rejects a commented document with "invalid JSON: key
+    /// must be a string", which tells a user their config is broken when in
+    /// fact a tool declined to touch it. OpenCode parses every config document
+    /// as JSONC — the extension is cosmetic and comments work inside
+    /// `opencode.json` just as well as `opencode.jsonc` — so a `.json` file
+    /// carrying comments is an ordinary case, not an edge case.
+    fn refuse_before_parse(config_path: &std::path::Path) -> Result<(), String> {
+        let jsonc = Self::jsonc_sibling(config_path);
+        if !config_path.exists() && jsonc.exists() {
+            return Err(format!(
+                "refusing to take over OpenCode: only {} exists. This adapter reads and writes \
+                 strict JSON, and rewriting the JSONC form would drop every comment in it. \
+                 Point OpenCode at {} instead, or take the file over by hand.",
+                jsonc.display(),
+                config_path.display()
+            ));
+        }
+        if config_path.exists() {
+            let text = std::fs::read_to_string(config_path)
+                .map_err(|e| format!("cannot read {}: {e}", config_path.display()))?;
+            if let Some(line) = first_comment_line(&text) {
+                return Err(format!(
+                    "refusing to take over OpenCode: {} carries a comment on line {line}. OpenCode \
+                     accepts comments in this file, but this adapter reads and writes strict \
+                     JSON, and rewriting it would strip every comment the file contains. Remove \
+                     the comments, or take the file over by hand.",
+                    config_path.display()
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Refuse a config whose *shape* this adapter does not manage.
+    ///
+    /// Runs after parsing, because deciding it requires the document.
+    ///
+    /// A v2-shaped config renames the top-level key from `provider` to
+    /// `providers` and the nested keys from `npm`/`options` to
+    /// `package`/`settings`. The field paths this adapter manages do not exist
+    /// there, so an adoption would create a second, ignored block and report
+    /// success. A file carrying *both* keys is refused for the same reason: it is
+    /// mid-migration and the file itself cannot say which key the running
+    /// client reads.
+    fn refuse_after_parse(raw: &serde_json::Value) -> Result<(), String> {
+        if raw.get("providers").is_some() {
+            return Err(
+                "refusing to take over OpenCode: this config carries the v2 provider key \
+                 (`providers`/`package`/`settings`), which this adapter does not manage. \
+                 Writing the v1 `provider` block into it would be ignored by the client while \
+                 Zroutery reported the agent as taken over. A config holding *both* keys is \
+                 refused for the same reason: it is a file mid-migration, and which one the \
+                 running client reads is not something this file can say."
+                    .into(),
+            );
+        }
+        Ok(())
+    }
+
+    /// Every config path the client may read, in the order it resolves them.
+    ///
+    /// Reported so a UI can show the user *where the value that actually wins
+    /// came from*, rather than implying Zroutery's write is in effect. Only the
+    /// global path is one Zroutery manages; a project-level or `OPENCODE_CONFIG`
+    /// override that shadows it is the single most common reason a takeover
+    /// appears to do nothing.
+    pub fn candidate_paths() -> Result<Vec<std::path::PathBuf>, String> {
+        let mut paths = Vec::new();
+        if let Some(dir) = config_dir_override("XDG_CONFIG_HOME") {
+            paths.push(dir.join("opencode").join("opencode.json"));
+        } else {
+            paths.push(
+                home_dir()?
+                    .join(".config")
+                    .join("opencode")
+                    .join("opencode.json"),
+            );
+        }
+        Ok(paths)
+    }
+
+    /// Whether a project-level or `OPENCODE_CONFIG` file shadows the global one.
+    ///
+    /// `Ok(None)` means nothing else was found. `Ok(Some(path))` means a higher
+    /// precedence file exists, and Zroutery's global write will lose to it —
+    /// a `Ready` state that must not be reported as `Active`.
+    ///
+    /// `OPENCODE_CONFIG` is checked first because it is resolved above the
+    /// global config and below the project files. It names a single **file**
+    /// (verified: it is `path.resolve`d and handed straight to the file loader,
+    /// so pointing it at a directory does nothing).
+    pub fn shadowing_config(
+        &self,
+        global: &std::path::Path,
+    ) -> Result<Option<std::path::PathBuf>, String> {
+        if let Ok(value) = std::env::var(OPENCODE_CONFIG_ENV) {
+            let trimmed = value.trim();
+            if !trimmed.is_empty() {
+                return Ok(Some(std::path::PathBuf::from(trimmed)));
+            }
+        }
+        Ok(project_shadow(global))
+    }
+}
+
+/// The 1-based line of the first `//` or `/* */` comment in a JSON document,
+/// or `None` when there is none.
+///
+/// Deliberately naive and deliberately *not* a JSON parser: the only question
+/// asked is "is this file written in a dialect this adapter can round-trip",
+/// and answering that does not require understanding the document. A real
+/// parser would have to accept comments in order to reject them, which is the
+/// whole problem.
+///
+/// A `//` inside a string is not a comment, so the scan tracks quoting and
+/// escapes; without that, a base URL like `"https://host"` would read as a
+/// comment on every single config and the adapter would refuse all of them.
+fn first_comment_line(text: &str) -> Option<usize> {
+    let mut in_string = false;
+    let mut escaped = false;
+    let bytes: Vec<char> = text.chars().collect();
+    let mut index = 0;
+    let mut line = 1;
+    while index < bytes.len() {
+        let ch = bytes[index];
+        if ch == '\n' {
+            line += 1;
+            index += 1;
+            continue;
+        }
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            index += 1;
+            continue;
+        }
+        match ch {
+            '"' => in_string = true,
+            '/' => {
+                if bytes.get(index + 1) == Some(&'/') {
+                    return Some(line);
+                }
+                if bytes.get(index + 1) == Some(&'*') {
+                    return Some(line);
+                }
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+    None
+}
+
+/// The project config that outranks the global one, if any.
+///
+/// Split out of [`OpenCodeAdapter::shadowing_config`] so it can be exercised
+/// without the ambient `OPENCODE_CONFIG` deciding the answer first — that
+/// variable is process-global, and a machine that happens to have it set (this
+/// one does) would otherwise make every assertion about project precedence
+/// untestable.
+///
+/// `.opencode/opencode.json` is listed first because it is merged *after* the
+/// bare `opencode.json`, so when both exist it is the effective source. Naming
+/// the weaker one would point a user at a file that is not deciding anything.
+fn project_shadow(global: &std::path::Path) -> Option<std::path::PathBuf> {
+    for relative in [".opencode/opencode.json", "opencode.json"] {
+        let candidate = std::path::PathBuf::from(relative);
+        if candidate.exists() && candidate != global {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+impl AgentAdapter for OpenCodeAdapter {
+    fn agent_type(&self) -> AgentType {
+        AgentType::OpenCode
+    }
+
+    fn config_path(&self) -> Result<std::path::PathBuf, String> {
+        if let Some(dir) = config_dir_override("XDG_CONFIG_HOME") {
+            return Ok(dir.join("opencode").join("opencode.json"));
+        }
+        let home = home_dir()?;
+        Ok(home.join(".config").join("opencode").join("opencode.json"))
+    }
+
+    fn read_config(&self) -> Result<AgentConfigSnapshot, String> {
+        let path = self.config_path()?;
+        Self::refuse_before_parse(&path)?;
+        let snapshot = read_snapshot(AgentType::OpenCode, path, ConfigFormat::Json)?;
+        Self::refuse_after_parse(&snapshot.raw)?;
+        Ok(snapshot)
+    }
+
+    fn apply_patch(
+        &self,
+        snapshot: &AgentConfigSnapshot,
+        fields: &[ManagedField],
+    ) -> Result<AgentConfigSnapshot, String> {
+        apply_patch_to_disk(snapshot, fields, ConfigFormat::Json)
+    }
+
+    fn release(
+        &self,
+        snapshot: &AgentConfigSnapshot,
+        manifest: &OwnershipManifest,
+    ) -> Result<(), String> {
+        release_to_disk(snapshot, manifest, ConfigFormat::Json)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// GatewayTarget / takeover_fields
+// ---------------------------------------------------------------------------
+
+/// One model class an agent is allowed to ask Zroutery for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TierClass {
+    /// The model id the agent puts in its request.
+    ///
+    /// OpenCode strips the provider prefix before sending, so this is the name
+    /// Zroutery's own model matching sees.
+    pub model: String,
+    /// The name the client's model picker shows for it.
+    pub display_name: String,
+}
+
+/// What Zroutery offers an agent when it takes it over.
+///
+/// This is a **local gateway credential**, not an upstream provider secret: the
+/// agent authenticates to `127.0.0.1` and Zroutery substitutes the real provider
+/// key from its own credential store. That distinction is what makes writing the
+/// token into the agent's config defensible — the token's blast radius is this
+/// machine — and it is why nothing here ever holds a provider key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GatewayTarget {
+    /// The local endpoint the agent should send to.
+    pub base_url: String,
+    /// Zroutery's local gateway token.
+    pub token: String,
+    /// The model classes this agent may ask for.
+    pub classes: Vec<TierClass>,
+    /// The class to make the agent's default, if any.
+    ///
+    /// `None` means the takeover does not touch the agent's model selection: the
+    /// agent keeps whatever default it had and the user picks a class in the
+    /// client or through Zroutery's per-client policy. Zroutery does not choose
+    /// a tier on the user's behalf.
+    pub default_class: Option<String>,
+}
+
+/// The provider table key every adapter registers Zroutery under.
+///
+/// Shared by Codex (`model_providers.<id>`) and OpenCode (`provider.<id>`) so
+/// the two clients name the same gateway the same way, and so a UI can render
+/// one identifier instead of guessing per client.
+///
+/// A free constant rather than one declared per adapter on purpose: two
+/// adapters that each declared their own would be free to drift, and a client
+/// whose provider id changed between releases would strand every manifest that
+/// named the old one.
+pub const GATEWAY_PROVIDER_ID: &str = "zroutery";
+
+/// The environment variable OpenCode documents for relocating its config.
+pub const OPENCODE_CONFIG_ENV: &str = "OPENCODE_CONFIG";
+
+/// The fields a takeover of `agent` manages, and the values Zroutery puts there.
+///
+/// # Why the set is derived here and not chosen by the user
+///
+/// The manifest's unit of ownership is a dotted path into one document, and a
+/// takeover can only restore what it wrote. Those two facts bound the set from
+/// both sides: it has to be small enough to be reviewable in a confirmation
+/// dialog and stable enough to restore exactly, and only Zroutery knows which
+/// fields those are. A UI that listed every dotted path in an agent's config
+/// would be showing the user Zroutery's internals and asking them to pick the
+/// subset that happens to work.
+///
+/// So each agent's set is a function of one [`GatewayTarget`], and
+/// [`TakeoverStore::plan_adopt`] can still refuse if a caller asks for a field
+/// this function does not produce.
+///
+/// # What it never manages
+///
+/// Zroutery's own tier → model mapping, the agent's model class unless the
+/// caller set [`GatewayTarget::default_class`], approval or sandbox policy, the
+/// working directory, and any provider entry the adapter did not write. Those
+/// are the user's, and a manifest that recorded them would restore stale values
+/// over newer ones.
+///
+/// # Errors
+///
+/// Returns an error rather than a partial set when the target is unusable or
+/// the agent has no verified takeover. An empty or half-populated field set
+/// would be adopted and recorded as complete.
+pub fn takeover_fields(
+    agent: AgentType,
+    target: &GatewayTarget,
+) -> Result<Vec<ManagedField>, String> {
+    if target.base_url.trim().is_empty() {
+        return Err("cannot take over: the local gateway URL is empty".into());
+    }
+    if target.token.trim().is_empty() {
+        return Err(
+            "cannot take over: the local gateway token is empty, so the agent would have no way \
+             to authenticate to Zroutery"
+                .into(),
+        );
+    }
+    if target.classes.is_empty() {
+        return Err(
+            "cannot take over: Zroutery currently offers no model classes, so an agent pointed at \
+             it would have nothing to ask for. Assign a tier to at least one enabled model first."
+                .into(),
+        );
+    }
+    if let Some(default) = &target.default_class {
+        if !target.classes.iter().any(|c| &c.model == default) {
+            return Err(format!(
+                "cannot take over: default class `{default}` is not one of the classes offered \
+                 ({})",
+                target
+                    .classes
+                    .iter()
+                    .map(|c| c.model.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+    }
+    for class in &target.classes {
+        if class.model.trim().is_empty() {
+            return Err("cannot take over: a class was offered with an empty model id".into());
+        }
+        // A dot in a model id would be read as a path separator by
+        // `set_nested`/`extract_field_values` and land the value somewhere the
+        // client never looks.
+        if class.model.contains('.') {
+            return Err(format!(
+                "cannot take over: class model id `{}` contains a '.', which is the field-path \
+                 separator",
+                class.model
+            ));
+        }
+    }
+
+    match agent {
+        AgentType::Claude => {
+            // `env` in `~/.claude/settings.json`. Claude Code writes each `env`
+            // entry into its own process environment, so these two fields are
+            // what actually redirect the agent's own API traffic — not just
+            // the tools it spawns — and a value here replaces the same variable
+            // exported in the user's shell.
+            //
+            // No per-class field here on purpose. Claude Code picks a model by
+            // name (`claude-sonnet-4-5`), and Zroutery already maps those names
+            // onto classes with its own `match_claude_names` config. Writing
+            // `ANTHROPIC_DEFAULT_*_MODEL` here would move a routing decision
+            // out of Zroutery's configuration and into a file this manifest
+            // then owns — the boundary takeover is not supposed to cross.
+            Ok(vec![
+                ManagedField {
+                    path: "env.ANTHROPIC_BASE_URL".into(),
+                    value: serde_json::json!(target.base_url),
+                },
+                ManagedField {
+                    path: "env.ANTHROPIC_AUTH_TOKEN".into(),
+                    value: serde_json::json!(target.token),
+                },
+            ])
+        }
+
+        AgentType::Codex => {
+            // `model_provider` is the selector; without it the table below is
+            // defined and never used.
+            //
+            // This table goes in the **user-level** `~/.codex/config.toml`.
+            // Codex reads `model_provider` and `model_providers` out of a
+            // project-local `.codex/config.toml` for nothing — it ignores those
+            // keys there and prints a startup warning — so a takeover written to
+            // the project file would report success and route nowhere.
+            //
+            // The token is written literally, and that is a deliberate choice between two
+            // verified options rather than a guess:
+            //
+            // * `env_key` is what upstream recommends, but it names an
+            //   environment variable — not a file field this manifest can
+            //   restore. A takeover that pointed at an env var would have
+            //   nothing to put back on release.
+            // * `auth` runs a command, which would mean shipping a Zroutery CLI
+            //   binary solely to print a token.
+            // * `experimental_bearer_token` takes a literal token and is a real,
+            //   documented, runtime-wired field (Codex emits
+            //   `Authorization: Bearer <token>` from it). It is *discouraged*
+            //   upstream for writing the secret in plaintext — which is exactly
+            //   what it does here, into a file on the user's own machine, holding
+            //   a credential whose blast radius is that machine.
+            //
+            // One caveat worth recording: `env_key` wins over
+            // `experimental_bearer_token` when both are set, so a user who
+            // already has an `env_key` in this provider table keeps using it and
+            // this field is ignored. That shows up as a takeover that stays
+            // `degraded` rather than as a wrong credential.
+            //
+            // `wire_api` is `responses` because that is the route Zroutery
+            // serves for Codex's dialect. It is currently the only accepted
+            // value and also the default; it is written explicitly so the
+            // provider table does not depend on a default staying put.
+            let id = GATEWAY_PROVIDER_ID;
+            let mut out = vec![
+                ManagedField {
+                    path: "model_provider".into(),
+                    value: serde_json::json!(id),
+                },
+                ManagedField {
+                    // Required and non-empty: Codex rejects a provider whose
+                    // `name` is blank at config-parse time, which would make the
+                    // whole `config.toml` fail to load rather than just this
+                    // provider being ignored.
+                    path: format!("model_providers.{id}.name"),
+                    value: serde_json::json!("Zroutery"),
+                },
+                ManagedField {
+                    path: format!("model_providers.{id}.base_url"),
+                    value: serde_json::json!(target.base_url),
+                },
+                ManagedField {
+                    path: format!("model_providers.{id}.wire_api"),
+                    value: serde_json::json!("responses"),
+                },
+                ManagedField {
+                    path: format!("model_providers.{id}.experimental_bearer_token"),
+                    value: serde_json::json!(target.token),
+                },
+            ];
+            // Codex addresses a model by bare id in `model`; it has no
+            // per-provider model table.
+            if let Some(default) = &target.default_class {
+                out.push(ManagedField {
+                    path: "model".into(),
+                    value: serde_json::json!(default),
+                });
+            }
+            Ok(out)
+        }
+
+        AgentType::OpenCode => {
+            let id = GATEWAY_PROVIDER_ID;
+            let mut out = vec![
+                ManagedField {
+                    path: format!("provider.{id}.npm"),
+                    value: serde_json::json!("@ai-sdk/openai-compatible"),
+                },
+                ManagedField {
+                    path: format!("provider.{id}.name"),
+                    value: serde_json::json!("Zroutery"),
+                },
+                ManagedField {
+                    path: format!("provider.{id}.options.baseURL"),
+                    value: serde_json::json!(target.base_url),
+                },
+                ManagedField {
+                    path: format!("provider.{id}.options.apiKey"),
+                    value: serde_json::json!(target.token),
+                },
+            ];
+            for class in &target.classes {
+                out.push(ManagedField {
+                    path: format!("provider.{id}.models.{}.name", class.model),
+                    value: serde_json::json!(class.display_name),
+                });
+            }
+            if let Some(default) = &target.default_class {
+                // OpenCode addresses a model as `<provider>/<model>`, but it
+                // strips the prefix before sending, so Zroutery matches on the
+                // bare class id.
+                out.push(ManagedField {
+                    path: "model".into(),
+                    value: serde_json::json!(format!("{id}/{}", default)),
+                });
+            }
+            Ok(out)
+        }
+
+        AgentType::Gemini => Err(
+            "Gemini CLI is not supported for takeover. Its endpoint is only settable through the \
+             GOOGLE_GEMINI_BASE_URL environment variable, which is not a file this manifest can \
+             restore, so taking over the settings file would redirect the key but leave the client \
+             talking to Google."
+                .into(),
+        ),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -1414,7 +2509,7 @@ impl AgentAdapter for GeminiAdapter {
 //
 // The adapters below resolve their config path against the user home, and
 // the tests used to exercise apply_patch/release against the real
-// ~/.claude.json, ~/.codex/config.json and ~/.config/gemini/config.json.
+// ~/.claude/settings.json, ~/.codex/config.toml and ~/.gemini/settings.json.
 // That clobbered the developer own agent configuration and raced other
 // tests reading the same files, so under cfg(test) a test can point the
 // adapters at a private temp directory instead. The override is
@@ -2347,6 +3442,7 @@ fn quote_toml_string(text: &str) -> String {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(deprecated)] // the Gemini fixtures cover the release-only adapter
 mod tests {
     use super::*;
 
@@ -2711,6 +3807,24 @@ mod tests {
     // AgentAdapter tests
     // -----------------------------------------------------------------------
 
+    /// Claude's config lives a directory deep (`~/.claude/settings.json`), so a
+    /// test that writes the file has to create `.claude/` first — otherwise the
+    /// write fails for a reason unrelated to what it is testing.
+    ///
+    /// It also has to resolve through the adapter rather than join a path by
+    /// hand. The four fixtures that used `home.join(".claude.json")` and then
+    /// called `adapter.read_config()` were writing to one file and reading
+    /// another: with the adapter pointed at the settings file, `read_config()`
+    /// found nothing, handed back an empty snapshot, and the tests that asserted
+    /// `apply_patch` *fails* got an `Ok` instead. They were green because the
+    /// adapter was reading a file nobody wrote.
+    fn claude_settings_path() -> std::path::PathBuf {
+        let adapter = ClaudeAdapter;
+        let path = adapter.config_path().expect("claude config path");
+        std::fs::create_dir_all(path.parent().unwrap()).expect("create .claude/");
+        path
+    }
+
     #[test]
     fn claude_adapter_agent_type() {
         super::isolate_agent_home();
@@ -2737,7 +3851,11 @@ mod tests {
         super::isolate_agent_home();
         let adapter = ClaudeAdapter;
         let path = adapter.config_path().unwrap();
-        assert!(path.ends_with(".claude.json"));
+        assert!(
+            path.ends_with(".claude/settings.json"),
+            "path: {}",
+            path.display()
+        );
     }
 
     #[test]
@@ -3744,20 +4862,528 @@ mod tests {
         super::isolate_agent_home();
         let claude = ClaudeAdapter;
         let codex = CodexAdapter;
-        let gemini = GeminiAdapter;
+        let opencode = OpenCodeAdapter;
 
         let claude_path = claude.config_path().unwrap();
         let codex_path = codex.config_path().unwrap();
-        let gemini_path = gemini.config_path().unwrap();
+        let opencode_path = opencode.config_path().unwrap();
 
-        assert!(claude_path.ends_with(".claude.json"));
+        // Claude Code reads settings out of `~/.claude/settings.json`. The first
+        // version of this test asserted `.claude.json`, which pinned the defect:
+        // that is the state file Claude Code writes for itself and it is not on
+        // the settings precedence stack, so a takeover there changed nothing.
+        assert!(
+            claude_path.ends_with(".claude/settings.json"),
+            "path: {}",
+            claude_path.display()
+        );
         assert!(codex_path.ends_with(".codex/config.toml"));
-        assert!(gemini_path.ends_with(".gemini/settings.json"));
+        assert!(
+            opencode_path.ends_with("opencode/opencode.json"),
+            "path: {}",
+            opencode_path.display()
+        );
 
-        // All three should be distinct.
+        // Every pair must be distinct. Sharing a path would mean two adapters
+        // writing the same file under two manifests, and a release restoring
+        // fields the other adoption never owned.
         assert_ne!(claude_path, codex_path);
-        assert_ne!(claude_path, gemini_path);
-        assert_ne!(codex_path, gemini_path);
+        assert_ne!(claude_path, opencode_path);
+        assert_ne!(codex_path, opencode_path);
+    }
+
+    #[test]
+    fn the_claude_adapter_reads_the_settings_file_not_the_state_file() {
+        super::isolate_agent_home();
+        let path = ClaudeAdapter.config_path().unwrap();
+        assert!(
+            !path.ends_with(".claude.json"),
+            "the takeover must not target the file Claude Code writes for itself: {}",
+            path.display()
+        );
+        assert!(
+            path.ends_with(".claude/settings.json"),
+            "path: {}",
+            path.display()
+        );
+    }
+
+    #[test]
+    fn claude_config_dir_moves_the_whole_settings_directory() {
+        super::isolate_agent_home();
+        let custom = tempfile::tempdir().unwrap();
+        super::isolate_config_dir("CLAUDE_CONFIG_DIR", custom.path());
+
+        let path = ClaudeAdapter.config_path().unwrap();
+        assert_eq!(path, custom.path().join("settings.json"));
+    }
+
+    #[test]
+    fn xdg_config_home_relocates_the_opencode_config() {
+        super::isolate_agent_home();
+        let custom = tempfile::tempdir().unwrap();
+        super::isolate_config_dir("XDG_CONFIG_HOME", custom.path());
+
+        let path = OpenCodeAdapter.config_path().unwrap();
+        assert_eq!(path, custom.path().join("opencode").join("opencode.json"));
+    }
+
+    /// The refusal that protects a user's comments.
+    ///
+    /// OpenCode accepts JSONC; this adapter parses strict JSON. Rewriting the
+    /// JSONC form would flatten every comment in it, so the adapter declines
+    /// rather than take the file over and silently delete user content.
+    #[test]
+    fn opencode_refuses_a_jsonc_config_it_would_flatten() {
+        super::isolate_agent_home();
+        let home = super::isolated_agent_home().unwrap();
+        let dir = home.join(".config").join("opencode");
+        std::fs::create_dir_all(&dir).unwrap();
+        // Only the `.jsonc` exists.
+        std::fs::write(dir.join("opencode.jsonc"), "{ /* keep me */ }").unwrap();
+
+        let err = OpenCodeAdapter
+            .read_config()
+            .expect_err("the jsonc-only config must be refused");
+        assert!(err.contains("jsonc") || err.contains("JSONC"), "{err}");
+        assert!(
+            err.contains("comment"),
+            "the refusal has to say what would be lost: {err}"
+        );
+    }
+
+    /// The refusal that protects a v2-shaped config.
+    ///
+    /// OpenCode's v2 schema renames `provider` to `providers` and `npm`/`options`
+    /// to `package`/`settings`. Writing the v1 paths into such a file would
+    /// succeed, be ignored by the client, and be reported as a working takeover.
+    #[test]
+    fn opencode_refuses_a_v2_shaped_provider_block() {
+        super::isolate_agent_home();
+        let home = super::isolated_agent_home().unwrap();
+        let dir = home.join(".config").join("opencode");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("opencode.json"),
+            r#"{"providers":{"zroutery":{"package":"@ai-sdk/openai-compatible"}}}"#,
+        )
+        .unwrap();
+
+        let err = OpenCodeAdapter
+            .read_config()
+            .expect_err("a v2 provider block must be refused");
+        assert!(err.contains("v2"), "{err}");
+    }
+
+    #[test]
+    fn opencode_reads_a_v1_config() {
+        super::isolate_agent_home();
+        let home = super::isolated_agent_home().unwrap();
+        let dir = home.join(".config").join("opencode");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("opencode.json"),
+            r#"{"model":"anthropic/claude","$schema":"https://opencode.ai/config.json"}"#,
+        )
+        .unwrap();
+
+        let snapshot = OpenCodeAdapter
+            .read_config()
+            .expect("a v1 config is the supported shape");
+        assert_eq!(snapshot.agent_type, AgentType::OpenCode);
+        assert_eq!(snapshot.raw["model"], "anthropic/claude");
+    }
+
+    /// A config carrying *both* schema generations is mid-migration, and the
+    /// file itself cannot say which one the running client reads.
+    #[test]
+    fn opencode_refuses_a_config_carrying_both_schema_generations() {
+        super::isolate_agent_home();
+        let home = super::isolated_agent_home().unwrap();
+        let dir = home.join(".config").join("opencode");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("opencode.json"),
+            r#"{"provider":{},"providers":{}}"#,
+        )
+        .unwrap();
+
+        let err = OpenCodeAdapter
+            .read_config()
+            .expect_err("a mid-migration config must be refused");
+        assert!(err.contains("v2"), "{err}");
+    }
+
+    // -----------------------------------------------------------------------
+    // takeover_fields: what a takeover is allowed to manage
+    // -----------------------------------------------------------------------
+
+    fn a_target() -> GatewayTarget {
+        GatewayTarget {
+            base_url: "http://127.0.0.1:8787".into(),
+            token: "gw-local-token".into(),
+            classes: vec![
+                TierClass {
+                    model: "sonnet-class".into(),
+                    display_name: "Sonnet".into(),
+                },
+                TierClass {
+                    model: "haiku-class".into(),
+                    display_name: "Haiku".into(),
+                },
+            ],
+            default_class: None,
+        }
+    }
+
+    fn paths(agent: AgentType, target: &GatewayTarget) -> Vec<String> {
+        takeover_fields(agent, target)
+            .unwrap_or_else(|e| panic!("{agent:?} should have a field set: {e}"))
+            .into_iter()
+            .map(|f| f.path)
+            .collect()
+    }
+
+    /// The Claude adapter must not be handed a model field.
+    ///
+    /// Claude Code picks a model by name and Zroutery already maps those names
+    /// onto classes with `match_claude_names`. Writing `ANTHROPIC_DEFAULT_*_MODEL`
+    /// would move a routing decision out of Zroutery's config into a file the
+    /// manifest then owns — the boundary takeover is not supposed to cross.
+    #[test]
+    fn the_claude_field_set_is_exactly_two_env_entries() {
+        let target = a_target();
+        assert_eq!(
+            paths(AgentType::Claude, &target),
+            vec!["env.ANTHROPIC_BASE_URL", "env.ANTHROPIC_AUTH_TOKEN"]
+        );
+    }
+
+    #[test]
+    fn the_claude_field_set_does_not_touch_the_model_unless_asked() {
+        let mut target = a_target();
+        let plain = paths(AgentType::Claude, &target);
+        target.default_class = Some("sonnet-class".into());
+        let with_default = paths(AgentType::Claude, &target);
+
+        assert_eq!(
+            plain, with_default,
+            "a default class must not add a Claude field: the model is chosen by \
+             name and mapped inside Zroutery, not written into the client config"
+        );
+    }
+
+    /// The defect the Codex adapter's first fixtures had: a provider table with
+    /// no selector, so the table is defined and never used.
+    #[test]
+    fn the_codex_field_set_selects_the_provider_it_defines() {
+        let target = a_target();
+        let got = paths(AgentType::Codex, &target);
+
+        assert!(
+            got.iter().any(|p| p == "model_provider"),
+            "codex needs the selector field, not just the table: {got:?}"
+        );
+        assert_eq!(
+            got.iter().filter(|p| *p == "model_provider").count(),
+            1,
+            "exactly one selector: {got:?}"
+        );
+        let selected = serde_json::json!(GATEWAY_PROVIDER_ID);
+        let table_prefix = format!("model_providers.{GATEWAY_PROVIDER_ID}.");
+        assert!(
+            got.iter()
+                .any(|p| p.starts_with(&table_prefix) && p.ends_with("base_url")),
+            "the selected provider must be the one that got a base url: {got:?}"
+        );
+        assert!(got.contains(&format!("{table_prefix}base_url")), "{got:?}");
+        // The selector value must name the table that was written.
+        let fields = takeover_fields(AgentType::Codex, &target).unwrap();
+        let selector = fields
+            .iter()
+            .find(|f| f.path == "model_provider")
+            .expect("selector field");
+        assert_eq!(selector.value, selected);
+    }
+
+    #[test]
+    fn the_codex_field_set_only_sets_the_model_when_a_default_is_asked_for() {
+        let mut target = a_target();
+        assert!(
+            !paths(AgentType::Codex, &target)
+                .iter()
+                .any(|p| p == "model"),
+            "codex must not have its model rewritten by default"
+        );
+        target.default_class = Some("sonnet-class".into());
+        assert!(paths(AgentType::Codex, &target)
+            .iter()
+            .any(|p| p == "model"));
+    }
+
+    /// A `.json` file carrying comments is refused, naming the line.
+    ///
+    /// OpenCode parses *every* config document as JSONC — the extension is
+    /// cosmetic. Without this, `serde_json` rejects the file with a syntax error
+    /// that says nothing about comments, and the user concludes their config is
+    /// broken rather than that a tool declined to touch it.
+    #[test]
+    fn opencode_refuses_a_json_file_that_carries_comments() {
+        super::isolate_agent_home();
+        let home = super::isolated_agent_home().unwrap();
+        let dir = home.join(".config").join("opencode");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("opencode.json"),
+            "{\n  // my notes\n  \"model\": \"anthropic/claude\"\n}\n",
+        )
+        .unwrap();
+
+        let err = OpenCodeAdapter
+            .read_config()
+            .expect_err("a commented .json must be refused");
+        assert!(err.contains("comment"), "{err}");
+        assert!(err.contains("line 2"), "the line has to be named: {err}");
+    }
+
+    /// A `//` inside a string is not a comment.
+    ///
+    /// Every OpenCode base URL contains `https://`, so a scanner that does not
+    /// track quoting would refuse every well-formed config in the world.
+    #[test]
+    fn a_url_in_a_string_is_not_mistaken_for_a_comment() {
+        assert_eq!(first_comment_line(r#"{"baseURL":"https://host/v1"}"#), None);
+        assert_eq!(first_comment_line(r#"{"a":"b//c"}"#), None);
+        assert_eq!(first_comment_line(r#"{"a":"q\"//not a comment"}"#), None);
+        assert_eq!(first_comment_line("{\n  \"a\": 1\n  // note\n}"), Some(3));
+        assert_eq!(first_comment_line("{ /* note */ \"a\": 1 }"), Some(1));
+    }
+
+    /// The project `.opencode/` directory outranks the bare project file, and
+    /// reporting the weaker one would name the wrong source.
+    #[test]
+    fn opencode_reports_the_dotted_project_directory_when_it_shadows() {
+        super::isolate_agent_home();
+        let home = super::isolated_agent_home().unwrap();
+        let dir = home.join(".config").join("opencode");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("opencode.json"), "{}").unwrap();
+
+        let global = OpenCodeAdapter.config_path().unwrap();
+
+        // Both project files present, both relative to the working directory.
+        let cwd = std::env::current_dir().expect("cwd");
+        let dotted = cwd.join(".opencode");
+        let created = std::fs::create_dir_all(&dotted);
+        std::fs::write(cwd.join("opencode.json"), "{}").ok();
+        let dotted_file = std::fs::write(dotted.join("opencode.json"), "{}");
+        if created.is_err() || dotted_file.is_err() {
+            // Cannot create a project config beside the crate; the path list is
+            // still what matters and is asserted below.
+            return;
+        }
+
+        let shadowing =
+            super::project_shadow(&global).expect("a project config shadows the global one");
+        assert!(
+            shadowing.ends_with(".opencode/opencode.json"),
+            "the dotted directory is loaded last, so it is the effective source: {}",
+            shadowing.display()
+        );
+
+        let _ = std::fs::remove_file(cwd.join("opencode.json"));
+        let _ = std::fs::remove_file(dotted.join("opencode.json"));
+        let _ = std::fs::remove_dir(&dotted);
+    }
+
+    /// A Codex takeover must land in the **user** config.
+    ///
+    /// Codex ignores `model_provider` and `model_providers` in a project-local
+    /// `.codex/config.toml` and prints a startup warning. A takeover written there
+    /// would report success and route nowhere.
+    #[test]
+    fn the_codex_takeover_targets_the_user_config() {
+        super::isolate_agent_home();
+        let home = super::isolated_agent_home().unwrap();
+
+        let path = CodexAdapter.config_path().unwrap();
+        assert_eq!(path, home.join(".codex").join("config.toml"));
+        assert!(
+            !path.starts_with(
+                home.join(".codex")
+                    .join("config.toml")
+                    .parent()
+                    .unwrap()
+                    .join("projects")
+            ),
+            "never the project-local file: {}",
+            path.display()
+        );
+    }
+
+    /// `name` is load-bearing, not decoration.
+    ///
+    /// Codex rejects a provider whose `name` is empty at config-parse time, which
+    /// fails the whole `config.toml` rather than ignoring one provider.
+    #[test]
+    fn the_codex_provider_table_carries_a_non_empty_name() {
+        let target = a_target();
+        let fields = takeover_fields(AgentType::Codex, &target).unwrap();
+        let name = fields
+            .iter()
+            .find(|f| f.path == format!("model_providers.{GATEWAY_PROVIDER_ID}.name"))
+            .expect("a name field");
+        assert_eq!(
+            name.value,
+            serde_json::json!("Zroutery"),
+            "an empty provider name is a parse error, not a default"
+        );
+        assert!(!name.value.as_str().unwrap().is_empty());
+    }
+
+    /// The bearer token is a literal, and that is a decision between two verified
+    /// alternatives rather than a guess.
+    #[test]
+    fn the_codex_token_goes_in_the_field_that_takes_a_literal() {
+        let target = a_target();
+        let got = paths(AgentType::Codex, &target);
+
+        assert!(
+            got.contains(&format!(
+                "model_providers.{GATEWAY_PROVIDER_ID}.experimental_bearer_token"
+            )),
+            "{got:?}"
+        );
+        // `env_key` names an environment variable, which is not a file field a
+        // manifest can restore, and `auth` runs a command. Writing either would mean
+        // a takeover with nothing to put back on release.
+        assert!(
+            !got.iter().any(|p| p.ends_with(".env_key")),
+            "env_key is not restorable from a manifest: {got:?}"
+        );
+        assert!(
+            !got.iter().any(|p| p.ends_with(".auth")),
+            "auth runs an external command: {got:?}"
+        );
+    }
+
+    #[test]
+    fn the_opencode_field_set_uses_the_documented_v1_shape() {
+        let target = a_target();
+        let got = paths(AgentType::OpenCode, &target);
+
+        for expected in [
+            format!("provider.{GATEWAY_PROVIDER_ID}.npm"),
+            format!("provider.{GATEWAY_PROVIDER_ID}.options.baseURL"),
+            format!("provider.{GATEWAY_PROVIDER_ID}.options.apiKey"),
+            format!("provider.{GATEWAY_PROVIDER_ID}.models.sonnet-class.name"),
+        ] {
+            assert!(got.contains(&expected), "missing {expected} in {got:?}");
+        }
+        assert!(
+            !got.iter().any(|p| p.starts_with("providers.")),
+            "v2 key must never be written: {got:?}"
+        );
+    }
+
+    #[test]
+    fn the_opencode_default_model_is_namespaced_but_the_table_is_not() {
+        let mut target = a_target();
+        target.default_class = Some("sonnet-class".into());
+        let fields = takeover_fields(AgentType::OpenCode, &target).unwrap();
+
+        let model = fields.iter().find(|f| f.path == "model").expect("model");
+        assert_eq!(
+            model.value,
+            serde_json::json!("zroutery/sonnet-class"),
+            "opencode addresses a model as provider/model"
+        );
+        let table = fields
+            .iter()
+            .find(|f| f.path.ends_with("models.sonnet-class.name"))
+            .expect("model table entry");
+        assert_eq!(
+            table.value,
+            serde_json::json!("Sonnet"),
+            "the table key is the bare id because opencode strips the prefix"
+        );
+    }
+
+    #[test]
+    fn gemini_is_refused_a_new_takeover() {
+        let target = a_target();
+        let err =
+            takeover_fields(AgentType::Gemini, &target).expect_err("gemini takeover is withdrawn");
+        assert!(err.contains("not supported"), "{err}");
+        assert!(
+            !AgentType::Gemini.is_takeover_supported(),
+            "and it must not be advertised as a target"
+        );
+        assert!(
+            adapter_for(AgentType::Gemini).is_none(),
+            "and there must be no adapter to hand a caller"
+        );
+    }
+
+    /// Every takeover target the product offers, so a new agent cannot be added
+    /// to [`adapter_for`] without a field set behind it.
+    #[test]
+    fn every_advertised_agent_can_produce_a_field_set() {
+        let target = a_target();
+        for agent in AgentType::ALL {
+            let supported = agent.is_takeover_supported();
+            let adapter = adapter_for(agent);
+            assert_eq!(
+                supported,
+                adapter.is_some(),
+                "{agent:?}: support flag and adapter presence must agree"
+            );
+            if supported {
+                assert!(
+                    !takeover_fields(agent, &target)
+                        .expect("a supported agent must yield fields")
+                        .is_empty(),
+                    "{agent:?} yielded no fields"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn takeover_fields_refuses_an_unusable_target() {
+        let base = a_target();
+
+        let mut no_url = base.clone();
+        no_url.base_url = "   ".into();
+        assert!(takeover_fields(AgentType::Claude, &no_url)
+            .unwrap_err()
+            .contains("gateway URL"));
+
+        let mut no_token = base.clone();
+        no_token.token = String::new();
+        assert!(takeover_fields(AgentType::Claude, &no_token)
+            .unwrap_err()
+            .contains("token"));
+
+        let mut no_classes = base.clone();
+        no_classes.classes = Vec::new();
+        assert!(takeover_fields(AgentType::Claude, &no_classes)
+            .unwrap_err()
+            .contains("no model classes"));
+
+        let mut bad_default = base.clone();
+        bad_default.default_class = Some("nope-class".into());
+        assert!(takeover_fields(AgentType::Claude, &bad_default)
+            .unwrap_err()
+            .contains("not one of the classes offered"));
+
+        // A dot is the field-path separator, so it would land the value
+        // somewhere the client never reads.
+        let mut dotted = base.clone();
+        dotted.classes[0].model = "sonnet.class".into();
+        assert!(takeover_fields(AgentType::OpenCode, &dotted)
+            .unwrap_err()
+            .contains("field-path separator"));
     }
 
     #[cfg(unix)]
@@ -3766,8 +5392,7 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
 
         super::isolate_agent_home();
-        let home = super::isolated_agent_home().expect("isolated agent home");
-        let path = home.join(".claude.json");
+        let path = claude_settings_path();
         std::fs::write(&path, r#"{"model":"gpt-4"}"#).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
 
@@ -3822,8 +5447,7 @@ mod tests {
     #[test]
     fn apply_patch_refuses_stale_snapshot() {
         super::isolate_agent_home();
-        let home = super::isolated_agent_home().expect("isolated agent home");
-        let path = home.join(".claude.json");
+        let path = claude_settings_path();
         std::fs::write(
             &path,
             serde_json::to_string_pretty(&serde_json::json!({
@@ -3885,8 +5509,7 @@ mod tests {
     #[test]
     fn apply_patch_reports_type_conflict_on_scalar_parent() {
         super::isolate_agent_home();
-        let home = super::isolated_agent_home().expect("isolated agent home");
-        let path = home.join(".claude.json");
+        let path = claude_settings_path();
         std::fs::write(
             &path,
             serde_json::to_string_pretty(&serde_json::json!({"model": "existing-scalar"})).unwrap(),
@@ -3917,8 +5540,7 @@ mod tests {
     #[test]
     fn apply_patch_refuses_to_replace_existing_non_table() {
         super::isolate_agent_home();
-        let home = super::isolated_agent_home().expect("isolated agent home");
-        let path = home.join(".claude.json");
+        let path = claude_settings_path();
         let initial = serde_json::json!({"a": {"b": 5}});
         std::fs::write(&path, serde_json::to_string_pretty(&initial).unwrap()).unwrap();
 
