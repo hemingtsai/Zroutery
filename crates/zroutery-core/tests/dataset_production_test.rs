@@ -761,7 +761,7 @@ async fn collecting_samples_influences_no_response() {
 /// back, and the only thing that reaches it is the terminal transition.
 #[tokio::test]
 async fn the_dataset_is_never_read_back_by_production() {
-    let source = include_str!("../src/server/pipeline.rs");
+    let source = include_str!("../src/server/pipeline/mod.rs");
 
     // The property is that the dataset cannot influence a *routing decision*.
     //

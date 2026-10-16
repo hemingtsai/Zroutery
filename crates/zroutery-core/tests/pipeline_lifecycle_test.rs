@@ -1180,7 +1180,7 @@ async fn an_unusable_candidate_is_the_last_attempt_without_poisoning_health() {
 /// its own.
 #[test]
 fn the_pipeline_has_no_second_failure_classifier() {
-    let source = include_str!("../src/server/pipeline.rs");
+    let source = include_str!("../src/server/pipeline/mod.rs");
     for forbidden in [
         "from_status_with_body",
         "FailureClass::from_status",
@@ -1347,7 +1347,9 @@ async fn a_failed_stream_handshake_is_a_failed_outcome() {
 /// The drop path may not resolve to a success in the source either.
 #[test]
 fn dropping_a_stream_is_not_a_success_in_the_source_either() {
-    let source = include_str!("../src/server/pipeline.rs");
+    // `SseState` and its `Drop` live in the pipeline's sse child, not the
+    // barrel, so this asserts against the file that actually carries the impl.
+    let source = include_str!("../src/server/pipeline/sse.rs");
     let (_, after) = source
         .split_once("impl Drop for SseState")
         .expect("the stream state still has a drop path");
