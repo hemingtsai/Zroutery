@@ -1264,6 +1264,44 @@ fn the_module_derives_no_location_and_schedules_nothing() {
     }
 }
 
+/// Every file of the router, spelled out.
+///
+/// `router.rs` became `router/` and this tripwire has to follow it. A child that
+/// reached the module could not be seen if only the barrel were scanned, and a
+/// tripwire that cannot see a moved file is indistinguishable from one that does
+/// not exist. Adding a file here is the cost of keeping it honest.
+const ROUTER_SOURCES: &[(&str, &str)] = &[
+    ("router/mod.rs", include_str!("../src/router/mod.rs")),
+    (
+        "router/candidate.rs",
+        include_str!("../src/router/candidate.rs"),
+    ),
+    (
+        "router/candidates.rs",
+        include_str!("../src/router/candidates.rs"),
+    ),
+    (
+        "router/classifier.rs",
+        include_str!("../src/router/classifier.rs"),
+    ),
+    ("router/health.rs", include_str!("../src/router/health.rs")),
+    (
+        "router/helpers.rs",
+        include_str!("../src/router/helpers.rs"),
+    ),
+    ("router/plan.rs", include_str!("../src/router/plan.rs")),
+    (
+        "router/reporting.rs",
+        include_str!("../src/router/reporting.rs"),
+    ),
+    (
+        "router/selection.rs",
+        include_str!("../src/router/selection.rs"),
+    ),
+    ("router/tiers.rs", include_str!("../src/router/tiers.rs")),
+    ("router/tests.rs", include_str!("../src/router/tests.rs")),
+];
+
 /// Every file of the routing policy, spelled out.
 ///
 /// `policy.rs` became `policy/` and this tripwire has to follow it. A child
@@ -1311,7 +1349,6 @@ fn nothing_in_the_running_product_can_reach_this_journal() {
             "src-tauri/src/main.rs",
             include_str!("../../../src-tauri/src/main.rs"),
         ),
-        ("src/router.rs", include_str!("../src/router.rs")),
         (
             "src/ml/coordinator.rs",
             include_str!("../src/ml/coordinator.rs"),
@@ -1320,6 +1357,7 @@ fn nothing_in_the_running_product_can_reach_this_journal() {
     ]
     .into_iter()
     .chain(POLICY_SOURCES.iter().copied())
+    .chain(ROUTER_SOURCES.iter().copied())
     {
         let source = source.to_lowercase();
         assert!(

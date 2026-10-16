@@ -818,12 +818,53 @@ async fn the_dataset_is_never_read_back_by_production() {
         }
     }
 
-    // Routing still knows nothing about the dataset.
-    let routing = include_str!("../src/router.rs");
-    assert!(
-        !routing.contains("dataset"),
-        "routing must not know the dataset exists"
-    );
+    /// Every file of the router, spelled out.
+    ///
+    /// `router.rs` became `router/` and this tripwire has to follow it. A child that
+    /// reached the module could not be seen if only the barrel were scanned, and a
+    /// tripwire that cannot see a moved file is indistinguishable from one that does
+    /// not exist. Adding a file here is the cost of keeping it honest.
+    const ROUTER_SOURCES: &[(&str, &str)] = &[
+        ("router/mod.rs", include_str!("../src/router/mod.rs")),
+        (
+            "router/candidate.rs",
+            include_str!("../src/router/candidate.rs"),
+        ),
+        (
+            "router/candidates.rs",
+            include_str!("../src/router/candidates.rs"),
+        ),
+        (
+            "router/classifier.rs",
+            include_str!("../src/router/classifier.rs"),
+        ),
+        ("router/health.rs", include_str!("../src/router/health.rs")),
+        (
+            "router/helpers.rs",
+            include_str!("../src/router/helpers.rs"),
+        ),
+        ("router/plan.rs", include_str!("../src/router/plan.rs")),
+        (
+            "router/reporting.rs",
+            include_str!("../src/router/reporting.rs"),
+        ),
+        (
+            "router/selection.rs",
+            include_str!("../src/router/selection.rs"),
+        ),
+        ("router/tiers.rs", include_str!("../src/router/tiers.rs")),
+        ("router/tests.rs", include_str!("../src/router/tests.rs")),
+    ];
+
+    // Routing still knows nothing about the dataset. `router.rs` became
+    // `router/`, so the check has to cover every child: a `dataset` mention in
+    // any one of them is the thing this asserts does not exist.
+    for (name, routing) in ROUTER_SOURCES {
+        assert!(
+            !routing.contains("dataset"),
+            "routing must not know the dataset exists ({name})"
+        );
+    }
 }
 
 /// The store production uses is bounded by both count and age, and reports both.
