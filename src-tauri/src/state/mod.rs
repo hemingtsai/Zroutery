@@ -124,7 +124,12 @@ mod balances;
 mod budget;
 mod helpers;
 mod lifecycle;
-#[cfg(feature = "ml")]
+// `any`, not `ml`: `ml.rs` is the learned model, but it also holds
+// `reconcile_accounts`, which is gated on `account` alone. Gating the module
+// on `ml` took the reconciler with it, so every combination carrying `newapi`
+// without `account` failed to build --features newapi is legal on the command
+// line and the feature's own manifest comment describes it.
+#[cfg(any(feature = "ml", feature = "account"))]
 mod ml;
 mod server;
 mod snapshot;
