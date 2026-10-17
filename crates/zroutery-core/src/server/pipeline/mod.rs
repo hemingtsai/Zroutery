@@ -67,6 +67,7 @@ mod tests;
 use budget::{apply_budgets, classifier_admission_scopes};
 use client::{build_client_context, client_for, client_identity};
 use lifecycle::{RequestLifecycle, Settlement, TerminalKind};
+#[cfg(feature = "ml")]
 use ml_rank::apply_ml_ranking;
 use repair::{maybe_filter_stream, try_rectify_buffered, try_rectify_stream};
 use response::{inject_cost_header, inject_routing_headers, register_in_flight, stream_response};
