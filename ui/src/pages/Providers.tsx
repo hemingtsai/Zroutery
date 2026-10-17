@@ -309,6 +309,17 @@ export default function Providers({
     ? config.models.filter((m) => m.provider_id === open.id).length
     : 0;
 
+  /*
+   * Whether any provider publishes a balance at all.
+   *
+   * The gate for the refresh-all button. A provider with `preset: "none"` has
+   * nothing to ask for, so on an installation where every provider is like that
+   * the button would press, spend a request per provider, and change nothing —
+   * which is the same "control this build cannot serve" problem the account
+   * section below guards against, in the other direction.
+   */
+  const anyBalance = config.providers.some((p) => p.balance.preset !== "none");
+
   return (
     <>
       <ConfirmDialog request={confirm} onClose={() => setConfirm(null)} />
@@ -320,9 +331,28 @@ export default function Providers({
             : t("count.providers", { n: config.providers.length })
         }
         actions={
-          <button className="linky" onClick={loadCcPreview} disabled={ccLoading || busy}>
-            {ccLoading ? t("providers.reading_cc") : t("providers.import_cc")}
-          </button>
+          <>
+            {/*
+              `refresh_balances` asks every provider for its balance and probes
+              every account, then answers with one snapshot — so the chips on this
+              page and the figures in each drawer go current without opening any of
+              them. The account probe below asks the same accounts but answers with
+              the per-account outcome, which is the only way to learn *which* one is
+              unsupported. They overlap deliberately: one refreshes, one diagnoses.
+            */}
+            {anyBalance && (
+              <button
+                className="linky"
+                onClick={() => void run(api.refreshBalances)}
+                disabled={busy || probing}
+              >
+                {t("providers.refresh_all")}
+              </button>
+            )}
+            <button className="linky" onClick={loadCcPreview} disabled={ccLoading || busy}>
+              {ccLoading ? t("providers.reading_cc") : t("providers.import_cc")}
+            </button>
+          </>
         }
       />
 
