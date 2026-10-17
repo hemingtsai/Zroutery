@@ -3,7 +3,7 @@
   "node_id": "UI-LAYOUT",
   "display_name": "UI layout harness",
   "status": "DONE",
-  "implementation_state": "The current UI layout harness has a fresh fixture, real browser assertions, and explicit non-success when no browser is available.",
+  "implementation_state": "The current UI layout harness has a fresh fixture, real browser assertions, and explicit non-success when no browser is available. A surface can now declare the routing tab it lives on, and Settings is measured across its three subject tabs.",
   "dependencies": [
     "UI"
   ],
@@ -22,7 +22,8 @@
     "E-012",
     "E-016",
     "E-029",
-    "E-031"
+    "E-031",
+    "E-143"
   ],
   "source_references": [
     "docs/development/repository-audit-2026-09-25.md",
@@ -32,7 +33,8 @@
     "ui/src/pages/Routing.tsx"
   ],
   "notes": [
-    "Accepted repair commit: 4e36fdb; pnpm test:layout passed on c782a49.",
+    "Accepted repair commit: 4e36fdb; pnpm test:layout passed again on the integration tree recorded in E-143 — 15 self-tests, 5 surfaces, 40 controls.",
+    "The tab-aware pass is not a convenience. After the settings split, a harness that opened a page and measured the controls it found was measuring one of three subjects and reporting a pass; `routing-default` and `routing-auto` had the same shape, because their two drawers moved onto separate tabs. A surface now declares its tab, and the harness switches it with a real click before it measures.",
     "The harness is not Tauri IPC E2E."
   ]
 }

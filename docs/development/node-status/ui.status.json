@@ -3,7 +3,7 @@
   "node_id": "UI",
   "display_name": "Operational UI",
   "status": "DONE",
-  "implementation_state": "The existing operational provider/model/routing/activity/settings UI builds and is integrated.",
+  "implementation_state": "The operational provider/model/routing/activity/settings UI builds and is integrated. The routing page also mounts the learning panel, which renders the gate's verdict, the shadow replay and a promotion round.",
   "dependencies": [
     "STAGE-1"
   ],
@@ -21,7 +21,8 @@
   "evidence": [
     "E-009",
     "E-014",
-    "E-016"
+    "E-016",
+    "E-143"
   ],
   "source_references": [
     "docs/development/repository-audit-2026-09-25.md",
@@ -29,11 +30,12 @@
     "ui/src/pages/Providers.tsx",
     "ui/src/pages/Models.tsx",
     "ui/src/pages/Routing.tsx",
+    "ui/src/pages/MlRouting.tsx",
     "ui/src/pages/Activity.tsx",
     "ui/src/pages/Settings.tsx",
     "package.json"
   ],
   "notes": [
-    "This DONE state does not expose Account, migration, takeover, shadow, or ML."
+    "The previous note here said this DONE state exposes no Account, migration, takeover, shadow, or ML surface. Three of those five had become false and the sentence was never revisited: `ui/src/pages/MlRouting.tsx` is mounted as a routing tab and renders the gate's verdict, the shadow replay and a promotion round, and Providers renders a maintenance row per declared account. Migration and takeover still have no command and no surface, which is UI-NEW-TRACKS' unmet gate rather than this node's. Corrected at the integration recorded in E-143; the status itself does not move, because the three gates this node owns — build, integration, smoke — are the same gates and still pass."
   ]
 }
