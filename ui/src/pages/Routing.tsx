@@ -22,12 +22,15 @@ import {
   Badge,
   Button,
   CompactNumber,
+  CommitInput,
+  CommitNumber,
   Drawer,
   Field,
   KeyValue,
   NumberField,
   PageHead,
   Section,
+  Segment,
   Tabs,
   Select,
   StatusDot,
@@ -68,6 +71,29 @@ export default function Routing({
 
   const tierRoutes = TIERS
     .map((tier) => ({ tier, members: tierMembers(rows, config.providers, tier) }));
+
+  const patchVision = (patch: Partial<AppConfig["vision"]>) => {
+    void save((cfg) => {
+      const next = structuredClone(cfg);
+      Object.assign(next.vision, patch);
+      return next;
+    });
+  };
+
+  /*
+   * The models the vision fallback is allowed to choose from.
+   *
+   * Three conditions, not one: a model has to be enabled, its provider has to be
+   * enabled, and it has to actually accept images. The third is the one that
+   * matters here — offering a model that cannot see as the thing that describes
+   * images would make the fallback substitute one failure for another.
+   */
+  const visionCapable = rows.filter(
+    (r) =>
+      r.model.enabled &&
+      r.model.capabilities.vision &&
+      config.providers.find((p) => p.id === r.model.provider_id)?.enabled,
+  );
 
   // The pool in the order the router would try it. Every strategy pool is
   // ranked by priority, so the page follows the numbers rather than the array.
@@ -135,6 +161,68 @@ export default function Routing({
           ))}
         </div>
       </div>
+    </Section>
+  );
+
+  /*
+   * Vision fallback, here rather than on the settings page.
+   *
+   * It is not an appearance or a machine preference: when the chosen model
+   * cannot see, a different model is asked what the image contains and its
+   * answer is sent in place of the image. That is a decision about what a
+   * request contains, made before the request is routed, and it belongs on the
+   * page whose subject is what happens to a request.
+   */
+  const visionFallback = (
+    <Section title={t("vision.title")} hint={t("vision.hint")}>
+      <div className="setting-row">
+        <div className="setting-left">
+          <span className="setting-title">{t("vision.enable")}</span>
+        </div>
+        <div className="setting-right">
+          <input
+            type="checkbox"
+            checked={config.vision.enabled}
+            onChange={(e) => patchVision({ enabled: e.currentTarget.checked })}
+          />
+        </div>
+      </div>
+      {config.vision.enabled && (
+        <>
+          <div className="setting-row">
+            <div className="setting-left">
+              <span className="setting-title">{t("vision.model")}</span>
+              <span className="setting-desc">{t("vision.model_hint")}</span>
+            </div>
+            <div className="setting-right">
+              <Select
+                ariaLabel={t("vision.model")}
+                value={config.vision.model}
+                onChange={(model) => patchVision({ model: model || null })}
+                placeholder="—"
+                options={visionCapable.map((r) => ({ value: r.id, label: r.id }))}
+              />
+            </div>
+          </div>
+          <div className="setting-row">
+            <div className="setting-left">
+              <span className="setting-title">{t("vision.placeholder")}</span>
+              <span className="setting-desc">{t("vision.placeholder_hint")}</span>
+            </div>
+            <div className="setting-right">
+              <CommitInput
+                value={config.vision.placeholder}
+                onCommit={(placeholder) =>
+                  placeholder.trim() && patchVision({ placeholder })
+                }
+              />
+            </div>
+          </div>
+          {visionCapable.length === 0 && (
+            <p className="field-hint">{t("vision.model_required")}</p>
+          )}
+        </>
+      )}
     </Section>
   );
 
@@ -224,7 +312,16 @@ return (
                 },
               ]
             : []),
-          { value: "main", label: t("routing.tab_main"), content: mainRoutes },
+          {
+            value: "main",
+            label: t("routing.tab_main"),
+            content: (
+              <>
+                {mainRoutes}
+                {visionFallback}
+              </>
+            ),
+          },
           { value: "auto", label: t("routing.tab_auto"), content: autoReview },
         ]}
       />
@@ -281,6 +378,10 @@ function DefaultDrawer({
 }) {
   const routing = snapshot.config.routing;
   const { t } = useI18n();
+  const [aliasDraft, setAliasDraft] = useState<{ from: string; to: ModelTier }>({
+    from: "",
+    to: "standard",
+  });
 
   const patch = (mutate: Partial<AppConfig["routing"]>) => {
     void onSave((cfg) => {
@@ -288,6 +389,33 @@ function DefaultDrawer({
       Object.assign(next.routing, mutate);
       return next;
     });
+  };
+
+  /**
+   * Scoring is a nested object, so it cannot go through `patch`, which assigns
+   * onto `routing` itself. Kept as its own writer rather than a special case
+   * inside `patch` so that "a field on routing" and "a field inside routing's
+   * scoring" stay distinguishable at the call site.
+   */
+  const patchScoring = (patch: Partial<AppConfig["routing"]["scoring"]>) => {
+    void onSave((cfg) => {
+      const next = structuredClone(cfg);
+      Object.assign(next.routing.scoring, patch);
+      return next;
+    });
+  };
+
+  const addAlias = () => {
+    const from = aliasDraft.from.trim();
+    if (!from) return;
+    patch({ client_aliases: { ...routing.client_aliases, [from]: aliasDraft.to } });
+    setAliasDraft({ from: "", to: aliasDraft.to });
+  };
+
+  const removeAlias = (from: string) => {
+    const next = { ...routing.client_aliases };
+    delete next[from];
+    patch({ client_aliases: next });
   };
 
   return (
@@ -365,9 +493,155 @@ function DefaultDrawer({
             checked={routing.elect_on_start}
             onChange={(elect_on_start) => patch({ elect_on_start })}
           />
+          {/*
+            The four weights that decide the election, here rather than on the
+            settings page. They were the reason a hint had to name a path in
+            another page — "only meaningful for the balanced strategy (Routing →
+            default → edit)" — because the strategy that makes them meaningful
+            sits above them in this drawer and the numbers did not. The heading
+            repeats itself because a reader who arrives at the weights by
+            scrolling has not necessarily registered that the whole section only
+            exists for one strategy.
+          */}
+          <h3 className="section-sub">{t("settings.election_weights")}</h3>
+          <div className="setting-row">
+            <div className="setting-left">
+              <span className="setting-title">{t("settings.price_weight")}</span>
+              <span className="setting-desc">{t("settings.price_weight_hint")}</span>
+            </div>
+            <div className="setting-right">
+              <CommitNumber
+                min={0}
+                value={routing.scoring.price_weight}
+                onCommit={(v) => patchScoring({ price_weight: v ?? 0 })}
+              />
+            </div>
+          </div>
+          <div className="setting-row">
+            <div className="setting-left">
+              <span className="setting-title">{t("settings.latency_weight")}</span>
+            </div>
+            <div className="setting-right">
+              <CommitNumber
+                min={0}
+                value={routing.scoring.latency_weight}
+                onCommit={(v) => patchScoring({ latency_weight: v ?? 0 })}
+              />
+            </div>
+          </div>
+          <div className="setting-row">
+            <div className="setting-left">
+              <span className="setting-title">{t("settings.ref_input")}</span>
+              <span className="setting-desc">{t("settings.ref_input_hint")}</span>
+            </div>
+            <div className="setting-right">
+              <CommitNumber
+                min={0}
+                integer
+                value={routing.scoring.reference_input_tokens}
+                onCommit={(v) => patchScoring({ reference_input_tokens: v ?? 0 })}
+              />
+            </div>
+          </div>
+          <div className="setting-row">
+            <div className="setting-left">
+              <span className="setting-title">{t("settings.ref_output")}</span>
+            </div>
+            <div className="setting-right">
+              <CommitNumber
+                min={0}
+                integer
+                value={routing.scoring.reference_output_tokens}
+                onCommit={(v) => patchScoring({ reference_output_tokens: v ?? 0 })}
+              />
+            </div>
+          </div>
           <ElectionResult election={snapshot.election} namingStyle={snapshot.config.routing.naming_style} />
         </Section>
       )}
+
+      {/*
+        Tier naming and the client aliases, together and here, because both
+        decide what id a client may ask for. They override `match_claude_names`
+        above — the aliases hint says so, and it can now point at the control it
+        means instead of describing a rule three fields away.
+      */}
+      <Section title={t("settings.tier_naming_section")}>
+        <div className="setting-row">
+          <div className="setting-left">
+            <span className="setting-title">{t("settings.naming_style")}</span>
+            <span className="setting-desc">{t("settings.naming_style_hint")}</span>
+          </div>
+          <div className="setting-right">
+            <Segment<NamingStyle>
+              ariaLabel={t("settings.naming_style")}
+              value={routing.naming_style}
+              onChange={(naming_style) => patch({ naming_style })}
+              options={[
+                { value: "internal", label: t("settings.naming_internal") },
+                { value: "anthropic", label: t("settings.naming_anthropic") },
+                { value: "openai", label: t("settings.naming_openai") },
+              ]}
+            />
+          </div>
+        </div>
+      </Section>
+
+      <Section title={t("settings.aliases")} hint={t("settings.aliases_hint")}>
+        {Object.entries(routing.client_aliases).length > 0 && (
+          <table className="table">
+            <tbody>
+              {Object.entries(routing.client_aliases).map(([from, to]) => (
+                <tr key={from}>
+                  <td>
+                    <code>{from}</code>
+                  </td>
+                  <td>{virtualId(to, routing.naming_style)}</td>
+                  <td>
+                    <Button kind="ghost" onClick={() => removeAlias(from)}>
+                      {t("common.remove")}
+                    </Button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+        <div className="setting-row">
+          <div className="setting-left">
+            <span className="setting-title">{t("settings.f_model_id")}</span>
+          </div>
+          <div className="setting-right">
+            <input
+              value={aliasDraft.from}
+              placeholder="claude-opus-4-1-20250805"
+              onChange={(e) => setAliasDraft({ ...aliasDraft, from: e.currentTarget.value })}
+              onKeyDown={(e) => e.key === "Enter" && addAlias()}
+            />
+          </div>
+        </div>
+        <div className="setting-row">
+          <div className="setting-left">
+            <span className="setting-title">{t("settings.f_class")}</span>
+          </div>
+          <div className="setting-right">
+            <Select<ModelTier>
+              ariaLabel={t("settings.f_class")}
+              value={aliasDraft.to}
+              onChange={(to) => setAliasDraft({ ...aliasDraft, to })}
+              options={TIERS.map((c) => ({ value: c, label: virtualId(c, routing.naming_style) }))}
+            />
+          </div>
+        </div>
+        <div className="setting-row">
+          <div className="setting-left" />
+          <div className="setting-right">
+            <Button onClick={addAlias} disabled={busy || !aliasDraft.from.trim()}>
+              {t("settings.add_alias")}
+            </Button>
+          </div>
+        </div>
+      </Section>
     </Drawer>
   );
 }

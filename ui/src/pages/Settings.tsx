@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
-import { api, costText, errorText, modelRows, money, virtualId } from "../api";
+import { useState } from "react";
+import { api, costText, errorText, money, virtualId } from "../api";
 import {
   TIERS,
   type AppConfig,
@@ -49,17 +49,8 @@ export default function Settings({
   const { config, server } = snapshot;
   const { t, lang, setLang } = useI18n();
   const notify = useToast();
-  // Candidates for the vision fallback: enabled models that can see, on
-  // enabled providers. Mirrors what the backend resolver accepts.
-  const visionCapable = modelRows(snapshot).filter(
-    (r) =>
-      r.model.enabled &&
-      r.model.capabilities.vision &&
-      config.providers.find((p) => p.id === r.model.provider_id)?.enabled,
-  );
   const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
   const [originError, setOriginError] = useState<string | null>(null);
-  const [aliasDraft, setAliasDraft] = useState({ from: "", to: "standard" as ModelTier });
   const [originDraft, setOriginDraft] = useState("");
   const [budgetDraft, setBudgetDraft] = useState({
     scope: "global",
@@ -68,7 +59,6 @@ export default function Settings({
     currency: "USD",
   });
   const [revealed, setRevealed] = useState<string | null>(null);
-  const [logs, setLogs] = useState<string[] | null>(null);
 
   const patchServer = (patch: Partial<AppConfig["server"]>) => {
     void save((cfg) => {
@@ -82,30 +72,6 @@ export default function Settings({
     void save((cfg) => {
       const next = structuredClone(cfg);
       Object.assign(next.window, patch);
-      return next;
-    });
-  };
-
-  const patchVision = (patch: Partial<AppConfig["vision"]>) => {
-    void save((cfg) => {
-      const next = structuredClone(cfg);
-      Object.assign(next.vision, patch);
-      return next;
-    });
-  };
-
-  const patchScoring = (patch: Partial<AppConfig["routing"]["scoring"]>) => {
-    void save((cfg) => {
-      const next = structuredClone(cfg);
-      Object.assign(next.routing.scoring, patch);
-      return next;
-    });
-  };
-
-  const patchRouting = (patch: Partial<AppConfig["routing"]>) => {
-    void save((cfg) => {
-      const next = structuredClone(cfg);
-      Object.assign(next.routing, patch);
       return next;
     });
   };
@@ -154,23 +120,6 @@ export default function Settings({
       next.budgets.splice(index, 1);
       return next;
     });
-  };  const addAlias = () => {
-    const from = aliasDraft.from.trim();
-    if (!from) return;
-    void save((cfg) => {
-      const next = structuredClone(cfg);
-      next.routing.client_aliases[from] = aliasDraft.to;
-      return next;
-    });
-    setAliasDraft({ from: "", to: aliasDraft.to });
-  };
-
-  const removeAlias = (from: string) => {
-    void save((cfg) => {
-      const next = structuredClone(cfg);
-      delete next.routing.client_aliases[from];
-      return next;
-    });
   };
 
   const addOrigin = () => {
@@ -189,20 +138,6 @@ export default function Settings({
       return next;
     });
   };
-
-  const loadLogs = useCallback(async () => {
-    try {
-      setLogs(await api.logs());
-    } catch {
-      setLogs([]);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (logs === null) return;
-    const timer = setInterval(loadLogs, 1500);
-    return () => clearInterval(timer);
-  }, [logs !== null, loadLogs]);
 
   const baseUrl = server.base_url ?? `http://${config.server.host}:${config.server.port}`;
 
@@ -319,60 +254,6 @@ export default function Settings({
               </Button>
             </div>
           </div>
-        </Section>
-
-        <Section title={t("vision.title")} hint={t("vision.hint")}>
-          <div className="setting-row">
-            <div className="setting-left">
-              <span className="setting-title">{t("vision.enable")}</span>
-            </div>
-            <div className="setting-right">
-              <input
-                type="checkbox"
-                checked={config.vision.enabled}
-                onChange={(e) => patchVision({ enabled: e.currentTarget.checked })}
-              />
-            </div>
-          </div>
-          {config.vision.enabled && (
-            <>
-              <div className="setting-row">
-                <div className="setting-left">
-                  <span className="setting-title">{t("vision.model")}</span>
-                  <span className="setting-desc">{t("vision.model_hint")}</span>
-                </div>
-                <div className="setting-right">
-                  <Select
-                    ariaLabel={t("vision.model")}
-                    value={config.vision.model}
-                    onChange={(model) => patchVision({ model: model || null })}
-                    placeholder="—"
-                    options={visionCapable.map((r) => ({
-                      value: r.id,
-                      label: r.id,
-                    }))}
-                  />
-                </div>
-              </div>
-              <div className="setting-row">
-                <div className="setting-left">
-                  <span className="setting-title">{t("vision.placeholder")}</span>
-                  <span className="setting-desc">{t("vision.placeholder_hint")}</span>
-                </div>
-                <div className="setting-right">
-                  <CommitInput
-                    value={config.vision.placeholder}
-                    onCommit={(placeholder) =>
-                      placeholder.trim() && patchVision({ placeholder })
-                    }
-                  />
-                </div>
-              </div>
-              {visionCapable.length === 0 && (
-                <p className="field-hint">{t("vision.model_required")}</p>
-              )}
-            </>
-          )}
         </Section>
     </>
   );
@@ -763,166 +644,7 @@ export default function Settings({
         </Section>
     </>
   );
-
-  const advancedPane = (
-    <>
-        <Section title={t("settings.advanced")} hint={t("settings.advanced_hint")}>
-          <h3 className="section-sub">
-            {t("settings.aliases")}
-          </h3>
-          <p className="field-hint">{t("settings.aliases_hint")}</p>
-          {Object.entries(config.routing.client_aliases).length > 0 && (
-            <table className="table">
-              <tbody>
-                {Object.entries(config.routing.client_aliases).map(([from, to]) => (
-                  <tr key={from}>
-                    <td>
-                      <code>{from}</code>
-                    </td>
-                    <td>{virtualId(to, config.routing.naming_style)}</td>
-                    <td>
-                      <Button kind="ghost" onClick={() => removeAlias(from)}>
-                        {t("common.remove")}
-                      </Button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-          <div className="setting-row">
-            <div className="setting-left">
-              <span className="setting-title">{t("settings.f_model_id")}</span>
-            </div>
-            <div className="setting-right">
-              <input
-                value={aliasDraft.from}
-                placeholder="claude-opus-4-1-20250805"
-                onChange={(e) => setAliasDraft({ ...aliasDraft, from: e.currentTarget.value })}
-                onKeyDown={(e) => e.key === "Enter" && addAlias()}
-              />
-            </div>
-          </div>
-          <div className="setting-row">
-            <div className="setting-left">
-              <span className="setting-title">{t("settings.f_class")}</span>
-            </div>
-            <div className="setting-right">
-              <Select<ModelTier>
-                ariaLabel={t("settings.f_class")}
-                value={aliasDraft.to}
-                onChange={(to) => setAliasDraft({ ...aliasDraft, to })}
-                options={TIERS.map((c) => ({ value: c, label: virtualId(c, config.routing.naming_style) }))}
-              />
-            </div>
-          </div>
-          <div className="setting-row">
-            <div className="setting-left" />
-            <div className="setting-right">
-              <Button onClick={addAlias} disabled={busy || !aliasDraft.from.trim()}>
-                {t("settings.add_alias")}
-              </Button>
-            </div>
-          </div>
-
-          <h3 className="section-sub">
-            {t("settings.naming_style")}
-          </h3>
-          <div className="setting-row">
-            <div className="setting-left">
-              <span className="setting-title">{t("settings.naming_style")}</span>
-            </div>
-            <div className="setting-right">
-              <Segment<NamingStyle>
-                ariaLabel={t("settings.naming_style")}
-                value={config.routing.naming_style}
-                onChange={(naming_style) => patchRouting({ naming_style })}
-                options={[
-                  { value: "internal", label: t("settings.naming_internal") },
-                  { value: "anthropic", label: t("settings.naming_anthropic") },
-                  { value: "openai", label: t("settings.naming_openai") },
-                ]}
-              />
-            </div>
-          </div>
-
-          <h3 className="section-sub">
-            {t("settings.election")}
-          </h3>
-          <p className="field-hint">{t("settings.election_hint")}</p>
-          <div className="setting-row">
-            <div className="setting-left">
-              <span className="setting-title">{t("settings.price_weight")}</span>
-              <span className="setting-desc">{t("settings.price_weight_hint")}</span>
-            </div>
-            <div className="setting-right">
-              <CommitNumber
-                min={0}
-                value={config.routing.scoring.price_weight}
-                onCommit={(v) => patchScoring({ price_weight: v ?? 0 })}
-              />
-            </div>
-          </div>
-          <div className="setting-row">
-            <div className="setting-left">
-              <span className="setting-title">{t("settings.latency_weight")}</span>
-            </div>
-            <div className="setting-right">
-              <CommitNumber
-                min={0}
-                value={config.routing.scoring.latency_weight}
-                onCommit={(v) => patchScoring({ latency_weight: v ?? 0 })}
-              />
-            </div>
-          </div>
-          <div className="setting-row">
-            <div className="setting-left">
-              <span className="setting-title">{t("settings.ref_input")}</span>
-              <span className="setting-desc">{t("settings.ref_input_hint")}</span>
-            </div>
-            <div className="setting-right">
-              <CommitNumber
-                min={0}
-                integer
-                value={config.routing.scoring.reference_input_tokens}
-                onCommit={(v) => patchScoring({ reference_input_tokens: v ?? 0 })}
-              />
-            </div>
-          </div>
-          <div className="setting-row">
-            <div className="setting-left">
-              <span className="setting-title">{t("settings.ref_output")}</span>
-            </div>
-            <div className="setting-right">
-              <CommitNumber
-                min={0}
-                integer
-                value={config.routing.scoring.reference_output_tokens}
-                onCommit={(v) => patchScoring({ reference_output_tokens: v ?? 0 })}
-              />
-            </div>
-          </div>
-
-          <h3 className="section-sub">
-            {t("settings.log")}
-          </h3>
-          {logs === null ? (
-            <Button kind="ghost" onClick={loadLogs}>
-              {t("settings.show_log")}
-            </Button>
-          ) : (
-            <>
-              <pre className="log-view">{logs.join("\n")}</pre>
-              <Button kind="ghost" onClick={() => setLogs(null)}>
-                {t("settings.stop_follow")}
-              </Button>
-            </>
-          )}
-        </Section>
-    </>
-  );
-
-  const [tab, setTab] = useState<"general" | "gateway" | "budgets" | "advanced">("general");
+  const [tab, setTab] = useState<"general" | "gateway" | "budgets">("general");
 
   return (
     <>
@@ -938,7 +660,6 @@ export default function Settings({
           { value: "general", label: t("settings.tab_general"), content: generalPane },
           { value: "gateway", label: t("settings.tab_gateway"), content: gatewayPane },
           { value: "budgets", label: t("settings.tab_budgets"), content: budgetsPane },
-          { value: "advanced", label: t("settings.tab_advanced"), content: advancedPane },
         ]}
       />
     </>
