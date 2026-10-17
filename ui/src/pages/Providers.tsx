@@ -7,18 +7,20 @@ import {
   money,
   previewId,
   slugify,
+  type AccountBalance,
+  type AccountEvent,
+  type AccountSyncOutcome,
   type AppConfig,
   type BalanceStatus,
   type CcProviderDraft,
   type CcSwitchPreview,
   type CheckinView,
-  type AccountBalance,
-  type AccountEvent,
   type DiscoveredModel,
   type Maintenance,
   type Provider,
   type ProviderClientProfile,
   type ProviderKind,
+  type ReconcileReport,
   type Snapshot,
 } from "../api";
 import {
@@ -150,6 +152,11 @@ export default function Providers({
   const [ccPreview, setCcPreview] = useState<CcSwitchPreview | null>(null);
   const [ccLoading, setCcLoading] = useState(false);
   const [ccSelected, setCcSelected] = useState<Record<string, boolean>>({});
+  // What the last account probe established, held as the backend's own report
+  // rather than a summary of it. Null means no probe has been run, which is a
+  // different thing from a probe that found nothing, and the panel says which.
+  const [report, setReport] = useState<ReconcileReport | null>(null);
+  const [probing, setProbing] = useState(false);
   const isMounted = useRef(true);
   useEffect(() => () => { isMounted.current = false; }, []);
 
@@ -233,6 +240,36 @@ export default function Providers({
     setOpenId(null);
     if (models.length) {
       notify("ok", t("providers.removed_models_notice", { n: models.length }));
+    }
+  };
+
+  /**
+   * Probe every declared account and show what the reconciler did with each.
+   *
+   * One call covers every provider, which is why this sits on the page and not
+   * inside one provider's drawer: a per-provider button would report accounts
+   * belonging to providers the reader is not looking at. The returned document is
+   * stored as-is rather than folded into a total, because the four outcomes are
+   * four different statements — see `AccountSyncOutcome` in `api.ts` and the row
+   * renderer below, which keeps them apart for the same reason the check-in
+   * phases are kept apart.
+   *
+   * Nothing calls this on a timer or at startup: probing costs a network request
+   * per account, so the button is the policy about when.
+   */
+  const probeAccounts = async () => {
+    setProbing(true);
+    try {
+      setReport(await api.reconcileAccounts());
+      // The reconciler published into the account store, which is where the
+      // snapshot's balances and per-account figures are read from. Re-read the
+      // snapshot rather than patching it here, so the panel cannot end up showing
+      // a probe result beside balances from before it ran.
+      await run(api.snapshot);
+    } catch (e) {
+      notify("error", errorText(e));
+    } finally {
+      setProbing(false);
     }
   };
 
@@ -327,6 +364,37 @@ export default function Providers({
             );
           })}
         </div>
+      )}
+
+      {/*
+        Offered only when the build actually contains the account subsystem.
+        Same discipline as the check-in section below: a command that was never
+        registered looks exactly like one that failed, so the absence is declared
+        in the snapshot rather than discovered by pressing the button. It is a
+        different flag from `account_maintenance_available` — `account-maint`
+        implies `account`, and reading one for the other offers a control this
+        build cannot serve.
+      */}
+      {snapshot.account_available && (
+        <Section
+          title={t("providers.probe_section")}
+          hint={t("providers.probe_hint")}
+          actions={
+            <Button
+              kind="ghost"
+              onClick={() => void probeAccounts()}
+              disabled={busy || probing}
+            >
+              {probing ? t("providers.probing") : t("providers.probe_now")}
+            </Button>
+          }
+        >
+          {report === null ? (
+            <Empty>{t("providers.probe_idle")}</Empty>
+          ) : (
+            <ReconcileTable report={report} />
+          )}
+        </Section>
       )}
 
       <Section title={t("providers.add_section")} hint={t("providers.add_hint")}>
@@ -435,6 +503,81 @@ export default function Providers({
         />
       )}
     </>
+  );
+}
+
+/**
+ * What one probe established per declared account, one row each.
+ *
+ * An empty report is its own sentence rather than an empty table: it says every
+ * account that was declared is disabled, which is not the same as a probe that
+ * ran and found nothing to report.
+ */
+function ReconcileTable({ report }: { report: ReconcileReport }) {
+  const { t } = useI18n();
+  if (report.outcomes.length === 0) {
+    return <Empty>{t("providers.probe_none")}</Empty>;
+  }
+  return (
+    <table className="table">
+      <thead>
+        <tr>
+          <th>{t("field.provider")}</th>
+          <th>{t("field.account")}</th>
+          <th>{t("providers.probe_outcome")}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {report.outcomes.map(([providerId, accountId, outcome], index) => (
+          <tr key={`${providerId}/${accountId}/${index}`}>
+            <td className="mono">{providerId}</td>
+            <td className="mono">{accountId}</td>
+            <td>
+              <ReconcileOutcome outcome={outcome} />
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+/**
+ * One account's outcome, in the backend's own terms.
+ *
+ * The four are kept apart rather than collapsed into one healthy/unhealthy pair,
+ * for the reason the check-in phases are: `refreshed` is a reading, `unsupported`
+ * is an account nothing was able to ask, `partially_reported` is a provider that
+ * declined to say something, and `failed` is an account that was asked and
+ * refused. Rendering the last two as the same "problem", or the first two as the
+ * same "healthy", loses the distinction the report exists to preserve.
+ *
+ * A failure's reason is printed rather than replaced: it names the credential or
+ * the declaration that is wrong, and a row that only said "failed" would leave
+ * the reader to guess which.
+ */
+function ReconcileOutcome({ outcome }: { outcome: AccountSyncOutcome }) {
+  const { t } = useI18n();
+  if (outcome === "refreshed") {
+    return <span className="row-sub">{t("account.sync.refreshed")}</span>;
+  }
+  if (outcome === "unsupported") {
+    return <span className="row-sub">{t("account.sync.unsupported")}</span>;
+  }
+  if ("failed" in outcome) {
+    return (
+      <span className="row-sub warn-text">
+        {t("account.sync.failed")} · {outcome.failed.reason}
+      </span>
+    );
+  }
+  // The missing fields are named rather than counted, because "partially
+  // reported" without the list is a claim that something was withheld without
+  // saying what.
+  return (
+    <span className="row-sub">
+      {t("account.sync.partially_reported")} · {outcome.partially_reported.missing.join(", ")}
+    </span>
   );
 }
 
