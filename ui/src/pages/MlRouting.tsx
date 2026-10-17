@@ -8,6 +8,8 @@ import {
   type MlStatus,
   type MlTraceClear,
   type MlTraceInfo,
+  type PromotionCriterion,
+  type PromotionDecision,
   type PromotionVerdict,
   type ShadowAnalysisStatus,
 } from "../api";
@@ -111,8 +113,24 @@ export default function MlRouting({
   useEffect(() => {
     void read();
     if (!available) return;
-    const timer = setInterval(() => void read(), POLL_MS);
-    return () => clearInterval(timer);
+    // A hidden window is not being read, so a status document fetched every two
+    // seconds is work whose only consumer is a screen nobody is looking at —
+    // and the status walk touches every configured candidate, so it is not
+    // free. The poll resumes on the first tick after the window is visible
+    // again, and becoming visible refreshes immediately rather than leaving the
+    // panel showing the counters it had when it was hidden.
+    const timer = setInterval(() => {
+      if (document.visibilityState === "hidden") return;
+      void read();
+    }, POLL_MS);
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") void read();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
   }, [read, available]);
 
   useEffect(() => {
@@ -360,20 +378,7 @@ export default function MlRouting({
         }
       />
 
-      {decision && (
-        <details style={{ marginTop: 12 }}>
-          <summary>{t("ml.criteria")}</summary>
-          <ul className="ml-criteria">
-            {decision.criteria.map((criterion) => (
-              <li key={criterion.name}>
-                <StatusDot tone={criterion.held ? "ok" : "warn"} />
-                <code>{criterion.name}</code>
-                <span className="muted"> {criterion.reason}</span>
-              </li>
-            ))}
-          </ul>
-        </details>
-      )}
+      {decision && <Criteria decision={decision} />}
 
       {/* -- Replay: what would the serving model have done differently? ------- */}
       <div className="row" style={{ gap: 8, marginTop: 12 }}>
@@ -540,6 +545,10 @@ function RoundResult({ round }: { round: MlPromotionRoundStatus }) {
           {t("ml.round_error")}: {round.error}
         </p>
       )}
+      {/* The criteria belong to this round, not to whatever is serving. A round
+          that was refused is exactly the case where they are the answer: the
+          verdict names that something did not hold, and these rows name what. */}
+      {round.decision && <Criteria decision={round.decision} />}
     </div>
   );
 }
@@ -565,6 +574,81 @@ function VerdictBadge({ verdict }: { verdict: PromotionVerdict }) {
             : "ml.verdict_rejected",
       )}
     </Badge>
+  );
+}
+
+/**
+ * The gate's judgement, criterion by criterion.
+ *
+ * A verdict is one word and a decision is thirty rows: `blocked` says there was
+ * not enough evidence to judge, and only the rows say which evidence was short
+ * and by how much. The panel therefore shows the failing rows unconditionally
+ * and folds the passing ones behind a disclosure — a criterion that held is
+ * evidence the gate worked, not something to act on, so it must not push the
+ * one that did not hold off the screen.
+ *
+ * The numbers are printed with the names they belong to rather than compared on
+ * the reader's behalf: `measured` and `threshold` are the two values the gate
+ * compared, and deciding whether 12 is close to 30 is a judgement the panel
+ * should not make for whoever has to decide whether to collect more traffic.
+ */
+function Criteria({ decision }: { decision: PromotionDecision }) {
+  const { t } = useI18n();
+  const blockers = decision.criteria.filter((criterion) => !criterion.held);
+  const held = decision.criteria.filter((criterion) => criterion.held);
+  const total = decision.criteria.length;
+
+  return (
+    <div className="ml-criteria-block">
+      {blockers.length > 0 ? (
+        <>
+          <div className="section-sub">
+            {t("ml.criteria_refused", { n: blockers.length, total })}
+          </div>
+          <ul className="ml-criteria">
+            {blockers.map((criterion) => (
+              <Criterion key={criterion.name} criterion={criterion} />
+            ))}
+          </ul>
+        </>
+      ) : (
+        <p className="muted" style={{ marginTop: 8 }}>
+          {t("ml.criteria_all_held", { total })}
+        </p>
+      )}
+
+      {held.length > 0 && (
+        <details style={{ marginTop: 8 }}>
+          <summary>{t("ml.criteria_held_list", { n: held.length })}</summary>
+          <ul className="ml-criteria">
+            {held.map((criterion) => (
+              <Criterion key={criterion.name} criterion={criterion} />
+            ))}
+          </ul>
+        </details>
+      )}
+    </div>
+  );
+}
+
+/** One criterion: whether it held, the numbers it was decided on, and why. */
+function Criterion({ criterion }: { criterion: PromotionCriterion }) {
+  const { t } = useI18n();
+  return (
+    <li>
+      <StatusDot tone={criterion.held ? "ok" : "warn"} />
+      <div className="ml-criterion-body">
+        <code>{criterion.name}</code>{" "}
+        <span className="muted">
+          {criterion.measured === null
+            ? t("ml.criterion_unmeasured")
+            : t("ml.criterion_measured", { value: measurement(criterion.measured) })}
+          {criterion.threshold !== null &&
+            ` · ${t("ml.criterion_threshold", { value: measurement(criterion.threshold) })}`}
+        </span>{" "}
+        <span>{criterion.reason}</span>
+      </div>
+    </li>
   );
 }
 
@@ -712,6 +796,20 @@ function pct(value: number): string {
 /** A count, grouped so a six-figure sample total stays readable. */
 function count(value: number): string {
   return value.toLocaleString();
+}
+
+/**
+ * A measured value, with no sign.
+ *
+ * Deliberately not [`number`] below: that one prefixes a positive value with `+`
+ * because it renders a *delta*, and a threshold printed as `+30` reads as a
+ * change of thirty rather than as a floor. Integers are grouped; everything else
+ * is rounded to four decimals, which is the resolution the gate compares at.
+ */
+function measurement(value: number): string {
+  if (!Number.isFinite(value)) return "—";
+  if (Number.isInteger(value)) return value.toLocaleString();
+  return String(Math.round(value * 10_000) / 10_000);
 }
 
 /**
