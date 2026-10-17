@@ -333,7 +333,11 @@ pub async fn refresh_balances(app: AppHandle, desktop: State<'_, Arc<Desktop>>) 
     // probing here rather than to a timer of its own is what stops it from
     // multiplying one provider's API traffic by the number of its accounts every
     // minute, unasked. One button, one reading per account, one snapshot back.
-    #[cfg(feature = "newapi")]
+    // `account`, not `newapi`: this calls `Desktop::reconcile_accounts`, which is
+    // gated on `account`, and `newapi` does not enable that in this crate even
+    // though it does in zroutery-core. A build with newapi and without account was
+    // legal on the command line and did not compile.
+    #[cfg(feature = "account")]
     let _ = desktop.reconcile_accounts().await;
     Ok(refreshed(&app, &desktop).await)
 }

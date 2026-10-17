@@ -34,7 +34,7 @@
     "crates/zroutery-core/src/ml/evaluation.rs",
     "crates/zroutery-core/src/ml/offline_gate.rs",
     "crates/zroutery-core/src/ml/model_identity.rs",
-    "crates/zroutery-core/src/outcome.rs"
+    "crates/zroutery-core/src/outcome/mod.rs"
   ],
   "notes": [
     "REPLAY EQUIVALENCE IS BIT-IDENTICAL AND MAY NOT BE APPROXIMATE. Every float is compared through to_bits, never through ==, so +0.0 and -0.0 are correctly a divergence. There is no epsilon, no rounding and no partial comparison anywhere in the module; a sweep of the new file for tolerance constructs found none. Any non-identical result is a typed refusal naming the FIRST differing component in a fixed documented order, not a pass with a small delta.",

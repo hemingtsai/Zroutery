@@ -18,6 +18,7 @@ import {
   Banner,
   Button,
   ConfirmDialog,
+  Disclosure,
   Empty,
   KeyValue,
   Section,
@@ -26,7 +27,7 @@ import {
   num,
   type ConfirmRequest,
 } from "../components";
-import { useI18n } from "../i18n";
+import { useI18n, type TKey } from "../i18n";
 
 /** How many records an on-demand replay reads. */
 const REPLAY_LIMIT = 5_000;
@@ -113,12 +114,9 @@ export default function MlRouting({
   useEffect(() => {
     void read();
     if (!available) return;
-    // A hidden window is not being read, so a status document fetched every two
-    // seconds is work whose only consumer is a screen nobody is looking at —
-    // and the status walk touches every configured candidate, so it is not
-    // free. The poll resumes on the first tick after the window is visible
-    // again, and becoming visible refreshes immediately rather than leaving the
-    // panel showing the counters it had when it was hidden.
+    // The status document walks every candidate, so a panel left open in a
+    // background window pays that cost for a screen nobody is looking at. Skip
+    // the tick while hidden, and refresh once when the window comes back.
     const timer = setInterval(() => {
       if (document.visibilityState === "hidden") return;
       void read();
@@ -378,7 +376,7 @@ export default function MlRouting({
         }
       />
 
-      {decision && <Criteria decision={decision} />}
+      {decision && <GateCriteria decision={decision} />}
 
       {/* -- Replay: what would the serving model have done differently? ------- */}
       <div className="row" style={{ gap: 8, marginTop: 12 }}>
@@ -395,8 +393,7 @@ export default function MlRouting({
       {replay && <Replay verdict={replay} />}
 
       {status.history.length > 0 && (
-        <details style={{ marginTop: 8 }}>
-          <summary>{t("ml.history")}</summary>
+        <Disclosure title={t("ml.history")} count={status.history.length}>
           <ul className="ml-criteria">
             {status.history
               .slice()
@@ -411,7 +408,7 @@ export default function MlRouting({
                 </li>
               ))}
           </ul>
-        </details>
+        </Disclosure>
       )}
       </Section>
 
@@ -540,16 +537,56 @@ function RoundResult({ round }: { round: MlPromotionRoundStatus }) {
           ].filter(Boolean) as [React.ReactNode, React.ReactNode][]
         }
       />
+      {round.decision && <GateCriteria decision={round.decision} />}
       {round.error && (
         <p className="ml-fault" role="alert">
           {t("ml.round_error")}: {round.error}
         </p>
       )}
-      {/* The criteria belong to this round, not to whatever is serving. A round
-          that was refused is exactly the case where they are the answer: the
-          verdict names that something did not hold, and these rows name what. */}
-      {round.decision && <Criteria decision={round.decision} />}
     </div>
+  );
+}
+
+/**
+ * Every criterion the gate decided on, with the number it decided with.
+ *
+ * Shared by the two places a decision is shown: what is serving now, and the
+ * round that was just judged. They are the same document and the same question,
+ * and a panel that answered it in one place and not the other sent an operator
+ * asking "why was this refused?" to a screen that only said "blocked".
+ *
+ * The criteria that held are still listed rather than filtered out: a reader
+ * checking a refusal against the whole gate needs to see that the gate asked
+ * nine questions and not one.
+ */
+function GateCriteria({ decision }: { decision: PromotionDecision }) {
+  const { t } = useI18n();
+  const held = decision.criteria.filter((criterion) => criterion.held).length;
+
+  return (
+    <Disclosure title={t("ml.criteria")} count={<>{held}/{decision.criteria.length}</>}>
+      <ul className="ml-criteria">
+        {decision.criteria.map((criterion) => (
+          <li key={criterion.name}>
+            <StatusDot tone={criterion.held ? "ok" : "warn"} />
+            <span className="ml-criterion-name">{criterionName(criterion.name, t)}</span>
+            {criterionValue(criterion, t) && (
+              <span className="ml-criterion-value">{criterionValue(criterion, t)}</span>
+            )}
+            {/*
+              The gate's own prose, in the gate's own language, and only where
+              it failed. On a passing row it restates the two numbers already
+              shown beside it, so it is dropped rather than translated — a
+              criterion whose reason mattered would need the reason to come
+              from the backend as structured fields, not as a format string.
+            */}
+            {!criterion.held && criterion.reason && (
+              <span className="muted ml-criterion-reason">{criterion.reason}</span>
+            )}
+          </li>
+        ))}
+      </ul>
+    </Disclosure>
   );
 }
 
@@ -574,81 +611,6 @@ function VerdictBadge({ verdict }: { verdict: PromotionVerdict }) {
             : "ml.verdict_rejected",
       )}
     </Badge>
-  );
-}
-
-/**
- * The gate's judgement, criterion by criterion.
- *
- * A verdict is one word and a decision is thirty rows: `blocked` says there was
- * not enough evidence to judge, and only the rows say which evidence was short
- * and by how much. The panel therefore shows the failing rows unconditionally
- * and folds the passing ones behind a disclosure — a criterion that held is
- * evidence the gate worked, not something to act on, so it must not push the
- * one that did not hold off the screen.
- *
- * The numbers are printed with the names they belong to rather than compared on
- * the reader's behalf: `measured` and `threshold` are the two values the gate
- * compared, and deciding whether 12 is close to 30 is a judgement the panel
- * should not make for whoever has to decide whether to collect more traffic.
- */
-function Criteria({ decision }: { decision: PromotionDecision }) {
-  const { t } = useI18n();
-  const blockers = decision.criteria.filter((criterion) => !criterion.held);
-  const held = decision.criteria.filter((criterion) => criterion.held);
-  const total = decision.criteria.length;
-
-  return (
-    <div className="ml-criteria-block">
-      {blockers.length > 0 ? (
-        <>
-          <div className="section-sub">
-            {t("ml.criteria_refused", { n: blockers.length, total })}
-          </div>
-          <ul className="ml-criteria">
-            {blockers.map((criterion) => (
-              <Criterion key={criterion.name} criterion={criterion} />
-            ))}
-          </ul>
-        </>
-      ) : (
-        <p className="muted" style={{ marginTop: 8 }}>
-          {t("ml.criteria_all_held", { total })}
-        </p>
-      )}
-
-      {held.length > 0 && (
-        <details style={{ marginTop: 8 }}>
-          <summary>{t("ml.criteria_held_list", { n: held.length })}</summary>
-          <ul className="ml-criteria">
-            {held.map((criterion) => (
-              <Criterion key={criterion.name} criterion={criterion} />
-            ))}
-          </ul>
-        </details>
-      )}
-    </div>
-  );
-}
-
-/** One criterion: whether it held, the numbers it was decided on, and why. */
-function Criterion({ criterion }: { criterion: PromotionCriterion }) {
-  const { t } = useI18n();
-  return (
-    <li>
-      <StatusDot tone={criterion.held ? "ok" : "warn"} />
-      <div className="ml-criterion-body">
-        <code>{criterion.name}</code>{" "}
-        <span className="muted">
-          {criterion.measured === null
-            ? t("ml.criterion_unmeasured")
-            : t("ml.criterion_measured", { value: measurement(criterion.measured) })}
-          {criterion.threshold !== null &&
-            ` · ${t("ml.criterion_threshold", { value: measurement(criterion.threshold) })}`}
-        </span>{" "}
-        <span>{criterion.reason}</span>
-      </div>
-    </li>
   );
 }
 
@@ -799,20 +761,6 @@ function count(value: number): string {
 }
 
 /**
- * A measured value, with no sign.
- *
- * Deliberately not [`number`] below: that one prefixes a positive value with `+`
- * because it renders a *delta*, and a threshold printed as `+30` reads as a
- * change of thirty rather than as a floor. Integers are grouped; everything else
- * is rounded to four decimals, which is the resolution the gate compares at.
- */
-function measurement(value: number): string {
-  if (!Number.isFinite(value)) return "—";
-  if (Number.isInteger(value)) return value.toLocaleString();
-  return String(Math.round(value * 10_000) / 10_000);
-}
-
-/**
  * A signed mean, or "—".
  *
  * "—" is not zero. A body with nothing measured reports no number, and showing a
@@ -828,4 +776,76 @@ function number(value: number | null): string {
 function when(seconds: number): string {
   if (!seconds) return "—";
   return new Date(seconds * 1000).toLocaleString();
+}
+
+/** The nine checks `PromotionGate::evaluate` can report, in evaluation order. */
+const CRITERION_NAMES = new Set([
+  "baseline_present",
+  "paired_evidence",
+  "holdout_quality",
+  "routing_utility",
+  "selection_safety",
+  "success_regression",
+  "cost_regression",
+  "latency_regression",
+  "dataset_identity",
+]);
+
+/**
+ * A criterion's name, translated.
+ *
+ * `PromotionCriterion::name` is documented as a stable identifier so a decision
+ * can be reasoned about by name, which makes it a translation key rather than
+ * prose the backend happens to have written in English. The fallback is the
+ * identifier itself: a criterion a newer backend adds has to stay visible, and
+ * an untranslated `dataset_freshness` is a smaller problem than a blank row in
+ * a list where every other row is named.
+ */
+function criterionName(
+  name: string,
+  t: (key: TKey, params?: Record<string, string | number>) => string,
+): string {
+  return CRITERION_NAMES.has(name) ? t(`ml.criterion.${name}` as TKey) : name;
+}
+
+/**
+ * The number the criterion was decided on, per ADR-0007's "every criterion with
+ * the number it was decided on".
+ *
+ * Null for the two checks that are facts rather than measurements —
+ * `baseline_present` and `dataset_identity` both pass `None` for both fields —
+ * so the row simply carries no figure instead of showing a placeholder that
+ * reads like a measurement of zero.
+ */
+function criterionValue(
+  criterion: PromotionCriterion,
+  t: (key: TKey, params?: Record<string, string | number>) => string,
+): string | null {
+  if (criterion.measured === null || criterion.threshold === null) return null;
+  return t("ml.criterion_value", {
+    measured: formatMeasure(criterion.measured, criterion.name),
+    threshold: formatMeasure(criterion.threshold, criterion.name),
+  });
+}
+
+/**
+ * The four-decimal default is wrong for two of the nine: an evidence count of
+ * 1842 and a latency budget in milliseconds both read as noise with four
+ * decimals on them. Grouped by criterion rather than by magnitude, because
+ * whether a figure is a count or a measurement is a property of the check and
+ * not something the number's own size can tell you.
+ */
+function formatMeasure(value: number, criterion: string): string {
+  switch (criterion) {
+    case "paired_evidence":
+    case "success_regression":
+    case "selection_safety":
+      return String(Math.round(value));
+    case "latency_regression":
+      return `${value.toFixed(1)} ms`;
+    case "holdout_quality":
+      return value.toFixed(4);
+    default:
+      return value.toFixed(4);
+  }
 }

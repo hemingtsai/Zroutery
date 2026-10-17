@@ -36,7 +36,7 @@
     "docs/development/repository-audit-2026-09-25.md",
     "crates/zroutery-core/src/ml/dataset.rs",
     "crates/zroutery-core/src/feedback.rs",
-    "crates/zroutery-core/src/outcome.rs"
+    "crates/zroutery-core/src/outcome/mod.rs"
   ],
   "notes": [
     "The audit kept this node blocked for want of a trustworthy production Outcome; that reason is closed and the node's own work is accepted.",

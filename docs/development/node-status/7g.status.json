@@ -25,8 +25,8 @@
   ],
   "source_references": [
     "docs/development/repository-audit-2026-09-25.md",
-    "crates/zroutery-core/src/agent_takeover.rs",
-    "crates/zroutery-core/src/migration.rs"
+    "crates/zroutery-core/src/agent_takeover/mod.rs",
+    "crates/zroutery-core/src/migration/mod.rs"
   ],
   "notes": [
     "No production takeover is claimed.",

@@ -109,6 +109,10 @@ const en = {
   "route.default_hint": "ordinary requests",
   "route.auto_review": "Auto review",
   "route.review_hint_on": "permission checks",
+  "routing.tab_group": "Routing subjects",
+  "routing.tab_ml": "Learned routing",
+  "routing.tab_main": "Model routes",
+  "routing.tab_auto": "Auto review",
   "route.review_hint_off": "follows Default",
   "route.check": "check",
   "route.no_tier": "No tier has a model.",
@@ -311,6 +315,14 @@ const en = {
   // panel never presents one as the other.
   "account.reward_weak_source": "read from provider log text",
   "account.reward_inferred": "inferred from the balance change",
+  "account.effect.credited": "observed: added",
+  "account.effect.debited": "observed: taken",
+  "account.effect.no_change": "observed: nothing moved",
+  "account.effect.unobserved": "not observed either way",
+  "account.source.provider_response": "reported by the provider",
+  "account.source.account_state": "read from the account state",
+  "account.source.account_log": "read from the account log",
+  "account.source.operation_response": "from the operation response",
   "account.checkin": "Check in",
   "account.resume": "Continue in the open window",
   "account.cancel": "Cancel",
@@ -318,12 +330,52 @@ const en = {
   "account.not_enabled":
     "Check-in is switched off for this account. Turn it on in its maintenance settings first.",
   "account.need_path":
-    "This account has no check-in page. Set maintenance.checkin_path to the panel page that carries the check-in control.",
+    "This account has no check-in page. Point maintenance.checkin_path at the panel page that carries the check-in control.",
   "account.need_selector":
-    "This account has no check-in control. Set maintenance.checkin_trigger_selector to a CSS selector for the button, such as button.checkin.",
+    "This account has no check-in control. Set maintenance.checkin_trigger_selector to a CSS selector for that button, for example button.checkin.",
   "account.start_failed": "Could not start the check-in",
   "account.resume_failed": "Could not continue the check-in",
   "account.cancel_failed": "Could not cancel the check-in",
+
+  // ------------------------------------------------------- account probing
+  //
+  // A probe is not a check-in. It asks the provider what state an account is in
+  // and reports what came back; it never opens a browser and never grants
+  // anything. The wording keeps that apart, because "check in" next to a button
+  // that only reads would send the reader looking for a reward that is not there.
+  //
+  // The probe runs on the button and never on a timer: it costs one request per
+  // declared account, and a proxy that probes on its own turns a slow panel into
+  // a slow start. Saying so is part of the hint, not a footnote.
+  "providers.probe_section": "Account probe",
+  "providers.probe_hint":
+    "Ask each declared account's platform what state it is in, and publish the result. One request per account, so it happens when you press the button and never on its own. An account that is switched off is not probed at all, so it does not appear in the list.",
+  "providers.probe_now": "Probe every account",
+  /*
+   * One press over `refresh_balance` per provider, which is the only way to do
+   * it today. It also probes every account, because `refresh_balances` does both
+   * levels in one snapshot — so this is not merely "the same thing, all at once"
+   * as the probe below it, which asks the same accounts but answers with the
+   * per-account outcome.
+   */
+  "providers.refresh_all": "Refresh every balance",
+  "providers.probing": "Probing…",
+  "providers.probe_idle":
+    "Nothing has been probed yet. Until you press the button, no account has been asked.",
+  "providers.probe_none":
+    "The probe ran and found nothing: no provider declares an enabled account.",
+  "providers.probe_outcome": "Outcome",
+  "field.account": "Account",
+  /*
+   * Four outcomes, four sentences. They are kept apart because each answers a
+   * different question, and a single healthy/unhealthy pair would say an account
+   * nobody could ask about was an account in trouble.
+   */
+  "account.sync.refreshed": "Probed",
+  "account.sync.partially_reported": "Reported without",
+  "account.sync.unsupported":
+    "No backend in this build can ask this provider — not probed",
+  "account.sync.failed": "Probe failed",
 
   // ------------------------------------------------------------- routing
   "routing.lede":
@@ -334,6 +386,10 @@ const en = {
   "tier.hint.standard": "the everyday workhorse",
   "tier.hint.reasoning": "the strongest, most expensive tier",
   "tier.hint.frontier": "cutting-edge frontier models",
+  "tier.name.fast": "Fast",
+  "tier.name.standard": "Standard",
+  "tier.name.reasoning": "Reasoning",
+  "tier.name.frontier": "Frontier",
   "routing.tier_empty": "Empty — requests for {id} fail until a model joins this tier.",
   "routing.fallback_n": "fallback {n}",
   "routing.request": "request",
@@ -361,7 +417,7 @@ const en = {
   "routing.claude_names": "Understand Claude model names",
   "routing.claude_names_hint": "claude-*-sonnet-* maps onto the matching tier",
   "routing.aliases_note":
-    "Everything else must be an exact id, an alias, or a configured client alias (Settings → Advanced).",
+    "Everything else must be an exact id, or one of the client aliases below.",
   "routing.election": "Election",
   "routing.election_hint":
     "One tiny request per model measures latency and price, then pins the order.",
@@ -400,6 +456,13 @@ const en = {
     "Auto review: {n} checks · {failed} failed · avg {latency} — counted separately from main traffic.",
   "activity.nothing": "Nothing yet.",
   "activity.health": "Model health",
+  "activity.tab_group": "Activity subjects",
+  "activity.tab_usage": "Requests and usage",
+  "activity.tab_log": "Internal log",
+  "activity.log_section": "Internal log",
+  "activity.log_hint": "The process's own output, followed while this pane is open",
+  "activity.show_log": "Show the internal log",
+  "activity.stop_follow": "Stop following",
   "activity.health_hint": "Circuit-breaker state per model, shared by every routing pool.",
   "activity.ok_failed": "{ok} ok / {failed} failed",
   "activity.cooling": "cooling {n}s",
@@ -430,7 +493,7 @@ const en = {
   "activity.unpriced": "unpriced",
 
   // ------------------------------------------------------------ settings
-  "settings.lede": "How the box is wired: the gateway, the limits, and the deep knobs.",
+  "settings.lede": "Application behaviour, the gateway it serves, and what it is allowed to spend.",
   "settings.gateway": "Gateway",
   "settings.gateway_hint": "Serving {url} · {path}",
   "field.host": "Host",
@@ -482,27 +545,36 @@ const en = {
   "budget.used_up": "used up",
   "budget.add": "Add budget",
   "budget.currency_hint": "In the currency your models bill in",
-  "settings.advanced": "Advanced",
-  "settings.advanced_hint":
-    "Client aliases, election weights and the internal log — the knobs nobody needs on the way in.",
+  /*
+   * The weights, under a heading of their own inside the balanced-election
+   * section. They were a section on their own once and read as a peer of the
+   * strategy that gives them meaning; here they are a part of it.
+   */
+  "settings.election_weights": "How it weighs them",
+  /*
+   * One section for tier naming and client aliases, because both decide what id
+   * a client is allowed to ask for, and both are read by every page that
+   * renders a virtual id.
+   */
+  "settings.tier_naming_section": "What a client may ask for",
+  "settings.naming_style_hint":
+    "How tiers are named everywhere in this app, not only in routing",
+  "settings.tab_group": "Settings subjects",
+  "settings.tab_general": "General",
+  "settings.tab_gateway": "Gateway",
+  "settings.tab_budgets": "Budgets",
   "settings.aliases": "Client model aliases",
   "settings.aliases_hint":
     "Map an exact model id a client sends onto a tier. Wins over the Claude name heuristic.",
   "settings.f_model_id": "Model id",
   "settings.f_class": "Tier",
   "settings.add_alias": "Add alias",
-  "settings.election": "Balanced election",
-  "settings.election_hint":
-    "How the Balanced strategy weighs latency against price. Only meaningful with the Balanced strategy (Routing → Default → Edit).",
   "settings.price_weight": "Price weight",
   "settings.price_weight_hint": "Relative, so 3 and 1 means the same as 0.75 and 0.25",
   "settings.latency_weight": "Latency weight",
   "settings.ref_input": "Reference input tokens",
   "settings.ref_input_hint": "Prices are per Mtok, so they need a request to be compared on",
   "settings.ref_output": "Reference output tokens",
-  "settings.log": "Log",
-  "settings.show_log": "Show the internal log",
-  "settings.stop_follow": "Stop following",
   "settings.naming_style": "Tier naming",
   "settings.naming_internal": "Internal",
   "settings.naming_anthropic": "Anthropic",
@@ -515,6 +587,11 @@ const en = {
   "win.keep_in_tray": "Keep in tray on close",
   "win.keep_in_tray_hint":
     "Closing the window leaves Zroutery running in the tray; off — closing quits and stops the gateway",
+  "win.window_actions": "Hide or quit",
+  "win.window_actions_hint":
+    "Hide keeps the gateway running in the tray; quit stops the gateway and ends the process",
+  "win.hide_to_tray": "Hide to tray",
+  "win.quit": "Quit",
   "vision.title": "Vision fallback",
   "vision.hint":
     "Models that cannot see still receive the image's content: a vision model describes it, and the description travels in its place. Failing that, an honest placeholder — never a silent drop.",
@@ -555,12 +632,34 @@ const en = {
   "ml.samples": "samples",
   "ml.traces": "traces",
   "ml.criteria": "Gate criteria",
-  "ml.criteria_refused": "{n} of {total} criteria did not hold",
-  "ml.criteria_all_held": "All {total} criteria held",
-  "ml.criteria_held_list": "Criteria that held ({n})",
-  "ml.criterion_measured": "measured {value}",
-  "ml.criterion_threshold": "threshold {value}",
-  "ml.criterion_unmeasured": "not measured",
+  /*
+   * The nine promotion criteria, by the stable identifier the gate reports.
+   *
+   * `PromotionCriterion::name` is documented as stable "so a decision can be
+   * reasoned about by name", which makes it a translation key rather than a
+   * display string — so these are looked up by id and an id this build does not
+   * know falls back to itself, which is how a criterion added by a newer backend
+   * stays visible instead of rendering as a blank row.
+   */
+  "ml.criterion.baseline_present": "Baseline paired",
+  "ml.criterion.paired_evidence": "Paired evidence",
+  "ml.criterion.holdout_quality": "Holdout quality",
+  "ml.criterion.routing_utility": "Routing utility",
+  "ml.criterion.selection_safety": "Selection safety",
+  "ml.criterion.success_regression": "Success regressions",
+  "ml.criterion.cost_regression": "Cost regression",
+  "ml.criterion.latency_regression": "Latency regression",
+  "ml.criterion.dataset_identity": "Dataset identity",
+  /*
+   * The figure a criterion was decided on. ADR-0007 asks for every criterion
+   * "with the number it was decided on", so the two structured fields are
+   * rendered rather than left inside the gate's English prose.
+   *
+   * Labelled rather than written as "measured >= threshold": the direction is a
+   * property of each criterion (a cost budget is a ceiling, an evidence floor is
+   * not) and asserting one direction for all nine would misstate six of them.
+   */
+  "ml.criterion_value": "{measured} measured / {threshold} required",
   "ml.history": "Promotion history",
   "ml.promoted": "promoted",
   "ml.rolled_back": "rolled back",
@@ -676,7 +775,7 @@ const zh: Dict = {
   // ------------------------------------------------------------------ app
   "app.live_stopped": "实时更新已停止:{err}",
   "app.exposed":
-    "网关绑定在 {host},网络上的其他机器可以使用你的 API key。请保持认证开启,或改回 127.0.0.1。",
+    "网关绑定在 {host},局域网内其他机器可用你的 API key。保持认证开启,或改回 127.0.0.1。",
   "app.no_auth": "认证已关闭:本机任何进程都能消耗你的 API 额度。",
   "nav.overview": "概览",
   "nav.models": "模型",
@@ -711,7 +810,7 @@ const zh: Dict = {
   // ---------------------------------------------------------------- confirm
   "confirm.remove_provider": "移除提供商",
   "confirm.remove_provider_body":
-    "该提供商下的 {n} 个模型与已存密钥会一并删除。| 该提供商下的 {n} 个模型与已存密钥会一并删除。",
+    "该提供商下的 {n} 个模型与已存密钥会一并删除。 | 该提供商下的 {n} 个模型与已存密钥会一并删除。",
   "confirm.remove_model": "移除模型",
   "confirm.remove_model_body": "客户端按 id 调用它时会报错。",
   "confirm.remove_budget": "删除预算",
@@ -741,6 +840,10 @@ const zh: Dict = {
   "route.default_hint": "普通请求",
   "route.auto_review": "自动审查",
   "route.review_hint_on": "权限检查",
+  "routing.tab_group": "路由的三个主题",
+  "routing.tab_ml": "学习型路由",
+  "routing.tab_main": "模型路由",
+  "routing.tab_auto": "自动审查",
   "route.review_hint_off": "跟随默认",
   "route.check": "检查",
   "route.no_tier": "尚无类别分配到模型。",
@@ -757,15 +860,14 @@ const zh: Dict = {
   // -------------------------------------------------------------- models
   "models.pick_provider_name": "请选择提供商并填写模型名。",
   "models.duplicate": "该提供商已提供“{model}”。",
-  "models.unclassified":
-    "{n} 个模型尚未分层:{ids}。它们仍可通过完整 id 调用,但在指定层级前不参与 *-class 路由。",
+  "models.unclassified": "{n} 个模型尚未分层:{ids}。可按完整 id 调用,但不参与分层路由。",
   "models.lede_none": "Zroutery 暴露的每个模型,每个提供商型号一条。",
   "models.exposed": "已暴露 {n} 个",
   "models.empty": "暂无模型。",
   "models.empty_hint": "在下方添加,或在提供商页从 CC Switch 导入。",
   "models.no_tier": "未分层",
   "models.add_section": "添加模型",
-  "models.add_hint": "层级由人工随后指定 —— Zroutery 绝不猜测层级。",
+  "models.add_hint": "层级需手动指定,不自动推断。",
   "field.provider": "提供商",
   "field.model_name": "模型名",
   "models.add": "添加模型",
@@ -858,7 +960,7 @@ const zh: Dict = {
   "providers.f_version_hint": "留空发送标准 2023-06-01",
   "providers.client_profile": "客户端身份",
   "providers.client_profile_hint":
-    "Zroutery 以什么身份访问上游。选 Claude Code 或 Codex 时,还会转发该客户端自己的请求头。",
+    "以什么身份访问上游。选 Claude Code 或 Codex 时会转发该客户端的请求头。",
   "providers.profile_auto": "自动 — 识别调用方",
   "providers.profile_native": "原生 — 不伪装任何客户端",
   "providers.profile_claude_code": "Claude Code — 带其请求头",
@@ -871,14 +973,13 @@ const zh: Dict = {
   "providers.free_badge": "免费",
   "providers.free_only": "仅显示免费模型",
   "providers.free_only_hint":
-    "依据提供商自己的目录标注为零成本。不代表该模型一定能用:免费模型仍可能被地区屏蔽或在上游下线。",
+    "按提供商目录标注为零成本。免费模型仍可能被地区屏蔽或在上游下线。",
   "providers.catalogue_shown": "显示 {total} 个中的 {shown} 个",
   "providers.catalogue_total": "共 {total} 个模型",
   "providers.catalogue_no_free":
     "目录共 {total} 个模型,其中没有一个标记为免费。关闭筛选即可查看。",
   "providers.bearer_auth": "同时发送 Bearer 认证",
-  "providers.bearer_auth_hint":
-    "用于读取 Authorization: Bearer 而非 x-api-key 的中转;两个头都会发送,任一校验均可通过",
+  "providers.bearer_auth_hint": "用于读 Authorization: Bearer 而非 x-api-key 的中转。",
   "providers.balance": "余额",
   "providers.balance_hint": "部分提供商公布剩余额度。",
   "field.probe": "探针",
@@ -899,7 +1000,7 @@ const zh: Dict = {
 
   // ------------------------------------------------------- account maintenance
   "account.section": "账户",
-  "account.section_hint": "每个账户使用各自独立的浏览器窗口签到，一个账户的会话不会被用于另一个账户。",
+  "account.section_hint": "每个账户用各自的浏览器窗口签到,会话互不共用。",
   "account.phase.idle": "尚未签到",
   "account.phase.running": "正在签到…",
   "account.phase.waiting_for_user": "需要人工验证 — 请在已打开的窗口中完成",
@@ -916,11 +1017,11 @@ const zh: Dict = {
     "account.balance": "余额",
 "account.schedule.disabled": "该账户未开启签到",
   "account.schedule.not_applicable":
-    "该账户已开启签到但无法执行——请设置 checkin_path 与 checkin_trigger_selector",
+    "已开启签到但无法执行,请补全 checkin_path 与 checkin_trigger_selector。",
   "account.schedule.needs_first_observation":
-    "该账户还没有跑过一次签到，因此没有可倒数的到期时间。手动跑一次，之后交给日程",
+    "尚未签到过一次,没有可倒数的到期时间。手动签到一次后交给日程。",
   "account.schedule.no_policy":
-    "该账户没有声明 checkin_interval_secs，即使以前签到过也不会自动运行",
+    "未声明 checkin_interval_secs,不会自动运行。",
   "account.schedule.not_due": "已排期",
   "account.schedule.due": "现在到期",
   "account.schedule.unknown": "日程未知",
@@ -929,26 +1030,57 @@ const zh: Dict = {
   "account.reward": "奖励",
   "account.reward_weak_source": "取自平台日志文本",
   "account.reward_inferred": "由余额变化推断",
+  "account.effect.credited": "已确认入账",
+  "account.effect.debited": "已确认扣减",
+  "account.effect.no_change": "已确认无变化",
+  "account.effect.unobserved": "未观测到",
+  "account.source.provider_response": "平台直接返回",
+  "account.source.account_state": "读自账户状态",
+  "account.source.account_log": "读自账户日志",
+  "account.source.operation_response": "来自操作返回",
   "account.checkin": "签到",
   "account.resume": "在已打开的窗口中继续",
   "account.cancel": "取消",
   "account.close_browser": "关闭窗口",
-  "account.not_enabled": "该账户未开启签到，请先在其维护设置中启用。",
-  "account.need_path": "该账户没有配置签到页面。请将 maintenance.checkin_path 设为承载签到按钮的面板页面。",
-  "account.need_selector":
-    "该账户没有配置签到控件。请将 maintenance.checkin_trigger_selector 设为按钮的 CSS 选择器，例如 button.checkin。",
+  "account.not_enabled": "该账户未开启签到,请先在其维护设置中启用。",
+  "account.need_path": "未配置签到页面。请把 maintenance.checkin_path 指向带有签到按钮的那个面板页。",
+  "account.need_selector": "未配置签到按钮选择器。请把 maintenance.checkin_trigger_selector 填成该按钮的 CSS 选择器,例如 button.checkin。",
   "account.start_failed": "无法开始签到",
   "account.resume_failed": "无法继续签到",
   "account.cancel_failed": "无法取消签到",
 
+  // ------------------------------------------------------- account probing
+  //
+  // 探测不是签到。它只询问平台账户处于什么状态并报告结果，不会打开浏览器，
+  // 也不会领取任何东西。
+  "providers.probe_section": "账户探测",
+  "providers.probe_hint": "询问各账户的平台状态。每个账户一次请求,仅在你点击时运行。已关闭的账户完全不探测,也不会出现在列表里。",
+  "providers.probe_now": "探测所有账户",
+  "providers.refresh_all": "刷新全部余额",
+  "providers.probing": "探测中…",
+  "providers.probe_idle": "尚未探测。点击之前,没有任何账户被问过。",
+  "providers.probe_none": "没有已启用的账户可供探测。",
+  "providers.probe_outcome": "结果",
+  "field.account": "账户",
+  // 四种结果，四种说法。分开表述，是因为它们各自回答不同的问题；
+  // 若归为「正常 / 异常」两类，无人能够询问的账户就会被显示成有问题的账户。
+  "account.sync.refreshed": "已探测",
+  "account.sync.partially_reported": "未上报",
+  "account.sync.unsupported": "此构建中没有后端能询问该平台 —— 未探测",
+  "account.sync.failed": "探测失败",
+
   // ------------------------------------------------------------- routing
-  "routing.lede": "按请求目的决定去向。Zroutery 服务任何讲 Anthropic 或 OpenAI 协议的客户端。",
+  "routing.lede": "按请求目的分流。服务兼容 Anthropic 或 OpenAI 协议的客户端。",
   "routing.default_hint": "所有普通请求,按客户端请求的层级。",
   "routing.edit": "编辑",
   "tier.hint.fast": "便宜且快",
   "tier.hint.standard": "日常主力",
   "tier.hint.reasoning": "最强、最贵的层级",
-  "tier.hint.frontier": "前沿尖端模型",
+  "tier.hint.frontier": "最前沿的模型",
+  "tier.name.fast": "快速",
+  "tier.name.standard": "标准",
+  "tier.name.reasoning": "推理",
+  "tier.name.frontier": "前沿",
   "routing.tier_empty": "为空 —— 在有模型加入该层级前,{id} 的请求会失败。",
   "routing.fallback_n": "备选 {n}",
   "routing.request": "请求",
@@ -975,7 +1107,7 @@ const zh: Dict = {
   "routing.failover_hint": "出错时尝试下一个模型",
   "routing.claude_names": "理解 Claude 模型名",
   "routing.claude_names_hint": "claude-*-sonnet-* 映射到对应层级",
-  "routing.aliases_note": "其余必须是完整 id、别名,或在设置 → 高级中配置的客户端别名。",
+  "routing.aliases_note": "其余必须是完整 id,或下面配置的某个客户端别名。",
   "routing.election": "选举",
   "routing.election_hint": "每模型一次极小请求测量延迟与价格,然后固定顺序。",
   "routing.rerun": "立即重跑",
@@ -989,7 +1121,7 @@ const zh: Dict = {
   "routing.review_failover": "池内失败转移",
   "routing.review_failover_hint": "出错时尝试下一个候选",
   "routing.pool": "模型池",
-  "routing.pool_hint": "模型来自模型页 —— 提供商、密钥与价格全部复用,无需重复配置。",
+  "routing.pool_hint": "模型来自模型页,提供商、密钥与价格复用其配置。",
   "routing.no_candidates": "暂无候选。在下方选择模型。",
   "routing.not_configured": "不是已配置的模型",
   "routing.add_model": "添加模型…",
@@ -1000,16 +1132,22 @@ const zh: Dict = {
   "routing.verdict_only": "仅 <block>yes|no</block>",
   "routing.no_verdict": "无判定时",
   "routing.fails_closed": "失败关闭 —— 由客户端询问用户",
-  "routing.fail_closed_note":
-    "出错、超时或无判定的候选会转移到下一个;若全部失败,查询将失败而非被批准。Zroutery 绝不把模型的自然语言解释为许可。",
+  "routing.fail_closed_note": "候选出错、超时或无法判定时转移到下一个;全部失败则查询失败。",
 
   // ------------------------------------------------------------ activity
   "activity.lede_none": "暂无数据。将客户端指向网关即可在此看到流量。",
   "activity.lede": "{requests} 个请求 · {rate}% 成功 · 输入 {in} / 输出 {out} token",
   "activity.reset": "重置计数",
-  "activity.review_line": "自动审查:{n} 次检查 · {failed} 失败 · 平均 {latency} —— 与主流量分开统计。",
+  "activity.review_line": "自动审查:{n} 次检查 · {failed} 失败 · 平均 {latency}(与主流量分开计数)",
   "activity.nothing": "暂无数据。",
   "activity.health": "模型健康",
+  "activity.tab_group": "活动的两个主题",
+  "activity.tab_usage": "请求与用量",
+  "activity.tab_log": "内部日志",
+  "activity.log_section": "内部日志",
+  "activity.log_hint": "进程自身的输出,在此页签打开时持续跟踪。",
+  "activity.show_log": "显示内部日志",
+  "activity.stop_follow": "停止跟踪",
   "activity.health_hint": "每模型的熔断状态,所有路由池共享。",
   "activity.ok_failed": "{ok} 成功 / {failed} 失败",
   "activity.cooling": "冷却 {n}s",
@@ -1039,7 +1177,7 @@ const zh: Dict = {
   "activity.unpriced": "未定价",
 
   // ------------------------------------------------------------ settings
-  "settings.lede": "软件的接线方式:网关、限额与深层开关。",
+  "settings.lede": "应用行为、对外的网关,以及它被允许花多少。",
   "settings.gateway": "网关",
   "settings.gateway_hint": "服务地址 {url} · {path}",
   "field.host": "主机",
@@ -1090,24 +1228,24 @@ const zh: Dict = {
   "budget.used_up": "已用尽",
   "budget.add": "添加预算",
   "budget.currency_hint": "以模型计费的币种",
-  "settings.advanced": "高级",
-  "settings.advanced_hint": "客户端别名、选举权重与内部日志 —— 进阶者才需要的开关。",
+  "settings.election_weights": "如何权衡",
+  "settings.tier_naming_section": "客户端可以请求什么",
+  "settings.naming_style_hint": "层级在整个应用里的显示方式,不只出现在路由页。",
+  "settings.tab_group": "设置的四个主题",
+  "settings.tab_general": "常规",
+  "settings.tab_gateway": "网关",
+  "settings.tab_budgets": "限额",
   "settings.aliases": "客户端模型别名",
   "settings.aliases_hint": "将客户端发送的完整模型 id 映射到层级。优先于 Claude 名称启发式。",
   "settings.f_model_id": "模型 id",
   "settings.f_class": "层级",
   "settings.add_alias": "添加别名",
-  "settings.election": "均衡选举",
-  "settings.election_hint": "均衡策略如何权衡延迟与价格。仅均衡策略(路由 → 默认 → 编辑)时有意义。",
   "settings.price_weight": "价格权重",
   "settings.price_weight_hint": "相对值,3:1 等价于 0.75:0.25",
   "settings.latency_weight": "延迟权重",
   "settings.ref_input": "参考输入 token",
   "settings.ref_input_hint": "价格按 Mtok 计,需要一个请求作比较基准",
   "settings.ref_output": "参考输出 token",
-  "settings.log": "日志",
-  "settings.show_log": "显示内部日志",
-  "settings.stop_follow": "停止跟踪",
   "settings.naming_style": "层级命名",
   "settings.naming_internal": "内部",
   "settings.naming_anthropic": "Anthropic",
@@ -1119,10 +1257,13 @@ const zh: Dict = {
   "win.silent_start_hint": "启动时不显示主窗口,仅在系统托盘运行",
   "win.keep_in_tray": "关闭窗口时保留在托盘",
   "win.keep_in_tray_hint":
-    "关闭窗口后 Zroutery 将继续在后台运行;关闭此选项则关闭窗口即退出并停止网关",
+    "关闭窗口后继续在后台运行;关闭则退出并停止网关。",
+  "win.window_actions": "隐藏或退出",
+  "win.window_actions_hint": "隐藏则网关继续在托盘运行;退出会停止网关并结束进程。",
+  "win.hide_to_tray": "隐藏到托盘",
+  "win.quit": "退出",
   "vision.title": "视觉降级",
-  "vision.hint":
-    "让看不见图片的模型也能收到图片内容:由视觉模型生成描述,代替原图进入请求。失败时以诚实的占位符兜底,绝不静默丢弃。",
+  "vision.hint": "不支持视觉的模型仍会收到图片的内容:由视觉模型生成描述,代替原图发过去。描述失败时换上占位文本,不静默丢弃。",
   "vision.enable": "为不支持视觉的模型描述图片",
   "vision.model": "视觉模型",
   "vision.model_hint": "模型页中一个支持视觉的现有模型;复用其提供商与价格",
@@ -1132,12 +1273,12 @@ const zh: Dict = {
   // ------------------------------------------------------------ learned routing
   "ml.title": "学习型路由",
   "ml.hint": "训练出的模型是否可以重排 provider 顺序。关闭时路由保持确定性。",
-  "ml.unavailable": "此版本不包含学习栈，路由为确定性路由。",
+  "ml.unavailable": "此版本不含学习栈,路由保持确定性。",
   "ml.serving": "已提升的模型正在重排 provider 顺序。",
-  "ml.inert": "模型已提升但学习型路由为关闭，因此不会被调用。",
+  "ml.inert": "模型已提升但学习型路由为关闭,不会被调用。",
   "ml.off": "未安装模型。路由为确定性路由。",
   "ml.exploring": "探索 {pct}%",
-  "ml.no_state_dir": "未配置持久化状态目录，重启后不会保留任何内容，也无法提升模型。",
+  "ml.no_state_dir": "未配置持久化状态目录,重启后不保留内容,也无法提升模型。",
   "ml.installed": "已安装",
   "ml.none": "无",
   "ml.gate": "授权依据",
@@ -1147,22 +1288,26 @@ const zh: Dict = {
   "ml.ranking": "已排序 / 已回退",
   "ml.explored": "已探索 / 已排序",
   "ml.blind_explored": "无模型时尝试",
-  "ml.with_no_model": "在没有模型的情况下，为采集证据而尝试",
+  "ml.with_no_model": "无模型时为采集证据而尝试",
   "ml.never_tried": "从未尝试",
   "ml.blind_spot_warning":
-    "{names} 已配置但从未尝试，且探索已关闭，因此永远不会有流量到达它。把 ml_routing.exploration_probability 提高到 0 以上确实能触达它，但会阻止任何已学习模型的晋升 —— 门控需要在同一批请求上比较模型与基线，而探索恰恰使两者不一致，所以无论如何路由都仍是确定性的。改为给它最高优先级。",
+    "{names} 已配置但排不上队,永远收不到请求。打开探索可以触达,但会阻断学习型模型的提升。给它最高优先级。",
   "ml.blind_spot_count": "{n} 个无法触达",
   "ml.collected": "已采集",
   "ml.refused": "已拒绝",
   "ml.samples": "样本",
   "ml.traces": "轨迹",
   "ml.criteria": "门禁条件",
-  "ml.criteria_refused": "{total} 条判据中有 {n} 条未通过",
-  "ml.criteria_all_held": "{total} 条判据全部通过",
-  "ml.criteria_held_list": "已通过的判据（{n}）",
-  "ml.criterion_measured": "实测 {value}",
-  "ml.criterion_threshold": "阈值 {value}",
-  "ml.criterion_unmeasured": "未测量",
+  "ml.criterion.baseline_present": "基线已配对",
+  "ml.criterion.paired_evidence": "配对证据量",
+  "ml.criterion.holdout_quality": "留出集质量",
+  "ml.criterion.routing_utility": "路由效用",
+  "ml.criterion.selection_safety": "选择安全性",
+  "ml.criterion.success_regression": "成功回退次数",
+  "ml.criterion.cost_regression": "成本回退",
+  "ml.criterion.latency_regression": "延迟回退",
+  "ml.criterion.dataset_identity": "数据集一致",
+  "ml.criterion_value": "实测 {measured} / 门槛 {threshold}",
   "ml.history": "提升历史",
   "ml.promoted": "已提升",
   "ml.rolled_back": "已回滚",
@@ -1185,15 +1330,14 @@ const zh: Dict = {
 
   // ----------------------------------------------- learned routing: collection
   "ml.learning_blocked":
-    "学习型路由已开启，但什么都没在采集，而且各个端点看起来都正常。影子评估处于关闭状态，因此没有请求会保留生成样本所需的决策时输入，每一条都在入库前被丢弃 —— 目前已丢弃 {n} 条。此时提升轮次没有任何可学的内容。要采集证据，请打开影子评估。",
+    "影子评估已关闭,{n} 条请求在入库前被丢弃,提升轮次无内容可学。打开影子评估即可开始采集。",
   "ml.learning_blocked_short": "学习已被阻断",
   "ml.ingested": "已入库请求",
   "ml.dropped_no_decision": "因缺少决策而丢弃",
 
   // -------------------------------------------- learned routing: promotion round
   "ml.round": "提升轮次",
-  "ml.round_hint":
-    "用已记录的历史训练一个候选模型，并让门禁判断它是否胜过基线。仅判断不会安装任何东西；这里不做任何调度，所以轮次只在你主动触发时发生。",
+  "ml.round_hint": "用已记录的历史训练一个候选模型,由门禁判断是否胜过基线。不会自动运行。",
   "ml.round_judge": "判断候选模型",
   "ml.round_judging": "判断中…",
   "ml.round_judged": "候选模型已评判 —— 未安装",
@@ -1206,25 +1350,24 @@ const zh: Dict = {
   "ml.round_candidate": "候选模型",
   "ml.round_choices": "候选模型本会如何选择",
   "ml.round_single_choice":
-    "候选模型在每个请求上都只选中了同一个选项。这不是学出来的排序，无论上面的结论如何。",
+    "候选模型每次都选同一个,并未学到排序。",
   "ml.round_installed": "已安装并正在服务",
-  "ml.round_not_installed": "已评判，未安装",
+  "ml.round_not_installed": "已评判,未安装",
   "ml.round_serving_now": "当前正在服务",
   "ml.round_deterministic": "路由为确定性路由",
   "ml.verdict": "结论",
   "ml.verdict_promoted": "已提升",
   "ml.verdict_rejected": "已拒绝",
   "ml.verdict_blocked": "已阻断",
-  "ml.round_error": "轮次已评判，但无法安装",
+  "ml.round_error": "轮次已评判,但无法安装",
 
   // ------------------------------------------------ learned routing: the log
   "ml.log": "已记录的历史",
-  "ml.log_hint":
-    "提升轮次据以训练��持久化证据。这里没有自动保留策略，因为自动触发的保留策略会在你没有要求的情况下改变下一个模型所学的内容。",
+  "ml.log_hint": "提升轮次的训练数据。不会自动清理,清理时机由你决定。",
   "ml.log_records": "记录数",
   "ml.log_size": "占用空间",
   "ml.log_path": "文件",
-  "ml.log_unreadable": "无法统计该日志，因此这并不是零条记录。",
+  "ml.log_unreadable": "无法统计该日志,这不代表零条记录。",
   "ml.log_appended": "已追加",
   "ml.log_nothing": "无可记录内容",
   "ml.log_refused": "已拒绝",
@@ -1236,7 +1379,7 @@ const zh: Dict = {
   "ml.log_clear_nothing": "没有已记录的内容可删除。",
   "confirm.clear_traces": "删除已记录的历史",
   "confirm.clear_traces_body":
-    "已记录的 {n} 条请求会被删除且无法恢复。之后的提升轮次只能使用从这里开始写入的记录来训练 —— 此后被提升的任何模型都只学这些内容。这里不做任何调度，所以不会有其他东西自行改变。",
+    "{n} 条记录会被删除且无法恢复,之后的提升轮次只能使用新写入的记录训练。没有定时任务,所以不会有别的东西自行变化。",
   "bytes.value": "{n} 字节",
 };
 

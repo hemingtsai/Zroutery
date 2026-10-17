@@ -35,7 +35,7 @@
     "docs/development/repository-audit-2026-09-25.md",
     "crates/zroutery-core/src/ml/shadow.rs",
     "crates/zroutery-core/tests/shadow_test.rs",
-    "crates/zroutery-core/src/server/pipeline.rs"
+    "crates/zroutery-core/src/server/pipeline/mod.rs"
   ],
   "notes": [
     "The audit decision was PARTIAL and is superseded only by the accepted child nodes and their evidence.",
