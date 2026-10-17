@@ -325,6 +325,38 @@ const en = {
   "account.resume_failed": "Could not continue the check-in",
   "account.cancel_failed": "Could not cancel the check-in",
 
+  // ------------------------------------------------------- account probing
+  //
+  // A probe is not a check-in. It asks the provider what state an account is in
+  // and reports what came back; it never opens a browser and never grants
+  // anything. The wording keeps that apart, because "check in" next to a button
+  // that only reads would send the reader looking for a reward that is not there.
+  //
+  // The probe runs on the button and never on a timer: it costs one request per
+  // declared account, and a proxy that probes on its own turns a slow panel into
+  // a slow start. Saying so is part of the hint, not a footnote.
+  "providers.probe_section": "Account probe",
+  "providers.probe_hint":
+    "Ask each declared account's platform what state it is in, and publish the result. One request per account, so it happens when you press the button and never on its own. An account that is switched off is not probed at all, so it does not appear in the list.",
+  "providers.probe_now": "Probe every account",
+  "providers.probing": "Probing…",
+  "providers.probe_idle":
+    "Nothing has been probed yet. Until you press the button, no account has been asked.",
+  "providers.probe_none":
+    "The probe ran and found nothing: no provider declares an enabled account.",
+  "providers.probe_outcome": "Outcome",
+  "field.account": "Account",
+  /*
+   * Four outcomes, four sentences. They are kept apart because each answers a
+   * different question, and a single healthy/unhealthy pair would say an account
+   * nobody could ask about was an account in trouble.
+   */
+  "account.sync.refreshed": "Probed",
+  "account.sync.partially_reported": "Reported without",
+  "account.sync.unsupported":
+    "No backend in this build can ask this provider — not probed",
+  "account.sync.failed": "Probe failed",
+
   // ------------------------------------------------------------- routing
   "routing.lede":
     "Where a request goes, by its purpose. Zroutery serves any client that speaks Anthropic or OpenAI.",
@@ -934,6 +966,26 @@ const zh: Dict = {
   "account.start_failed": "无法开始签到",
   "account.resume_failed": "无法继续签到",
   "account.cancel_failed": "无法取消签到",
+
+  // ------------------------------------------------------- account probing
+  //
+  // 探测不是签到。它只询问平台账户处于什么状态并报告结果，不会打开浏览器，
+  // 也不会领取任何东西。
+  "providers.probe_section": "账户探测",
+  "providers.probe_hint":
+    "向每个已声明账户的平台询问其状态并发布结果。每个账户一次请求，因此只在你点击按钮时发生，不会自行运行。未启用的账户不会被探测，所以不会出现在列表中。",
+  "providers.probe_now": "探测所有账户",
+  "providers.probing": "探测中…",
+  "providers.probe_idle": "尚未探测过任何账户。在你点击按钮之前，没有任何账户被询问过。",
+  "providers.probe_none": "探测已执行，但没有结果：没有任何提供商声明了已启用的账户。",
+  "providers.probe_outcome": "结果",
+  "field.account": "账户",
+  // 四种结果，四种说法。分开表述，是因为它们各自回答不同的问题；
+  // 若归为「正常 / 异常」两类，无人能够询问的账户就会被显示成有问题的账户。
+  "account.sync.refreshed": "已探测",
+  "account.sync.partially_reported": "未上报",
+  "account.sync.unsupported": "此构建中没有后端能询问该平台 —— 未探测",
+  "account.sync.failed": "探测失败",
 
   // ------------------------------------------------------------- routing
   "routing.lede": "按请求目的决定去向。Zroutery 服务任何讲 Anthropic 或 OpenAI 协议的客户端。",

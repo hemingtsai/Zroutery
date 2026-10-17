@@ -518,6 +518,16 @@ export interface Snapshot {
    * where the bridge is merely broken.
    */
   account_maintenance_available: boolean;
+  /**
+   * Whether this build contains the account subsystem at all.
+   *
+   * Distinct from `account_maintenance_available`, and asked for the same reason:
+   * `account-maint` implies `account`, so a build can have one without the other,
+   * and the two answer different questions — whether declared accounts can be
+   * probed at all, or whether they can be checked in through a browser. Reading
+   * one for the other offers a control the build cannot serve.
+   */
+  account_available: boolean;
   /** What each declared account's check-in is doing. */
   checkin?: CheckinView[];
   /** Observed resource events, newest first. */
@@ -654,6 +664,41 @@ export interface AccountEvent {
   unit: string | null;
   source: string;
   description: string;
+}
+
+/**
+ * What a reconcile did with one account, mirroring
+ * `zroutery_core::account::AccountSyncOutcome`.
+ *
+ * Serde's external tagging, so the two carrying variants arrive as objects and
+ * the two bare ones as strings. The shape is load-bearing rather than decorative:
+ * it is what keeps `failed` from rendering as an account with no reason, which is
+ * the mistake a panel is most likely to make with this document.
+ */
+export type AccountSyncOutcome =
+  | "refreshed"
+  /** The provider answered, but declines to report usage or quota. */
+  | { partially_reported: { missing: string[] } }
+  /** No backend in this build speaks to this provider's account API. */
+  | "unsupported"
+  | { failed: { reason: string } };
+
+/**
+ * The result of probing the declared accounts, mirroring
+ * `zroutery_core::account::ReconcileReport`.
+ *
+ * One entry per declared *enabled* account, in probe order, as
+ * `(provider_id, account_id, outcome)`. The pair is carried rather than looked up
+ * because the account store is keyed on it.
+ *
+ * Absence is itself a reading and the two halves must not be merged: an account
+ * missing from this report is one that is disabled or not declared, while an
+ * account present as `unsupported` is one that was probed and established
+ * nothing. A panel that collapses the two renders a deliberately disabled
+ * account as an unhealthy one.
+ */
+export interface ReconcileReport {
+  outcomes: [string, string, AccountSyncOutcome][];
 }
 
 /** One entry of a provider's catalogue, with prices when it publishes them. */
@@ -1035,6 +1080,22 @@ export const api = {
       providerId: provider_id,
       accountId: account_id,
     }),
+  /**
+   * Probe every declared, enabled account and return what the reconciler did.
+   *
+   * One call covers every provider, so a caller that wants this per provider has
+   * to filter the report itself — the backend does not probe a subset.
+   *
+   * Costs one network request per declared account, which is why nothing calls
+   * it on a timer or at startup: this is the operation, not a policy about when.
+   * The returned document is Core's own `ReconcileReport`, so what is shown and
+   * what the reconciler did are the same value by construction.
+   *
+   * Call only when `snapshot.account_available` is true, for the same reason the
+   * other gated wrappers carry: a command that was never registered and a
+   * command that failed are the same event to the webview.
+   */
+  reconcileAccounts: () => invoke<ReconcileReport>("reconcile_accounts"),
   saveConfig: (config: AppConfig) => invoke<Snapshot>("save_config", { config }),
   setKey: (provider_id: string, api_key: string) =>
     invoke<Snapshot>("set_provider_key", { providerId: provider_id, apiKey: api_key }),
