@@ -330,9 +330,9 @@ const en = {
   "account.not_enabled":
     "Check-in is switched off for this account. Turn it on in its maintenance settings first.",
   "account.need_path":
-    "This account has no check-in page. Set maintenance.checkin_path to the panel page that carries the check-in control.",
+    "This account has no check-in page. Point maintenance.checkin_path at the panel page that carries the check-in control.",
   "account.need_selector":
-    "This account has no check-in control. Set maintenance.checkin_trigger_selector to a CSS selector for the button, such as button.checkin.",
+    "This account has no check-in control. Set maintenance.checkin_trigger_selector to a CSS selector for that button, for example button.checkin.",
   "account.start_failed": "Could not start the check-in",
   "account.resume_failed": "Could not continue the check-in",
   "account.cancel_failed": "Could not cancel the check-in",
@@ -1043,8 +1043,8 @@ const zh: Dict = {
   "account.cancel": "取消",
   "account.close_browser": "关闭窗口",
   "account.not_enabled": "该账户未开启签到,请先在其维护设置中启用。",
-  "account.need_path": "未配置签到页面。请填写 maintenance.checkin_path。",
-  "account.need_selector": "未配置签到按钮选择器。请填写 maintenance.checkin_trigger_selector。",
+  "account.need_path": "未配置签到页面。请把 maintenance.checkin_path 指向带有签到按钮的那个面板页。",
+  "account.need_selector": "未配置签到按钮选择器。请把 maintenance.checkin_trigger_selector 填成该按钮的 CSS 选择器,例如 button.checkin。",
   "account.start_failed": "无法开始签到",
   "account.resume_failed": "无法继续签到",
   "account.cancel_failed": "无法取消签到",
@@ -1054,11 +1054,11 @@ const zh: Dict = {
   // 探测不是签到。它只询问平台账户处于什么状态并报告结果，不会打开浏览器，
   // 也不会领取任何东西。
   "providers.probe_section": "账户探测",
-  "providers.probe_hint": "询问各账户的平台状态。每个账户一次请求,仅在你点击时运行。",
+  "providers.probe_hint": "询问各账户的平台状态。每个账户一次请求,仅在你点击时运行。已关闭的账户完全不探测,也不会出现在列表里。",
   "providers.probe_now": "探测所有账户",
   "providers.refresh_all": "刷新全部余额",
   "providers.probing": "探测中…",
-  "providers.probe_idle": "尚未探测。",
+  "providers.probe_idle": "尚未探测。点击之前,没有任何账户被问过。",
   "providers.probe_none": "没有已启用的账户可供探测。",
   "providers.probe_outcome": "结果",
   "field.account": "账户",
@@ -1138,7 +1138,7 @@ const zh: Dict = {
   "activity.lede_none": "暂无数据。将客户端指向网关即可在此看到流量。",
   "activity.lede": "{requests} 个请求 · {rate}% 成功 · 输入 {in} / 输出 {out} token",
   "activity.reset": "重置计数",
-  "activity.review_line": "自动审查:{n} 次检查 · {failed} 失败 · 平均 {latency}",
+  "activity.review_line": "自动审查:{n} 次检查 · {failed} 失败 · 平均 {latency}(与主流量分开计数)",
   "activity.nothing": "暂无数据。",
   "activity.health": "模型健康",
   "activity.tab_group": "活动的两个主题",
@@ -1263,7 +1263,7 @@ const zh: Dict = {
   "win.hide_to_tray": "隐藏到托盘",
   "win.quit": "退出",
   "vision.title": "视觉降级",
-  "vision.hint": "由视觉模型生成图片描述,代替原图发给不支持视觉的模型。",
+  "vision.hint": "不支持视觉的模型仍会收到图片的内容:由视觉模型生成描述,代替原图发过去。描述失败时换上占位文本,不静默丢弃。",
   "vision.enable": "为不支持视觉的模型描述图片",
   "vision.model": "视觉模型",
   "vision.model_hint": "模型页中一个支持视觉的现有模型;复用其提供商与价格",
@@ -1378,7 +1378,8 @@ const zh: Dict = {
   "ml.log_cleared": "已删除 {bytes} 的已记录历史。",
   "ml.log_clear_nothing": "没有已记录的内容可删除。",
   "confirm.clear_traces": "删除已记录的历史",
-  "confirm.clear_traces_body": "{n} 条记录会被删除且无法恢复,之后的提升轮次只能使用新写入的记录训练。",
+  "confirm.clear_traces_body":
+    "{n} 条记录会被删除且无法恢复,之后的提升轮次只能使用新写入的记录训练。没有定时任务,所以不会有别的东西自行变化。",
   "bytes.value": "{n} 字节",
 };
 

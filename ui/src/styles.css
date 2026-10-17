@@ -689,8 +689,19 @@ code,
   animation: page-in var(--t-page) var(--ease);
 }
 
+/*
+ * The panel takes `tabindex=0` so that arriving here from the tab strip lands on
+ * something focusable — but `outline: none` meant that focus stop had no visible
+ * indicator at all, which is the one thing a focusable element must never be.
+ *
+ * The ring is drawn inside rather than around, because the panel is full-width
+ * and flush with the page margin: an outside ring would be clipped by the scroll
+ * container's edge. Inside, it reads as a boundary rather than a control, which
+ * is what it is.
+ */
 .tab-panel:focus-visible {
-  outline: none;
+  outline: 2px solid var(--text);
+  outline-offset: -2px;
 }
 
 /*
@@ -1021,6 +1032,30 @@ input:focus-visible,
 .disclosure-head:focus-visible {
   outline: 2px solid var(--text);
   outline-offset: 0;
+}
+
+/*
+ * Reduced motion.
+ *
+ * One block, at the end, rather than a guard on each rule — so a motion added
+ * later is covered by default instead of needing to remember. Every duration and
+ * every keyframe in this file collapses to 0.01ms rather than `none`: a zero
+ * duration would skip the animation's own end state, and several of these
+ * animations are what makes a panel *reach* its final position, so `none` would
+ * leave the disclosure body laid out from its opening frame.
+ *
+ * `!important` is the price of doing it once. Every declaration here is one the
+ * stylesheet already owns, so there is nothing to override except our own rules.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 input {

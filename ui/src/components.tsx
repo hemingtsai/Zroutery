@@ -347,9 +347,33 @@ export function Segment<T extends string>({
   options: { value: T; label: ReactNode }[];
   ariaLabel?: string;
 }) {
+  /*
+   * `role="radiogroup"` is a promise, not a label.
+   *
+   * The ARIA pattern requires arrow keys to move *and select* within a radio
+   * group, and a roving tabindex so the group is one stop in the tab sequence.
+   * Without them this was a row of buttons wearing a role it did not honour:
+   * a screen reader would announce "radio, 1 of 3" and then arrow keys would do
+   * nothing, which is worse than saying nothing. `Tabs` already implemented
+   * exactly this, and this borrows its shape.
+   */
+  const onKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>, index: number) => {
+    const last = options.length - 1;
+    let next: number | null = null;
+    if (event.key === "ArrowRight" || event.key === "ArrowDown") next = index === last ? 0 : index + 1;
+    else if (event.key === "ArrowLeft" || event.key === "ArrowUp") next = index === 0 ? last : index - 1;
+    else if (event.key === "Home") next = 0;
+    else if (event.key === "End") next = last;
+    if (next === null) return;
+    event.preventDefault();
+    onChange(options[next].value);
+    const items = event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="radio"]');
+    items?.[next]?.focus();
+  };
+
   return (
     <div className="segment" role="radiogroup" aria-label={ariaLabel}>
-      {options.map((option) => (
+      {options.map((option, index) => (
         <button
           key={option.value}
           type="button"
@@ -357,7 +381,11 @@ export function Segment<T extends string>({
           aria-checked={option.value === value}
           className="segment-item"
           data-active={option.value === value}
+          // Roving tabindex: one stop for the whole group, and the one stop is
+          // wherever the value currently is, so Tab lands on the selected option.
+          tabIndex={option.value === value ? 0 : -1}
           onClick={() => onChange(option.value)}
+          onKeyDown={(event) => onKeyDown(event, index)}
         >
           {option.label}
         </button>
