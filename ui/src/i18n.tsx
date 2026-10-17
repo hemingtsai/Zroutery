@@ -718,7 +718,7 @@ const zh: Dict = {
   // ------------------------------------------------------------------ app
   "app.live_stopped": "实时更新已停止:{err}",
   "app.exposed":
-    "网关绑定在 {host},网络上的其他机器可以使用你的 API key。请保持认证开启,或改回 127.0.0.1。",
+    "网关绑定在 {host},局域网内其他机器可用你的 API key。保持认证开启,或改回 127.0.0.1。",
   "app.no_auth": "认证已关闭:本机任何进程都能消耗你的 API 额度。",
   "nav.overview": "概览",
   "nav.models": "模型",
@@ -753,7 +753,7 @@ const zh: Dict = {
   // ---------------------------------------------------------------- confirm
   "confirm.remove_provider": "移除提供商",
   "confirm.remove_provider_body":
-    "该提供商下的 {n} 个模型与已存密钥会一并删除。| 该提供商下的 {n} 个模型与已存密钥会一并删除。",
+    "该提供商下的 {n} 个模型与已存密钥会一并删除。 | 该提供商下的 {n} 个模型与已存密钥会一并删除。",
   "confirm.remove_model": "移除模型",
   "confirm.remove_model_body": "客户端按 id 调用它时会报错。",
   "confirm.remove_budget": "删除预算",
@@ -810,7 +810,7 @@ const zh: Dict = {
   "models.empty_hint": "在下方添加,或在提供商页从 CC Switch 导入。",
   "models.no_tier": "未分层",
   "models.add_section": "添加模型",
-  "models.add_hint": "层级由人工随后指定 —— Zroutery 绝不猜测层级。",
+  "models.add_hint": "层级需手动指定,不自动推断。",
   "field.provider": "提供商",
   "field.model_name": "模型名",
   "models.add": "添加模型",
@@ -903,7 +903,7 @@ const zh: Dict = {
   "providers.f_version_hint": "留空发送标准 2023-06-01",
   "providers.client_profile": "客户端身份",
   "providers.client_profile_hint":
-    "Zroutery 以什么身份访问上游。选 Claude Code 或 Codex 时,还会转发该客户端自己的请求头。",
+    "以什么身份访问上游。选 Claude Code 或 Codex 时会转发该客户端的请求头。",
   "providers.profile_auto": "自动 — 识别调用方",
   "providers.profile_native": "原生 — 不伪装任何客户端",
   "providers.profile_claude_code": "Claude Code — 带其请求头",
@@ -916,7 +916,7 @@ const zh: Dict = {
   "providers.free_badge": "免费",
   "providers.free_only": "仅显示免费模型",
   "providers.free_only_hint":
-    "依据提供商自己的目录标注为零成本。不代表该模型一定能用:免费模型仍可能被地区屏蔽或在上游下线。",
+    "按提供商目录标注为零成本。免费模型仍可能被地区屏蔽或在上游下线。",
   "providers.catalogue_shown": "显示 {total} 个中的 {shown} 个",
   "providers.catalogue_total": "共 {total} 个模型",
   "providers.catalogue_no_free":
@@ -960,11 +960,11 @@ const zh: Dict = {
     "account.balance": "余额",
 "account.schedule.disabled": "该账户未开启签到",
   "account.schedule.not_applicable":
-    "该账户已开启签到但无法执行——请设置 checkin_path 与 checkin_trigger_selector",
+    "已开启签到但无法执行,请补全 checkin_path 与 checkin_trigger_selector。",
   "account.schedule.needs_first_observation":
     "该账户还没有跑过一次签到，因此没有可倒数的到期时间。手动跑一次，之后交给日程",
   "account.schedule.no_policy":
-    "该账户没有声明 checkin_interval_secs，即使以前签到过也不会自动运行",
+    "未声明 checkin_interval_secs,不会自动运行。",
   "account.schedule.not_due": "已排期",
   "account.schedule.due": "现在到期",
   "account.schedule.unknown": "日程未知",
@@ -1012,7 +1012,7 @@ const zh: Dict = {
   "account.sync.failed": "探测失败",
 
   // ------------------------------------------------------------- routing
-  "routing.lede": "按请求目的决定去向。Zroutery 服务任何讲 Anthropic 或 OpenAI 协议的客户端。",
+  "routing.lede": "按请求目的分流。服务任何讲 Anthropic 或 OpenAI 协议的客户端。",
   "routing.default_hint": "所有普通请求,按客户端请求的层级。",
   "routing.edit": "编辑",
   "tier.hint.fast": "便宜且快",
@@ -1063,7 +1063,7 @@ const zh: Dict = {
   "routing.review_failover": "池内失败转移",
   "routing.review_failover_hint": "出错时尝试下一个候选",
   "routing.pool": "模型池",
-  "routing.pool_hint": "模型来自模型页 —— 提供商、密钥与价格全部复用,无需重复配置。",
+  "routing.pool_hint": "模型来自模型页,提供商、密钥与价格复用其配置。",
   "routing.no_candidates": "暂无候选。在下方选择模型。",
   "routing.not_configured": "不是已配置的模型",
   "routing.add_model": "添加模型…",
@@ -1164,7 +1164,7 @@ const zh: Dict = {
   "budget.add": "添加预算",
   "budget.currency_hint": "以模型计费的币种",
   "settings.advanced": "高级",
-  "settings.advanced_hint": "客户端别名、选举权重与内部日志 —— 进阶者才需要的开关。",
+  "settings.advanced_hint": "客户端别名、选举权重与内部日志。",
   "settings.aliases": "客户端模型别名",
   "settings.aliases_hint": "将客户端发送的完整模型 id 映射到层级。优先于 Claude 名称启发式。",
   "settings.f_model_id": "模型 id",
@@ -1192,7 +1192,7 @@ const zh: Dict = {
   "win.silent_start_hint": "启动时不显示主窗口,仅在系统托盘运行",
   "win.keep_in_tray": "关闭窗口时保留在托盘",
   "win.keep_in_tray_hint":
-    "关闭窗口后 Zroutery 将继续在后台运行;关闭此选项则关闭窗口即退出并停止网关",
+    "关闭窗口后继续在后台运行;关闭则退出并停止网关。",
   "vision.title": "视觉降级",
   "vision.hint": "由视觉模型生成图片描述,代替原图发给不支持视觉的模型。",
   "vision.enable": "为不支持视觉的模型描述图片",
@@ -1271,7 +1271,7 @@ const zh: Dict = {
   "ml.round_candidate": "候选模型",
   "ml.round_choices": "候选模型本会如何选择",
   "ml.round_single_choice":
-    "候选模型在每个请求上都只选中了同一个选项。这不是学出来的排序，无论上面的结论如何。",
+    "候选模型每次都选同一个,并未学到排序。",
   "ml.round_installed": "已安装并正在服务",
   "ml.round_not_installed": "已评判，未安装",
   "ml.round_serving_now": "当前正在服务",
