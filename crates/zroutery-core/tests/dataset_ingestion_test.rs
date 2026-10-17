@@ -200,6 +200,41 @@ fn request_sample<'a>(
 
 /// The central claim: an ingested sample carries the vector the record retained,
 /// for the exact candidate the attempt used.
+/// Every file of the request pipeline, spelled out.
+///
+/// `pipeline/mod.rs` is the barrel plus the orchestration that stays in it; the
+/// marked blocks and the terminal transition now live in children. A tripwire
+/// that scanned only the barrel would find nothing and pass vacuously, which is
+/// the one failure this fence must not have. Adding a file here is the cost of
+/// keeping it honest.
+const PIPELINE_SOURCES: &[(&str, &str)] = &[
+    ("mod.rs", include_str!("../src/server/pipeline/mod.rs")),
+    ("sse.rs", include_str!("../src/server/pipeline/sse.rs")),
+    (
+        "budget.rs",
+        include_str!("../src/server/pipeline/budget.rs"),
+    ),
+    (
+        "client.rs",
+        include_str!("../src/server/pipeline/client.rs"),
+    ),
+    (
+        "lifecycle.rs",
+        include_str!("../src/server/pipeline/lifecycle.rs"),
+    ),
+    (
+        "ml_rank.rs",
+        include_str!("../src/server/pipeline/ml_rank.rs"),
+    ),
+    (
+        "repair.rs",
+        include_str!("../src/server/pipeline/repair.rs"),
+    ),
+    (
+        "response.rs",
+        include_str!("../src/server/pipeline/response.rs"),
+    ),
+];
 #[test]
 fn ingested_samples_carry_the_retained_decision_time_vectors() {
     let store = DatasetStore::new(10, 3600);
@@ -935,16 +970,23 @@ fn the_dataset_module_references_no_mutation_surface() {
 /// after the outcome exists, and it returns nothing.
 #[test]
 fn the_pipeline_dataset_surface_is_ingestion_only() {
-    let source = include_str!("../src/server/pipeline/mod.rs");
+    // The marked block, the lifecycle method and the terminal transition all
+    // live in the lifecycle child; the barrel holds only the orchestration that
+    // calls them, so this reads that one file for the structure it asserts on.
+    let source = include_str!("../src/server/pipeline/lifecycle.rs");
     const BEGIN: &str = "// dataset-block-begin";
     const END: &str = "// dataset-block-end";
     let mut blocks = Vec::new();
-    let mut rest = source;
-    while let Some(start) = rest.find(BEGIN) {
-        let after = &rest[start + BEGIN.len()..];
-        let stop = after.find(END).expect("every dataset block is closed");
-        blocks.push(&after[..stop]);
-        rest = &after[stop + END.len()..];
+    for (name, file) in PIPELINE_SOURCES {
+        let mut rest = *file;
+        while let Some(start) = rest.find(BEGIN) {
+            let after = &rest[start + BEGIN.len()..];
+            let stop = after
+                .find(END)
+                .unwrap_or_else(|| panic!("every dataset block in {name} is closed"));
+            blocks.push(&after[..stop]);
+            rest = &after[stop + END.len()..];
+        }
     }
     assert_eq!(blocks.len(), 1, "one marked dataset block");
     let block = blocks[0];
