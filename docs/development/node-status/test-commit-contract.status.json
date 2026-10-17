@@ -17,7 +17,8 @@
   "unblock_condition": "Reopen if the commit grammar, workflow, or global state vocabulary changes.",
   "evidence": [
     "E-016",
-    "E-032"
+    "E-032",
+    "E-143"
   ],
   "source_references": [
     "docs/development/repository-audit-2026-09-25.md",
@@ -26,6 +27,7 @@
   ],
   "notes": [
     "Accepted repair commits: efd8092, cf50328, 8ea7696, afba42c, and 0d3367b.",
-    "Commit validation passed for c66072f..c782a49."
+    "Commit validation passed for c66072f..c782a49.",
+    "Re-run over the integration range in E-143: 39 non-merge commits from `5566915`, including the thirty whose messages were rewritten and the merge that carries them. The validator checks non-merge commits reached from the tip, which is how the thirty could be repaired without editing a single tree."
   ]
 }

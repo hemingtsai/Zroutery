@@ -38,7 +38,7 @@
     "docs/development/decisions/0004-failure-outcome-authority.md",
     "docs/development/decisions/0005-core-p1-node-boundaries.md",
     "docs/development/repository-audit-2026-09-25.md",
-    "crates/zroutery-core/src/server/pipeline.rs",
+    "crates/zroutery-core/src/server/pipeline/mod.rs",
     "crates/zroutery-core/src/server/mod.rs",
     "crates/zroutery-core/src/stats.rs",
     "crates/zroutery-core/src/ir/response.rs",

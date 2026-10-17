@@ -129,10 +129,12 @@ The Stage 3, Stage 4, and Stage 6 repair edges are intentionally repeated in
 Outcome, cancellation, or candidate identity inputs are untrustworthy. Those
 edges stay in the graph after revalidation because the dependency is real, not
 because it is still blocking; only the `blocked_by` sets changed. The
-`CORE-P1-PIPELINE-LIFECYCLE` node was the sole owner of `server/pipeline.rs` and
-has completed its work. All five bounded Core P1 nodes and the aggregate are
-accepted, so `7E-1B` and `7B` are the next dispatchable nodes while `7E-2A`
-stays blocked on `7E-1B`.
+`CORE-P1-PIPELINE-LIFECYCLE` node was the sole owner of `server/pipeline.rs`,
+since split into `server/pipeline/`, and has completed its work. All five
+bounded Core P1 nodes and the aggregate are accepted. The ML chain has since
+closed `7E-2A` through `7E-3`; its frontier is `7F`, which is `PARTIAL` on one
+of its four gates — the accepted model's statistical volume — with `blocked_by`
+empty, and `7G`, `7H` and `STAGE-8` remain blocked behind it.
 
 ## Stage and aggregate edges
 
@@ -146,10 +148,12 @@ stays blocked on `7E-1B`.
 - `UI` is independent of new backend sidecars. `UI-NEW-TRACKS` is no longer
   blocked on upstream — `ACCOUNT`, `NEWAPI`, `I2`, `I3` and `I4` all pass their
   gates and its `blocked_by` is empty — but it is `PARTIAL` on its own three
-  gates, because migration and takeover rollback surfaces do not exist, and the
-  one surface that was built has never been driven by a person in a running
-  app. The current operational UI can remain `DONE` without implying that the
-  new surfaces exist.
+  gates: migration and takeover still have no command and no surface, and the
+  product confirmation and rollback UI is a product decision that has not been
+  taken. `UI` is `DONE` on the three gates it owns, and since the integration
+  recorded in E-143 it does mount the learning panel, the shadow replay and the
+  per-account maintenance row — so `DONE` there means the surface builds and is
+  integrated, not that the new tracks exist.
 
 ## Parallel-track edges
 

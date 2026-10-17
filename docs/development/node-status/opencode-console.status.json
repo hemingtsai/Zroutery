@@ -23,8 +23,8 @@
     "crates/zroutery-core/src/opencode/oauth.rs",
     "crates/zroutery-core/src/opencode/console.rs",
     "crates/zroutery-core/src/opencode/mod.rs",
-    "crates/zroutery-core/src/config.rs",
-    "crates/zroutery-core/src/server/pipeline.rs",
+    "crates/zroutery-core/src/config/mod.rs",
+    "crates/zroutery-core/src/server/pipeline/mod.rs",
     "src-tauri/src/commands.rs",
     "docs/development/opencode-zen.md"
   ],

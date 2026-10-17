@@ -25,7 +25,7 @@
   ],
   "source_references": [
     "docs/development/repository-audit-2026-09-25.md",
-    "crates/zroutery-core/src/migration.rs",
+    "crates/zroutery-core/src/migration/mod.rs",
     "crates/zroutery-core/tests/e2e.rs"
   ],
   "notes": [

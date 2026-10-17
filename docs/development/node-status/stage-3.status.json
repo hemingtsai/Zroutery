@@ -27,9 +27,9 @@
   ],
   "source_references": [
     "docs/development/repository-audit-2026-09-25.md",
-    "crates/zroutery-core/src/policy.rs",
-    "crates/zroutery-core/src/router.rs",
-    "crates/zroutery-core/src/server/pipeline.rs",
+    "crates/zroutery-core/src/policy/mod.rs",
+    "crates/zroutery-core/src/router/mod.rs",
+    "crates/zroutery-core/src/server/pipeline/mod.rs",
     "crates/zroutery-core/tests/routing_policy_test.rs"
   ],
   "notes": [

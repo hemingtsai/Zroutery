@@ -2778,6 +2778,81 @@ fn the_calibration_source_reaches_no_installation_or_background_surface() {
     }
 }
 
+/// Every file of the router, spelled out.
+///
+/// `router.rs` became `router/` and this tripwire has to follow it. A child that
+/// reached the module could not be seen if only the barrel were scanned, and a
+/// tripwire that cannot see a moved file is indistinguishable from one that does
+/// not exist. Adding a file here is the cost of keeping it honest.
+const ROUTER_SOURCES: &[(&str, &str)] = &[
+    ("router/mod.rs", include_str!("../src/router/mod.rs")),
+    (
+        "router/candidate.rs",
+        include_str!("../src/router/candidate.rs"),
+    ),
+    (
+        "router/candidates.rs",
+        include_str!("../src/router/candidates.rs"),
+    ),
+    (
+        "router/classifier.rs",
+        include_str!("../src/router/classifier.rs"),
+    ),
+    ("router/health.rs", include_str!("../src/router/health.rs")),
+    (
+        "router/helpers.rs",
+        include_str!("../src/router/helpers.rs"),
+    ),
+    ("router/plan.rs", include_str!("../src/router/plan.rs")),
+    (
+        "router/reporting.rs",
+        include_str!("../src/router/reporting.rs"),
+    ),
+    (
+        "router/selection.rs",
+        include_str!("../src/router/selection.rs"),
+    ),
+    ("router/tiers.rs", include_str!("../src/router/tiers.rs")),
+    ("router/tests.rs", include_str!("../src/router/tests.rs")),
+];
+
+/// Every file of the routing policy, spelled out.
+///
+/// `policy.rs` became `policy/` and this tripwire has to follow it. A child
+/// that reached `ml::calibration` would be invisible if only the barrel were
+/// scanned, and a tripwire that cannot see a moved file is indistinguishable
+/// from one that does not exist. Adding a file here is the cost of keeping it
+/// honest.
+const POLICY_SOURCES: &[(&str, &str)] = &[
+    ("policy/mod.rs", include_str!("../src/policy/mod.rs")),
+    (
+        "policy/capabilities.rs",
+        include_str!("../src/policy/capabilities.rs"),
+    ),
+    (
+        "policy/clients.rs",
+        include_str!("../src/policy/clients.rs"),
+    ),
+    (
+        "policy/decision.rs",
+        include_str!("../src/policy/decision.rs"),
+    ),
+    (
+        "policy/eligibility.rs",
+        include_str!("../src/policy/eligibility.rs"),
+    ),
+    ("policy/policy.rs", include_str!("../src/policy/policy.rs")),
+    (
+        "policy/profile.rs",
+        include_str!("../src/policy/profile.rs"),
+    ),
+    (
+        "policy/scoring.rs",
+        include_str!("../src/policy/scoring.rs"),
+    ),
+    ("policy/tests.rs", include_str!("../src/policy/tests.rs")),
+];
+
 /// GATE 6, behavioural: nothing outside this module names it, so the running
 /// product cannot reach the distribution.
 ///
@@ -2793,13 +2868,15 @@ fn nothing_in_the_running_product_can_reach_this_module() {
             "src-tauri/src/main.rs",
             include_str!("../../../src-tauri/src/main.rs"),
         ),
-        ("src/router.rs", include_str!("../src/router.rs")),
-        ("src/policy.rs", include_str!("../src/policy.rs")),
         (
             "src/ml/coordinator.rs",
             include_str!("../src/ml/coordinator.rs"),
         ),
-    ] {
+    ]
+    .into_iter()
+    .chain(POLICY_SOURCES.iter().copied())
+    .chain(ROUTER_SOURCES.iter().copied())
+    {
         let source = source.to_lowercase();
         assert!(
             !source.contains("ml::calibration"),

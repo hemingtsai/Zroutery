@@ -29,7 +29,7 @@
   ],
   "source_references": [
     "docs/development/repository-audit-2026-09-25.md",
-    "crates/zroutery-core/src/account/adapters/newapi.rs",
+    "crates/zroutery-core/src/account/adapters/newapi/mod.rs",
     "crates/zroutery-core/src/account/provider.rs",
     "crates/zroutery-core/src/account/types.rs"
   ],

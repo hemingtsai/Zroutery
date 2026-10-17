@@ -22,11 +22,11 @@
   "evidence": [],
   "source_references": [
     "crates/zroutery-core/src/opencode/mod.rs",
-    "crates/zroutery-core/src/config.rs",
-    "crates/zroutery-core/src/upstream.rs",
+    "crates/zroutery-core/src/config/mod.rs",
+    "crates/zroutery-core/src/upstream/mod.rs",
     "crates/zroutery-core/src/protocol/mod.rs",
-    "crates/zroutery-core/src/server/pipeline.rs",
-    "crates/zroutery-core/src/router.rs",
+    "crates/zroutery-core/src/server/pipeline/mod.rs",
+    "crates/zroutery-core/src/router/mod.rs",
     "crates/zroutery-core/src/server/mod.rs",
     "docs/development/opencode-zen.md"
   ],

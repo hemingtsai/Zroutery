@@ -1,7 +1,7 @@
 # Regression Ledger
 
 This ledger is the canonical owner/recovery view for `REG-001` through
-`REG-010`. It preserves the audit's severity and planned owner. `baseline_state`
+`REG-011`. It preserves the audit's severity and planned owner. `baseline_state`
 is the state at the audited repository; `current_state` is the state justified
 by the evidence available to the orchestration batch. Both use the legal node
 state vocabulary. ORCH-DOCS records defects; it does not repair them.
@@ -18,6 +18,7 @@ state vocabulary. ORCH-DOCS records defects; it does not repair them.
 | `REG-008` | A valid model checkpoint could be paired with an unrelated commit ID. | `FAILED` | `DONE` | P1 | `7E-1A` | E-016; E-026; E-027; E-028; E-033; `ml/model_identity.rs`; `ml/shadow.rs` | Closed by 1c49109 and c782a49 with complete lineage and schema-envelope gates. |
 | `REG-009` | Decision-time feature vectors and exact shadow input were not retained through production evaluation/training. | `FAILED` | `DONE` | P1 | `7E-1B-CORE` / `7E-1B` / `7B` | E-016; E-035; E-037; E-041; E-062; E-067; E-068; E-072; `crates/zroutery-core/src/ml/shadow.rs`; `crates/zroutery-core/tests/shadow_integration_test.rs`; `crates/zroutery-core/tests/dataset_production_test.rs` | Closed: the stored record holds the exact decision-time input, a test replays it through a fresh engine to reproduce both checksums, and production ingestion now consumes those same values rather than re-deriving them. Reopen if the dataset ever sources features from anywhere but the decision-time snapshot. |
 | `REG-010` | Node state, DAG, evidence, and regression recovery information was not present in development records. | `FAILED` | `DONE` | P1 | `ORCH-DOCS` | E-017 through E-023; `docs/development/node-status/`; `docs/development/dependency-dag.md`; `docs/development/evidence-registry.md` | `ORCH-INFRA`, `ORCH-STATUS`, `ORCH-EVIDENCE`, `ORCH-REGRESSION`, `ORCH-VALIDATION`; reopen if JSON, inventory, edge, enum, path, or diff validation fails. |
+| `REG-011` | The recorded all-target/all-feature clippy gate was red on `dev`, for two unrelated reasons: `tests/e2e.rs` matched only the `ProviderKind` variants that existed before the OpenCode work, so that test target did not compile, and `buffered_chat` crossed `clippy::too_many_arguments` when the retained shadow input became its eleventh parameter. | `FAILED` | `DONE` | P2 | `7F` / test hygiene | E-141; `crates/zroutery-core/tests/e2e.rs`; `crates/zroutery-core/src/server/pipeline.rs` | Closed by naming the two provider kinds this fixture cannot build and allowing the argument count the file already allows three times, with the reason written beside it. Reopen if a provider kind is added without visiting this fixture, or if the seam grows another parameter. |
 
 ## Ownership and closure rules
 

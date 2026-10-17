@@ -28,6 +28,7 @@ pub mod billing;
 pub mod budget;
 pub mod circuit_breaker;
 pub mod classifier;
+pub mod client;
 pub mod config;
 pub mod election;
 pub mod error;
@@ -61,8 +62,11 @@ pub mod opencode;
 pub mod account;
 
 pub use agent_takeover::{
-    ConflictResolution, ExternalModification, FieldConflict, OwnershipManifest, OwnershipState,
-    ProposedChange, ReleaseOutcome, ResolutionReport, TakeoverProposal, TakeoverStore,
+    adapter_for, extract_field_values, takeover_fields, AgentType, ConflictResolution,
+    ExternalModification, FieldConflict, GatewayTarget, ManagedField, OwnershipManifest,
+    OwnershipState, ProposedChange, ReleaseOutcome, ResolutionReport, TakeoverProposal,
+    TakeoverStatus, TakeoverStore, TierClass, VerificationReport, GATEWAY_PROVIDER_ID,
+    OPENCODE_CONFIG_ENV,
 };
 pub use billing::{
     Balance, BalanceConfig, BalancePreset, BalanceProbe, BaseDepth, Cost, CostTotals, Pricing,
@@ -71,6 +75,10 @@ pub use budget::{Budget, BudgetPeriod, BudgetScope, Ledger, OnExceeded, Verdict}
 pub use circuit_breaker::{CircuitBreaker, CircuitBreakerConfig, CircuitState};
 pub use classifier::{
     ClassifierSignature, ClassifierVerdict, Detection as ClassifierDetection, DetectionConfig,
+};
+pub use client::{
+    AttributionSource, ClientFamily, ClientFingerprint, ClientId, ClientRegistry, Confidence,
+    CredentialBinding, RuleProvenance, MAX_CUSTOM_CLIENT_ID_LEN, MAX_TRACKED_CLIENTS,
 };
 pub use config::{
     resolve_client_identity, AppConfig, ClassifierCandidate, ClassifierConfig, ClientIdentity,
@@ -128,7 +136,7 @@ pub use router::{
 };
 pub use server::{build_app, AppState, ServerHandle};
 pub use session::{SessionRoutingMode, SessionState, SessionStore};
-pub use stats::{RequestRecord, Stats};
+pub use stats::{AttributionSummary, ClientTotals, RequestRecord, Stats};
 pub use stats_ext::{
     Ewma, FailureStats, LatencyStats, PercentileEstimator, ProviderModelStats, StatsStore,
 };
