@@ -140,6 +140,10 @@ HARNESS = """
     server: query("server") || __SERVER__,
     keys: query("keys") || __KEYS__,
     catalogues: query("catalogues") || {},
+    // A case that wants the learning panel has to ask for it. The panel is off
+    // by default because every other case's page would grow a section that has
+    // nothing to do with what it is testing.
+    ml: query("ml") || null,
     commandLog: [],
     delays: {},
   };
@@ -175,6 +179,7 @@ HARNESS = """
       balances: {},
       election: null,
       budgets: [],
+      ml_available: Boolean(state.ml),
     };
   }
 
@@ -223,6 +228,15 @@ HARNESS = """
         listeners.delete(args.eventId);
         return null;
       }
+      case "get_ml_status":
+        return state.ml ? clone(state.ml.status) : null;
+      case "get_ml_traces":
+        return state.ml ? clone(state.ml.traces) : null;
+      case "run_ml_promotion_round":
+        state.commandLog.push({ cmd, args: clone(args) });
+        // One answer whatever the flags: this case is about what the panel shows
+        // for a refused round, and judging is the only act it performs.
+        return state.ml ? clone(state.ml.round) : null;
       default:
         state.commandLog.push({ cmd, args: clone(args) });
         return null;
@@ -561,6 +575,110 @@ SERVER_STATUS = {
 }
 
 KEYS = {"deepseek": True, "anthropic": False}
+
+
+# --------------------------------------------------------------------------
+# The learning panel's fixtures
+# --------------------------------------------------------------------------
+
+
+def ml_status() -> dict:
+    """A status document for a build whose learning stack is on and holds no model.
+
+    Every counter is present on purpose: the panel reads them unconditionally and
+    formats them as numbers, so a document missing one would crash the page rather
+    than test it. The zero model is the state this case needs — a refused round is
+    only interesting when nothing is serving.
+    """
+    return {
+        "routing_enabled": True,
+        "durable_state": True,
+        "traces_open": True,
+        "model_store_open": True,
+        "active": None,
+        "active_decision": None,
+        "history": [],
+        "routing": {
+            "rankings": 0,
+            "fallbacks": 0,
+            "explorations": 0,
+            "blind_explorations": 0,
+            "attached": False,
+        },
+        "exploration_probability": 0.0,
+        "exploration_seed": 0,
+        "blind_candidates": [],
+        "dataset": {
+            "ingested": 34,
+            "samples": 34,
+            "no_decision_time_input": 0,
+            "rejected": 0,
+            "evicted_by_count": 0,
+            "evicted_by_age": 0,
+            "faults": 0,
+        },
+        "traces": {"appended": 34, "nothing": 0, "refused": 0, "io_errors": 0},
+        "shadow": {"enabled": True, "decisions_recorded": 34, "faults": 0},
+        "read_at": 1_760_000_000,
+    }
+
+
+ML_TRACES = {
+    "records": 34,
+    "bytes_on_disk": 1024,
+    "path": "/tmp/zroutery/traces.jsonl",
+    "counters": {"appended": 34, "nothing": 0, "refused": 0, "io_errors": 0},
+    "error": None,
+}
+
+# Two criteria: one that refused and one that held. The refused one is the whole
+# point of the case, and the held one proves the panel does not dump thirty rows
+# of agreement on top of the answer.
+ML_ROUND = {
+    "round": {
+        "traces_read": 34,
+        "candidate_commit": "c0ffee00c0ffee00",
+        "decision": {
+            "verdict": "blocked",
+            "candidate_commit": "c0ffee00c0ffee00",
+            "model_id": "ml.candidate",
+            "learning_event_count": 34,
+            "dataset_fingerprint": "d00dfeed",
+            "fitted_partition_fingerprint": "feedface",
+            "holdout_loss": 0.4321,
+            "gate_config_identity": "gate@1",
+            "criteria": [
+                {
+                    "name": "statistical_volume",
+                    "held": False,
+                    "measured": 12,
+                    "threshold": 30,
+                    "reason": "12 effective holdout decisions against a floor of 30",
+                },
+                {
+                    "name": "replay_equivalence",
+                    "held": True,
+                    "measured": None,
+                    "threshold": None,
+                    "reason": "30 of 30 decisions replayed bit-identically",
+                },
+            ],
+            "baseline": "baseline.priority",
+            "paired_requests": 12,
+            "decided_at": 1_760_000_000,
+            "revision": None,
+        },
+        "analysis": None,
+        "policy_choices": {"alpha/model": 34},
+        "installed": None,
+        "reload": {"attached": False, "commit_id": None, "error": None},
+        "reason": None,
+        "error": None,
+    },
+    "status": ml_status(),
+}
+
+ML_QUERY = {"status": ml_status(), "traces": ML_TRACES, "round": ML_ROUND}
 
 
 # --------------------------------------------------------------------------
@@ -1364,6 +1482,91 @@ def case_ui4_tray_state(devtools: DevTools) -> list[str]:
     return failures
 
 
+def case_ui5_refused_round_shows_its_criteria(devtools: DevTools) -> list[str]:
+    """A refused promotion must name the criterion that refused it.
+
+    The backend has always sent the gate's per-criterion evidence; the panel used
+    to render one word, ``blocked``, which is the verdict and not the reason. An
+    operator who reads "blocked" cannot tell a model that was judged and lost from
+    a body that was too small to judge, and those send them to different places.
+
+    The click is a real mouse event on the button the operator would press, and
+    every assertion is read out of the rendered text rather than from component
+    state, so a panel that received the data and did not draw it fails here.
+    """
+    failures: list[str] = []
+    seed(devtools)
+    devtools.click_selector(".nav-item", 3)
+    devtools.wait_for(
+        "document.body.innerText.includes('Promotion round')", "the learning panel"
+    )
+
+    def box_for(expression: str) -> dict | None:
+        # Scrolled into view first: the panel is taller than the viewport, and a
+        # click at the coordinates of an element below the fold lands on whatever
+        # is there instead.
+        return devtools.evaluate(
+            "(() => {"
+            "  const el = %s;"
+            "  if (!el) return null;"
+            "  el.scrollIntoView({ block: 'center' });"
+            "  const r = el.getBoundingClientRect();"
+            "  return { x: r.left + r.width / 2, y: r.top + r.height / 2 };"
+            "})()" % expression
+        )
+
+    judge = box_for(
+        "Array.from(document.querySelectorAll('button'))"
+        ".find((b) => b.textContent.trim() === 'Judge a candidate')"
+    )
+    if not judge:
+        return ["the round's judge button is not on the page"]
+    devtools.click(judge)
+
+    devtools.wait_for(
+        "window.__zrStub.log('run_ml_promotion_round').length >= 1",
+        "the round to reach the backend",
+        timeout=15.0,
+    )
+    devtools.wait_for(
+        "document.body.innerText.includes('statistical_volume')",
+        "the refused round's criteria",
+        timeout=15.0,
+    )
+
+    body = devtools.evaluate("document.body.innerText")
+    for needle in (
+        "blocked",
+        "statistical_volume",
+        "measured 12",
+        "threshold 30",
+        "12 effective holdout decisions against a floor of 30",
+    ):
+        if needle not in body:
+            failures.append("the refused round never showed %r" % needle)
+
+    # The criterion that held is evidence, not the answer: it must be folded away
+    # so the refusal is not buried under thirty rows of agreement.
+    if "replay_equivalence" in body:
+        failures.append("the criteria that held were rendered open beside the refusal")
+    if "Criteria that held (1)" not in body:
+        failures.append("the folded criteria were not labelled with how many held")
+
+    summary = box_for("document.querySelector('.ml-criteria-block details summary')")
+    if not summary:
+        failures.append("there is no disclosure for the criteria that held")
+    else:
+        devtools.click(summary)
+        devtools.wait_for(
+            "document.body.innerText.includes('replay_equivalence')",
+            "the folded criteria to open",
+            timeout=10.0,
+        )
+
+    devtools.evaluate("window.__zrStub.reset()")
+    return failures
+
+
 def connect(debugging_port: int, url: str) -> DevTools:
     """Attach to the page the browser opened, retrying while it starts."""
     deadline = time.monotonic() + 30.0
@@ -1384,6 +1587,11 @@ CASES = (
         "query": {"keys": {}},
     },
     {"label": "UI-4 tray state change updates page and command", "run": case_ui4_tray_state},
+    {
+        "label": "UI-5 refused promotion names the criterion that refused it",
+        "run": case_ui5_refused_round_shows_its_criteria,
+        "query": {"ml": ML_QUERY},
+    },
 )
 
 
