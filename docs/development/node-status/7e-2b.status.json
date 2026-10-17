@@ -32,7 +32,7 @@
     "docs/development/repository-audit-2026-09-25.md",
     "crates/zroutery-core/src/ml/dataset.rs",
     "crates/zroutery-core/src/ml/reward.rs",
-    "crates/zroutery-core/src/outcome.rs"
+    "crates/zroutery-core/src/outcome/mod.rs"
   ],
   "notes": [
     "This is the first node that consumes the collected dataset, and the first that trains anything at all. Training happened here; activation did not and may not.",

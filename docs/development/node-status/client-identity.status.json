@@ -22,12 +22,12 @@
     "E-120"
   ],
   "source_references": [
-    "crates/zroutery-core/src/config.rs",
-    "crates/zroutery-core/src/upstream.rs",
+    "crates/zroutery-core/src/config/mod.rs",
+    "crates/zroutery-core/src/upstream/mod.rs",
     "crates/zroutery-core/src/media/vision.rs",
-    "crates/zroutery-core/src/server/pipeline.rs",
+    "crates/zroutery-core/src/server/pipeline/mod.rs",
     "crates/zroutery-core/src/ir/mod.rs",
-    "crates/zroutery-core/src/protocol/responses.rs",
+    "crates/zroutery-core/src/protocol/responses/mod.rs",
     "crates/zroutery-core/src/failure.rs",
     "crates/zroutery-core/tests/client_profile_headers_test.rs",
     "crates/zroutery-core/tests/client_profile_resolution_test.rs",

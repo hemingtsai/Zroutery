@@ -44,6 +44,10 @@ MODULE_SCOPES = (
     "ml",
     "account",
     "provider",
+    # The OpenCode module boundary, `crates/zroutery-core/src/opencode/`.  Twelve
+    # commits used this scope before the whitelist knew it, so they were flagged
+    # as unknown rather than as wrong; the boundary is real and is listed here.
+    "opencode",
     "integration",
     "tauri",
     "workflow",
@@ -582,6 +586,10 @@ def _fixture_messages() -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
         (
             "provider compatibility scope",
             "feat(provider): add provider health checks",
+        ),
+        (
+            "opencode module scope",
+            "feat(opencode): add zen gateway shaping",
         ),
         (
             "integration compatibility scope",

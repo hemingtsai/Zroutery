@@ -26,8 +26,8 @@
   ],
   "source_references": [
     "docs/development/repository-audit-2026-09-25.md",
-    "crates/zroutery-core/src/config.rs",
-    "crates/zroutery-core/src/policy.rs",
+    "crates/zroutery-core/src/config/mod.rs",
+    "crates/zroutery-core/src/policy/mod.rs",
     "crates/zroutery-core/tests/tier_contract_test.rs"
   ],
   "notes": [

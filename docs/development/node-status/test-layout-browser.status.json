@@ -19,7 +19,8 @@
   "unblock_condition": "BASELINE-GATE must make missing browser explicit non-success and run assertions when available.",
   "evidence": [
     "E-012",
-    "E-031"
+    "E-031",
+    "E-143"
   ],
   "source_references": [
     "docs/development/repository-audit-2026-09-25.md",
@@ -28,6 +29,7 @@
   ],
   "notes": [
     "Accepted repair commit: 4e36fdb; real Chrome layout assertions and missing-browser fail-closed behavior were revalidated.",
+    "Re-run on the integration tree recorded in E-143, which is the first tree where a surface can live behind a tab. Five surfaces and forty controls measured in a real Chromium; the missing-browser path still exits non-success rather than reporting a pass.",
     "This is not Tauri IPC E2E."
   ]
 }

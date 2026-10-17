@@ -494,7 +494,10 @@ class Surface:
 
     ``required`` is a per-kind minimum, so a surface cannot pass by measuring
     some other kind of control. ``drawer`` is the index of the ``Edit`` button
-    that mounts the surface, when it is not simply on the page.
+    that mounts the surface, when it is not simply on the page, and ``tab`` is
+    the routing subject that has to be selected before the page holds it: the
+    three subjects are tabs, and a section on a tab that is not selected is not
+    in the document at all.
     """
 
     id: str
@@ -504,6 +507,7 @@ class Surface:
     anchor: str
     scope: str = ".page"
     drawer: int | None = None
+    tab: str | tuple[str, ...] | None = None
 
 
 # Declared coverage. A surface listed here must yield at least ``required``
@@ -535,24 +539,27 @@ SURFACES = (
         {"combobox": 2, "segment": 3, "native": 4, "action": 1},
         nav=5,
         anchor=".setting-row",
+        tab=("general", "gateway", "budgets"),
     ),
     Surface(
         "routing-default",
-        "Routing default drawer",
+        "Routing model-routes drawer",
         {"combobox": 2, "native": 1},
         nav=3,
         anchor=".flow-row",
         scope=".drawer",
         drawer=0,
+        tab="main",
     ),
     Surface(
         "routing-auto",
-        "Routing auto drawer",
+        "Routing auto-review drawer",
         {"combobox": 2, "native": 1},
         nav=3,
         anchor=".flow-row",
         scope=".drawer",
-        drawer=1,
+        drawer=0,
+        tab="auto",
     ),
 )
 
@@ -1020,30 +1027,61 @@ class DevTools:
 
 
 def measure_surfaces(devtools: DevTools) -> dict[str, dict]:
-    """Walk every declared surface, opening drawers with real input."""
+    """Walk every declared surface, opening drawers with real input.
+
+    A surface that lives on tabs is measured one tab at a time and the counts are
+    summed: the page's promise is that these controls exist and are laid out, not
+    that they coexist in one viewport, and a tab that is not selected is not in
+    the document to be measured at all.
+    """
     devtools.wait_for(
         "document.querySelector('.nav-item') !== null", "the dashboard shell"
     )
     measured: dict[str, dict] = {}
     for surface in SURFACES:
         devtools.click(devtools.element(".nav-item", surface.nav))
-        devtools.wait_for(
-            "document.querySelector(%s) !== null" % json.dumps(surface.anchor),
-            surface.anchor,
-        )
-        if surface.drawer is not None:
-            devtools.click(devtools.element(".section-head button.linky", surface.drawer))
+        tabs: tuple[str, ...]
+        if surface.tab is None:
+            tabs = (None,)  # type: ignore[assignment]
+        elif isinstance(surface.tab, str):
+            tabs = (surface.tab,)
+        else:
+            tabs = surface.tab
+
+        merged = {"surface": surface.id, "rows": [], "controls": 0, "kinds": {}}
+        for tab in tabs:
+            if tab is not None:
+                selector = "#tab-%s" % tab
+                devtools.wait_for(
+                    "document.querySelector(%s) !== null" % json.dumps(selector),
+                    "the %s tab" % tab,
+                )
+                devtools.click(devtools.element(selector))
             devtools.wait_for(
-                "document.querySelector('.drawer') !== null", "drawer %d" % surface.drawer
+                "document.querySelector(%s) !== null" % json.dumps(surface.anchor),
+                surface.anchor,
             )
-        measured[surface.id] = devtools.evaluate(
-            "window.__zrScan(%s, %s)" % (json.dumps(surface.scope), json.dumps(surface.id))
-        )
-        if surface.drawer is not None:
-            devtools.click(devtools.element(".drawer-head button"))
-            devtools.wait_for(
-                "document.querySelector('.drawer') === null", "drawer to close"
+            if surface.drawer is not None:
+                devtools.click(devtools.element(".section-head button.linky", surface.drawer))
+                devtools.wait_for(
+                    "document.querySelector('.drawer') !== null",
+                    "drawer %d" % surface.drawer,
+                )
+            scanned = devtools.evaluate(
+                "window.__zrScan(%s, %s)" % (json.dumps(surface.scope), json.dumps(surface.id))
             )
+            if surface.drawer is not None:
+                devtools.click(devtools.element(".drawer-head button"))
+                devtools.wait_for(
+                    "document.querySelector('.drawer') === null", "drawer to close"
+                )
+            for row in scanned["rows"]:
+                row["index"] = len(merged["rows"])
+                merged["rows"].append(row)
+            merged["controls"] += scanned["controls"]
+            for kind, count in scanned["kinds"].items():
+                merged["kinds"][kind] = merged["kinds"].get(kind, 0) + count
+        measured[surface.id] = merged
     return measured
 
 

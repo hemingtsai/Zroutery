@@ -36,9 +36,9 @@
     "src-tauri/src/checkin_commands.rs",
     "src-tauri/src/checkin/mod.rs",
     "ui/src/pages/Providers.tsx",
-    "crates/zroutery-core/src/account/adapters/newapi.rs",
-    "crates/zroutery-core/src/migration.rs",
-    "crates/zroutery-core/src/agent_takeover.rs"
+    "crates/zroutery-core/src/account/adapters/newapi/mod.rs",
+    "crates/zroutery-core/src/migration/mod.rs",
+    "crates/zroutery-core/src/agent_takeover/mod.rs"
   ],
   "notes": [
     "No placeholder control is treated as a product lifecycle.",

@@ -26,7 +26,7 @@
     "docs/development/repository-audit-2026-09-25.md",
     "crates/zroutery-core/src/observability.rs",
     "crates/zroutery-core/src/observation.rs",
-    "crates/zroutery-core/src/outcome.rs",
+    "crates/zroutery-core/src/outcome/mod.rs",
     "crates/zroutery-core/tests/observability_projection_test.rs"
   ],
   "notes": [

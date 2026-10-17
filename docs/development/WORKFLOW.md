@@ -62,6 +62,7 @@ runtime
 ml
 account
 provider
+opencode
 integration
 tauri
 workflow
@@ -115,7 +116,7 @@ reviewed before it is added.
 The workflow's structural expression is:
 
 ```text
-^(feat|fix|refactor|test|perf|docs|build|ci|chore)\((core|router|protocol|policy|runtime|ml|account|provider|integration|tauri|workflow|repo|routing|observation|stats|newapi|migration|takeover|server|decision|shadow|reward|replay|dataset|model|ui|docs|tests|7e1|7e2a|7e2b|7e2c|7e2d|7e2e|7e2f|7e3|7f|7g|7h)\): [a-z][^\r\n]*$
+^(feat|fix|refactor|test|perf|docs|build|ci|chore)\((core|router|protocol|policy|runtime|ml|account|provider|opencode|integration|tauri|workflow|repo|routing|observation|stats|newapi|migration|takeover|server|decision|shadow|reward|replay|dataset|model|ui|docs|tests|7e1|7e2a|7e2b|7e2c|7e2d|7e2e|7e2f|7e3|7f|7g|7h)\): [a-z][^\r\n]*$
 ```
 
 The expression is followed by deterministic checks in
@@ -168,6 +169,14 @@ git push origin backup/pre-contract-rewrite-b86eede:dev --force-with-lease=dev:9
 | author, author date, committer, committer date | 0 differences |
 | `git diff` between the two tips | empty |
 | merge-base with `main` | still `9abfada` — history is shared, not forked |
+
+A second, smaller rewrite followed. Seven commits from 2026-10-07 were still
+rejected on `main..dev`: `opencode` was absent from the scope table, two subjects
+were past the limit, two began with a capitalised noun, one began with a noun
+that is not a verb, one used a type outside the nine. The scope was the defect;
+the grammar was not. Six keep the `opencode` boundary, the README commit moves to
+`repo`, no identity is touched, and 63 of 130 commits were rebuilt with no tree
+changing — recorded as E-144.
 
 Two attempts failed first, and the failures are the reason that table has three
 rows rather than one:

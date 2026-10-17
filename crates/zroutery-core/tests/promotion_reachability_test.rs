@@ -66,26 +66,78 @@ use zroutery_core::server::AppState;
 /// merely somewhere in the crate.
 #[test]
 fn a_promotion_round_is_reachable_from_the_request_path() {
-    let source = include_str!("../src/server/mod.rs");
-    let outside_tests = match source.find("#[cfg(test)]") {
-        Some(at) => &source[..at],
-        None => source,
-    };
-    let caller = outside_tests.lines().find(|line| {
-        let code = line.trim();
-        if code.starts_with("//") || code.starts_with('*') {
-            return false;
-        }
-        code.contains("run_promotion_round(") && !code.contains("fn ")
+    // `server/mod.rs` became `server/` and the call moved with the route that
+    // makes it, so the scan has to cover the whole production surface rather
+    // than the barrel. Each file is trimmed at its own `#[cfg(test)]` so a
+    // fixture calling the round cannot keep this green.
+    let caller = SERVER_SOURCES.iter().find_map(|(name, source)| {
+        let outside_tests = match source.find("#[cfg(test)]") {
+            Some(at) => &source[..at],
+            None => *source,
+        };
+        outside_tests.lines().find_map(|line| {
+            let code = line.trim();
+            if code.starts_with("//") || code.starts_with('*') {
+                return None;
+            }
+            (code.contains("run_promotion_round(") && !code.contains("fn ")).then_some(*name)
+        })
     });
     assert!(
         caller.is_some(),
-        "nothing in server/mod.rs calls run_promotion_round any more, so the loop is \
+        "nothing in server/ calls run_promotion_round any more, so the loop is \
          open in the product again. That is the regression §E9 recorded and this file \
          exists to catch: either restore the call, or record deliberately that \
          promotion is no longer reachable."
     );
 }
+
+/// Every production file of the server, spelled out.
+///
+/// A file that reached the round without appearing here would be invisible to
+/// the check above, which is the one failure this tripwire must not have.
+const SERVER_SOURCES: &[(&str, &str)] = &[
+    ("server/mod.rs", include_str!("../src/server/mod.rs")),
+    (
+        "server/accessors.rs",
+        include_str!("../src/server/accessors.rs"),
+    ),
+    (
+        "server/accounts.rs",
+        include_str!("../src/server/accounts.rs"),
+    ),
+    (
+        "server/config_state.rs",
+        include_str!("../src/server/config_state.rs"),
+    ),
+    ("server/cors.rs", include_str!("../src/server/cors.rs")),
+    (
+        "server/handlers.rs",
+        include_str!("../src/server/handlers.rs"),
+    ),
+    ("server/ledger.rs", include_str!("../src/server/ledger.rs")),
+    (
+        "server/ml_state.rs",
+        include_str!("../src/server/ml_state.rs"),
+    ),
+    (
+        "server/pipeline/mod.rs",
+        include_str!("../src/server/pipeline/mod.rs"),
+    ),
+    (
+        "server/pipeline/sse.rs",
+        include_str!("../src/server/pipeline/sse.rs"),
+    ),
+    (
+        "server/projection_log.rs",
+        include_str!("../src/server/projection_log.rs"),
+    ),
+    (
+        "server/shadow_candidate.rs",
+        include_str!("../src/server/shadow_candidate.rs"),
+    ),
+    ("server/state.rs", include_str!("../src/server/state.rs")),
+];
 
 // ---------------------------------------------------------------------------
 // The round mechanism itself
