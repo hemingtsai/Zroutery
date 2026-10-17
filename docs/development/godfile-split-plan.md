@@ -141,3 +141,51 @@ The things that *will* break, and are known in advance:
 4. `pnpm --dir ui build`
 5. `git diff --stat` shows **no change to any `pub` path** — verified by diffing
    the public surface before and after with a grep of every `pub` item's path.
+
+## Landed
+
+Merged into `dev` as the integration recorded in E-143. Every file this plan
+named is now a module directory. The right-hand column is measured at that tip;
+the left-hand column is the plan's own measurement.
+
+| File | Before | After |
+|---|---|---|
+| `agent_takeover.rs` | 5028 | `agent_takeover/`, 8 files, `mod.rs` 72 |
+| `server/pipeline.rs` | 3900 | `server/pipeline/`, 9 files, `mod.rs` 1534 |
+| `account/adapters/newapi.rs` | 3265 | `newapi/`, 13 files, `mod.rs` 177 |
+| `config.rs` | 2749 | `config/`, 11 files, `mod.rs` 56 |
+| `router.rs` | 2655 | `router/`, 11 files, `mod.rs` 76 |
+| `src-tauri/src/state.rs` | 2700 | `state/`, 11 files, `mod.rs` 157 |
+| `server/mod.rs` | 2587 | `server/`, 14 entries, `mod.rs` 101 |
+| `protocol/openai.rs` | 2854 | `openai/`, 7 files, `mod.rs` 51 |
+| `migration.rs` | 2547 | `migration/`, 6 files, `mod.rs` 40 |
+| `protocol/responses.rs` | 2372 | `responses/`, 6 files, `mod.rs` 42 |
+| `policy.rs` | 2134 | `policy/`, 9 files, `mod.rs` 70 |
+
+The same pass took six files this plan did not rank: `protocol/anthropic.rs`,
+`protocol/gemini.rs`, `upstream.rs`, `outcome.rs`, `src-tauri/src/ccswitch.rs`,
+and `ui/src/pages/Settings.tsx`, which was cut by subject rather than by struct.
+
+`server/pipeline/mod.rs` stays above 1500 lines on purpose. What remains there
+is `buffered_chat`, `stream_chat`, the preparation and continuation the two
+share, and the vision fallback that can rewrite a request before either path
+sees it. The eight siblings took the handlers, the budget accounting, the SSE
+encoder, the repair loop and the ML rank step; what is left is the sequencing
+of them, and splitting a sequence across files turns one readable function into
+eight files a reader has to reassemble.
+
+## What this did not do
+
+The six largest remaining source files are all under `ml/`:
+`calibration.rs` (3687), `bandit.rs` (3138), `shadow.rs` (2660),
+`activation.rs` (2595), `offline_gate.rs` (2418) and `model.rs` (2218). The
+first five are the ones this plan declared off limits. That exclusion is still
+the reason the tree's tail is heavy, and it is a scope decision rather than an
+oversight.
+
+The definition of done above asks for `cargo test -p zroutery-core --features
+ml` to stay at 2367. At the merge tip the suite is `--workspace --all-features`:
+73 binaries, 2735 tests. Other work landed on the same tree in the same period,
+so the two numbers measure different commands over different code. The larger
+one is not evidence that the split kept every test, and this section does not
+offer it as such.
