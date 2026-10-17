@@ -182,6 +182,7 @@ export default function Routing({
         <div className="setting-right">
           <input
             type="checkbox"
+            aria-label={t("vision.enable")}
             checked={config.vision.enabled}
             onChange={(e) => patchVision({ enabled: e.currentTarget.checked })}
           />
@@ -212,6 +213,7 @@ export default function Routing({
             <div className="setting-right">
               <CommitInput
                 value={config.vision.placeholder}
+                ariaLabel={t("vision.placeholder")}
                 onCommit={(placeholder) =>
                   placeholder.trim() && patchVision({ placeholder })
                 }
@@ -513,6 +515,7 @@ function DefaultDrawer({
               <CommitNumber
                 min={0}
                 value={routing.scoring.price_weight}
+                ariaLabel={t("settings.price_weight")}
                 onCommit={(v) => patchScoring({ price_weight: v ?? 0 })}
               />
             </div>
@@ -525,6 +528,7 @@ function DefaultDrawer({
               <CommitNumber
                 min={0}
                 value={routing.scoring.latency_weight}
+                ariaLabel={t("settings.latency_weight")}
                 onCommit={(v) => patchScoring({ latency_weight: v ?? 0 })}
               />
             </div>
@@ -539,6 +543,7 @@ function DefaultDrawer({
                 min={0}
                 integer
                 value={routing.scoring.reference_input_tokens}
+                ariaLabel={t("settings.ref_input")}
                 onCommit={(v) => patchScoring({ reference_input_tokens: v ?? 0 })}
               />
             </div>
@@ -552,6 +557,7 @@ function DefaultDrawer({
                 min={0}
                 integer
                 value={routing.scoring.reference_output_tokens}
+                ariaLabel={t("settings.ref_output")}
                 onCommit={(v) => patchScoring({ reference_output_tokens: v ?? 0 })}
               />
             </div>
@@ -613,6 +619,7 @@ function DefaultDrawer({
           </div>
           <div className="setting-right">
             <input
+              aria-label={t("settings.f_model_id")}
               value={aliasDraft.from}
               placeholder="claude-opus-4-1-20250805"
               onChange={(e) => setAliasDraft({ ...aliasDraft, from: e.currentTarget.value })}
