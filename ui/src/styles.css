@@ -135,6 +135,58 @@ code,
   font-size: 0.95em;
 }
 
+/* ================================================================ scrollbar */
+
+/*
+ * The scrollbar, which is otherwise entirely the platform's.
+ *
+ * Nine gate criteria plus the promotion round plus the trace log make the
+ * learned-routing tab the tallest page in the app, so this is the one place the
+ * default is on screen at length rather than glimpsed. Unstyled it arrives in
+ * the platform's own grey, with its own corner radii, against a surface that is
+ * otherwise `--line` on square corners throughout.
+ *
+ * Two mechanisms, because they are not alternatives. `scrollbar-width: thin`
+ * and `scrollbar-color` are the standardized properties and are what Firefox
+ * honours; Chromium honours them only from v121, and the `::-webkit-scrollbar`
+ * rules below are what cover everything older. Writing only one set leaves a
+ * browser showing one of the two, which is the usual way this goes wrong.
+ */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/*
+ * No `border-radius` here, and not by omission: the token is `0` and the point
+ * is that the thumb's corners are the same as every other corner in the app.
+ * A thumb is the one element a user drags, so a rounded one is also the one
+ * most likely to be noticed disagreeing with the panels it scrolls.
+ */
+::-webkit-scrollbar-thumb {
+  background: var(--line-strong);
+  border-radius: var(--radius);
+  /* Three of the ten pixels go to a border in the track's colour, which is what
+     makes the thumb read as 4px wide against a 10px gutter without changing
+     the gutter the layout reserves. */
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--muted);
+  background-clip: content-box;
+}
+
 /* ============================================================== app layout */
 
 .shell {
@@ -643,7 +695,7 @@ code,
 .disclosure {
   margin-top: 12px;
   border: 1px solid var(--line);
-  border-radius: 6px;
+  border-radius: var(--radius);
 }
 
 .disclosure-head {
@@ -654,7 +706,7 @@ code,
   padding: 8px 10px;
   background: none;
   border: none;
-  border-radius: 6px;
+  border-radius: var(--radius);
   color: var(--text);
   font: inherit;
   font-size: 13px;
@@ -791,7 +843,7 @@ code,
   margin-top: 12px;
   padding: 12px;
   border: 1px solid var(--line-strong);
-  border-radius: 6px;
+  border-radius: var(--radius);
   background: var(--surface-muted);
 }
 
