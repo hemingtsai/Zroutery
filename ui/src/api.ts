@@ -4,6 +4,7 @@
  */
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import type { TKey } from "./i18n";
 
 export type ModelTier = "fast" | "standard" | "reasoning" | "frontier";
 /** @deprecated Use ModelTier. */
@@ -1253,6 +1254,26 @@ export function virtualId(tier: ModelTier, style: NamingStyle = "internal"): str
     openai: { fast: "luna-class", standard: "terra-class", reasoning: "sol-class", frontier: "astra-class" },
   };
   return map[style][tier];
+}
+
+/**
+ * The tier in words, for prose that is describing a model rather than routing
+ * it.
+ *
+ * `virtualId` is the name a client asks for and has to stay exactly as
+ * configured; this is the readable label, so a row can say which tier a model
+ * belongs to without printing `standard-class` or a bare enum value.
+ *
+ * The translator is typed by parameter rather than taken as a dependency,
+ * because the dictionary's key union lives in i18n and this file is what it
+ * describes. The import is type-only and erased, so there is no cycle at
+ * runtime.
+ */
+export function tierName(
+  tier: ModelTier,
+  t: (key: TKey, params?: Record<string, string | number>) => string,
+): string {
+  return t(`tier.name.${tier}` as TKey);
 }
 
 /** A configured model together with the id the backend exposes it as. */

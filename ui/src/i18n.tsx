@@ -109,6 +109,10 @@ const en = {
   "route.default_hint": "ordinary requests",
   "route.auto_review": "Auto review",
   "route.review_hint_on": "permission checks",
+  "routing.tab_group": "Routing subjects",
+  "routing.tab_ml": "Learned routing",
+  "routing.tab_main": "Model routes",
+  "routing.tab_auto": "Auto review",
   "route.review_hint_off": "follows Default",
   "route.check": "check",
   "route.no_tier": "No tier has a model.",
@@ -311,6 +315,14 @@ const en = {
   // panel never presents one as the other.
   "account.reward_weak_source": "read from provider log text",
   "account.reward_inferred": "inferred from the balance change",
+  "account.effect.credited": "observed: added",
+  "account.effect.debited": "observed: taken",
+  "account.effect.no_change": "observed: nothing moved",
+  "account.effect.unobserved": "not observed either way",
+  "account.source.provider_response": "reported by the provider",
+  "account.source.account_state": "read from the account state",
+  "account.source.account_log": "read from the account log",
+  "account.source.operation_response": "from the operation response",
   "account.checkin": "Check in",
   "account.resume": "Continue in the open window",
   "account.cancel": "Cancel",
@@ -366,6 +378,10 @@ const en = {
   "tier.hint.standard": "the everyday workhorse",
   "tier.hint.reasoning": "the strongest, most expensive tier",
   "tier.hint.frontier": "cutting-edge frontier models",
+  "tier.name.fast": "Fast",
+  "tier.name.standard": "Standard",
+  "tier.name.reasoning": "Reasoning",
+  "tier.name.frontier": "Frontier",
   "routing.tier_empty": "Empty — requests for {id} fail until a model joins this tier.",
   "routing.fallback_n": "fallback {n}",
   "routing.request": "request",
@@ -767,6 +783,10 @@ const zh: Dict = {
   "route.default_hint": "普通请求",
   "route.auto_review": "自动审查",
   "route.review_hint_on": "权限检查",
+  "routing.tab_group": "路由的三个主题",
+  "routing.tab_ml": "学习型路由",
+  "routing.tab_main": "模型路由",
+  "routing.tab_auto": "自动审查",
   "route.review_hint_off": "跟随默认",
   "route.check": "检查",
   "route.no_tier": "尚无类别分配到模型。",
@@ -783,8 +803,7 @@ const zh: Dict = {
   // -------------------------------------------------------------- models
   "models.pick_provider_name": "请选择提供商并填写模型名。",
   "models.duplicate": "该提供商已提供“{model}”。",
-  "models.unclassified":
-    "{n} 个模型尚未分层:{ids}。它们仍可通过完整 id 调用,但在指定层级前不参与 *-class 路由。",
+  "models.unclassified": "{n} 个模型尚未分层:{ids}。可按完整 id 调用,但不参与分层路由。",
   "models.lede_none": "Zroutery 暴露的每个模型,每个提供商型号一条。",
   "models.exposed": "已暴露 {n} 个",
   "models.empty": "暂无模型。",
@@ -903,8 +922,7 @@ const zh: Dict = {
   "providers.catalogue_no_free":
     "目录共 {total} 个模型,其中没有一个标记为免费。关闭筛选即可查看。",
   "providers.bearer_auth": "同时发送 Bearer 认证",
-  "providers.bearer_auth_hint":
-    "用于读取 Authorization: Bearer 而非 x-api-key 的中转;两个头都会发送,任一校验均可通过",
+  "providers.bearer_auth_hint": "用于读 Authorization: Bearer 而非 x-api-key 的中转。",
   "providers.balance": "余额",
   "providers.balance_hint": "部分提供商公布剩余额度。",
   "field.probe": "探针",
@@ -955,14 +973,21 @@ const zh: Dict = {
   "account.reward": "奖励",
   "account.reward_weak_source": "取自平台日志文本",
   "account.reward_inferred": "由余额变化推断",
+  "account.effect.credited": "已确认入账",
+  "account.effect.debited": "已确认扣减",
+  "account.effect.no_change": "已确认无变化",
+  "account.effect.unobserved": "未观测到",
+  "account.source.provider_response": "平台直接返回",
+  "account.source.account_state": "读自账户状态",
+  "account.source.account_log": "读自账户日志",
+  "account.source.operation_response": "来自操作返回",
   "account.checkin": "签到",
   "account.resume": "在已打开的窗口中继续",
   "account.cancel": "取消",
   "account.close_browser": "关闭窗口",
   "account.not_enabled": "该账户未开启签到，请先在其维护设置中启用。",
-  "account.need_path": "该账户没有配置签到页面。请将 maintenance.checkin_path 设为承载签到按钮的面板页面。",
-  "account.need_selector":
-    "该账户没有配置签到控件。请将 maintenance.checkin_trigger_selector 设为按钮的 CSS 选择器，例如 button.checkin。",
+  "account.need_path": "未配置签到页面。请填写 maintenance.checkin_path。",
+  "account.need_selector": "未配置签到按钮选择器。请填写 maintenance.checkin_trigger_selector。",
   "account.start_failed": "无法开始签到",
   "account.resume_failed": "无法继续签到",
   "account.cancel_failed": "无法取消签到",
@@ -972,12 +997,11 @@ const zh: Dict = {
   // 探测不是签到。它只询问平台账户处于什么状态并报告结果，不会打开浏览器，
   // 也不会领取任何东西。
   "providers.probe_section": "账户探测",
-  "providers.probe_hint":
-    "向每个已声明账户的平台询问其状态并发布结果。每个账户一次请求，因此只在你点击按钮时发生，不会自行运行。未启用的账户不会被探测，所以不会出现在列表中。",
+  "providers.probe_hint": "询问各账户的平台状态。每个账户一次请求,仅在你点击时运行。",
   "providers.probe_now": "探测所有账户",
   "providers.probing": "探测中…",
-  "providers.probe_idle": "尚未探测过任何账户。在你点击按钮之前，没有任何账户被询问过。",
-  "providers.probe_none": "探测已执行，但没有结果：没有任何提供商声明了已启用的账户。",
+  "providers.probe_idle": "尚未探测。",
+  "providers.probe_none": "没有已启用的账户可供探测。",
   "providers.probe_outcome": "结果",
   "field.account": "账户",
   // 四种结果，四种说法。分开表述，是因为它们各自回答不同的问题；
@@ -994,7 +1018,11 @@ const zh: Dict = {
   "tier.hint.fast": "便宜且快",
   "tier.hint.standard": "日常主力",
   "tier.hint.reasoning": "最强、最贵的层级",
-  "tier.hint.frontier": "前沿尖端模型",
+  "tier.hint.frontier": "最前沿的模型",
+  "tier.name.fast": "快速",
+  "tier.name.standard": "标准",
+  "tier.name.reasoning": "推理",
+  "tier.name.frontier": "前沿",
   "routing.tier_empty": "为空 —— 在有模型加入该层级前,{id} 的请求会失败。",
   "routing.fallback_n": "备选 {n}",
   "routing.request": "请求",
@@ -1046,14 +1074,13 @@ const zh: Dict = {
   "routing.verdict_only": "仅 <block>yes|no</block>",
   "routing.no_verdict": "无判定时",
   "routing.fails_closed": "失败关闭 —— 由客户端询问用户",
-  "routing.fail_closed_note":
-    "出错、超时或无判定的候选会转移到下一个;若全部失败,查询将失败而非被批准。Zroutery 绝不把模型的自然语言解释为许可。",
+  "routing.fail_closed_note": "候选出错、超时或无法判定时转移到下一个;全部失败则查询失败。",
 
   // ------------------------------------------------------------ activity
   "activity.lede_none": "暂无数据。将客户端指向网关即可在此看到流量。",
   "activity.lede": "{requests} 个请求 · {rate}% 成功 · 输入 {in} / 输出 {out} token",
   "activity.reset": "重置计数",
-  "activity.review_line": "自动审查:{n} 次检查 · {failed} 失败 · 平均 {latency} —— 与主流量分开统计。",
+  "activity.review_line": "自动审查:{n} 次检查 · {failed} 失败 · 平均 {latency}",
   "activity.nothing": "暂无数据。",
   "activity.health": "模型健康",
   "activity.health_hint": "每模型的熔断状态,所有路由池共享。",
@@ -1167,8 +1194,7 @@ const zh: Dict = {
   "win.keep_in_tray_hint":
     "关闭窗口后 Zroutery 将继续在后台运行;关闭此选项则关闭窗口即退出并停止网关",
   "vision.title": "视觉降级",
-  "vision.hint":
-    "让看不见图片的模型也能收到图片内容:由视觉模型生成描述,代替原图进入请求。失败时以诚实的占位符兜底,绝不静默丢弃。",
+  "vision.hint": "由视觉模型生成图片描述,代替原图发给不支持视觉的模型。",
   "vision.enable": "为不支持视觉的模型描述图片",
   "vision.model": "视觉模型",
   "vision.model_hint": "模型页中一个支持视觉的现有模型;复用其提供商与价格",
@@ -1196,7 +1222,7 @@ const zh: Dict = {
   "ml.with_no_model": "在没有模型的情况下，为采集证据而尝试",
   "ml.never_tried": "从未尝试",
   "ml.blind_spot_warning":
-    "{names} 已配置但从未尝试，且探索已关闭，因此永远不会有流量到达它。把 ml_routing.exploration_probability 提高到 0 以上确实能触达它，但会阻止任何已学习模型的晋升 —— 门控需要在同一批请求上比较模型与基线，而探索恰恰使两者不一致，所以无论如何路由都仍是确定性的。改为给它最高优先级。",
+    "{names} 已配置但排不上队,永远收不到请求。给它最高优先级,或打开探索。",
   "ml.blind_spot_count": "{n} 个无法触达",
   "ml.collected": "已采集",
   "ml.refused": "已拒绝",
@@ -1225,15 +1251,14 @@ const zh: Dict = {
 
   // ----------------------------------------------- learned routing: collection
   "ml.learning_blocked":
-    "学习型路由已开启，但什么都没在采集，而且各个端点看起来都正常。影子评估处于关闭状态，因此没有请求会保留生成样本所需的决策时输入，每一条都在入库前被丢弃 —— 目前已丢弃 {n} 条。此时提升轮次没有任何可学的内容。要采集证据，请打开影子评估。",
+    "影子评估已关闭,{n} 条请求在入库前被丢弃,提升轮次无内容可学。打开影子评估即可开始采集。",
   "ml.learning_blocked_short": "学习已被阻断",
   "ml.ingested": "已入库请求",
   "ml.dropped_no_decision": "因缺少决策而丢弃",
 
   // -------------------------------------------- learned routing: promotion round
   "ml.round": "提升轮次",
-  "ml.round_hint":
-    "用已记录的历史训练一个候选模型，并让门禁判断它是否胜过基线。仅判断不会安装任何东西；这里不做任何调度，所以轮次只在你主动触发时发生。",
+  "ml.round_hint": "用已记录的历史训练一个候选模型,由门禁判断是否胜过基线。不会自动运行。",
   "ml.round_judge": "判断候选模型",
   "ml.round_judging": "判断中…",
   "ml.round_judged": "候选模型已评判 —— 未安装",
@@ -1259,8 +1284,7 @@ const zh: Dict = {
 
   // ------------------------------------------------ learned routing: the log
   "ml.log": "已记录的历史",
-  "ml.log_hint":
-    "提升轮次据以训练��持久化证据。这里没有自动保留策略，因为自动触发的保留策略会在你没有要求的情况下改变下一个模型所学的内容。",
+  "ml.log_hint": "提升轮次的训练数据。不会自动清理,清理时机由你决定。",
   "ml.log_records": "记录数",
   "ml.log_size": "占用空间",
   "ml.log_path": "文件",
@@ -1275,8 +1299,7 @@ const zh: Dict = {
   "ml.log_cleared": "已删除 {bytes} 的已记录历史。",
   "ml.log_clear_nothing": "没有已记录的内容可删除。",
   "confirm.clear_traces": "删除已记录的历史",
-  "confirm.clear_traces_body":
-    "已记录的 {n} 条请求会被删除且无法恢复。之后的提升轮次只能使用从这里开始写入的记录来训练 —— 此后被提升的任何模型都只学这些内容。这里不做任何调度，所以不会有其他东西自行改变。",
+  "confirm.clear_traces_body": "{n} 条记录会被删除且无法恢复,之后的提升轮次只能使用新写入的记录训练。",
   "bytes.value": "{n} 字节",
 };
 

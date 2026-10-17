@@ -16,6 +16,7 @@ import {
   Banner,
   Button,
   ConfirmDialog,
+  Disclosure,
   Empty,
   KeyValue,
   Section,
@@ -361,8 +362,15 @@ export default function MlRouting({
       />
 
       {decision && (
-        <details style={{ marginTop: 12 }}>
-          <summary>{t("ml.criteria")}</summary>
+        <Disclosure
+          title={t("ml.criteria")}
+          count={
+            <>
+              {decision.criteria.filter((criterion) => criterion.held).length}/
+              {decision.criteria.length}
+            </>
+          }
+        >
           <ul className="ml-criteria">
             {decision.criteria.map((criterion) => (
               <li key={criterion.name}>
@@ -372,7 +380,7 @@ export default function MlRouting({
               </li>
             ))}
           </ul>
-        </details>
+        </Disclosure>
       )}
 
       {/* -- Replay: what would the serving model have done differently? ------- */}
@@ -390,8 +398,7 @@ export default function MlRouting({
       {replay && <Replay verdict={replay} />}
 
       {status.history.length > 0 && (
-        <details style={{ marginTop: 8 }}>
-          <summary>{t("ml.history")}</summary>
+        <Disclosure title={t("ml.history")} count={status.history.length}>
           <ul className="ml-criteria">
             {status.history
               .slice()
@@ -406,7 +413,7 @@ export default function MlRouting({
                 </li>
               ))}
           </ul>
-        </details>
+        </Disclosure>
       )}
       </Section>
 
