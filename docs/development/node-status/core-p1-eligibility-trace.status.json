@@ -33,8 +33,8 @@
     "docs/development/decisions/0003-capability-media-fail-closed.md",
     "docs/development/decisions/0004-failure-outcome-authority.md",
     "docs/development/repository-audit-2026-09-25.md",
-    "crates/zroutery-core/src/policy.rs",
-    "crates/zroutery-core/src/router.rs",
+    "crates/zroutery-core/src/policy/mod.rs",
+    "crates/zroutery-core/src/router/mod.rs",
     "crates/zroutery-core/tests/routing_policy_test.rs"
   ],
   "notes": [

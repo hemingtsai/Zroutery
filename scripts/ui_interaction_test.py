@@ -648,19 +648,22 @@ ML_ROUND = {
             "holdout_loss": 0.4321,
             "gate_config_identity": "gate@1",
             "criteria": [
+                # The names here are the ones the gate actually emits: the panel
+                # translates them by id, so a fixture that invented a name would
+                # test the fallback path and never the translation table.
                 {
-                    "name": "statistical_volume",
+                    "name": "paired_evidence",
                     "held": False,
                     "measured": 12,
                     "threshold": 30,
                     "reason": "12 effective holdout decisions against a floor of 30",
                 },
                 {
-                    "name": "replay_equivalence",
+                    "name": "dataset_identity",
                     "held": True,
                     "measured": None,
                     "threshold": None,
-                    "reason": "30 of 30 decisions replayed bit-identically",
+                    "reason": "34 decisions carry the fitted dataset fingerprint",
                 },
             ],
             "baseline": "baseline.priority",
@@ -1237,9 +1240,13 @@ def case_ui2_candidate_priority(devtools: DevTools) -> list[str]:
     failures: list[str] = []
 
     devtools.click_selector(".nav-item", 3)
-    devtools.wait_for("document.querySelector('.flow-row') !== null", "routing page")
-    # The Auto Mode section's Edit button is the second `.section-head button.linky`.
-    devtools.click_selector(".section-head button.linky", 1)
+    # The routing page splits its three subjects into tabs, so the auto-review
+    # section is only mounted once its own tab is selected — and once it is, its
+    # Edit button is the only `linky` on the page rather than the second.
+    devtools.wait_for("Boolean(document.querySelector('#tab-auto'))", "the routing tabs")
+    devtools.click_selector("#tab-auto")
+    devtools.wait_for("document.querySelector('.flow-row') !== null", "auto review tab")
+    devtools.click_selector(".section-head button.linky", 0)
     devtools.wait_for("document.querySelector('.drawer table.table') !== null", "auto drawer")
 
     before = devtools.evaluate(
@@ -1496,9 +1503,16 @@ def case_ui5_refused_round_shows_its_criteria(devtools: DevTools) -> list[str]:
     """
     failures: list[str] = []
     seed(devtools)
+    # The learned panel is the first of the three routing subjects, so the path
+    # to it is a page and then a tab. Clicking the page alone leaves the panel
+    # unmounted and the judge button nowhere.
     devtools.click_selector(".nav-item", 3)
     devtools.wait_for(
-        "document.body.innerText.includes('Promotion round')", "the learning panel"
+        "Boolean(document.querySelector('#tab-ml'))", "the learned-routing tab"
+    )
+    devtools.click_selector("#tab-ml")
+    devtools.wait_for(
+        "document.body.innerText.includes('Judge a candidate')", "the learning panel"
     )
 
     def box_for(expression: str) -> dict | None:
@@ -1528,40 +1542,50 @@ def case_ui5_refused_round_shows_its_criteria(devtools: DevTools) -> list[str]:
         "the round to reach the backend",
         timeout=15.0,
     )
+    # The criteria sit behind a disclosure that is closed until someone asks why,
+    # so the verdict is the first thing read and the evidence is one click away.
+    guard = box_for(
+        "Array.from(document.querySelectorAll('.disclosure-head'))"
+        ".find((b) => b.textContent.includes('Gate criteria'))"
+    )
+    if not guard:
+        return ["the refused round has no gate-criteria disclosure"]
+    devtools.click(guard)
     devtools.wait_for(
-        "document.body.innerText.includes('statistical_volume')",
+        "document.body.innerText.includes('Paired evidence')",
         "the refused round's criteria",
-        timeout=15.0,
+        timeout=10.0,
     )
 
     body = devtools.evaluate("document.body.innerText")
     for needle in (
         "blocked",
-        "statistical_volume",
-        "measured 12",
-        "threshold 30",
+        # The gate reports `paired_evidence`; the panel must name it in words a
+        # reader recognises, from the id, not print the id.
+        "Paired evidence",
+        # Both numbers, and the unit the criterion is counted in. A threshold
+        # rendered as "+30" would mean a delta, which this is not.
+        "12 measured / 30 required",
         "12 effective holdout decisions against a floor of 30",
     ):
         if needle not in body:
             failures.append("the refused round never showed %r" % needle)
 
-    # The criterion that held is evidence, not the answer: it must be folded away
-    # so the refusal is not buried under thirty rows of agreement.
-    if "replay_equivalence" in body:
-        failures.append("the criteria that held were rendered open beside the refusal")
-    if "Criteria that held (1)" not in body:
-        failures.append("the folded criteria were not labelled with how many held")
+    # The criterion that held is evidence, not the answer. Its own prose would
+    # restate the pass beside a refusal, so the panel drops the reason on a row
+    # that held rather than printing agreement under it.
+    if "34 decisions carry the fitted dataset fingerprint" in body:
+        failures.append("a passing criterion printed its reason beside the refusal")
 
-    summary = box_for("document.querySelector('.ml-criteria-block details summary')")
-    if not summary:
-        failures.append("there is no disclosure for the criteria that held")
-    else:
-        devtools.click(summary)
-        devtools.wait_for(
-            "document.body.innerText.includes('replay_equivalence')",
-            "the folded criteria to open",
-            timeout=10.0,
-        )
+    header = devtools.evaluate(
+        "(() => {"
+        "  const head = Array.from(document.querySelectorAll('.disclosure-head'))"
+        "    .find((b) => b.textContent.includes('Gate criteria'));"
+        "  return head ? head.textContent : '';"
+        "})()"
+    )
+    if not header or "1/2" not in header:
+        failures.append("the disclosure did not count the criteria that held: %r" % header)
 
     devtools.evaluate("window.__zrStub.reset()")
     return failures

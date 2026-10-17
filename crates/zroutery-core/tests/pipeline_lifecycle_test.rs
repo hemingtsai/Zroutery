@@ -1180,7 +1180,42 @@ async fn an_unusable_candidate_is_the_last_attempt_without_poisoning_health() {
 /// its own.
 #[test]
 fn the_pipeline_has_no_second_failure_classifier() {
-    let source = include_str!("../src/server/pipeline.rs");
+    // `pipeline/mod.rs` is now a directory: the orchestration and its children. A
+    // fence reading only the barrel would stop seeing a write the day it moved,
+    // which is indistinguishable from the write not existing.
+    const PIPELINE_SOURCES: &[(&str, &str)] = &[
+        ("mod.rs", include_str!("../src/server/pipeline/mod.rs")),
+        ("sse.rs", include_str!("../src/server/pipeline/sse.rs")),
+        (
+            "budget.rs",
+            include_str!("../src/server/pipeline/budget.rs"),
+        ),
+        (
+            "client.rs",
+            include_str!("../src/server/pipeline/client.rs"),
+        ),
+        (
+            "lifecycle.rs",
+            include_str!("../src/server/pipeline/lifecycle.rs"),
+        ),
+        (
+            "ml_rank.rs",
+            include_str!("../src/server/pipeline/ml_rank.rs"),
+        ),
+        (
+            "repair.rs",
+            include_str!("../src/server/pipeline/repair.rs"),
+        ),
+        (
+            "response.rs",
+            include_str!("../src/server/pipeline/response.rs"),
+        ),
+    ];
+    let source = &PIPELINE_SOURCES
+        .iter()
+        .map(|(_name, src)| *src)
+        .collect::<Vec<_>>()
+        .join("\n");
     for forbidden in [
         "from_status_with_body",
         "FailureClass::from_status",
@@ -1191,7 +1226,7 @@ fn the_pipeline_has_no_second_failure_classifier() {
     ] {
         assert!(
             !source.contains(forbidden),
-            "pipeline.rs must not classify failures itself: {forbidden}"
+            "the pipeline must not classify failures itself: {forbidden}"
         );
     }
     // The canonical entry point and the router adapters are what it does use.
@@ -1347,7 +1382,9 @@ async fn a_failed_stream_handshake_is_a_failed_outcome() {
 /// The drop path may not resolve to a success in the source either.
 #[test]
 fn dropping_a_stream_is_not_a_success_in_the_source_either() {
-    let source = include_str!("../src/server/pipeline.rs");
+    // `SseState` and its `Drop` live in the pipeline's sse child, not the
+    // barrel, so this asserts against the file that actually carries the impl.
+    let source = include_str!("../src/server/pipeline/sse.rs");
     let (_, after) = source
         .split_once("impl Drop for SseState")
         .expect("the stream state still has a drop path");

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { api, costText, totalsText, type RequestRecord, type Snapshot } from "../api";
 import {
   Badge,
@@ -9,6 +9,7 @@ import {
   PageHead,
   Section,
   StatusDot,
+  Tabs,
   ms,
   num,
   type ConfirmRequest,
@@ -31,6 +32,35 @@ export default function Activity({
   const { t } = useI18n();
   const [openId, setOpenId] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
+  const [tab, setTab] = useState<"usage" | "log">("usage");
+  /*
+   * The internal log, here rather than on the settings page it used to live on.
+   *
+   * It was the one observability surface not on this page, which is otherwise
+   * entirely observability — health, spend, timing, usage. What a reader wants
+   * from a log is the same thing they came here for, and sending them to
+   * "Advanced" on a settings page to find it is what makes a working feature
+   * look absent.
+   *
+   * `null` means not following, which is the distinction the button draws. It is
+   * not an empty log: a log that cannot be read arrives as `[]` from `loadLogs`,
+   * so "stopped following" and "there is nothing logged" never render the same.
+   */
+  const [logs, setLogs] = useState<string[] | null>(null);
+
+  const loadLogs = useCallback(async () => {
+    try {
+      setLogs(await api.logs());
+    } catch {
+      setLogs([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (logs === null) return;
+    const timer = setInterval(loadLogs, 1500);
+    return () => clearInterval(timer);
+  }, [logs !== null, loadLogs]);
 
   const successRate =
     summary.requests > 0
@@ -40,39 +70,25 @@ export default function Activity({
   const classifier = summary.per_kind.find((k) => k.kind === "auto_mode");
   const open = recent.find((r) => r.id === openId) ?? null;
 
-  return (
-    <>
-      <ConfirmDialog request={confirm} onClose={() => setConfirm(null)} />
-
-      <PageHead
-        lede={
-          summary.requests === 0
-            ? t("activity.lede_none")
-            : t("activity.lede", {
-                requests: num(summary.requests),
-                rate: successRate ?? 100,
-                in: num(summary.input_tokens),
-                out: num(summary.output_tokens),
-              })
-        }
-        actions={
-          <Button
-            kind="ghost"
-            onClick={() =>
-              setConfirm({
-                title: t("confirm.reset_stats"),
-                body: t("confirm.reset_stats_body"),
-                confirmLabel: t("activity.reset"),
-                danger: true,
-                onConfirm: () => void run(api.clearStats),
-              })
-            }
-          >
-            {t("activity.reset")}
+  const logPane = (
+    <Section title={t("activity.log_section")} hint={t("activity.log_hint")}>
+      {logs === null ? (
+        <Button kind="ghost" onClick={loadLogs}>
+          {t("activity.show_log")}
+        </Button>
+      ) : (
+        <>
+          <pre className="log-view">{logs.join("\n")}</pre>
+          <Button kind="ghost" onClick={() => setLogs(null)}>
+            {t("activity.stop_follow")}
           </Button>
-        }
-      />
+        </>
+      )}
+    </Section>
+  );
 
+  const usagePane = (
+    <>
       {classifier && classifier.requests > 0 && (
         <p className="section-hint">
           <StatusDot tone="ok" />{" "}
@@ -178,6 +194,57 @@ export default function Activity({
           </table>
         )}
       </Section>
+    </>
+  );
+
+  return (
+    <>
+      <ConfirmDialog request={confirm} onClose={() => setConfirm(null)} />
+
+      <PageHead
+        lede={
+          summary.requests === 0
+            ? t("activity.lede_none")
+            : t("activity.lede", {
+                requests: num(summary.requests),
+                rate: successRate ?? 100,
+                in: num(summary.input_tokens),
+                out: num(summary.output_tokens),
+              })
+        }
+        actions={
+          <Button
+            kind="ghost"
+            onClick={() =>
+              setConfirm({
+                title: t("confirm.reset_stats"),
+                body: t("confirm.reset_stats_body"),
+                confirmLabel: t("activity.reset"),
+                danger: true,
+                onConfirm: () => void run(api.clearStats),
+              })
+            }
+          >
+            {t("activity.reset")}
+          </Button>
+        }
+      />
+
+      {/*
+        The drawer is deliberately outside the strip. It is opened from a row in
+        the usage pane, so it belongs to the page rather than to whichever pane
+        happens to be showing — inside, switching to the log would close the
+        request the reader was reading.
+      */}
+      <Tabs
+        value={tab}
+        onChange={(next) => setTab(next as "usage" | "log")}
+        ariaLabel={t("activity.tab_group")}
+        tabs={[
+          { value: "usage", label: t("activity.tab_usage"), content: usagePane },
+          { value: "log", label: t("activity.tab_log"), content: logPane },
+        ]}
+      />
 
       {open && <RequestDrawer record={open} onClose={() => setOpenId(null)} />}
     </>

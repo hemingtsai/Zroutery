@@ -26,8 +26,8 @@
   ],
   "source_references": [
     "docs/development/repository-audit-2026-09-25.md",
-    "crates/zroutery-core/src/agent_takeover.rs",
-    "crates/zroutery-core/src/migration.rs",
+    "crates/zroutery-core/src/agent_takeover/mod.rs",
+    "crates/zroutery-core/src/migration/mod.rs",
     "crates/zroutery-core/tests/migration_executor_test.rs",
     "crates/zroutery-core/tests/agent_takeover_test.rs"
   ],

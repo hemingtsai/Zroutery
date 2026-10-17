@@ -32,7 +32,7 @@
     "crates/zroutery-core/src/error.rs",
     "crates/zroutery-core/src/observation.rs",
     "crates/zroutery-core/src/stats_ext.rs",
-    "crates/zroutery-core/src/server/pipeline.rs",
+    "crates/zroutery-core/src/server/pipeline/mod.rs",
     "crates/zroutery-core/tests/circuit_breaker_test.rs"
   ],
   "notes": [

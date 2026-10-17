@@ -193,6 +193,145 @@ export function Select<T extends string>({
 }
 
 /**
+ * A group of panels behind one strip of tab headers, for a page section that
+ * holds more than the eye should track at once.
+ *
+ * Built on the `segment` look so it reads as the same control as the segmented
+ * choices above, but it is a real tablist rather than a radio group: the panels
+ * are reachable by the keyboard (Left/Right, Home/End), the active tab is the
+ * only one in the tab order, and each panel is named by its header so a screen
+ * reader announces "routing, tab 2 of 3" instead of reading the whole page.
+ *
+ * `Segment` stays a radio group on purpose: choosing between options is one
+ * decision, and this is a change of subject.
+ */
+export function Tabs({
+  value,
+  onChange,
+  tabs,
+  ariaLabel,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  tabs: { value: string; label: ReactNode; content: ReactNode }[];
+  ariaLabel?: string;
+}) {
+  const onKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>, index: number) => {
+    const last = tabs.length - 1;
+    let next: number | null = null;
+    if (event.key === "ArrowRight") next = index === last ? 0 : index + 1;
+    else if (event.key === "ArrowLeft") next = index === 0 ? last : index - 1;
+    else if (event.key === "Home") next = 0;
+    else if (event.key === "End") next = last;
+    if (next === null) return;
+    event.preventDefault();
+    onChange(tabs[next].value);
+    // Move focus with the selection, so the keyboard user lands on the header
+    // rather than back at the top of the page.
+    const headers = event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]');
+    headers?.[next]?.focus();
+  };
+  return (
+    <div className="tabs">
+      <div className="segment" role="tablist" aria-label={ariaLabel}>
+        {tabs.map((tab, index) => (
+          <button
+            key={tab.value}
+            type="button"
+            role="tab"
+            id={`tab-${tab.value}`}
+            aria-controls={`panel-${tab.value}`}
+            aria-selected={tab.value === value}
+            // Roving tabindex: one stop for the whole strip.
+            tabIndex={tab.value === value ? 0 : -1}
+            className="segment-item"
+            data-active={tab.value === value}
+            onClick={() => onChange(tab.value)}
+            onKeyDown={(event) => onKeyDown(event, index)}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+      {tabs.map((tab) =>
+        tab.value === value ? (
+          <div
+            key={tab.value}
+            role="tabpanel"
+            id={`panel-${tab.value}`}
+            aria-labelledby={`tab-${tab.value}`}
+            tabIndex={0}
+            className="tab-panel"
+          >
+            {tab.content}
+          </div>
+        ) : null,
+      )}
+    </div>
+  );
+}
+
+/**
+ * A titled block that folds away, for supporting detail the reader only wants
+ * when they go looking for it.
+ *
+ * This is a button and a region rather than a bare `<details>`: the native one
+ * carries a browser-drawn marker and default type that match neither this
+ * stylesheet nor the rest of the page, and its open/closed state is invisible
+ * to assistive technology as "expanded". `aria-expanded` and the chevron carry
+ * the state; Enter and Space both work because it is a real button.
+ */
+export function Disclosure({
+  title,
+  count,
+  defaultOpen = false,
+  children,
+}: {
+  title: ReactNode;
+  /** Optional trailing count, shown on the header rather than in the body. */
+  count?: ReactNode;
+  defaultOpen?: boolean;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  const bodyId = `disclosure-${useId()}`;
+  return (
+    <div className="disclosure" data-open={open}>
+      <button
+        type="button"
+        className="disclosure-head"
+        aria-expanded={open}
+        aria-controls={bodyId}
+        onClick={() => setOpen((previous) => !previous)}
+      >
+        <span className="disclosure-chevron" aria-hidden="true">
+          {open ? "▾" : "▸"}
+        </span>
+        <span className="disclosure-title">{title}</span>
+        {count !== undefined && <span className="disclosure-count">{count}</span>}
+      </button>
+      {/*
+        Kept mounted and collapsed by a 0fr grid row rather than unmounted, so
+        the height can be transitioned. An unmounted body gives the opening a
+        fade and the closing nothing at all, which reads as two different
+        components rather than one thing opening.
+
+        `inert` is what makes a collapsed-but-present body correct rather than
+        merely invisible: without it every control inside stays in the tab order
+        while clipped to nothing, so keyboard users tab into a panel they cannot
+        see. React 19 takes `inert` as a boolean, and it also takes the element
+        out of the accessibility tree, which `aria-hidden` alone would not do.
+      */}
+      <div className="disclosure-panel" id={bodyId} inert={!open}>
+        <div className="disclosure-clip">
+          <div className="disclosure-body">{children}</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
  * Two or three mutually exclusive choices, as a quiet segmented control: the
  * active segment is marked by a two-pixel rule under it and nothing else —
  * the professional-application switch, not the web-form dropdown.
@@ -208,9 +347,33 @@ export function Segment<T extends string>({
   options: { value: T; label: ReactNode }[];
   ariaLabel?: string;
 }) {
+  /*
+   * `role="radiogroup"` is a promise, not a label.
+   *
+   * The ARIA pattern requires arrow keys to move *and select* within a radio
+   * group, and a roving tabindex so the group is one stop in the tab sequence.
+   * Without them this was a row of buttons wearing a role it did not honour:
+   * a screen reader would announce "radio, 1 of 3" and then arrow keys would do
+   * nothing, which is worse than saying nothing. `Tabs` already implemented
+   * exactly this, and this borrows its shape.
+   */
+  const onKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>, index: number) => {
+    const last = options.length - 1;
+    let next: number | null = null;
+    if (event.key === "ArrowRight" || event.key === "ArrowDown") next = index === last ? 0 : index + 1;
+    else if (event.key === "ArrowLeft" || event.key === "ArrowUp") next = index === 0 ? last : index - 1;
+    else if (event.key === "Home") next = 0;
+    else if (event.key === "End") next = last;
+    if (next === null) return;
+    event.preventDefault();
+    onChange(options[next].value);
+    const items = event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="radio"]');
+    items?.[next]?.focus();
+  };
+
   return (
     <div className="segment" role="radiogroup" aria-label={ariaLabel}>
-      {options.map((option) => (
+      {options.map((option, index) => (
         <button
           key={option.value}
           type="button"
@@ -218,7 +381,11 @@ export function Segment<T extends string>({
           aria-checked={option.value === value}
           className="segment-item"
           data-active={option.value === value}
+          // Roving tabindex: one stop for the whole group, and the one stop is
+          // wherever the value currently is, so Tab lands on the selected option.
+          tabIndex={option.value === value ? 0 : -1}
           onClick={() => onChange(option.value)}
+          onKeyDown={(event) => onKeyDown(event, index)}
         >
           {option.label}
         </button>
@@ -775,11 +942,22 @@ export function CommitInput({
   onCommit,
   placeholder,
   type = "text",
+  ariaLabel,
 }: {
   value: string;
   onCommit: (value: string) => void;
   placeholder?: string;
   type?: "text" | "password";
+  /**
+   * Required in practice.
+   *
+   * Unlike [`Field`], which wraps its child in a `<label>` and so names it, this
+   * is used bare inside `.setting-row` — a div whose title is a `<span>`, which
+   * names nothing. Without this the control announces as an unlabelled text box
+   * and the reader has no way to know which setting they are in. The visible
+   * `.setting-title` is passed as the name, so the two cannot drift.
+   */
+  ariaLabel: string;
 }) {
   const [draft, setDraft] = useState(value);
   useEffect(() => setDraft(value), [value]);
@@ -792,6 +970,7 @@ export function CommitInput({
     <input
       type={type}
       value={draft}
+      aria-label={ariaLabel}
       placeholder={placeholder}
       onChange={(e) => setDraft(e.currentTarget.value)}
       onBlur={commit}
@@ -814,12 +993,15 @@ export function CommitNumber({
   min,
   max,
   integer,
+  ariaLabel,
 }: {
   value: number | null;
   onCommit: (value: number | null) => void;
   min?: number;
   max?: number;
   integer?: boolean;
+  /** Required in practice — see [`CommitInput`]. */
+  ariaLabel: string;
 }) {
   const text = value === null ? "" : String(value);
   const [draft, setDraft] = useState(text);
@@ -846,6 +1028,7 @@ export function CommitNumber({
     <input
       type="number"
       className="tiny"
+      aria-label={ariaLabel}
       min={min}
       max={max}
       step={integer ? 1 : "any"}

@@ -873,22 +873,112 @@ async fn a_config_change_reaches_the_running_shadow_engine() {
 /// The decision-time snapshot is built once, in the routing handler, and is
 /// never rebuilt at the terminal. A correlation that reconstructed the input
 /// would silently reintroduce the REG-009 defect.
+/// The decision side: everything that runs before a request is handed to an
+/// attempt. `mod.rs` is the orchestration and the barrel; the rest are the parts
+/// of it that now live in children.
+const DECISION_SIDE: &[(&str, &str)] = &[
+    ("mod.rs", include_str!("../src/server/pipeline/mod.rs")),
+    ("sse.rs", include_str!("../src/server/pipeline/sse.rs")),
+    (
+        "budget.rs",
+        include_str!("../src/server/pipeline/budget.rs"),
+    ),
+    (
+        "client.rs",
+        include_str!("../src/server/pipeline/client.rs"),
+    ),
+    (
+        "ml_rank.rs",
+        include_str!("../src/server/pipeline/ml_rank.rs"),
+    ),
+    (
+        "repair.rs",
+        include_str!("../src/server/pipeline/repair.rs"),
+    ),
+    (
+        "response.rs",
+        include_str!("../src/server/pipeline/response.rs"),
+    ),
+];
+
+/// The settlement side: the one file holding a request's single terminal
+/// transition. Split out because two assertions are about the order *inside* it -
+/// evaluation ahead of the transition, correlation inside it - and a fence that
+/// concatenated the children together could not say which side it was reading.
+const SETTLEMENT_SIDE: &str = include_str!("../src/server/pipeline/lifecycle.rs");
+
+/// Both sides, in reading order. Used where the property is "somewhere in the
+/// pipeline", which is most of the marked-block assertions.
+const PIPELINE_SOURCES: &[(&str, &str)] = &[
+    ("mod.rs", include_str!("../src/server/pipeline/mod.rs")),
+    ("sse.rs", include_str!("../src/server/pipeline/sse.rs")),
+    (
+        "budget.rs",
+        include_str!("../src/server/pipeline/budget.rs"),
+    ),
+    (
+        "client.rs",
+        include_str!("../src/server/pipeline/client.rs"),
+    ),
+    (
+        "lifecycle.rs",
+        include_str!("../src/server/pipeline/lifecycle.rs"),
+    ),
+    (
+        "ml_rank.rs",
+        include_str!("../src/server/pipeline/ml_rank.rs"),
+    ),
+    (
+        "repair.rs",
+        include_str!("../src/server/pipeline/repair.rs"),
+    ),
+    (
+        "response.rs",
+        include_str!("../src/server/pipeline/response.rs"),
+    ),
+];
+
+/// The whole pipeline as one string, for the reach counts.
+///
+/// Safe to concatenate for what it is used for: every token counted below is
+/// written in full, so no boundary between two files can invent a match. It is
+/// *not* safe for the ordering assertions, which is why those read one side.
+fn whole_pipeline() -> String {
+    let mut out = String::new();
+    for (_, source) in PIPELINE_SOURCES {
+        out.push_str(source);
+        out.push('\n');
+    }
+    out
+}
 #[test]
 fn the_decision_time_input_is_built_once_and_never_rebuilt() {
-    let source = include_str!("../src/server/pipeline.rs");
+    // The snapshot is built on the decision path; the terminal transition only
+    // ever carries a record identity forward. Those are two files now, and the
+    // property is about which side of the transition each of them sits on.
+    let decision = DECISION_SIDE
+        .iter()
+        .map(|(_, src)| *src)
+        .collect::<Vec<_>>()
+        .join("\n");
     assert_eq!(
-        source.matches("ShadowInput::from_policy_plan").count(),
+        decision.matches("ShadowInput::from_policy_plan").count(),
         1,
         "the decision-time snapshot is built exactly once"
     );
-    let (before_finalize, after) = source
+    assert_eq!(
+        decision.matches("lifecycle.shadow_evaluated(").count(),
+        2,
+        "one evaluation per response shape, both on the decision path"
+    );
+
+    let (before_finalize, after) = SETTLEMENT_SIDE
         .split_once("fn finalize(")
         .expect("the lifecycle still has its one terminal transition");
     assert!(
-        before_finalize.contains("shadow_evaluated("),
-        "evaluation happens on the decision path, ahead of the terminal transition"
+        before_finalize.contains("fn shadow_evaluated("),
+        "evaluation is a lifecycle method, defined ahead of the transition"
     );
-    // The terminal transition only ever carries a record identity forward.
     assert_eq!(after.matches("shadow_correlated(").count(), 1);
     assert!(!after.contains("from_policy_plan"));
     assert!(!after.contains("shadow_evaluated("));
@@ -899,18 +989,19 @@ fn the_decision_time_input_is_built_once_and_never_rebuilt() {
 /// activation seam. This node observes; it does not act.
 #[test]
 fn the_production_shadow_surface_is_record_only() {
-    let source = include_str!("../src/server/pipeline.rs");
-    let begin = "// shadow-block-begin";
-    let end = "// shadow-block-end";
+    const BEGIN: &str = "// shadow-block-begin";
+    const END: &str = "// shadow-block-end";
     let mut blocks = Vec::new();
-    let mut rest = source;
-    while let Some(start) = rest.find(begin) {
-        let after_begin = &rest[start + begin.len()..];
-        let stop = after_begin
-            .find(end)
-            .expect("every marked shadow block is closed");
-        blocks.push(&after_begin[..stop]);
-        rest = &after_begin[stop + end.len()..];
+    for (name, file) in PIPELINE_SOURCES {
+        let mut rest = *file;
+        while let Some(start) = rest.find(BEGIN) {
+            let after = &rest[start + BEGIN.len()..];
+            let stop = after
+                .find(END)
+                .unwrap_or_else(|| panic!("every marked shadow block in {name} is closed"));
+            blocks.push(&after[..stop]);
+            rest = &after[stop + END.len()..];
+        }
     }
     assert_eq!(blocks.len(), 4, "four marked shadow blocks");
 
@@ -949,13 +1040,14 @@ fn the_production_shadow_surface_is_record_only() {
     // touching the engine from here, which is what keeps the predictor from
     // leaving AppState. These counts exist to bound the surface, so the sum is
     // what matters and is asserted as such below.
-    assert_eq!(source.matches(".shadow()").count(), 2);
-    assert_eq!(source.matches("shadow_evaluated(").count(), 4);
-    assert_eq!(source.matches("shadow_correlated(").count(), 2);
+    let whole = whole_pipeline();
+    assert_eq!(whole.matches(".shadow()").count(), 2);
+    assert_eq!(whole.matches("shadow_evaluated(").count(), 4);
+    assert_eq!(whole.matches("shadow_correlated(").count(), 2);
     // The evaluation still passes the decision identity and the retained input;
     // it just reaches them one call deeper now.
-    assert!(source.contains("shadow_evaluated(self.id(), input)"));
-    assert!(source.contains("correlate_served("));
+    assert!(whole.contains("shadow_evaluated(self.id(), input)"));
+    assert!(whole.contains("correlate_served("));
 }
 
 /// The pure seam still owns the decision identity, and the served identity is

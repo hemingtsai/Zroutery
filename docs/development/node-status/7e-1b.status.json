@@ -41,8 +41,8 @@
   "source_references": [
     "docs/development/repository-audit-2026-09-25.md",
     "crates/zroutery-core/src/ml/shadow.rs",
-    "crates/zroutery-core/src/server/pipeline.rs",
-    "crates/zroutery-core/src/policy.rs"
+    "crates/zroutery-core/src/server/pipeline/mod.rs",
+    "crates/zroutery-core/src/policy/mod.rs"
   ],
   "notes": [
     "7E-1B-CORE accepted the pure seam and this node closed the production half; both are required before 7E-1 can be DONE.",

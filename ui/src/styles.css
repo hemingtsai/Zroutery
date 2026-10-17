@@ -116,9 +116,75 @@ body {
   background: color-mix(in srgb, var(--text) 14%, transparent);
 }
 
+/*
+ * "This is code" — an identifier, a config key, a path, a commit hash.
+ *
+ * .mono is the house way to say that on a span, and <code> says it on an
+ * element, but only .mono had a rule. Nine <code> sites across four pages were
+ * falling back to the browser's default monospace, which is Courier New on
+ * Windows: a commit hash sitting next to the serif UI read as text pasted in
+ * from somewhere else rather than as part of this application. Selecting both
+ * here instead of styling each site keeps the two spellings from drifting.
+ *
+ * Specificity stays at 0,0,1, so the class rules that size code deliberately —
+ * `.banner code` at 12px — still win over this.
+ */
+code,
 .mono {
   font-family: var(--font-mono);
   font-size: 0.95em;
+}
+
+/* ================================================================ scrollbar */
+
+/*
+ * The scrollbar, which is otherwise entirely the platform's.
+ *
+ * Nine gate criteria plus the promotion round plus the trace log make the
+ * learned-routing tab the tallest page in the app, so this is the one place the
+ * default is on screen at length rather than glimpsed. Unstyled it arrives in
+ * the platform's own grey, with its own corner radii, against a surface that is
+ * otherwise `--line` on square corners throughout.
+ *
+ * Two mechanisms, because they are not alternatives. `scrollbar-width: thin`
+ * and `scrollbar-color` are the standardized properties and are what Firefox
+ * honours; Chromium honours them only from v121, and the `::-webkit-scrollbar`
+ * rules below are what cover everything older. Writing only one set leaves a
+ * browser showing one of the two, which is the usual way this goes wrong.
+ */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/*
+ * No `border-radius` here, and not by omission: the token is `0` and the point
+ * is that the thumb's corners are the same as every other corner in the app.
+ * A thumb is the one element a user drags, so a rounded one is also the one
+ * most likely to be noticed disagreeing with the panels it scrolls.
+ */
+::-webkit-scrollbar-thumb {
+  background: var(--line-strong);
+  border-radius: var(--radius);
+  /* Three of the ten pixels go to a border in the track's colour, which is what
+     makes the thumb read as 4px wide against a 10px gutter without changing
+     the gutter the layout reserves. */
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--muted);
+  background-clip: content-box;
 }
 
 /* ============================================================== app layout */
@@ -595,6 +661,160 @@ body {
  * right-hand column of a two-column layout is what makes an operator stop
  * reading halfway down.
  */
+/*
+ * Tabs.
+ *
+ * The strip reuses `.segment` so it reads as the same control as every other
+ * segmented choice on the page; only the panel below it is new. The panel
+ * takes focus (tabindex 0 in the markup) so a keyboard user landing on it after
+ * the header hears what it is, and the focus ring is suppressed because the
+ * panel is not itself interactive — its contents are.
+ */
+.tabs {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.tab-panel {
+  outline: none;
+  /*
+   * The panel is keyed by tab value, so switching tabs unmounts one and mounts
+   * another — which is what lets a plain `animation` replay on every change
+   * with no state and no class toggling. It reuses `page-in` rather than
+   * inventing a fourth entrance: a tab change is a page change as far as the
+   * reader is concerned, and two names for the same two pixels of movement
+   * would be one more thing to keep in sync.
+   */
+  animation: page-in var(--t-page) var(--ease);
+}
+
+/*
+ * The panel takes `tabindex=0` so that arriving here from the tab strip lands on
+ * something focusable — but `outline: none` meant that focus stop had no visible
+ * indicator at all, which is the one thing a focusable element must never be.
+ *
+ * The ring is drawn inside rather than around, because the panel is full-width
+ * and flush with the page margin: an outside ring would be clipped by the scroll
+ * container's edge. Inside, it reads as a boundary rather than a control, which
+ * is what it is.
+ */
+.tab-panel:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: -2px;
+}
+
+/*
+ * Disclosure.
+ *
+ * Replaces a bare `<details>`, which rendered the browser's own marker and
+ * default type: neither matched this stylesheet, and the open state was not
+ * exposed as "expanded". The chevron and the border carry the state instead,
+ * and the header is a real button so Enter and Space both work.
+ */
+.disclosure {
+  margin-top: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.disclosure-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  background: none;
+  border: none;
+  border-radius: var(--radius);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.disclosure-head:hover {
+  background: var(--hover);
+}
+
+.disclosure-head:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: -2px;
+}
+
+.disclosure-chevron {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1;
+}
+
+.disclosure-title {
+  font-weight: 500;
+}
+
+.disclosure-count {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+/*
+ * The collapse.
+ *
+ * `grid-template-rows: 0fr → 1fr` is the one height transition that needs no
+ * measurement: the row is sized by its content at 1fr and clipped to nothing at
+ * 0fr, so no JS height, no scrollHeight, and no layout read on every toggle.
+ * It degrades to an instant toggle on a browser without animated grid rows,
+ * which is the correct failure — the panel still opens.
+ *
+ * The border belongs on the body rather than the panel so it does not draw
+ * itself as a line under an empty row while collapsed.
+ */
+.disclosure-panel {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows var(--t-fast) var(--ease);
+}
+
+.disclosure[data-open="true"] .disclosure-panel {
+  grid-template-rows: 1fr;
+}
+
+/*
+ * The clipping element carries no padding and no border of its own, which is
+ * the whole reason it is a separate element rather than the body.
+ *
+ * `overflow: hidden` clips a box's *children*; it does not clip the box's own
+ * padding or border. Putting the padding on the element that does the clipping
+ * therefore leaves 4px + 10px + 1px of border standing after the row collapses
+ * to zero — a closed panel 15px tall, with its top border drawn across an
+ * empty row.
+ *
+ * `min-height: 0` is equally required. A grid item defaults to
+ * `min-height: auto`, which refuses to shrink below its content and pins the
+ * row at content height however small the track is set: the panel would report
+ * itself closed and stay open.
+ */
+.disclosure-panel > .disclosure-clip {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.disclosure-body {
+  padding: 4px 10px 10px;
+  border-top: 1px solid var(--line);
+}
+
+/*
+ * The gate's criteria.
+ *
+ * A name, a figure, and — only where the check failed — the gate's own wording.
+ * The name column is fixed so the figures line up down the list: nine rows of
+ * differing name length with the numbers ragged against each other is harder to
+ * scan than the two columns it replaces.
+ */
 .ml-criteria {
   list-style: none;
   margin: 8px 0 0;
@@ -613,6 +833,22 @@ body {
 
 .ml-criteria code {
   flex: none;
+}
+
+.ml-criterion-name {
+  min-width: 11em;
+}
+
+.ml-criterion-value {
+  font-family: var(--font-mono);
+  font-size: 0.95em;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.ml-criterion-reason {
+  font-size: 12px;
 }
 
 /*
@@ -639,7 +875,7 @@ body {
   margin-top: 12px;
   padding: 12px;
   border: 1px solid var(--line-strong);
-  border-radius: 6px;
+  border-radius: var(--radius);
   background: var(--surface-muted);
 }
 
@@ -803,9 +1039,35 @@ input:focus-visible,
 .linky:focus-visible,
 .chip:focus-visible,
 .nav-item:focus-visible,
-.list-row:focus-visible {
+.list-row:focus-visible,
+.segment-item:focus-visible,
+.disclosure-head:focus-visible {
   outline: 2px solid var(--text);
   outline-offset: 0;
+}
+
+/*
+ * Reduced motion.
+ *
+ * One block, at the end, rather than a guard on each rule — so a motion added
+ * later is covered by default instead of needing to remember. Every duration and
+ * every keyframe in this file collapses to 0.01ms rather than `none`: a zero
+ * duration would skip the animation's own end state, and several of these
+ * animations are what makes a panel *reach* its final position, so `none` would
+ * leave the disclosure body laid out from its opening frame.
+ *
+ * `!important` is the price of doing it once. Every declaration here is one the
+ * stylesheet already owns, so there is nothing to override except our own rules.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 input {
@@ -954,6 +1216,16 @@ input::placeholder {
   font-size: 14px;
   color: var(--muted);
   cursor: pointer;
+  /*
+   * The active state moves the two-pixel rule, the weight and the colour at
+   * once, and without this the selection teleports between segments. Stated as
+   * three properties rather than `all`: `all` would also transition the layout
+   * properties on the box and make the strip reflow while it animates.
+   */
+  transition:
+    color var(--t-fast) var(--ease),
+    box-shadow var(--t-fast) var(--ease),
+    font-weight var(--t-fast) var(--ease);
 }
 
 .segment-item:hover {

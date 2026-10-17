@@ -6,6 +6,7 @@ import {
   previewId,
   priceText,
   virtualId,
+  tierName,
   type AppConfig,
   type ModelTier,
   type ModelEntry,
@@ -192,7 +193,9 @@ export default function Models({
                   <span className="row-sub">
                     {provider?.name ?? t("models.missing_provider")}
                     {provider?.enabled === false && ` ${t("providers.provider_off")}`}
-                    {r.model.tier ? ` · ${r.model.tier}` : ` · ${t("models.no_tier")}`}
+                    {r.model.tier
+                      ? ` · ${tierName(r.model.tier, t)}`
+                      : ` · ${t("models.no_tier")}`}
                   </span>
                 </div>
                 <span className="col-num">

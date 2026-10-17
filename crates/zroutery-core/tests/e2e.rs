@@ -1927,13 +1927,14 @@ async fn the_sub2api_preset_reads_a_relay_of_either_dialect() {
             ProviderKind::OpenAICompatible => {
                 assert_eq!(headers["authorization"], format!("Bearer {key}"))
             }
-            // The fixture above builds exactly one OpenAI-compatible provider and
-            // one Anthropic-style one. A third dialect here would mean this test
-            // is asserting headers for a provider it never configured, so it names
-            // the surprise instead of letting a wildcard pass it through. Both
-            // OpenCode kinds authenticate with an OAuth token rather than an API
-            // key, which is a different question from the one this test asks.
-            other => panic!("the balance fixture built an unexpected {other:?} provider"),
+            // `config_for` only builds the two dialects above, so this arm cannot
+            // be reached today. It is written out rather than folded into a
+            // wildcard so that adding a provider kind here fails this test
+            // instead of silently leaving the Sub2API preset claim about
+            // credential headers unverified for that dialect. Both OpenCode kinds
+            // authenticate with an OAuth token rather than an API key, which is a
+            // different question from the one this test asks.
+            other => panic!("the Sub2API preset test does not cover {other:?}"),
         }
     }
 

@@ -1,0 +1,24 @@
+<!doctype html>
+<!--
+  The dashboard driven by fixtures instead of the Tauri runtime.
+
+  Identical to index.html except that mock-bridge.ts loads first, so
+  `window.__TAURI_INTERNALS__` exists before the application asks for it. Vite
+  serves this as a second entry point in dev; `vite build` only follows
+  index.html, so neither this file nor the bridge reaches dist/.
+
+  Open it at http://localhost:5173/mock.html with `pnpm --dir ui dev` running.
+  See mock-bridge.ts for what the fixtures do and do not prove.
+-->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Zroutery (mock bridge)</title>
+    <script type="module" src="/mock-bridge.ts"></script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
