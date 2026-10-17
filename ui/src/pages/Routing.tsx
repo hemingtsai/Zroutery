@@ -28,6 +28,7 @@ import {
   NumberField,
   PageHead,
   Section,
+  Tabs,
   Select,
   StatusDot,
   Toggle,
@@ -83,117 +84,150 @@ export default function Routing({
       )
     : [];
 
-  return (
-    <>
-      <PageHead lede={t("routing.lede")} />
+  const [tab, setTab] = useState<"ml" | "main" | "auto">(snapshot.ml_available ? "ml" : "main");
 
-      <MlRouting available={snapshot.ml_available} />
-
-      <Section
-        title={t("route.default")}
-        hint={t("routing.default_hint")}
-        actions={
-          <button className="linky" onClick={() => setEdit("default")}>
-            {t("routing.edit")}
-          </button>
-        }
-      >
-        <div className="list">
-          <div className="flow">
-            {tierRoutes.map(({ tier, members }) => (
-              <div className="flow-row" key={tier}>
-                <div className="flow-kind">
-                  <span className="flow-kind-name mono">{virtualId(tier, config.routing.naming_style)}</span>
-                  <span className="flow-kind-hint">{t(TIER_HINT_KEY[tier])}</span>
-                </div>
-                <div className="flow-routes">
-                  {members.length === 0 ? (
-                    <span className="flow-empty">
-                      {t("routing.tier_empty", { id: virtualId(tier, config.routing.naming_style) })}
-                    </span>
-                  ) : (
-                    members.map((r, i) => (
-                      <span className="flow-route" key={r.id}>
-                        {i === 0 ? (
-                          <span className="flow-src">{i === 0 ? t("routing.request") : ""}</span>
-                        ) : (
-                          <span className="flow-src muted">{t("routing.fallback_n", { n: i })}</span>
-                        )}
-                        <span className="flow-arrow" aria-hidden>{"→"}</span>
-                        <span className="flow-target">
-                          <StatusDot tone={cooling.has(r.id) ? "warn" : "ok"} />
-                          {r.id}
-                          <span className="flow-provider">
-                            {config.providers.find((p) => p.id === r.model.provider_id)?.name}
-                          </span>
-                        </span>
-                      </span>
-                    ))
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </Section>
-
-      <Section
-        title={t("route.auto_review")}
-        hint={config.classifier.enabled
-          ? t("routing.review_hint_on")
-          : t("routing.review_hint_off")}
-        actions={
-          <button className="linky" onClick={() => setEdit("auto")}>
-            {t("routing.edit")}
-          </button>
-        }
-      >
-        <div className="list">
-          <div className="flow">
-            <div className="flow-row">
+  // The two route bodies, hoisted so the tab strip below can place them
+  // without the two subjects and the tab shell duplicating any markup.
+  const mainRoutes = (
+    <Section
+      title={t("route.default")}
+      hint={t("routing.default_hint")}
+      actions={
+        <button className="linky" onClick={() => setEdit("default")}>
+          {t("routing.edit")}
+        </button>
+      }
+    >
+      <div className="list">
+        <div className="flow">
+          {tierRoutes.map(({ tier, members }) => (
+            <div className="flow-row" key={tier}>
               <div className="flow-kind">
-                <span className="flow-kind-name">{t("routing.side_query")}</span>
-                <span className="flow-kind-hint">
-                  {config.classifier.enabled
-                    ? t("route.review_hint_on")
-                    : t("route.review_hint_off")}
-                </span>
+                <span className="flow-kind-name mono">{virtualId(tier, config.routing.naming_style)}</span>
+                <span className="flow-kind-hint">{t(TIER_HINT_KEY[tier])}</span>
               </div>
               <div className="flow-routes">
-                {config.classifier.enabled ? (
-                  classifierCandidates.length > 0 ? (
-                    classifierCandidates.map(({ row: r }, i) => (
-                      <span className="flow-route" key={r.id}>
-                        {i === 0 ? (
-                          <span className="flow-src">
-                            {config.classifier.strategy === "priority"
-                              ? t("routing.verdict")
-                              : t("routing.next")}
-                          </span>
-                        ) : (
-                          <span className="flow-src muted">{t("routing.fallback_n", { n: i })}</span>
-                        )}
-                        <span className="flow-arrow" aria-hidden>{"→"}</span>
-                        <span className="flow-target">
-                          <StatusDot tone={cooling.has(r.id) ? "warn" : "ok"} />
-                          {r.id}
-                          <span className="flow-provider">
-                            {config.providers.find((p) => p.id === r.model.provider_id)?.name}
-                          </span>
+                {members.length === 0 ? (
+                  <span className="flow-empty">
+                    {t("routing.tier_empty", { id: virtualId(tier, config.routing.naming_style) })}
+                  </span>
+                ) : (
+                  members.map((r, i) => (
+                    <span className="flow-route" key={r.id}>
+                      {i === 0 ? (
+                        <span className="flow-src">{i === 0 ? t("routing.request") : ""}</span>
+                      ) : (
+                        <span className="flow-src muted">{t("routing.fallback_n", { n: i })}</span>
+                      )}
+                      <span className="flow-arrow" aria-hidden>{"→"}</span>
+                      <span className="flow-target">
+                        <StatusDot tone={cooling.has(r.id) ? "warn" : "ok"} />
+                        {r.id}
+                        <span className="flow-provider">
+                          {config.providers.find((p) => p.id === r.model.provider_id)?.name}
                         </span>
                       </span>
-                    ))
-                  ) : (
-                    <span className="flow-empty">{t("routing.review_no_candidate")}</span>
-                  )
-                ) : (
-                  <span className="flow-empty">{t("routing.review_off")}</span>
+                    </span>
+                  ))
                 )}
               </div>
             </div>
+          ))}
+        </div>
+      </div>
+    </Section>
+  );
+
+  const autoReview = (
+    <Section
+      title={t("route.auto_review")}
+      hint={config.classifier.enabled
+        ? t("routing.review_hint_on")
+        : t("routing.review_hint_off")}
+      actions={
+        <button className="linky" onClick={() => setEdit("auto")}>
+          {t("routing.edit")}
+        </button>
+      }
+    >
+      <div className="list">
+        <div className="flow">
+          <div className="flow-row">
+            <div className="flow-kind">
+              <span className="flow-kind-name">{t("routing.side_query")}</span>
+              <span className="flow-kind-hint">
+                {config.classifier.enabled
+                  ? t("route.review_hint_on")
+                  : t("route.review_hint_off")}
+              </span>
+            </div>
+            <div className="flow-routes">
+              {config.classifier.enabled ? (
+                classifierCandidates.length > 0 ? (
+                  classifierCandidates.map(({ row: r }, i) => (
+                    <span className="flow-route" key={r.id}>
+                      {i === 0 ? (
+                        <span className="flow-src">
+                          {config.classifier.strategy === "priority"
+                            ? t("routing.verdict")
+                            : t("routing.next")}
+                        </span>
+                      ) : (
+                        <span className="flow-src muted">{t("routing.fallback_n", { n: i })}</span>
+                      )}
+                      <span className="flow-arrow" aria-hidden>{"→"}</span>
+                      <span className="flow-target">
+                        <StatusDot tone={cooling.has(r.id) ? "warn" : "ok"} />
+                        {r.id}
+                        <span className="flow-provider">
+                          {config.providers.find((p) => p.id === r.model.provider_id)?.name}
+                        </span>
+                      </span>
+                    </span>
+                  ))
+                ) : (
+                  <span className="flow-empty">{t("routing.review_no_candidate")}</span>
+                )
+              ) : (
+                <span className="flow-empty">{t("routing.review_off")}</span>
+              )}
+            </div>
           </div>
         </div>
-      </Section>
+      </div>
+    </Section>
+  );
+
+return (
+    <>
+      <PageHead lede={t("routing.lede")} />
+
+      {/*
+        Three subjects, one screen. The learned model, the ordinary tier routes
+        and the classifier pool each answer a different question, and stacked
+        they made a reader scroll past two of them to reach the third. As tabs
+        each is one click from any other and the page stops growing downward.
+        A build without the learning stack has no first tab, so it opens on the
+        ordinary routes instead.
+      */}
+      <Tabs
+        value={tab}
+        onChange={(next) => setTab(next as "ml" | "main" | "auto")}
+        ariaLabel={t("routing.tab_group")}
+        tabs={[
+          ...(snapshot.ml_available
+            ? [
+                {
+                  value: "ml",
+                  label: t("routing.tab_ml"),
+                  content: <MlRouting available={snapshot.ml_available} />,
+                },
+              ]
+            : []),
+          { value: "main", label: t("routing.tab_main"), content: mainRoutes },
+          { value: "auto", label: t("routing.tab_auto"), content: autoReview },
+        ]}
+      />
 
       {edit === "default" && (
         <DefaultDrawer

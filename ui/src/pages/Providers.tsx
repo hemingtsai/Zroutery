@@ -22,6 +22,7 @@ import {
   type ProviderKind,
   type ReconcileReport,
   type Snapshot,
+  tierName,
 } from "../api";
 import {
   Badge,
@@ -42,7 +43,7 @@ import {
   useToast,
   type ConfirmRequest,
 } from "../components";
-import { useI18n } from "../i18n";
+import { useI18n, type TKey } from "../i18n";
 
 type KindLabelKey =
   | "providers.openai_dialect"
@@ -626,7 +627,7 @@ function CcSwitchRow({
         {draft.models.length === 0
           ? "—"
           : draft.models
-              .map((m) => (m.tier ? `${m.upstream_model} (${m.tier})` : m.upstream_model))
+              .map((m) => (m.tier ? `${m.upstream_model}（${tierName(m.tier, t)}）` : m.upstream_model))
               .join(", ")}
       </td>
     </tr>
@@ -730,7 +731,7 @@ function AccountMaintenanceRow({
            * is available from the provider directly.
            */
           <span className="row-sub mono">
-            {eventLabel(latestEventFor(events, view.provider_id, view.account_id)!)}
+            {eventLabel(latestEventFor(events, view.provider_id, view.account_id)!, t)}
           </span>
         )}
         {/*
@@ -834,15 +835,41 @@ function latestEventFor(
  * information, and rendering both as "no change" would state as fact something the
  * provider never said.
  */
-function eventLabel(event: AccountEvent): string {
-  if (event.effect === "credited" && event.amount !== null) {
-    return `+${event.amount} ${event.unit ?? ""} (${event.source})`;
+/** The effects the backend publishes, so an unknown one can be told apart. */
+const EFFECT_KEYS = new Set(["credited", "debited", "no_change", "unobserved"]);
+/** Where a figure was read from, strongest evidence first. */
+const EVENT_SOURCE_KEYS = new Set([
+  "operation_response",
+  "provider_response",
+  "account_state",
+  "account_log",
+]);
+
+/**
+ * One observed change, in words, with where it came from.
+ *
+ * The source is named rather than implied because the three are not equally
+ * trustworthy: a structured field the provider returned is evidence, text
+ * scraped from a localised log is a fallback, and a label that shows all three
+ * identically claims more than it knows. An unrecognised effect or source falls
+ * back to the raw value, which is how a value the backend has since added is
+ * made visible instead of silently rendered as something else.
+ */
+function eventLabel(
+  event: AccountEvent,
+  t: (key: TKey, params?: Record<string, string | number>) => string,
+): string {
+  const effect = EFFECT_KEYS.has(event.effect)
+    ? t(`account.effect.${event.effect}` as TKey)
+    : event.effect;
+  if ((event.effect === "credited" || event.effect === "debited") && event.amount !== null) {
+    const sign = event.effect === "credited" ? "+" : "-";
+    const source = EVENT_SOURCE_KEYS.has(event.source)
+      ? t(`account.source.${event.source}` as TKey)
+      : event.source;
+    return `${sign}${event.amount} ${event.unit ?? ""} · ${source}`;
   }
-  if (event.effect === "debited" && event.amount !== null) {
-    return `-${event.amount} ${event.unit ?? ""} (${event.source})`;
-  }
-  if (event.effect === "no_change") return "observed: nothing moved";
-  return "established: unknown";
+  return effect;
 }
 
 /** The scheduler decisions the backend publishes. */

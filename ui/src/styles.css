@@ -595,6 +595,90 @@ body {
  * right-hand column of a two-column layout is what makes an operator stop
  * reading halfway down.
  */
+/*
+ * Tabs.
+ *
+ * The strip reuses `.segment` so it reads as the same control as every other
+ * segmented choice on the page; only the panel below it is new. The panel
+ * takes focus (tabindex 0 in the markup) so a keyboard user landing on it after
+ * the header hears what it is, and the focus ring is suppressed because the
+ * panel is not itself interactive — its contents are.
+ */
+.tabs {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.tab-panel {
+  outline: none;
+}
+
+.tab-panel:focus-visible {
+  outline: none;
+}
+
+/*
+ * Disclosure.
+ *
+ * Replaces a bare `<details>`, which rendered the browser's own marker and
+ * default type: neither matched this stylesheet, and the open state was not
+ * exposed as "expanded". The chevron and the border carry the state instead,
+ * and the header is a real button so Enter and Space both work.
+ */
+.disclosure {
+  margin-top: 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.disclosure-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.disclosure-head:hover {
+  background: var(--hover);
+}
+
+.disclosure-head:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: -2px;
+}
+
+.disclosure-chevron {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1;
+}
+
+.disclosure-title {
+  font-weight: 500;
+}
+
+.disclosure-count {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.disclosure-body {
+  padding: 4px 10px 10px;
+  border-top: 1px solid var(--line);
+}
+
 .ml-criteria {
   list-style: none;
   margin: 8px 0 0;
@@ -791,7 +875,9 @@ input:focus-visible,
 .linky:focus-visible,
 .chip:focus-visible,
 .nav-item:focus-visible,
-.list-row:focus-visible {
+.list-row:focus-visible,
+.segment-item:focus-visible,
+.disclosure-head:focus-visible {
   outline: 2px solid var(--text);
   outline-offset: 0;
 }
