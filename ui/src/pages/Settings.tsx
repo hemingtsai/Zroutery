@@ -294,6 +294,31 @@ export default function Settings({
               />
             </div>
           </div>
+          {/*
+            The two ways to leave, next to the setting that decides what closing
+            the window does.
+
+            Neither is reachable from the window's own close button once
+            keep-in-tray is on, and the tray is not a place a first-time user
+            looks: the box says "closing keeps it running", so the way to actually
+            stop it has to be here. `quit_app` is the same code path the tray's
+            Quit item runs — the proxy is stopped before the process ends — which
+            is why it is a button rather than a bare window close.
+          */}
+          <div className="setting-row">
+            <div className="setting-left">
+              <span className="setting-title">{t("win.window_actions")}</span>
+              <span className="setting-desc">{t("win.window_actions_hint")}</span>
+            </div>
+            <div className="setting-right">
+              <Button kind="ghost" onClick={() => void api.hide()}>
+                {t("win.hide_to_tray")}
+              </Button>
+              <Button kind="danger" onClick={() => void api.quit()}>
+                {t("win.quit")}
+              </Button>
+            </div>
+          </div>
         </Section>
 
         <Section title={t("vision.title")} hint={t("vision.hint")}>

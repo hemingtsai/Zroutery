@@ -351,6 +351,14 @@ const en = {
   "providers.probe_hint":
     "Ask each declared account's platform what state it is in, and publish the result. One request per account, so it happens when you press the button and never on its own. An account that is switched off is not probed at all, so it does not appear in the list.",
   "providers.probe_now": "Probe every account",
+  /*
+   * One press over `refresh_balance` per provider, which is the only way to do
+   * it today. It also probes every account, because `refresh_balances` does both
+   * levels in one snapshot — so this is not merely "the same thing, all at once"
+   * as the probe below it, which asks the same accounts but answers with the
+   * per-account outcome.
+   */
+  "providers.refresh_all": "Refresh every balance",
   "providers.probing": "Probing…",
   "providers.probe_idle":
     "Nothing has been probed yet. Until you press the button, no account has been asked.",
@@ -567,6 +575,11 @@ const en = {
   "win.keep_in_tray": "Keep in tray on close",
   "win.keep_in_tray_hint":
     "Closing the window leaves Zroutery running in the tray; off — closing quits and stops the gateway",
+  "win.window_actions": "Hide or quit",
+  "win.window_actions_hint":
+    "Hide keeps the gateway running in the tray; quit stops the gateway and ends the process",
+  "win.hide_to_tray": "Hide to tray",
+  "win.quit": "Quit",
   "vision.title": "Vision fallback",
   "vision.hint":
     "Models that cannot see still receive the image's content: a vision model describes it, and the description travels in its place. Failing that, an honest placeholder — never a silent drop.",
@@ -1031,6 +1044,7 @@ const zh: Dict = {
   "providers.probe_section": "账户探测",
   "providers.probe_hint": "询问各账户的平台状态。每个账户一次请求,仅在你点击时运行。",
   "providers.probe_now": "探测所有账户",
+  "providers.refresh_all": "刷新全部余额",
   "providers.probing": "探测中…",
   "providers.probe_idle": "尚未探测。",
   "providers.probe_none": "没有已启用的账户可供探测。",
@@ -1230,6 +1244,10 @@ const zh: Dict = {
   "win.keep_in_tray": "关闭窗口时保留在托盘",
   "win.keep_in_tray_hint":
     "关闭窗口后继续在后台运行;关闭则退出并停止网关。",
+  "win.window_actions": "隐藏或退出",
+  "win.window_actions_hint": "隐藏则网关继续在托盘运行;退出会停止网关并结束进程。",
+  "win.hide_to_tray": "隐藏到托盘",
+  "win.quit": "退出",
   "vision.title": "视觉降级",
   "vision.hint": "由视觉模型生成图片描述,代替原图发给不支持视觉的模型。",
   "vision.enable": "为不支持视觉的模型描述图片",
