@@ -8,6 +8,7 @@ import {
   type MlStatus,
   type MlTraceClear,
   type MlTraceInfo,
+  type PromotionCriterion,
   type PromotionVerdict,
   type ShadowAnalysisStatus,
 } from "../api";
@@ -25,7 +26,7 @@ import {
   num,
   type ConfirmRequest,
 } from "../components";
-import { useI18n } from "../i18n";
+import { useI18n, type TKey } from "../i18n";
 
 /** How many records an on-demand replay reads. */
 const REPLAY_LIMIT = 5_000;
@@ -375,8 +376,20 @@ export default function MlRouting({
             {decision.criteria.map((criterion) => (
               <li key={criterion.name}>
                 <StatusDot tone={criterion.held ? "ok" : "warn"} />
-                <code>{criterion.name}</code>
-                <span className="muted"> {criterion.reason}</span>
+                <span className="ml-criterion-name">{criterionName(criterion.name, t)}</span>
+                {criterionValue(criterion, t) && (
+                  <span className="ml-criterion-value">{criterionValue(criterion, t)}</span>
+                )}
+                {/*
+                  The gate's own prose, in the gate's own language, and only where
+                  it failed. On a passing row it restates the two numbers already
+                  shown beside it, so it is dropped rather than translated — a
+                  criterion whose reason mattered would need the reason to come
+                  from the backend as structured fields, not as a format string.
+                */}
+                {!criterion.held && criterion.reason && (
+                  <span className="muted ml-criterion-reason">{criterion.reason}</span>
+                )}
               </li>
             ))}
           </ul>
@@ -737,4 +750,76 @@ function number(value: number | null): string {
 function when(seconds: number): string {
   if (!seconds) return "—";
   return new Date(seconds * 1000).toLocaleString();
+}
+
+/** The nine checks `PromotionGate::evaluate` can report, in evaluation order. */
+const CRITERION_NAMES = new Set([
+  "baseline_present",
+  "paired_evidence",
+  "holdout_quality",
+  "routing_utility",
+  "selection_safety",
+  "success_regression",
+  "cost_regression",
+  "latency_regression",
+  "dataset_identity",
+]);
+
+/**
+ * A criterion's name, translated.
+ *
+ * `PromotionCriterion::name` is documented as a stable identifier so a decision
+ * can be reasoned about by name, which makes it a translation key rather than
+ * prose the backend happens to have written in English. The fallback is the
+ * identifier itself: a criterion a newer backend adds has to stay visible, and
+ * an untranslated `dataset_freshness` is a smaller problem than a blank row in
+ * a list where every other row is named.
+ */
+function criterionName(
+  name: string,
+  t: (key: TKey, params?: Record<string, string | number>) => string,
+): string {
+  return CRITERION_NAMES.has(name) ? t(`ml.criterion.${name}` as TKey) : name;
+}
+
+/**
+ * The number the criterion was decided on, per ADR-0007's "every criterion with
+ * the number it was decided on".
+ *
+ * Null for the two checks that are facts rather than measurements —
+ * `baseline_present` and `dataset_identity` both pass `None` for both fields —
+ * so the row simply carries no figure instead of showing a placeholder that
+ * reads like a measurement of zero.
+ */
+function criterionValue(
+  criterion: PromotionCriterion,
+  t: (key: TKey, params?: Record<string, string | number>) => string,
+): string | null {
+  if (criterion.measured === null || criterion.threshold === null) return null;
+  return t("ml.criterion_value", {
+    measured: formatMeasure(criterion.measured, criterion.name),
+    threshold: formatMeasure(criterion.threshold, criterion.name),
+  });
+}
+
+/**
+ * The four-decimal default is wrong for two of the nine: an evidence count of
+ * 1842 and a latency budget in milliseconds both read as noise with four
+ * decimals on them. Grouped by criterion rather than by magnitude, because
+ * whether a figure is a count or a measurement is a property of the check and
+ * not something the number's own size can tell you.
+ */
+function formatMeasure(value: number, criterion: string): string {
+  switch (criterion) {
+    case "paired_evidence":
+    case "success_regression":
+    case "selection_safety":
+      return String(Math.round(value));
+    case "latency_regression":
+      return `${value.toFixed(1)} ms`;
+    case "holdout_quality":
+      return value.toFixed(4);
+    default:
+      return value.toFixed(4);
+  }
 }
