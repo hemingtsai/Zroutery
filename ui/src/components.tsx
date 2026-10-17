@@ -942,11 +942,22 @@ export function CommitInput({
   onCommit,
   placeholder,
   type = "text",
+  ariaLabel,
 }: {
   value: string;
   onCommit: (value: string) => void;
   placeholder?: string;
   type?: "text" | "password";
+  /**
+   * Required in practice.
+   *
+   * Unlike [`Field`], which wraps its child in a `<label>` and so names it, this
+   * is used bare inside `.setting-row` — a div whose title is a `<span>`, which
+   * names nothing. Without this the control announces as an unlabelled text box
+   * and the reader has no way to know which setting they are in. The visible
+   * `.setting-title` is passed as the name, so the two cannot drift.
+   */
+  ariaLabel: string;
 }) {
   const [draft, setDraft] = useState(value);
   useEffect(() => setDraft(value), [value]);
@@ -959,6 +970,7 @@ export function CommitInput({
     <input
       type={type}
       value={draft}
+      aria-label={ariaLabel}
       placeholder={placeholder}
       onChange={(e) => setDraft(e.currentTarget.value)}
       onBlur={commit}
@@ -981,12 +993,15 @@ export function CommitNumber({
   min,
   max,
   integer,
+  ariaLabel,
 }: {
   value: number | null;
   onCommit: (value: number | null) => void;
   min?: number;
   max?: number;
   integer?: boolean;
+  /** Required in practice — see [`CommitInput`]. */
+  ariaLabel: string;
 }) {
   const text = value === null ? "" : String(value);
   const [draft, setDraft] = useState(text);
@@ -1013,6 +1028,7 @@ export function CommitNumber({
     <input
       type="number"
       className="tiny"
+      aria-label={ariaLabel}
       min={min}
       max={max}
       step={integer ? 1 : "any"}

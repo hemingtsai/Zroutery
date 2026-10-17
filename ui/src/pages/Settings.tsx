@@ -198,6 +198,7 @@ export default function Settings({
             <div className="setting-right">
               <input
                 type="checkbox"
+                aria-label={t("win.launch_on_login")}
                 checked={config.window.launch_on_login}
                 onChange={(e) => patchWindow({ launch_on_login: e.currentTarget.checked })}
               />
@@ -211,6 +212,7 @@ export default function Settings({
             <div className="setting-right">
               <input
                 type="checkbox"
+                aria-label={t("win.silent_start")}
                 checked={config.window.silent_start}
                 onChange={(e) => patchWindow({ silent_start: e.currentTarget.checked })}
               />
@@ -224,6 +226,7 @@ export default function Settings({
             <div className="setting-right">
               <input
                 type="checkbox"
+                aria-label={t("win.keep_in_tray")}
                 checked={config.window.keep_in_tray}
                 onChange={(e) => patchWindow({ keep_in_tray: e.currentTarget.checked })}
               />
@@ -272,6 +275,7 @@ export default function Settings({
             <div className="setting-right">
               <CommitInput
                 value={config.server.host}
+                ariaLabel={t("field.host")}
                 onCommit={(host) => patchServer({ host })}
               />
             </div>
@@ -286,6 +290,7 @@ export default function Settings({
                 max={65535}
                 integer
                 value={config.server.port}
+                ariaLabel={t("field.port")}
                 onCommit={(port) => port && patchServer({ port })}
               />
             </div>
@@ -301,6 +306,7 @@ export default function Settings({
                 max={512}
                 integer
                 value={config.server.max_body_mib}
+                ariaLabel={t("field.body_limit")}
                 onCommit={(v) => patchServer({ max_body_mib: v ?? 32 })}
               />
             </div>
@@ -316,6 +322,7 @@ export default function Settings({
                 max={5000}
                 integer
                 value={config.server.log_limit}
+                ariaLabel={t("field.log_limit")}
                 onCommit={(v) => patchServer({ log_limit: v ?? 500 })}
               />
             </div>
@@ -328,6 +335,7 @@ export default function Settings({
             <div className="setting-right">
               <input
                 type="checkbox"
+                aria-label={t("settings.require_auth")}
                 checked={config.server.require_auth}
                 onChange={(e) => patchServer({ require_auth: e.currentTarget.checked })}
               />
@@ -340,6 +348,7 @@ export default function Settings({
             <div className="setting-right">
               <input
                 type="checkbox"
+                aria-label={t("settings.autostart")}
                 checked={config.server.autostart}
                 onChange={(e) => patchServer({ autostart: e.currentTarget.checked })}
               />
@@ -353,6 +362,7 @@ export default function Settings({
             <div className="setting-right">
               <input
                 type="checkbox"
+                aria-label={t("settings.bypass_proxy")}
                 checked={config.server.bypass_proxy}
                 onChange={(e) => patchServer({ bypass_proxy: e.currentTarget.checked })}
               />
@@ -431,6 +441,7 @@ export default function Settings({
             <div className="setting-right">
               <input
                 type="checkbox"
+                aria-label={t("settings.allow_origins")}
                 checked={config.server.allow_cors}
                 onChange={(e) => patchServer({ allow_cors: e.currentTarget.checked })}
               />
@@ -467,6 +478,7 @@ export default function Settings({
                 </div>
                 <div className="setting-right">
                   <input
+                    aria-label={t("field.allowed_origin")}
                     value={originDraft}
                     placeholder="http://localhost:3000"
                     className={originError ? "input-error" : undefined}
@@ -616,6 +628,7 @@ export default function Settings({
               <CommitNumber
                 min={0}
                 value={budgetDraft.amount}
+                ariaLabel={t("budget.limit")}
                 onCommit={(amount) => setBudgetDraft({ ...budgetDraft, amount: amount ?? 0 })}
               />
             </div>
@@ -626,6 +639,7 @@ export default function Settings({
             </div>
             <div className="setting-right">
               <input
+                aria-label={t("field.currency")}
                 value={budgetDraft.currency}
                 onChange={(e) =>
                   setBudgetDraft({ ...budgetDraft, currency: e.currentTarget.value.toUpperCase() })

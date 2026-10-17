@@ -1202,6 +1202,7 @@ function ProviderDrawer({
           <div className="controls">
             <input
               type="password"
+              aria-label={t("providers.api_key")}
               autoComplete="off"
               placeholder="sk-…"
               value={keyDraft}
