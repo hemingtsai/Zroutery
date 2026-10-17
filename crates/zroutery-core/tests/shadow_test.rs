@@ -1169,6 +1169,30 @@ fn shadow_respects_coordinator_semantics() {
 const PIPELINE_SOURCES: &[(&str, &str)] = &[
     ("mod.rs", include_str!("../src/server/pipeline/mod.rs")),
     ("sse.rs", include_str!("../src/server/pipeline/sse.rs")),
+    (
+        "budget.rs",
+        include_str!("../src/server/pipeline/budget.rs"),
+    ),
+    (
+        "client.rs",
+        include_str!("../src/server/pipeline/client.rs"),
+    ),
+    (
+        "lifecycle.rs",
+        include_str!("../src/server/pipeline/lifecycle.rs"),
+    ),
+    (
+        "ml_rank.rs",
+        include_str!("../src/server/pipeline/ml_rank.rs"),
+    ),
+    (
+        "repair.rs",
+        include_str!("../src/server/pipeline/repair.rs"),
+    ),
+    (
+        "response.rs",
+        include_str!("../src/server/pipeline/response.rs"),
+    ),
 ];
 
 /// Extract every `// shadow-block-begin` .. `// shadow-block-end` region from

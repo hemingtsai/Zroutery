@@ -761,8 +761,6 @@ async fn collecting_samples_influences_no_response() {
 /// back, and the only thing that reaches it is the terminal transition.
 #[tokio::test]
 async fn the_dataset_is_never_read_back_by_production() {
-    let source = include_str!("../src/server/pipeline/mod.rs");
-
     // The property is that the dataset cannot influence a *routing decision*.
     //
     // It used to be enforced by counting `.dataset()` occurrences and banning
@@ -773,23 +771,66 @@ async fn the_dataset_is_never_read_back_by_production() {
     //
     // The decision path ends where the request is handed to `stream_chat` or
     // `buffered_chat`. Nothing at or before that point may read the store.
-    let (before_dispatch, after_dispatch) = source
+    //
+    // `pipeline/mod.rs` became a directory, so "at or before that point" is now
+    // a list of files rather than a prefix of one. Naming every child is what
+    // keeps this honest: a file absent from DECISION_SIDE is a file this
+    // assertion cannot see, which is the failure mode it exists to prevent.
+    const DECISION_SIDE: &[(&str, &str)] = &[
+        (
+            "budget.rs",
+            include_str!("../src/server/pipeline/budget.rs"),
+        ),
+        (
+            "client.rs",
+            include_str!("../src/server/pipeline/client.rs"),
+        ),
+        (
+            "ml_rank.rs",
+            include_str!("../src/server/pipeline/ml_rank.rs"),
+        ),
+        (
+            "repair.rs",
+            include_str!("../src/server/pipeline/repair.rs"),
+        ),
+        (
+            "response.rs",
+            include_str!("../src/server/pipeline/response.rs"),
+        ),
+        ("sse.rs", include_str!("../src/server/pipeline/sse.rs")),
+    ];
+    const READERS: [&str; 3] = ["training_slice(", "legacy_training_slice(", ".dataset()"];
+
+    let pipeline = include_str!("../src/server/pipeline/mod.rs");
+    let (before_dispatch, _) = pipeline
         .split_once("if req.stream {")
         .expect("the pipeline still dispatches both response shapes");
-    for reader in ["training_slice(", "legacy_training_slice(", ".dataset()"] {
+    for reader in READERS {
         assert!(
             !before_dispatch.contains(reader),
             "the routing decision must not read the dataset ({reader})"
         );
     }
+    // Everything that runs on the way to dispatch, in whichever file it lives.
+    for (name, source) in DECISION_SIDE {
+        for reader in READERS {
+            assert!(
+                !source.contains(reader),
+                "{name} is on the decision path and must not read the dataset ({reader})"
+            );
+        }
+    }
 
     // After dispatch, a read is allowed and must be one-way: inside the terminal
-    // transition, after the outcome exists, and never before it.
+    // transition, after the outcome exists, and never before it. That transition
+    // is one file, so the ordering assertion reads it directly rather than
+    // across a concatenated whole.
+    let settlement = include_str!("../src/server/pipeline/lifecycle.rs");
     assert!(
-        after_dispatch.contains("training_slice("),
+        settlement.contains("training_slice("),
         "the durable trace write must read the samples it records"
     );
-    let (before_finalize, after_finalize) = after_dispatch
+    let (before_finalize, after_finalize) = settlement
         .split_once("fn finalize(")
         .expect("the lifecycle still has its one terminal transition");
     assert!(
@@ -808,13 +849,22 @@ async fn the_dataset_is_never_read_back_by_production() {
     );
 
     // Every read of the store still goes through AppState, so there is one path
-    // in and not several competing ones.
-    for line in source.lines() {
-        if line.contains(".dataset()") {
-            assert!(
-                line.contains("self.state.dataset()"),
-                "the dataset must only be reached through AppState: {line}"
-            );
+    // in and not several competing ones. This covers the whole pipeline, not
+    // just the settlement side: a second way in is a second path whatever file
+    // it was written in.
+    for (name, source) in DECISION_SIDE
+        .iter()
+        .copied()
+        .chain(std::iter::once(("lifecycle.rs", settlement)))
+        .chain(std::iter::once(("mod.rs", pipeline)))
+    {
+        for line in source.lines() {
+            if line.contains(".dataset()") {
+                assert!(
+                    line.contains("self.state.dataset()"),
+                    "the dataset must only be reached through AppState ({name}): {line}"
+                );
+            }
         }
     }
 
