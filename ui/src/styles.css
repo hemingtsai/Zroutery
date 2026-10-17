@@ -678,6 +678,15 @@ code,
 
 .tab-panel {
   outline: none;
+  /*
+   * The panel is keyed by tab value, so switching tabs unmounts one and mounts
+   * another — which is what lets a plain `animation` replay on every change
+   * with no state and no class toggling. It reuses `page-in` rather than
+   * inventing a fourth entrance: a tab change is a page change as far as the
+   * reader is concerned, and two names for the same two pixels of movement
+   * would be one more thing to keep in sync.
+   */
+  animation: page-in var(--t-page) var(--ease);
 }
 
 .tab-panel:focus-visible {
@@ -1160,6 +1169,16 @@ input::placeholder {
   font-size: 14px;
   color: var(--muted);
   cursor: pointer;
+  /*
+   * The active state moves the two-pixel rule, the weight and the colour at
+   * once, and without this the selection teleports between segments. Stated as
+   * three properties rather than `all`: `all` would also transition the layout
+   * properties on the box and make the strip reflow while it animates.
+   */
+  transition:
+    color var(--t-fast) var(--ease),
+    box-shadow var(--t-fast) var(--ease),
+    font-weight var(--t-fast) var(--ease);
 }
 
 .segment-item:hover {

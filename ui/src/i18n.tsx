@@ -478,7 +478,7 @@ const en = {
   "activity.unpriced": "unpriced",
 
   // ------------------------------------------------------------ settings
-  "settings.lede": "How the box is wired: the gateway, the limits, and the deep knobs.",
+  "settings.lede": "Application behaviour, the gateway, spending limits, and the ranking weights.",
   "settings.gateway": "Gateway",
   "settings.gateway_hint": "Serving {url} · {path}",
   "field.host": "Host",
@@ -531,8 +531,12 @@ const en = {
   "budget.add": "Add budget",
   "budget.currency_hint": "In the currency your models bill in",
   "settings.advanced": "Advanced",
-  "settings.advanced_hint":
-    "Client aliases, election weights and the internal log — the knobs nobody needs on the way in.",
+  "settings.advanced_hint": "Client aliases, election weights and the internal log.",
+  "settings.tab_group": "Settings subjects",
+  "settings.tab_general": "General",
+  "settings.tab_gateway": "Gateway",
+  "settings.tab_budgets": "Budgets",
+  "settings.tab_advanced": "Advanced",
   "settings.aliases": "Client model aliases",
   "settings.aliases_hint":
     "Map an exact model id a client sends onto a tier. Wins over the Claude name heuristic.",
@@ -1140,7 +1144,7 @@ const zh: Dict = {
   "activity.unpriced": "未定价",
 
   // ------------------------------------------------------------ settings
-  "settings.lede": "软件的接线方式:网关、限额与深层开关。",
+  "settings.lede": "应用行为、网关、花费限额与排序权重。",
   "settings.gateway": "网关",
   "settings.gateway_hint": "服务地址 {url} · {path}",
   "field.host": "主机",
@@ -1192,6 +1196,11 @@ const zh: Dict = {
   "budget.add": "添加预算",
   "budget.currency_hint": "以模型计费的币种",
   "settings.advanced": "高级",
+  "settings.tab_group": "设置的四个主题",
+  "settings.tab_general": "常规",
+  "settings.tab_gateway": "网关",
+  "settings.tab_budgets": "限额",
+  "settings.tab_advanced": "高级",
   "settings.advanced_hint": "客户端别名、选举权重与内部日志。",
   "settings.aliases": "客户端模型别名",
   "settings.aliases_hint": "将客户端发送的完整模型 id 映射到层级。优先于 Claude 名称启发式。",
