@@ -603,6 +603,34 @@ const en = {
   "ml.samples": "samples",
   "ml.traces": "traces",
   "ml.criteria": "Gate criteria",
+  /*
+   * The nine promotion criteria, by the stable identifier the gate reports.
+   *
+   * `PromotionCriterion::name` is documented as stable "so a decision can be
+   * reasoned about by name", which makes it a translation key rather than a
+   * display string — so these are looked up by id and an id this build does not
+   * know falls back to itself, which is how a criterion added by a newer backend
+   * stays visible instead of rendering as a blank row.
+   */
+  "ml.criterion.baseline_present": "Baseline paired",
+  "ml.criterion.paired_evidence": "Paired evidence",
+  "ml.criterion.holdout_quality": "Holdout quality",
+  "ml.criterion.routing_utility": "Routing utility",
+  "ml.criterion.selection_safety": "Selection safety",
+  "ml.criterion.success_regression": "Success regressions",
+  "ml.criterion.cost_regression": "Cost regression",
+  "ml.criterion.latency_regression": "Latency regression",
+  "ml.criterion.dataset_identity": "Dataset identity",
+  /*
+   * The figure a criterion was decided on. ADR-0007 asks for every criterion
+   * "with the number it was decided on", so the two structured fields are
+   * rendered rather than left inside the gate's English prose.
+   *
+   * Labelled rather than written as "measured >= threshold": the direction is a
+   * property of each criterion (a cost budget is a ceiling, an evidence floor is
+   * not) and asserting one direction for all nine would misstate six of them.
+   */
+  "ml.criterion_value": "{measured} measured / {threshold} required",
   "ml.history": "Promotion history",
   "ml.promoted": "promoted",
   "ml.rolled_back": "rolled back",
@@ -943,7 +971,7 @@ const zh: Dict = {
 
   // ------------------------------------------------------- account maintenance
   "account.section": "账户",
-  "account.section_hint": "每个账户使用各自独立的浏览器窗口签到，一个账户的会话不会被用于另一个账户。",
+  "account.section_hint": "每个账户用各自的浏览器窗口签到,会话互不共用。",
   "account.phase.idle": "尚未签到",
   "account.phase.running": "正在签到…",
   "account.phase.waiting_for_user": "需要人工验证 — 请在已打开的窗口中完成",
@@ -962,7 +990,7 @@ const zh: Dict = {
   "account.schedule.not_applicable":
     "已开启签到但无法执行,请补全 checkin_path 与 checkin_trigger_selector。",
   "account.schedule.needs_first_observation":
-    "该账户还没有跑过一次签到，因此没有可倒数的到期时间。手动跑一次，之后交给日程",
+    "尚未签到过一次,没有可倒数的到期时间。手动签到一次后交给日程。",
   "account.schedule.no_policy":
     "未声明 checkin_interval_secs,不会自动运行。",
   "account.schedule.not_due": "已排期",
@@ -985,7 +1013,7 @@ const zh: Dict = {
   "account.resume": "在已打开的窗口中继续",
   "account.cancel": "取消",
   "account.close_browser": "关闭窗口",
-  "account.not_enabled": "该账户未开启签到，请先在其维护设置中启用。",
+  "account.not_enabled": "该账户未开启签到,请先在其维护设置中启用。",
   "account.need_path": "未配置签到页面。请填写 maintenance.checkin_path。",
   "account.need_selector": "未配置签到按钮选择器。请填写 maintenance.checkin_trigger_selector。",
   "account.start_failed": "无法开始签到",
@@ -1012,7 +1040,7 @@ const zh: Dict = {
   "account.sync.failed": "探测失败",
 
   // ------------------------------------------------------------- routing
-  "routing.lede": "按请求目的分流。服务任何讲 Anthropic 或 OpenAI 协议的客户端。",
+  "routing.lede": "按请求目的分流。服务兼容 Anthropic 或 OpenAI 协议的客户端。",
   "routing.default_hint": "所有普通请求,按客户端请求的层级。",
   "routing.edit": "编辑",
   "tier.hint.fast": "便宜且快",
@@ -1204,12 +1232,12 @@ const zh: Dict = {
   // ------------------------------------------------------------ learned routing
   "ml.title": "学习型路由",
   "ml.hint": "训练出的模型是否可以重排 provider 顺序。关闭时路由保持确定性。",
-  "ml.unavailable": "此版本不包含学习栈，路由为确定性路由。",
+  "ml.unavailable": "此版本不含学习栈,路由保持确定性。",
   "ml.serving": "已提升的模型正在重排 provider 顺序。",
-  "ml.inert": "模型已提升但学习型路由为关闭，因此不会被调用。",
+  "ml.inert": "模型已提升但学习型路由为关闭,不会被调用。",
   "ml.off": "未安装模型。路由为确定性路由。",
   "ml.exploring": "探索 {pct}%",
-  "ml.no_state_dir": "未配置持久化状态目录，重启后不会保留任何内容，也无法提升模型。",
+  "ml.no_state_dir": "未配置持久化状态目录,重启后不保留内容,也无法提升模型。",
   "ml.installed": "已安装",
   "ml.none": "无",
   "ml.gate": "授权依据",
@@ -1219,16 +1247,26 @@ const zh: Dict = {
   "ml.ranking": "已排序 / 已回退",
   "ml.explored": "已探索 / 已排序",
   "ml.blind_explored": "无模型时尝试",
-  "ml.with_no_model": "在没有模型的情况下，为采集证据而尝试",
+  "ml.with_no_model": "无模型时为采集证据而尝试",
   "ml.never_tried": "从未尝试",
   "ml.blind_spot_warning":
-    "{names} 已配置但排不上队,永远收不到请求。给它最高优先级,或打开探索。",
+    "{names} 已配置但排不上队,永远收不到请求。打开探索可以触达,但会阻断学习型模型的提升。给它最高优先级。",
   "ml.blind_spot_count": "{n} 个无法触达",
   "ml.collected": "已采集",
   "ml.refused": "已拒绝",
   "ml.samples": "样本",
   "ml.traces": "轨迹",
   "ml.criteria": "门禁条件",
+  "ml.criterion.baseline_present": "基线已配对",
+  "ml.criterion.paired_evidence": "配对证据量",
+  "ml.criterion.holdout_quality": "留出集质量",
+  "ml.criterion.routing_utility": "路由效用",
+  "ml.criterion.selection_safety": "选择安全性",
+  "ml.criterion.success_regression": "成功回退次数",
+  "ml.criterion.cost_regression": "成本回退",
+  "ml.criterion.latency_regression": "延迟回退",
+  "ml.criterion.dataset_identity": "数据集一致",
+  "ml.criterion_value": "实测 {measured} / 门槛 {threshold}",
   "ml.history": "提升历史",
   "ml.promoted": "已提升",
   "ml.rolled_back": "已回滚",
@@ -1273,14 +1311,14 @@ const zh: Dict = {
   "ml.round_single_choice":
     "候选模型每次都选同一个,并未学到排序。",
   "ml.round_installed": "已安装并正在服务",
-  "ml.round_not_installed": "已评判，未安装",
+  "ml.round_not_installed": "已评判,未安装",
   "ml.round_serving_now": "当前正在服务",
   "ml.round_deterministic": "路由为确定性路由",
   "ml.verdict": "结论",
   "ml.verdict_promoted": "已提升",
   "ml.verdict_rejected": "已拒绝",
   "ml.verdict_blocked": "已阻断",
-  "ml.round_error": "轮次已评判，但无法安装",
+  "ml.round_error": "轮次已评判,但无法安装",
 
   // ------------------------------------------------ learned routing: the log
   "ml.log": "已记录的历史",
@@ -1288,7 +1326,7 @@ const zh: Dict = {
   "ml.log_records": "记录数",
   "ml.log_size": "占用空间",
   "ml.log_path": "文件",
-  "ml.log_unreadable": "无法统计该日志，因此这并不是零条记录。",
+  "ml.log_unreadable": "无法统计该日志,这不代表零条记录。",
   "ml.log_appended": "已追加",
   "ml.log_nothing": "无可记录内容",
   "ml.log_refused": "已拒绝",

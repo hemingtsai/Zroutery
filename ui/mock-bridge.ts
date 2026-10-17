@@ -49,6 +49,20 @@
 type Json = unknown;
 
 const NOW = new Date("2026-10-17T09:41:00Z").getTime();
+
+/**
+ * Two clocks, because the backend has two.
+ *
+ * `ago()` feeds the fields serde renders out of `DateTime<Utc>`; those arrive as
+ * ISO strings and are milliseconds. The fields the ML stack and the account
+ * maintenance code set from `now_seconds()` / `Utc::now().timestamp()` are bare
+ * i64 unix *seconds*, and the UI multiplies those by 1000 before formatting.
+ *
+ * Getting this wrong is not a cosmetic slip in the fixture. `when()` multiplied
+ * milliseconds by 1000 a second time and the promotion history rendered as
+ * dates in the year 58,700 — a correct UI made to look broken by the data.
+ */
+const NOW_SECS = Math.floor(NOW / 1000);
 const ago = (ms: number) => new Date(NOW - ms).toISOString();
 
 const quirks = () => ({
@@ -401,7 +415,7 @@ function mlStatusFixture() {
       required_baseline: "ranker-2026-10-02",
       paired_requests: 1_842,
       holdout_loss: 0.214,
-      promoted_at: NOW - 2 * 86_400_000,
+      promoted_at: NOW_SECS - 2 * 86_400,
     },
     active_decision: {
       verdict: "promoted",
@@ -413,13 +427,29 @@ function mlStatusFixture() {
       holdout_loss: 0.214,
       gate_config_identity: "gate-v3",
       criteria: [
-        { name: "paired_requests >= 1000", held: true, measured: 1842, threshold: 1000, reason: "" },
-        { name: "holdout loss beats baseline", held: true, measured: 0.214, threshold: 0.268, reason: "" },
-        { name: "no regression on fast tier", held: true, measured: 0.019, threshold: 0.05, reason: "" },
+        /*
+         * The nine names, their order and their shapes are copied from
+         * `PromotionGate::evaluate`, including which two carry no figure at all
+         * — `baseline_present` and `dataset_identity` pass `None` for both
+         * fields, because each is a fact rather than a measurement.
+         *
+         * An invented name here is not cosmetic: it renders as an untranslated
+         * identifier, which is indistinguishable from a criterion a newer
+         * backend added that this build has no translation for.
+         */
+        { name: "baseline_present", held: true, measured: null, threshold: null, reason: "paired against 'ranker-2026-10-02'" },
+        { name: "paired_evidence", held: true, measured: 1842, threshold: 1000, reason: "" },
+        { name: "holdout_quality", held: true, measured: 0.214, threshold: 0.05, reason: "" },
+        { name: "routing_utility", held: true, measured: 0.044, threshold: 0.01, reason: "" },
+        { name: "selection_safety", held: true, measured: 0, threshold: 0, reason: "" },
+        { name: "success_regression", held: true, measured: 3, threshold: 20, reason: "" },
+        { name: "cost_regression", held: true, measured: -0.0012, threshold: 0.05, reason: "" },
+        { name: "latency_regression", held: true, measured: 12.4, threshold: 250, reason: "" },
+        { name: "dataset_identity", held: true, measured: null, threshold: null, reason: "both name source body ds-7f21 (fitted partition fp-4c0e)" },
       ],
       baseline: "ranker-2026-10-02",
       paired_requests: 1_842,
-      decided_at: NOW - 2 * 86_400_000,
+      decided_at: NOW_SECS - 2 * 86_400,
       revision: "rev-31",
     },
     history: [
@@ -428,7 +458,7 @@ function mlStatusFixture() {
         commit_id: "a91f3c2",
         gate_identity: "gate-v3",
         verdict: "promoted",
-        at: NOW - 2 * 86_400_000,
+        at: NOW_SECS - 2 * 86_400,
         note: "beat baseline on the held-out split",
       },
       {
@@ -436,7 +466,7 @@ function mlStatusFixture() {
         commit_id: "5b0e7d1",
         gate_identity: "gate-v3",
         verdict: "promoted",
-        at: NOW - 16 * 86_400_000,
+        at: NOW_SECS - 16 * 86_400,
         note: "first learned model in the routing path",
       },
       {
@@ -444,7 +474,7 @@ function mlStatusFixture() {
         commit_id: "5b0e7d1",
         gate_identity: "gate-v3",
         verdict: "rejected",
-        at: NOW - 12 * 86_400_000,
+        at: NOW_SECS - 12 * 86_400,
         note: "held-out accuracy regressed after promotion",
       },
     ],
@@ -466,7 +496,7 @@ function mlStatusFixture() {
     },
     traces: { appended: 18_402, nothing: 312, refused: 9, io_errors: 0 },
     shadow: { enabled: true, decisions_recorded: 2_140, faults: 3 },
-    read_at: NOW,
+    read_at: NOW_SECS,
   };
 }
 
@@ -551,11 +581,11 @@ const snapshot = (): Json => ({
       reward_amount: 0.5,
       reward_unit: "USD",
       reward_source: "provider_response",
-      last_completed_at: NOW - 3 * 3600_000,
+      last_completed_at: NOW_SECS - 3 * 3600,
       schedule: {
         decision: "not_due",
-        next_due_at: NOW + 21 * 3600_000,
-        last_settled_at: NOW - 3 * 3600_000,
+        next_due_at: NOW_SECS + 21 * 3600,
+        last_settled_at: NOW_SECS - 3 * 3600,
       },
     },
     {
@@ -578,7 +608,7 @@ const snapshot = (): Json => ({
     {
       provider_id: "relay-main",
       account_id: "acct-0",
-      observed_at: NOW - 3 * 3600_000,
+      observed_at: NOW_SECS - 3 * 3600,
       kind: "checkin",
       effect: "credited",
       amount: 0.5,
@@ -612,8 +642,8 @@ function checkin(phase: string, held: boolean) {
     reward_amount: phase === "succeeded" ? 0.5 : null,
     reward_unit: phase === "succeeded" ? "USD" : null,
     reward_source: phase === "succeeded" ? "provider_response" : null,
-    last_completed_at: NOW,
-    schedule: { decision: "not_due", next_due_at: NOW + 21 * 3600_000, last_settled_at: NOW },
+    last_completed_at: NOW_SECS,
+    schedule: { decision: "not_due", next_due_at: NOW_SECS + 21 * 3600, last_settled_at: NOW_SECS },
   };
 }
 
@@ -659,7 +689,7 @@ const handlers: Record<string, (args: any) => Json | Promise<Json>> = {
         no_alternative: 154,
         no_candidates: 318,
       },
-      produced_at: NOW,
+      produced_at: NOW_SECS,
     },
   }),
   get_ml_traces: () => ({
@@ -687,19 +717,28 @@ const handlers: Record<string, (args: any) => Json | Promise<Json>> = {
         holdout_loss: 0.271,
         gate_config_identity: "gate-v3",
         criteria: [
-          { name: "paired_requests >= 1000", held: true, measured: 1986, threshold: 1000, reason: "" },
+          { name: "baseline_present", held: true, measured: null, threshold: null, reason: "paired against 'ranker-2026-10-15'" },
+          { name: "paired_evidence", held: true, measured: 1986, threshold: 1000, reason: "" },
           {
-            name: "holdout loss beats baseline",
+            // The one check the round was rejected on, kept failing so the
+            // panel exercises the reason-and-warn-tone branch rather than nine
+            // green rows.
+            name: "holdout_quality",
             held: false,
             measured: 0.271,
-            threshold: 0.268,
-            reason: "0.271 did not beat the incumbent 0.268",
+            threshold: 0.05,
+            reason: "holdout log loss 0.2710 did not beat an uninformed model by the required 0.0500",
           },
-          { name: "no regression on fast tier", held: true, measured: 0.022, threshold: 0.05, reason: "" },
+          { name: "routing_utility", held: true, measured: 0.019, threshold: 0.01, reason: "" },
+          { name: "selection_safety", held: true, measured: 0, threshold: 0, reason: "" },
+          { name: "success_regression", held: true, measured: 6, threshold: 20, reason: "" },
+          { name: "cost_regression", held: true, measured: 0.0004, threshold: 0.05, reason: "" },
+          { name: "latency_regression", held: true, measured: 22.1, threshold: 250, reason: "" },
+          { name: "dataset_identity", held: true, measured: null, threshold: null, reason: "both name source body ds-8820 (fitted partition fp-1a77)" },
         ],
         baseline: "ranker-2026-10-15",
         paired_requests: 1_986,
-        decided_at: NOW,
+        decided_at: NOW_SECS,
         revision: "rev-32",
       },
       analysis: null,
