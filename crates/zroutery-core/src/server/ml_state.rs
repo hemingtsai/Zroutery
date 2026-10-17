@@ -1,9 +1,9 @@
 //! Model attachment, promotion rounds, shadow verdicts, and the ML status the console reads.
 
-use super::projection_log::ProjectionLog;
+use std::collections::BTreeMap;
+
 use super::shadow_candidate::*;
 use super::state::AppState;
-use std::collections::BTreeMap;
 
 impl AppState {
     /// Bring the serving model back in line with the durable pointer.
@@ -197,7 +197,7 @@ impl AppState {
     /// the open `TraceLog` so that no accessor is added to that type for this one
     /// caller.
     #[cfg(feature = "ml")]
-    pub(super) fn ml_state_dir(&self) -> std::path::PathBuf {
+    fn ml_state_dir(&self) -> std::path::PathBuf {
         std::path::PathBuf::from(&self.config().ml_routing.state_dir)
     }
 
@@ -419,14 +419,5 @@ impl AppState {
             "the shadow model candidate was withdrawn; the shadow is back on its own predictor"
         );
         true
-    }
-
-    /// The retained outcomes paired with their routing decisions, so the
-    /// observability projection can be read back.
-    ///
-    /// Not a routing input and not a training source: a diagnostic view of the
-    /// same single accounting the request log records.
-    pub fn projections(&self) -> &ProjectionLog {
-        &self.projections
     }
 }

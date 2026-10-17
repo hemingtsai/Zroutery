@@ -23,6 +23,7 @@
 
 pub use crate::protocol::ProviderQuirks;
 mod app;
+#[cfg(feature = "ml")]
 mod ml;
 mod model;
 mod provider;
@@ -36,6 +37,7 @@ mod validate;
 mod tests;
 
 pub use app::{AppConfig, NotificationConfig, WindowBehavior};
+#[cfg(feature = "ml")]
 pub use ml::MlRoutingConfig;
 pub use model::{ModelCapabilities, ModelTier, NamingStyle};
 pub use provider::{
@@ -48,5 +50,7 @@ pub use routing::{
     VisionConfig,
 };
 pub use secrets::{MemorySecretStore, SecretStore};
-pub use server::{ServerConfig, ShadowConfig};
+pub use server::ServerConfig;
+#[cfg(feature = "ml")]
+pub use server::ShadowConfig;
 pub use validate::{ConfigIssue, IssueSeverity};

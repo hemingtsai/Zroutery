@@ -9,6 +9,7 @@ use crate::config::{ModelEntry, ModelTier, RoutingStrategy};
 use crate::election::Election;
 use crate::error::{Error, Result};
 use crate::ir::Capability;
+#[cfg(feature = "ml")]
 use crate::observation::ObservationStore;
 use crate::registry::Registry;
 use rand::Rng;
