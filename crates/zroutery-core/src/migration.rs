@@ -2072,11 +2072,22 @@ mod tests {
         let store = MigrationStore::new();
         let executor = MigrationExecutor::new(store);
 
-        // Use a URL that will not connect (non-routable IP with short timeout)
+        // A URL that cannot be built, rather than a non-routable address.
+        //
+        // `http://192.0.2.1:1/health` is the obvious choice and it is not
+        // hermetic: `reqwest` honours the proxy environment variables, so on a
+        // machine behind a proxy that address is not unreachable at all — the
+        // proxy answers, the step reports a status it did not expect, and this
+        // test fails for a reason that has nothing to do with the executor. That
+        // is the same "green until it is not" shape the I4 restore fixture was
+        // written to avoid by injecting the failure instead of provoking it with
+        // an environment the test does not control. A URL with no scheme fails
+        // before any socket is opened, which keeps this fixture about the step's
+        // refusal rather than about the network the test happens to run on.
         let plan = make_plan(vec![MigrationStep {
             description: "Verify".to_string(),
             action: MigrationAction::VerifyEndpoint {
-                url: "http://192.0.2.1:1/health".to_string(), // TEST-NET, non-routable
+                url: "not-a-url".to_string(),
                 expect: EndpointExpect::Success,
             },
             reversible: false,
