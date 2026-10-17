@@ -444,6 +444,51 @@ and empty, behaviourally, against a default-constructed **and** a
 document-deserialised configuration. That is what makes building ML into the
 desktop app a packaging change rather than a behaviour change.
 
+### A refused round, and the number that refused it
+
+The gate's decision traveled whole to the panel for the *serving* model and not
+for a round. A round that was refused rendered one word — `blocked` — while the
+document it came from carried every criterion, the value measured, the threshold
+it was compared against, and the reason in prose. The verdict is not the reason.
+`rejected` is a judgement about the model and `blocked` is a statement that there
+was not enough evidence to judge one, and an operator who cannot tell those apart
+changes a setting when the answer is to collect more traffic.
+
+The panel now shows the criteria that did not hold, always open, with
+`measured` and `threshold` printed beside the criterion's name. The criteria that
+held are folded behind a disclosure labelled with how many there were: thirty
+rows of agreement must not push the one row that refused off the screen. The
+panel prints the two numbers and does not compare them, because whether 12 is
+close to 30 is the operator's judgement and not a claim the dashboard should make
+on their behalf.
+
+**A defect this change introduced and the test caught.** The first version used
+the panel's existing `number` formatter, which prefixes a positive value with `+`
+because it renders a *delta* — regret, utility difference. Applied to a
+threshold it printed `+30`, which reads as a change of thirty rather than as a
+floor. The two now have separate formatters: an unsigned one for measurements,
+which groups integers and rounds fractions to four decimals, and the signed one
+for means. This was found by the browser test, not by reading the diff:
+`measured 12` was asserted and the page said `measured +12`.
+
+`scripts/ui_interaction_test.py` case **UI-5** drives this. It renders the real
+built UI in headless Chromium against a stubbed Tauri bridge that now answers
+`get_ml_status`, `get_ml_traces` and `run_ml_promotion_round`, clicks the judge
+button with a real mouse event, and asserts from the rendered text that the
+failing criterion, its measured value and its threshold are visible, that the
+criterion that held is folded and not rendered open, and that a real click on the
+disclosure opens it. Before the reply existed at all the panel was reachable but
+never driven by a test; the four earlier interaction cases do not enter it.
+
+What the panel still cannot say: the criteria are the gate's numbers and the
+panel adds none of its own. It does not say how much traffic would clear the
+floor, and it cannot — that is `7F`'s measured refusal, not a rendering problem.
+
+One adjacent change, made for the same reason the replay is on demand: the
+status poll now stops while the document is hidden and refreshes once when it
+becomes visible. The document walks every configured candidate, and a two-second
+poll whose only consumer is a screen nobody is looking at is work with no reader.
+
 ---
 
 ## E3. Cross-provider, and what it cost to find out (ADR-0008)
