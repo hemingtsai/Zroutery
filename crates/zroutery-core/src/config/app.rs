@@ -2,11 +2,14 @@
 
 use serde::{Deserialize, Serialize};
 
+#[cfg(feature = "ml")]
 use super::ml::MlRoutingConfig;
 use super::provider::default_true;
 use super::registry::{ModelEntry, ProviderConfig};
 use super::routing::{ClassifierConfig, RoutingConfig, VisionConfig};
-use super::server::{ServerConfig, ShadowConfig};
+use super::server::ServerConfig;
+#[cfg(feature = "ml")]
+use super::server::ShadowConfig;
 use crate::budget::Budget;
 
 /// How the desktop app behaves as a resident process: what autostart, the

@@ -1,14 +1,25 @@
-//! Swapping configuration and the registry it feeds, and holding an election.
+//! The retained projections, swapping configuration and the registry it feeds, and holding an election.
 
 use std::sync::Arc;
 
-use super::state::AppState;
 use crate::config::{AppConfig, ModelTier, ProviderConfig, SecretStore};
 use crate::election::{self, Election, Measurement};
 use crate::error::{Error, Result};
 use crate::registry::Registry;
 
+use super::projection_log::ProjectionLog;
+use super::state::AppState;
+
 impl AppState {
+    /// The retained outcomes paired with their routing decisions, so the
+    /// observability projection can be read back.
+    ///
+    /// Not a routing input and not a training source: a diagnostic view of the
+    /// same single accounting the request log records.
+    pub fn projections(&self) -> &ProjectionLog {
+        &self.projections
+    }
+
     /// Rebuild the upstream HTTP client (e.g. when bypass_proxy changes).
     pub fn rebuild_upstream(&self, bypass_proxy: bool) {
         self.upstream.rebuild_client(bypass_proxy);

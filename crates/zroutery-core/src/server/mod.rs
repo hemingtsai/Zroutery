@@ -6,23 +6,6 @@
 //!
 //! Security: it binds loopback by default and requires a local token. Anything
 //! that can reach this port can spend the configured API keys.
-//!
-//! # Layout
-//!
-//! | module | what it owns |
-//! |---|---|
-//! | [`state`] | [`AppState`] and the admission permits that keep budget scopes exclusive |
-//! | [`handlers`] | the route table and one function per route, plus the auth layer |
-//! | [`cors`] | the CORS policy, and the origin validation behind it |
-//! | [`ledger`] | construction, the spend ledger, and budget admission |
-//! | [`accessors`] | the read-only handles other subsystems hold on the process |
-//! | [`ml_state`] | model attachment, promotion rounds, shadow verdicts, ML status |
-//! | [`config_state`] | swapping configuration and the registry it feeds |
-//!
-//! `ledger`, `accessors`, `ml_state` and `config_state` are the method groups of
-//! one type. Rust merges split inherent `impl` blocks, so this is legal rather
-//! than a workaround, but it does make the table above the only map from a
-//! method name to a file.
 
 mod pipeline;
 mod projection_log;
@@ -34,6 +17,8 @@ mod shadow_candidate;
 #[cfg(feature = "account")]
 mod accounts;
 
+// ServerHandle is the only thing left in this file, so these are the only
+// imports it needs; each child carries its own.
 use std::net::SocketAddr;
 use std::sync::Arc;
 
@@ -101,6 +86,7 @@ mod config_state;
 mod cors;
 mod handlers;
 mod ledger;
+#[cfg(feature = "ml")]
 mod ml_state;
 mod state;
 
