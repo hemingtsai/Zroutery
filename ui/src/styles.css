@@ -616,6 +616,18 @@ body {
 }
 
 /*
+ * One criterion's text, beside its status dot.
+ *
+ * A reason is prose and a name is an identifier, so the row must wrap rather
+ * than widen: `flex: 1 1 auto` plus `min-width: 0` is what lets a long reason
+ * break inside the flex item instead of forcing the page to scroll sideways.
+ */
+.ml-criterion-body {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/*
  * The on-demand replay's numbers.
  *
  * Set apart from the counters above it because it answers a different kind of
