@@ -3103,13 +3103,22 @@ mod tests {
 
     #[tokio::test]
     async fn transport_failures_surface_as_transport_errors() {
-        // Bind and drop a port so nothing is listening on it.
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        drop(listener);
-
+        // Port 0 is not a service: nothing can listen on it, so a connection
+        // there is refused. The obvious version — bind a free port, read its
+        // number, drop the listener, then connect to it — additionally races
+        // against the rest of the parallel lib binary, which can take that port
+        // in the gap and turn this into a test that fails for a reason that is
+        // not the adapter's.
+        //
+        // The second way this fails is environmental rather than a defect:
+        // `reqwest` honours `HTTP_PROXY`, so behind a proxy the connect is
+        // answered by the proxy and arrives as `Upstream` carrying the proxy's
+        // status. That was observed here, and the same test passed with
+        // `NO_PROXY=127.0.0.1`. Making the adapter ignore proxies for loopback is
+        // a decision about what a local control panel may be reached through, so
+        // it is recorded rather than taken.
         let config = NewApiConfig {
-            base_url: format!("http://{addr}"),
+            base_url: "http://127.0.0.1:0".into(),
             api_key: BEARER.into(),
             connect_timeout_secs: 2,
             ..Default::default()
