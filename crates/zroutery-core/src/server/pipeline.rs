@@ -1436,6 +1436,14 @@ async fn buffered_upstream(
         .await
 }
 
+// The argument list is one request's whole context, assembled by the caller that
+// already holds every part of it: the state, its wire dialect, the parsed
+// request, the plan, the kind, the Responses inputs, the storage policy, the
+// routing decision, the admission guard whose drop is the release, and the
+// retained shadow input when `ml` is on. A struct over that set would exist to
+// satisfy a count rather than to give anything a name, which is the same reason
+// the three other seam functions in this file allow this lint.
+#[allow(clippy::too_many_arguments)]
 async fn buffered_chat(
     state: Arc<AppState>,
     dialect: Dialect,
