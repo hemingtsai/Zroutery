@@ -959,7 +959,11 @@ fn a_failed_ledger_write_is_retried_after_the_disk_recovers() {
     std::fs::remove_dir_all(dir).ok();
 }
 /// A provider declaring the given account ids, for the account-projection tests.
-#[cfg(feature = "newapi")]
+// `any`, not one of them: this fixture declares accounts, and the two tests
+// that use it sit behind different features -- `account_balance_views` is a
+// newapi surface, `reconcile_accounts` is an account one. Gating the fixture on
+// either alone compiles one family and fails the other.
+#[cfg(any(feature = "newapi", feature = "account"))]
 fn multi_provider(account_ids: &[&str]) -> AppConfig {
     let accounts: Vec<serde_json::Value> = account_ids
         .iter()
@@ -1197,7 +1201,10 @@ fn account_balances_appear_only_where_the_provider_total_hides_something() {
 }
 
 #[tokio::test]
-#[cfg(feature = "newapi")]
+// `account`, not `newapi`, for the reason given on the caller in commands.rs:
+// the method under test is gated on `account`, and `newapi` does not enable
+// that in this crate even though it does in zroutery-core.
+#[cfg(feature = "account")]
 async fn an_account_with_no_credential_is_reported_rather_than_silently_absent() {
     // The single most likely reason an operator sees an account missing is a
     // credential that will not resolve, and a report that omitted it would leave
