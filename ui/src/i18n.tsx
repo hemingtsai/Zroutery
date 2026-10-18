@@ -1192,7 +1192,7 @@ const zh: Dict = {
   "providers.free_badge": "免费",
   "providers.free_only": "仅显示免费模型",
   "providers.free_only_hint":
-    "按提供商目录标注为零成本。免费模型仍可能被地区屏蔽或在上游下线。",
+    "依据提供商自己的目录标注为零成本。不代表该模型一定能用:免费模型仍可能被地区屏蔽或在上游下线。",
   "providers.catalogue_shown": "显示 {total} 个中的 {shown} 个",
   "providers.catalogue_total": "共 {total} 个模型",
   "providers.catalogue_no_free":
