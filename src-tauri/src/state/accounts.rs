@@ -171,7 +171,17 @@ impl Desktop {
             .checkin_schedule
             .last_settled_at(provider_id, account_id);
         let now = chrono::Utc::now().timestamp();
-        let decision = zroutery_core::account::checkin::decide(&maintenance, last_settled_at, now);
+        // The scheduler's own function, so the panel renders what the scan will
+        // actually do rather than a second opinion about it. The executor
+        // adjustment lives next to the scan (`scheduler::executor_decision`) so
+        // this view and the launch loop cannot drift: due with no executor reads
+        // `not_applicable`, and a fresh account with a credential reads due —
+        // both in the panel and in the scan.
+        let decision = crate::checkin::scheduler::executor_decision(
+            &maintenance,
+            zroutery_core::account::checkin::decide_api(&maintenance, last_settled_at, now),
+            self.has_account_credential(provider_id, account_id),
+        );
         CheckinScheduleView {
             decision: match decision {
                 zroutery_core::account::checkin::MaintenanceDecision::NotApplicable => {
@@ -211,12 +221,48 @@ impl Desktop {
         self.checkin.shutdown_all().await;
     }
 
+    /// Whether a credential is stored for one declared account.
+    ///
+    /// The same resolution [`Self::panel_adapter`] applies — an account with no
+    /// `key_ref` of its own uses the provider's — but answers a yes/no question
+    /// instead of building an adapter, because the scheduler asks it for every
+    /// due account on every tick and the only fact it needs is "would the HTTP
+    /// path have something to sign in with". Deliberately not gated on
+    /// `newapi`: whether a secret exists is a configuration-and-keychain
+    /// question, and gating it on the adapter feature would make an
+    /// `account-maint`-only build unable to say why nothing runs.
+    pub fn has_account_credential(&self, provider_id: &str, account_id: &str) -> bool {
+        use zroutery_core::config::SecretStore;
+        let config = self.core.config();
+        let Some(provider) = config.providers.iter().find(|p| p.id == provider_id) else {
+            return false;
+        };
+        let Some(account) = provider
+            .accounts
+            .iter()
+            .find(|a| a.account_id == account_id)
+        else {
+            return false;
+        };
+        let key_ref = if account.key_ref.trim().is_empty() {
+            provider.key_ref.as_str()
+        } else {
+            account.key_ref.as_str()
+        };
+        self.secrets
+            .get(key_ref)
+            .map(|k| !k.trim().is_empty())
+            .unwrap_or(false)
+    }
+
     /// A NewAPI panel adapter for one account, built from its stored credential.
     ///
-    /// Returns `None` — rather than an adapter with no credential — when no key is
-    /// stored. That distinction matters: an adapter with an empty key would fail
-    /// every call with an authentication error, which reads as "the credential is
-    /// wrong" when the truth is that none was ever configured.
+    /// Returns `Err` — rather than an adapter with no credential — when no usable
+    /// key is stored, and the error says which of the two facts it is: no
+    /// credential was ever stored, or one is stored but the panel can never
+    /// accept it (an `sk-` relay key). Collapsing both into "no adapter" would
+    /// render the second case as "nothing was configured", sending the user to
+    /// set a credential they already set — just the wrong one.
     ///
     /// The key is read here and goes straight into the adapter. It is never
     /// returned, stored on `Desktop`, or put in a snapshot: the credential lives
@@ -235,27 +281,42 @@ impl Desktop {
         &self,
         provider_id: &str,
         account_id: &str,
-    ) -> Option<(zroutery_core::account::adapters::newapi::NewApiAdapter, f64)> {
+    ) -> Result<(zroutery_core::account::adapters::newapi::NewApiAdapter, f64), String> {
         use zroutery_core::account::adapters::newapi::{NewApiAdapter, NewApiConfig};
         use zroutery_core::config::SecretStore;
 
         let config = self.core.config();
-        let provider = config.providers.iter().find(|p| p.id == provider_id)?;
+        let provider = config
+            .providers
+            .iter()
+            .find(|p| p.id == provider_id)
+            .ok_or_else(|| format!("no provider `{provider_id}`"))?;
         let account = provider
             .accounts
             .iter()
-            .find(|a| a.account_id == account_id)?;
+            .find(|a| a.account_id == account_id)
+            .ok_or_else(|| format!("no account `{account_id}` on provider `{provider_id}`"))?;
         // An empty account key means "use the provider's own", which is the same
-        // convention `AccountConfig::key_ref` documents.
+        // convention `AccountConfig::key_ref` documents. A provider key is
+        // usually the relay's `sk-` key, which the adapter itself refuses for
+        // dashboard use — the construction error carries that explanation rather
+        // than a bare 401 would.
         let key_ref = if account.key_ref.trim().is_empty() {
             provider.key_ref.as_str()
         } else {
             account.key_ref.as_str()
         };
-        let api_key = self.secrets.get(key_ref)?;
-        if api_key.trim().is_empty() {
-            return None;
-        }
+        let api_key = self
+            .secrets
+            .get(key_ref)
+            .filter(|k| !k.trim().is_empty())
+            .ok_or_else(|| {
+                format!(
+                    "no panel access token is stored for account `{account_id}` on provider \
+                     `{provider_id}` — set the account's credential to the panel's personal \
+                     access token first"
+                )
+            })?;
 
         // The panel root, with any relay suffix stripped, exactly as the adapter's
         // own normalisation would do — it is repeated here only to pick the
@@ -267,8 +328,8 @@ impl Desktop {
             api_key,
             ..Default::default()
         })
-        .ok()?;
-        Some((
+        .map_err(|e| e.to_string())?;
+        Ok((
             adapter,
             zroutery_core::account::adapters::newapi::DEFAULT_QUOTA_PER_UNIT,
         ))

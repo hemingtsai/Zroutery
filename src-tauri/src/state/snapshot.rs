@@ -18,10 +18,23 @@ impl Desktop {
             .as_ref()
             .map(|s| s.addr.to_string());
 
+        // Provider keys under the provider id; an account's own reference is
+        // its entry, so the drawer can show "has its own key" without the
+        // secret itself ever crossing the bridge. A declaration that shares
+        // the provider's reference adds no entry: the provider's row already
+        // answers whether that secret exists.
         let keys = stored
             .providers
             .iter()
-            .map(|p| (p.id.clone(), self.secrets.has(&p.key_ref)))
+            .flat_map(|p| {
+                let mut entries = vec![(p.id.clone(), self.secrets.has(&p.key_ref))];
+                for a in &p.accounts {
+                    if !a.key_ref.is_empty() && a.key_ref != p.key_ref {
+                        entries.push((a.key_ref.clone(), self.secrets.has(&a.key_ref)));
+                    }
+                }
+                entries
+            })
             .collect();
 
         // The webview gets everything except the token itself.
@@ -55,6 +68,11 @@ impl Desktop {
             ml_available: cfg!(feature = "ml"),
             account_maintenance_available: cfg!(feature = "account-maint"),
             account_available: cfg!(feature = "account"),
+            // The HTTP check-in needs both halves: the report views of
+            // `account-maint` and the panel adapter of `newapi`. Declared for the
+            // same reason the other two are — a command that was never registered
+            // and a command that failed are the same event to the webview.
+            api_checkin_available: cfg!(all(feature = "account-maint", feature = "newapi")),
             #[cfg(feature = "account-maint")]
             checkin: self.checkin_views().await,
             #[cfg(feature = "account-maint")]

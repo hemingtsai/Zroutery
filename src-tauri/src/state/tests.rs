@@ -1177,15 +1177,23 @@ fn the_snapshot_carries_at_most_the_documented_number_of_events() {
 }
 #[test]
 #[cfg(feature = "newapi")]
-fn account_balances_appear_only_where_the_provider_total_hides_something() {
-    // The rule under test: one account means the two levels say the same thing,
-    // and saying it twice is noise. Several accounts mean the provider figure is
-    // a total that hides which account is empty and which is suspended, which is
-    // the only reason to look at the second level at all.
+fn account_balances_appear_for_every_declared_account() {
+    // The rule under test: every declared account of an enabled provider is
+    // emitted, including the single-account case. The old rule — views only from
+    // two accounts up — hid the only reading a single-account operator has, which
+    // is the "probed but shown nowhere" report that motivated the change; whether
+    // one row is noise is the rendering panel's decision, not the data layer's.
     let (one, _d1) = desktop_with(multi_provider(&["only"]));
-    assert!(
-        one.account_balance_views().is_empty(),
-        "a single account must not produce a second panel saying the same thing"
+    let views = one.account_balance_views();
+    assert_eq!(
+        views.len(),
+        1,
+        "a single account still produces its own view"
+    );
+    assert_eq!(views[0].account_id, "only");
+    assert_eq!(
+        views[0].status, "unprobed",
+        "an account that was never probed says so"
     );
 
     let (several, _d2) = desktop_with(multi_provider(&["a", "b", "c"]));
@@ -1230,4 +1238,72 @@ async fn an_account_with_no_credential_is_reported_rather_than_silently_absent()
     }
     ids.sort_unstable();
     assert_eq!(ids, ["a", "b"], "both account ids survive into the report");
+}
+
+// ---------------------------------------------------------------- takeover
+
+/// The gateway target is exactly what the proxy can serve right now: the
+/// bound address, the live token, and one class per tier that has an enabled
+/// model — not one per declared tier, and not a default chosen on the user's
+/// behalf.
+#[test]
+fn the_gateway_target_offers_exactly_the_tiers_that_have_enabled_models() {
+    let config: AppConfig = serde_json::from_value(serde_json::json!({
+        "server": {"auth_token": "gw-token"},
+        "providers": [{
+            "id": "p", "name": "p", "kind": "openai_compatible",
+            "base_url": "https://example.invalid"
+        }],
+        "models": [
+            {"provider_id": "p", "upstream_model": "m-fast", "tier": "fast", "enabled": true},
+            {"provider_id": "p", "upstream_model": "m-std", "tier": "standard", "enabled": true},
+            {"provider_id": "p", "upstream_model": "m-off", "tier": "reasoning", "enabled": false}
+        ]
+    }))
+    .expect("the fixture is a valid configuration");
+    let (desktop, _dir) = desktop_with(config);
+
+    let target = desktop
+        .gateway_target()
+        .expect("a token and two tiered models make a servable target");
+    assert_eq!(target.token, "gw-token");
+    assert!(target.base_url.starts_with("http://127.0.0.1:"));
+    assert_eq!(
+        target
+            .classes
+            .iter()
+            .map(|c| c.model.as_str())
+            .collect::<Vec<_>>(),
+        ["fast-class", "standard-class"],
+        "the disabled reasoning model offers no class, and the order follows ModelTier::ALL"
+    );
+    assert!(target.default_class.is_none());
+
+    // No token: nothing to authenticate a client with, so no target at all.
+    let mut config = AppConfig::default();
+    config.server.auth_token.clear();
+    let (desktop, _dir) = desktop_with(config);
+    assert!(desktop.gateway_target().is_none());
+}
+
+/// Each agent's ownership store is durable from first use: the manifest lives
+/// under the application's own config directory, so a crash cannot orphan a
+/// client config that still points at this proxy.
+#[test]
+fn takeover_stores_are_durable_under_the_config_directory() {
+    let (desktop, dir) = desktop_with(AppConfig::default());
+    let store = desktop
+        .takeover_store(zroutery_core::agent_takeover::AgentType::Claude)
+        .expect("a fresh store opens cleanly");
+    assert!(store.is_durable());
+    assert!(
+        dir.join("takeover").join("claude.json").exists() || store.manifest().is_none(),
+        "the manifest path lives under <config_dir>/takeover/"
+    );
+    // The same store comes back for the same agent; ownership state is not
+    // re-derived per command.
+    let again = desktop
+        .takeover_store(zroutery_core::agent_takeover::AgentType::Claude)
+        .expect("the second open reuses the first");
+    assert!(Arc::ptr_eq(&store, &again));
 }

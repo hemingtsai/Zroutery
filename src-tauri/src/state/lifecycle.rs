@@ -52,6 +52,7 @@ impl Desktop {
             ),
             #[cfg(feature = "account-maint")]
             checkin_schedule,
+            takeover_stores: Mutex::new(BTreeMap::new()),
         }
     }
 

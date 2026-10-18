@@ -45,7 +45,8 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use zroutery_core::account::checkin::{decide, MaintenanceDecision};
+use zroutery_core::account::checkin::{decide_api, MaintenanceDecision};
+use zroutery_core::config::MaintenanceConfig;
 
 use crate::checkin::SessionKey;
 use crate::state::Desktop;
@@ -73,8 +74,57 @@ pub const SCAN_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60
 pub struct ScanPlan {
     /// Accounts the scan looked at.
     pub considered: usize,
-    /// The accounts a decision called due, in configuration order.
+    /// The accounts a decision called due *and* actionable, in configuration
+    /// order.
     pub due: Vec<SessionKey>,
+    /// Accounts a decision called due but no executor can act on: no stored
+    /// credential and no browser configuration. Counted rather than launched,
+    /// and reported `not_applicable` by `schedule_view` by the same rule.
+    pub unactionable: usize,
+}
+
+/// The timing decision adjusted for the executors this build can actually drive.
+///
+/// `decide_api` answers "is this account due"; whether anyone can act on a due
+/// answer depends on what exists — a stored credential for the HTTP path, a
+/// configured browser for the held-session path. That adjustment used to be
+/// re-derived at each of the three places that render or act on the decision
+/// (`scan`, `decisions_by_kind`, `schedule_view`), which is three copies of one
+/// rule waiting to drift, so it lives here now, next to its tests.
+///
+/// The second correction is the one that makes "signed in, so it signs in" true:
+/// an account that has **never** checked in reports `NeedsFirstObservation`,
+/// which is the right conservatism for the browser executor — the alternative is
+/// opening one visible window per account seconds after launch — but wrong for
+/// the HTTP executor, which opens no window, costs two or three requests, and
+/// settles whatever happens. So a fresh account holding a panel credential runs
+/// now, and the schedule takes over from the settlement it records. The first
+/// attempt still needs a person only where a person is actually needed.
+///
+/// Pure, so the same decision a panel renders is provably the one the scan acts
+/// on: both call this, and neither keeps a private copy of the rules.
+pub(crate) fn executor_decision(
+    maintenance: &MaintenanceConfig,
+    timing: MaintenanceDecision,
+    has_credential: bool,
+) -> MaintenanceDecision {
+    match timing {
+        // Due with no executor at all: "the interval elapsed" is true, but
+        // nothing can act, and reporting due would promise a run the scan
+        // refuses on every tick.
+        MaintenanceDecision::Due { .. }
+            if !maintenance.is_browser_checkin_configured() && !has_credential =>
+        {
+            MaintenanceDecision::NotApplicable
+        }
+        // Fresh account, HTTP executor available: the first run needs no window
+        // and no person, so "nothing has been observed yet" is not a reason to
+        // wait — run it and let the interval take over from the settlement.
+        MaintenanceDecision::NeedsFirstObservation if has_credential => {
+            MaintenanceDecision::Due { since_last_secs: 0 }
+        }
+        other => other,
+    }
 }
 
 /// Decide which accounts are due, and open nothing.
@@ -116,16 +166,37 @@ pub async fn scan(desktop: &Arc<Desktop>, now: i64) -> ScanPlan {
         let Some(maintenance) = desktop.maintenance_for(&provider_id, &account_id) else {
             continue;
         };
-        if decide(
+        // The timing decision is executor-agnostic on purpose: whether an
+        // account is due is a scheduling question, and *how* it would run is the
+        // next question, not part of this one. The executor adjustment is shared
+        // with the panel so what is rendered is what would run.
+        if !executor_decision(
             &maintenance,
-            desktop
-                .checkin_schedule
-                .last_settled_at(&provider_id, &account_id),
-            now,
+            decide_api(
+                &maintenance,
+                desktop
+                    .checkin_schedule
+                    .last_settled_at(&provider_id, &account_id),
+                now,
+            ),
+            desktop.has_account_credential(&provider_id, &account_id),
         )
         .should_run()
         {
+            continue;
+        }
+        // An account that is due must also be actionable: an executor is either
+        // a stored credential (the HTTP path) or a configured browser. Neither
+        // means the declaration is a sentence without an ending, and reporting
+        // it due would make the scan refuse it on every tick — counted forever,
+        // explained nowhere. The panel sees `not_applicable` for exactly these,
+        // from the same rule in `schedule_view`.
+        if maintenance.is_browser_checkin_configured()
+            || desktop.has_account_credential(&provider_id, &account_id)
+        {
             plan.due.push(SessionKey::new(&provider_id, &account_id));
+        } else {
+            plan.unactionable += 1;
         }
     }
     plan
@@ -150,6 +221,66 @@ pub async fn run(desktop: &Arc<Desktop>, now: i64) -> ScanOutcome {
         if desktop.checkin.phase(&key).await.is_some() {
             outcome.skipped_busy += 1;
             continue;
+        }
+        let browser_configured = desktop
+            .maintenance_for(&key.provider_id, &key.account_id)
+            .map(|m| m.is_browser_checkin_configured())
+            .unwrap_or(false);
+
+        // The HTTP path first, wherever a credential makes it possible. It costs
+        // no window and no person, and it is the only executor an unattended
+        // scan can rely on; the browser is the fallback for the one case the
+        // panel itself reserves for a human — a challenge it wants solved in a
+        // real page.
+        #[cfg(feature = "newapi")]
+        if desktop.has_account_credential(&key.provider_id, &key.account_id) {
+            match crate::checkin_commands::api_checkin_once(
+                desktop,
+                &key.provider_id,
+                &key.account_id,
+            )
+            .await
+            {
+                Ok(view) if view.phase == "waiting_for_user" => {
+                    // The panel wants a person. Hand the account to the browser
+                    // path when one is configured — it opens the page, holds the
+                    // session and settles itself when the attempt ends. Without
+                    // a browser there is nothing to hand to: the attempt ended
+                    // refused-before-executed, and it is settled here so the
+                    // scan does not retry it on every tick.
+                    if !browser_configured {
+                        outcome.refused += 1;
+                        crate::checkin_commands::settle_api_handoff(
+                            desktop,
+                            &key.provider_id,
+                            &key.account_id,
+                        );
+                        continue;
+                    }
+                }
+                Ok(_) => {
+                    outcome.api_started += 1;
+                    continue;
+                }
+                Err(_) if browser_configured => {
+                    // The HTTP attempt ended in a transport failure. The browser
+                    // path may still be able to act, and if it can, it should:
+                    // the panel being unreachable over one client is not proof
+                    // it is unreachable over all.
+                }
+                Err(e) => {
+                    // Settled inside `api_checkin_once`; counted here so the
+                    // scan's summary says an attempt was made and lost.
+                    outcome.refused += 1;
+                    tracing::debug!(
+                        provider = %key.provider_id,
+                        account = %key.account_id,
+                        error = %e,
+                        "scheduler's HTTP check-in did not complete"
+                    );
+                    continue;
+                }
+            }
         }
         match crate::checkin_commands::launch_attempt(desktop, &key.provider_id, &key.account_id)
             .await
@@ -188,9 +319,11 @@ pub async fn run(desktop: &Arc<Desktop>, now: i64) -> ScanOutcome {
 pub struct ScanOutcome {
     /// Accounts the scan looked at.
     pub considered: usize,
-    /// Accounts that came back [`MaintenanceDecision::Due`].
+    /// Accounts that came back due *and* actionable.
     pub due: usize,
-    /// Of those, attempts actually opened.
+    /// Of those, attempts completed over the panel's own HTTP API.
+    pub api_started: usize,
+    /// Of those, attempts actually opened in a browser.
     pub started: usize,
     /// Accounts skipped because a session is live or waiting for a human.
     pub skipped_busy: usize,
@@ -235,13 +368,25 @@ pub fn decisions_by_kind(
             else {
                 continue;
             };
-            let decision = decide(
-                &maintenance,
-                desktop
-                    .checkin_schedule
-                    .last_settled_at(&provider.id, &account.account_id),
-                now,
-            );
+            let decision = {
+                let timing = decide_api(
+                    &maintenance,
+                    desktop
+                        .checkin_schedule
+                        .last_settled_at(&provider.id, &account.account_id),
+                    now,
+                );
+                // The same rule `scan` applies before launching and
+                // `schedule_view` applies before rendering: due with no executor
+                // is a declaration that cannot be acted on, and saying "due"
+                // would promise a run the scan will refuse — and a fresh account
+                // with a credential is due now, which the panel must say too.
+                executor_decision(
+                    &maintenance,
+                    timing,
+                    desktop.has_account_credential(&provider.id, &account.account_id),
+                )
+            };
             let kind = match decision {
                 MaintenanceDecision::NotApplicable => "not_applicable",
                 MaintenanceDecision::Disabled => "disabled",
@@ -283,6 +428,10 @@ mod tests {
                 "name": "prov",
                 "kind": "openai_compatible",
                 "base_url": "https://example.invalid",
+                // Named explicitly: the document shape defaults `key_ref` to
+                // empty, and the credential tests below need the same reference
+                // `ProviderConfig::new` would have generated.
+                "key_ref": "provider:prov",
                 "accounts": accounts,
             }]
         });
@@ -475,9 +624,18 @@ mod tests {
         // A panel renders these; two reasons sharing a group would send an operator
         // to fix the wrong thing. Each account carries a different declaration so
         // each reason comes from configuration rather than from timing.
+        //
+        // The "unconfigured" account exercises the executor correction: its timing
+        // is due (enabled, interval, settled), but its browser declaration is half
+        // a sentence — a page with no control — and no credential backs the HTTP
+        // path, so due-with-no-executor is reported as `not_applicable` by the
+        // same rule the scan applies before launching.
         let unconfigured = MaintenanceConfig {
             checkin_enabled: true,
-            checkin_interval_secs: Some(3_600),
+            // Short enough that the settlement below puts it due at `now`, which
+            // is the precondition the executor correction answers: due, with half
+            // a browser declaration and no credential.
+            checkin_interval_secs: Some(60),
             checkin_path: Some("/console/personal".into()),
             ..Default::default()
         };
@@ -496,6 +654,7 @@ mod tests {
         ]));
         record_settlement(&desktop, "prov", "nointerval", 0);
         record_settlement(&desktop, "prov", "settled", 0);
+        record_settlement(&desktop, "prov", "unconfigured", 0);
 
         let grouped = decisions_by_kind(&desktop, 1_000);
         assert_eq!(grouped.get("disabled").map(Vec::len), Some(1));
@@ -561,6 +720,138 @@ mod tests {
         assert_eq!(
             second.checkin_schedule.last_settled_at("prov", "kept"),
             Some(10)
+        );
+    }
+
+    // ── the executor adjustment ─────────────────────────────────────────
+
+    use crate::secrets::{CredentialBackend, KeychainSecrets, StoreError};
+    use std::sync::Mutex;
+
+    /// A credential store that lives in memory, so a test can hold a credential
+    /// without writing anything into the machine's real keychain.
+    #[derive(Default)]
+    struct FakeSecrets(Mutex<std::collections::HashMap<String, String>>);
+
+    impl CredentialBackend for FakeSecrets {
+        fn get(&self, key_ref: &str) -> Result<String, StoreError> {
+            self.0
+                .lock()
+                .unwrap()
+                .get(key_ref)
+                .cloned()
+                .ok_or(StoreError::NoEntry)
+        }
+        fn set(&self, key_ref: &str, secret: &str) -> Result<(), StoreError> {
+            self.0
+                .lock()
+                .unwrap()
+                .insert(key_ref.to_string(), secret.to_string());
+            Ok(())
+        }
+        fn delete(&self, key_ref: &str) -> Result<(), StoreError> {
+            self.0.lock().unwrap().remove(key_ref);
+            Ok(())
+        }
+    }
+
+    fn desktop_with_secrets(config: AppConfig) -> (Arc<Desktop>, Arc<KeychainSecrets>, Scratch) {
+        let dir = scratch("secrets");
+        let store = Arc::new(KeychainSecrets::with_backend(Box::new(
+            FakeSecrets::default(),
+        )));
+        (
+            Arc::new(Desktop::new(dir.0.clone(), config, store.clone())),
+            store,
+            dir,
+        )
+    }
+
+    #[test]
+    fn a_fresh_account_with_a_credential_is_due_now() {
+        // "Signed in, so it signs in": the first HTTP run needs no window and no
+        // person, so the browser path's conservatism does not apply when the only
+        // executor is the panel API.
+        let m = MaintenanceConfig {
+            checkin_enabled: true,
+            checkin_interval_secs: Some(86_400),
+            ..Default::default()
+        };
+        assert_eq!(
+            executor_decision(&m, MaintenanceDecision::NeedsFirstObservation, true),
+            MaintenanceDecision::Due { since_last_secs: 0 }
+        );
+        // Without a credential the conservatism stands: a browser-only account
+        // still waits for its first, person-started attempt.
+        assert_eq!(
+            executor_decision(&m, MaintenanceDecision::NeedsFirstObservation, false),
+            MaintenanceDecision::NeedsFirstObservation
+        );
+        // The correction never invents a due answer for a reason that is not
+        // about freshness.
+        assert_eq!(
+            executor_decision(&m, MaintenanceDecision::NoPolicy, true),
+            MaintenanceDecision::NoPolicy,
+            "no interval still means no automatic run, credential or not"
+        );
+        assert_eq!(
+            executor_decision(&m, MaintenanceDecision::Disabled, true),
+            MaintenanceDecision::Disabled
+        );
+        // The not-applicable correction is unchanged and shares the rule.
+        assert_eq!(
+            executor_decision(&m, MaintenanceDecision::Due { since_last_secs: 5 }, false),
+            MaintenanceDecision::NotApplicable
+        );
+        let browser_backed = MaintenanceConfig {
+            checkin_path: Some("/console/personal".into()),
+            checkin_trigger_selector: Some("button".into()),
+            ..m
+        };
+        assert!(executor_decision(
+            &browser_backed,
+            MaintenanceDecision::Due { since_last_secs: 5 },
+            false
+        )
+        .should_run());
+    }
+
+    #[tokio::test]
+    async fn a_signed_in_account_with_no_history_reaches_the_scan_as_due() {
+        // The end-to-end shape of the correction: declare an HTTP-only account,
+        // store a panel credential, and the first scan finds it due — no manual
+        // first attempt required.
+        let (desktop, store, _dir) = desktop_with_secrets(config_with(vec![account(
+            "a",
+            &MaintenanceConfig {
+                checkin_enabled: true,
+                checkin_interval_secs: Some(86_400),
+                ..Default::default()
+            },
+        )]));
+        store.set("provider:prov", "panel-access-token").unwrap();
+
+        let plan = scan(&desktop, 1_000).await;
+        assert_eq!(plan.due.len(), 1, "fresh but signed in: run it now");
+    }
+
+    #[tokio::test]
+    async fn a_fresh_account_without_any_executor_is_not_due() {
+        let (desktop, _store, _dir) = desktop_with_secrets(config_with(vec![account(
+            "a",
+            &MaintenanceConfig {
+                checkin_enabled: true,
+                checkin_interval_secs: Some(86_400),
+                ..Default::default()
+            },
+        )]));
+
+        let plan = scan(&desktop, 1_000).await;
+        assert_eq!(plan.due.len(), 0);
+        assert_eq!(
+            plan.unactionable, 0,
+            "a fresh account is not due rather than due-and-refused, so it is not counted \
+             as unactionable either"
         );
     }
 }

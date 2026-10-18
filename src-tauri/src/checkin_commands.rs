@@ -73,6 +73,86 @@ pub async fn start_checkin(
     launch_attempt(&desktop, &provider_id, &account_id).await
 }
 
+/// Check one account in over the panel's own HTTP API — no browser.
+///
+/// This is the "logged in, so it signs in" path. The stored credential *is* the
+/// login: the adapter authenticates with it, posts the panel's check-in
+/// endpoint, and then observes what actually happened, exactly as the browser
+/// path observes it. The result is the same [`CheckinReport`] pipeline, so the
+/// panel cannot tell which executor ran except by the absence of a held
+/// browser.
+///
+/// The executor is not chosen here when the credential alone cannot act: an
+/// instance that requires a Turnstile challenge reports
+/// [`CheckinPhase::NeedsUserAction`], and that is the browser path's cue — the
+/// challenge exists to be solved by a human in a real page, which is what
+/// [`start_checkin`] opens. A scheduler hand-off keeps this order: HTTP first,
+/// browser only when the panel itself demands a person.
+///
+/// Settlement follows the browser path's rule — an attempt that *ended* is
+/// recorded, whatever the answer — so a failing check-in is retried at the next
+/// interval rather than on every scan tick.
+#[cfg(feature = "newapi")]
+#[tauri::command]
+pub async fn api_checkin(
+    desktop: State<'_, Arc<Desktop>>,
+    provider_id: String,
+    account_id: String,
+) -> Cmd<CheckinView> {
+    api_checkin_once(&desktop, &provider_id, &account_id).await
+}
+
+/// Run one HTTP check-in for one account, and record what it did.
+///
+/// Shared by the command and the scheduler, for the same reason
+/// [`launch_attempt`] is: the manual path and the unattended path must not be
+/// two implementations that drift.
+///
+/// Settles the schedule for every outcome that is not a hand-off to the browser
+/// path, including a transport failure — an attempt that ended is history,
+/// whatever it ended as, and not settling a failure would retry it every tick.
+#[cfg(feature = "newapi")]
+pub(crate) async fn api_checkin_once(
+    desktop: &Arc<Desktop>,
+    provider_id: &str,
+    account_id: &str,
+) -> Result<CheckinView, String> {
+    let (adapter, _rate) = desktop.panel_adapter(provider_id, account_id)?;
+    let account = zroutery_core::account::AccountId(account_id.to_string());
+    let report = match adapter.checkin_observed(&account).await {
+        Ok(report) => report,
+        Err(e) => {
+            // The attempt ended without a report the observation could build.
+            // Settling here is what keeps a network-broken panel from being
+            // retried on every scan tick; the browser path records a settlement
+            // for a failed attempt for the same reason.
+            crate::checkin::scheduler::record_settlement(
+                desktop,
+                provider_id,
+                account_id,
+                chrono::Utc::now().timestamp(),
+            );
+            return Err(e.to_string());
+        }
+    };
+    let waiting_for_user = report.phase.is_waiting_for_user();
+    let view = view_from_report(provider_id, account_id, &report);
+    desktop.record_checkin_view(view.clone());
+    if !waiting_for_user {
+        // Terminal, and terminal-adjacent (an observation that never resolved is
+        // still an attempt that was made): settled, so the interval runs from
+        // this attempt. A pause is excluded — nothing ended; the browser hand-off
+        // records its own settlement when it finishes.
+        crate::checkin::scheduler::record_settlement(
+            desktop,
+            provider_id,
+            account_id,
+            chrono::Utc::now().timestamp(),
+        );
+    }
+    Ok(view)
+}
+
 /// Open a browser for one account and drive one attempt.
 ///
 /// Shared by the command and the scheduler, and the reason it is a plain function
@@ -190,6 +270,24 @@ pub(crate) async fn launch_attempt(
         .checkin_view(provider_id, account_id)
         .await
         .ok_or_else(|| format!("no account {account_id} on provider {provider_id}"))
+}
+
+/// Settle the schedule for an HTTP attempt that ended before execution.
+///
+/// The one outcome [`api_checkin_once`] deliberately does not settle: the panel
+/// demanded a person, no browser is configured to give it one, and the caller
+/// (the scheduler) records the refusal. Settling here rather than in the caller
+/// keeps the rule in one place next to the other settlement decisions — an
+/// attempt that ended, even refused, is history, and not recording it would let
+/// the scan retry the same refusal on every tick.
+#[cfg(feature = "newapi")]
+pub(crate) fn settle_api_handoff(desktop: &Arc<Desktop>, provider_id: &str, account_id: &str) {
+    crate::checkin::scheduler::record_settlement(
+        desktop,
+        provider_id,
+        account_id,
+        chrono::Utc::now().timestamp(),
+    );
 }
 
 /// Continue a check-in that is waiting on a human-verification challenge.
@@ -643,15 +741,18 @@ async fn observe(
     account_id: &zroutery_core::account::AccountId,
     started_at: i64,
 ) -> Option<CheckinPhase> {
-    let Some((adapter, quota_per_unit)) = desktop.panel_adapter(&key.provider_id, &key.account_id)
-    else {
-        tracing::debug!(
-            provider = %key.provider_id,
-            account = %key.account_id,
-            "no stored credential for this account; the browser record stands unconfirmed"
-        );
-        return None;
-    };
+    let (adapter, quota_per_unit) = desktop
+        .panel_adapter(&key.provider_id, &key.account_id)
+        .map_err(|e| {
+            tracing::debug!(
+                provider = %key.provider_id,
+                account = %key.account_id,
+                reason = %e,
+                "no usable panel credential; the browser record stands unconfirmed"
+            );
+            e
+        })
+        .ok()?;
     let until = chrono::Utc::now().timestamp();
     let observation = match adapter
         .observe_checkin(account_id, None, None, started_at, until)

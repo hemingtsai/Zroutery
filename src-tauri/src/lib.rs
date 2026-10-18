@@ -53,6 +53,12 @@ pub fn run() {
             commands::get_ml_status,
             #[cfg(feature = "account")]
             commands::reconcile_accounts,
+            #[cfg(feature = "account")]
+            commands::set_account_key,
+            #[cfg(feature = "account")]
+            commands::clear_account_key,
+            #[cfg(feature = "account")]
+            commands::remove_account,
             #[cfg(feature = "ml")]
             commands::get_ml_shadow,
             #[cfg(feature = "ml")]
@@ -88,6 +94,8 @@ pub fn run() {
             takeover_commands::takeover_release,
             #[cfg(feature = "account-maint")]
             checkin_commands::start_checkin,
+            #[cfg(all(feature = "account-maint", feature = "newapi"))]
+            checkin_commands::api_checkin,
             #[cfg(feature = "account-maint")]
             checkin_commands::resume_checkin,
             #[cfg(feature = "account-maint")]
