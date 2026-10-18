@@ -1,4 +1,4 @@
-//! Balances, fetched per provider and broken down per account only where the total hides something.
+//! Balances, fetched per provider and broken down per declared account.
 
 use std::collections::BTreeMap;
 
@@ -88,13 +88,15 @@ impl Desktop {
         let store = self.core.accounts();
         let mut views = Vec::new();
         for provider in &self.core.config().providers {
-            // **Only where the provider-level figure is not the whole truth.** With
-            // one account the two levels say the same thing, and showing both is
-            // noise; with several, the provider-level number is a total that hides
-            // which account is empty and which is suspended.
-            if provider.accounts.len() < 2 {
-                continue;
-            }
+            // Every declared account of an enabled provider is emitted, including
+            // the single-account case. The old rule — views only from two accounts
+            // up, on the grounds that one account's provider-level figure is the
+            // whole truth — hid the only reading a single-account operator has:
+            // the probe runs, the store fills, and no panel anywhere shows it,
+            // because the provider-level balance is a relay-endpoint figure that
+            // most deployments do not publish. Whether one account's row is noise
+            // is a layout question for the panel that renders these, not a reason
+            // for the data layer to drop it.
             for declared in &provider.accounts {
                 let Some(runtime) = store.get(
                     &provider.id,

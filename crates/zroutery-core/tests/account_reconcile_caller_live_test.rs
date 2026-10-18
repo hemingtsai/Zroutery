@@ -77,10 +77,12 @@ async fn status() -> Json<Value> {
 }
 
 async fn self_snapshot(headers: HeaderMap) -> Response {
+    // The dashboard credential rides verbatim in the Authorization header —
+    // the same rule a real panel's auth middleware applies — so the token the
+    // adapter presents is compared as-is, with no `Bearer ` prefix to strip.
     let presented = headers
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "))
         .unwrap_or_default()
         .to_string();
 

@@ -2115,6 +2115,73 @@ input::placeholder {
   }
 }
 
+/* --------------------------------------------------------------- accounts
+   One declared account inside the provider drawer: an identity line with its
+   credential status, then the declaration's own fields. */
+.account-decl {
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.list .account-decl:first-child {
+  border-top: none;
+  padding-top: 0;
+}
+
+.account-decl .row-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.account-decl .row-title {
+  font-weight: 500;
+  font-size: 15px;
+}
+
+.account-decl .row-main .field-actions {
+  margin-left: auto;
+  margin-top: 0;
+}
+
+/* One account's runtime row on the Accounts page. Same identity-line shape as
+   the declaration, plus the design system's control height on its buttons: the
+   row was drawer-styled before the page existed and its buttons never measured,
+   and a page-level action that is visibly shorter than every other page-level
+   action reads as a different kind of thing. */
+.account-maint {
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.list .account-maint:first-child {
+  border-top: none;
+  padding-top: 0;
+}
+
+.account-maint .row-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.account-maint .row-title {
+  font-weight: 500;
+  font-size: 15px;
+}
+
+.account-maint .controls button {
+  height: var(--control-h);
+}
+
 /* ---------------------------------------------------------------- confirm
    The modal question for irreversible actions. Shares the drawer's veil;
    sits one layer above it so it can ask about things inside a drawer. */
@@ -2130,7 +2197,23 @@ input::placeholder {
   border: 1px solid var(--border-primary, var(--line));
   border-radius: 0;
   box-shadow: var(--shadow-layer);
-  animation: drawer-in var(--t-drawer) var(--ease);
+  animation: confirm-in var(--t-drawer) var(--ease);
+}
+
+/* Own keyframes, not drawer-in: a keyframe `transform` replaces the element's
+   whole transform, so reusing the drawer's slide would drop the centering
+   translate during the animation — the dialog appeared offset down-right and
+   snapped to centre the moment the animation ended. Every frame below carries
+   the same centering translate, only the slide offset changes. */
+@keyframes confirm-in {
+  from {
+    transform: translate(-50%, -50%) translateX(16px);
+    opacity: 0.5;
+  }
+  to {
+    transform: translate(-50%, -50%);
+    opacity: 1;
+  }
 }
 
 .confirm-title {

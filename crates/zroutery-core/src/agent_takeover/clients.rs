@@ -1,4 +1,4 @@
-//! The client adapters: where each one keeps its config, and the two shapes the OpenCode adapter refuses to rewrite.
+//! The client adapters: where each one keeps its config, and the shape the OpenCode adapter refuses to rewrite.
 
 use super::fs::{
     apply_patch_to_disk, config_dir_override, home_dir, read_snapshot, release_to_disk,
@@ -407,32 +407,6 @@ impl OpenCodeAdapter {
         Ok(())
     }
 
-    /// Refuse a config whose *shape* this adapter does not manage.
-    ///
-    /// Runs after parsing, because deciding it requires the document.
-    ///
-    /// A v2-shaped config renames the top-level key from `provider` to
-    /// `providers` and the nested keys from `npm`/`options` to
-    /// `package`/`settings`. The field paths this adapter manages do not exist
-    /// there, so an adoption would create a second, ignored block and report
-    /// success. A file carrying *both* keys is refused for the same reason: it is
-    /// mid-migration and the file itself cannot say which key the running
-    /// client reads.
-    fn refuse_after_parse(raw: &serde_json::Value) -> Result<(), String> {
-        if raw.get("providers").is_some() {
-            return Err(
-                "refusing to take over OpenCode: this config carries the v2 provider key \
-                 (`providers`/`package`/`settings`), which this adapter does not manage. \
-                 Writing the v1 `provider` block into it would be ignored by the client while \
-                 Zroutery reported the agent as taken over. A config holding *both* keys is \
-                 refused for the same reason: it is a file mid-migration, and which one the \
-                 running client reads is not something this file can say."
-                    .into(),
-            );
-        }
-        Ok(())
-    }
-
     /// Every config path the client may read, in the order it resolves them.
     ///
     /// Reported so a UI can show the user *where the value that actually wins
@@ -569,9 +543,7 @@ impl AgentAdapter for OpenCodeAdapter {
     fn read_config(&self) -> Result<AgentConfigSnapshot, String> {
         let path = self.config_path()?;
         Self::refuse_before_parse(&path)?;
-        let snapshot = read_snapshot(AgentType::OpenCode, path, ConfigFormat::Json)?;
-        Self::refuse_after_parse(&snapshot.raw)?;
-        Ok(snapshot)
+        read_snapshot(AgentType::OpenCode, path, ConfigFormat::Json)
     }
 
     fn apply_patch(

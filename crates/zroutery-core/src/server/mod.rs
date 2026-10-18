@@ -47,9 +47,21 @@ impl ServerHandle {
     pub async fn start(state: Arc<AppState>) -> Result<ServerHandle> {
         let cfg = state.config();
         let addr = format!("{}:{}", cfg.server.host, cfg.server.port);
-        let listener = TcpListener::bind(&addr)
-            .await
-            .map_err(|e| Error::internal(format!("cannot bind {addr}: {e}")))?;
+        let listener = TcpListener::bind(&addr).await.map_err(|e| {
+            // The raw OS string for a taken port is a localised paragraph the
+            // operator cannot act on ("通常每个套接字地址... os error 10048"). Name
+            // the condition instead, and keep the code for diagnosis; the
+            // desktop layer adds the "another instance may be running" hint on
+            // top of this wording.
+            let reason = match e.kind() {
+                std::io::ErrorKind::AddrInUse => match e.raw_os_error() {
+                    Some(code) => format!("the address is already in use (os error {code})"),
+                    None => "the address is already in use".to_string(),
+                },
+                _ => e.to_string(),
+            };
+            Error::internal(format!("cannot bind {addr}: {reason}"))
+        })?;
         let addr = listener
             .local_addr()
             .map_err(|e| Error::internal(format!("cannot read local addr: {e}")))?;

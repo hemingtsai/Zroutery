@@ -21,7 +21,7 @@
 //! |---|---|
 //! | [`ownership`] | the ownership model and the durable store — what is managed, what it replaced, how that is recorded, and how it is restored |
 //! | [`status`] | [`TakeoverStatus`], the nine-state surface machine, and the report a caller must supply before `active` may be claimed |
-//! | [`clients`] | the adapters: where each client keeps its config, and the two shapes the OpenCode adapter refuses to rewrite |
+//! | [`clients`] | the adapters: where each client keeps its config, and the shape the OpenCode adapter refuses to rewrite |
 //! | [`gateway`] | [`takeover_fields`] — the field set each client needs, which is the only thing that may be written |
 //! | [`fs`] | atomic writes, permission preservation, and the nested-path walk that makes a dotted manifest path real |
 //! | [`toml`] | a small TOML reader and writer, scoped to what Codex's `config.toml` contains |

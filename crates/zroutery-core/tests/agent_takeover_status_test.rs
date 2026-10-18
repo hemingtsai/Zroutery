@@ -254,7 +254,7 @@ fn store_for(sandbox: &Sandbox, label: &str) -> TakeoverStore {
 
 /// Run a real takeover: plan, write, confirm, record.
 fn take_over(store: &TakeoverStore, adapter: &SandboxAdapter, target: &GatewayTarget) {
-    let fields = takeover_fields(AgentType::Claude, target).expect("field set");
+    let fields = takeover_fields(AgentType::Claude, target, None).expect("field set");
     let paths: Vec<String> = fields.iter().map(|f| f.path.clone()).collect();
     let managed: HashMap<String, serde_json::Value> = fields
         .iter()

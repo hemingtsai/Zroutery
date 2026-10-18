@@ -421,16 +421,25 @@ fn classifier_candidates_are_validated_against_the_registry() {
     let mut cfg = sample();
     cfg.classifier.enabled = true;
 
-    // A candidate naming a model that does not exist is an error.
+    // A candidate naming a model that does not exist is reported — as a warning,
+    // not an error: the router skips it at routing time, and an error here once
+    // blocked every save a panel attempted until the stale entry was hand-fixed.
     cfg.classifier.candidates.push(ClassifierCandidate {
         model: "nope-missing".into(),
         priority: 10,
         enabled: true,
     });
-    assert!(cfg
-        .validate()
+    let issues = cfg.validate();
+    assert!(issues
         .iter()
         .any(|i| i.code == "classifier.candidate_unknown"));
+    assert!(
+        issues
+            .iter()
+            .find(|i| i.code == "classifier.candidate_unknown")
+            .is_some_and(|i| i.severity == IssueSeverity::Warning),
+        "a dangling candidate warns instead of blocking every save"
+    );
 
     // A valid candidate on an enabled model is fine...
     cfg.classifier.candidates[0].model = "deepseek-deepseek-chat".into();

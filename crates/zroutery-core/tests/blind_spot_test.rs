@@ -1,3 +1,4 @@
+#![cfg(feature = "ml")]
 //! Is a provider added to the configuration actually reachable?
 //!
 //! # The defect this pins

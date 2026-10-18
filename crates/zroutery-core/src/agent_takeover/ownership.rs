@@ -1368,17 +1368,19 @@ impl TakeoverStore {
         };
 
         let fields = match target {
-            Some(target) => match takeover_fields(adapter.agent_type(), target) {
-                Ok(fields) => fields,
-                // The client is fine; Zroutery is not ready to serve it. That is
-                // `available`, not an error — the user may be mid-setup.
-                Err(reason) => {
-                    return TakeoverStatus::Available {
-                        config_path: path_text,
-                        blocker: reason,
+            Some(target) => {
+                match takeover_fields(adapter.agent_type(), target, Some(&snapshot.raw)) {
+                    Ok(fields) => fields,
+                    // The client is fine; Zroutery is not ready to serve it. That is
+                    // `available`, not an error — the user may be mid-setup.
+                    Err(reason) => {
+                        return TakeoverStatus::Available {
+                            config_path: path_text,
+                            blocker: reason,
+                        }
                     }
                 }
-            },
+            }
             None => {
                 return TakeoverStatus::Available {
                     config_path: path_text,

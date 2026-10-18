@@ -337,24 +337,57 @@ pub(super) fn release_to_disk(
     write_config_atomic(&snapshot.config_path, text.as_bytes())
 }
 
-/// Remove a nested JSON value by dotted path, leaving anything else untouched.
+/// Remove a nested JSON value by dotted path, pruning the tables the removal
+/// leaves empty.
+///
+/// Pruning is the part that makes absence honest. A field Zroutery introduced
+/// sits inside tables it usually also introduced — `providers.zroutery
+/// .settings.apiKey` implies three of them. Removing only the leaf would leave
+/// an empty husk behind, and a husked provider entry is not "nothing": in
+/// OpenCode's merge, a native entry — any native entry — shadows the legacy
+/// block for the same id, so the husk would keep the released client pointed
+/// at a broken half-definition instead of handing effect back to what was
+/// there before. Empty tables and absent tables are equivalent to every
+/// config reader involved, so pruning cannot lose a setting; it can only
+/// remove scaffolding Zroutery itself stood up.
 pub(super) fn remove_nested(root: &mut serde_json::Value, path: &str) {
     let parts: Vec<&str> = path.split('.').collect();
-    if parts.is_empty() {
+    if parts.is_empty() || parts.iter().any(|part| part.is_empty()) {
         return;
     }
+    remove_and_prune(root, &parts);
+}
 
-    let mut current = root;
-    for part in &parts[..parts.len() - 1] {
-        match current.get_mut(*part) {
-            Some(next) if next.is_object() => current = next,
-            _ => return,
-        }
+/// Remove `parts` from `current`; return whether `current`'s entry for the
+/// next level up is now gone, so the caller can prune it in turn.
+fn remove_and_prune(current: &mut serde_json::Value, parts: &[&str]) -> bool {
+    let Some((head, rest)) = parts.split_first() else {
+        return false;
+    };
+    let Some(object) = current.as_object_mut() else {
+        return false;
+    };
+
+    if rest.is_empty() {
+        object.remove(*head);
+        return true;
     }
 
-    if let Some(obj) = current.as_object_mut() {
-        obj.remove(*parts.last().unwrap());
+    // The child must be a table to descend into; anything else means the path
+    // does not resolve, and there is nothing to remove or prune.
+    let descends = match object.get_mut(*head) {
+        Some(child) if child.is_object() => remove_and_prune(child, rest),
+        _ => return false,
+    };
+    if descends
+        && object
+            .get(*head)
+            .is_some_and(|value| value.as_object().is_some_and(serde_json::Map::is_empty))
+    {
+        object.remove(*head);
+        return true;
     }
+    false
 }
 
 /// Get a nested JSON value by dotted path (e.g. "model.temperature").

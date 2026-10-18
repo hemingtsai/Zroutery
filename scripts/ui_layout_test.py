@@ -183,6 +183,34 @@ SNAPSHOT = {
                     "system_as_developer": False,
                     "send_reasoning_effort": False,
                 },
+                "accounts": [
+                    {
+                        "account_id": "main",
+                        "enabled": True,
+                        "key_ref": "provider:deepseek:account:main",
+                        "maintenance": {
+                            "checkin_enabled": True,
+                            "checkin_interval_secs": 86400,
+                            "checkin_path": "/console/personal",
+                            "checkin_trigger_selector": "button.checkin",
+                            "login_path": None,
+                            "browser_executable": "",
+                        },
+                    },
+                    {
+                        "account_id": "spare",
+                        "enabled": True,
+                        "key_ref": "",
+                        "maintenance": {
+                            "checkin_enabled": False,
+                            "checkin_interval_secs": None,
+                            "checkin_path": None,
+                            "checkin_trigger_selector": None,
+                            "login_path": None,
+                            "browser_executable": "",
+                        },
+                    },
+                ],
             },
             {
                 "id": "anthropic",
@@ -284,6 +312,63 @@ SNAPSHOT = {
         "exposed": False,
     },
     "keys": {"deepseek": True, "anthropic": False},
+    # The accounts page is declared coverage, so the fixture has to carry what
+    # the page reads: the availability flags, one check-in view per declared
+    # account, and one probed balance. `spare` stays unprobed on purpose, so the
+    # page has to render both "we asked and it answered" and "nobody asked yet".
+    "account_available": True,
+    "account_maintenance_available": True,
+    "api_checkin_available": True,
+    "checkin": [
+        {
+            "provider_id": "deepseek",
+            "account_id": "main",
+            "phase": "succeeded",
+            "browser_held": False,
+            "awaiting_user": False,
+            "failure": None,
+            "reward_amount": 25.0,
+            "reward_unit": "USD",
+            "reward_source": "provider_response",
+            "last_completed_at": 1_700_000_000,
+            "schedule": {
+                "decision": "not_due",
+                "next_due_at": None,
+                "last_settled_at": 1_700_000_000,
+            },
+        },
+        {
+            "provider_id": "deepseek",
+            "account_id": "spare",
+            "phase": "idle",
+            "browser_held": False,
+            "awaiting_user": False,
+            "failure": None,
+            "reward_amount": None,
+            "reward_unit": None,
+            "reward_source": None,
+            "last_completed_at": None,
+            "schedule": {
+                "decision": "not_applicable",
+                "next_due_at": None,
+                "last_settled_at": None,
+            },
+        },
+    ],
+    "account_balances": [
+        {
+            "provider_id": "deepseek",
+            "account_id": "main",
+            "status": "active",
+            "remaining": 12.5,
+            "total": 100.0,
+            "used": 87.5,
+            "unit": "USD",
+            "last_sync": 1_700_000_000,
+            "last_failure": None,
+        }
+    ],
+    "account_events": [],
     "health": [
         {
             "model_id": "deepseek-deepseek-chat",
@@ -402,10 +487,67 @@ HARNESS = """
 <script>
   // Stub the Tauri bridge so the real dashboard renders in a plain browser.
   const SNAPSHOT = __SNAPSHOT__;
+  // One takeover reading per agent, covering the states the page renders from
+  // (ready carries the proposal table, active the release path), plus the two
+  // inert ones (not_detected, unsupported) that must not render controls.
+  const TAKEOVER = [
+    {
+      agent: "claude",
+      status: {
+        state: "ready",
+        config_path: "C:/Users/dev/.claude/settings.json",
+        proposal: {
+          managed_fields: ["env.ANTHROPIC_BASE_URL", "env.ANTHROPIC_AUTH_TOKEN"],
+          changes: [
+            {
+              field_path: "env.ANTHROPIC_BASE_URL",
+              current: null,
+              managed: "http://127.0.0.1:8787",
+            },
+            {
+              field_path: "env.ANTHROPIC_AUTH_TOKEN",
+              current: "old-token",
+              managed: "gw-token",
+            },
+          ],
+          fingerprint: "abc123",
+        },
+      },
+    },
+    {
+      agent: "codex",
+      status: {
+        state: "active",
+        config_path: "C:/Users/dev/.codex/config.toml",
+        generation: 1,
+      },
+    },
+    {
+      agent: "opencode",
+      status: {
+        state: "not_detected",
+        searched: ["C:/Users/dev/.config/opencode/opencode.json"],
+        reason: "no opencode config was found",
+      },
+    },
+    {
+      agent: "gemini",
+      status: {
+        state: "unsupported",
+        reason: "this build has no takeover adapter for gemini",
+      },
+    },
+  ];
   window.__TAURI_INTERNALS__ = {
     transformCallback: (cb) => cb,
     invoke: (cmd) =>
-      Promise.resolve(cmd === "fetch_provider_models" ? ["mock-a", "mock-b"] : SNAPSHOT),
+      Promise.resolve(
+        cmd === "fetch_provider_models"
+          ? ["mock-a", "mock-b"]
+          : cmd === "takeover_status"
+            ? TAKEOVER
+            : SNAPSHOT,
+      ),
   };
 
   // A control is anything the design system sizes as a control. The two that a
@@ -534,10 +676,31 @@ SURFACES = (
         anchor=".list-row",
     ),
     Surface(
+        "accounts",
+        "Accounts page",
+        # Two buttons per declared account row — the direct check-in and the
+        # browser one — inside each row's `.controls`. The probe button lives in
+        # a section head, which no container row holds, so the page's promise is
+        # per-row: two actions times two declared accounts.
+        {"action": 4},
+        nav=3,
+        anchor=".account-maint",
+    ),
+    Surface(
+        "takeover",
+        "Takeover page",
+        # Four agent rows; exactly two render actions in the fixture — the ready
+        # row's adopt and the active row's release. The proposal and conflict
+        # tables are content, not controls, and are deliberately not counted.
+        {"action": 2},
+        nav=4,
+        anchor=".list-row",
+    ),
+    Surface(
         "settings",
         "Settings page",
         {"combobox": 2, "segment": 3, "native": 4, "action": 1},
-        nav=5,
+        nav=7,
         anchor=".setting-row",
         tab=("general", "gateway", "budgets"),
     ),
@@ -545,7 +708,7 @@ SURFACES = (
         "routing-default",
         "Routing model-routes drawer",
         {"combobox": 2, "native": 1},
-        nav=3,
+        nav=5,
         anchor=".flow-row",
         scope=".drawer",
         drawer=0,
@@ -555,7 +718,7 @@ SURFACES = (
         "routing-auto",
         "Routing auto-review drawer",
         {"combobox": 2, "native": 1},
-        nav=3,
+        nav=5,
         anchor=".flow-row",
         scope=".drawer",
         drawer=0,

@@ -70,9 +70,10 @@ pub const OPENCODE_CONFIG_ENV: &str = "OPENCODE_CONFIG";
 /// would be showing the user Zroutery's internals and asking them to pick the
 /// subset that happens to work.
 ///
-/// So each agent's set is a function of one [`GatewayTarget`], and
-/// [`TakeoverStore::plan_adopt`] can still refuse if a caller asks for a field
-/// this function does not produce.
+/// So each agent's set is a function of one [`GatewayTarget`] — and, for the
+/// clients with more than one config schema on the street, of the document
+/// being taken over. [`TakeoverStore::plan_adopt`] still refuses a caller that
+/// asks for a field this function does not produce.
 ///
 /// # What it never manages
 ///
@@ -90,6 +91,7 @@ pub const OPENCODE_CONFIG_ENV: &str = "OPENCODE_CONFIG";
 pub fn takeover_fields(
     agent: AgentType,
     target: &GatewayTarget,
+    existing: Option<&serde_json::Value>,
 ) -> Result<Vec<ManagedField>, String> {
     if target.base_url.trim().is_empty() {
         return Err("cannot take over: the local gateway URL is empty".into());
@@ -240,27 +242,45 @@ pub fn takeover_fields(
 
         AgentType::OpenCode => {
             let id = GATEWAY_PROVIDER_ID;
+            // Which block is authoritative is decided by the file, by
+            // OpenCode's own merge rule: the legacy `provider` entries and the
+            // native `providers` entries merge into one table, and for the
+            // same id the native (v2) one wins. So a file carrying the v2 key
+            // is managed through `providers.<id>` — writing the deprecated v1
+            // block there would be shadowed the moment both exist — while a
+            // file with only the legacy key keeps getting the v1 block. A
+            // missing document (a takeover that creates the file) gets the
+            // schema's current shape.
+            let v2 = match existing {
+                None => true,
+                Some(doc) => doc.get("providers").is_some(),
+            };
+            let (prefix, npm_key, options_key) = if v2 {
+                (format!("providers.{id}"), "package", "settings")
+            } else {
+                (format!("provider.{id}"), "npm", "options")
+            };
             let mut out = vec![
                 ManagedField {
-                    path: format!("provider.{id}.npm"),
+                    path: format!("{prefix}.{npm_key}"),
                     value: serde_json::json!("@ai-sdk/openai-compatible"),
                 },
                 ManagedField {
-                    path: format!("provider.{id}.name"),
+                    path: format!("{prefix}.name"),
                     value: serde_json::json!("Zroutery"),
                 },
                 ManagedField {
-                    path: format!("provider.{id}.options.baseURL"),
+                    path: format!("{prefix}.{options_key}.baseURL"),
                     value: serde_json::json!(target.base_url),
                 },
                 ManagedField {
-                    path: format!("provider.{id}.options.apiKey"),
+                    path: format!("{prefix}.{options_key}.apiKey"),
                     value: serde_json::json!(target.token),
                 },
             ];
             for class in &target.classes {
                 out.push(ManagedField {
-                    path: format!("provider.{id}.models.{}.name", class.model),
+                    path: format!("{prefix}.models.{}.name", class.model),
                     value: serde_json::json!(class.display_name),
                 });
             }

@@ -14,6 +14,7 @@ pub mod platform;
 pub mod secrets;
 pub mod state;
 pub mod store;
+pub mod takeover_commands;
 mod tray;
 
 use std::sync::Arc;
@@ -52,6 +53,12 @@ pub fn run() {
             commands::get_ml_status,
             #[cfg(feature = "account")]
             commands::reconcile_accounts,
+            #[cfg(feature = "account")]
+            commands::set_account_key,
+            #[cfg(feature = "account")]
+            commands::clear_account_key,
+            #[cfg(feature = "account")]
+            commands::remove_account,
             #[cfg(feature = "ml")]
             commands::get_ml_shadow,
             #[cfg(feature = "ml")]
@@ -82,8 +89,13 @@ pub fn run() {
             commands::quit_app,
             commands::ccswitch_preview,
             commands::ccswitch_import,
+            takeover_commands::takeover_status,
+            takeover_commands::takeover_adopt,
+            takeover_commands::takeover_release,
             #[cfg(feature = "account-maint")]
             checkin_commands::start_checkin,
+            #[cfg(all(feature = "account-maint", feature = "newapi"))]
+            checkin_commands::api_checkin,
             #[cfg(feature = "account-maint")]
             checkin_commands::resume_checkin,
             #[cfg(feature = "account-maint")]

@@ -93,6 +93,13 @@ pub struct Snapshot {
     /// Same reasoning as [`Self::ml_available`]: a command that was never
     /// registered and a command that failed are the same event to the webview.
     pub account_available: bool,
+    /// Whether this build can check an account in over the panel's own HTTP API.
+    ///
+    /// Needs both `account-maint` (the report views) and `newapi` (the panel
+    /// adapter), so it is a different flag from either of the two above: a build
+    /// can hold a browser but no adapter, and reading one flag for the other
+    /// would offer the HTTP check-in to a build whose command does not exist.
+    pub api_checkin_available: bool,
     /// What each declared account is doing, newest observation last.
     #[cfg(feature = "account-maint")]
     pub checkin: Vec<CheckinView>,
@@ -104,7 +111,7 @@ pub struct Snapshot {
     /// and one recovered out of log text must not read the same.
     #[cfg(feature = "account-maint")]
     pub account_events: Vec<AccountEventView>,
-    /// Per-account balances, for providers that declare more than one account.
+    /// Per-account balances, for every declared account of an enabled provider.
     #[cfg(feature = "newapi")]
     pub account_balances: Vec<AccountBalanceView>,
 }

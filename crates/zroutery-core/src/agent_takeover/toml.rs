@@ -8,179 +8,93 @@
 // Codex reads TOML, and this crate has no TOML dependency available to this
 // module, so the subset below covers the shapes a Codex config uses: comments,
 // `[table]` headers, dotted or quoted keys, basic and literal strings,
-// integers, floats, booleans and single-line arrays of those scalars. Anything
-// else (arrays of tables, inline tables, multi-line strings, dates) is rejected
-// with an explicit error instead of being silently misread, so `read_config`
-// fails loudly rather than letting the adapter write a file the client cannot
-// parse.
+// integers, floats, booleans, and arrays of those scalars — single-line or
+// spanning lines, because `args = [` with one item per line is how a real
+// config lists a command's arguments, and rejecting it would refuse half the
+// configs Codex itself accepts. Anything else (arrays of tables, inline
+// tables, multi-line strings, dates) is rejected with an explicit error
+// instead of being silently misread, so `read_config` fails loudly rather than
+// letting the adapter write a file the client cannot parse.
+//
+// The reader is cursor-based rather than line-based for exactly that reason:
+// whether an array is finished is a property of the value, not of the line it
+// started on.
 
 /// Parse the supported TOML subset into a JSON value.
 pub(super) fn parse_toml_subset(text: &str) -> Result<serde_json::Value, String> {
     let mut root = serde_json::Value::Object(serde_json::Map::new());
+    let mut parser = TomlValueParser {
+        input: text,
+        pos: 0,
+        line: 1,
+    };
     let mut table_path: Vec<String> = Vec::new();
 
-    for (index, raw_line) in text.lines().enumerate() {
-        let line_number = index + 1;
-        let line = strip_toml_comment(raw_line).trim();
-        if line.is_empty() {
-            continue;
+    loop {
+        parser.skip_trivia();
+        if parser.pos >= parser.input.len() {
+            break;
         }
 
-        if line.starts_with("[[") {
-            return Err(format!(
-                "line {line_number}: arrays of tables are not supported"
-            ));
-        }
-
-        if let Some(inner) = line.strip_prefix('[') {
-            let inner = inner
-                .strip_suffix(']')
-                .ok_or_else(|| format!("line {line_number}: unterminated table header"))?
-                .trim();
-            let path = parse_toml_key(inner, line_number)?;
+        // A `[table]` header, or the array-of-tables form this subset refuses.
+        if parser.peek() == Some('[') {
+            let line_number = parser.line;
+            parser.bump();
+            if parser.peek() == Some('[') {
+                return Err(format!(
+                    "line {line_number}: arrays of tables are not supported"
+                ));
+            }
+            parser.skip_spaces();
+            let path = parser.parse_key_path()?;
+            parser.skip_spaces();
+            match parser.bump() {
+                Some(']') => {}
+                other => {
+                    return Err(format!(
+                        "line {line_number}: unterminated table header, found {other:?}"
+                    ))
+                }
+            }
             toml_table_mut(&mut root, &path, line_number)?;
             table_path = path;
             continue;
         }
 
-        let split = find_unquoted(line, '=')
-            .ok_or_else(|| format!("line {line_number}: expected `key = value`"))?;
-        let mut key = parse_toml_key(&line[..split], line_number)?;
-        let value = parse_toml_value(line[split + 1..].trim(), line_number)?;
+        // `key = value`, where the value may be an array spanning lines.
+        let line_number = parser.line;
+        let mut key = parser.parse_key_path()?;
+        parser.skip_spaces();
+        match parser.bump() {
+            Some('=') => {}
+            other => return Err(format!("line {line_number}: expected `=`, found {other:?}")),
+        }
+        let value = parser.parse_value(line_number)?;
+        // The line ends the value: only trailing spaces, an optional comment,
+        // then the newline. Anything else on the line is not a document this
+        // subset represents, and reading it as two pairs would invent config.
+        parser.skip_spaces();
+        match parser.peek() {
+            None | Some('\n') | Some('\r') | Some('#') => {}
+            Some(other) => {
+                return Err(format!(
+                    "line {}: unexpected trailing text `{}`",
+                    parser.line, other
+                ))
+            }
+        }
 
         let mut path = table_path.clone();
         path.append(&mut key);
-        insert_toml_value(&mut root, &path, value, line_number)?;
+        insert_toml_value(&mut root, &path, value, parser.line)?;
     }
 
     Ok(root)
 }
 
-/// Remove a `#` comment, ignoring `#` inside quoted strings.
-fn strip_toml_comment(line: &str) -> &str {
-    let mut in_basic = false;
-    let mut in_literal = false;
-    let mut escaped = false;
-
-    for (index, ch) in line.char_indices() {
-        if in_basic {
-            if escaped {
-                escaped = false;
-            } else if ch == '\\' {
-                escaped = true;
-            } else if ch == '"' {
-                in_basic = false;
-            }
-        } else if in_literal {
-            if ch == '\'' {
-                in_literal = false;
-            }
-        } else if ch == '"' {
-            in_basic = true;
-        } else if ch == '\'' {
-            in_literal = true;
-        } else if ch == '#' {
-            return &line[..index];
-        }
-    }
-
-    line
-}
-
-/// Find the first occurrence of `needle` outside of quoted strings.
-fn find_unquoted(text: &str, needle: char) -> Option<usize> {
-    let mut in_basic = false;
-    let mut in_literal = false;
-    let mut escaped = false;
-
-    for (index, ch) in text.char_indices() {
-        if in_basic {
-            if escaped {
-                escaped = false;
-            } else if ch == '\\' {
-                escaped = true;
-            } else if ch == '"' {
-                in_basic = false;
-            }
-        } else if in_literal {
-            if ch == '\'' {
-                in_literal = false;
-            }
-        } else if ch == '"' {
-            in_basic = true;
-        } else if ch == '\'' {
-            in_literal = true;
-        } else if ch == needle {
-            return Some(index);
-        }
-    }
-
-    None
-}
-
-/// Parse a dotted, optionally quoted TOML key into its segments.
-fn parse_toml_key(text: &str, line_number: usize) -> Result<Vec<String>, String> {
-    let bytes = text.as_bytes();
-    let mut parts = Vec::new();
-    let mut index = 0;
-
-    loop {
-        while index < bytes.len() && bytes[index].is_ascii_whitespace() {
-            index += 1;
-        }
-        if index >= bytes.len() {
-            break;
-        }
-
-        let segment = if bytes[index] == b'"' || bytes[index] == b'\'' {
-            let quote = bytes[index];
-            let start = index + 1;
-            let mut end = start;
-            while end < bytes.len() && bytes[end] != quote {
-                if quote == b'"' && bytes[end] == b'\\' {
-                    end += 1;
-                }
-                end += 1;
-            }
-            if end >= bytes.len() {
-                return Err(format!("line {line_number}: unterminated quoted key"));
-            }
-            index = end + 1;
-            text[start..end].to_string()
-        } else {
-            let start = index;
-            while index < bytes.len() && !bytes[index].is_ascii_whitespace() && bytes[index] != b'.'
-            {
-                index += 1;
-            }
-            if start == index {
-                return Err(format!("line {line_number}: empty key segment"));
-            }
-            text[start..index].to_string()
-        };
-
-        if segment.is_empty() {
-            return Err(format!("line {line_number}: empty key segment"));
-        }
-        parts.push(segment);
-
-        while index < bytes.len() && bytes[index].is_ascii_whitespace() {
-            index += 1;
-        }
-        if index >= bytes.len() {
-            break;
-        }
-        if bytes[index] != b'.' {
-            return Err(format!("line {line_number}: unexpected character in key"));
-        }
-        index += 1;
-    }
-
-    if parts.is_empty() {
-        return Err(format!("line {line_number}: empty key"));
-    }
-
-    Ok(parts)
+/// Whether `ch` can appear in a bare (unquoted) TOML key.
+fn is_bare_key_char(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || ch == '_' || ch == '-'
 }
 
 /// Navigate to a table, creating missing tables and rejecting conflicts.
@@ -228,27 +142,11 @@ fn insert_toml_value(
     Ok(())
 }
 
-/// Parse a single-line TOML value.
-fn parse_toml_value(text: &str, line_number: usize) -> Result<serde_json::Value, String> {
-    let mut parser = TomlValueParser {
-        input: text,
-        pos: 0,
-    };
-    let value = parser.parse_value(line_number)?;
-    parser.skip_whitespace();
-    if parser.pos != text.len() {
-        return Err(format!(
-            "line {line_number}: unexpected trailing text `{}`",
-            &text[parser.pos..]
-        ));
-    }
-    Ok(value)
-}
-
-/// Cursor over the text of one TOML value.
+/// Cursor over the whole document, tracking the line for error messages.
 struct TomlValueParser<'a> {
     input: &'a str,
     pos: usize,
+    line: usize,
 }
 
 impl TomlValueParser<'_> {
@@ -259,26 +157,109 @@ impl TomlValueParser<'_> {
     fn bump(&mut self) -> Option<char> {
         let ch = self.peek()?;
         self.pos += ch.len_utf8();
+        if ch == '\n' {
+            self.line += 1;
+        }
         Some(ch)
     }
 
-    fn skip_whitespace(&mut self) {
-        while matches!(self.peek(), Some(' ' | '\t')) {
+    /// Spaces, tabs and carriage returns on the current line.
+    fn skip_spaces(&mut self) {
+        while matches!(self.peek(), Some(' ' | '\t' | '\r')) {
             self.pos += 1;
         }
     }
 
+    /// Whitespace, newlines and comments — the gaps TOML allows between
+    /// items, and inside a multi-line array.
+    fn skip_trivia(&mut self) {
+        loop {
+            match self.peek() {
+                Some(' ' | '\t' | '\r') => {
+                    self.pos += 1;
+                }
+                Some('\n') => {
+                    self.bump();
+                }
+                Some('#') => {
+                    while let Some(ch) = self.peek() {
+                        if ch == '\n' {
+                            break;
+                        }
+                        self.pos += ch.len_utf8();
+                    }
+                }
+                _ => break,
+            }
+        }
+    }
+
+    /// Parse a dotted, optionally quoted key path at the cursor.
+    fn parse_key_path(&mut self) -> Result<Vec<String>, String> {
+        let line = self.line;
+        let mut parts = Vec::new();
+
+        loop {
+            self.skip_spaces();
+            let segment = match self.peek() {
+                Some('"') => {
+                    self.bump();
+                    self.parse_basic_string(line)?
+                }
+                Some('\'') => {
+                    self.bump();
+                    self.parse_literal_string(line)?
+                }
+                Some(ch) if is_bare_key_char(ch) => {
+                    let start = self.pos;
+                    while matches!(self.peek(), Some(c) if is_bare_key_char(c)) {
+                        self.bump();
+                    }
+                    self.input[start..self.pos].to_string()
+                }
+                other => {
+                    return Err(format!(
+                        "line {line}: expected a key segment, found {other:?}"
+                    ))
+                }
+            };
+            if segment.is_empty() {
+                return Err(format!("line {line}: empty key segment"));
+            }
+            parts.push(segment);
+
+            self.skip_spaces();
+            if self.peek() == Some('.') {
+                self.bump();
+                continue;
+            }
+            break;
+        }
+
+        if parts.is_empty() {
+            return Err(format!("line {line}: empty key"));
+        }
+
+        Ok(parts)
+    }
+
+    /// Parse one TOML value at the cursor. Arrays may span lines and carry
+    /// comments; strings may not span lines.
     fn parse_value(&mut self, line_number: usize) -> Result<serde_json::Value, String> {
-        self.skip_whitespace();
+        self.skip_spaces();
         match self.peek() {
             None => Err(format!("line {line_number}: expected a value")),
-            Some('"') => self
-                .parse_basic_string(line_number)
-                .map(serde_json::Value::String),
-            Some('\'') => self
-                .parse_literal_string(line_number)
-                .map(serde_json::Value::String),
-            Some('[') => self.parse_array(line_number),
+            Some('"') => {
+                self.bump();
+                self.parse_basic_string(line_number)
+                    .map(serde_json::Value::String)
+            }
+            Some('\'') => {
+                self.bump();
+                self.parse_literal_string(line_number)
+                    .map(serde_json::Value::String)
+            }
+            Some('[') => self.parse_array(),
             Some('{') => Err(format!(
                 "line {line_number}: inline tables are not supported"
             )),
@@ -287,69 +268,99 @@ impl TomlValueParser<'_> {
     }
 
     fn parse_basic_string(&mut self, line_number: usize) -> Result<String, String> {
-        self.bump(); // opening quote
+        // The opening quote was consumed by the caller.
         let mut out = String::new();
 
         loop {
-            match self.bump() {
+            match self.peek() {
                 None => return Err(format!("line {line_number}: unterminated string")),
-                Some('"') => return Ok(out),
-                Some('\\') => match self.bump() {
-                    Some('n') => out.push('\n'),
-                    Some('t') => out.push('\t'),
-                    Some('r') => out.push('\r'),
-                    Some('"') => out.push('"'),
-                    Some('\\') => out.push('\\'),
-                    Some('b') => out.push('\u{8}'),
-                    Some('f') => out.push('\u{c}'),
-                    Some(marker @ ('u' | 'U')) => {
-                        let digits = if marker == 'u' { 4 } else { 8 };
-                        let mut code = 0u32;
-                        for _ in 0..digits {
-                            let ch = self.bump().ok_or_else(|| {
-                                format!("line {line_number}: unterminated unicode escape")
+                Some('\n') | Some('\r') => {
+                    return Err(format!(
+                        "line {line_number}: unterminated string (a basic string cannot span \
+                         lines)"
+                    ))
+                }
+                Some('"') => {
+                    self.bump();
+                    return Ok(out);
+                }
+                Some('\\') => {
+                    self.bump();
+                    match self.bump() {
+                        Some('n') => out.push('\n'),
+                        Some('t') => out.push('\t'),
+                        Some('r') => out.push('\r'),
+                        Some('"') => out.push('"'),
+                        Some('\\') => out.push('\\'),
+                        Some('b') => out.push('\u{8}'),
+                        Some('f') => out.push('\u{c}'),
+                        Some(marker @ ('u' | 'U')) => {
+                            let digits = if marker == 'u' { 4 } else { 8 };
+                            let mut code = 0u32;
+                            for _ in 0..digits {
+                                let ch = self.bump().ok_or_else(|| {
+                                    format!("line {line_number}: unterminated unicode escape")
+                                })?;
+                                let digit = ch.to_digit(16).ok_or_else(|| {
+                                    format!(
+                                        "line {line_number}: invalid unicode escape digit {ch:?}"
+                                    )
+                                })?;
+                                code = code * 16 + digit;
+                            }
+                            let ch = char::from_u32(code).ok_or_else(|| {
+                                format!("line {line_number}: invalid unicode scalar {code:#x}")
                             })?;
-                            let digit = ch.to_digit(16).ok_or_else(|| {
-                                format!("line {line_number}: invalid unicode escape digit {ch:?}")
-                            })?;
-                            code = code * 16 + digit;
+                            out.push(ch);
                         }
-                        let ch = char::from_u32(code).ok_or_else(|| {
-                            format!("line {line_number}: invalid unicode scalar {code:#x}")
-                        })?;
-                        out.push(ch);
+                        Some(other) => {
+                            return Err(format!(
+                                "line {line_number}: unsupported escape `\\{other}`"
+                            ))
+                        }
+                        None => return Err(format!("line {line_number}: unterminated string")),
                     }
-                    Some(other) => {
-                        return Err(format!(
-                            "line {line_number}: unsupported escape `\\{other}`"
-                        ))
-                    }
-                    None => return Err(format!("line {line_number}: unterminated string")),
-                },
-                Some(ch) => out.push(ch),
+                }
+                Some(ch) => {
+                    self.bump();
+                    out.push(ch);
+                }
             }
         }
     }
 
     fn parse_literal_string(&mut self, line_number: usize) -> Result<String, String> {
-        self.bump(); // opening quote
+        // The opening quote was consumed by the caller.
         let start = self.pos;
-        while let Some(ch) = self.bump() {
-            if ch == '\'' {
-                return Ok(self.input[start..self.pos - 1].to_string());
+        loop {
+            match self.peek() {
+                None | Some('\n') | Some('\r') => {
+                    return Err(format!("line {line_number}: unterminated string"))
+                }
+                Some('\'') => {
+                    let text = self.input[start..self.pos].to_string();
+                    self.bump();
+                    return Ok(text);
+                }
+                Some(_) => {
+                    self.bump();
+                }
             }
         }
-        Err(format!("line {line_number}: unterminated string"))
     }
 
-    fn parse_array(&mut self, line_number: usize) -> Result<serde_json::Value, String> {
+    fn parse_array(&mut self) -> Result<serde_json::Value, String> {
+        let open_line = self.line;
         self.bump(); // '['
         let mut items = Vec::new();
 
         loop {
-            self.skip_whitespace();
+            // Inside the brackets the grammar allows newlines and comments,
+            // which is the whole reason this parser follows the value rather
+            // than the line.
+            self.skip_trivia();
             match self.peek() {
-                None => return Err(format!("line {line_number}: unterminated array")),
+                None => return Err(format!("line {open_line}: unterminated array")),
                 Some(']') => {
                     self.bump();
                     return Ok(serde_json::Value::Array(items));
@@ -357,18 +368,23 @@ impl TomlValueParser<'_> {
                 _ => {}
             }
 
-            items.push(self.parse_value(line_number)?);
-            self.skip_whitespace();
+            items.push(self.parse_value(self.line)?);
+            self.skip_trivia();
 
-            match self.bump() {
-                Some(',') => continue,
-                Some(']') => return Ok(serde_json::Value::Array(items)),
-                Some(other) => {
+            match self.peek() {
+                Some(',') => {
+                    self.bump();
+                }
+                Some(']') => {
+                    self.bump();
+                    return Ok(serde_json::Value::Array(items));
+                }
+                other => {
                     return Err(format!(
-                        "line {line_number}: expected `,` or `]` in array, found {other:?}"
+                        "line {}: expected `,` or `]` in array, found {other:?}",
+                        self.line
                     ))
                 }
-                None => return Err(format!("line {line_number}: unterminated array")),
             }
         }
     }

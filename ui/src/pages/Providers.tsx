@@ -7,20 +7,20 @@ import {
   money,
   previewId,
   slugify,
-  type AccountBalance,
-  type AccountEvent,
-  type AccountSyncOutcome,
+  virtualId,
+  TIERS,
+  type Account,
   type AppConfig,
   type BalanceStatus,
   type CcProviderDraft,
   type CcSwitchPreview,
-  type CheckinView,
   type DiscoveredModel,
   type Maintenance,
+  type ModelEntry,
+  type ModelTier,
   type Provider,
   type ProviderClientProfile,
   type ProviderKind,
-  type ReconcileReport,
   type Snapshot,
   tierName,
 } from "../api";
@@ -43,7 +43,7 @@ import {
   useToast,
   type ConfirmRequest,
 } from "../components";
-import { useI18n, type TKey } from "../i18n";
+import { useI18n } from "../i18n";
 
 type KindLabelKey =
   | "providers.openai_dialect"
@@ -153,11 +153,6 @@ export default function Providers({
   const [ccPreview, setCcPreview] = useState<CcSwitchPreview | null>(null);
   const [ccLoading, setCcLoading] = useState(false);
   const [ccSelected, setCcSelected] = useState<Record<string, boolean>>({});
-  // What the last account probe established, held as the backend's own report
-  // rather than a summary of it. Null means no probe has been run, which is a
-  // different thing from a probe that found nothing, and the panel says which.
-  const [report, setReport] = useState<ReconcileReport | null>(null);
-  const [probing, setProbing] = useState(false);
   const isMounted = useRef(true);
   useEffect(() => () => { isMounted.current = false; }, []);
 
@@ -244,36 +239,6 @@ export default function Providers({
     }
   };
 
-  /**
-   * Probe every declared account and show what the reconciler did with each.
-   *
-   * One call covers every provider, which is why this sits on the page and not
-   * inside one provider's drawer: a per-provider button would report accounts
-   * belonging to providers the reader is not looking at. The returned document is
-   * stored as-is rather than folded into a total, because the four outcomes are
-   * four different statements — see `AccountSyncOutcome` in `api.ts` and the row
-   * renderer below, which keeps them apart for the same reason the check-in
-   * phases are kept apart.
-   *
-   * Nothing calls this on a timer or at startup: probing costs a network request
-   * per account, so the button is the policy about when.
-   */
-  const probeAccounts = async () => {
-    setProbing(true);
-    try {
-      setReport(await api.reconcileAccounts());
-      // The reconciler published into the account store, which is where the
-      // snapshot's balances and per-account figures are read from. Re-read the
-      // snapshot rather than patching it here, so the panel cannot end up showing
-      // a probe result beside balances from before it ran.
-      await run(api.snapshot);
-    } catch (e) {
-      notify("error", errorText(e));
-    } finally {
-      setProbing(false);
-    }
-  };
-
   // ------------------------------------------------------- CC Switch import
 
   const loadCcPreview = async () => {
@@ -344,7 +309,7 @@ export default function Providers({
               <button
                 className="linky"
                 onClick={() => void run(api.refreshBalances)}
-                disabled={busy || probing}
+                disabled={busy}
               >
                 {t("providers.refresh_all")}
               </button>
@@ -397,36 +362,9 @@ export default function Providers({
         </div>
       )}
 
-      {/*
-        Offered only when the build actually contains the account subsystem.
-        Same discipline as the check-in section below: a command that was never
-        registered looks exactly like one that failed, so the absence is declared
-        in the snapshot rather than discovered by pressing the button. It is a
-        different flag from `account_maintenance_available` — `account-maint`
-        implies `account`, and reading one for the other offers a control this
-        build cannot serve.
-      */}
-      {snapshot.account_available && (
-        <Section
-          title={t("providers.probe_section")}
-          hint={t("providers.probe_hint")}
-          actions={
-            <Button
-              kind="ghost"
-              onClick={() => void probeAccounts()}
-              disabled={busy || probing}
-            >
-              {probing ? t("providers.probing") : t("providers.probe_now")}
-            </Button>
-          }
-        >
-          {report === null ? (
-            <Empty>{t("providers.probe_idle")}</Empty>
-          ) : (
-            <ReconcileTable report={report} />
-          )}
-        </Section>
-      )}
+      {/* The account probe moved to the Accounts page: it is a runtime reading
+          over every provider's accounts, not a property of this page's list, and
+          the drawer never had a good place to put a cross-provider report. */}
 
       <Section title={t("providers.add_section")} hint={t("providers.add_hint")}>
         <div className="controls">
@@ -537,81 +475,6 @@ export default function Providers({
   );
 }
 
-/**
- * What one probe established per declared account, one row each.
- *
- * An empty report is its own sentence rather than an empty table: it says every
- * account that was declared is disabled, which is not the same as a probe that
- * ran and found nothing to report.
- */
-function ReconcileTable({ report }: { report: ReconcileReport }) {
-  const { t } = useI18n();
-  if (report.outcomes.length === 0) {
-    return <Empty>{t("providers.probe_none")}</Empty>;
-  }
-  return (
-    <table className="table">
-      <thead>
-        <tr>
-          <th>{t("field.provider")}</th>
-          <th>{t("field.account")}</th>
-          <th>{t("providers.probe_outcome")}</th>
-        </tr>
-      </thead>
-      <tbody>
-        {report.outcomes.map(([providerId, accountId, outcome], index) => (
-          <tr key={`${providerId}/${accountId}/${index}`}>
-            <td className="mono">{providerId}</td>
-            <td className="mono">{accountId}</td>
-            <td>
-              <ReconcileOutcome outcome={outcome} />
-            </td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
-  );
-}
-
-/**
- * One account's outcome, in the backend's own terms.
- *
- * The four are kept apart rather than collapsed into one healthy/unhealthy pair,
- * for the reason the check-in phases are: `refreshed` is a reading, `unsupported`
- * is an account nothing was able to ask, `partially_reported` is a provider that
- * declined to say something, and `failed` is an account that was asked and
- * refused. Rendering the last two as the same "problem", or the first two as the
- * same "healthy", loses the distinction the report exists to preserve.
- *
- * A failure's reason is printed rather than replaced: it names the credential or
- * the declaration that is wrong, and a row that only said "failed" would leave
- * the reader to guess which.
- */
-function ReconcileOutcome({ outcome }: { outcome: AccountSyncOutcome }) {
-  const { t } = useI18n();
-  if (outcome === "refreshed") {
-    return <span className="row-sub">{t("account.sync.refreshed")}</span>;
-  }
-  if (outcome === "unsupported") {
-    return <span className="row-sub">{t("account.sync.unsupported")}</span>;
-  }
-  if ("failed" in outcome) {
-    return (
-      <span className="row-sub warn-text">
-        {t("account.sync.failed")} · {outcome.failed.reason}
-      </span>
-    );
-  }
-  // The missing fields are named rather than counted, because "partially
-  // reported" without the list is a claim that something was withheld without
-  // saying what.
-  return (
-    <span className="row-sub">
-      {t("account.sync.partially_reported")} · {outcome.partially_reported.missing.join(", ")}
-    </span>
-  );
-}
-
 function CcSwitchRow({
   draft,
   checked,
@@ -680,313 +543,292 @@ function BalanceChip({ status }: { status: BalanceStatus | undefined }) {
   return null;
 }
 
+/** A fresh declaration: nothing observed, nothing scheduled, provider's key. */
+function blankMaintenance(): Maintenance {
+  return {
+    checkin_enabled: false,
+    checkin_interval_secs: null,
+    checkin_path: null,
+    checkin_trigger_selector: null,
+    login_path: null,
+    browser_executable: "",
+  };
+}
+
 /**
- * One account's resource maintenance: where it stands, when it was last
- * checked in, and the four things a user can do about it.
+ * Declare, credential and maintain one provider's accounts.
  *
- * The phase is rendered as a word rather than a dot on purpose. A dot would have
- * to collapse "never tried", "waiting for you", "already done today" and
- * "failed" into a colour, and three of those want different things from the
- * person looking at them.
+ * What this section edits is the *declaration*: the configuration that says an
+ * account exists, where its credential lives and what maintenance was asked
+ * for. It never shows an observation — quota, balances and the last check-in
+ * are runtime readings, and they render in the maintenance section below,
+ * filled by the reconciler. Requests do not route by account (the serving path
+ * resolves one credential per provider), which the hint says rather than hides:
+ * what declaring an account buys is probing, per-account balances and check-in.
  *
- * `resume` is a separate button from `start` and is only offered while a browser
- * is held. That is the whole contract of a paused check-in: the button continues
- * the browser already open, with the session that was halfway through solving a
- * challenge, and it must never quietly begin a new one.
+ * Keys are written through the backend command, never through the config save:
+ * the dashboard only ever learns whether a secret exists, the same discipline
+ * the provider key field follows.
  */
-function AccountMaintenanceRow({
-  view,
-  balance,
-  events,
+function AccountSection({
+  provider,
+  snapshot,
   busy,
-  onStart,
-  onResume,
-  onCancel,
+  save,
+  run,
+  onUpdate,
 }: {
-  view: CheckinView;
-  /** Observed resource events for the whole snapshot, newest first. */
-  events: AccountEvent[];
-  /** This account's probed balance, when the provider has more than one. */
-  balance: AccountBalance | undefined;
+  provider: Provider;
+  snapshot: Snapshot;
   busy: boolean;
-  onStart: () => void;
-  onResume: () => void;
-  onCancel: () => void;
+  save: (mutate: (config: AppConfig) => AppConfig | null) => Promise<boolean>;
+  run: (task: () => Promise<Snapshot>) => Promise<boolean>;
+  onUpdate: (mutate: (provider: Provider) => void) => void;
 }) {
   const { t } = useI18n();
-  const paused = view.awaiting_user;
+  const notify = useToast();
+  const accounts = provider.accounts ?? [];
+  const [newId, setNewId] = useState("");
+  const [newKey, setNewKey] = useState("");
+  const [keyFor, setKeyFor] = useState<string | null>(null);
+  const [keyDraft, setKeyDraft] = useState("");
+  const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
 
-  // The backend publishes a closed phase vocabulary, and a template key is not a
-  // key TypeScript can check. The fallback matters more than the cast: an
-  // unrecognised phase must read as "unknown", never as a phase that implies a
-  // reward or a success.
-  const phaseKey = `account.phase.${view.phase}` as const;
-  const phaseLabel = PHASE_KEYS.has(view.phase)
-    ? t(phaseKey as Parameters<typeof t>[0])
-    : view.phase;
+  /** A reference of its own — the account does not resolve to the provider key. */
+  const hasOwnRef = (a: Account) =>
+    a.key_ref !== "" && a.key_ref !== provider.key_ref;
+  const keyStored = (a: Account) =>
+    hasOwnRef(a) && (snapshot.keys[a.key_ref] ?? false);
 
-  return (
-    <div className="account-maint">
-      <div className="row-main">
-        <span className="row-title mono">{view.account_id}</span>
-        <span className="row-sub">
-          {phaseLabel}
-          {view.last_completed_at !== null && (
-            <span className="muted"> · {t("account.last_checkin")} {ago(view.last_completed_at)}</span>
-          )}
-        </span>
-        {view.failure && <span className="row-sub warn-text">{view.failure}</span>}
-        {/*
-          Why the scheduler is or is not acting, in its own words. Without this an
-          operator who sets an interval sees a row that never changes and cannot
-          tell a policy that is working from a policy that is doing nothing — and
-          the reasons differ enough that "nothing happened" would send them to
-          change a setting that is not the problem.
-        */}
-        <span className="row-sub muted">{scheduleLabel(view)}</span>        {balance && (
-          /*
-           * The account's own figure, shown only where the provider's total hides
-           * which account is empty and which is suspended. The backend decides that,
-           * so a panel cannot present one number twice.
-           */
-          <span className="row-sub mono">
-            {t("account.balance")} {accountBalanceLabel(balance, ago)}
-          </span>
-        )}
-        {latestEventFor(events, view.provider_id, view.account_id) && (
-          /*
-           * What the provider said actually happened, with the evidence it came
-           * from. Rendered as the event rather than as a running total, because a
-           * sum of partially-observed events drifts from the truth and the truth
-           * is available from the provider directly.
-           */
-          <span className="row-sub mono">
-            {eventLabel(latestEventFor(events, view.provider_id, view.account_id)!, t)}
-          </span>
-        )}
-        {/*
-          A reward is shown only when one was observed, and its source travels
-          with it. A figure recovered from provider log text is weaker evidence
-          than one the provider reported in a structured field, and printing them
-          identically would claim more than the backend knows.
-        */}
-        {view.reward_amount !== null && (
-          <span className="row-sub mono">
-            {t("account.reward")} {view.reward_amount} {view.reward_unit ?? ""}
-            {view.reward_source === "event_content" && (
-              <span className="muted"> · {t("account.reward_weak_source")}</span>
-            )}
-            {view.reward_source === "balance_delta" && (
-              <span className="muted"> · {t("account.reward_inferred")}</span>
-            )}
-          </span>
-        )}
-      </div>
+  /** Edit one declaration in place; the id is the key within this provider. */
+  const edit = (account_id: string, mutate: (a: Account) => void) =>
+    onUpdate((p) => {
+      const declaration = p.accounts?.find((a) => a.account_id === account_id);
+      if (declaration) mutate(declaration);
+    });
 
-      <div className="controls">
-        {paused ? (
-          <>
-            <button className="primary" disabled={busy} onClick={onResume}>
-              {t("account.resume")}
-            </button>
-            <button disabled={busy} onClick={onCancel}>
-              {t("account.cancel")}
-            </button>
-          </>
-        ) : (
-          <>
-            <button disabled={busy || view.phase === "running"} onClick={onStart}>
-              {t("account.checkin")}
-            </button>
-            {view.browser_held && (
-              <button disabled={busy} onClick={onCancel}>
-                {t("account.close_browser")}
-              </button>
-            )}
-          </>
-        )}
-      </div>
-    </div>
-  );
-}
-
-/**
- * The most recent observed event for one account, if there is one.
- *
- * Picks the newest rather than the first in the list because the snapshot is
- * already ordered but a caller should not have to know that.
- */
-/**
- * Per-account balances for one provider, or none when the provider declares one.
- *
- * The backend already filters, so an empty list here means "this provider has a
- * single account and the provider-level figure is the whole truth" rather than
- * "nothing was probed". Rendering nothing in that case is the point: two panels
- * saying one number is how an operator stops trusting either.
- */
-function balancesFor(
-  balances: AccountBalance[] | undefined,
-  providerId: string,
-): AccountBalance[] {
-  return (balances ?? []).filter((b) => b.provider_id === providerId);
-}
-
-/** One account's line: who it is, what it has left, and how well that is known. */
-function accountBalanceLabel(balance: AccountBalance, ago: (at: number) => string): string {
-  if (balance.status === "unprobed") {
-    // Not a balance of zero. Nobody has asked this account yet.
-    return "not probed yet";
-  }
-  if (balance.remaining === null) {
-    return balance.status.replace(/_/g, " ");
-  }
-  const stale = balance.last_failure !== null ? ` · last attempt failed ${ago(balance.last_failure!)}` : "";
-  return `${balance.remaining} ${balance.unit ?? ""} of ${balance.total ?? "?"}${stale}`;
-}
-
-function latestEventFor(
-  events: AccountEvent[] | undefined,
-  providerId: string,
-  accountId: string,
-): AccountEvent | undefined {
-  let newest: AccountEvent | undefined;
-  for (const event of events ?? []) {
-    if (event.provider_id !== providerId || event.account_id !== accountId) continue;
-    if (!newest || event.observed_at > newest.observed_at) newest = event;
-  }
-  return newest;
-}
-
-/**
- * One line saying what the provider established, and how well.
- *
- * The `no_change` and `unobserved` cases are spelled differently on purpose. One is
- * a finding — we looked and nothing moved — and the other is an absence of
- * information, and rendering both as "no change" would state as fact something the
- * provider never said.
- */
-/** The effects the backend publishes, so an unknown one can be told apart. */
-const EFFECT_KEYS = new Set(["credited", "debited", "no_change", "unobserved"]);
-/** Where a figure was read from, strongest evidence first. */
-const EVENT_SOURCE_KEYS = new Set([
-  "operation_response",
-  "provider_response",
-  "account_state",
-  "account_log",
-]);
-
-/**
- * One observed change, in words, with where it came from.
- *
- * The source is named rather than implied because the three are not equally
- * trustworthy: a structured field the provider returned is evidence, text
- * scraped from a localised log is a fallback, and a label that shows all three
- * identically claims more than it knows. An unrecognised effect or source falls
- * back to the raw value, which is how a value the backend has since added is
- * made visible instead of silently rendered as something else.
- */
-function eventLabel(
-  event: AccountEvent,
-  t: (key: TKey, params?: Record<string, string | number>) => string,
-): string {
-  const effect = EFFECT_KEYS.has(event.effect)
-    ? t(`account.effect.${event.effect}` as TKey)
-    : event.effect;
-  if ((event.effect === "credited" || event.effect === "debited") && event.amount !== null) {
-    const sign = event.effect === "credited" ? "+" : "-";
-    const source = EVENT_SOURCE_KEYS.has(event.source)
-      ? t(`account.source.${event.source}` as TKey)
-      : event.source;
-    return `${sign}${event.amount} ${event.unit ?? ""} · ${source}`;
-  }
-  return effect;
-}
-
-/** The scheduler decisions the backend publishes. */
-const SCHEDULE_KEYS = new Set([
-  "disabled",
-  "not_applicable",
-  "needs_first_observation",
-  "no_policy",
-  "not_due",
-  "due",
-  "unknown",
-]);
-
-/**
- * One sentence saying why the scheduler did or did not act on this account.
- *
- * An unrecognised decision renders as itself rather than as a neighbouring reason,
- * for the same reason `PHASE_KEYS` exists below: two reasons merged into one would
- * send the reader to change a setting that is not the problem.
- */
-function scheduleLabel(view: CheckinView): string {
-  const { t } = useI18n();
-  const decision = view.schedule?.decision ?? "unknown";
-  const reason = SCHEDULE_KEYS.has(decision)
-    ? t(`account.schedule.${decision}` as Parameters<typeof t>[0])
-    : decision;
-  const next = view.schedule?.next_due_at;
-  if (next !== null && next !== undefined) {
-    return `${reason} · ${t("account.next_run")} ${ago(next)}`;
-  }
-  return reason;
-}
-
-/** The phases the backend publishes, so an unknown one can be told apart. */
-const PHASE_KEYS = new Set([
-  "idle",
-  "running",
-  "waiting_for_user",
-  "succeeded",
-  "already_completed",
-  "not_supported",
-  "failed",
-  "cancelled",
-  "cancelling"
-]);
-
-/**
- * The check-in view for one account, or a neutral one when the snapshot carries
- * none.
- *
- * A fallback rather than nothing, because "the backend said nothing about this
- * account" and "this account is idle" must not render the same way: the first is
- * a gap in the bridge and the second is a fact about the account.
- */
-function checkinFor(
-  views: CheckinView[] | undefined,
-  providerId: string,
-  accountId: string,
-): CheckinView {
-  return (
-    views?.find((v) => v.provider_id === providerId && v.account_id === accountId) ?? {
-      provider_id: providerId,
-      account_id: accountId,
-      phase: "idle",
-      browser_held: false,
-      awaiting_user: false,
-      failure: null,
-      reward_amount: null,
-      reward_unit: null,
-      reward_source: null,
-      last_completed_at: null,
-      // "unknown" rather than a guess. The backend is the only thing that knows this
-      // account's declaration and history, and inventing a decision here would
-      // render as a scheduler answer nobody actually computed.
-      schedule: { decision: "unknown", next_due_at: null, last_settled_at: null },
+  const addAccount = async () => {
+    const id = newId.trim();
+    const key = newKey.trim();
+    if (!id) return;
+    if (accounts.some((a) => a.account_id === id)) {
+      notify("error", t("accounts.duplicate", { id }));
+      return;
     }
+    const ok = await save((cfg) => {
+      const next = structuredClone(cfg);
+      const target = next.providers.find((p) => p.id === provider.id);
+      if (!target) return null;
+      target.accounts = target.accounts ?? [];
+      // Re-checked here rather than trusted from the render: a save that
+      // queues behind another one rebases onto the newer document.
+      if (target.accounts.some((a) => a.account_id === id)) return null;
+      target.accounts.push({
+        account_id: id,
+        key_ref: "",
+        enabled: true,
+        maintenance: blankMaintenance(),
+      });
+      return next;
+    });
+    if (!ok) return;
+    setNewId("");
+    setNewKey("");
+    if (key) {
+      // The declaration exists only after the save landed, so the key is
+      // stored as a second step against the saved configuration.
+      const stored = await run(() => api.setAccountKey(provider.id, id, key));
+      if (!stored) notify("error", t("accounts.key_store_failed"));
+    }
+  };
+
+  const storeKey = async (account_id: string) => {
+    const key = keyDraft.trim();
+    if (!key) return;
+    const ok = await run(() => api.setAccountKey(provider.id, account_id, key));
+    if (ok) {
+      setKeyDraft("");
+      setKeyFor(null);
+    }
+  };
+
+  return (
+    <Section title={t("accounts.title")} hint={t("accounts.title_hint")}>
+      {accounts.length === 0 ? (
+        <Empty>{t("accounts.empty")}</Empty>
+      ) : (
+        <div className="list">
+          {accounts.map((a) => (
+            <div className="account-decl" key={a.account_id}>
+              <div className="row-main">
+                <span className="row-title mono">{a.account_id}</span>
+                {hasOwnRef(a) ? (
+                  keyStored(a) ? (
+                    <Badge tone="ok">{t("accounts.own_key")}</Badge>
+                  ) : (
+                    <Badge tone="warn">{t("accounts.no_key")}</Badge>
+                  )
+                ) : (
+                  <Badge>{t("accounts.follows_provider")}</Badge>
+                )}
+                <div className="field-actions">
+                  <Button
+                    kind="ghost"
+                    disabled={busy}
+                    onClick={() => {
+                      setKeyFor(keyFor === a.account_id ? null : a.account_id);
+                      setKeyDraft("");
+                    }}
+                  >
+                    {t("accounts.set_key")}
+                  </Button>
+                  {hasOwnRef(a) && (
+                    <Button
+                      kind="ghost"
+                      disabled={busy}
+                      onClick={() =>
+                        setConfirm({
+                          title: t("accounts.clear_key_title", { id: a.account_id }),
+                          body: t("accounts.clear_key_body"),
+                          confirmLabel: t("accounts.clear_key"),
+                          danger: true,
+                          onConfirm: () =>
+                            void run(() =>
+                              api.clearAccountKey(provider.id, a.account_id),
+                            ),
+                        })
+                      }
+                    >
+                      {t("accounts.clear_key")}
+                    </Button>
+                  )}
+                  <Button
+                    kind="ghost"
+                    disabled={busy}
+                    onClick={() =>
+                      setConfirm({
+                        title: t("accounts.remove_title", { id: a.account_id }),
+                        body: t("accounts.remove_body"),
+                        confirmLabel: t("common.delete"),
+                        danger: true,
+                        onConfirm: () =>
+                          void run(() => api.removeAccount(provider.id, a.account_id)),
+                      })
+                    }
+                  >
+                    {t("common.delete")}
+                  </Button>
+                </div>
+              </div>
+              {keyFor === a.account_id && (
+                <div className="controls">
+                  <TextField
+                    label={t("accounts.key_label")}
+                    hint={t("accounts.key_hint")}
+                    value={keyDraft}
+                    password
+                    onCommit={(v) => {
+                      setKeyDraft(v);
+                      void storeKey(a.account_id);
+                    }}
+                  />
+                  <div className="field-actions">
+                    <Button
+                      kind="primary"
+                      disabled={busy || !keyDraft.trim()}
+                      onClick={() => void storeKey(a.account_id)}
+                    >
+                      {t("accounts.set_key")}
+                    </Button>
+                  </div>
+                </div>
+              )}
+              <div className="controls">
+                <Toggle
+                  label={t("common.enabled")}
+                  checked={a.enabled}
+                  onChange={(enabled) => edit(a.account_id, (d) => { d.enabled = enabled; })}
+                />
+                <Toggle
+                  label={t("accounts.checkin")}
+                  checked={a.maintenance.checkin_enabled}
+                  onChange={(v) =>
+                    edit(a.account_id, (d) => {
+                      d.maintenance.checkin_enabled = v;
+                    })
+                  }
+                />
+                <NumberField
+                  label={t("accounts.interval")}
+                  hint={t("accounts.interval_hint")}
+                  min={1}
+                  integer
+                  value={a.maintenance.checkin_interval_secs}
+                  onCommit={(v) =>
+                    edit(a.account_id, (d) => {
+                      d.maintenance.checkin_interval_secs = v;
+                    })
+                  }
+                />
+                {a.maintenance.checkin_enabled && (
+                  <>
+                    <TextField
+                      label={t("accounts.checkin_path")}
+                      hint={t("accounts.checkin_path_hint")}
+                      value={a.maintenance.checkin_path ?? ""}
+                      placeholder="/checkin"
+                      wide
+                      onCommit={(v) =>
+                        edit(a.account_id, (d) => {
+                          d.maintenance.checkin_path = v.trim() || null;
+                        })
+                      }
+                    />
+                    <TextField
+                      label={t("accounts.checkin_selector")}
+                      hint={t("accounts.checkin_selector_hint")}
+                      value={a.maintenance.checkin_trigger_selector ?? ""}
+                      wide
+                      onCommit={(v) =>
+                        edit(a.account_id, (d) => {
+                          d.maintenance.checkin_trigger_selector = v.trim() || null;
+                        })
+                      }
+                    />
+                  </>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="controls">
+        <TextField
+          label={t("accounts.id_label")}
+          hint={t("accounts.id_hint")}
+          value={newId}
+          onCommit={(v) => setNewId(v)}
+        />
+        <TextField
+          label={t("accounts.key_label_add")}
+          hint={t("accounts.key_hint_add")}
+          value={newKey}
+          password
+          onCommit={(v) => setNewKey(v)}
+        />
+        <div className="field-actions">
+          <Button
+            kind="primary"
+            disabled={busy || !newId.trim()}
+            onClick={() => void addAccount()}
+          >
+            {t("accounts.add")}
+          </Button>
+        </div>
+      </div>
+      <ConfirmDialog request={confirm} onClose={() => setConfirm(null)} />
+    </Section>
   );
-}
-
-/** A whole number of seconds, as a short relative phrase. */
-function ago(unix_secs: number): string {
-
-const seconds = Math.max(0, Math.floor(Date.now() / 1000) - unix_secs);
-  if (seconds < 60) return `${seconds}s`;
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
-  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h`;
-  return `${Math.floor(seconds / 86400)}d`;
 }
 
 /**
@@ -1022,6 +864,11 @@ function ProviderDrawer({
   const [discovered, setDiscovered] = useState<DiscoveredModel[] | null>(null);
   const [discovering, setDiscovering] = useState(false);
   const [checkingBalance, setCheckingBalance] = useState(false);
+  // The tier each catalogue row is about to be added as. Keys are the discovered
+  // model ids; "" means "no class yet" — the model lands unclassified and the
+  // Models page banner keeps counting it until a class is assigned.
+  const [tierChoice, setTierChoice] = useState<Record<string, ModelTier | "">>({});
+  const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
   // The free tier's catalogue is the whole Zen list, paid models included, so
   // this defaults on for that one kind: the operator is looking for the free
   // models and the paid ones can only fail on an unauthenticated provider.
@@ -1061,50 +908,6 @@ function ProviderDrawer({
     const ok = await run(() => api.setKey(providerId, value));
     if (ok) setKeyDraft("");
   };
-
-  // Check-in reports its own outcome rather than round-tripping the snapshot, so
-  // these three ask for a fresh view and let the next poll carry it. The failure
-  // is surfaced with the backend's own wording: every message here names the
-  // setting or the action that fixes it, and paraphrasing would throw that away.
-  const start = async (id: string, account: string, maintenance: Maintenance) => {
-    if (!maintenance.checkin_enabled) {
-      notify("error", t("account.not_enabled"));
-      return;
-    }
-    // Checked here as well as in the backend so the operator is told which of the
-    // two settings is missing, rather than receiving "not configured" for a page
-    // they already set.
-    const missing =
-      !maintenance.checkin_path?.trim()
-        ? t("account.need_path")
-        : !maintenance.checkin_trigger_selector?.trim()
-          ? t("account.need_selector")
-          : null;
-    if (missing) {
-      notify("error", missing);
-      return;
-    }
-    try {
-      await api.startCheckin(id, account);
-    } catch (e) {
-      notify("error", `${t("account.start_failed")}: ${errorText(e)}`);
-    }
-  };
-  const resume = async (id: string, account: string) => {
-    try {
-      await api.resumeCheckin(id, account);
-    } catch (e) {
-      notify("error", `${t("account.resume_failed")}: ${errorText(e)}`);
-    }
-  };
-  const cancel = async (id: string, account: string) => {
-    try {
-      await api.cancelCheckin(id, account);
-    } catch (e) {
-      notify("error", `${t("account.cancel_failed")}: ${errorText(e)}`);
-    }
-  };
-
   const discover = async () => {
     const generation = ++discoveryGeneration.current;
     setDiscovering(true);
@@ -1121,9 +924,11 @@ function ProviderDrawer({
     }
   };
 
-  const addDiscovered = (model: DiscoveredModel) => {
+  const addDiscovered = (model: DiscoveredModel, tier: ModelTier | "") => {
     // Adding a model is a config mutation; the provider page reaches into the
-    // same save pipeline every other page uses.
+    // same save pipeline every other page uses. The tier rides along so an
+    // operator who knows the class does not have to visit the Models page to
+    // finish the sentence.
     void save((cfg) => {
       if (
         cfg.models.some(
@@ -1137,7 +942,7 @@ function ProviderDrawer({
       next.models.push({
         provider_id: provider.id,
         upstream_model: model.id,
-        tier: null,
+        tier: tier === "" ? null : tier,
         priority: 0,
         weight: 1,
         enabled: true,
@@ -1156,6 +961,37 @@ function ProviderDrawer({
         pricing: model.pricing,
       });
       return next;
+    });
+  };
+
+  /** Remove one configured model, with the confirmation the list row uses. */
+  const removeModel = (model: ModelEntry) => {
+    setConfirm({
+      title: t("confirm.remove_model"),
+      body: t("confirm.remove_model_body"),
+      confirmLabel: t("models.remove"),
+      danger: true,
+      onConfirm: () =>
+        void save((cfg) => {
+          const index = cfg.models.findIndex(
+            (m) =>
+              m.provider_id === provider.id && m.upstream_model === model.upstream_model,
+          );
+          if (index < 0) return null;
+          const next = structuredClone(cfg);
+          // The Auto Mode pool names models by exposed id or alias; deleting the
+          // model deletes its pool membership with it, so the reference cannot
+          // dangle behind the removal.
+          const gone = [
+            previewId(provider.id, model.upstream_model),
+            ...model.aliases,
+          ];
+          next.models.splice(index, 1);
+          next.classifier.candidates = next.classifier.candidates.filter(
+            (c) => !gone.includes(c.model),
+          );
+          return next;
+        }),
     });
   };
 
@@ -1217,16 +1053,67 @@ function ProviderDrawer({
       )}
 
       <Section title={t("providers.models_section")} hint={t("providers.models_hint")}>
-        <div className="row gap wrap">
-          {models.length > 0 && (
-            <span className="row gap wrap">
+        {models.length > 0 ? (
+          <table className="table">
+            <thead>
+              <tr>
+                <th>{t("field.model_name")}</th>
+                <th>{t("models.tier")}</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
               {models.map((m) => (
-                <span key={m.upstream_model} className="chip chip-done">
-                  <span className="mono">{previewId(provider.id, m.upstream_model)}</span>
-                </span>
+                <tr key={m.upstream_model}>
+                  <td className="mono">{previewId(provider.id, m.upstream_model)}</td>
+                  <td>
+                    <Select
+                      ariaLabel={t("models.tier")}
+                      value={m.tier ?? "none"}
+                      disabled={busy}
+                      onChange={(next) =>
+                        // Models live at the config level, not on the provider,
+                        // so the class edit is its own save rather than a
+                        // provider-field mutation.
+                        void save((cfg) => {
+                          const nextCfg = structuredClone(cfg);
+                          const entry = nextCfg.models.find(
+                            (e) =>
+                              e.provider_id === provider.id &&
+                              e.upstream_model === m.upstream_model,
+                          );
+                          if (!entry) return null;
+                          entry.tier = next === "none" ? null : next;
+                          return nextCfg;
+                        })
+                      }
+                      options={[
+                        { value: "none", label: t("models.no_tier") },
+                        ...TIERS.map((c) => ({
+                          value: c,
+                          label: virtualId(c, snapshot.config.routing.naming_style),
+                        })),
+                      ]}
+                    />
+                  </td>
+                  <td>
+                    <Button
+                      kind="ghost"
+                      ariaLabel={t("models.remove")}
+                      disabled={busy}
+                      onClick={() => removeModel(m)}
+                    >
+                      {t("common.remove")}
+                    </Button>
+                  </td>
+                </tr>
               ))}
-            </span>
-          )}
+            </tbody>
+          </table>
+        ) : (
+          <Empty>{t("providers.models_none")}</Empty>
+        )}
+        <div className="row gap wrap">
           <Button
             kind="ghost"
             ariaLabel="Fetch models"
@@ -1260,6 +1147,7 @@ function ProviderDrawer({
                   <tr>
                     <th>{t("field.model_name")}</th>
                     <th>{t("models.price")}</th>
+                    <th>{t("models.tier")}</th>
                     <th />
                   </tr>
                 </thead>
@@ -1275,9 +1163,23 @@ function ProviderDrawer({
                           : "—"}
                       </td>
                       <td>
+                        <Select
+                          ariaLabel={t("models.tier")}
+                          value={tierChoice[d.id] ?? ""}
+                          onChange={(next) => setTierChoice({ ...tierChoice, [d.id]: next })}
+                          options={[
+                            { value: "", label: t("models.no_tier") },
+                            ...TIERS.map((c) => ({
+                              value: c,
+                              label: virtualId(c, snapshot.config.routing.naming_style),
+                            })),
+                          ]}
+                        />
+                      </td>
+                      <td>
                         <Button
                           kind="ghost"
-                          onClick={() => addDiscovered(d)}
+                          onClick={() => addDiscovered(d, tierChoice[d.id] ?? "")}
                           disabled={models.some((m) => m.upstream_model === d.id)}
                         >
                           {t("cc.add")}
@@ -1294,6 +1196,7 @@ function ProviderDrawer({
             )}
           </>
         )}
+        <ConfirmDialog request={confirm} onClose={() => setConfirm(null)} />
       </Section>
 
       <Section title={t("providers.configuration")}>
@@ -1536,36 +1439,25 @@ function ProviderDrawer({
       </Section>
 
       {/*
-        Account maintenance is offered only when the build actually contains it.
-        Asking first is the discipline the rest of this panel follows: a command
-        that was never registered looks exactly like one that failed, and a panel
-        that probed for it would render "unavailable" on a build whose bridge is
-        merely broken.
+        Account declarations are offered only when the build actually contains
+        the account subsystem, for the same reason the maintenance section
+        below asks first: a command that was never registered looks exactly
+        like one that failed.
       */}
-      {snapshot.account_maintenance_available && (provider.accounts ?? []).length > 0 && (
-        <Section title={t("account.section")} hint={t("account.section_hint")}>
-          <div className="list">
-            {(provider.accounts ?? []).map((account) => {
-              const view = checkinFor(snapshot.checkin, provider.id, account.account_id);
-              return (
-                <AccountMaintenanceRow
-                  key={account.account_id}
-                  view={view}
-                  events={snapshot.account_events ?? []}                  balance={balancesFor(snapshot.account_balances, provider.id).find(
-                    (b) => b.account_id === account.account_id,
-                  )}
-                  busy={busy}
-                  onStart={() =>
-                    void start(provider.id, account.account_id, account.maintenance)
-                  }
-                  onResume={() => void resume(provider.id, account.account_id)}
-                  onCancel={() => void cancel(provider.id, account.account_id)}
-                />
-              );
-            })}
-          </div>
-        </Section>
+      {snapshot.account_available && (
+        <AccountSection
+          provider={provider}
+          snapshot={snapshot}
+          busy={busy}
+          save={save}
+          run={run}
+          onUpdate={onUpdate}
+        />
       )}
+
+      {/* Account maintenance — the runtime face — moved to the Accounts page.
+          This drawer keeps the declaration, which is the part that changes when
+          the user edits configuration rather than when the account is used. */}
 
       <div>
         <Button kind="danger" disabled={busy} onClick={onRemove}>

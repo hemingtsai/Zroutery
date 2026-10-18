@@ -571,6 +571,71 @@ fn codex_read_config_rejects_unsupported_toml() {
     );
 }
 
+/// The exact shape a real Codex config carries: `args = [` with one argument
+/// per line. The first version of the reader was line-based and reported
+/// "unterminated array" for it, refusing a config Codex itself reads fine —
+/// which made a takeover of a real Codex install an error before it started.
+#[test]
+fn codex_read_config_accepts_a_multi_line_array() {
+    super::isolate_agent_home();
+    let home = super::isolated_agent_home().expect("isolated agent home");
+    let path = home.join(".codex").join("config.toml");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &path,
+        "model_provider = \"custom\"\n\
+         \n\
+         notify = [ \"C:\\\\tools\\\\notify.exe\", \"turn-ended\" ]\n\
+         [mcp_servers.context7]\n\
+         type = \"stdio\"\n\
+         command = \"cmd\"\n\
+         args = [\n\
+         \x20   \"/c\",\n\
+         \x20   \"npx\",\n\
+         \x20   # a comment between items is legal TOML\n\
+         \x20   \"-y\",\n\
+         ]\n\
+         \n\
+         [model_providers.custom]\n\
+         name = \"OpenAI\"\n",
+    )
+    .unwrap();
+
+    let snapshot = CodexAdapter
+        .read_config()
+        .expect("a multi-line array is valid TOML");
+    assert_eq!(
+        snapshot.raw["mcp_servers"]["context7"]["args"],
+        serde_json::json!(["/c", "npx", "-y"]),
+        "one array, however many lines it spans"
+    );
+    assert_eq!(snapshot.raw["model_provider"], "custom");
+    assert_eq!(
+        snapshot.raw["notify"],
+        serde_json::json!(["C:\\tools\\notify.exe", "turn-ended"])
+    );
+
+    // And the shape round-trips: an adopt rewrites the file, the re-read
+    // parser agrees with the first one, and the unmanaged arrays survive.
+    let target = a_target();
+    let fields = takeover_fields(AgentType::Codex, &target, None).unwrap();
+    CodexAdapter
+        .apply_patch(&snapshot, &fields)
+        .expect("the adopt writes");
+    let reread = CodexAdapter
+        .read_config()
+        .expect("the rewritten file parses");
+    assert_eq!(
+        reread.raw["mcp_servers"]["context7"]["args"],
+        serde_json::json!(["/c", "npx", "-y"]),
+        "an unmanaged multi-line array survives the rewrite"
+    );
+    assert_eq!(
+        reread.raw["model_provider"], "zroutery",
+        "the managed selector moved to the gateway"
+    );
+}
+
 #[test]
 fn gemini_adapter_read_config() {
     super::isolate_agent_home();
@@ -1518,27 +1583,81 @@ fn opencode_refuses_a_jsonc_config_it_would_flatten() {
     );
 }
 
-/// The refusal that protects a v2-shaped config.
-///
-/// OpenCode's v2 schema renames `provider` to `providers` and `npm`/`options`
-/// to `package`/`settings`. Writing the v1 paths into such a file would
-/// succeed, be ignored by the client, and be reported as a working takeover.
+/// A config carrying both schema generations is not ambiguous: OpenCode's
+/// loader merges the legacy `provider` entries with the native `providers`
+/// entries, and for the same id the native one wins. So an adopt of such a
+/// file manages the v2 block, and — the part a naive "write and forget" would
+/// miss — the legacy block is left exactly as it was, because on release the
+/// merge hands effect straight back to it. Restore has to mean "back to the
+/// effective provider that was here before", not "back to the values we saw".
 #[test]
-fn opencode_refuses_a_v2_shaped_provider_block() {
+fn opencode_adopt_writes_the_native_block_and_release_restores_the_legacy_handback() {
     super::isolate_agent_home();
     let home = super::isolated_agent_home().unwrap();
     let dir = home.join(".config").join("opencode");
     std::fs::create_dir_all(&dir).unwrap();
+    // The shape this machine actually had: a hand-written legacy block pointing
+    // somewhere, and a native block for an unrelated provider.
     std::fs::write(
         dir.join("opencode.json"),
-        r#"{"providers":{"zroutery":{"package":"@ai-sdk/openai-compatible"}}}"#,
+        r#"{"provider":{"zroutery":{"npm":"@ai-sdk/openai-compatible","name":"Zroutery","options":{"baseURL":"http://127.0.0.1:15721","apiKey":"stale-token"}}},"providers":{"tireflow":{"package":"aisdk:@ai-sdk/openai-compatible"}}}"#,
     )
     .unwrap();
 
-    let err = OpenCodeAdapter
+    let target = a_target();
+    let fields = takeover_fields(AgentType::OpenCode, &target, None)
+        .expect("a config carrying the native key is served through it");
+    let snapshot = OpenCodeAdapter.read_config().expect("the config parses");
+
+    // The canonical adopt sequence: record the originals, write, record what
+    // was written.
+    let paths: Vec<String> = fields.iter().map(|f| f.path.clone()).collect();
+    let managed_values: HashMap<String, serde_json::Value> = fields
+        .iter()
+        .map(|f| (f.path.clone(), f.value.clone()))
+        .collect();
+    let current = extract_field_values(&snapshot.raw, &paths);
+    let store = TakeoverStore::new();
+    store
+        .adopt(paths, &current)
+        .expect("the originals are recorded");
+    let patched = OpenCodeAdapter
+        .apply_patch(&snapshot, &fields)
+        .expect("the native block lands");
+    store.record_applied(&managed_values).unwrap();
+
+    // The native block now carries the gateway; the legacy block is untouched.
+    assert_eq!(
+        patched.raw["providers"][GATEWAY_PROVIDER_ID]["settings"]["baseURL"], target.base_url,
+        "the authoritative block is the native one"
+    );
+    assert_eq!(
+        patched.raw["provider"][GATEWAY_PROVIDER_ID]["options"]["baseURL"],
+        "http://127.0.0.1:15721",
+        "the legacy block is neither updated nor deleted by an adopt"
+    );
+
+    // Release: the manifest recorded the native fields as absent (they did not
+    // exist before the adopt), so releasing removes the block and the legacy
+    // handback becomes effective again — the pre-takeover state.
+    let manifest = store.release_with_restore(&OpenCodeAdapter).unwrap();
+    assert_eq!(manifest.state, OwnershipState::Released);
+    let after = OpenCodeAdapter
         .read_config()
-        .expect_err("a v2 provider block must be refused");
-    assert!(err.contains("v2"), "{err}");
+        .expect("released config reads");
+    assert!(
+        after
+            .raw
+            .get("providers")
+            .and_then(|p| p.get(GATEWAY_PROVIDER_ID))
+            .is_none(),
+        "a field that was absent at adoption must not outlive the ownership: {}",
+        after.raw
+    );
+    assert_eq!(
+        after.raw["provider"][GATEWAY_PROVIDER_ID]["options"]["baseURL"], "http://127.0.0.1:15721",
+        "release hands effect back to the legacy block, which is the pre-takeover state"
+    );
 }
 
 #[test]
@@ -1560,25 +1679,9 @@ fn opencode_reads_a_v1_config() {
     assert_eq!(snapshot.raw["model"], "anthropic/claude");
 }
 
-/// A config carrying *both* schema generations is mid-migration, and the
-/// file itself cannot say which one the running client reads.
-#[test]
-fn opencode_refuses_a_config_carrying_both_schema_generations() {
-    super::isolate_agent_home();
-    let home = super::isolated_agent_home().unwrap();
-    let dir = home.join(".config").join("opencode");
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(
-        dir.join("opencode.json"),
-        r#"{"provider":{},"providers":{}}"#,
-    )
-    .unwrap();
-
-    let err = OpenCodeAdapter
-        .read_config()
-        .expect_err("a mid-migration config must be refused");
-    assert!(err.contains("v2"), "{err}");
-}
+// A config carrying *both* schema generations is not refused: see
+// `opencode_adopt_writes_the_native_block_and_release_restores_the_legacy_handback`,
+// which exercises the merge rule that makes the file decidable.
 
 // -----------------------------------------------------------------------
 // takeover_fields: what a takeover is allowed to manage
@@ -1602,8 +1705,12 @@ fn a_target() -> GatewayTarget {
     }
 }
 
-fn paths(agent: AgentType, target: &GatewayTarget) -> Vec<String> {
-    takeover_fields(agent, target)
+fn paths(
+    agent: AgentType,
+    target: &GatewayTarget,
+    existing: Option<&serde_json::Value>,
+) -> Vec<String> {
+    takeover_fields(agent, target, existing)
         .unwrap_or_else(|e| panic!("{agent:?} should have a field set: {e}"))
         .into_iter()
         .map(|f| f.path)
@@ -1620,7 +1727,7 @@ fn paths(agent: AgentType, target: &GatewayTarget) -> Vec<String> {
 fn the_claude_field_set_is_exactly_two_env_entries() {
     let target = a_target();
     assert_eq!(
-        paths(AgentType::Claude, &target),
+        paths(AgentType::Claude, &target, None),
         vec!["env.ANTHROPIC_BASE_URL", "env.ANTHROPIC_AUTH_TOKEN"]
     );
 }
@@ -1628,9 +1735,9 @@ fn the_claude_field_set_is_exactly_two_env_entries() {
 #[test]
 fn the_claude_field_set_does_not_touch_the_model_unless_asked() {
     let mut target = a_target();
-    let plain = paths(AgentType::Claude, &target);
+    let plain = paths(AgentType::Claude, &target, None);
     target.default_class = Some("sonnet-class".into());
-    let with_default = paths(AgentType::Claude, &target);
+    let with_default = paths(AgentType::Claude, &target, None);
 
     assert_eq!(
         plain, with_default,
@@ -1644,7 +1751,7 @@ fn the_claude_field_set_does_not_touch_the_model_unless_asked() {
 #[test]
 fn the_codex_field_set_selects_the_provider_it_defines() {
     let target = a_target();
-    let got = paths(AgentType::Codex, &target);
+    let got = paths(AgentType::Codex, &target, None);
 
     assert!(
         got.iter().any(|p| p == "model_provider"),
@@ -1664,7 +1771,7 @@ fn the_codex_field_set_selects_the_provider_it_defines() {
     );
     assert!(got.contains(&format!("{table_prefix}base_url")), "{got:?}");
     // The selector value must name the table that was written.
-    let fields = takeover_fields(AgentType::Codex, &target).unwrap();
+    let fields = takeover_fields(AgentType::Codex, &target, None).unwrap();
     let selector = fields
         .iter()
         .find(|f| f.path == "model_provider")
@@ -1676,13 +1783,13 @@ fn the_codex_field_set_selects_the_provider_it_defines() {
 fn the_codex_field_set_only_sets_the_model_when_a_default_is_asked_for() {
     let mut target = a_target();
     assert!(
-        !paths(AgentType::Codex, &target)
+        !paths(AgentType::Codex, &target, None)
             .iter()
             .any(|p| p == "model"),
         "codex must not have its model rewritten by default"
     );
     target.default_class = Some("sonnet-class".into());
-    assert!(paths(AgentType::Codex, &target)
+    assert!(paths(AgentType::Codex, &target, None)
         .iter()
         .any(|p| p == "model"));
 }
@@ -1793,7 +1900,7 @@ fn the_codex_takeover_targets_the_user_config() {
 #[test]
 fn the_codex_provider_table_carries_a_non_empty_name() {
     let target = a_target();
-    let fields = takeover_fields(AgentType::Codex, &target).unwrap();
+    let fields = takeover_fields(AgentType::Codex, &target, None).unwrap();
     let name = fields
         .iter()
         .find(|f| f.path == format!("model_providers.{GATEWAY_PROVIDER_ID}.name"))
@@ -1811,7 +1918,7 @@ fn the_codex_provider_table_carries_a_non_empty_name() {
 #[test]
 fn the_codex_token_goes_in_the_field_that_takes_a_literal() {
     let target = a_target();
-    let got = paths(AgentType::Codex, &target);
+    let got = paths(AgentType::Codex, &target, None);
 
     assert!(
         got.contains(&format!(
@@ -1832,22 +1939,73 @@ fn the_codex_token_goes_in_the_field_that_takes_a_literal() {
     );
 }
 
+/// Which schema generation gets managed is decided by the document, by
+/// OpenCode's own merge rule: the legacy `provider` entries and the native
+/// `providers` entries merge into one effective table, and for the same id the
+/// native (v2) one wins. Managing the losing block would be a takeover the
+/// client ignores.
 #[test]
-fn the_opencode_field_set_uses_the_documented_v1_shape() {
+fn the_opencode_field_set_follows_the_file_s_schema_generation() {
     let target = a_target();
-    let got = paths(AgentType::OpenCode, &target);
 
+    // No document (a takeover that creates the file) gets the schema's
+    // current shape.
+    let created = paths(AgentType::OpenCode, &target, None);
+    for expected in [
+        format!("providers.{GATEWAY_PROVIDER_ID}.package"),
+        format!("providers.{GATEWAY_PROVIDER_ID}.settings.baseURL"),
+        format!("providers.{GATEWAY_PROVIDER_ID}.settings.apiKey"),
+        format!("providers.{GATEWAY_PROVIDER_ID}.models.sonnet-class.name"),
+    ] {
+        assert!(
+            created.contains(&expected),
+            "missing {expected} in {created:?}"
+        );
+    }
+    assert!(
+        !created.iter().any(|p| p.starts_with("provider.")),
+        "the deprecated v1 key must not be written into a fresh file: {created:?}"
+    );
+
+    // A v2-era file — anything carrying `providers` — is managed through the
+    // v2 block, including when a legacy block also sits in the file: the
+    // native one wins the merge for the same id.
+    let v2_doc = serde_json::json!({
+        "providers": { "tireflow": { "package": "aisdk:@ai-sdk/openai-compatible" } }
+    });
+    let v2 = paths(AgentType::OpenCode, &target, Some(&v2_doc));
+    assert!(v2.iter().all(|p| !p.starts_with("provider.")), "{v2:?}");
+    assert!(v2
+        .iter()
+        .any(|p| p == &format!("providers.{GATEWAY_PROVIDER_ID}.settings.apiKey")));
+
+    let both_doc = serde_json::json!({
+        "provider": { (GATEWAY_PROVIDER_ID): { "npm": "@ai-sdk/openai-compatible" } },
+        "providers": { "tireflow": { "package": "aisdk:@ai-sdk/openai-compatible" } }
+    });
+    let both = paths(AgentType::OpenCode, &target, Some(&both_doc));
+    assert_eq!(
+        both, v2,
+        "a legacy block beside the native key changes nothing"
+    );
+
+    // A file that only speaks v1 keeps the v1 paths, which is what that
+    // client reads.
+    let v1_doc = serde_json::json!({
+        "provider": { (GATEWAY_PROVIDER_ID): { "npm": "@ai-sdk/openai-compatible" } }
+    });
+    let v1 = paths(AgentType::OpenCode, &target, Some(&v1_doc));
     for expected in [
         format!("provider.{GATEWAY_PROVIDER_ID}.npm"),
         format!("provider.{GATEWAY_PROVIDER_ID}.options.baseURL"),
         format!("provider.{GATEWAY_PROVIDER_ID}.options.apiKey"),
         format!("provider.{GATEWAY_PROVIDER_ID}.models.sonnet-class.name"),
     ] {
-        assert!(got.contains(&expected), "missing {expected} in {got:?}");
+        assert!(v1.contains(&expected), "missing {expected} in {v1:?}");
     }
     assert!(
-        !got.iter().any(|p| p.starts_with("providers.")),
-        "v2 key must never be written: {got:?}"
+        !v1.iter().any(|p| p.starts_with("providers.")),
+        "v2 key must never be written into a v1-only file: {v1:?}"
     );
 }
 
@@ -1855,7 +2013,7 @@ fn the_opencode_field_set_uses_the_documented_v1_shape() {
 fn the_opencode_default_model_is_namespaced_but_the_table_is_not() {
     let mut target = a_target();
     target.default_class = Some("sonnet-class".into());
-    let fields = takeover_fields(AgentType::OpenCode, &target).unwrap();
+    let fields = takeover_fields(AgentType::OpenCode, &target, None).unwrap();
 
     let model = fields.iter().find(|f| f.path == "model").expect("model");
     assert_eq!(
@@ -1877,8 +2035,8 @@ fn the_opencode_default_model_is_namespaced_but_the_table_is_not() {
 #[test]
 fn gemini_is_refused_a_new_takeover() {
     let target = a_target();
-    let err =
-        takeover_fields(AgentType::Gemini, &target).expect_err("gemini takeover is withdrawn");
+    let err = takeover_fields(AgentType::Gemini, &target, None)
+        .expect_err("gemini takeover is withdrawn");
     assert!(err.contains("not supported"), "{err}");
     assert!(
         !AgentType::Gemini.is_takeover_supported(),
@@ -1905,7 +2063,7 @@ fn every_advertised_agent_can_produce_a_field_set() {
         );
         if supported {
             assert!(
-                !takeover_fields(agent, &target)
+                !takeover_fields(agent, &target, None)
                     .expect("a supported agent must yield fields")
                     .is_empty(),
                 "{agent:?} yielded no fields"
@@ -1920,25 +2078,25 @@ fn takeover_fields_refuses_an_unusable_target() {
 
     let mut no_url = base.clone();
     no_url.base_url = "   ".into();
-    assert!(takeover_fields(AgentType::Claude, &no_url)
+    assert!(takeover_fields(AgentType::Claude, &no_url, None)
         .unwrap_err()
         .contains("gateway URL"));
 
     let mut no_token = base.clone();
     no_token.token = String::new();
-    assert!(takeover_fields(AgentType::Claude, &no_token)
+    assert!(takeover_fields(AgentType::Claude, &no_token, None)
         .unwrap_err()
         .contains("token"));
 
     let mut no_classes = base.clone();
     no_classes.classes = Vec::new();
-    assert!(takeover_fields(AgentType::Claude, &no_classes)
+    assert!(takeover_fields(AgentType::Claude, &no_classes, None)
         .unwrap_err()
         .contains("no model classes"));
 
     let mut bad_default = base.clone();
     bad_default.default_class = Some("nope-class".into());
-    assert!(takeover_fields(AgentType::Claude, &bad_default)
+    assert!(takeover_fields(AgentType::Claude, &bad_default, None)
         .unwrap_err()
         .contains("not one of the classes offered"));
 
@@ -1946,7 +2104,7 @@ fn takeover_fields_refuses_an_unusable_target() {
     // somewhere the client never reads.
     let mut dotted = base.clone();
     dotted.classes[0].model = "sonnet.class".into();
-    assert!(takeover_fields(AgentType::OpenCode, &dotted)
+    assert!(takeover_fields(AgentType::OpenCode, &dotted, None)
         .unwrap_err()
         .contains("field-path separator"));
 }

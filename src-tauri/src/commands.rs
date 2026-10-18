@@ -295,6 +295,198 @@ pub async fn clear_provider_key(
     Ok(refreshed(&app, &desktop).await)
 }
 
+/// Where an account's own credential lives, when it does not share the
+/// provider's. Derived rather than chosen, so two accounts on one provider can
+/// never collide and the reference is reproducible from the pair alone.
+#[cfg(feature = "account")]
+fn account_key_ref(provider_id: &str, account_id: &str) -> String {
+    format!("provider:{provider_id}:account:{account_id}")
+}
+
+/// Store one account's own credential and point its declaration at it.
+///
+/// An account whose `key_ref` is empty (or equal to the provider's own
+/// reference) resolves to the provider's key, which is the common
+/// single-account case; this command exists for the case where the account
+/// must not share it. The declaration is patched here rather than edited from
+/// the dashboard because the reference and the stored secret must agree, and
+/// only this command sees both.
+#[cfg(feature = "account")]
+#[tauri::command]
+pub async fn set_account_key(
+    app: AppHandle,
+    desktop: State<'_, Arc<Desktop>>,
+    provider_id: String,
+    account_id: String,
+    api_key: String,
+) -> Cmd<Snapshot> {
+    let key = api_key.trim();
+    if key.is_empty() {
+        return Err("the API key is empty".into());
+    }
+    if key.len() > 4096 {
+        return Err("the API key exceeds 4096 bytes".into());
+    }
+    let derived = account_key_ref(&provider_id, &account_id);
+    // Where to store, and whether the declaration still says "share the
+    // provider's key" and has to be repointed. A reference the user set by
+    // hand is kept and its stored value replaced; a reference equal to the
+    // provider's is treated as sharing, because storing an account secret
+    // under the provider's address would silently rekey the whole provider.
+    let (key_ref, repoint) = {
+        let config = desktop.core.config();
+        let provider = config
+            .provider(&provider_id)
+            .ok_or_else(|| format!("unknown provider `{provider_id}`"))?;
+        let declaration = provider
+            .accounts
+            .iter()
+            .find(|a| a.account_id == account_id)
+            .ok_or_else(|| format!("unknown account `{account_id}` on provider `{provider_id}`"))?;
+        if declaration.key_ref.is_empty() || declaration.key_ref == provider.key_ref {
+            (derived.clone(), true)
+        } else {
+            (declaration.key_ref.clone(), false)
+        }
+    };
+    // Keychain I/O blocks; keep it off the async worker thread.
+    let secrets = Arc::clone(&desktop.secrets);
+    let key = key.to_string();
+    let key_ref_for_store = key_ref.clone();
+    tauri::async_runtime::spawn_blocking(move || secrets.set(&key_ref_for_store, &key))
+        .await
+        .map_err(|e| e.to_string())??;
+    if repoint {
+        let mut config = (*desktop.core.config()).clone();
+        if let Some(declaration) = config
+            .providers
+            .iter_mut()
+            .find(|p| p.id == provider_id)
+            .and_then(|p| p.accounts.iter_mut().find(|a| a.account_id == account_id))
+        {
+            declaration.key_ref = key_ref;
+        }
+        desktop.apply_config(config).await?;
+    }
+    Ok(refreshed(&app, &desktop).await)
+}
+
+/// Drop one account's own credential and let it resolve to the provider's key
+/// again.
+///
+/// The stored secret is deleted only when nothing else references it; a
+/// reference shared with another declaration survives, because clearing one
+/// account must not rekey another. A missing declaration is an error, unlike
+/// [`clear_provider_key`]: this command also edits the configuration, and
+/// editing a document that does not contain the account would silently do
+/// nothing while reporting success.
+#[cfg(feature = "account")]
+#[tauri::command]
+pub async fn clear_account_key(
+    app: AppHandle,
+    desktop: State<'_, Arc<Desktop>>,
+    provider_id: String,
+    account_id: String,
+) -> Cmd<Snapshot> {
+    let (key_ref, shared) = {
+        let config = desktop.core.config();
+        let provider = config
+            .provider(&provider_id)
+            .ok_or_else(|| format!("unknown provider `{provider_id}`"))?;
+        let declaration = provider
+            .accounts
+            .iter()
+            .find(|a| a.account_id == account_id)
+            .ok_or_else(|| format!("unknown account `{account_id}` on provider `{provider_id}`"))?;
+        if declaration.key_ref.is_empty() || declaration.key_ref == provider.key_ref {
+            // Nothing of its own to clear: the account follows the provider's
+            // key already, and clearing is a no-op rather than an error.
+            return Ok(refreshed(&app, &desktop).await);
+        }
+        let shared_elsewhere = config.providers.iter().any(|p| {
+            p.key_ref == declaration.key_ref
+                || p.accounts
+                    .iter()
+                    .any(|a| a.account_id != account_id && a.key_ref == declaration.key_ref)
+        });
+        (declaration.key_ref.clone(), shared_elsewhere)
+    };
+    if !shared {
+        let secrets = Arc::clone(&desktop.secrets);
+        tauri::async_runtime::spawn_blocking(move || secrets.delete(&key_ref))
+            .await
+            .map_err(|e| e.to_string())??;
+    }
+    let mut config = (*desktop.core.config()).clone();
+    if let Some(declaration) = config
+        .providers
+        .iter_mut()
+        .find(|p| p.id == provider_id)
+        .and_then(|p| p.accounts.iter_mut().find(|a| a.account_id == account_id))
+    {
+        declaration.key_ref = String::new();
+    }
+    desktop.apply_config(config).await?;
+    Ok(refreshed(&app, &desktop).await)
+}
+
+/// Remove one account declaration, and the credential only it referenced.
+///
+/// Mirrors [`remove_provider`]'s discipline: the declaration's real `key_ref`
+/// is read before the configuration changes, a reference another declaration
+/// still holds is left alone, and an account that followed the provider's key
+/// deletes nothing. The probe and check-in stores key their runtime state by
+/// `(provider_id, account_id)`, so a re-added account with the same pair starts
+/// from observations of the previous one — recorded here rather than hidden.
+#[cfg(feature = "account")]
+#[tauri::command]
+pub async fn remove_account(
+    app: AppHandle,
+    desktop: State<'_, Arc<Desktop>>,
+    provider_id: String,
+    account_id: String,
+) -> Cmd<Snapshot> {
+    let (removed_ref, provider_key_ref) = {
+        let config = desktop.core.config();
+        let provider = config
+            .provider(&provider_id)
+            .ok_or_else(|| format!("unknown provider `{provider_id}`"))?;
+        let declaration = provider
+            .accounts
+            .iter()
+            .find(|a| a.account_id == account_id)
+            .ok_or_else(|| format!("unknown account `{account_id}` on provider `{provider_id}`"))?;
+        (declaration.key_ref.clone(), provider.key_ref.clone())
+    };
+    let mut config = (*desktop.core.config()).clone();
+    let provider = config
+        .providers
+        .iter_mut()
+        .find(|p| p.id == provider_id)
+        .ok_or_else(|| format!("unknown provider `{provider_id}`"))?;
+    let index = provider
+        .accounts
+        .iter()
+        .position(|a| a.account_id == account_id)
+        .ok_or_else(|| format!("unknown account `{account_id}` on provider `{provider_id}`"))?;
+    provider.accounts.remove(index);
+    // The mutable borrow ends here; the shared-reference scan below reads the
+    // post-removal document.
+    let own = !removed_ref.is_empty() && removed_ref != provider_key_ref;
+    let shared = own
+        && config.providers.iter().any(|p| {
+            p.key_ref == removed_ref || p.accounts.iter().any(|a| a.key_ref == removed_ref)
+        });
+    if own && !shared {
+        let secrets = Arc::clone(&desktop.secrets);
+        tauri::async_runtime::spawn_blocking(move || secrets.delete(&removed_ref))
+            .await
+            .map_err(|e| e.to_string())??;
+    }
+    desktop.apply_config(config).await?;
+    Ok(refreshed(&app, &desktop).await)
+}
+
 /// Remove a provider, its models and the credential only it referenced.
 ///
 /// The backend reads the provider's real `key_ref` before changing the

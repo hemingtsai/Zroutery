@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, errorText, gatewayAction, onGatewayStateChanged, type AppConfig, type Snapshot } from "./api";
 import { Banner, MenuItem, Popover, StatusDot, ToastProvider, useToast } from "./components";
-import { I18nProvider, useI18n } from "./i18n";
+import { describeBackendError, I18nProvider, useI18n } from "./i18n";
 import Overview from "./pages/Overview";
 import Models from "./pages/Models";
 import Providers from "./pages/Providers";
+import Accounts from "./pages/Accounts";
+import Takeover from "./pages/Takeover";
 import Routing from "./pages/Routing";
 import Activity from "./pages/Activity";
 import Settings from "./pages/Settings";
@@ -15,12 +17,22 @@ import Settings from "./pages/Settings";
  * that reads darkest. Everything else lives inside a page: Auto review inside
  * Routing, the gateway inside Settings, diagnostics inside Settings.
  */
-type Page = "overview" | "models" | "providers" | "routing" | "activity" | "settings";
+type Page =
+  | "overview"
+  | "models"
+  | "providers"
+  | "accounts"
+  | "takeover"
+  | "routing"
+  | "activity"
+  | "settings";
 
 const NAV: { id: Page; labelKey: Parameters<ReturnType<typeof useI18n>["t"]>[0] }[] = [
   { id: "overview", labelKey: "nav.overview" },
   { id: "models", labelKey: "nav.models" },
   { id: "providers", labelKey: "nav.providers" },
+  { id: "accounts", labelKey: "nav.accounts" },
+  { id: "takeover", labelKey: "nav.takeover" },
   { id: "routing", labelKey: "nav.routing" },
   { id: "activity", labelKey: "nav.activity" },
   { id: "settings", labelKey: "nav.settings" },
@@ -288,7 +300,7 @@ function Shell() {
   if (!snapshot) {
     return (
       <main className="loading">
-        <p>{error ?? t("common.loading")}</p>
+        <p>{error ? describeBackendError(t, error) : t("common.loading")}</p>
       </main>
     );
   }
@@ -439,16 +451,22 @@ function Shell() {
                   </button>
                 }
               >
-                {error}
+                {describeBackendError(t, error)}
               </Banner>
             )}
-            {pollError && <Banner tone="warn">{t("app.live_stopped", { err: pollError })}</Banner>}
-            {snapshot.warning && <Banner tone="warn">{snapshot.warning}</Banner>}
+            {pollError && (
+              <Banner tone="warn">
+                {t("app.live_stopped", { err: describeBackendError(t, pollError) })}
+              </Banner>
+            )}
+            {snapshot.warning && (
+              <Banner tone="warn">{describeBackendError(t, snapshot.warning)}</Banner>
+            )}
             {snapshot.issues
               .filter((i) => i.severity === "error")
               .map((i) => (
                 <Banner key={`${i.code}:${i.subject ?? ""}`} tone="danger">
-                  {i.message}
+                  {describeBackendError(t, i.message)}
                 </Banner>
               ))}
             {server.exposed && (
@@ -461,6 +479,10 @@ function Shell() {
             {page === "providers" && (
               <Providers snapshot={snapshot} save={save} run={run} busy={busy} />
             )}
+            {page === "accounts" && (
+              <Accounts snapshot={snapshot} save={save} run={run} busy={busy} />
+            )}
+            {page === "takeover" && <Takeover />}
             {page === "routing" && <Routing snapshot={snapshot} save={save} run={run} busy={busy} />}
             {page === "activity" && <Activity snapshot={snapshot} run={run} />}
             {page === "settings" && (

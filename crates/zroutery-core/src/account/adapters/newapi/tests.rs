@@ -681,10 +681,9 @@ async fn authenticate_with_api_key_verifies_and_installs_the_session() {
 
     let probe = panel.state.last();
     assert_eq!(probe.path, "/api/user/self");
-    assert_eq!(
-        probe.bearer.as_deref(),
-        Some(&format!("Bearer {BEARER}")[..])
-    );
+    // The dashboard credential is sent verbatim, with no `Bearer ` prefix: the
+    // panel compares the header value against the stored token as-is.
+    assert_eq!(probe.bearer.as_deref(), Some(BEARER));
 }
 
 #[tokio::test]
@@ -748,7 +747,7 @@ async fn authenticate_with_cookie_exchanges_it_for_an_access_token() {
     assert!(quota.remaining > 0.0);
     assert_eq!(
         panel.state.last().bearer.as_deref(),
-        Some("Bearer jwt-from-cookie")
+        Some("jwt-from-cookie")
     );
 }
 
@@ -784,7 +783,34 @@ async fn authenticate_with_oauth2_uses_the_access_token_as_the_bearer() {
 
     assert_eq!(session.username.as_deref(), Some("alice"));
     let probe = panel.state.last();
-    assert_eq!(probe.bearer.as_deref(), Some("Bearer bearer-jwt"));
+    assert_eq!(probe.bearer.as_deref(), Some("bearer-jwt"));
+}
+
+/// A relay key authenticates `/v1`, never the dashboard; storing one as an
+/// account credential must be refused at construction with the reason, not at
+/// request time as a 401 that reads as an expired token.
+#[test]
+fn a_relay_key_is_refused_as_a_dashboard_credential() {
+    let build = |api_key: &str| {
+        NewApiAdapter::new(NewApiConfig {
+            base_url: "https://panel.example.com".into(),
+            api_key: api_key.into(),
+            ..Default::default()
+        })
+    };
+    let err = build("sk-relay-key")
+        .err()
+        .expect("an sk- credential must not build an adapter");
+    assert!(
+        err.to_string().contains("relay API key"),
+        "the refusal names the credential kind: {err}"
+    );
+
+    // Also refused when pasted with a bearer prefix on top.
+    let err = build("Bearer sk-relay-key")
+        .err()
+        .expect("a prefixed sk- credential must not build an adapter either");
+    assert!(err.to_string().contains("relay API key"), "{err}");
 }
 
 #[tokio::test]
@@ -863,7 +889,7 @@ async fn an_expired_access_token_is_renewed_once_and_the_call_retried() {
     assert_eq!(panel.state.hits("/api/user/auth/refresh"), 1);
     assert_eq!(
         panel.state.last().bearer.as_deref(),
-        Some("Bearer jwt-from-cookie"),
+        Some("jwt-from-cookie"),
         "the retry uses the renewed token"
     );
 }

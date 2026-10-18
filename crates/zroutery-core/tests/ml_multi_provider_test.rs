@@ -1,3 +1,4 @@
+#![cfg(feature = "ml")]
 //! Cross-provider routing, on real traffic.
 //!
 //! Every other fixture in this repository routes between two *models of one

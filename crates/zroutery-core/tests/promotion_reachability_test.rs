@@ -1,3 +1,4 @@
+#![cfg(feature = "ml")]
 //! Is a promoted model reachable from the product at all?
 //!
 //! # The question

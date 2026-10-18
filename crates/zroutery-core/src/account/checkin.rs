@@ -601,6 +601,52 @@ pub fn decide(
     if !maintenance.is_browser_checkin_configured() {
         return MaintenanceDecision::NotApplicable;
     }
+    timing_decision(maintenance, last_settled_at, now)
+}
+
+/// Decide whether one account's check-in should run now, on any executor.
+///
+/// [`decide`] answers the question *for the browser executor*, and historically
+/// that was the only executor, so the two questions were one. They are not any
+/// more: an account holding a verified panel credential can check in over the
+/// provider's own HTTP endpoint with no browser at all — the "logged in, so it
+/// signs in" path — and demanding a page path and a trigger selector from an
+/// operator whose instance needs neither would report a working declaration as
+/// `NotApplicable`.
+///
+/// This function is [`decide`] minus the browser-configuration gate: everything
+/// else — the `Disabled` answer, the first-observation conservatism, the
+/// no-interval answer, the saturating arithmetic — is the same decision made by
+/// the same rules, and the caller chooses the executor. That split is the whole
+/// design: *whether* to run is a scheduling question answered here, *how* to run
+/// is an execution question answered by whoever holds the credential and the
+/// browser, and neither half may invent the other's answer.
+///
+/// An account that is due under this function but has **no** executor — no
+/// credential and no browser configuration — is the caller's to refuse, and the
+/// desktop scheduler refuses it before launch rather than here, because whether
+/// a credential exists is a secret-store question this pure function cannot ask.
+pub fn decide_api(
+    maintenance: &crate::config::MaintenanceConfig,
+    last_settled_at: Option<i64>,
+    now: i64,
+) -> MaintenanceDecision {
+    if !maintenance.checkin_enabled {
+        return MaintenanceDecision::Disabled;
+    }
+    timing_decision(maintenance, last_settled_at, now)
+}
+
+/// The interval arithmetic shared by [`decide`] and [`decide_api`].
+///
+/// Extracted rather than copied: two copies of the saturating-add rule would
+/// drift, and the drift would be invisible until a clock-skewed settlement
+/// overflowed one function but not the other.
+fn timing_decision(
+    maintenance: &crate::config::MaintenanceConfig,
+    last_settled_at: Option<i64>,
+    now: i64,
+) -> MaintenanceDecision {
     let Some(last) = last_settled_at else {
         return MaintenanceDecision::NeedsFirstObservation;
     };
@@ -951,5 +997,77 @@ mod tests {
         }
         assert!(all.iter().filter(|d| d.should_run()).count() == 1);
         assert!(all.iter().filter(|d| d.is_declared()).count() == 2);
+    }
+
+    #[test]
+    fn the_api_decision_ignores_the_browser_configuration() {
+        // The whole reason `decide_api` exists: a credential-only account with no
+        // page path and no selector is actionable over HTTP, so demanding browser
+        // configuration here would report a working declaration as NotApplicable
+        // and the scheduler would never run it.
+        let m = crate::config::MaintenanceConfig {
+            checkin_enabled: true,
+            checkin_interval_secs: Some(86_400),
+            ..Default::default()
+        };
+        assert_eq!(
+            decide(&m, Some(1_000), 1_000 + 999_999),
+            MaintenanceDecision::NotApplicable,
+            "the browser decision still demands browser configuration"
+        );
+        assert!(decide_api(&m, Some(1_000), 1_000 + 999_999).should_run());
+        // Never run: the first-observation conservatism is shared, not dropped.
+        assert_eq!(
+            decide_api(&m, None, 1_000),
+            MaintenanceDecision::NeedsFirstObservation
+        );
+        // Switched off: the same answer, for the same reason.
+        assert_eq!(
+            decide_api(
+                &crate::config::MaintenanceConfig {
+                    checkin_enabled: false,
+                    ..m.clone()
+                },
+                Some(1_000),
+                1_000 + 999_999
+            ),
+            MaintenanceDecision::Disabled
+        );
+        // No interval: the same answer, for the same reason.
+        assert_eq!(
+            decide_api(
+                &crate::config::MaintenanceConfig {
+                    checkin_interval_secs: None,
+                    ..m
+                },
+                Some(1_000),
+                1_000 + 999_999
+            ),
+            MaintenanceDecision::NoPolicy
+        );
+    }
+
+    #[test]
+    fn the_two_decisions_agree_wherever_the_browser_gate_does_not_apply() {
+        // One timing rule, two gates: wherever `decide` gets past its own gate,
+        // both must answer identically, or a schedule view and a scheduler run
+        // could disagree about the same account at the same instant.
+        let m = actionable(Some(3_600));
+        for last in [None, Some(1_000), Some(i64::MAX)] {
+            for now in [0i64, 1_000, 4_600, i64::MAX] {
+                assert_eq!(decide(&m, last, now), decide_api(&m, last, now));
+            }
+        }
+        let unconfigured = crate::config::MaintenanceConfig {
+            checkin_enabled: true,
+            checkin_interval_secs: Some(3_600),
+            ..Default::default()
+        };
+        // And the one place they differ is exactly the gate.
+        assert_eq!(
+            decide(&unconfigured, Some(1_000), 999_999),
+            MaintenanceDecision::NotApplicable
+        );
+        assert!(decide_api(&unconfigured, Some(1_000), 999_999).should_run());
     }
 }
