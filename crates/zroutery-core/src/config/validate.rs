@@ -311,8 +311,10 @@ impl AppConfig {
         }
 
         // Classifier candidates reference models by exposed id or alias; a
-        // dangling reference means a classifier request would fail at routing
-        // time, which is better caught at save time.
+        // dangling reference is reported so the panel can offer to clean it up,
+        // but as a warning: the router skips unknown candidates at routing time,
+        // and an error here once turned one stale entry into a lockout of every
+        // save in the panel.
         if self.classifier.enabled {
             if !(0.0..=1.0).contains(&self.classifier.detection.minimum_confidence) {
                 issues.push(ConfigIssue {
@@ -365,8 +367,18 @@ impl AppConfig {
                         });
                     }
                 } else {
+                    // A warning, not an error — and that is a lesson from the field,
+                    // not a softening. As an error this blocked *every* save: a user
+                    // who deleted the model a stale candidate pointed at could not
+                    // delete it, could not save anything else, and could only learn
+                    // of the lockout through this English sentence. The router
+                    // already skips unknown candidates at routing time (see
+                    // `plan_classifier`), so a dangling reference costs the pool one
+                    // member and nothing more; the panel says which candidate and
+                    // offers removal, and the rest of the configuration keeps
+                    // saving.
                     issues.push(ConfigIssue {
-                        severity: IssueSeverity::Error,
+                        severity: IssueSeverity::Warning,
                         code: "classifier.candidate_unknown".into(),
                         message: format!(
                             "Classifier candidate `{}` is not a configured model",
