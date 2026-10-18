@@ -551,6 +551,83 @@ const en = {
   "takeover.report_overwritten": "restored {n} field(s)",
   "takeover.report_skipped": "skipped {n} field(s)",
 
+  // ------------------------------------------------------------- cutover
+  /*
+   * The cutover page. A cutover replaces a client's whole configuration file
+   * with a staged copy, having first snapshotted the original byte for byte.
+   * It overlaps the takeover page on purpose and the two are not the same
+   * tool: takeover writes managed fields and tracks their previous values,
+   * this writes the file and keeps the file — which is the only one of the two
+   * that survives the process dying mid-run. That is why this page exists
+   * rather than a second set of buttons on the takeover page: the case it
+   * answers is a cutover that failed or was interrupted, and whether the
+   * user's file came back.
+   */
+  "nav.cutover": "Cutover",
+  "cutover.section": "Configuration cutover",
+  "cutover.section_hint":
+    "Move an external client's configuration onto this gateway as a typed, verified plan — with the original file captured byte for byte first, so a run that fails partway can be put back exactly as it was. Use the Takeover page for putting a client on the gateway and taking it off again; this page is the undo.",
+  "cutover.state.section": "Migration record",
+  "cutover.state.detected": "nothing run yet",
+  "cutover.state.prepared": "interrupted while preparing",
+  "cutover.state.verified": "interrupted after verifying",
+  "cutover.state.switched": "interrupted after switching",
+  "cutover.state.completed": "completed",
+  "cutover.state.rolled_back": "rolled back",
+  "cutover.state.failed": "failed",
+  "cutover.state.hint.detected":
+    "No cutover has been run from this record. Nothing on this page has changed a client's configuration.",
+  "cutover.state.hint.completed":
+    "A cutover finished and the record kept its state. There is no rollback from a completed run: the record has no transition out of it, even though the snapshot is still on disk. Nothing is half-applied, so nothing needs undoing.",
+  "cutover.state.hint.rolled_back":
+    "A cutover was rolled back and the files it captured were restored. This record admits one run, so choosing a client below starts over from the original file.",
+  "cutover.state.hint.interrupted":
+    "This record says a cutover started and did not finish. The snapshot below is the only copy of the original file; until it is restored or the cutover completed, the client's configuration is whatever the run left behind.",
+  "cutover.state.hint.failed":
+    "This cutover failed partway. Its snapshot is the only way back to the original file, so the rollback below is the one action that matters.",
+  "cutover.snapshot.none": "No rollback snapshot has been captured.",
+  "cutover.snapshot.files": "{n} file(s) captured, restorable byte for byte.",
+  "cutover.not_durable":
+    "This build's migration record is not durable, so a restart cannot recover an interrupted cutover. Nothing will be written until it is.",
+  "cutover.persist_error": "The record is not reaching disk: {err}",
+  "cutover.plans.section": "Cutover plans",
+  "cutover.plans.hint":
+    "Each plan below is built from the client's real configuration path and this gateway's real address, and changes nothing until you confirm it.",
+  "cutover.step.not_reversible": "cannot be undone",
+  "cutover.step.reversible": "restored by a rollback",
+  "cutover.run": "Run this cutover",
+  "cutover.running": "Running…",
+  "cutover.rollback": "Roll back",
+  "cutover.rolling_back": "Rolling back…",
+  "cutover.already_run":
+    "This record has already run a cutover and admits one run only. Review the migration record above; reset it by removing the record from the configuration directory if you intend to start again.",
+  "cutover.rollback_unavailable":
+    "A rollback is only offered from a failed run, because that is the only state with a permitted transition back.",
+  "cutover.confirm_run_title": "Replace {agent}'s configuration?",
+  "cutover.confirm_run_body":
+    "{n} step(s) will run. The file is captured byte for byte before anything is written, so this can be undone — but only while the run fails rather than succeeds. An external process running at cutover time is reported, not stopped.",
+  "cutover.confirm_rollback_title": "Put the configuration file back?",
+  "cutover.confirm_rollback_body":
+    "{n} file(s) will be overwritten with the bytes captured before the cutover ran. Anything edited in the file since is lost, and the cutover's own changes are lost with it.",
+  "cutover.result.title": "Last run",
+  "cutover.result.steps": "{done} of {total} step(s)",
+  "cutover.result.duration": "{ms} ms",
+  "cutover.result.errors": "Errors",
+  "cutover.result.warnings": "Warnings",
+  "cutover.result.restored": "Restored {n} file(s)",
+  "cutover.result.restore_failed":
+    "{n} file(s) could not be put back. The state says rolled back, but the configuration on disk is not what it was — fix these by hand.",
+  "cutover.result.rolled_back_nothing":
+    "Nothing was put back: no file was restored. The state machine advanced, and the configuration on disk is unchanged rather than reverted.",
+  "cutover.result.ok": "The cutover finished and the endpoint answered as Zroutery.",
+  "cutover.toast_applied": "Cutover finished for {agent}.",
+  "cutover.toast_rolled_back": "Restored {n} file(s).",
+  "cutover.toast_nothing_restored": "Nothing was restored.",
+  "cutover.agent.claude": "Claude Code",
+  "cutover.agent.codex": "Codex CLI",
+  "cutover.agent.opencode": "OpenCode",
+  "cutover.agent.gemini": "Gemini CLI",
+
   // ------------------------------------------------------------- routing
   "routing.lede":
     "Where a request goes, by its purpose. Zroutery serves any client that speaks Anthropic or OpenAI.",
@@ -1388,6 +1465,75 @@ const zh: Dict = {
   "takeover.report_kept": "保留 {n} 处修改",
   "takeover.report_overwritten": "恢复 {n} 个字段",
   "takeover.report_skipped": "跳过 {n} 个字段",
+
+  // ------------------------------------------------------------- cutover
+  /*
+   * 切换页。切换会用一个暂存副本整体替换客户端的配置,并在动手之前逐字节
+   * 快照原文件。它与接管页有意重叠,但两者不是同一件工具:接管写的是受管
+   * 字段、并记录字段原值;这里写的是整个文件、并保留整个文件 —— 两者中只有
+   * 这一种能在进程中途死掉后仍然幸存。这正是单独存在这一页、而不是在接管
+   * 页再加一组按钮的原因:它回答的是一次失败或被中断的切换,以及用户的
+   * 文件有没有回来。
+   */
+  "nav.cutover": "切换",
+  "cutover.section": "配置切换",
+  "cutover.section_hint":
+    "以类型化、可验证的计划,把外部客户端的配置迁移到本网关 —— 并在动手前逐字节留存原文件,使中途失败的运行可以被原样还原。把客户端接上/摘下网关请用「接管」页;这一页负责的是撤销。",
+  "cutover.state.section": "迁移记录",
+  "cutover.state.detected": "尚未运行",
+  "cutover.state.prepared": "在准备阶段中断",
+  "cutover.state.verified": "在验证阶段中断",
+  "cutover.state.switched": "在切换阶段中断",
+  "cutover.state.completed": "已完成",
+  "cutover.state.rolled_back": "已回滚",
+  "cutover.state.failed": "已失败",
+  "cutover.state.hint.detected": "该记录未运行过任何切换。本页没有改动过任何客户端的配置。",
+  "cutover.state.hint.completed":
+    "一次切换已完成,记录保留了它的状态。已完成的运行没有回滚路径:记录里没有离开该状态的迁移,尽管快照仍在磁盘上。此时不存在半应用状态,也就无需撤销。",
+  "cutover.state.hint.rolled_back":
+    "一次切换已回滚,其捕获的文件已还原。该记录只允许运行一次,因此在下方选择客户端会从原文件重新开始。",
+  "cutover.state.hint.interrupted":
+    "该记录表明一次切换已开始但未结束。下方快照是原文件唯一的副本;在还原或完成之前,客户端的配置就是那次运行留下的样子。",
+  "cutover.state.hint.failed":
+    "这次切换中途失败。它的快照是回到原文件的唯一途径,所以下面的回滚是真正要紧的那一个操作。",
+  "cutover.snapshot.none": "尚未捕获任何回滚快照。",
+  "cutover.snapshot.files": "已捕获 {n} 个文件,可逐字节还原。",
+  "cutover.not_durable": "此构建的迁移记录不持久,因此重启后无法恢复被中断的切换。落盘之前不会写入任何内容。",
+  "cutover.persist_error": "记录未能写入磁盘:{err}",
+  "cutover.plans.section": "切换计划",
+  "cutover.plans.hint": "下面的每个计划都依据客户端真实的配置路径与本网关真实的地址生成,在你确认之前不会改动任何内容。",
+  "cutover.step.not_reversible": "无法撤销",
+  "cutover.step.reversible": "回滚时还原",
+  "cutover.run": "执行此次切换",
+  "cutover.running": "执行中…",
+  "cutover.rollback": "回滚",
+  "cutover.rolling_back": "回滚中…",
+  "cutover.already_run": "该记录已运行过一次切换,且只允许运行一次。请查看上方的迁移记录;若确要重来,请从配置目录中删除该记录。",
+  "cutover.rollback_unavailable": "只有失败的运行才提供回滚,因为那是唯一存在允许回退迁移的状态。",
+  "cutover.confirm_run_title": "替换 {agent} 的配置?",
+  "cutover.confirm_run_body":
+    "将运行 {n} 个步骤。在写入任何内容之前会逐字节捕获该文件,因此这一步可以撤销 —— 但仅限于运行失败的情形;若运行成功则不适用。切换时仍在运行的外部进程只会被报告,不会被停止。",
+  "cutover.confirm_rollback_title": "把配置文件还原回去?",
+  "cutover.confirm_rollback_body":
+    "{n} 个文件将被覆盖为切换运行前捕获的字节。此后在文件中所做的修改会丢失,切换本身的改动也一并丢失。",
+  "cutover.result.title": "最近一次运行",
+  "cutover.result.steps": "{total} 步中的 {done} 步",
+  "cutover.result.duration": "{ms} 毫秒",
+  "cutover.result.errors": "错误",
+  "cutover.result.warnings": "警告",
+  "cutover.result.restored": "已还原 {n} 个文件",
+  "cutover.result.restore_failed":
+    "{n} 个文件未能还原。状态显示已回滚,但磁盘上的配置并非原样 —— 请手工处理这些文件。",
+  "cutover.result.rolled_back_nothing":
+    "没有还原任何内容:未恢复任何文件。状态机前进了,而磁盘上的配置是被保持原样,而非被回退。",
+  "cutover.result.ok": "切换已完成,端点以 Zroutery 的身份作答。",
+  "cutover.toast_applied": "{agent} 的切换已完成。",
+  "cutover.toast_rolled_back": "已还原 {n} 个文件。",
+  "cutover.toast_nothing_restored": "未还原任何内容。",
+  "cutover.agent.claude": "Claude Code",
+  "cutover.agent.codex": "Codex CLI",
+  "cutover.agent.opencode": "OpenCode",
+  "cutover.agent.gemini": "Gemini CLI",
 
   // ------------------------------------------------------------- routing
   "routing.lede": "按请求目的分流。服务兼容 Anthropic 或 OpenAI 协议的客户端。",

@@ -787,6 +787,95 @@ export interface TakeoverReleaseView {
   status: TakeoverStatus;
 }
 
+// ------------------------------------------------------------------ cutover
+
+/**
+ * Where the cutover record stands, mirroring
+ * `zroutery_core::migration::MigrationState`.
+ *
+ * `prepared`, `verified` and `switched` are kept apart from `detected` even
+ * though the panel mostly treats them alike, because they are not alike: they
+ * are the three states that mean work started and did not finish, and the
+ * distinction is what tells a fresh install from one that was interrupted
+ * mid-cutover.
+ */
+export type MigrationStateName =
+  | "detected"
+  | "prepared"
+  | "verified"
+  | "switched"
+  | "completed"
+  | "rolled_back"
+  | "failed";
+
+/**
+ * One step of the cutover, as a reviewable sentence.
+ *
+ * The typed action itself is deliberately not on the wire. A panel that
+ * received it would be asking a user to confirm a Rust enum rather than a
+ * change to their system.
+ */
+export interface MigrationStepView {
+  kind: string;
+  description: string;
+  /** Whether a rollback puts back what this step changed. */
+  reversible: boolean;
+}
+
+/**
+ * What a cutover would do, bound to the config it was built against.
+ *
+ * `fingerprint` travels back with the apply call for the same reason the
+ * takeover proposal's does: the backend refuses a plan whose digest has moved,
+ * so the plan the user read is provably the plan that runs.
+ */
+export interface MigrationPreview {
+  agent: TakeoverAgent;
+  config_path: string | null;
+  steps: MigrationStepView[];
+  fingerprint: string;
+  /** Why this client cannot be cut over, when it cannot. */
+  blocked_reason: string | null;
+}
+
+/**
+ * Where the migration record stands and whether the way back is open.
+ *
+ * `interrupted` and `has_snapshot` answer different questions and the page
+ * renders them apart: an interrupted migration with no snapshot is a cutover
+ * that cannot be undone, which is the one case where offering rollback would
+ * be offering a button that cannot help.
+ */
+export interface MigrationStatus {
+  state: MigrationStateName;
+  interrupted: boolean;
+  has_snapshot: boolean;
+  snapshot_files: string[];
+  durable: boolean;
+  persist_error: string | null;
+  owned_processes: string[];
+}
+
+/**
+ * What a run produced. Mirrors `zroutery_core::migration::MigrationResult`.
+ *
+ * `rolled_back` is *not* the same question as `state`, and the page keeps them
+ * apart: the state machine records that a rollback transition happened, while
+ * this records whether the files actually came back. They diverge exactly when a
+ * restore fails, which is the case a user most needs to be told about.
+ */
+export interface MigrationResult {
+  state: MigrationStateName;
+  steps_completed: number;
+  steps_total: number;
+  errors: string[];
+  warnings: string[];
+  duration_ms: number;
+  rolled_back: boolean;
+  restored_files: string[];
+  failed_restores: string[];
+}
+
 /** One entry of a provider's catalogue, with prices when it publishes them. */
 export interface DiscoveredModel {
   id: string;
@@ -1240,6 +1329,51 @@ export const api = {
    */
   takeoverRelease: (agent: TakeoverAgent, strategy: ResolutionReport["strategy"]) =>
     invoke<TakeoverReleaseView>("takeover_release", { agent, strategy }),
+
+  /**
+   * Where the cutover record stands, and whether the way back is open.
+   *
+   * Not part of the snapshot: it opens a manifest on first call and reads the
+   * rollback snapshot beside it. Call on page mount and after any run.
+   *
+   * Not capability-gated. `zroutery_core::migration` is compiled into every
+   * build, so unlike `account` or `ml` there is no configuration in which these
+   * commands are absent and the page has nothing to detect.
+   */
+  migrationStatus: () => invoke<MigrationStatus>("migration_status"),
+  /**
+   * The cutover plan for every client this build can migrate.
+   *
+   * Read-only: it reads each client's config path and builds a plan without
+   * writing anything, so a page may call it as often as it likes.
+   */
+  migrationPreviews: () => invoke<MigrationPreview[]>("migration_previews"),
+  /**
+   * Run one client's cutover.
+   *
+   * `expected_fingerprint` is the digest of the plan the user confirmed;
+   * passing it makes the backend refuse when the plan moved between the
+   * preview and the click.
+   *
+   * The backend snapshots the client's config file before writing anything, so
+   * a failed run can be put back. That is the guarantee worth reading before
+   * offering the button: without it this call would rewrite a config with no
+   * record of what was there.
+   */
+  migrationApply: (agent: TakeoverAgent, expected_fingerprint: string | null) =>
+    invoke<MigrationResult>("migration_apply", {
+      agent,
+      expectedFingerprint: expected_fingerprint,
+    }),
+  /**
+   * Restore the client's config file exactly as the snapshot captured it.
+   *
+   * Offered only when the record is `failed`, because that is the only state
+   * with a permitted transition back — a `completed` cutover has no rollback
+   * the state machine will record, even though the bytes are on disk.
+   */
+  migrationRollback: () => invoke<MigrationResult>("migration_rollback"),
+
   saveConfig: (config: AppConfig) => invoke<Snapshot>("save_config", { config }),
   setKey: (provider_id: string, api_key: string) =>
     invoke<Snapshot>("set_provider_key", { providerId: provider_id, apiKey: api_key }),

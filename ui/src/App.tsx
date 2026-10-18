@@ -7,6 +7,7 @@ import Models from "./pages/Models";
 import Providers from "./pages/Providers";
 import Accounts from "./pages/Accounts";
 import Takeover from "./pages/Takeover";
+import Cutover from "./pages/Cutover";
 import Routing from "./pages/Routing";
 import Activity from "./pages/Activity";
 import Settings from "./pages/Settings";
@@ -23,6 +24,7 @@ type Page =
   | "providers"
   | "accounts"
   | "takeover"
+  | "cutover"
   | "routing"
   | "activity"
   | "settings";
@@ -33,6 +35,7 @@ const NAV: { id: Page; labelKey: Parameters<ReturnType<typeof useI18n>["t"]>[0] 
   { id: "providers", labelKey: "nav.providers" },
   { id: "accounts", labelKey: "nav.accounts" },
   { id: "takeover", labelKey: "nav.takeover" },
+  { id: "cutover", labelKey: "nav.cutover" },
   { id: "routing", labelKey: "nav.routing" },
   { id: "activity", labelKey: "nav.activity" },
   { id: "settings", labelKey: "nav.settings" },
@@ -318,6 +321,12 @@ function Shell() {
           <button
             key={item.id}
             className={`nav-item ${page === item.id ? "active" : ""}`}
+            // Named as well as classed. The two layout harnesses drive the
+            // shell with real clicks, and an ordinal is a promise that breaks
+            // the moment a page is inserted: adding one silently repoints every
+            // later index at a different page, which measures a healthy surface
+            // and reports it as a pass. `data-page` survives the insert.
+            data-page={item.id}
             onClick={() => setPage(item.id)}
           >
             {t(item.labelKey)}
@@ -483,6 +492,7 @@ function Shell() {
               <Accounts snapshot={snapshot} save={save} run={run} busy={busy} />
             )}
             {page === "takeover" && <Takeover />}
+            {page === "cutover" && <Cutover />}
             {page === "routing" && <Routing snapshot={snapshot} save={save} run={run} busy={busy} />}
             {page === "activity" && <Activity snapshot={snapshot} run={run} />}
             {page === "settings" && (
