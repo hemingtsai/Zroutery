@@ -529,6 +529,16 @@ export interface Snapshot {
    * one for the other offers a control the build cannot serve.
    */
   account_available: boolean;
+  /**
+   * Whether this build can check an account in over the panel's own HTTP API.
+   *
+   * A third flag, not a combination of the two above: it needs the report views
+   * of `account-maint` *and* the panel adapter of `newapi`, and a build can hold
+   * one without the other. Offering the HTTP check-in from the browser flag
+   * alone would call a command that does not exist in an `account-maint`-only
+   * build.
+   */
+  api_checkin_available: boolean;
   /** What each declared account's check-in is doing. */
   checkin?: CheckinView[];
   /** Observed resource events, newest first. */
@@ -536,10 +546,12 @@ export interface Snapshot {
   /**
    * Per-account balances.
    *
-   * Present only for providers declaring more than one account, because with a
-   * single account this is the same figure the provider-level `balances` already
-   * carries. The backend filters rather than the panel, so an operator cannot end up
-   * with two panels saying one thing.
+   * One entry per declared account of every enabled provider. The backend emits
+   * them all rather than only the multi-account ones: with one account the
+   * provider-level figure may not even exist (most relays publish no balance
+   * endpoint), and hiding the account's own reading on the assumption that a
+   * provider total covers it is exactly how a probed account used to be visible
+   * nowhere.
    */
   account_balances?: AccountBalance[];
 }
@@ -700,6 +712,79 @@ export type AccountSyncOutcome =
  */
 export interface ReconcileReport {
   outcomes: [string, string, AccountSyncOutcome][];
+}
+
+// ------------------------------------------------------------------ takeover
+
+/** The external clients Zroutery can hold config fields for. */
+export type TakeoverAgent = "claude" | "codex" | "gemini" | "opencode";
+
+/** One field an adoption would rewrite: where it is, what it holds, what lands. */
+export interface ProposedChange {
+  field_path: string;
+  current: unknown;
+  managed: unknown;
+}
+
+/**
+ * A preview of an adoption, bound to the config it was computed against.
+ *
+ * `fingerprint` must travel back with the confirm call: the backend refuses an
+ * adopt whose config has moved since this digest was taken, so the thing the
+ * user approved is provably the thing that gets written.
+ */
+export interface TakeoverProposal {
+  managed_fields: string[];
+  changes: ProposedChange[];
+  fingerprint: string;
+}
+
+/** One field someone changed behind a held takeover. */
+export interface FieldConflict {
+  field_path: string;
+  original_value: unknown;
+  last_applied: unknown;
+  current_external: unknown;
+}
+
+/**
+ * Where one client's takeover stands, mirroring
+ * `zroutery_core::agent_takeover::TakeoverStatus` (tagged, snake_case).
+ *
+ * The nine states are kept apart rather than collapsed into held/not-held:
+ * `degraded` is a written config nobody has proven in effect, and `conflict`
+ * is a field someone changed behind Zroutery's back — merging either into
+ * `active` would hide the exact moment a user must decide something.
+ */
+export type TakeoverStatus =
+  | { state: "unsupported"; reason: string }
+  | { state: "not_detected"; searched: string[]; reason: string }
+  | { state: "available"; config_path: string; blocker: string }
+  | { state: "ready"; config_path: string; proposal: TakeoverProposal }
+  | { state: "active"; config_path: string; generation: number }
+  | { state: "conflict"; config_path: string; conflicts: FieldConflict[] }
+  | { state: "degraded"; config_path: string; generation: number; reasons: string[] }
+  | { state: "released"; config_path: string; generation: number }
+  | { state: "error"; reason: string };
+
+export interface TakeoverView {
+  agent: TakeoverAgent;
+  status: TakeoverStatus;
+}
+
+/** What a release did, per field. Mirrors `ResolutionReport`. */
+export interface ResolutionReport {
+  strategy: "keep_external" | "overwrite_with_managed" | "skip";
+  kept_external: string[];
+  overwritten: string[];
+  skipped: string[];
+}
+
+export interface TakeoverReleaseView {
+  agent: TakeoverAgent;
+  report: ResolutionReport;
+  conflicts: FieldConflict[];
+  status: TakeoverStatus;
 }
 
 /** One entry of a provider's catalogue, with prices when it publishes them. */
@@ -1069,6 +1154,19 @@ export const api = {
    */
   startCheckin: (provider_id: string, account_id: string) =>
     invoke<CheckinView>("start_checkin", { providerId: provider_id, accountId: account_id }),
+  /**
+   * Check one account in over the panel's own HTTP API — no browser.
+   *
+   * The stored credential is the login: the panel adapter authenticates with
+   * it, posts the check-in endpoint, and observes what was granted. An instance
+   * that demands a Turnstile challenge answers `waiting_for_user`, which is the
+   * browser path's cue — the challenge exists to be solved by a person in a
+   * real page.
+   *
+   * Call only when `snapshot.api_checkin_available` is true.
+   */
+  apiCheckin: (provider_id: string, account_id: string) =>
+    invoke<CheckinView>("api_checkin", { providerId: provider_id, accountId: account_id }),
   /** Continue a check-in that is waiting on a human-verification challenge. */
   resumeCheckin: (provider_id: string, account_id: string) =>
     invoke<CheckinView>("resume_checkin", { providerId: provider_id, accountId: account_id }),
@@ -1097,6 +1195,51 @@ export const api = {
    * command that failed are the same event to the webview.
    */
   reconcileAccounts: () => invoke<ReconcileReport>("reconcile_accounts"),
+  /**
+   * Store one account's own credential and point its declaration at it.
+   *
+   * Call only when `snapshot.account_available` is true, and only after the
+   * declaration itself is saved: the command looks the account up in the
+   * stored configuration, so an unsaved declaration reads as unknown.
+   */
+  setAccountKey: (provider_id: string, account_id: string, api_key: string) =>
+    invoke<Snapshot>("set_account_key", {
+      providerId: provider_id,
+      accountId: account_id,
+      apiKey: api_key,
+    }),
+  /** Drop one account's own credential; it resolves to the provider's key again. */
+  clearAccountKey: (provider_id: string, account_id: string) =>
+    invoke<Snapshot>("clear_account_key", { providerId: provider_id, accountId: account_id }),
+  /** Remove one account declaration, and the credential only it referenced. */
+  removeAccount: (provider_id: string, account_id: string) =>
+    invoke<Snapshot>("remove_account", { providerId: provider_id, accountId: account_id }),
+  /**
+   * Every external agent's takeover reading, in a fixed order.
+   *
+   * Not part of the snapshot: it reads each client's config file from disk,
+   * which is work a poll would repeat for nothing. Call on page mount and
+   * after adopt/release.
+   */
+  takeoverStatus: () => invoke<TakeoverView[]>("takeover_status"),
+  /**
+   * Take one agent over.
+   *
+   * `expected_fingerprint` is the digest of the proposal the user confirmed;
+   * passing it makes the backend refuse when the agent's config moved between
+   * the preview and the click, which is the whole guarantee the preview buys.
+   */
+  takeoverAdopt: (agent: TakeoverAgent, expected_fingerprint: string | null) =>
+    invoke<TakeoverView>("takeover_adopt", { agent, expectedFingerprint: expected_fingerprint }),
+  /**
+   * Give one agent's fields back, deciding conflicts with `strategy`.
+   *
+   * `keep_external` preserves what the user changed behind the takeover,
+   * `overwrite_with_managed` restores Zroutery's values, `skip` leaves the
+   * field exactly as it stands and stops managing it.
+   */
+  takeoverRelease: (agent: TakeoverAgent, strategy: ResolutionReport["strategy"]) =>
+    invoke<TakeoverReleaseView>("takeover_release", { agent, strategy }),
   saveConfig: (config: AppConfig) => invoke<Snapshot>("save_config", { config }),
   setKey: (provider_id: string, api_key: string) =>
     invoke<Snapshot>("set_provider_key", { providerId: provider_id, apiKey: api_key }),

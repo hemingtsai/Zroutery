@@ -35,6 +35,7 @@ const en = {
   "common.yes": "yes",
   "common.no": "no",
   "common.dash": "—",
+  "common.unknown": "unknown",
   "count.models": "{n} models",
   "count.providers": "{n} providers",
 
@@ -87,6 +88,56 @@ const en = {
   "confirm.regenerate_token": "Regenerate token",
   "confirm.regenerate_token_body":
     "Existing clients stop working until you give them the new token.",
+  // ------------------------------------------------------- backend errors
+  // Raw backend text is English and technical; the few conditions an operator
+  // can actually act on are re-stated here and matched in describeBackendError.
+  "err.bind_in_use":
+    "The proxy could not start: {addr} is already in use — another Zroutery instance (or a leftover headless process) may still be running. Stop that process, or pick a different port in Settings.",
+  "err.bind_denied":
+    "The proxy could not start: the system refused {addr}. Windows sometimes reserves port ranges — pick a different port in Settings.",
+  "err.credentials_rejected":
+    "The panel rejected this credential. Dashboard authentication needs the panel's access token (personal settings → access token), not the relay's sk- API key.",
+  "err.relay_key":
+    "The stored credential is a relay API key (sk-…), which the dashboard does not accept. Copy the access token from the panel's personal settings → access token page, and set it as this account's credential.",
+  "err.no_panel_token":
+    "No panel access token is stored for this account, so probing and sign-in have nothing to authenticate with. Set the account's credential to the panel's access token (personal settings → access token).",
+  "err.classifier_candidate":
+    "Auto Mode candidate {model} is not a configured model, so it is skipped. Remove it in Routing → Auto Mode, or add the model back.",
+  // -------------------------------------------------------------- accounts
+  "accounts.title": "Accounts",
+  "accounts.title_hint":
+    "Declarations only: probing, per-account balances and check-in read them. Requests do not route by account.",
+  "accounts.empty": "No accounts declared. Every request uses the provider's own key.",
+  "accounts.add": "Add account",
+  "accounts.id_label": "Account ID",
+  "accounts.id_hint":
+    "Stable name within this provider — the (provider, account) pair keys its runtime state.",
+  "accounts.key_label_add": "Panel access token (optional)",
+  "accounts.key_hint_add":
+    "Leave empty to resolve to the provider's key — but note that a relay key (sk-…) cannot authenticate the dashboard; paste the panel's access token here.",
+  "accounts.duplicate": "Account `{id}` already exists on this provider.",
+  "accounts.key_store_failed": "The account was saved, but storing its key failed.",
+  "accounts.set_key": "Set credential",
+  "accounts.key_label": "Panel access token",
+  "accounts.key_hint":
+    "From the panel's personal settings → access token. Stored in the system credential store, never shown again. A relay key (sk-…) cannot authenticate the dashboard.",
+  "accounts.clear_key": "Clear credential",
+  "accounts.clear_key_title": "Clear account {id}'s credential",
+  "accounts.clear_key_body":
+    "The account resolves to the provider's key again. Its own stored secret is deleted unless another declaration references it.",
+  "accounts.own_key": "Own credential",
+  "accounts.no_key": "Credential not stored",
+  "accounts.follows_provider": "Provider's credential",
+  "accounts.remove_title": "Remove account {id}",
+  "accounts.remove_body":
+    "The declaration is removed, and its own stored key with it. Observations keyed by this pair stay until the id is reused.",
+  "accounts.checkin": "Browser check-in",
+  "accounts.interval": "Interval (seconds)",
+  "accounts.interval_hint": "Empty means the scheduler never acts on its own.",
+  "accounts.checkin_path": "Check-in page path",
+  "accounts.checkin_path_hint": "Panel-relative, e.g. /checkin — no default on purpose.",
+  "accounts.checkin_selector": "Check-in button selector",
+  "accounts.checkin_selector_hint": "CSS selector the browser clicks. No default on purpose.",
   "error.title": "The dashboard hit a bug",
   "error.unaffected": "The proxy is unaffected and keeps running in the menu bar.",
   "common.try_again": "Try again",
@@ -297,13 +348,14 @@ const en = {
    * schedule is quietly counting down.
    */
   "account.balance": "balance",
+  "account.balance_amount": "{remaining} {unit} left of {total}",
   "account.schedule.disabled": "Check-in is switched off for this account",
   "account.schedule.not_applicable":
-    "Check-in is switched on but cannot be acted on — set checkin_path and checkin_trigger_selector",
+    "Check-in is switched on but cannot be acted on — set the check-in page and its trigger selector",
   "account.schedule.needs_first_observation":
     "No check-in has run for this account yet, so there is no due time to count down from. Start one once to hand it over to the schedule",
   "account.schedule.no_policy":
-    "No checkin_interval_secs is declared, so nothing will run automatically even though this account has been checked in before",
+    "No check-in interval is set, so nothing will run automatically even though this account has been checked in before",
   "account.schedule.not_due": "Scheduled",
   "account.schedule.due": "Due now",
   "account.schedule.unknown": "Schedule not known",
@@ -330,9 +382,9 @@ const en = {
   "account.not_enabled":
     "Check-in is switched off for this account. Turn it on in its maintenance settings first.",
   "account.need_path":
-    "This account has no check-in page. Point maintenance.checkin_path at the panel page that carries the check-in control.",
+    "This account has no check-in page. Set the check-in page path in the provider's account settings to the page that carries the check-in control.",
   "account.need_selector":
-    "This account has no check-in control. Set maintenance.checkin_trigger_selector to a CSS selector for that button, for example button.checkin.",
+    "This account has no check-in control. Set the check-in button selector in the provider's account settings to a CSS selector for that button, for example button.checkin.",
   "account.start_failed": "Could not start the check-in",
   "account.resume_failed": "Could not continue the check-in",
   "account.cancel_failed": "Could not cancel the check-in",
@@ -347,24 +399,70 @@ const en = {
   // The probe runs on the button and never on a timer: it costs one request per
   // declared account, and a proxy that probes on its own turns a slow panel into
   // a slow start. Saying so is part of the hint, not a footnote.
-  "providers.probe_section": "Account probe",
-  "providers.probe_hint":
-    "Ask each declared account's platform what state it is in, and publish the result. One request per account, so it happens when you press the button and never on its own. An account that is switched off is not probed at all, so it does not appear in the list.",
-  "providers.probe_now": "Probe every account",
   /*
    * One press over `refresh_balance` per provider, which is the only way to do
    * it today. It also probes every account, because `refresh_balances` does both
    * levels in one snapshot — so this is not merely "the same thing, all at once"
-   * as the probe below it, which asks the same accounts but answers with the
-   * per-account outcome.
+   * as the Accounts page's probe, which asks the same accounts but answers with
+   * the per-account outcome.
    */
   "providers.refresh_all": "Refresh every balance",
-  "providers.probing": "Probing…",
-  "providers.probe_idle":
+  /*
+   * The Accounts page: the runtime face of every declared account. The split
+   * from the provider drawer is declaration (there) versus observation (here),
+   * and the lede says the one thing this page does not do — route by account —
+   * because an operator who assumed it would otherwise learn it from a
+   * misrouted request.
+   */
+  "nav.accounts": "Accounts",
+  "nav.takeover": "Takeover",
+  "accounts.empty_build":
+    "This build does not contain the account subsystem, so declared accounts cannot be probed or checked in.",
+  "accounts.none":
+    "No provider declares an account yet. Add one on the Providers page, in a provider's Accounts section.",
+  "accounts.probe_section": "Account probe",
+  "accounts.probe_hint":
+    "Ask each declared account's platform what state it is in, and publish the result. One request per account, so it happens when you press the button and never on its own. An account that is switched off is not probed at all, so it does not appear in the report.",
+  "accounts.probe_now": "Probe every account",
+  "accounts.probing": "Probing…",
+  "accounts.probe_idle":
     "Nothing has been probed yet. Until you press the button, no account has been asked.",
-  "providers.probe_none":
+  "accounts.probe_none":
     "The probe ran and found nothing: no provider declares an enabled account.",
-  "providers.probe_outcome": "Outcome",
+  "accounts.probe_outcome": "Outcome",
+  "accounts.provider_disabled": "provider disabled",
+  "accounts.own_key_stored": "its own access token is stored",
+  "accounts.own_key_missing": "declared its own credential, but none is stored",
+  "accounts.shared_key": "uses the provider's credential",
+  /*
+   * The credential-type hint. The panel API authenticates with the site's
+   * access token — the string on the panel's personal-settings page — and an
+   * `sk-` relay key fails there with an answer that reads as "wrong password".
+   * Saying which is which is the difference between a fixable declaration and
+   * a stale one.
+   */
+  "accounts.auth_hint":
+    "The panel rejected this credential. Accounts authenticate with the panel's access token (personal settings → access token), not with the relay's sk- API key.",
+  "accounts.last_failure": "last probe failed",
+  "accounts.auto_section": "Automatic check-in",
+  "accounts.checkin_api": "Check in (direct)",
+  "accounts.checkin_api_hint":
+    "Sign in over the panel's API with the stored credential — no browser. Only works when the instance does not require a challenge.",
+  "accounts.checking": "Checking in…",
+  "accounts.checkin_api_failed": "Direct check-in failed",
+  "accounts.events_section": "Account events",
+  "accounts.events_hint":
+    "What the provider said happened to each account's resources, newest first, with where each figure was read from.",
+  "accounts.events_none": "Nothing observed yet.",
+  "accounts.events_when": "When",
+  "accounts.events_what": "What",
+  "accounts.status.active": "active",
+  "accounts.status.suspended": "suspended",
+  "accounts.status.quota_exhausted": "quota exhausted",
+  "accounts.status.rate_limited": "rate limited",
+  "accounts.status.authentication_expired": "credential rejected",
+  "accounts.status.unknown": "unknown",
+  "accounts.status.unprobed": "not probed",
   "field.account": "Account",
   /*
    * Four outcomes, four sentences. They are kept apart because each answers a
@@ -376,6 +474,82 @@ const en = {
   "account.sync.unsupported":
     "No backend in this build can ask this provider — not probed",
   "account.sync.failed": "Probe failed",
+
+  // ------------------------------------------------------------ takeover
+  /*
+   * The takeover page. A takeover writes Zroutery's local gateway address and
+   * token into a client's own config file, records what it replaced, and
+   * restores it on release. The states are rendered per state because four of
+   * them need a decision, and a collapsed held/not-held pair would hide the
+   * exact moments a user must make one.
+   */
+  "takeover.section": "Agent takeover",
+  "takeover.section_hint":
+    "Point an external coding agent at this gateway by writing the address and token into its own configuration file, and restore the original values on release. Requests still choose a tier by the names the client already sends; Zroutery never picks one for you.",
+  "takeover.none": "No external agent is known to this build.",
+  "takeover.agent.claude": "Claude Code",
+  "takeover.agent.codex": "Codex CLI",
+  "takeover.agent.opencode": "OpenCode",
+  "takeover.agent.gemini": "Gemini CLI",
+  "takeover.state.unsupported": "not supported",
+  "takeover.state.not_detected": "not detected",
+  "takeover.state.available": "available",
+  "takeover.state.ready": "ready",
+  "takeover.state.active": "active",
+  "takeover.state.conflict": "conflict",
+  "takeover.state.degraded": "degraded",
+  "takeover.state.released": "released",
+  "takeover.state.error": "error",
+  "takeover.hint.unsupported":
+    "Gemini CLI's endpoint can only be set through an environment variable, which no configuration file records — a takeover could redirect the key while the client kept talking to Google. Not offered.",
+  "takeover.hint.not_detected":
+    "No config for {agent} was found on this machine. Install and run it once so its configuration file exists, then refresh this page.",
+  "takeover.hint.ready":
+    "Everything is in place: adopting would write {n} field(s) listed below and record the values they hold now.",
+  "takeover.confirm_inline":
+    "Adopting edits {agent}'s own configuration file. Zroutery restores exactly these fields on release; everything else in the file stays yours.",
+  "takeover.hint.active":
+    "This client is pointed at the gateway and its managed fields still match what Zroutery wrote. Releasing restores the values recorded at adoption.",
+  "takeover.hint.degraded":
+    "The fields are written, but Zroutery cannot prove the takeover is in effect — no request from this client has been confirmed yet. Releasing still restores the recorded values.",
+  "takeover.hint.conflict":
+    "{n} managed field(s) no longer hold the values Zroutery wrote — something changed them behind the takeover. Choose, per release, whether to keep those edits or overwrite them.",
+  "takeover.hint.released":
+    "A previous takeover was released and the original values were restored. Taking over again records the current values as the ones to restore.",
+  "takeover.blocker.no_token":
+    "Zroutery has no gateway token yet, so there is nothing for a client to authenticate with. Set or regenerate the token in Settings → Gateway first.",
+  "takeover.blocker.no_classes":
+    "No enabled model is assigned to a tier yet, so an agent pointed here would have nothing to ask for. Assign a tier to at least one enabled model first.",
+  "takeover.reason.unverified":
+    "The takeover has not been confirmed by a real request from this client yet.",
+  "takeover.reason.token_changed":
+    "The gateway token has changed since this client was taken over — release and take over again to hand the client the new one.",
+  "takeover.table.field": "Field",
+  "takeover.table.current": "Current value",
+  "takeover.table.next": "After adoption",
+  "takeover.table.managed": "Zroutery wrote",
+  "takeover.generation": "generation {n}",
+  "takeover.adopt": "Take over",
+  "takeover.adopt_again": "Take over again",
+  "takeover.release": "Release",
+  "takeover.working": "Working…",
+  "takeover.strategy.label": "Conflict resolution",
+  "takeover.strategy.keep_external": "Keep my edits",
+  "takeover.strategy.overwrite": "Restore Zroutery's values",
+  "takeover.strategy.skip": "Skip changed fields",
+  "takeover.confirm_adopt_title": "Take over {agent}?",
+  "takeover.confirm_adopt_body":
+    "{n} field(s) in {agent}'s configuration will be rewritten and managed from then on. The values they hold now are recorded and restored on release.",
+  "takeover.confirm_adopt_again_body":
+    "{agent}'s configuration will be rewritten and managed from then on, with the current values recorded for release.",
+  "takeover.confirm_release_title": "Release {agent}?",
+  "takeover.confirm_release_body":
+    "The managed fields in {agent}'s configuration will be restored to the values recorded at adoption, and Zroutery stops managing them.",
+  "takeover.toast_adopted": "{agent} is now taken over.",
+  "takeover.toast_released": "Released.",
+  "takeover.report_kept": "kept {n} of your edit(s)",
+  "takeover.report_overwritten": "restored {n} field(s)",
+  "takeover.report_skipped": "skipped {n} field(s)",
 
   // ------------------------------------------------------------- routing
   "routing.lede":
@@ -769,6 +943,7 @@ const zh: Dict = {
   "common.yes": "是",
   "common.no": "否",
   "common.dash": "—",
+  "common.unknown": "未知",
   "count.models": "{n} 个模型",
   "count.providers": "{n} 个提供商",
 
@@ -818,6 +993,50 @@ const zh: Dict = {
   "confirm.reset_stats_body": "请求历史、模型健康与花费估算会被清零。",
   "confirm.regenerate_token": "重新生成令牌",
   "confirm.regenerate_token_body": "现有客户端会全部失效,直到换用新令牌。",
+  "err.bind_in_use":
+    "代理无法启动:{addr} 端口已被占用——可能另一个 Zroutery 实例(或残留的无头进程)还在运行。结束那个进程,或在设置里换一个端口后重试。",
+  "err.bind_denied":
+    "代理无法启动:系统拒绝绑定 {addr},可能落在 Windows 保留端口段。在设置里换一个端口通常即可解决。",
+  "err.credentials_rejected":
+    "面板拒绝了该凭据。面板认证使用 个人设置 → 访问令牌 生成的访问令牌,而不是中转的 sk- API 密钥。",
+  "err.relay_key":
+    "存储的凭据是中转 sk- 密钥,面板认证不接受它。请到面板 个人设置 → 访问令牌 复制访问令牌,并重新设置该账户的凭据。",
+  "err.no_panel_token":
+    "该账户尚未存储面板访问令牌,探测与签到都无法认证。请先把账户凭据设置为面板的访问令牌(个人设置 → 访问令牌)。",
+  "err.classifier_candidate":
+    "自动审核候选模型 {model} 不在已配置模型中,会被自动跳过。可在 路由 → 自动审核 中移除该候选,或恢复对应模型。",
+  "accounts.title": "账户",
+  "accounts.title_hint": "仅声明:探测、分账户余额与签到会读取它。请求转发不按账户区分。",
+  "accounts.empty": "未声明账户。所有请求都使用提供商自身的密钥。",
+  "accounts.add": "添加账户",
+  "accounts.id_label": "账户 ID",
+  "accounts.id_hint": "在此提供商内的稳定名称——(提供商, 账户) 二元组是运行状态的键。",
+  "accounts.key_label_add": "面板访问令牌(可选)",
+  "accounts.key_hint_add":
+    "留空则沿用提供商自身的密钥;但注意中转密钥(sk- 开头)无法用于面板认证,请在此填入面板的访问令牌。",
+  "accounts.duplicate": "该提供商下已存在账户 `{id}`。",
+  "accounts.key_store_failed": "账户已保存,但写入凭据失败。",
+  "accounts.set_key": "设置凭据",
+  "accounts.key_label": "面板访问令牌",
+  "accounts.key_hint":
+    "来自面板 个人设置 → 访问令牌,生成后复制到这里。存入系统凭据库,不会再次显示。中转密钥(sk- 开头)无法用于面板认证。",
+  "accounts.clear_key": "清除凭据",
+  "accounts.clear_key_title": "清除账户 {id} 的凭据",
+  "accounts.clear_key_body":
+    "该账户将重新沿用提供商密钥;其独立存储的凭据会被删除,除非其他声明仍在引用。",
+  "accounts.own_key": "独立凭据",
+  "accounts.no_key": "凭据未存",
+  "accounts.follows_provider": "沿用提供商凭据",
+  "accounts.remove_title": "删除账户 {id}",
+  "accounts.remove_body":
+    "声明会被删除,其独立存储的密钥一并删除。以该 ID 为键的观测记录在 ID 复用前保留。",
+  "accounts.checkin": "浏览器签到",
+  "accounts.interval": "间隔(秒)",
+  "accounts.interval_hint": "留空表示调度器不会自动执行。",
+  "accounts.checkin_path": "签到页路径",
+  "accounts.checkin_path_hint": "面板相对路径,如 /checkin——刻意不设默认值。",
+  "accounts.checkin_selector": "签到按钮选择器",
+  "accounts.checkin_selector_hint": "浏览器点击的 CSS 选择器。刻意不设默认值。",
   "error.title": "界面出现了问题",
   "error.unaffected": "网关不受影响,仍在菜单栏正常运行。",
   "common.try_again": "重试",
@@ -1015,13 +1234,14 @@ const zh: Dict = {
    * 两个才表示一个日程正在安静地倒数。
    */
     "account.balance": "余额",
+"account.balance_amount": "剩 {remaining} {unit},总额 {total}",
 "account.schedule.disabled": "该账户未开启签到",
   "account.schedule.not_applicable":
-    "已开启签到但无法执行,请补全 checkin_path 与 checkin_trigger_selector。",
+    "已开启签到但无法执行,请补全签到页面路径与签到按钮选择器。",
   "account.schedule.needs_first_observation":
     "尚未签到过一次,没有可倒数的到期时间。手动签到一次后交给日程。",
   "account.schedule.no_policy":
-    "未声明 checkin_interval_secs,不会自动运行。",
+    "尚未设置签到周期,不会自动签到。设置签到周期后生效。",
   "account.schedule.not_due": "已排期",
   "account.schedule.due": "现在到期",
   "account.schedule.unknown": "日程未知",
@@ -1042,9 +1262,9 @@ const zh: Dict = {
   "account.resume": "在已打开的窗口中继续",
   "account.cancel": "取消",
   "account.close_browser": "关闭窗口",
-  "account.not_enabled": "该账户未开启签到,请先在其维护设置中启用。",
-  "account.need_path": "未配置签到页面。请把 maintenance.checkin_path 指向带有签到按钮的那个面板页。",
-  "account.need_selector": "未配置签到按钮选择器。请把 maintenance.checkin_trigger_selector 填成该按钮的 CSS 选择器,例如 button.checkin。",
+  "account.not_enabled": "该账户未开启签到,请先在下方或提供商的账户设置中启用。",
+  "account.need_path": "未配置签到页面。请在该提供商的账户设置中把签到页路径指向带有签到按钮的面板页。",
+  "account.need_selector": "未配置签到按钮选择器。请在该提供商的账户设置中把签到按钮选择器填成该按钮的 CSS 选择器,例如 button.checkin。",
   "account.start_failed": "无法开始签到",
   "account.resume_failed": "无法继续签到",
   "account.cancel_failed": "无法取消签到",
@@ -1053,14 +1273,43 @@ const zh: Dict = {
   //
   // 探测不是签到。它只询问平台账户处于什么状态并报告结果，不会打开浏览器，
   // 也不会领取任何东西。
-  "providers.probe_section": "账户探测",
-  "providers.probe_hint": "询问各账户的平台状态。每个账户一次请求,仅在你点击时运行。已关闭的账户完全不探测,也不会出现在列表里。",
-  "providers.probe_now": "探测所有账户",
   "providers.refresh_all": "刷新全部余额",
-  "providers.probing": "探测中…",
-  "providers.probe_idle": "尚未探测。点击之前,没有任何账户被问过。",
-  "providers.probe_none": "没有已启用的账户可供探测。",
-  "providers.probe_outcome": "结果",
+  "nav.accounts": "账户",
+  "nav.takeover": "接管",
+  "accounts.empty_build": "此构建未包含账户子系统,声明的账户无法探测或签到。",
+  "accounts.none": "还没有任何提供商声明账户。在提供商页的账户区块里添加一个。",
+  "accounts.probe_section": "账户探测",
+  "accounts.probe_hint": "询问各账户的平台状态并报告结果。每个账户一次请求,仅在你点击时运行。已关闭的账户完全不探测,也不会出现在报告里。",
+  "accounts.probe_now": "探测所有账户",
+  "accounts.probing": "探测中…",
+  "accounts.probe_idle": "尚未探测。点击之前,没有任何账户被问过。",
+  "accounts.probe_none": "探测完成,但没有已启用的账户可供探测。",
+  "accounts.probe_outcome": "结果",
+  "accounts.provider_disabled": "提供商已停用",
+  "accounts.own_key_stored": "已存面板访问令牌",
+  "accounts.own_key_missing": "声明了独立凭据,但尚未存储",
+  "accounts.shared_key": "共用提供商凭据",
+  // 凭据类型提示。面板 API 认的是站点「访问令牌」(面板个人设置页里的那一串),
+  // 中转的 sk- 密钥在那里只会被当成密码错误。说清楚两者的区别,声明才能被修好。
+  "accounts.auth_hint": "面板拒绝了该凭据。账户认证用面板的访问令牌(个人设置 → 访问令牌),不是中转的 sk- API 密钥。",
+  "accounts.last_failure": "上次探测失败",
+  "accounts.auto_section": "自动签到",
+  "accounts.checkin_api": "直接签到",
+  "accounts.checkin_api_hint": "用已存凭据通过面板 API 签到,不开浏览器。仅当站点未开启人机验证时可用。",
+  "accounts.checking": "签到中…",
+  "accounts.checkin_api_failed": "直接签到失败",
+  "accounts.events_section": "账户事件",
+  "accounts.events_hint": "平台声称的账户资源变动,最新在前,并标明每个数字的出处。",
+  "accounts.events_none": "还没有观察到任何事件。",
+  "accounts.events_when": "时间",
+  "accounts.events_what": "事件",
+  "accounts.status.active": "正常",
+  "accounts.status.suspended": "已停用",
+  "accounts.status.quota_exhausted": "额度用尽",
+  "accounts.status.rate_limited": "被限速",
+  "accounts.status.authentication_expired": "凭据被拒",
+  "accounts.status.unknown": "未知",
+  "accounts.status.unprobed": "未探测",
   "field.account": "账户",
   // 四种结果，四种说法。分开表述，是因为它们各自回答不同的问题；
   // 若归为「正常 / 异常」两类，无人能够询问的账户就会被显示成有问题的账户。
@@ -1068,6 +1317,77 @@ const zh: Dict = {
   "account.sync.partially_reported": "未上报",
   "account.sync.unsupported": "此构建中没有后端能询问该平台 —— 未探测",
   "account.sync.failed": "探测失败",
+
+  // ------------------------------------------------------------- 接管
+  // 接管页。接管会把本机网关地址与令牌写入外部客户端自己的配置文件,
+  // 记录被替换的值,释放时恢复。九种状态逐个渲染,因为其中四种需要用户
+  // 做决定;归并成「在管/不在管」两类,恰好会藏住这些时刻。
+  "takeover.section": "Agent 接管",
+  "takeover.section_hint":
+    "把外部编码 Agent 的配置指向本机网关:写入网关地址与令牌到它自己的配置文件,释放时恢复原值。请求仍按客户端原本发送的模型名选择层级,Zroutery 不替你选。",
+  "takeover.none": "此构建没有已知的外部 Agent。",
+  "takeover.agent.claude": "Claude Code",
+  "takeover.agent.codex": "Codex CLI",
+  "takeover.agent.opencode": "OpenCode",
+  "takeover.agent.gemini": "Gemini CLI",
+  "takeover.state.unsupported": "不支持",
+  "takeover.state.not_detected": "未检测到",
+  "takeover.state.available": "可接管",
+  "takeover.state.ready": "就绪",
+  "takeover.state.active": "接管中",
+  "takeover.state.conflict": "存在冲突",
+  "takeover.state.degraded": "未确认",
+  "takeover.state.released": "已释放",
+  "takeover.state.error": "出错",
+  "takeover.hint.unsupported":
+    "Gemini CLI 的接入端点只能通过环境变量设置,而环境变量不在这份清单能记录、能恢复的配置文件里——接管会改掉密钥,客户端却仍然连着 Google。因此不提供。",
+  "takeover.hint.not_detected":
+    "本机没有找到 {agent} 的配置文件。先安装并运行一次,让它的配置文件生成,然后刷新本页。",
+  "takeover.hint.ready":
+    "条件已齐备:接管将写入下面列出的 {n} 个字段,并记录它们当前的原值。",
+  "takeover.confirm_inline":
+    "接管会修改 {agent} 自己的配置文件。释放时只恢复这些字段;文件里其余内容不受影响。",
+  "takeover.hint.active":
+    "该客户端已指向本网关,受管字段与 Zroutery 写入的值一致。释放会恢复接管时记录的原值。",
+  "takeover.hint.degraded":
+    "字段已写入,但 Zroutery 尚不能证明接管已生效——还没有确认到来自该客户端的真实请求。释放仍会恢复已记录的值。",
+  "takeover.hint.conflict":
+    "{n} 个受管字段的值已不是 Zroutery 写入的内容——有程序在接管之外改动了它。释放时可以选择保留这些修改,或恢复 Zroutery 的值。",
+  "takeover.hint.released":
+    "上一次接管已释放,原值已恢复。再次接管会把当前值记录为新的恢复点。",
+  "takeover.blocker.no_token":
+    "Zroutery 还没有网关令牌,客户端没有可用的凭据。请先在「设置 → 网关」中设置或重新生成令牌。",
+  "takeover.blocker.no_classes":
+    "还没有已启用模型被分配到层级,指向这里的 Agent 将无模型可请求。请先给至少一个已启用模型指定层级。",
+  "takeover.reason.unverified": "接管尚未被该客户端的真实请求确认过。",
+  "takeover.reason.token_changed":
+    "网关令牌在该客户端被接管后发生过变化——请释放并重新接管,把新令牌交给客户端。",
+  "takeover.table.field": "字段",
+  "takeover.table.current": "当前值",
+  "takeover.table.next": "接管后",
+  "takeover.table.managed": "Zroutery 写入",
+  "takeover.generation": "第 {n} 代",
+  "takeover.adopt": "接管",
+  "takeover.adopt_again": "再次接管",
+  "takeover.release": "释放",
+  "takeover.working": "处理中…",
+  "takeover.strategy.label": "冲突处理",
+  "takeover.strategy.keep_external": "保留我的修改",
+  "takeover.strategy.overwrite": "恢复 Zroutery 的值",
+  "takeover.strategy.skip": "跳过已改动的字段",
+  "takeover.confirm_adopt_title": "接管 {agent}?",
+  "takeover.confirm_adopt_body":
+    "{agent} 配置中的 {n} 个字段将被改写并进入托管。字段当前的原值会被记录,释放时恢复。",
+  "takeover.confirm_adopt_again_body":
+    "{agent} 的配置将被改写并进入托管,当前值会作为新的恢复点记录下来。",
+  "takeover.confirm_release_title": "释放 {agent}?",
+  "takeover.confirm_release_body":
+    "{agent} 配置中的受管字段将恢复为接管时记录的原值,Zroutery 不再托管它们。",
+  "takeover.toast_adopted": "{agent} 已接管。",
+  "takeover.toast_released": "已释放。",
+  "takeover.report_kept": "保留 {n} 处修改",
+  "takeover.report_overwritten": "恢复 {n} 个字段",
+  "takeover.report_skipped": "跳过 {n} 个字段",
 
   // ------------------------------------------------------------- routing
   "routing.lede": "按请求目的分流。服务兼容 Anthropic 或 OpenAI 协议的客户端。",
@@ -1396,6 +1716,51 @@ export function detectLang(): Lang {
   const stored = localStorage.getItem("zroutery-lang");
   if (stored === "en" || stored === "zh") return stored;
   return navigator.language.toLowerCase().startsWith("zh") ? "zh" : "en";
+}
+
+/**
+ * Re-state the backend errors an operator can act on, in their language.
+ *
+ * Backend messages are English technical strings and most of them are fine
+ * that way — they name a setting or an action and paraphrasing would throw
+ * that away. The handful that arrive as raw OS text (a taken port reads as a
+ * localised socket paragraph) are matched here; everything else passes
+ * through unchanged. Takes `t` rather than calling the hook so non-component
+ * error paths can use it too.
+ */
+export function describeBackendError(
+  t: (key: TKey, params?: Record<string, string | number>) => string,
+  raw: string,
+): string {
+  const bind = raw.match(/cannot bind (\S+)/);
+  if (bind) {
+    if (/already in use|os error 10048/i.test(raw)) {
+      return t("err.bind_in_use", { addr: bind[1] });
+    }
+    if (/os error 10013|access denied|permission denied/i.test(raw)) {
+      return t("err.bind_denied", { addr: bind[1] });
+    }
+  }
+  // The panel refused the credential. The two shapes it takes are the same
+  // advice with different causes: a stored relay key (refused at construction,
+  // by name) and a rejected token (the 401 the probe surfaces). Both are fixed
+  // by storing the panel's access token, so one wording serves both.
+  if (/relay API key/i.test(raw)) {
+    return t("err.relay_key");
+  }
+  if (/missing or invalid credentials/i.test(raw)) {
+    return t("err.credentials_rejected");
+  }
+  if (/no panel access token is stored/i.test(raw)) {
+    return t("err.no_panel_token");
+  }
+  // A config issue that crosses the bridge in English; the model name, when the
+  // message carries one, is the part worth keeping verbatim.
+  const candidate = raw.match(/`([^`]+)` is not a configured model/);
+  if (candidate) {
+    return t("err.classifier_candidate", { model: candidate[1] });
+  }
+  return raw;
 }
 
 type I18n = {
