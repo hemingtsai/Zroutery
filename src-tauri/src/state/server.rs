@@ -78,6 +78,24 @@ impl Desktop {
         let mut next = (*previous).clone();
         next.providers.retain(|p| p.id != provider_id);
         next.models.retain(|m| m.provider_id != provider_id);
+        // The Auto Mode pool names models by exposed id or alias, and every model
+        // this provider offered is gone now — leaving the candidates behind would
+        // dangle them (reported as a warning since the classifier simply skips
+        // unknown members). Removing a provider is an explicit intent that
+        // covers its models, so the pool members that lived on it go too.
+        let gone: std::collections::HashSet<String> = previous
+            .models
+            .iter()
+            .filter(|m| m.provider_id == provider_id)
+            .flat_map(|m| {
+                let mut ids = m.aliases.clone();
+                ids.push(m.exposed_id());
+                ids
+            })
+            .collect();
+        next.classifier
+            .candidates
+            .retain(|c| !gone.contains(&c.model));
 
         let orphaned = if removed_key_ref.trim().is_empty() {
             // No credential to look after.

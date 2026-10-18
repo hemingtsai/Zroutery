@@ -92,7 +92,15 @@ export default function Models({
         (m) => previewId(m.provider_id, m.upstream_model) === id,
       );
       if (index < 0) return null;
+      // The Auto Mode pool names models by exposed id or alias. Deleting the
+      // model deletes its pool membership with it — leaving the candidate would
+      // dangle it, and a dangling candidate used to block every save until it
+      // was hunted down by hand.
+      const gone = [id, ...next.models[index].aliases];
       next.models.splice(index, 1);
+      next.classifier.candidates = next.classifier.candidates.filter(
+        (c) => !gone.includes(c.model),
+      );
       return next;
     });
     setOpenId(null);
