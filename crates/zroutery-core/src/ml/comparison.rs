@@ -653,6 +653,14 @@ pub struct PairedDeltas {
     pub paired_requests: usize,
     /// Positive favours the candidate.
     pub success_rate_delta: f64,
+    /// Share of paired requests the candidate would have needed an extra attempt
+    /// for, minus the baseline's share. **Negative favours the candidate.**
+    ///
+    /// This is the counterfactual fallback *requirement*: how often choosing this
+    /// candidate means the first attempt did not answer. It was a constant `0.0`
+    /// until the per-request `fell_back` flags were actually counted, which meant
+    /// the field reported "no change" on every dataset regardless of the traffic —
+    /// and left `PromotionConfig::max_fallback_rate_delta` comparing against it.
     pub fallback_rate_delta: f64,
     /// Negative favours the candidate.
     pub mean_latency_delta_ms: f64,
@@ -725,6 +733,11 @@ pub fn pair_against_baseline(
     let mut latency_delta_total = 0.0f64;
     let mut ttft_delta_total = 0.0f64;
     let mut cost_delta_total = 0.0f64;
+    // Signed on purpose, for the same reason `success_rate_delta` is: regressions
+    // routinely exceed improvements, and a `usize` difference would overflow on
+    // exactly the data this module exists to detect.
+    let mut candidate_fallbacks = 0i64;
+    let mut baseline_fallbacks = 0i64;
 
     for base in baseline.iter().filter(|r| r.measured) {
         let Some(other) = candidate_by_request.get(base.choice.request_id.as_str()) else {
@@ -739,6 +752,17 @@ pub fn pair_against_baseline(
             (true, false) => candidate_regressions += 1,
             (false, true) => candidate_improvements += 1,
             (false, false) => both_failed += 1,
+        }
+
+        // `fell_back` is derived from whether the chosen candidate's own attempt
+        // failed, so it is this arm's counterfactual fallback requirement — how often
+        // picking this candidate would have cost the request another try. Counted
+        // per paired request so both arms are measured over exactly the same set.
+        if base.fell_back {
+            baseline_fallbacks += 1;
+        }
+        if other.fell_back {
+            candidate_fallbacks += 1;
         }
 
         let base_utility = observed_utility(&base_outcome, reward_policy, base.fell_back);
@@ -768,7 +792,16 @@ pub fn pair_against_baseline(
             // module exists to detect.
             (candidate_improvements as i64 - candidate_regressions as i64) as f64 / n
         },
-        fallback_rate_delta: 0.0,
+        // Previously hardcoded to 0.0. A report that published a constant zero here
+        // claimed "this policy does not change how often a fallback is needed" no
+        // matter what the traffic actually showed, and
+        // `PromotionConfig::max_fallback_rate_delta` — a configured tolerance — had
+        // nothing to compare against.
+        fallback_rate_delta: if n == 0.0 {
+            0.0
+        } else {
+            (candidate_fallbacks - baseline_fallbacks) as f64 / n
+        },
         mean_latency_delta_ms: if n == 0.0 {
             0.0
         } else {
@@ -829,6 +862,18 @@ pub struct RoutingComparison {
     pub reward_policy: RewardPolicy,
     /// The evidence floor a directional verdict required.
     pub min_paired_requests: usize,
+    /// Statistical evidence for the paired effect, clustered by time.
+    ///
+    /// Attached here rather than passed separately so the promotion gate cannot be
+    /// reached without it: `run_promotion_round` evaluates the gate directly, so a
+    /// gate that had to be handed its evidence would still be callable on a body
+    /// that carried none.
+    ///
+    /// Keyed by baseline name, because the gate reads the pairing its own configured
+    /// `required_baseline` names. A figure pinned to one baseline would measure a
+    /// different comparison than the one judged whenever that setting differs.
+    #[serde(default)]
+    pub evidence: BTreeMap<String, super::eval_stats::RoutingEvidence>,
     pub produced_at: i64,
 }
 
@@ -865,6 +910,52 @@ pub fn run_comparison(
     baselines: &[ReplayBaseline],
     reward_policy: &RewardPolicy,
 ) -> Result<RoutingComparison, ComparisonError> {
+    run_comparison_with_records(traces, candidate, baselines, reward_policy)
+        .map(|run| run.comparison)
+}
+
+/// A comparison plus the per-policy arm records it was built from.
+///
+/// The records are what a confidence interval needs: `PairedDeltas` carries sums and
+/// counts, which is enough to report a mean but not enough to estimate a variance.
+/// Exposing them here — rather than widening `RoutingComparison` — keeps every
+/// existing consumer and every serialised report exactly as they were.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ComparisonRun {
+    pub comparison: RoutingComparison,
+    /// Per-policy arm records, keyed by policy name.
+    pub records: BTreeMap<String, Vec<ArmRecord>>,
+}
+
+/// [`run_comparison`], additionally returning the arm records.
+pub fn run_comparison_with_records(
+    traces: &[RequestTrace],
+    candidate: &MlPolicy,
+    baselines: &[ReplayBaseline],
+    reward_policy: &RewardPolicy,
+) -> Result<ComparisonRun, ComparisonError> {
+    run_comparison_with_evidence(
+        traces,
+        candidate,
+        baselines,
+        reward_policy,
+        &Default::default(),
+    )
+}
+
+/// [`run_comparison_with_records`], additionally measuring the statistical evidence.
+///
+/// The evidence is computed here, while the per-request records still exist, and then
+/// travels on the comparison. There is no way to obtain the records later — they are
+/// the only place a variance can be estimated from — so computing it here is what
+/// makes it available to the promotion gate at all.
+pub fn run_comparison_with_evidence(
+    traces: &[RequestTrace],
+    candidate: &MlPolicy,
+    baselines: &[ReplayBaseline],
+    reward_policy: &RewardPolicy,
+    evidence_config: &super::eval_stats::EvidenceConfig,
+) -> Result<ComparisonRun, ComparisonError> {
     if traces.is_empty() {
         return Err(ComparisonError::NoTraces);
     }
@@ -948,7 +1039,7 @@ pub fn run_comparison(
         });
     }
 
-    Ok(RoutingComparison {
+    let comparison = RoutingComparison {
         // The fingerprint is of the *deduplicated* body, because that is the body
         // the arms are evaluated over and therefore the body a training run over
         // the same traces must name. Hashing the raw traces instead would make a
@@ -961,8 +1052,99 @@ pub fn run_comparison(
         paired,
         reward_policy: reward_policy.clone(),
         min_paired_requests: MIN_PAIRED_REQUESTS,
+        // Measured for every baseline this comparison paired against, so the gate can
+        // read whichever one its configuration names.
+        evidence: evidence_for_every_baseline(
+            &records_by_policy,
+            candidate.name(),
+            baselines,
+            reward_policy,
+            traces,
+            evidence_config,
+        ),
         produced_at: now_seconds(),
+    };
+    Ok(ComparisonRun {
+        comparison,
+        records: records_by_policy,
     })
+}
+
+/// Measure the evidence for every baseline this comparison paired against.
+///
+/// One figure per baseline rather than one in total. The gate judges whichever
+/// pairing its configuration names, so a single figure pinned to the *default*
+/// baseline would measure a different comparison than the one judged whenever that
+/// setting differs — which is not a hypothetical: a configured `required_baseline`
+/// is ordinary use.
+fn evidence_for_every_baseline(
+    records: &BTreeMap<String, Vec<ArmRecord>>,
+    candidate_name: &str,
+    baselines: &[ReplayBaseline],
+    reward_policy: &RewardPolicy,
+    traces: &[RequestTrace],
+    config: &super::eval_stats::EvidenceConfig,
+) -> BTreeMap<String, super::eval_stats::RoutingEvidence> {
+    let recorded: BTreeMap<&str, i64> = traces
+        .iter()
+        .map(|trace| (trace.request_id.as_str(), trace.recorded_at))
+        .collect();
+    baselines
+        .iter()
+        .map(|baseline| {
+            let observations = paired_observations(
+                records.get(baseline.as_str()),
+                records.get(candidate_name),
+                reward_policy,
+                &recorded,
+            );
+            (
+                baseline.as_str().to_string(),
+                super::eval_stats::measure(&observations, config),
+            )
+        })
+        .collect()
+}
+
+/// Build the per-request paired observations an interval is computed from.
+///
+/// Only requests where **both** arms were measured contribute — exactly the set
+/// `pair_against_baseline` uses, so the interval and the reported mean describe the
+/// same population.
+fn paired_observations(
+    baseline: Option<&Vec<ArmRecord>>,
+    candidate: Option<&Vec<ArmRecord>>,
+    reward_policy: &RewardPolicy,
+    recorded: &BTreeMap<&str, i64>,
+) -> Vec<super::eval_stats::PairedObservation> {
+    let (Some(baseline), Some(candidate)) = (baseline, candidate) else {
+        return Vec::new();
+    };
+    let candidate_by_request: BTreeMap<&str, &ArmRecord> = candidate
+        .iter()
+        .filter(|record| record.measured)
+        .map(|record| (record.choice.request_id.as_str(), record))
+        .collect();
+
+    baseline
+        .iter()
+        .filter(|record| record.measured)
+        .filter_map(|base| {
+            let other = candidate_by_request.get(base.choice.request_id.as_str())?;
+            let (base_outcome, other_outcome) = (base.outcome?, other.outcome?);
+            let base_utility = observed_utility(&base_outcome, reward_policy, base.fell_back);
+            let other_utility = observed_utility(&other_outcome, reward_policy, other.fell_back);
+            Some(super::eval_stats::PairedObservation {
+                recorded_at: recorded
+                    .get(base.choice.request_id.as_str())
+                    .copied()
+                    .unwrap_or_default(),
+                utility_delta: other_utility - base_utility,
+                candidate_only_success: !base_outcome.success && other_outcome.success,
+                baseline_only_success: base_outcome.success && !other_outcome.success,
+            })
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------

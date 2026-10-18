@@ -1315,9 +1315,42 @@ mod tests {
             reward_policy: RewardPolicy::default(),
             min_paired_requests: crate::ml::comparison::MIN_PAIRED_REQUESTS,
             produced_at: 0,
+            // A sufficient measurement. These tests are about what happens
+            // *after* a promotion, not about whether the evidence supports one, and
+            // the statistical criterion would otherwise decide every one of them.
+            // Production always carries evidence: it is attached by
+            // `run_comparison`, so `None` is a fixture-only shape.
+            evidence: supporting_evidence(),
         }
     }
 
+    /// Evidence sufficient to pass the statistical criterion, for fixtures that are
+    /// about something other than whether the evidence supports a promotion.
+    fn supporting_evidence(
+    ) -> std::collections::BTreeMap<String, crate::ml::eval_stats::RoutingEvidence> {
+        let observations: Vec<crate::ml::eval_stats::PairedObservation> = (0..200)
+            .map(|index| crate::ml::eval_stats::PairedObservation {
+                recorded_at: 1_700_000_000 + index as i64 * 3_600,
+                utility_delta: 0.5,
+                candidate_only_success: true,
+                baseline_only_success: false,
+            })
+            .collect();
+        [crate::ml::eval_stats::measure(
+            &observations,
+            &crate::ml::eval_stats::EvidenceConfig::default(),
+        )]
+        .into_iter()
+        // Keyed under every baseline these fixtures might be judged against:
+        // `permissive_gate` names `baseline.priority` while the default names
+        // `baseline.lowest_latency`, and the gate reads whichever its config says.
+        .flat_map(|evidence| {
+            ["baseline.priority", "baseline.lowest_latency"]
+                .into_iter()
+                .map(move |name| (name.to_string(), evidence.clone()))
+        })
+        .collect()
+    }
     /// A gate configuration that promotes anything with enough paired evidence
     /// and a positive utility delta.
     fn permissive_gate() -> crate::ml::PromotionConfig {

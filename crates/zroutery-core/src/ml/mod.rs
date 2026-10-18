@@ -4,6 +4,12 @@
 //! scoring and ranking routing candidates, and the training dataset
 //! that collects samples for model training.
 
+// Bridges what the account subsystem observes into the planner's vocabulary.
+//
+// Behind the `account` feature, which the shipped binary does not enable: there is
+// nothing to project when the account subsystem is not compiled in.
+#[cfg(feature = "account")]
+pub mod account_projection;
 pub mod activation;
 pub mod attribution;
 pub mod bandit;
@@ -13,7 +19,10 @@ pub mod coordinator;
 pub mod dataset;
 pub mod decision_contract;
 pub mod decision_engine;
+pub mod eval_report;
+pub mod eval_stats;
 pub mod evaluation;
+pub mod execution_identity;
 pub mod features;
 pub mod journal;
 pub mod learning;
@@ -21,6 +30,8 @@ pub mod model;
 pub mod model_identity;
 pub mod offline_gate;
 pub mod promotion;
+pub mod resource_buckets;
+pub mod resource_shadow;
 pub mod reward;
 pub mod round;
 pub mod serving;
@@ -28,6 +39,9 @@ pub mod shadow;
 pub mod shadow_analysis;
 pub mod statistics;
 pub mod status;
+pub mod task_evidence;
+pub mod task_verifier;
+pub mod temporal_planner;
 pub mod traces;
 pub mod warmup;
 pub use activation::{
@@ -68,10 +82,11 @@ pub use calibration::{
     DEFAULT_PROBABILITY_FLOOR, DEFAULT_RELIABILITY_BINS, DISTRIBUTION_ROLE,
 };
 pub use comparison::{
-    aggregate, observed_utility, pair_against_baseline, run_comparison, ArmMetrics, ArmRecord,
-    BaselinePairing, ComparisonError, MeasuredOutcome, MlPolicy, PairedDeltas, PolicyChoice,
-    ReplayBaseline, ReplayPolicy, ReplayState, RoutingComparison, RoutingVerdict,
-    MIN_PAIRED_REQUESTS, UTILITY_DELTA_THRESHOLD,
+    aggregate, observed_utility, pair_against_baseline, run_comparison,
+    run_comparison_with_records, ArmMetrics, ArmRecord, BaselinePairing, ComparisonError,
+    ComparisonRun, MeasuredOutcome, MlPolicy, PairedDeltas, PolicyChoice, ReplayBaseline,
+    ReplayPolicy, ReplayState, RoutingComparison, RoutingVerdict, MIN_PAIRED_REQUESTS,
+    UTILITY_DELTA_THRESHOLD,
 };
 pub use coordinator::{Coordinator, CoordinatorConfig, RoutingAction, RoutingDecision};
 pub use dataset::{
@@ -88,10 +103,24 @@ pub use decision_contract::{
     SettledStep, DISTRIBUTION_NORMALIZATION_TOLERANCE,
 };
 pub use decision_engine::{DecisionEngine, EngineCandidate, EngineInput, EngineOutput};
+pub use eval_report::{
+    evaluability, evaluate, is_promotable, DataQualityReport, EvaluationConfig, EvaluationError,
+    EvaluationReport, EvaluationVerdict, ResourceShadowSummary, RoutingArmReport,
+    TaskQualityVerdict,
+};
+pub use eval_stats::{
+    measure as measure_routing_evidence, Clustering, EffectInterval, EvidenceConfig,
+    PairedObservation, RoutingEvidence,
+};
 pub use evaluation::{
     f32_identical, f64_identical, find_nonfinite_f64, temporal_split, ulp_distance,
-    ComparisonReport, Divergence, EvaluationError, Evaluator, Exactness, FrozenHoldout,
-    NonFiniteComponent, PredictionMetrics, Recommendation, RoutingDeltas, RoutingMetrics,
+    ComparisonReport, Divergence, EvaluationError as ModelEvaluationError, Evaluator, Exactness,
+    FrozenHoldout, NonFiniteComponent, PredictionMetrics, Recommendation, RoutingDeltas,
+    RoutingMetrics,
+};
+pub use execution_identity::{
+    ExecutionIdentity, IdentityEvidence, IdentitySource, UnavailableReason,
+    EXECUTION_IDENTITY_SCHEMA_VERSION,
 };
 pub use features::{
     extract_features, FeatureContext, RoutingFeatures, FEATURE_DIMENSION, FEATURE_SCHEMA_VERSION,
@@ -127,6 +156,13 @@ pub use promotion::{
     comparison_was_improved, PromotionConfig, PromotionCriterion, PromotionDecision, PromotionGate,
     PromotionVerdict,
 };
+pub use resource_buckets::{
+    ChargeOrder, ChargeReconciliation, ObservationSource, ReconciliationVerdict, ResetBehavior,
+    ResourceBucket, ResourceKind,
+};
+pub use resource_shadow::{
+    evaluate as evaluate_resource_shadow, ResourceCandidateShadow, ResourceShadow,
+};
 pub use reward::{
     compute_utility, Action, ActionGuard, AttemptReward, PredictionBundle, RequestReward,
     RewardComputer, RewardPolicy, UtilityBreakdown,
@@ -158,9 +194,20 @@ pub use status::{
     MlStatus, PromotedModelStatus, PromotionHistoryEntry, ReloadOutcome, ShadowAnalysisStatus,
     ShadowStatus,
 };
+pub use task_evidence::{
+    EvidenceCoverage, EvidenceOrigin, TaskOutcomeEvidence, TaskStatus, VerifierKind,
+};
+pub use task_verifier::{
+    verify as verify_task_outcome, StreamResponseAccumulator, VerdictContext, VerifierConfig,
+};
+pub use temporal_planner::{
+    attribute_draw, saving_is_valuable, verified_charge, DemandForecast, ResourcePlan,
+    ResourceValuation, TemporalConfig, TemporalPlanner,
+};
 pub use traces::{
-    contained_append, deduped_samples_from, samples_from, DatasetFingerprint, RequestTrace,
-    TraceCounters, TraceError, TraceIngestion, TraceLog, TRACES_FILE_NAME, TRACE_SCHEMA_VERSION,
+    contained_append, contained_append_with_evidence, deduped_samples_from, samples_from,
+    DatasetFingerprint, RequestTrace, TraceClear, TraceCounters, TraceError, TraceIngestion,
+    TraceLog, TRACES_FILE_NAME, TRACE_SCHEMA_MAX_READABLE, TRACE_SCHEMA_VERSION,
 };
 pub use warmup::{
     run_warmup, LabelCoverage, WarmupConfig, WarmupError, WarmupOutcome, WarmupReport,

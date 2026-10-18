@@ -56,7 +56,19 @@ use crate::ml::shadow::ShadowInput;
 // ---------------------------------------------------------------------------
 
 /// Schema version of a persisted [`RequestTrace`] line.
-pub const TRACE_SCHEMA_VERSION: u32 = 1;
+///
+/// Version 2 adds [`RequestTrace::execution_identity`]. Every v2 field is
+/// `#[serde(default)]`, so a version-1 line still deserialises with its identity
+/// recorded as unknown rather than refused — losing an existing history to gain a
+/// field would be a far worse trade than a missing observation on old records.
+pub const TRACE_SCHEMA_VERSION: u32 = 2;
+
+/// The highest trace schema version this build can read.
+///
+/// A line newer than this is refused rather than partially parsed. Silently dropping
+/// unknown fields would let a newer writer's evidence disappear without a word, which
+/// is the failure mode that makes a data-quality report worse than useless.
+pub const TRACE_SCHEMA_MAX_READABLE: u32 = 2;
 
 /// File name of the append-only trace log, inside the router's state directory.
 pub const TRACES_FILE_NAME: &str = "traces.jsonl";
@@ -135,6 +147,40 @@ pub struct RequestTrace {
     /// Canonical samples this request produced, one per attempt plus one for
     /// the request as a whole.
     pub samples: Vec<OutcomeTrainingSample>,
+    /// What the upstream actually declared it ran.
+    ///
+    /// Separate from the routing identity inside `samples`, which records which
+    /// configured candidate served. This one records what the provider said, which is
+    /// the only evidence that distinguishes the model from a relay fronting several
+    /// backends behind one name.
+    ///
+    /// Defaults to "never reached an upstream" so a version-1 line reads with an
+    /// honest absence instead of a fabricated identity.
+    #[serde(default = "unknown_execution_identity")]
+    pub execution_identity: crate::ml::execution_identity::ExecutionIdentity,
+    /// The temporal resource policy's counterfactual for this request.
+    ///
+    /// Absent when there was nothing to plan over, which is a real state. It records
+    /// what the policy *would* have preferred and never what the alternative would
+    /// have achieved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_shadow: Option<crate::ml::resource_shadow::ResourceShadow>,
+    /// Verified claims about whether the *task* completed, as distinct from whether
+    /// the API call did.
+    ///
+    /// Absent means no task verifier ran for this request. It is not a failed task,
+    /// and reading it as one would make every unverifiable request look like evidence
+    /// of a bad model.
+    #[serde(default)]
+    pub task_evidence: Vec<crate::ml::task_evidence::TaskOutcomeEvidence>,
+}
+
+/// The identity a trace carries when nothing was observed.
+///
+/// Named rather than derived so the reason — never reached an upstream — travels with
+/// the value instead of being implied by a default.
+fn unknown_execution_identity() -> crate::ml::execution_identity::ExecutionIdentity {
+    crate::ml::execution_identity::ExecutionIdentity::unrouted("")
 }
 
 impl RequestTrace {
@@ -146,6 +192,25 @@ impl RequestTrace {
         input: ShadowInput,
         samples: Vec<OutcomeTrainingSample>,
     ) -> Self {
+        Self::with_evidence(
+            request_id,
+            recorded_at,
+            input,
+            samples,
+            crate::ml::execution_identity::ExecutionIdentity::unrouted(""),
+            Vec::new(),
+        )
+    }
+
+    /// Build a trace carrying the execution identity and task evidence.
+    pub fn with_evidence(
+        request_id: impl Into<String>,
+        recorded_at: i64,
+        input: ShadowInput,
+        samples: Vec<OutcomeTrainingSample>,
+        execution_identity: crate::ml::execution_identity::ExecutionIdentity,
+        task_evidence: Vec<crate::ml::task_evidence::TaskOutcomeEvidence>,
+    ) -> Self {
         let request_id = request_id.into();
         Self {
             schema_version: TRACE_SCHEMA_VERSION,
@@ -154,7 +219,24 @@ impl RequestTrace {
             recorded_at,
             input,
             samples,
+            execution_identity,
+            task_evidence,
+            resource_shadow: None,
         }
+    }
+
+    /// Task evidence covering this request, keyed for lookup by outcome id.
+    ///
+    /// Returns only evidence that is attributable to an attempted candidate, so a
+    /// caller building per-model quality statistics cannot accidentally credit a
+    /// request-level verdict to whichever model happened to be served.
+    pub fn attributable_task_evidence(
+        &self,
+    ) -> Vec<&crate::ml::task_evidence::TaskOutcomeEvidence> {
+        self.task_evidence
+            .iter()
+            .filter(|evidence| evidence.is_attempt_attributable())
+            .collect()
     }
 
     /// The attempt-scoped samples, i.e. the ones that describe one candidate's
@@ -305,6 +387,47 @@ pub enum TraceError {
         line: usize,
         reason: String,
     },
+    #[error("trace line {line} in {path} has schema version {found}, newer than this build reads ({supported})")]
+    UnsupportedSchema {
+        path: String,
+        line: usize,
+        found: u32,
+        supported: u32,
+    },
+}
+
+/// Parse one line, refusing a schema this build cannot honestly read.
+///
+/// A newer line is refused rather than partially parsed. Silently dropping the
+/// fields it does not recognise would let a newer writer's evidence vanish without a
+/// trace of its own — and a data-quality report that cannot see what it is ignoring
+/// is worse than one that stops.
+fn parse_line(line: &str, path: &Path, line_number: usize) -> Result<RequestTrace, TraceError> {
+    let corrupt = |reason: String| TraceError::Corrupt {
+        path: path.display().to_string(),
+        line: line_number,
+        reason,
+    };
+    // Peek at the version without deserialising the whole record, so an unknown
+    // schema is refused before any of it is interpreted.
+    let found: u32 = serde_json::from_str::<serde_json::Value>(line)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("schema_version")
+                .and_then(serde_json::Value::as_u64)
+        })
+        .map(|version| version as u32)
+        .ok_or_else(|| corrupt("line carries no usable schema_version".to_string()))?;
+    if found > TRACE_SCHEMA_MAX_READABLE {
+        return Err(TraceError::UnsupportedSchema {
+            path: path.display().to_string(),
+            line: line_number,
+            found,
+            supported: TRACE_SCHEMA_MAX_READABLE,
+        });
+    }
+    serde_json::from_str(line).map_err(|error| corrupt(error.to_string()))
 }
 
 // ---------------------------------------------------------------------------
@@ -510,12 +633,7 @@ impl TraceLog {
             if line.trim().is_empty() {
                 continue;
             }
-            let trace: RequestTrace =
-                serde_json::from_str(&line).map_err(|error| TraceError::Corrupt {
-                    path: self.path.display().to_string(),
-                    line: index + 1,
-                    reason: error.to_string(),
-                })?;
+            let trace: RequestTrace = parse_line(&line, &self.path, index + 1)?;
             traces.push(trace);
         }
         Ok(traces)
@@ -575,14 +693,19 @@ impl TraceLog {
             // Matched rather than mapped so the absolute line number can be
             // resolved here, on the error path, instead of eagerly for every
             // line. A `map_err` closure cannot return it.
-            let trace: RequestTrace = match serde_json::from_str(line) {
+            let trace: RequestTrace = match parse_line(line, &self.path, offset + 1) {
                 Ok(trace) => trace,
                 Err(error) => {
-                    return Err(TraceError::Corrupt {
-                        path: self.path.display().to_string(),
-                        line: Self::line_number_at(&self.path, start, offset, &self.tail_bytes)?,
-                        reason: error.to_string(),
-                    })
+                    let absolute =
+                        Self::line_number_at(&self.path, start, offset, &self.tail_bytes)?;
+                    return Err(match error {
+                        TraceError::Corrupt { reason, .. } => TraceError::Corrupt {
+                            path: self.path.display().to_string(),
+                            line: absolute,
+                            reason,
+                        },
+                        other => other,
+                    });
                 }
             };
             traces.push(trace);
@@ -871,15 +994,44 @@ pub fn contained_append(
     samples: Vec<OutcomeTrainingSample>,
     recorded_at: i64,
 ) -> TraceIngestion {
+    contained_append_with_evidence(
+        log,
+        decision_id,
+        input,
+        samples,
+        recorded_at,
+        crate::ml::execution_identity::ExecutionIdentity::unrouted(""),
+        Vec::new(),
+    )
+}
+
+/// [`contained_append`] carrying execution identity and task evidence.
+///
+/// Same containment contract, and the same empty-samples rule: a request that
+/// produced no samples has no trace to write, because a record without feature
+/// vectors looks like counterfactual evidence and cannot support a counterfactual
+/// claim.
+#[allow(clippy::too_many_arguments)]
+pub fn contained_append_with_evidence(
+    log: &TraceLog,
+    decision_id: &str,
+    input: &ShadowInput,
+    samples: Vec<OutcomeTrainingSample>,
+    recorded_at: i64,
+    execution_identity: crate::ml::execution_identity::ExecutionIdentity,
+    task_evidence: Vec<crate::ml::task_evidence::TaskOutcomeEvidence>,
+) -> TraceIngestion {
     if samples.is_empty() {
         log.note_nothing();
         return TraceIngestion::Nothing;
     }
-    let trace = RequestTrace::new(
+    let trace = RequestTrace::with_evidence(
         input.decision_id.clone(),
         recorded_at,
         input.clone(),
         samples,
+        execution_identity,
+        task_evidence,
     );
     // `decision_id` is accepted so a caller can log the id it holds when the
     // trace itself fails to build; keeping it in the signature means the

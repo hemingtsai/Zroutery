@@ -18,6 +18,7 @@ use zroutery_lib::secrets::KeychainSecrets;
 use zroutery_lib::state::Desktop;
 use zroutery_lib::store;
 
+mod evaluate;
 mod experiment;
 
 /// Arguments after the program name, or an error naming what was expected.
@@ -75,6 +76,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         let report = experiment::run(&state_dir, requests_per_phase, exploration).await?;
         print!("{}", report.render());
+        return Ok(());
+    }
+
+    // `--evaluate-routing` is likewise self-contained and exits without serving: it
+    // reads the trace log, replays recorded decisions through the baselines and the
+    // current model, and reports. It sends no upstream request and changes no routing,
+    // so it is handled before the proxy is wired up.
+    if std::env::args().any(|a| a == "--evaluate-routing") {
+        let args = subcommand_args("--evaluate-routing")?;
+        let code = evaluate::run(evaluate::EvalArgs::parse(&args)?)?;
+        if code != 0 {
+            std::process::exit(code);
+        }
         return Ok(());
     }
 

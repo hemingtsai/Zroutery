@@ -462,6 +462,126 @@ impl PromotionGate {
             ),
         });
 
+        // -- 8b. Fallback regression budget. ----------------------------------
+        //
+        // `max_fallback_rate_delta` was declared, defaulted and folded into
+        // `identity()` but read by no criterion, and the field it would have
+        // compared against was a constant 0.0. A configured tolerance that no code
+        // consults is a tolerance the operator believes they have and does not, so
+        // this is the criterion that makes the setting mean what it says.
+        //
+        // Sign: positive means the candidate needs an extra attempt more often, which
+        // is worse. A candidate that trades a little speed for far fewer retries
+        // passes; one that shifts failure into silent second attempts does not.
+        criteria.push(PromotionCriterion {
+            name: "fallback_regression".to_string(),
+            held: pairing.deltas.fallback_rate_delta <= self.config.max_fallback_rate_delta,
+            measured: Some(pairing.deltas.fallback_rate_delta),
+            threshold: Some(self.config.max_fallback_rate_delta),
+            reason: format!(
+                "fallback rate moved {:+.4} against a tolerated {:+.4}",
+                pairing.deltas.fallback_rate_delta, self.config.max_fallback_rate_delta
+            ),
+        });
+
+        // -- 8c. Statistical evidence. ------------------------------------
+        //
+        // Every other criterion here is a threshold on a point estimate, so a thin
+        // body with a large delta passed exactly as readily as a large one. This one
+        // asks whether the effect survives its own uncertainty.
+        //
+        // Absent evidence is *unknown*, not a pass. That distinction is the whole
+        // point: `run_promotion_round` reaches this gate directly, so a gate that
+        // treated "no interval computed" as "nothing to object to" would be the one
+        // path where a thin body still promoted.
+        let Some(evidence) = comparison.evidence.get(&self.config.required_baseline) else {
+            criteria.push(PromotionCriterion::unknown(
+                "statistical_evidence",
+                format!(
+                    "the comparison carries no statistical evidence for the required baseline '{}', \
+                     so the measured effect has no interval, no minimum detectable effect and no \
+                     required sample size behind it",
+                    self.config.required_baseline
+                ),
+            ));
+            return self.decide(training, criteria, String::new(), 0, revision);
+        };
+
+        if !evidence.is_sufficient() {
+            criteria.push(PromotionCriterion::failed(
+                "statistical_evidence",
+                evidence.utility.as_ref().map(|interval| interval.mean),
+                evidence.utility.as_ref().map(|interval| interval.lower),
+                format!(
+                    "the measured effect is not supported by {} paired request(s): {}",
+                    evidence.pairs,
+                    evidence.blockers.join("; ")
+                ),
+            ));
+        } else {
+            // Two different questions, deliberately kept apart.
+            //
+            // *Is the improvement real?* is the lower bound above zero — the
+            // standard bar for claiming an effect exists. That is a promotion
+            // requirement, because promoting on a delta indistinguishable from noise
+            // is how a worse model gets installed.
+            //
+            // *Is it big enough to act on?* is the lower bound clearing the minimum
+            // detectable effect. That is **not** a promotion requirement: it is the
+            // operator's cost-benefit call, and a real improvement that is merely
+            // small is still an improvement. Conflating the two would reject
+            // candidates that are genuinely better, and rejecting a better candidate
+            // is its own kind of failure.
+            //
+            // So the second is reported in the criterion's reason and nowhere else.
+            let Some(interval) = evidence.utility.as_ref() else {
+                criteria.push(PromotionCriterion::failed(
+                    "statistical_evidence",
+                    None,
+                    None,
+                    "no interval could be computed".to_string(),
+                ));
+                return self.decide(training, criteria, String::new(), 0, revision);
+            };
+            if interval.lower > 0.0 {
+                criteria.push(PromotionCriterion::held(
+                    "statistical_evidence",
+                    Some(interval.mean),
+                    Some(interval.lower),
+                    format!(
+                        "effect {:+.4} with a {:.0}% interval of {:+.4} to {:+.4} over {} paired \
+                         request(s) in {} time cluster(s); {} the {:+.4} minimum detectable effect",
+                        interval.mean,
+                        interval.level * 100.0,
+                        interval.lower,
+                        interval.upper,
+                        evidence.pairs,
+                        evidence.clusters,
+                        if interval.clears(evidence.minimum_effect) {
+                            "clearing"
+                        } else {
+                            "below"
+                        },
+                        evidence.minimum_effect
+                    ),
+                ));
+            } else {
+                criteria.push(PromotionCriterion::failed(
+                    "statistical_evidence",
+                    Some(interval.mean),
+                    Some(interval.lower),
+                    format!(
+                        "the effect's {:.0}% interval {:+.4} to {:+.4} includes zero, so the \
+                         improvement is not distinguishable from noise over {} paired request(s)",
+                        interval.level * 100.0,
+                        interval.lower,
+                        interval.upper,
+                        evidence.pairs
+                    ),
+                ));
+            }
+        }
+
         // -- 9. Dataset identity: the model and the evidence must be about the
         //       same body of data. ------------------------------------------
         //
@@ -518,12 +638,29 @@ impl PromotionGate {
         paired_requests: usize,
         revision: Option<String>,
     ) -> PromotionDecision {
+        // An *unknown* criterion is "could not measure", not "measured and failed". The
+        // verdict has to reflect that difference, because `Blocked` is the answer that
+        // invites more data while `Rejected` is the answer that invites abandoning the
+        // candidate — and a promotion decision that was never actually measurable
+        // belongs to the first.
+        //
+        // The list is explicit rather than "any unknown criterion" so that adding an
+        // unmeasurable check cannot quietly reclassify existing rejections. Each entry
+        // is a criterion whose absence of a measurement means the evidence itself is
+        // missing.
+        const EVIDENCE_BEARING_UNKNOWNS: [&str; 2] = ["paired_evidence", "statistical_evidence"];
+        // The discriminator is `!held && measured.is_none()` — a criterion that could
+        // not be measured at all. A criterion that passed while carrying no figure
+        // (`baseline_present` does exactly that) is *held*, not unknown, and must not
+        // be mistaken for missing evidence.
         let evidence_short = criteria
             .iter()
-            .any(|criterion| criterion.name == "paired_evidence" && criterion.measured.is_none())
-            || criteria
-                .iter()
-                .any(|c| c.name == "baseline_present" && !c.held);
+            .any(|c| c.name == "baseline_present" && !c.held)
+            || EVIDENCE_BEARING_UNKNOWNS.iter().any(|name| {
+                criteria
+                    .iter()
+                    .any(|c| &c.name == name && !c.held && c.measured.is_none())
+            });
 
         let verdict = if evidence_short {
             PromotionVerdict::Blocked
@@ -652,9 +789,38 @@ mod tests {
             reward_policy: RewardPolicy::default(),
             min_paired_requests: PromotionConfig::default().min_paired_requests,
             produced_at: 1_700_000_000,
+            // Hand-built fixtures carry an explicit, sufficient measurement so the
+            // statistical criterion behaves as the surrounding test intends. `None`
+            // would be honest about having measured nothing, and would block.
+            evidence: supporting_evidence(),
         }
     }
 
+    /// A sufficient measurement, so a fixture can test the surrounding criteria
+    /// without the statistical one deciding the verdict.
+    fn supporting_evidence(
+    ) -> std::collections::BTreeMap<String, crate::ml::eval_stats::RoutingEvidence> {
+        let observations: Vec<crate::ml::eval_stats::PairedObservation> = (0..200)
+            .map(|index| crate::ml::eval_stats::PairedObservation {
+                recorded_at: 1_700_000_000 + index as i64 * 3_600,
+                utility_delta: 0.5,
+                candidate_only_success: true,
+                baseline_only_success: false,
+            })
+            .collect();
+        [crate::ml::eval_stats::measure(
+            &observations,
+            &crate::ml::eval_stats::EvidenceConfig::default(),
+        )]
+        .into_iter()
+        .map(|evidence| {
+            (
+                PromotionConfig::default().required_baseline.clone(),
+                evidence,
+            )
+        })
+        .collect()
+    }
     fn pairing(deltas: PairedDeltas) -> BaselinePairing {
         BaselinePairing {
             baseline: "baseline.lowest_latency".to_string(),
