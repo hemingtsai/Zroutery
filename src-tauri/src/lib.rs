@@ -14,6 +14,7 @@ pub mod platform;
 pub mod secrets;
 pub mod state;
 pub mod store;
+pub mod takeover_commands;
 mod tray;
 
 use std::sync::Arc;
@@ -82,6 +83,9 @@ pub fn run() {
             commands::quit_app,
             commands::ccswitch_preview,
             commands::ccswitch_import,
+            takeover_commands::takeover_status,
+            takeover_commands::takeover_adopt,
+            takeover_commands::takeover_release,
             #[cfg(feature = "account-maint")]
             checkin_commands::start_checkin,
             #[cfg(feature = "account-maint")]

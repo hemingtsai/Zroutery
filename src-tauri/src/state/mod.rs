@@ -92,6 +92,18 @@ pub struct Desktop {
     /// nothing. Holding it here is what makes the events reachable at all.
     #[cfg(feature = "account-maint")]
     pub(crate) account_events: zroutery_core::account::AccountEventLog,
+    /// Per-agent takeover ownership stores, opened lazily against the durable
+    /// manifests under `<config_dir>/takeover/`.
+    ///
+    /// Held here rather than reopened per command so one long-lived process
+    /// keeps one view of each manifest; the manifests themselves are what
+    /// survive a restart.
+    takeover_stores: Mutex<
+        BTreeMap<
+            zroutery_core::agent_takeover::AgentType,
+            Arc<zroutery_core::agent_takeover::TakeoverStore>,
+        >,
+    >,
 }
 
 /// Whether a listener can claim an address.
@@ -133,6 +145,7 @@ mod lifecycle;
 mod ml;
 mod server;
 mod snapshot;
+mod takeover;
 mod views;
 
 #[cfg(test)]
