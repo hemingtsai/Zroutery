@@ -1,3 +1,4 @@
+#![cfg(feature = "ml")]
 //! The closed loop, end to end, on real traffic.
 //!
 //! Everything below drives the production axum server over real HTTP against a

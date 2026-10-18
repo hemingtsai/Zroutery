@@ -1,3 +1,4 @@
+#![cfg(feature = "ml")]
 //! Does the cost head use the cost axis?
 //!
 //! # The question
