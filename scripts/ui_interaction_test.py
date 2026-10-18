@@ -144,6 +144,10 @@ HARNESS = """
     // by default because every other case's page would grow a section that has
     // nothing to do with what it is testing.
     ml: query("ml") || null,
+    // Same discipline for the accounts page: null keeps every other case's
+    // snapshot free of account flags, so a case that wants the page has to ask
+    // for it by seeding an `account` payload.
+    account: query("account") || null,
     commandLog: [],
     delays: {},
   };
@@ -154,6 +158,15 @@ HARNESS = """
 
   function snapshot() {
     const config = clone(state.config);
+    // The account payload may carry one provider's account declarations. They
+    // merge into the default configuration rather than replacing it, because a
+    // whole-config seed would have to spell out every field the shell reads and
+    // would drift the moment the configuration grows one.
+    if (state.account && state.account.providerAccounts) {
+      const patch = state.account.providerAccounts;
+      const provider = config.providers.find((p) => p.id === patch.providerId);
+      if (provider) provider.accounts = clone(patch.accounts);
+    }
     return {
       config,
       exposed_ids: config.models.map((m) => m.provider_id + "-" + m.upstream_model),
@@ -180,6 +193,15 @@ HARNESS = """
       election: null,
       budgets: [],
       ml_available: Boolean(state.ml),
+      // The account flags follow the same shape the Rust snapshot publishes:
+      // declared, not discovered. `api` mirrors `api_checkin_available`, which
+      // needs both maintenance and the panel adapter.
+      account_available: Boolean(state.account),
+      account_maintenance_available: Boolean(state.account),
+      api_checkin_available: Boolean(state.account && state.account.api),
+      checkin: state.account ? clone(state.account.checkin || []) : undefined,
+      account_events: state.account ? clone(state.account.events || []) : undefined,
+      account_balances: state.account ? clone(state.account.balances || []) : undefined,
     };
   }
 
@@ -230,6 +252,44 @@ HARNESS = """
       }
       case "get_ml_status":
         return state.ml ? clone(state.ml.status) : null;
+      case "reconcile_accounts": {
+        state.commandLog.push({ cmd, args: clone(args) });
+        // The report is the backend's own document, one outcome per declared
+        // enabled account, in probe order.
+        const outcomes = state.account ? clone(state.account.outcomes || []) : [];
+        return { outcomes };
+      }
+      case "api_checkin": {
+        state.commandLog.push({ cmd, args: clone(args) });
+        // A fixed succeeded answer, and — like the real backend, which records
+        // the report where the next snapshot reads it — the view is written back
+        // into the check-in list, so the row renders what the operation did.
+        const answer = clone(
+          (state.account && state.account.apiAnswer) || {
+            provider_id: args.providerId,
+            account_id: args.accountId,
+            phase: "succeeded",
+            browser_held: false,
+            awaiting_user: false,
+            failure: null,
+            reward_amount: 25.0,
+            reward_unit: "USD",
+            reward_source: "provider_response",
+            last_completed_at: Math.floor(Date.now() / 1000),
+            schedule: { decision: "not_due", next_due_at: null, last_settled_at: null },
+          },
+        );
+        if (state.account) {
+          const views = (state.account.checkin ||= []);
+          const at = views.findIndex(
+            (v) =>
+              v.provider_id === args.providerId && v.account_id === args.accountId,
+          );
+          if (at >= 0) views[at] = answer;
+          else views.push(answer);
+        }
+        return answer;
+      }
       case "get_ml_traces":
         return state.ml ? clone(state.ml.traces) : null;
       case "run_ml_promotion_round":
@@ -288,7 +348,7 @@ HARNESS = """
    * would be testing the old snapshot.
    */
   window.__zrReload = (seed) => {
-    for (const key of ["config", "server", "keys", "catalogues"]) {
+    for (const key of ["config", "server", "keys", "catalogues", "account"]) {
       if (seed && seed[key] !== undefined) state[key] = clone(seed[key]);
     }
     if (seed && seed.delays) state.delays = { ...seed.delays };
@@ -1239,7 +1299,7 @@ def case_ui2_candidate_priority(devtools: DevTools) -> list[str]:
     seed(devtools)
     failures: list[str] = []
 
-    devtools.click_selector(".nav-item", 3)
+    devtools.click_selector(".nav-item", 5)
     # The routing page splits its three subjects into tabs, so the auto-review
     # section is only mounted once its own tab is selected — and once it is, its
     # Edit button is the only `linky` on the page rather than the second.
@@ -1506,7 +1566,7 @@ def case_ui5_refused_round_shows_its_criteria(devtools: DevTools) -> list[str]:
     # The learned panel is the first of the three routing subjects, so the path
     # to it is a page and then a tab. Clicking the page alone leaves the panel
     # unmounted and the judge button nowhere.
-    devtools.click_selector(".nav-item", 3)
+    devtools.click_selector(".nav-item", 5)
     devtools.wait_for(
         "Boolean(document.querySelector('#tab-ml'))", "the learned-routing tab"
     )
@@ -1602,6 +1662,171 @@ def connect(debugging_port: int, url: str) -> DevTools:
     raise ProtocolError("the browser exposed no DevTools page target")
 
 
+# The accounts-page fixture: one provider with two declared accounts, a probe
+# answer covering both, one check-in view, and a balance reading. `api` turns on
+# the direct check-in button, which is the command this case exists to exercise.
+# The accounts-page fixture: one provider with two declared accounts, a probe
+# answer covering both, one check-in view, and a balance reading. `api` turns on
+# the direct check-in button, which is the command this case exists to exercise.
+# The declarations ride inside the account payload and merge into the default
+# configuration — see `snapshot()` in the harness; a whole-config seed would have
+# to spell out every field the shell reads and would drift the moment the
+# configuration grew one.
+ACCOUNT_QUERY = {
+    "account": {
+        "api": True,
+        "providerAccounts": {
+            "providerId": "deepseek",
+            "accounts": [
+                {
+                    "account_id": "main",
+                    "enabled": True,
+                    "key_ref": "provider:deepseek:account:main",
+                    "maintenance": {
+                        "checkin_enabled": True,
+                        "checkin_interval_secs": 86400,
+                        "checkin_path": "/console/personal",
+                        "checkin_trigger_selector": "button.checkin",
+                        "login_path": None,
+                        "browser_executable": "",
+                    },
+                },
+                {
+                    "account_id": "spare",
+                    "enabled": False,
+                    "key_ref": "",
+                    "maintenance": {
+                        "checkin_enabled": False,
+                        "checkin_interval_secs": None,
+                        "checkin_path": None,
+                        "checkin_trigger_selector": None,
+                        "login_path": None,
+                        "browser_executable": "",
+                    },
+                },
+            ],
+        },
+        "outcomes": [
+            ["deepseek", "main", "refreshed"],
+            ["deepseek", "spare", "unsupported"],
+        ],
+        "balances": [
+            {
+                "provider_id": "deepseek",
+                "account_id": "main",
+                "status": "active",
+                "remaining": 12.5,
+                "total": 100.0,
+                "used": 87.5,
+                "unit": "USD",
+                "last_sync": 1_700_000_000,
+                "last_failure": None,
+            }
+        ],
+        "checkin": [
+            {
+                "provider_id": "deepseek",
+                "account_id": "main",
+                "phase": "idle",
+                "browser_held": False,
+                "awaiting_user": False,
+                "failure": None,
+                "reward_amount": None,
+                "reward_unit": None,
+                "reward_source": None,
+                "last_completed_at": None,
+                "schedule": {
+                    "decision": "not_due",
+                    "next_due_at": None,
+                    "last_settled_at": None,
+                },
+            }
+        ],
+        "events": [],
+    }
+}
+
+
+def case_ui6_accounts_direct_checkin(devtools: DevTools) -> list[str]:
+    """The accounts page renders declarations as readings, and direct check-in acts.
+
+    Three things the page owes the operator, all asserted out of rendered text:
+    a probed account shows its status and balance rather than nothing (the old
+    data layer hid single-account providers entirely, which is how a probe could
+    run and the panel stay empty); the direct check-in button calls the backend
+    with the right account and renders the phase and reward that came back; and
+    the probe's report distinguishes an unsupported account from a refreshed one
+    instead of merging them into one verdict.
+    """
+    failures: list[str] = []
+    seed(devtools, **ACCOUNT_QUERY)
+    devtools.click_selector(".nav-item", 3)
+    devtools.wait_for(
+        "Boolean(document.querySelector('.account-maint'))", "the accounts page rows"
+    )
+
+    # Two declared accounts, rendered regardless of how many the provider has.
+    # The single-account blackout is the defect that motivated the page.
+    rows = devtools.evaluate("document.querySelectorAll('.account-maint').length")
+    if rows != 2:
+        failures.append("expected 2 account rows, saw %d" % rows)
+
+    # The probe reading: status and balance in the row's own text. The balance
+    # is the panel's own sentence now, not the wire vocabulary's.
+    body = devtools.evaluate("document.querySelector('.page').innerText")
+    for needle in ("active", "12.5 USD left of 100"):
+        if needle not in body:
+            failures.append("the probed reading %r is not rendered" % needle)
+
+    # The direct check-in: a real press on the button the operator would use,
+    # then the phase and reward the backend answered, rendered in the row.
+    devtools.evaluate(
+        """
+        (() => {
+          const buttons = [...document.querySelectorAll('.account-maint .controls button')];
+          const direct = buttons.find((b) => b.textContent.includes('Check in (direct)'));
+          direct.click();
+        })()
+        """
+    )
+    devtools.wait_for(
+        "window.__zrStub.state.commandLog.some("
+        "(e) => e.cmd === 'api_checkin' && e.args.providerId === 'deepseek'"
+        " && e.args.accountId === 'main')",
+        "the direct check-in command",
+    )
+    devtools.wait_for(
+        "document.querySelector('.page').innerText.includes('checked in')",
+        "the answered phase",
+    )
+    if "reward 25 USD" not in devtools.evaluate("document.querySelector('.page').innerText"):
+        failures.append("the observed reward is not rendered after the check-in")
+
+    # The probe report, with its four-way outcome kept apart.
+    devtools.evaluate(
+        """
+        (() => {
+          const buttons = [...document.querySelectorAll('.page button')];
+          const probe = buttons.find((b) => b.textContent.includes('Probe every account'));
+          probe.click();
+        })()
+        """
+    )
+    devtools.wait_for(
+        "window.__zrStub.state.commandLog.some((e) => e.cmd === 'reconcile_accounts')",
+        "the reconcile command",
+    )
+    body = devtools.evaluate("document.querySelector('.page').innerText")
+    # The two outcomes render as two different sentences — the refreshed row
+    # says "Probed", the unsupported one says no backend could ask it — which is
+    # the distinction the report exists to preserve.
+    if "Probed" not in body or "not probed" not in body:
+        failures.append(
+            "the probe report does not keep the refreshed and unsupported rows apart"
+        )
+    return failures
+
+
 CASES = (
     {"label": "UI-1 two nested edits in sequence (first save delayed)", "run": case_ui1_nested_rebase},
     {"label": "UI-2 moved candidate renumbers priority", "run": case_ui2_candidate_priority},
@@ -1615,6 +1840,11 @@ CASES = (
         "label": "UI-5 refused promotion names the criterion that refused it",
         "run": case_ui5_refused_round_shows_its_criteria,
         "query": {"ml": ML_QUERY},
+    },
+    {
+        "label": "UI-6 accounts page shows readings and direct check-in acts",
+        "run": case_ui6_accounts_direct_checkin,
+        "query": ACCOUNT_QUERY,
     },
 )
 
