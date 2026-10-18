@@ -12,6 +12,8 @@ use crate::billing::Pricing;
 use crate::config::ModelTier;
 use crate::error::Error;
 use crate::ir::{StoredResponse, StreamEvent, Usage};
+#[cfg(feature = "ml")]
+use crate::policy::TaskProfile;
 use crate::protocol::{self, SseFrame, StreamEncoder};
 use crate::query::RequestKind;
 
@@ -68,6 +70,13 @@ pub(super) struct SseState {
     /// a total this stream has not written yet, and a client that walks away
     /// releases the scope through the same path.
     _admission: AdmissionGuard,
+    /// Reassembles the streamed answer so the task verifier can judge it once the
+    /// stream ends. Main streams only; classifier streams never pay for it.
+    ///
+    /// The accumulator holds the answer in memory while the stream runs and drops it
+    /// with the state, so nothing about the response body outlives the request.
+    #[cfg(feature = "ml")]
+    verify_accumulator: Option<crate::ml::StreamResponseAccumulator>,
 }
 
 impl SseState {
@@ -105,6 +114,50 @@ impl SseState {
         ));
     }
 
+    /// Reassemble the streamed answer and run the task verifier over it.
+    ///
+    /// Contained for the same reason every other hook is: it cannot fail a request,
+    /// and a verifier that panics is a bug rather than a verdict. The accumulator is
+    /// taken, so the buffered answer is dropped with this call rather than living
+    /// until the stream state does.
+    #[cfg(feature = "ml")]
+    fn verify_streamed_task(&mut self) {
+        let Some(accumulator) = self.verify_accumulator.take() else {
+            return;
+        };
+        if !accumulator.is_complete() {
+            return;
+        }
+        let Some(req) = self.lifecycle.request() else {
+            return;
+        };
+        let context = crate::ml::VerdictContext {
+            request_id: self.lifecycle.id().to_string(),
+            outcome_id: self.lifecycle.id().to_string(),
+            attempt_id: self.lifecycle.last_attempt_id(),
+            served_model: Some(self.lifecycle.served_model()),
+            served_provider: Some(self.lifecycle.served_provider()),
+            task_type: TaskProfile::from_request(req).task_type,
+            observed_at: chrono::Utc::now().timestamp(),
+        };
+        let verdicts = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            crate::ml::verify_task_outcome(
+                req,
+                &accumulator.finish(),
+                &context,
+                crate::ml::VerifierConfig::All,
+            )
+        }))
+        .unwrap_or_else(|_| {
+            tracing::warn!(
+                request_id = %self.lifecycle.id(),
+                "streamed task verification panicked and was contained"
+            );
+            Vec::new()
+        });
+        self.lifecycle.extend_task_evidence(verdicts);
+    }
+
     /// The stream's one terminal transition.
     ///
     /// Idempotent, so [`Drop`] can call it for a client that walked away
@@ -119,6 +172,12 @@ impl SseState {
         }
         if let StreamTerminal::Completed = terminal {
             self.store_completed();
+            // Judge the task from the reassembled answer. Only on a normal terminal: a
+            // truncated, failed or cancelled stream is content the client never
+            // received in full, and attributing a verdict to it would score a model
+            // for a connection problem.
+            #[cfg(feature = "ml")]
+            self.verify_streamed_task();
         }
         // A classifier stream that reached its end without producing a verdict
         // is worth a warning. The bytes have already gone out, so there is
@@ -200,6 +259,13 @@ pub(super) fn sse_body(
     use futures_util::StreamExt;
 
     let classifier_text = (!context.kind.is_main()).then(String::new);
+    // Main streams only: a classifier's own text is already accumulated above for its
+    // verdict, and judging that would score Zroutery's classifier rather than a model.
+    #[cfg(feature = "ml")]
+    let verify_accumulator = context
+        .kind
+        .is_main()
+        .then(crate::ml::StreamResponseAccumulator::default);
     let state = SseState {
         events,
         encoder,
@@ -211,6 +277,8 @@ pub(super) fn sse_body(
         provider_id: context.provider_id,
         tier: context.tier,
         classifier_text,
+        #[cfg(feature = "ml")]
+        verify_accumulator,
         finished: false,
         emitted: false,
         response_id: context.response_id,
@@ -276,6 +344,21 @@ pub(super) fn sse_body(
                         _ => event,
                     };
                     match &event {
+                        #[cfg_attr(not(feature = "ml"), allow(unused_variables))]
+                        StreamEvent::Start { model, usage, .. } => {
+                            // `model` is read only by the `ml` identity capture; the
+                            // usage accounting below is needed on every build.
+                            // Capture the upstream's declared model before the
+                            // encoder rewrites it to the client-facing `exposed_id`
+                            // (the encoder was built with that id at
+                            // `stream_encoder`). Streaming declares the model in its
+                            // opening frame, so this is the only place it exists —
+                            // unlike the buffered path, there is no later field to
+                            // recover it from.
+                            #[cfg(feature = "ml")]
+                            st.lifecycle.note_declared_model(Some(model.as_str()));
+                            st.usage = *usage;
+                        }
                         StreamEvent::ThinkingDelta { .. } => {
                             let elapsed = st.elapsed_ms();
                             st.lifecycle.ttft_ms(elapsed);
@@ -289,11 +372,17 @@ pub(super) fn sse_body(
                                 acc.push_str(text);
                             }
                         }
-                        StreamEvent::Start { usage, .. } => st.usage = *usage,
                         StreamEvent::Stop { usage, .. } => st.usage = *usage,
                         _ => {}
                     }
                     let frames = st.encoder.encode(&event);
+                    // Reassemble for the task verifier. Fed the *published* event, so
+                    // what is judged is what the client actually received rather than
+                    // what the upstream said before any rewrites.
+                    #[cfg(feature = "ml")]
+                    if let Some(accumulator) = st.verify_accumulator.as_mut() {
+                        accumulator.observe(&event);
+                    }
                     // From here the client holds part of the answer, so a
                     // disconnect that happens later truncates it.
                     st.emitted |= !frames.is_empty();

@@ -862,6 +862,8 @@ async fn buffered_chat(
         kind,
         &req.model,
         &req.client_headers,
+        #[cfg(feature = "ml")]
+        Some(req.clone()),
     );
     // The router's own decision supplies the planned identity, before any
     // attempt is made and before anything can fail.
@@ -1025,6 +1027,24 @@ async fn buffered_chat(
                     .pricing
                     .as_ref()
                     .map(|p| p.cost_of(&resp.usage));
+                // Capture the upstream's own declaration before anything that can
+                // consume it. Two things happen to it, and the order matters:
+                //
+                // * `finalize` below is the terminal transition, and the durable
+                //   trace is written *inside* it. Capturing after `finalize` records
+                //   an identity that was already persisted, which is how this was
+                //   silently wrong at first: the streaming path kept the right order
+                //   only because its terminal transition happens later, when the body
+                //   ends, so the two paths disagreed.
+                // * `resp.model = exposed_id` below discards the value outright.
+                #[cfg(feature = "ml")]
+                lifecycle.note_declared_model(Some(resp.model.as_str()));
+                // Judge the task while both the request's demands and the response's
+                // content are still in hand. Only the verdict is kept — the response
+                // body is never persisted — so this is the one place a task check can
+                // honestly run. It must also precede `finalize`, which persists.
+                #[cfg(feature = "ml")]
+                lifecycle.note_task_evidence(&req, &resp, candidate);
                 // The terminal transition below owns the charge, the record and
                 // the outcome: booking here as well would spend twice.
                 lifecycle.finalize(
@@ -1113,6 +1133,10 @@ async fn buffered_chat(
                             .pricing
                             .as_ref()
                             .map(|p| p.cost_of(&resp.usage));
+                        // Before `finalize`, which is the terminal transition that
+                        // persists the trace. See the buffered path for why.
+                        #[cfg(feature = "ml")]
+                        lifecycle.note_declared_model(Some(resp.model.as_str()));
                         lifecycle.finalize(
                             TerminalKind::Served,
                             Settlement {
@@ -1223,6 +1247,8 @@ async fn stream_chat(
         kind,
         &req.model,
         &req.client_headers,
+        #[cfg(feature = "ml")]
+        Some(req.clone()),
     );
     // Same correlation as the buffered path: the router's decision fixes the
     // planned identity before the first handshake.
@@ -1529,6 +1555,15 @@ fn reject(
     error: &Error,
 ) {
     let mut lifecycle =
-        RequestLifecycle::new(state, dialect, streaming, kind, requested_model, headers);
+        RequestLifecycle::new(
+        state,
+        dialect,
+        streaming,
+        kind,
+        requested_model,
+        headers,
+        #[cfg(feature = "ml")]
+        None,
+    );
     lifecycle.finalize(TerminalKind::failed(error), Settlement::default());
 }

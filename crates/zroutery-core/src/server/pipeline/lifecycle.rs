@@ -10,11 +10,13 @@ use crate::billing::{Cost, Pricing};
 use crate::config::{ModelTier, RoutingConfig};
 use crate::error::Error;
 use crate::failure::ClassifiedFailure;
-use crate::ir::{Dialect, Usage};
+use crate::ir::{ChatRequest, Dialect, Usage};
 #[cfg(feature = "ml")]
 use crate::ml::ShadowInput;
 use crate::outcome::{Attempt as OutcomeAttempt, CandidateIdentity, Outcome};
 use crate::policy::RouteDecision;
+#[cfg(feature = "ml")]
+use crate::policy::TaskProfile;
 use crate::query::RequestKind;
 use crate::router::Candidate;
 use crate::stats::{RecordBuilder, RequestRecord};
@@ -237,6 +239,27 @@ pub(super) struct RequestLifecycle {
     /// The exactly-once guard for the observability projection, for the same
     /// reason and on the same terms as `ingested`.
     projected: bool,
+    /// What the upstream actually declared it ran, kept separate from the routing
+    /// identity in `served` and captured *before* the response's model field is
+    /// rewritten to the client-facing `exposed_id`.
+    ///
+    /// Unobserved values stay unknown; they are never inferred from the requested
+    /// model, because a relay that fronts several backends behind one name would
+    /// otherwise report a confident identity it cannot support.
+    #[cfg(feature = "ml")]
+    execution_identity: crate::ml::ExecutionIdentity,
+    /// The request being served, retained for the stream verifier.
+    ///
+    /// A stream outlives the handler that owned it, so the request is kept where the
+    /// stream body can still reach it. Held only under `ml` because nothing else
+    /// needs it after parsing.
+    #[cfg(feature = "ml")]
+    request: Option<ChatRequest>,
+    /// Verdicts from the task verifier for this request, kept so the durable
+    /// trace records task outcomes alongside API outcomes. Empty when no check
+    /// applied, which is the common case and is not a failure.
+    #[cfg(feature = "ml")]
+    task_evidence: Vec<crate::ml::TaskOutcomeEvidence>,
 }
 
 impl RequestLifecycle {
@@ -255,6 +278,7 @@ impl RequestLifecycle {
         kind: RequestKind,
         requested_model: &str,
         headers: &HeaderMap,
+        #[cfg(feature = "ml")] request: Option<ChatRequest>,
     ) -> Self {
         let mut record = RecordBuilder::new(dialect, requested_model, streaming);
         record.kind(kind);
@@ -286,6 +310,12 @@ impl RequestLifecycle {
             ingested: false,
             #[cfg(feature = "ml")]
             trace_written: false,
+            #[cfg(feature = "ml")]
+            execution_identity: crate::ml::ExecutionIdentity::unrouted(requested_model),
+            #[cfg(feature = "ml")]
+            request,
+            #[cfg(feature = "ml")]
+            task_evidence: Vec::new(),
             projected: false,
         }
     }
@@ -293,7 +323,7 @@ impl RequestLifecycle {
     /// The request id the activity record, the outcome and the shadow
     /// evaluation all correlate on.
     #[cfg_attr(not(feature = "ml"), allow(dead_code))]
-    fn id(&self) -> &str {
+    pub(super) fn id(&self) -> &str {
         self.record.id()
     }
 
@@ -327,6 +357,69 @@ impl RequestLifecycle {
         self.response_id = Some(id.to_string());
     }
 
+    /// Record what the upstream said it ran, before the wire value is normalised.
+    ///
+    /// Must be called at the point the upstream `model` field is still intact —
+    /// immediately before `resp.model = candidate.exposed_id`, which replaces it with
+    /// the client-facing id. That rewrite is correct for the wire: a client that asks
+    /// for a Zroutery model id should not learn which relay served it. The cost is
+    /// that the declared value would otherwise be gone, leaving `served_model` able to
+    /// claim a backend identity the provider never stated.
+    ///
+    /// Copying it here changes nothing the client observes. A provider that declares
+    /// nothing is recorded as having declared nothing, and is never back-filled from
+    /// the requested model — see [`crate::ml::execution_identity`].
+    #[cfg(feature = "ml")]
+    pub(super) fn note_declared_model(&mut self, declared: Option<&str>) {
+        if declared.is_some_and(|value| !value.trim().is_empty()) {
+            self.execution_identity = self
+                .execution_identity
+                .clone()
+                .with_declared_model(declared);
+            return;
+        }
+        // Only downgrade to "not declared" if nothing better was already recorded, so
+        // a rectified retry cannot erase a real observation from the first attempt.
+        if !self
+            .execution_identity
+            .provider_declared_model
+            .is_observed()
+        {
+            self.execution_identity = self.execution_identity.clone().with_declared_model(None);
+        }
+    }
+
+    /// The request this lifecycle is serving, for the stream verifier.
+    ///
+    /// Held on the lifecycle because a stream outlives the handler that owned it.
+    #[cfg(feature = "ml")]
+    pub(super) fn request(&self) -> Option<&ChatRequest> {
+        self.request.as_ref()
+    }
+
+    /// The id of the attempt currently open, for attributing a task verdict.
+    #[cfg(feature = "ml")]
+    pub(super) fn last_attempt_id(&self) -> Option<String> {
+        self.attempts
+            .last()
+            .map(|attempt| attempt.attempt_id.clone())
+    }
+
+    /// The provider that served, for attributing a task verdict.
+    #[cfg(feature = "ml")]
+    pub(super) fn served_provider(&self) -> String {
+        self.attempts
+            .last()
+            .map(|attempt| attempt.candidate_provider.clone())
+            .unwrap_or_default()
+    }
+
+    /// Add verdicts produced after this request's terminal transition was set up.
+    #[cfg(feature = "ml")]
+    pub(super) fn extend_task_evidence(&mut self, verdicts: Vec<crate::ml::TaskOutcomeEvidence>) {
+        self.task_evidence.extend(verdicts);
+    }
+
     /// Fix the planned identity and the decision trace, before any attempt.
     pub(super) fn planned_from(&mut self, decision: Option<&RouteDecision>, plan: &[Candidate]) {
         self.planned = planned_identity(decision, plan);
@@ -334,6 +427,68 @@ impl RequestLifecycle {
             self.decision = Some(decision.clone());
             self.record.routing_decision(decision.clone());
         }
+    }
+
+    /// Note which candidate an attempt is running against.
+    ///
+    /// Routing provenance only: this is what Zroutery chose, never evidence of what
+    /// the provider then executed. It is kept in its own field precisely so it cannot
+    /// be mistaken for a declared identity.
+    #[cfg(feature = "ml")]
+    pub(super) fn note_routed_candidate(&mut self, candidate: &Candidate) {
+        self.execution_identity = self.execution_identity.clone().with_routed(
+            Some(candidate.exposed_id.as_str()),
+            Some(candidate.provider.id.as_str()),
+        );
+    }
+
+    /// Run the task verifier over a served response and keep only the verdicts.
+    ///
+    /// Contained for the same reason every other hook here is: it returns nothing,
+    /// propagates no error, and cannot fail a request. A verifier that panicked is a
+    /// bug, not a verdict, and must not cost the user their answer.
+    ///
+    /// This is the only place a task check can honestly run. It needs both the
+    /// request's *demands* (tools, tool_choice, structured_output) and the
+    /// response's *content*, and the persisted trace deliberately keeps neither the
+    /// prompt nor the answer. Only the verdict is stored.
+    ///
+    /// Attributed to the attempt that actually served, so a fallback chain keeps each
+    /// candidate's own task result rather than crediting the first failure with the
+    /// last one's success.
+    #[cfg(feature = "ml")]
+    pub(super) fn note_task_evidence(
+        &mut self,
+        req: &ChatRequest,
+        resp: &crate::ir::ChatResponse,
+        candidate: &Candidate,
+    ) {
+        let context = crate::ml::VerdictContext {
+            request_id: self.id().to_string(),
+            outcome_id: self.id().to_string(),
+            attempt_id: self
+                .attempts
+                .last()
+                .map(|attempt| attempt.attempt_id.clone()),
+            served_model: Some(candidate.exposed_id.clone()),
+            served_provider: Some(candidate.provider.id.clone()),
+            // Derived from the request rather than carried on the lifecycle: the
+            // lifecycle does not hold the task profile, and re-deriving it here is
+            // the same computation `TaskProfile::from_request` performs at ingress.
+            task_type: TaskProfile::from_request(req).task_type,
+            observed_at: chrono::Utc::now().timestamp(),
+        };
+        let verdicts = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            crate::ml::verify_task_outcome(req, resp, &context, crate::ml::VerifierConfig::All)
+        }))
+        .unwrap_or_else(|_| {
+            tracing::warn!(
+                request_id = %self.id(),
+                "task verification panicked and was contained"
+            );
+            Vec::new()
+        });
+        self.task_evidence.extend(verdicts);
     }
 
     /// Evaluate this request's shadow counterfactual over the decision-time
@@ -506,12 +661,14 @@ impl RequestLifecycle {
             return;
         }
         self.trace_written = true;
-        let verdict = crate::ml::traces::contained_append(
+        let verdict = crate::ml::traces::contained_append_with_evidence(
             log,
             &input.decision_id,
             input,
             samples,
             chrono::Utc::now().timestamp(),
+            self.execution_identity.clone(),
+            self.task_evidence.clone(),
         );
         if let crate::ml::traces::TraceIngestion::Refused { reason } = verdict {
             tracing::warn!(
@@ -602,6 +759,11 @@ impl RequestLifecycle {
     /// immediately; a stream's is settled by the terminal transition, because a
     /// handshake is all that is known once the body belongs to the client.
     pub(super) fn begin_attempt(&mut self, candidate: &Candidate, rectified: bool) {
+        // Routing provenance for the execution identity. Recorded here because this
+        // runs once per send, so a failover chain leaves the identity of the
+        // candidate that actually ran.
+        #[cfg(feature = "ml")]
+        self.note_routed_candidate(candidate);
         // The accounting dedup is per attempt, not per request: a new send has
         // recorded nothing yet, so a failure observed while *this* attempt is
         // open must still reach the router even when an earlier attempt on
