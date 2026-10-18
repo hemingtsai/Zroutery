@@ -10,6 +10,8 @@ pub mod checkin;
 mod checkin_commands;
 mod commands;
 mod logs;
+pub mod migration;
+mod migration_commands;
 pub mod platform;
 pub mod secrets;
 pub mod state;
@@ -92,6 +94,10 @@ pub fn run() {
             takeover_commands::takeover_status,
             takeover_commands::takeover_adopt,
             takeover_commands::takeover_release,
+            migration_commands::migration_status,
+            migration_commands::migration_previews,
+            migration_commands::migration_apply,
+            migration_commands::migration_rollback,
             #[cfg(feature = "account-maint")]
             checkin_commands::start_checkin,
             #[cfg(all(feature = "account-maint", feature = "newapi"))]

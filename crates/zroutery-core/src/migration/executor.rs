@@ -633,6 +633,43 @@ impl MigrationExecutor {
     pub fn check_already_migrated(&self) -> bool {
         self.store.current_state() == MigrationState::Completed
     }
+
+    /// Where the durable record says this migration stands.
+    ///
+    /// Pass-through to the store. It exists because `store` is crate-private,
+    /// which left a caller with no way to render the state machine: it could
+    /// run a plan, learn that it failed, and be unable to say afterwards what
+    /// state the system was left in -- which is the one question a surface
+    /// exists to answer, and the one that decides whether a rollback is even
+    /// offered.
+    pub fn state(&self) -> MigrationState {
+        self.store.current_state()
+    }
+
+    /// Whether this executor's record survives the process.
+    ///
+    /// False means a caller is running a migration it will not remember, and a
+    /// report that offers `recover` would be offering a button over a store
+    /// with nothing in it.
+    pub fn is_durable(&self) -> bool {
+        self.store.is_durable()
+    }
+
+    /// The last persistence failure, if the state advanced without reaching
+    /// disk.
+    pub fn persist_error(&self) -> Option<String> {
+        self.store.persist_error()
+    }
+
+    /// File a result in the durable history.
+    ///
+    /// `execute` and `rollback` both return a [`MigrationResult`] and neither
+    /// files it, so the record kept the *state* while losing what produced it:
+    /// a later process reading a failed migration could say it failed and not
+    /// say which step, how far it got, or which files it had already put back.
+    pub fn record(&self, result: MigrationResult) {
+        self.store.record_result(result);
+    }
 }
 
 // ---------------------------------------------------------------------------

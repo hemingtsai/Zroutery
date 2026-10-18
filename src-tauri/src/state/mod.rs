@@ -104,6 +104,18 @@ pub struct Desktop {
             Arc<zroutery_core::agent_takeover::TakeoverStore>,
         >,
     >,
+    /// The cutover record and its rollback snapshot, opened on first use.
+    ///
+    /// Durable by construction: the three states that mean a cutover started
+    /// and did not finish are the ones a restart has to be able to recover
+    /// from, and a record that lives only in this struct reports `Detected` for
+    /// all three once the process is gone. The manifest and the snapshot are
+    /// what survive; this holds the one open handle to them.
+    ///
+    /// Named `cutover` and not `migration` because `Desktop::migration` above
+    /// already exists and is a different thing entirely -- the lock that
+    /// serialises listener rebinds against saves.
+    cutover: Mutex<Option<Arc<zroutery_core::migration::MigrationExecutor>>>,
 }
 
 /// Whether a listener can claim an address.
@@ -136,6 +148,9 @@ mod balances;
 mod budget;
 mod helpers;
 mod lifecycle;
+mod migration;
+#[cfg(test)]
+mod migration_tests;
 // `any`, not `ml`: `ml.rs` is the learned model, but it also holds
 // `reconcile_accounts`, which is gated on `account` alone. Gating the module
 // on `ml` took the reconciler with it, so every combination carrying `newapi`
