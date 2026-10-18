@@ -13,7 +13,8 @@ pub enum NewApiAuth {
     /// Refresh cookie (`new_api_refresh`) from a dashboard login. Exchanged for
     /// a short-lived access token, and kept so expired tokens can be renewed.
     Cookie { session_cookie: String },
-    /// Personal access token from `GET /api/user/token`, sent as a bearer.
+    /// Personal access token from `GET /api/user/token`, sent verbatim in the
+    /// Authorization header.
     ApiKey { key: String },
     /// A dashboard access token (login JWT) plus, optionally, the refresh
     /// cookie value that can renew it.
@@ -46,7 +47,11 @@ pub struct NewApiConfig {
     pub base_url: String,
     /// Credential used before [`NewApiAdapter::authenticate`] is called: a
     /// personal access token, or a login JWT. Verified lazily by the first
-    /// authenticated call.
+    /// authenticated call. A relay key (`sk-…`) is rejected here: it
+    /// authenticates the `/v1` relay endpoints, which no dashboard endpoint
+    /// accepts, and sending one would only ever produce a 401 that reads as
+    /// "the token expired" when the truth is "this is the wrong kind of
+    /// credential".
     pub api_key: String,
     /// Which operations this NewAPI instance supports.
     pub capabilities: AccountCapabilities,
@@ -98,7 +103,16 @@ impl NewApiConfig {
             }
         }
         if !self.api_key.trim().is_empty() {
-            validate_secret("api_key", &self.api_key)?;
+            let key = strip_bearer_prefix(&self.api_key);
+            validate_secret("api_key", key)?;
+            if key.starts_with("sk-") {
+                return Err(
+                    "the stored credential is a relay API key (`sk-…`), but the dashboard \
+                     authenticates with the personal access token from the panel's personal \
+                     settings page — store that token as the account credential instead"
+                        .into(),
+                );
+            }
         }
         Ok(())
     }

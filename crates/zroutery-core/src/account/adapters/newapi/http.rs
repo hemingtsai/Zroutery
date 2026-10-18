@@ -84,7 +84,15 @@ impl NewApiAdapter {
             request = request.query(query);
         }
         if let Some(token) = bearer {
-            let value = header_value(&format!("Bearer {token}"))?;
+            // The credential rides in the Authorization header **as-is**, with no
+            // `Bearer ` prefix. This is a dashboard credential (a personal access
+            // token or a login token), and NewAPI's dashboard middleware compares
+            // the header value against the stored token verbatim — a `Bearer `
+            // prefix becomes part of the compared string and the panel answers
+            // 401 no matter how correct the token is. Newer forks that do strip
+            // the prefix accept the bare value too, so the bare form is the one
+            // form every generation of the panel accepts.
+            let value = header_value(token)?;
             request = request.header(reqwest::header::AUTHORIZATION, value);
         }
         if let Some(cookie) = refresh_cookie {
