@@ -90,23 +90,31 @@ production learning loop:
   non-empty credential as authentication, synthesizes an active runtime, and
   leaves usage and quota unimplemented. Its next safe gate is a local mock
   protocol contract for auth, expiry, refresh, usage, and quota.
-- **I2 Migration:** the state machine and local file mechanics are present.
-  Process stop/start actions do not own the intended process lifecycle, and
-  endpoint verification accepts any HTTP response. A typed action runner and
-  local child-process fixtures are required.
-- **I3 Takeover:** ownership state and temporary-adapter tests exist, but
-  release does not apply the computed conflict resolution and no durable
-  ownership manifest is available across process boundaries.
-- **I4 Restore / Rollback:** conflict resolution is disconnected from release,
-  and migration rollback can report `RolledBack` even when restoration emits
-  warnings. This track is `FAILED` until restore and rollback are
-  conflict-safe and observable.
+- **I2 Migration:** the state machine and local file mechanics are present, and
+  so is the desktop surface that drives them. Typed actions own the process
+  lifecycle they start, and endpoint verification judges the answer rather than
+  the socket (E-116). The cutover page builds a plan from real detected state,
+  runs it behind a confirmation, and keeps the original file as a byte snapshot.
+  What remains unexercised is the `Completed` path, which needs a live gateway
+  to answer `/health`; everything asserted about it is asserted against
+  fixtures.
+- **I3 Takeover:** ownership state and temporary-adapter tests exist, release
+  applies the computed conflict resolution, and the ownership manifest is
+  durable across process boundaries. The takeover page previews an adoption
+  with a field-level diff and refuses a stale one by fingerprint.
+- **I4 Restore / Rollback:** conflict resolution is applied during release and
+  restore failures are reported as errors rather than warnings, so a rollback
+  that restored nothing reports `false` (E-118). The cutover page renders
+  `rolled_back` and `state` as two separate claims for exactly this reason.
 - **Operational UI:** provider, model, routing, activity, and settings views
   build and are integrated. This is a `DONE` node for the current operational
   surface, not evidence that account, migration, takeover, shadow, or ML has
   a product surface.
-- **New-track UI / Tauri surfaces:** these remain `BLOCKED` until the
-  corresponding backend lifecycles are real and owned.
+- **New-track UI / Tauri surfaces:** every engine named here now has a command
+  and a page — account and check-in under Accounts, takeover under Takeover,
+  the migration engine under Cutover, and the learned model under Routing. The
+  node is `PARTIAL` because the cutover's completed path is still only asserted
+  against fixtures, not because a surface is missing.
 - **Runtime observability projection:** a read-only projection is `READY`;
   it must not mutate ML schemas or make an unverified activation decision.
 

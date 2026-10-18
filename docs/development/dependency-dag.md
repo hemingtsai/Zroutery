@@ -51,9 +51,9 @@ failed node. Historical tags are not graph edges.
 | `7H` | `BLOCKED` | `7G` |
 | `ACCOUNT` | `DONE` | `STAGE-5` |
 | `NEWAPI` | `PARTIAL` | `ACCOUNT` |
-| `I2` | `PARTIAL` | none |
-| `I3` | `PARTIAL` | none |
-| `I4` | `PARTIAL` | none |
+| `I2` | `DONE` | none |
+| `I3` | `DONE` | none |
+| `I4` | `DONE` | none |
 | `UI` | `DONE` | `STAGE-1` |
 | `UI-LAYOUT` | `DONE` | `UI` |
 | `UI-NEW-TRACKS` | `PARTIAL` | `UI`, `ACCOUNT`, `NEWAPI`, `I2`, `I3`, `I4` |
@@ -148,9 +148,15 @@ empty, and `7G`, `7H` and `STAGE-8` remain blocked behind it.
 - `UI` is independent of new backend sidecars. `UI-NEW-TRACKS` is no longer
   blocked on upstream — `ACCOUNT`, `NEWAPI`, `I2`, `I3` and `I4` all pass their
   gates and its `blocked_by` is empty — but it is `PARTIAL` on its own three
-  gates: migration and takeover still have no command and no surface, and the
-  product confirmation and rollback UI is a product decision that has not been
-  taken. `UI` is `DONE` on the three gates it owns, and since the integration
+  gates. Takeover, account, check-in and ML all have commands and surfaces; the
+  migration engine did not, and now does through the cutover page. What remains
+  open is narrower than the sentence this replaced claimed: the cutover page is
+  declared coverage with fixtures, and the one path it cannot exercise is a run
+  that reaches `Completed`, which needs a live gateway to answer `/health`. The
+  `rolled_back`-reports-false decision, which this record had listed as an open
+  confirmation question, was taken in code (E-118) and is now a rendering
+  decision the panel makes by branching on the field rather than on the state.
+  `UI` is `DONE` on the three gates it owns, and since the integration
   recorded in E-143 it does mount the learning panel, the shadow replay and the
   per-account maintenance row — so `DONE` there means the surface builds and is
   integrated, not that the new tracks exist.

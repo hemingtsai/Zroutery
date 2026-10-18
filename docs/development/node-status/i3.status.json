@@ -2,8 +2,8 @@
   "schema_version": 1,
   "node_id": "I3",
   "display_name": "I3 — agent takeover ownership",
-  "status": "PARTIAL",
-  "implementation_state": "All four gates now have passing fixtures and the node's two named defects are repaired. Ownership is durable across process boundaries: TakeoverStore::open persists the manifest through the existing 0600 atomic writer and refuses a corrupt one rather than reading it as empty, because starting from nothing would overwrite the only record of what was overwritten. A durable store re-reads that record before committing a release, so the compare-and-swap sees a second process and not only a competing thread. Conflict resolution is applied rather than merely computed: release_resolved detects, resolves and applies by rewriting the manifest the adapter already restores from, and writing that fixture found a second defect the record did not name, namely that last_applied was never updated after adoption, so the proxy's own writes were indistinguishable from user edits. The confirmation flow binds a proposal to a fingerprint of the config it was planned against and refuses if the config moved. Status stays PARTIAL rather than DONE for two reasons that are not gates. Nothing in the application calls TakeoverStore yet, so this is implemented and proven rather than integrated. And release_with_restore still restores the adoption-time snapshot unconditionally, so it still discards user edits; that is pinned by a test which names release_resolved as the alternative, so changing it has to be deliberate. Mutation coverage is partial: the CAS mutation was confirmed by name, and the confirmation-flow and Skip mutations were not re-run against the committed tree. See E-117.",
+  "status": "DONE",
+  "implementation_state": "All four gates have passing fixtures and the node's two named defects are repaired. Ownership is durable across process boundaries: TakeoverStore::open persists the manifest through the existing 0600 atomic writer and refuses a corrupt one rather than reading it as empty, because starting from nothing would overwrite the only record of what was overwritten. A durable store re-reads that record before committing a release, so the compare-and-swap sees a second process and not only a competing thread. Conflict resolution is applied rather than merely computed: release_resolved detects, resolves and applies by rewriting the manifest the adapter already restores from, and writing that fixture found a second defect the record did not name, namely that last_applied was never updated after adoption, so the proxy's own writes were indistinguishable from user edits. The confirmation flow binds a proposal to a fingerprint of the config it was planned against and refuses if the config moved. The first of the two reasons this was held at PARTIAL — that nothing in the application called TakeoverStore — stopped being true before this record was next read: three commands (takeover_status, takeover_adopt, takeover_release, registered ungated) and the Takeover page call it, and Desktop holds the open store per agent under <config_dir>/takeover/ so one process keeps one view of each manifest. The second reason stands and is unchanged: release_with_restore still restores the adoption-time snapshot unconditionally, so it still discards user edits; that is pinned by a test which names release_resolved as the alternative, so changing it has to be deliberate. It is a narrower surface than it sounds — the page and the commands call release_resolved — but it is a live path in the product rather than a fixture, which is what the DONE claim rests on. Mutation coverage is partial: the CAS mutation was confirmed by name, and the confirmation-flow and Skip mutations were not re-run against the committed tree. See E-117.",
   "dependencies": [],
   "dependents": [
     "I4",
@@ -26,9 +26,14 @@
     "docs/development/repository-audit-2026-09-25.md",
     "crates/zroutery-core/src/agent_takeover/mod.rs",
     "crates/zroutery-core/tests/e2e.rs",
-    "crates/zroutery-core/tests/agent_takeover_test.rs"
+    "crates/zroutery-core/tests/agent_takeover_test.rs",
+    "src-tauri/src/state/takeover.rs",
+    "src-tauri/src/takeover_commands.rs",
+    "ui/src/pages/Takeover.tsx"
   ],
   "notes": [
-    "Takeover is not authorized for production."
+    "Takeover is not authorized for production.",
+    "MOVED TO DONE, AND THE REASON IS WORTH READING BECAUSE THE SENTENCE THAT WAS FALSE WAS NOT MINE TO FIX QUIETLY. The previous revision said nothing in the application calls TakeoverStore yet. That had stopped being true when the takeover commands and page landed — this record simply was not re-read, which is the same failure E-143 records for three clauses in UI's only note: a sentence written before the surface existed, never revisited, and no gate reads prose. The integration is three ungated commands and a page whose per-state renderings make four of the nine states ask the user a question rather than collapsing them into held or not-held.",
+    "The second PARTIAL reason is deliberately left standing rather than resolved: release_with_restore still restores the adoption-time snapshot unconditionally and discards user edits. It is pinned by a test naming release_resolved as the alternative. Nothing in the product calls release_with_restore, so this is a decision waiting to be taken rather than a defect in use — and this record does not claim it was taken."
   ]
 }

@@ -35,6 +35,8 @@
   "notes": [
     "Accepted repair commit: 4e36fdb; pnpm test:layout passed again on the integration tree recorded in E-143 — 15 self-tests, 5 surfaces, 40 controls.",
     "The tab-aware pass is not a convenience. After the settings split, a harness that opened a page and measured the controls it found was measuring one of three subjects and reporting a pass; `routing-default` and `routing-auto` had the same shape, because their two drawers moved onto separate tabs. A surface now declares its tab, and the harness switches it with a real click before it measures.",
+    "A surface now names its page (`nav=\"routing\"`) instead of counting sidebar items, after the cutover page shifted the routing index from 5 to 6 and the interaction suite failed on two unrelated cases. The index was the worse half: the layout harness would have measured whatever page the wrong ordinal landed on, found it healthy, and reported a pass. Nav buttons carry `data-page` and both harnesses select by name, so inserting a page can no longer repoint one silently. See E-145.",
+    "The cutover surface is declared at four actions: the record row's rollback, which exists only because the fixture record is `failed` with a snapshot, plus one run button per migratable client. The fourth agent renders a reason and no button, which is what makes the count a claim about capability rather than about rows. Any other fixture state would let the page pass while offering no undo at all.",
     "The harness is not Tauri IPC E2E."
   ]
 }
