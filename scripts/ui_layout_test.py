@@ -538,6 +538,60 @@ HARNESS = """
       },
     },
   ];
+  // The cutover fixture. The record is deliberately `failed` *with* a snapshot:
+  // that is the one state where the rollback button exists, so a fixture in any
+  // other state would silently stop exercising it and the surface would pass
+  // while offering no undo at all.
+  const MIGRATION_STATUS = {
+    state: "failed",
+    interrupted: true,
+    has_snapshot: true,
+    snapshot_files: ["C:/Users/dev/.claude/settings.json"],
+    durable: true,
+    persist_error: null,
+    owned_processes: [],
+  };
+  const plan = (agent, path, kinds) => ({
+    agent,
+    config_path: path,
+    fingerprint: "fp-" + agent,
+    blocked_reason: null,
+    steps: kinds.map((k) => ({
+      kind: k[0],
+      description: k[1],
+      reversible: k[0] === "copy_config",
+    })),
+  });
+  const MIGRATION_PREVIEWS = [
+    plan("claude", "C:/Users/dev/.claude/settings.json", [
+      ["stop_external", "check whether claude is still running"],
+      ["start_zroutery", "check that port 8787 is free"],
+      ["copy_config", "install the staged document"],
+      ["verify_endpoint", "confirm /health answers as Zroutery"],
+    ]),
+    plan("codex", "C:/Users/dev/.codex/config.toml", [
+      ["stop_external", "check whether codex is still running"],
+      ["start_zroutery", "check that port 8787 is free"],
+      ["copy_config", "install the staged document"],
+      ["verify_endpoint", "confirm /health answers as Zroutery"],
+    ]),
+    plan("opencode", "C:/Users/dev/.config/opencode/opencode.json", [
+      ["stop_external", "check whether opencode is still running"],
+      ["start_zroutery", "check that port 8787 is free"],
+      ["copy_config", "install the staged document"],
+      ["verify_endpoint", "confirm /health answers as Zroutery"],
+    ]),
+    // The one client with no adapter. Carries a reason and renders no button,
+    // so the fixture is what proves the page does not offer a control it
+    // cannot honour.
+    {
+      agent: "gemini",
+      config_path: null,
+      fingerprint: "fp-gemini",
+      blocked_reason: "this build has no migration adapter for gemini",
+      steps: [],
+    },
+  ];
   window.__TAURI_INTERNALS__ = {
     transformCallback: (cb) => cb,
     invoke: (cmd) =>
@@ -546,7 +600,11 @@ HARNESS = """
           ? ["mock-a", "mock-b"]
           : cmd === "takeover_status"
             ? TAKEOVER
-            : SNAPSHOT,
+            : cmd === "migration_status"
+              ? MIGRATION_STATUS
+              : cmd === "migration_previews"
+                ? MIGRATION_PREVIEWS
+                : SNAPSHOT,
       ),
   };
 
@@ -640,12 +698,18 @@ class Surface:
     the routing subject that has to be selected before the page holds it: the
     three subjects are tabs, and a section on a tab that is not selected is not
     in the document at all.
+
+    ``nav`` is the page's ``data-page`` value, not an ordinal. An index is a
+    claim about the current sidebar that a new page falsifies silently: insert
+    one and every later surface is driven to the wrong page, which measures a
+    healthy surface and reports a pass. The cutover page was added and took two
+    hours to notice that way.
     """
 
     id: str
     label: str
     required: dict[str, int]
-    nav: int
+    nav: str
     anchor: str
     scope: str = ".page"
     drawer: int | None = None
@@ -665,14 +729,14 @@ SURFACES = (
         "models",
         "Models page",
         {"combobox": 1, "native": 1, "action": 1},
-        nav=1,
+        nav="models",
         anchor=".list-row",
     ),
     Surface(
         "providers",
         "Providers page",
         {"segment": 2, "native": 2, "action": 1},
-        nav=2,
+        nav="providers",
         anchor=".list-row",
     ),
     Surface(
@@ -683,7 +747,7 @@ SURFACES = (
         # a section head, which no container row holds, so the page's promise is
         # per-row: two actions times two declared accounts.
         {"action": 4},
-        nav=3,
+        nav="accounts",
         anchor=".account-maint",
     ),
     Surface(
@@ -693,14 +757,25 @@ SURFACES = (
         # row's adopt and the active row's release. The proposal and conflict
         # tables are content, not controls, and are deliberately not counted.
         {"action": 2},
-        nav=4,
+        nav="takeover",
+        anchor=".list-row",
+    ),
+    Surface(
+        "cutover",
+        "Cutover page",
+        # The record row's rollback (the fixture record is `failed` with a
+        # snapshot, which is the only state that offers it) plus one run button
+        # per client this build can migrate. Gemini is blocked and renders no
+        # button, so three of the four rows carry one.
+        {"action": 4},
+        nav="cutover",
         anchor=".list-row",
     ),
     Surface(
         "settings",
         "Settings page",
         {"combobox": 2, "segment": 3, "native": 4, "action": 1},
-        nav=7,
+        nav="settings",
         anchor=".setting-row",
         tab=("general", "gateway", "budgets"),
     ),
@@ -708,7 +783,7 @@ SURFACES = (
         "routing-default",
         "Routing model-routes drawer",
         {"combobox": 2, "native": 1},
-        nav=5,
+        nav="routing",
         anchor=".flow-row",
         scope=".drawer",
         drawer=0,
@@ -718,7 +793,7 @@ SURFACES = (
         "routing-auto",
         "Routing auto-review drawer",
         {"combobox": 2, "native": 1},
-        nav=5,
+        nav="routing",
         anchor=".flow-row",
         scope=".drawer",
         drawer=0,
@@ -889,7 +964,7 @@ def self_test() -> int:
     def measured(surface: str, controls: int, kinds: dict[str, int]) -> dict:
         return {surface: {"surface": surface, "rows": [], "controls": controls, "kinds": kinds}}
 
-    one = (Surface("only", "Only surface", {"combobox": 2, "native": 1}, nav=0, anchor=".x"),)
+    one = (Surface("only", "Only surface", {"combobox": 2, "native": 1}, nav="only", anchor=".x"),)
     coverage_cases: list[tuple[str, dict, bool]] = [
         (
             "declared surface fully measured",
@@ -1202,7 +1277,10 @@ def measure_surfaces(devtools: DevTools) -> dict[str, dict]:
     )
     measured: dict[str, dict] = {}
     for surface in SURFACES:
-        devtools.click(devtools.element(".nav-item", surface.nav))
+        # Selected by page name rather than by position in the sidebar. An index
+        # silently repoints at the wrong page the moment one is inserted, which
+        # measures a healthy surface and reports a pass.
+        devtools.click(devtools.element('[data-page="%s"]' % surface.nav))
         tabs: tuple[str, ...]
         if surface.tab is None:
             tabs = (None,)  # type: ignore[assignment]

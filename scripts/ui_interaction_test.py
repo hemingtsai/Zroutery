@@ -292,6 +292,56 @@ HARNESS = """
       }
       case "get_ml_traces":
         return state.ml ? clone(state.ml.traces) : null;
+      case "migration_status":
+        return state.migration ? clone(state.migration.status) : null;
+      case "migration_previews":
+        return state.migration ? clone(state.migration.previews) : [];
+      case "migration_apply": {
+        state.commandLog.push({ cmd, args: clone(args) });
+        const answer = clone(
+          (state.migration && state.migration.applyAnswer) || {
+            state: "completed",
+            steps_completed: 4,
+            steps_total: 4,
+            errors: [],
+            warnings: [],
+            duration_ms: 12,
+            rolled_back: false,
+            restored_files: [],
+            failed_restores: [],
+          },
+        );
+        // The record moves with the run, the way the durable store does — a
+        // second read has to see the state the run produced rather than the one
+        // it started from.
+        if (state.migration) state.migration.status = { ...state.migration.status, ...answer };
+        return answer;
+      }
+      case "migration_rollback": {
+        state.commandLog.push({ cmd, args: clone(args) });
+        const answer = clone(
+          (state.migration && state.migration.rollbackAnswer) || {
+            state: "rolled_back",
+            steps_completed: 0,
+            steps_total: 0,
+            errors: [],
+            warnings: [],
+            duration_ms: 3,
+            rolled_back: true,
+            restored_files: ["C:/Users/dev/.claude/settings.json"],
+            failed_restores: [],
+          },
+        );
+        if (state.migration) {
+          state.migration.status = {
+            ...state.migration.status,
+            state: answer.state,
+            has_snapshot: answer.restored_files.length > 0,
+            interrupted: false,
+          };
+        }
+        return answer;
+      }
       case "run_ml_promotion_round":
         state.commandLog.push({ cmd, args: clone(args) });
         // One answer whatever the flags: this case is about what the panel shows
@@ -348,7 +398,12 @@ HARNESS = """
    * would be testing the old snapshot.
    */
   window.__zrReload = (seed) => {
-    for (const key of ["config", "server", "keys", "catalogues", "account"]) {
+    // `ml` and `migration` are here for the same reason `account` is: each is a
+    // surface whose whole state arrives on its own command rather than through
+    // the snapshot, so a case that seeds it has to be able to install it. A key
+    // missing from this list is a seed that is silently dropped and a case that
+    // times out with no explanation.
+    for (const key of ["config", "server", "keys", "catalogues", "account", "ml", "migration"]) {
       if (seed && seed[key] !== undefined) state[key] = clone(seed[key]);
     }
     if (seed && seed.delays) state.delays = { ...seed.delays };
@@ -1137,7 +1192,7 @@ def case_ui1_nested_rebase(devtools: DevTools) -> list[str]:
     seed(devtools, delays={"save_config": 500})
     failures: list[str] = []
 
-    devtools.click_selector(".nav-item", 1)
+    devtools.click_selector('[data-page="models"]')
     devtools.wait_for("document.querySelector('.list-row') !== null", "models list")
     devtools.click_selector(".list-row", 0)
     devtools.wait_for("document.querySelector('.drawer') !== null", "model drawer")
@@ -1299,7 +1354,7 @@ def case_ui2_candidate_priority(devtools: DevTools) -> list[str]:
     seed(devtools)
     failures: list[str] = []
 
-    devtools.click_selector(".nav-item", 5)
+    devtools.click_selector('[data-page="routing"]')
     # The routing page splits its three subjects into tabs, so the auto-review
     # section is only mounted once its own tab is selected — and once it is, its
     # Edit button is the only `linky` on the page rather than the second.
@@ -1372,7 +1427,7 @@ def case_ui3_drawer_isolation(devtools: DevTools) -> list[str]:
     )
     key_selector = ".drawer input[type='password']"
 
-    devtools.click_selector(".nav-item", 2)
+    devtools.click_selector('[data-page="providers"]')
     devtools.wait_for("document.querySelector('.list-row') !== null", "providers list")
 
     # Open provider A and type a key that only A should ever see.
@@ -1566,7 +1621,7 @@ def case_ui5_refused_round_shows_its_criteria(devtools: DevTools) -> list[str]:
     # The learned panel is the first of the three routing subjects, so the path
     # to it is a page and then a tab. Clicking the page alone leaves the panel
     # unmounted and the judge button nowhere.
-    devtools.click_selector(".nav-item", 5)
+    devtools.click_selector('[data-page="routing"]')
     devtools.wait_for(
         "Boolean(document.querySelector('#tab-ml'))", "the learned-routing tab"
     )
@@ -1760,7 +1815,7 @@ def case_ui6_accounts_direct_checkin(devtools: DevTools) -> list[str]:
     """
     failures: list[str] = []
     seed(devtools, **ACCOUNT_QUERY)
-    devtools.click_selector(".nav-item", 3)
+    devtools.click_selector('[data-page="accounts"]')
     devtools.wait_for(
         "Boolean(document.querySelector('.account-maint'))", "the accounts page rows"
     )
@@ -1827,6 +1882,308 @@ def case_ui6_accounts_direct_checkin(devtools: DevTools) -> list[str]:
     return failures
 
 
+# The cutover seed, in the one shape a record starts in. A fresh record is
+# `detected`, which is the only state that admits a run — the state machine takes
+# Detected -> Prepared once — so this is what the run path has to be driven from.
+def _cutover_query(status, **extra):
+    return {
+        "migration": {
+            "status": status,
+            "previews": [
+                {
+                    "agent": agent,
+                    "config_path": path,
+                    "fingerprint": "fp-" + agent,
+                    "blocked_reason": None,
+                    "steps": [
+                        {
+                            "kind": kind,
+                            "description": description,
+                            "reversible": kind == "copy_config",
+                        }
+                        for kind, description in (
+                            ("stop_external", "check whether %s is still running" % agent),
+                            ("start_zroutery", "check that port 8787 is free"),
+                            ("copy_config", "install the staged document"),
+                            ("verify_endpoint", "confirm /health answers as Zroutery"),
+                        )
+                    ],
+                }
+                for agent, path in (
+                    ("claude", "C:/Users/dev/.claude/settings.json"),
+                    ("codex", "C:/Users/dev/.codex/config.toml"),
+                    ("opencode", "C:/Users/dev/.config/opencode/opencode.json"),
+                )
+            ]
+            + [
+                {
+                    "agent": "gemini",
+                    "config_path": None,
+                    "fingerprint": "fp-gemini",
+                    "blocked_reason": "this build has no migration adapter for gemini",
+                    "steps": [],
+                }
+            ],
+            **extra,
+        }
+    }
+
+
+CUTOVER_QUERY = _cutover_query(
+    {
+        "state": "detected",
+        "interrupted": False,
+        "has_snapshot": False,
+        "snapshot_files": [],
+        "durable": True,
+        "persist_error": None,
+        "owned_processes": [],
+    }
+)
+
+# The same page after a run that failed partway. This is the one state that
+# permits a rollback, so it is the state the undo has to be driven from, and the
+# answer that matters is the one where the machine reached RolledBack and no
+# byte came back: the defect this whole surface is built against is a panel that
+# reads `state` and tells the user their file was restored.
+CUTOVER_FAILED_QUERY = _cutover_query(
+    {
+        "state": "failed",
+        "interrupted": True,
+        "has_snapshot": True,
+        "snapshot_files": ["C:/Users/dev/.claude/settings.json"],
+        "durable": True,
+        "persist_error": None,
+        "owned_processes": [],
+    },
+    rollbackAnswer={
+        "state": "rolled_back",
+        "steps_completed": 0,
+        "steps_total": 0,
+        "errors": [],
+        "warnings": [],
+        "duration_ms": 3,
+        "rolled_back": False,
+        "restored_files": [],
+        "failed_restores": [],
+    },
+)
+
+
+def case_ui7_cutover_confirmation_and_honest_rollback(devtools) -> list[str]:
+    """Running a cutover, driven the way an operator drives it.
+
+    Four properties, each of which the page can get wrong in a way a rendering
+    fixture would not notice:
+
+    1. A client this build cannot migrate renders a reason and *no* button, so
+       the page never offers a control it cannot honour.
+    2. Running a plan goes through a confirmation that names what it replaces.
+    3. Nothing runs before the confirmation is answered.
+    4. The run carries the preview's fingerprint to the backend. Without that
+       argument the dialog is decoration: the plan the user read and the plan
+       that runs are then only assumed to be the same one.
+    """
+    failures: list[str] = []
+    seed(devtools, **CUTOVER_QUERY)
+    devtools.click_selector('[data-page="cutover"]')
+    devtools.wait_for("Boolean(document.querySelector('.page .list-row'))", "the cutover rows")
+
+    # (1) Every agent is a row; the unmigratable one explains itself and offers
+    # nothing to click.
+    if devtools.evaluate("document.querySelectorAll('.page .list-row').length") != 5:
+        failures.append(
+            "expected 4 plan rows plus the record row, saw %d"
+            % devtools.evaluate("document.querySelectorAll('.page .list-row').length")
+        )
+    body = devtools.evaluate("document.querySelector('.page').innerText")
+    if "no migration adapter for gemini" not in body:
+        failures.append("the client this build cannot migrate does not say why")
+
+    gemini_buttons = devtools.evaluate(
+        """
+        (() => {
+          const rows = [...document.querySelectorAll('.page .list-row')];
+          const row = rows.find((r) => r.textContent.includes('gemini'));
+          return row ? row.querySelectorAll('button').length : -1;
+        })()
+        """
+    )
+    if gemini_buttons != 0:
+        failures.append(
+            "the blocked client renders %d button(s); it must render none" % gemini_buttons
+        )
+
+    # (2) One live run button per migratable client, and none for the blocked one.
+    # Checked before anything runs: once the stub has moved the record to
+    # `completed` the page correctly retires them all, so asserting afterwards
+    # would assert the opposite of what is wanted.
+    enabled_now = devtools.evaluate(
+        """
+        [...document.querySelectorAll('.page button')]
+          .filter((b) => b.textContent.includes('Run this cutover'))
+          .filter((b) => !b.disabled)
+          .length
+        """
+    )
+    if enabled_now != 3:
+        failures.append(
+            "a record in `detected` must offer one live run button per migratable client (three of "
+            "the four agents; gemini has no adapter); saw %d" % enabled_now
+        )
+
+    # (3) and (4) The run goes through a confirmation that carries the fingerprint.
+    devtools.evaluate(
+        """
+        (() => {
+          const rows = [...document.querySelectorAll('.page .list-row')];
+          const row = rows.find((r) => r.textContent.includes('claude'));
+          [...row.querySelectorAll('button')]
+            .find((b) => b.textContent.includes('Run this cutover'))
+            .click();
+        })()
+        """
+    )
+    devtools.wait_for("Boolean(document.querySelector('.confirm'))", "the cutover confirmation")
+    if "Replace Claude Code's configuration?" not in devtools.evaluate(
+        "document.querySelector('.confirm').innerText"
+    ):
+        failures.append("the confirmation does not name what it is about to replace")
+    if devtools.evaluate(
+        "window.__zrStub.state.commandLog.some((e) => e.cmd === 'migration_apply')"
+    ):
+        failures.append("the run was sent before the confirmation was answered")
+
+    devtools.evaluate(
+        """
+        (() => {
+          [...document.querySelectorAll('.confirm-actions button')]
+            .find((b) => b.textContent.includes('Run this cutover'))
+            .click();
+        })()
+        """
+    )
+    devtools.wait_for(
+        "window.__zrStub.state.commandLog.some((e) => e.cmd === 'migration_apply')",
+        "the cutover command",
+    )
+    sent = devtools.evaluate(
+        "JSON.stringify(window.__zrStub.state.commandLog.filter((e) => e.cmd === 'migration_apply')[0].args)"
+    )
+    if "fp-claude" not in sent:
+        failures.append(
+            "the confirmed run did not carry the preview's fingerprint, so the plan the user read "
+            "is not provably the plan that ran: %s" % sent
+        )
+
+    # (4) The record admits one run, so there is no second one to offer.
+    enabled = devtools.evaluate(
+        """
+        [...document.querySelectorAll('.page button')]
+          .filter((b) => b.textContent.includes('Run this cutover'))
+          .filter((b) => !b.disabled)
+          .length
+        """
+    )
+    if enabled != 0:
+        failures.append(
+            "%d run button(s) are still live after the record ran; the machine takes Detected -> "
+            "Prepared once" % enabled
+        )
+    return failures
+
+
+def case_ui8_cutover_reports_a_bare_rollback_honestly(devtools) -> list[str]:
+    """The undo, driven from the only state that permits one.
+
+    The record is seeded `failed` with a snapshot, because `Failed -> RolledBack`
+    is the only transition the state machine allows and a fixture in any other
+    state would let the page pass while offering no undo at all.
+
+    The answer the stub gives back is the one that matters: the machine reached
+    `RolledBack` and no byte came back. `rollback_with` ignores a refused
+    transition and restores the files anyway, and `MigrationResult::rolled_back`
+    exists precisely because the state machine cannot tell the two apart — so a
+    panel that reads `state` tells a user their configuration was restored when
+    it was not. This is the assertion the page exists for.
+
+    Split from UI-7 because a case is seeded by its URL and a reload re-seeds
+    from that URL: one case cannot hold two different records.
+    """
+    failures: list[str] = []
+    seed(devtools, **CUTOVER_FAILED_QUERY)
+    devtools.click_selector('[data-page="cutover"]')
+    devtools.wait_for(
+        "document.querySelector('.page').innerText.includes('failed')", "the failed record"
+    )
+
+    # The snapshot is what makes a rollback possible, and the record row has to
+    # say there is one rather than leaving the button unexplained.
+    if "1 file(s) captured" not in devtools.evaluate("document.querySelector('.page').innerText"):
+        failures.append("the record row does not say what the snapshot holds")
+
+    # A record that has run offers no second run: the machine takes
+    # Detected -> Prepared once, so a second run would be refused by the engine
+    # only after the snapshot was taken.
+    enabled = devtools.evaluate(
+        """
+        [...document.querySelectorAll('.page button')]
+          .filter((b) => b.textContent.includes('Run this cutover'))
+          .filter((b) => !b.disabled)
+          .length
+        """
+    )
+    if enabled != 0:
+        failures.append(
+            "%d run button(s) are still live on a record that has already run" % enabled
+        )
+
+    # The rollback goes through a confirmation that names what it will overwrite.
+    devtools.evaluate(
+        """
+        (() => {
+          const row = [...document.querySelectorAll('.page .list-row')].find((r) =>
+            r.textContent.includes('failed'),
+          );
+          [...row.querySelectorAll('button')].find((b) => b.textContent.includes('Roll back')).click();
+        })()
+        """
+    )
+    devtools.wait_for("Boolean(document.querySelector('.confirm'))", "the rollback confirmation")
+    if "Put the configuration file back?" not in devtools.evaluate(
+        "document.querySelector('.confirm').innerText"
+    ):
+        failures.append("the rollback confirmation does not name what it will overwrite")
+    if devtools.evaluate(
+        "window.__zrStub.state.commandLog.some((e) => e.cmd === 'migration_rollback')"
+    ):
+        failures.append("the rollback was sent before the confirmation was answered")
+
+    devtools.evaluate(
+        """
+        (() => {
+          [...document.querySelectorAll('.confirm-actions button')]
+            .find((b) => b.textContent.includes('Roll back'))
+            .click();
+        })()
+        """
+    )
+    devtools.wait_for(
+        "window.__zrStub.state.commandLog.some((e) => e.cmd === 'migration_rollback')",
+        "the rollback command",
+    )
+    devtools.wait_for(
+        "document.querySelector('.page').innerText.includes('Last run')", "the run report"
+    )
+    body = devtools.evaluate("document.querySelector('.page').innerText")
+    if "Nothing was put back" not in body:
+        failures.append(
+            "a rollback that restored no file is not reported as having restored none, even though "
+            "the state machine says RolledBack — the page is reading state instead of rolled_back"
+        )
+    return failures
+
+
 CASES = (
     {"label": "UI-1 two nested edits in sequence (first save delayed)", "run": case_ui1_nested_rebase},
     {"label": "UI-2 moved candidate renumbers priority", "run": case_ui2_candidate_priority},
@@ -1845,6 +2202,16 @@ CASES = (
         "label": "UI-6 accounts page shows readings and direct check-in acts",
         "run": case_ui6_accounts_direct_checkin,
         "query": ACCOUNT_QUERY,
+    },
+    {
+        "label": "UI-7 cutover confirms a run behind the preview's fingerprint",
+        "run": case_ui7_cutover_confirmation_and_honest_rollback,
+        "query": CUTOVER_QUERY,
+    },
+    {
+        "label": "UI-8 a rollback that restored nothing says so",
+        "run": case_ui8_cutover_reports_a_bare_rollback_honestly,
+        "query": CUTOVER_FAILED_QUERY,
     },
 )
 
