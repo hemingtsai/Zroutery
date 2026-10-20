@@ -3,7 +3,7 @@
   "node_id": "TEST-CLIPPY",
   "display_name": "Full workspace clippy",
   "status": "DONE",
-  "implementation_state": "The full local workspace all-target/all-feature clippy passed on main after the platform-specific warning repair.",
+  "implementation_state": "The full local workspace all-target/all-feature clippy passes with no warnings at all. It had drifted: eighteen field_reassign_with_default warnings sat in the test targets, in five files, and the record still said the gate was green. The record's own note already said the external CI was narrower than this local gate, so the gap was known and the drift was still there. The warnings were fixed by building the value with the field in the initializer, which is what the lint asks for, and the gate is green again.",
   "dependencies": [
     "TEST-CHECK"
   ],
@@ -18,7 +18,8 @@
   "evidence": [
     "E-008",
     "E-024",
-    "E-028"
+    "E-028",
+    "E-149"
   ],
   "source_references": [
     "docs/development/repository-audit-2026-09-25.md",
@@ -27,6 +28,7 @@
   ],
   "notes": [
     "Accepted repair commits: 902db2c; current full command passed at c782a49.",
-    "External CI remains narrower than this local gate."
+    "External CI remains narrower than this local gate.",
+    "THE GATE WAS RED WHILE THIS RECORD SAID IT WAS GREEN, AND THE CI COULD NOT SEE IT. CI lints `-p zroutery-core --all-features` without `--all-targets`, so the library is linted and the integration tests are not. The wider command in this record — the one this node owns — sees them, and it was failing. The eighteen warnings were all in test files: four test suites and one module inside the library, none of them touched by the work that found them. The fix is mechanical and the gate is green; the record now says what the command actually does, which is the whole point of a record that names a command."
   ]
 }
