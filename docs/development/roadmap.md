@@ -328,11 +328,12 @@ real-provider E2E, or automatic model activation is authorized by this roadmap.
 | `TEST-WORKSPACE` | `DONE` | Local `cargo test --workspace` passed at the audited SHA and at `0f5c935`; it regressed at `c4188be` because a new test used an ml-gated API, and the gap is recorded in E-065. |
 | `TEST-ML` | `DONE` | Local `cargo test --workspace --features ml` passed at the audited SHA. |
 | `TEST-ALL-FEATURES` | `DONE` | Local `cargo test --workspace --all-features` passed at the audited SHA. |
-| `TEST-CLIPPY` | `DONE` | Full workspace all-target/all-feature clippy passed after the baseline repair. |
+| `TEST-CLIPPY` | `DONE` | Full workspace all-target/all-feature clippy passes with no warnings. It had drifted to eighteen warnings in the test targets, which the CI's narrower command does not see, and the record said it was green while it was red; the exemptions that excused three core combinations described a cause that had been deleted from the code. See E-149 and E-152. |
 | `TEST-UI-BUILD` | `DONE` | Local `pnpm --dir ui build` passed at the audited SHA. |
 | `TEST-SMOKE` | `DONE` | Windows native binary resolution and local mock-provider lifecycle passed. |
-| `TEST-LAYOUT-SELF` | `DONE` | Seven pure layout self-tests passed. |
-| `TEST-LAYOUT-BROWSER` | `DONE` | Real Chrome layout assertions passed; missing browser now fails closed. |
+| `TEST-LAYOUT-SELF` | `DONE` | Fifteen pure layout self-tests passed. |
+| `TEST-LAYOUT-BROWSER` | `DONE` | Real Chrome layout assertions passed; missing browser now fails closed. Eight surfaces and fifty-two controls are measured, and a surface is named rather than counted, so inserting a page cannot repoint another silently. |
+| `TEST-FEATURE-MATRIX` | `DONE` | Every feature combination a person can type compiles — forty of them. This gate runs in CI and had been red on three of them; the suites that reach into `ml` from a combination without it are now guarded the way the other twenty are, and the exemptions that excused the rest described a cause that no longer exists. See E-149. |
 | `TEST-FORMAT` | `DONE` | `cargo fmt --all -- --check` found pre-existing formatting drift. |
 | `TEST-DIFF-CHECK` | `DONE` | `git diff --check` passed at the audited baseline. |
 | `CI-CORE` | `DONE` | External run `36014406507` passed Linux core all-feature clippy/tests only. |
