@@ -339,9 +339,21 @@ const ModelListRow = memo(function ModelListRow({
     <button
       className={`list-row ${selected ? "selected" : ""}`}
       onClick={() => onOpen(id)}
-      aria-label={t("models.open_row", { id })}
+      /*
+       * The name carries the state as well, because the row's own content is
+       * replaced by it in the accessibility tree: the dot beside the model is
+       * a colour, and a colour is invisible to a screen reader. Without this
+       * the row announced only "Open <id>", and whether the model was enabled
+       * was nowhere in the sentence.
+       */
+      aria-label={`${t("models.open_row", { id })} — ${
+        status === "off" ? t("status.disabled") : t("status.enabled")
+      }`}
     >
-      <StatusDot tone={status} />
+      <StatusDot
+        tone={status}
+        state={status === "off" ? t("status.disabled") : t("status.enabled")}
+      />
       <div className="row-main">
         <span className="row-title mono">{id}</span>
         <span className="row-sub">{providerLine}</span>

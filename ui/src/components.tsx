@@ -915,23 +915,45 @@ export function KeyValue({ rows }: { rows: [ReactNode, ReactNode][] }) {
 /**
  * A status, as a small dot and a word. The dot is deliberately tiny: status
  * is information, not decoration, and full-width pills shout.
+ *
+ * `state` is the status in words, for a screen reader. A dot is a colour, and
+ * a colour is invisible to one — so a caller that means something by the
+ * colour has to say it here. The word is visually hidden, because the design
+ * is the design and the dot is the design's way of saying it.
+ *
+ * It is a caller-supplied string rather than a word chosen from the tone
+ * because the tones have no single meaning: "ok" is a request that succeeded
+ * on the activity timeline and a model that is simply enabled on the models
+ * page, and one word cannot be right for both.
  */
 export function StatusDot({
   tone,
   label,
+  state,
 }: {
   tone: "ok" | "warn" | "danger" | "off";
   label?: string;
+  state?: string;
 }) {
   const cls =
     tone === "ok" ? "dot-ok" : tone === "warn" ? "dot-warn" : tone === "danger" ? "dot-danger" : "";
-  if (!label) return <span className={`dot ${cls}`} aria-hidden />;
-  return (
-    <span className="dot-label">
-      <span className={`dot ${cls}`} />
-      {label}
-    </span>
-  );
+  if (label) {
+    return (
+      <span className="dot-label">
+        <span className={`dot ${cls}`} />
+        {label}
+      </span>
+    );
+  }
+  if (state) {
+    return (
+      <span className="dot-label">
+        <span className={`dot ${cls}`} />
+        <span className="visually-hidden">{state}</span>
+      </span>
+    );
+  }
+  return <span className={`dot ${cls}`} aria-hidden />;
 }
 
 export function Button({

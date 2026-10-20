@@ -177,7 +177,10 @@ export default function Overview({
                     {r.kind === "auto_mode" ? t("kind.review") : t("kind.main")}
                   </span>
                   <span className="timeline-main-cell">
-                    <StatusDot tone={r.ok ? "ok" : "danger"} />
+                    <StatusDot
+                      tone={r.ok ? "ok" : "danger"}
+                      state={r.ok ? t("status.succeeded") : t("status.failed")}
+                    />
                     <span className="timeline-model">
                       {r.resolved_model ?? r.requested_model}
                     </span>

@@ -269,11 +269,16 @@ function TimelineRow({
         {isAuto ? t("kind.review") : t("kind.main")}
       </span>
       <span className="timeline-main-cell">
-        {record.ok ? (
-          <StatusDot tone="ok" />
-        ) : (
-          <StatusDot tone="danger" />
-        )}
+        {/*
+         * The dot is the row's only sign of whether the request worked — the
+         * row carries the model, the provider and the latency, and nothing
+         * else said "this one failed". A dot is a colour, and a colour is
+         * invisible to a screen reader, so the outcome is said in words here.
+         */}
+        <StatusDot
+          tone={record.ok ? "ok" : "danger"}
+          state={record.ok ? t("status.succeeded") : t("status.failed")}
+        />
         <span className="timeline-model">{record.resolved_model ?? record.requested_model}</span>
         {record.provider_name && <span className="timeline-provider">{record.provider_name}</span>}
         {record.attempts > 1 && (
@@ -299,7 +304,10 @@ function RequestDrawer({ record, onClose }: { record: RequestRecord; onClose: ()
     <Drawer
       title={
         <>
-          <StatusDot tone={record.ok ? "ok" : "danger"} />
+          <StatusDot
+            tone={record.ok ? "ok" : "danger"}
+            state={record.ok ? t("status.succeeded") : t("status.failed")}
+          />
           {record.kind === "auto_mode" ? t("activity.review") : t("activity.request")}
         </>
       }

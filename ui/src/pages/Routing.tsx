@@ -184,7 +184,10 @@ export default function Routing({
                       )}
                       <span className="flow-arrow" aria-hidden>{"→"}</span>
                       <span className="flow-target">
-                        <StatusDot tone={cooling.has(r.id) ? "warn" : "ok"} />
+                        <StatusDot
+                          tone={cooling.has(r.id) ? "warn" : "ok"}
+                          state={cooling.has(r.id) ? t("status.cooling") : undefined}
+                        />
                         {r.id}
                         <span className="flow-provider">
                           {providerById.get(r.model.provider_id)?.name}
@@ -304,7 +307,10 @@ export default function Routing({
                       )}
                       <span className="flow-arrow" aria-hidden>{"→"}</span>
                       <span className="flow-target">
-                        <StatusDot tone={cooling.has(r.id) ? "warn" : "ok"} />
+                        <StatusDot
+                          tone={cooling.has(r.id) ? "warn" : "ok"}
+                          state={cooling.has(r.id) ? t("status.cooling") : undefined}
+                        />
                         {r.id}
                         <span className="flow-provider">
                           {providerById.get(r.model.provider_id)?.name}

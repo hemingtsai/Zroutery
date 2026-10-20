@@ -446,9 +446,32 @@ const ProviderRow = memo(function ProviderRow({
     <button
       className={`list-row ${selected ? "selected" : ""}`}
       onClick={() => onOpen(id)}
-      aria-label={t("providers.open_row", { name })}
+      /*
+       * The name carries the state as well, because the row's own content is
+       * replaced by it in the accessibility tree: the dot beside the provider
+       * is a colour, and a colour is invisible to a screen reader. Without
+       * this the row announced only "Open <name>", and whether the provider
+       * was switched on — or was on with no credential stored — was nowhere
+       * in the sentence.
+       */
+      aria-label={`${t("providers.open_row", { name })} — ${
+        status === "off"
+          ? t("status.disabled")
+          : status === "warn"
+            ? t("status.no_key")
+            : t("status.enabled")
+      }`}
     >
-      <StatusDot tone={status} />
+      <StatusDot
+        tone={status}
+        state={
+          status === "off"
+            ? t("status.disabled")
+            : status === "warn"
+              ? t("status.no_key")
+              : t("status.enabled")
+        }
+      />
       <div className="row-main">
         <span className="row-title">{name}</span>
         <span className="row-sub">
