@@ -764,6 +764,7 @@ export const en = {
   "activity.health_hint": "Circuit-breaker state per model, shared by every routing pool.",
   "activity.ok_failed": "{ok} ok / {failed} failed",
   "activity.cooling": "cooling {n}s",
+  "activity.clear_health": "Clear the health of {id}",
   "activity.spend": "Spend",
   "activity.spend_hint":
     "Computed from the prices you entered and the usage each provider reported. A floor, not a bill.",
@@ -1704,6 +1705,7 @@ export const zh: Dict = {
   "activity.health_hint": "每模型的熔断状态，所有路由池共享。",
   "activity.ok_failed": "{ok} 成功 / {failed} 失败",
   "activity.cooling": "冷却 {n}s",
+  "activity.clear_health": "清除 {id} 的健康状态",
   "activity.spend": "花费",
   "activity.spend_hint": "按你录入的价格与各提供商上报的用量估算。是下限，不是账单。",
   "activity.estimated": "预估花费",

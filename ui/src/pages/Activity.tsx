@@ -146,7 +146,14 @@ export default function Activity({
                     {t("activity.cooling", { n: h.cooldown_remaining_secs })}
                   </Badge>
                 )}
-                <Button kind="ghost" onClick={() => run(() => api.resetHealth(h.model_id))}>
+                <Button
+                  kind="ghost"
+                  // Every row's button is the same word, so the name carries
+                  // the model it clears the health of. Without it, a list of
+                  // twenty rows presents twenty buttons all called "Clear".
+                  ariaLabel={t("activity.clear_health", { id: h.model_id })}
+                  onClick={() => run(() => api.resetHealth(h.model_id))}
+                >
                   {t("common.clear")}
                 </Button>
               </div>

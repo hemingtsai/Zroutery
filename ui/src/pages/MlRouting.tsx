@@ -705,9 +705,15 @@ function Replay({ verdict }: { verdict: ShadowAnalysisStatus }) {
   const { t } = useI18n();
   const analysis = verdict.analysis;
 
+  /*
+   * A live region, because the replay arrives on its own: the operator asks
+   * for it, it reads the recorded traffic, and the answer appears. Without a
+   * live region the verdict — which is the whole point of asking — is a silent
+   * change further down the page.
+   */
   if (!analysis) {
     return (
-      <div className="ml-replay">
+      <div className="ml-replay" role="status">
         <p className="muted">
           {verdict.reason ?? t("ml.replay_none")}
           {verdict.traces_read > 0 && ` (${verdict.traces_read} ${t("ml.traces")})`}
@@ -719,7 +725,7 @@ function Replay({ verdict }: { verdict: ShadowAnalysisStatus }) {
   const gaps = Object.entries(analysis.gaps).filter(([, count]) => count > 0);
 
   return (
-    <div className="ml-replay">
+    <div className="ml-replay" role="status">
       <KeyValue
         rows={[
           [t("ml.replay_records"), analysis.records],
