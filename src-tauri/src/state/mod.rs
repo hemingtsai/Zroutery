@@ -144,13 +144,13 @@ impl ListenerProber for TcpListenerProber {
 }
 
 mod accounts;
+#[cfg(test)]
+mod balance_tests;
 mod balances;
 mod budget;
 mod helpers;
 mod lifecycle;
 mod migration;
-#[cfg(test)]
-mod balance_tests;
 #[cfg(test)]
 mod migration_tests;
 // `any`, not `ml`: `ml.rs` is the learned model, but it also holds
