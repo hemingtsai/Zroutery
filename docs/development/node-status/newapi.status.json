@@ -31,10 +31,14 @@
     "docs/development/repository-audit-2026-09-25.md",
     "crates/zroutery-core/src/account/adapters/newapi/mod.rs",
     "crates/zroutery-core/src/account/provider.rs",
-    "crates/zroutery-core/src/account/types.rs"
+    "crates/zroutery-core/src/account/types.rs",
+    "src-tauri/src/state/balances.rs",
+    "src-tauri/src/state/balance_tests.rs",
+    "ui/src/pages/Providers.tsx"
   ],
   "notes": [
     "No real NewAPI credential or provider call is evidence.",
-    "A production caller now exists and has still never touched a real panel. Reaching one in this repository's tests requires a credential nobody here has, so the gap is named rather than closed."
+    "A production caller now exists and has still never touched a real panel. Reaching one in this repository's tests requires a credential nobody here has, so the gap is named rather than closed.",
+    "THE BALANCE IS NOW REACHABLE FROM THE PROVIDER ROW, WITH THE USER ACCESS TOKEN. The adapter was always able to read a panel's wallet — the reconciler has called it since the account work — but the balance it produced was visible only on the Accounts page, per account. A provider that declares no account had no balance at all, because every balance preset is relay-side and a NewAPI relay publishes none: it serves /v1 and keeps the wallet in the panel. The provider-level figure is now the sum of what its accounts report, read per provider and added only when they agree on the unit. A preset could not have supplied this: the panel answers to the account's credential, and a provider-level probe authenticates with the provider's relay key. So the gap was a shape, not a missing endpoint. The status stays PARTIAL and the two reasons it gives are unchanged by this: the integration has still never been exercised against a real panel, and the subsystem is still only reachable under an opt-in feature."
   ]
 }
