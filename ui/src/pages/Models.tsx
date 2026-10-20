@@ -336,7 +336,7 @@ const ModelListRow = memo(function ModelListRow({
 }) {
   const { t } = useI18n();
   return (
-    <button
+    <button type="button"
       className={`list-row ${selected ? "selected" : ""}`}
       onClick={() => onOpen(id)}
       /*
@@ -402,7 +402,7 @@ function ModelDrawer({
           [
             t("models.tier"),
             <Select<ModelTier | "none">
-              ariaLabel={t("models.tier")}
+              ariaLabel={t("models.tier_for", { model: m.upstream_model })}
               value={m.tier ?? "none"}
               disabled={busy}
               onChange={(next) =>

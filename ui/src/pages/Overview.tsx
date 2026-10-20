@@ -57,14 +57,14 @@ export default function Overview({
           </span>
         </p>
         <div className="page-head-actions text-actions">
-          <button
+          <button type="button"
             className="linky"
             onClick={() => api.copy(`http://${server.host}:${server.port}`).then(() => notify("ok", t("toast.copied")))}
           >
             {t("action.copy_base_url")}
           </button>
           <span className="text-actions-sep">·</span>
-          <button
+          <button type="button"
             className="linky"
             onClick={() => api.copyToken().then(() => notify("ok", t("toast.copied")))}
           >
@@ -76,7 +76,7 @@ export default function Overview({
       <section className="section">
         <div className="section-head">
           <span className="section-title">{t("nav.routing")}</span>
-          <button className="linky" onClick={() => onNavigate("routing")}>
+          <button type="button" className="linky" onClick={() => onNavigate("routing")}>
             {t("overview.configure")}
           </button>
         </div>
@@ -152,7 +152,7 @@ export default function Overview({
       {providers.length === 0 ? (
         <div className="empty-state">
           <p>{t("overview.no_providers")}</p>
-          <button className="linky" onClick={() => onNavigate("providers")}>
+          <button type="button" className="linky" onClick={() => onNavigate("providers")}>
             {t("overview.add_provider")}
           </button>
         </div>
@@ -160,7 +160,7 @@ export default function Overview({
         <section className="section">
           <div className="section-head">
             <span className="section-title">{t("overview.recent")}</span>
-            <button className="linky" onClick={() => onNavigate("activity")}>
+            <button type="button" className="linky" onClick={() => onNavigate("activity")}>
               {t("overview.all_activity")}
             </button>
           </div>

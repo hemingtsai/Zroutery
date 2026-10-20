@@ -58,7 +58,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
            * "Dismiss", and a screen-reader user was told nothing about what had
            * happened.
            */
-          <button
+          <button type="button"
             key={toast.id}
             className={`toast toast-${toast.kind}`}
             onClick={() => dismiss(toast)}
@@ -700,7 +700,7 @@ export function Popover({
 
   return (
     <div className="popover-anchor" ref={anchor}>
-      <button
+      <button type="button"
         ref={triggerRef}
         className="bar-action"
         aria-expanded={open}
@@ -743,7 +743,7 @@ export function MenuItem({
   children: ReactNode;
 }) {
   return (
-    <button
+    <button type="button"
       className={`menu-item ${active ? "active" : ""}`}
       role={active === undefined ? "menuitem" : "menuitemradio"}
       aria-checked={active === undefined ? undefined : active}
@@ -945,7 +945,7 @@ export function Drawer({
           <div className="drawer-title" id={titleId}>
             {title}
           </div>
-          <button className="linky" onClick={onClose} title={t("common.close")} aria-label={t("common.close")}>
+          <button type="button" className="linky" onClick={onClose} title={t("common.close")} aria-label={t("common.close")}>
             ×
           </button>
         </header>

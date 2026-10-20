@@ -261,7 +261,7 @@ function TimelineRow({
   const isAuto = record.kind === "auto_mode";
   const { t } = useI18n();
   return (
-    <button className="timeline-item" onClick={onOpen}>
+    <button type="button" className="timeline-item" onClick={onOpen}>
       <span className="timeline-time">
         {new Date(record.at).toLocaleTimeString([], { hour12: false })}
       </span>

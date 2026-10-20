@@ -456,7 +456,7 @@ export default function Settings({
                   {config.server.cors_origins.map((origin) => (
                     <span key={origin} className="chip chip-done">
                       {origin}
-                      <button
+                      <button type="button"
                         className="chip-remove"
                         aria-label={t("settings.remove_origin", { origin })}
                         onClick={() =>

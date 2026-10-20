@@ -379,7 +379,7 @@ function Shell() {
         </div>
 
         {NAV.map((item) => (
-          <button
+          <button type="button"
             key={item.id}
             className={`nav-item ${page === item.id ? "active" : ""}`}
             // Named as well as classed. The two layout harnesses drive the
@@ -535,7 +535,7 @@ function Shell() {
               <Banner
                 tone="danger"
                 actions={
-                  <button className="linky" onClick={() => setError(null)}>
+                  <button type="button" className="linky" onClick={() => setError(null)}>
                     {t("common.dismiss")}
                   </button>
                 }

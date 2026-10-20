@@ -156,7 +156,7 @@ export default function Routing({
       title={t("route.default")}
       hint={t("routing.default_hint")}
       actions={
-        <button className="linky" onClick={() => setEdit("default")}>
+        <button type="button" className="linky" onClick={() => setEdit("default")}>
           {t("routing.edit")}
         </button>
       }
@@ -275,7 +275,7 @@ export default function Routing({
         ? t("routing.review_hint_on")
         : t("routing.review_hint_off")}
       actions={
-        <button className="linky" onClick={() => setEdit("auto")}>
+        <button type="button" className="linky" onClick={() => setEdit("auto")}>
           {t("routing.edit")}
         </button>
       }

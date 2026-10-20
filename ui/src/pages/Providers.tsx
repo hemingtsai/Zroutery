@@ -283,7 +283,7 @@ export default function Providers({
               unsupported. They overlap deliberately: one refreshes, one diagnoses.
             */}
             {anyBalance && (
-              <button
+              <button type="button"
                 className="linky"
                 onClick={() => void run(api.refreshBalances)}
                 disabled={busy}
@@ -291,7 +291,7 @@ export default function Providers({
                 {t("providers.refresh_all")}
               </button>
             )}
-            <button className="linky" onClick={loadCcPreview} disabled={ccLoading || busy}>
+            <button type="button" className="linky" onClick={loadCcPreview} disabled={ccLoading || busy}>
               {ccLoading ? t("providers.reading_cc") : t("providers.import_cc")}
             </button>
           </>
@@ -443,7 +443,7 @@ const ProviderRow = memo(function ProviderRow({
 }) {
   const { t } = useI18n();
   return (
-    <button
+    <button type="button"
       className={`list-row ${selected ? "selected" : ""}`}
       onClick={() => onOpen(id)}
       /*
@@ -1767,7 +1767,7 @@ const ConfiguredModelRow = memo(function ConfiguredModelRow({
       <td className="mono">{previewId(providerId, upstreamModel)}</td>
       <td>
         <Select
-          ariaLabel={t("models.tier")}
+          ariaLabel={t("models.tier_for", { model: previewId(providerId, upstreamModel) })}
           value={tier}
           disabled={disabled}
           onChange={(next) => onTier(upstreamModel, next)}
@@ -1832,7 +1832,7 @@ const DiscoveredModelRow = memo(function DiscoveredModelRow({
       </td>
       <td>
         <Select
-          ariaLabel={t("models.tier")}
+          ariaLabel={t("models.tier_for", { model: id })}
           value={tier}
           onChange={(next) => onTier(id, next)}
           options={options}

@@ -51,10 +51,10 @@ export default class ErrorBoundary extends Component<{ children: ReactNode }, St
         <p className="muted">{s.unaffected}</p>
         <pre className="snippet">{errorText(error)}</pre>
         <div className="row gap">
-          <button className="btn btn-primary" onClick={() => this.setState({ error: null })}>
+          <button type="button" className="btn btn-primary" onClick={() => this.setState({ error: null })}>
             {s.tryAgain}
           </button>
-          <button className="btn" onClick={() => window.location.reload()}>
+          <button type="button" className="btn" onClick={() => window.location.reload()}>
             {s.reload}
           </button>
         </div>
