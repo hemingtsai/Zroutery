@@ -462,7 +462,11 @@ export function Tabs({
             type="button"
             role="tab"
             id={`tab-${tab.value}`}
-            aria-controls={`panel-${tab.value}`}
+            // Only the selected tab points at a panel, because only the
+            // selected tab has one. The other panels are not in the document
+            // at all, and a reference to an element that is not there is a
+            // reference to nothing.
+            aria-controls={tab.value === value ? `panel-${tab.value}` : undefined}
             aria-selected={tab.value === value}
             // Roving tabindex: one stop for the whole strip.
             tabIndex={tab.value === value ? 0 : -1}
@@ -738,7 +742,11 @@ export function Popover({
           role="menu"
           aria-labelledby={title ? titleId : undefined}
         >
-          {title && <div className="menu-title" id={titleId}>{title}</div>}
+          {title && (
+            <div className="menu-title" id={titleId} role="none">
+              {title}
+            </div>
+          )}
           {typeof children === "function" ? children(() => setOpen(false)) : children}
         </div>
       )}

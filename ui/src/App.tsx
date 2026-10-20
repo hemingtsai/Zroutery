@@ -439,19 +439,25 @@ function Shell() {
             >
               {(close) => (
                 <>
-                  <div className="menu-row">
+                  {/*
+                    * A menu may only contain menu items, groups and
+                    * separators. The status rows and the rule are content, not
+                    * items, and saying so is what keeps the menu's structure
+                    * one a screen reader can walk.
+                    */}
+                  <div className="menu-row" role="none">
                     <StatusDot tone={server.running ? "ok" : "danger"} />
                     {t(server.running ? "status.running" : "status.stopped")}
                   </div>
                   {server.running && (
-                    <div className="menu-row">
+                    <div className="menu-row" role="none">
                       <span className="menu-key">{t("gw.address")}</span>
                       <span className="mono">
                         {server.host}:{server.port}
                       </span>
                     </div>
                   )}
-                  <div className="menu-sep" />
+                  <div className="menu-sep" role="separator" />
                   <MenuItem
                     onClick={() => {
                       void api.copy(`http://${server.host}:${server.port}`).then(() =>

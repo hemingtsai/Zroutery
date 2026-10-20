@@ -611,7 +611,7 @@ function CcSwitchRow({
   checked: boolean;
   onSelect: (id: string, on: boolean) => void;
 }) {
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
   // The backend decides this with the same rule the import command applies, so
   // a disabled row really is one the import would skip.
   const alreadyId = draft.already_imported ? draft.target_id : null;
@@ -647,7 +647,16 @@ function CcSwitchRow({
         {draft.models.length === 0
           ? "—"
           : draft.models
-              .map((m) => (m.tier ? `${m.upstream_model}（${tierName(m.tier, t)}）` : m.upstream_model))
+              .map((m) =>
+                m.tier
+                  ? // The brackets are full-width in Chinese and half-width in
+                    // English, because a full-width bracket in an English
+                    // sentence is a Chinese mark in the wrong place.
+                    lang === "zh"
+                    ? `${m.upstream_model}（${tierName(m.tier, t)}）`
+                    : `${m.upstream_model} (${tierName(m.tier, t)})`
+                  : m.upstream_model,
+              )
               .join(", ")}
       </td>
     </tr>
