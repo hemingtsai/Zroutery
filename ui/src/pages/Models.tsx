@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { memo, useCallback, useMemo, useState } from "react";
 import {
   TIERS,
   emptyPricing,
@@ -53,16 +53,78 @@ export default function Models({
   const { config, health } = snapshot;
   const { t } = useI18n();
   const notify = useToast();
-  const rows = modelRows(snapshot);
+  /*
+   * The list, and everything derived from it, is computed here rather than in
+   * the render body because it is the only unbounded thing on the page and the
+   * add-a-model field below it holds a draft that changes on every keystroke.
+   *
+   * `modelRows` reads only these two arrays, and `exposed_ids` is parallel to
+   * `config.models`, so keying on the pair is the whole input: a save that
+   * replaces either rebuilds the list, and nothing else has to.
+   */
+  const rows = useMemo(
+    () => modelRows(snapshot),
+    [snapshot.config.models, snapshot.exposed_ids],
+  );
   const [openId, setOpenId] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
   const [nameError, setNameError] = useState<string | null>(null);
   const [draft, setDraft] = useState({ provider_id: config.providers[0]?.id ?? "", upstream_model: "" });
 
-  const unclassified = rows.filter((r) => r.model.tier === null);
-  const cooling = new Set(
-    health.filter((h) => h.cooldown_remaining_secs > 0).map((h) => h.model_id),
+  /*
+   * Two index lookups instead of two linear scans.
+   *
+   * Every row used to ask `config.providers.find` and `health.find` its own
+   * question, so one render cost O(rows x (providers + health)) — and because
+   * the draft field below the list re-renders the page, that was the price of
+   * typing a model name. `Map` makes it O(providers + health) to build.
+   */
+  const providerById = useMemo(
+    () => new Map(config.providers.map((p) => [p.id, p])),
+    [config.providers],
   );
+  const healthById = useMemo(() => new Map(health.map((h) => [h.model_id, h])), [health]);
+
+  const unclassified = useMemo(() => rows.filter((r) => r.model.tier === null), [rows]);
+  const cooling = useMemo(
+    () => new Set(health.filter((h) => h.cooldown_remaining_secs > 0).map((h) => h.model_id)),
+    [health],
+  );
+
+  /**
+   * One row's worth of text, resolved while the configuration produced it.
+   *
+   * Joining the sub-line here rather than in the row keeps the strings out of
+   * the per-keystroke path entirely; the characters are the same either way, so
+   * the rendered line is identical.
+   */
+  const listView = useMemo(
+    () =>
+      rows.map((r) => {
+        const provider = providerById.get(r.model.provider_id);
+        const healthRow = healthById.get(r.id);
+        const status: ListTone =
+          !r.model.enabled || provider?.enabled === false
+            ? "off"
+            : cooling.has(r.id)
+              ? "warn"
+              : "ok";
+        return {
+          id: r.id,
+          status,
+          selected: openId === r.id,
+          providerLine:
+            (provider?.name ?? t("models.missing_provider")) +
+            (provider?.enabled === false ? ` ${t("providers.provider_off")}` : "") +
+            (r.model.tier ? ` · ${tierName(r.model.tier, t)}` : ` · ${t("models.no_tier")}`),
+          price: r.model.pricing ? priceText(r.model.pricing) : t("common.dash"),
+          latency: healthRow ? ms(healthRow.avg_latency_ms) : t("common.dash"),
+        };
+      }),
+    [rows, providerById, healthById, cooling, openId, t],
+  );
+
+  const openRow = useCallback((id: string) => setOpenId(id), []);
 
   /**
    * Apply an edit to the model the save is actually about.
@@ -180,39 +242,9 @@ export default function Models({
         </div>
       ) : (
         <div className="list">
-          {rows.map((r) => {
-            const provider = config.providers.find((p) => p.id === r.model.provider_id);
-            const status = !r.model.enabled || provider?.enabled === false
-              ? "off"
-              : cooling.has(r.id)
-                ? "warn"
-                : "ok";
-            const healthRow = health.find((h) => h.model_id === r.id);
-            return (
-              <button
-                key={r.id}
-                className={`list-row ${openId === r.id ? "selected" : ""}`}
-                onClick={() => setOpenId(r.id)}
-                aria-label={t("models.open_row", { id: r.id })}
-              >
-                <StatusDot tone={status} />
-                <div className="row-main">
-                  <span className="row-title mono">{r.id}</span>
-                  <span className="row-sub">
-                    {provider?.name ?? t("models.missing_provider")}
-                    {provider?.enabled === false && ` ${t("providers.provider_off")}`}
-                    {r.model.tier
-                      ? ` · ${tierName(r.model.tier, t)}`
-                      : ` · ${t("models.no_tier")}`}
-                  </span>
-                </div>
-                <span className="col-num">
-                  {r.model.pricing ? priceText(r.model.pricing) : t("common.dash")}
-                </span>
-                <span className="col-num">{healthRow ? ms(healthRow.avg_latency_ms) : t("common.dash")}</span>
-              </button>
-            );
-          })}
+          {listView.map((row) => (
+            <ModelListRow key={row.id} {...row} onOpen={openRow} />
+          ))}
         </div>
       )}
 
@@ -267,6 +299,58 @@ export default function Models({
     </>
   );
 }
+
+/** The status vocabulary a list row can draw. Mirrors `StatusDot`'s prop. */
+type ListTone = "ok" | "warn" | "danger" | "off";
+
+/**
+ * One row of the model list, memoised.
+ *
+ * This is the only element on the page that appears once per configured model,
+ * so it is the only one worth stopping: it takes every string it prints already
+ * resolved and only two changing values of its own (`selected`, and the status
+ * that depends on it), both computed by the list above. With the add-a-model
+ * field holding a draft that changes on every keystroke, a row that re-rendered
+ * with its parent turned four hundred rows of DOM into the price of typing a
+ * model name.
+ *
+ * The markup is the row's own button, unchanged — a component boundary is not
+ * a node, so the list draws exactly what it drew before.
+ */
+const ModelListRow = memo(function ModelListRow({
+  id,
+  status,
+  providerLine,
+  price,
+  latency,
+  selected,
+  onOpen,
+}: {
+  id: string;
+  status: ListTone;
+  providerLine: string;
+  price: string;
+  latency: string;
+  selected: boolean;
+  onOpen: (id: string) => void;
+}) {
+  const { t } = useI18n();
+  return (
+    <button
+      className={`list-row ${selected ? "selected" : ""}`}
+      onClick={() => onOpen(id)}
+      aria-label={t("models.open_row", { id })}
+    >
+      <StatusDot tone={status} />
+      <div className="row-main">
+        <span className="row-title mono">{id}</span>
+        <span className="row-sub">{providerLine}</span>
+      </div>
+      <span className="col-num">{price}</span>
+      <span className="col-num">{latency}</span>
+    </button>
+  );
+});
 
 /**
  * One model's whole story. "Used for" answers where it sits in routing;
