@@ -2184,6 +2184,130 @@ def case_ui8_cutover_reports_a_bare_rollback_honestly(devtools) -> list[str]:
     return failures
 
 
+def case_ui9_confirm_dialog_takes_focus_and_gives_it_back(devtools) -> list[str]:
+    """A modal that takes focus must give it back.
+
+    Two halves, and the second one is the one that was missing. The dialog
+    focuses its confirm button so a keyboard user starts inside it, and when
+    it closes the focus has to go back to the button that opened it.
+
+    Without the second half, dismissing the dialog with Escape or with Cancel
+    leaves the focus on the document body, and the next Tab starts from the
+    top of the page — a long way from the control the user had just used, and
+    nothing on screen says that is what happened. `Drawer` has always done
+    this; the dialog now does too.
+    """
+    failures: list[str] = []
+    seed(devtools, **CUTOVER_QUERY)
+    devtools.click_selector('[data-page="cutover"]')
+    devtools.wait_for(
+        "Boolean(document.querySelector('.page .list-row'))", "the cutover rows"
+    )
+
+    # A real mouse click, so the button genuinely holds the focus when the
+    # dialog opens. A DOM `.click()` does not move the focus, and the case
+    # would then be testing a restore to whatever happened to be focused
+    # before — which is the defect this is about.
+    point = devtools.evaluate(
+        """
+        (() => {
+          const rows = [...document.querySelectorAll('.page .list-row')];
+          const row = rows.find((r) => r.textContent.includes('claude'));
+          const button = [...row.querySelectorAll('button')]
+            .find((b) => b.textContent.includes('Run this cutover'));
+          if (!button) return null;
+          button.scrollIntoView({block: 'center', inline: 'center'});
+          const r = button.getBoundingClientRect();
+          return {x: r.left + r.width / 2, y: r.top + r.height / 2};
+        })()
+        """
+    )
+    if point is None:
+        failures.append("the cutover page offered no run button to press")
+        return failures
+    devtools.click(point)
+    devtools.wait_for("Boolean(document.querySelector('.confirm'))", "the confirm dialog")
+
+    inside = devtools.evaluate(
+        "document.querySelector('.confirm').contains(document.activeElement)"
+    )
+    if not inside:
+        failures.append(
+            "the dialog opened without taking the focus; a keyboard user would be typing into "
+            "the page behind it"
+        )
+
+    devtools.press_key("Escape")
+    devtools.wait_for("document.querySelector('.confirm') === null", "the dialog to close")
+
+    active = devtools.evaluate(
+        "document.activeElement === document.body ? 'body' : (document.activeElement.textContent || '').trim()"
+    )
+    if active == "body":
+        failures.append(
+            "the dialog closed and left the focus on the document body; the next Tab would start "
+            "from the top of the page instead of where the user was"
+        )
+    elif "Run this cutover" not in active:
+        failures.append(
+            "the dialog closed and did not give the focus back to the button that opened it; "
+            "it went to %r instead" % active
+        )
+    return failures
+
+
+def case_ui10_the_menu_moves_with_the_arrow_keys(devtools) -> list[str]:
+    """A menu role is a promise about the behaviour.
+
+    The popover claimed `role="menu"` with `role="menuitem"` children, and a
+    screen reader announced it as a menu while the arrow keys did what arrow
+    keys do everywhere else: move the page. The role has to be backed by the
+    behaviour, so the arrow keys move between the items, the focus starts
+    inside the menu, and Escape gives the focus back to the trigger.
+    """
+    failures: list[str] = []
+    seed(devtools, **CUTOVER_QUERY)
+    devtools.click_selector(".mainbar .popover-anchor .bar-action")
+    devtools.wait_for("Boolean(document.querySelector('.popover'))", "the menu")
+
+    inside = devtools.evaluate(
+        "document.querySelector('.popover').contains(document.activeElement)"
+    )
+    if not inside:
+        failures.append("the menu opened without taking the focus")
+
+    first = devtools.evaluate(
+        "document.activeElement.getAttribute('role') || ''"
+    )
+    if first != "menuitem":
+        failures.append(
+            "the menu did not start on a menu item; focus was on %r" % first
+        )
+
+    # Down has to move, and it has to move to the *next* item rather than
+    # staying put.
+    before = devtools.evaluate("document.activeElement.textContent.trim()")
+    devtools.press_key("ArrowDown")
+    after = devtools.evaluate("document.activeElement.textContent.trim()")
+    if before == after:
+        failures.append(
+            "ArrowDown did not move the focus between menu items; it stayed on %r" % before
+        )
+
+    # Up has to come back.
+    devtools.press_key("ArrowUp")
+    back = devtools.evaluate("document.activeElement.textContent.trim()")
+    if back != before:
+        failures.append(
+            "ArrowUp did not return the focus to the previous item; it went to %r instead of %r"
+            % (back, before)
+        )
+
+    devtools.press_key("Escape")
+    devtools.wait_for("document.querySelector('.popover') === null", "the menu to close")
+    return failures
+
+
 CASES = (
     {"label": "UI-1 two nested edits in sequence (first save delayed)", "run": case_ui1_nested_rebase},
     {"label": "UI-2 moved candidate renumbers priority", "run": case_ui2_candidate_priority},
@@ -2212,6 +2336,16 @@ CASES = (
         "label": "UI-8 a rollback that restored nothing says so",
         "run": case_ui8_cutover_reports_a_bare_rollback_honestly,
         "query": CUTOVER_FAILED_QUERY,
+    },
+    {
+        "label": "UI-9 a confirm dialog takes the focus and gives it back",
+        "run": case_ui9_confirm_dialog_takes_focus_and_gives_it_back,
+        "query": CUTOVER_QUERY,
+    },
+    {
+        "label": "UI-10 a menu moves with the arrow keys",
+        "run": case_ui10_the_menu_moves_with_the_arrow_keys,
+        "query": CUTOVER_QUERY,
     },
 )
 

@@ -85,11 +85,41 @@ export function ConfirmDialog({
   onClose: () => void;
 }) {
   const confirmRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const restoreTo = useRef<Element | null>(null);
+  const wasOpen = useRef(false);
   const { t } = useI18n();
+
+  /*
+   * Focus goes in when the dialog opens and comes back out when it closes.
+   *
+   * It used to only go in, and a keyboard user who dismissed the dialog — with
+   * Escape, or with Cancel — was left with focus on the document body. The
+   * next Tab then started from the top of the page, which is a long way from
+   * the button they had just used, and nothing on screen says that happened.
+   * `Drawer` has always done this; the dialog is now the same.
+   *
+   * The open/closed transition is tracked in a ref rather than read from the
+   * effect's cleanup, because the cleanup also runs when the request object is
+   * replaced while the dialog stays open — and restoring focus at that moment
+   * would throw the user out of a dialog they were still using.
+   */
+  useEffect(() => {
+    if (request) {
+      if (wasOpen.current) return;
+      wasOpen.current = true;
+      const previous = document.activeElement;
+      restoreTo.current = previous instanceof HTMLElement ? previous : null;
+      confirmRef.current?.focus();
+    } else if (wasOpen.current) {
+      wasOpen.current = false;
+      const target = restoreTo.current;
+      if (target instanceof HTMLElement && target.isConnected) target.focus();
+    }
+  }, [request]);
 
   useEffect(() => {
     if (!request) return;
-    confirmRef.current?.focus();
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
     };
@@ -97,12 +127,65 @@ export function ConfirmDialog({
     return () => window.removeEventListener("keydown", onKey);
   }, [request, onClose]);
 
+  /*
+   * Nothing behind the dialog may hold focus while it is open, and Tab has to
+   * cycle inside it rather than walk out into the page behind.
+   *
+   * Both halves are the `Drawer`'s, for the same reason: a modal that leaks
+   * focus is not modal, and a screen-reader user who tabs past the dialog
+   * lands on content they cannot see. The veil already marks the rest of the
+   * page as inert to a pointer; this makes it inert to a keyboard too.
+   */
+  useEffect(() => {
+    if (!request) return;
+    const keepInside = (event: FocusEvent) => {
+      const root = panelRef.current;
+      if (!root) return;
+      const target = event.target;
+      if (target instanceof Node && !root.contains(target)) root.focus();
+    };
+    document.addEventListener("focusin", keepInside);
+    const onTab = (e: KeyboardEvent) => {
+      if (e.key !== "Tab") return;
+      const root = panelRef.current;
+      if (!root) return;
+      const focusable = Array.from(
+        root.querySelectorAll<HTMLElement>(
+          "a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])",
+        ),
+      ).filter((el) => el.offsetParent !== null || el === document.activeElement);
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const active = document.activeElement;
+      if (e.shiftKey && (active === first || !root.contains(active))) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && active === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+    window.addEventListener("keydown", onTab, true);
+    return () => {
+      document.removeEventListener("focusin", keepInside);
+      window.removeEventListener("keydown", onTab, true);
+    };
+  }, [request]);
+
   if (!request) return null;
 
   return (
     <>
       <div className="drawer-veil" onClick={onClose} aria-hidden />
-      <div className="confirm" role="alertdialog" aria-modal aria-label={request.title}>
+      <div
+        className="confirm"
+        ref={panelRef}
+        role="alertdialog"
+        aria-modal
+        aria-label={request.title}
+        tabIndex={-1}
+      >
         <h2 className="confirm-title">{request.title}</h2>
         {request.body && <p className="confirm-body">{request.body}</p>}
         <div className="confirm-actions">
@@ -411,7 +494,41 @@ export function Popover({
 }) {
   const [open, setOpen] = useState(false);
   const anchor = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const wasOpen = useRef(false);
   const titleId = useId();
+
+  /*
+   * A menu has to behave like a menu.
+   *
+   * This popover claimed `role="menu"` with `role="menuitem"` children and
+   * nothing else: a screen reader announced "menu" and then the arrow keys did
+   * what arrow keys do everywhere else, which is move the page. A role is a
+   * promise about the behaviour, and the arrow keys are the behaviour.
+   *
+   * So the arrow keys are here now: Down and Up move between items and wrap,
+   * Home and End jump to the ends, Escape closes and gives focus back to the
+   * trigger that opened it, and Tab leaves the menu rather than walking
+   * through it. Focus moves into the menu when it opens, because a menu that
+   * opens with the focus still on its trigger is a menu the keyboard cannot
+   * reach.
+   */
+  useEffect(() => {
+    if (open) {
+      if (!wasOpen.current) {
+        wasOpen.current = true;
+        const first = menuRef.current?.querySelector<HTMLElement>('[role="menuitem"]');
+        (first ?? triggerRef.current)?.focus();
+      }
+    } else if (wasOpen.current) {
+      wasOpen.current = false;
+      // Only when the menu closes by itself. A click on a menu item moves
+      // focus to whatever that item did, and yanking it back to the trigger
+      // would undo that.
+      if (document.activeElement === document.body) triggerRef.current?.focus();
+    }
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -419,7 +536,30 @@ export function Popover({
       if (!anchor.current?.contains(e.target as Node)) setOpen(false);
     };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
+      if (e.key === "Escape") {
+        setOpen(false);
+        return;
+      }
+      if (e.key === "Tab") {
+        // Tabbing out of a menu closes it, which is what every other menu
+        // does. The menu does not trap the keyboard.
+        setOpen(false);
+        return;
+      }
+      if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key)) return;
+      const items = Array.from(
+        menuRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? [],
+      );
+      if (items.length === 0) return;
+      e.preventDefault();
+      const active = document.activeElement;
+      const at = items.indexOf(active as HTMLElement);
+      let next: number;
+      if (e.key === "Home") next = 0;
+      else if (e.key === "End") next = items.length - 1;
+      else if (e.key === "ArrowDown") next = at < 0 ? 0 : (at + 1) % items.length;
+      else next = at < 0 ? items.length - 1 : (at - 1 + items.length) % items.length;
+      items[next].focus();
     };
     document.addEventListener("mousedown", onDown);
     document.addEventListener("keydown", onKey);
@@ -432,15 +572,22 @@ export function Popover({
   return (
     <div className="popover-anchor" ref={anchor}>
       <button
+        ref={triggerRef}
         className="bar-action"
         aria-expanded={open}
+        aria-haspopup="menu"
         aria-label={ariaLabel}
         onClick={() => setOpen(!open)}
       >
         {trigger}
       </button>
       {open && (
-        <div className="popover" role="menu" aria-labelledby={title ? titleId : undefined}>
+        <div
+          className="popover"
+          ref={menuRef}
+          role="menu"
+          aria-labelledby={title ? titleId : undefined}
+        >
           {title && <div className="menu-title" id={titleId}>{title}</div>}
           {typeof children === "function" ? children(() => setOpen(false)) : children}
         </div>
