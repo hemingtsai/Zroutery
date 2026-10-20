@@ -78,6 +78,7 @@ export default function Cutover() {
 
   const [status, setStatus] = useState<MigrationStatus | null>(null);
   const [previews, setPreviews] = useState<MigrationPreview[] | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [acting, setActing] = useState<TakeoverAgent | null>(null);
   const [rollingBack, setRollingBack] = useState(false);
   const [result, setResult] = useState<MigrationResult | null>(null);
@@ -94,10 +95,16 @@ export default function Cutover() {
       setPreviews(
         [...nextPreviews].sort((a, b) => (order.get(a.agent) ?? 99) - (order.get(b.agent) ?? 99)),
       );
+      setLoadError(null);
     } catch (e) {
       notify("error", errorText(e));
+      // The empty list is kept, but the failure is remembered as one. A page
+      // that cannot read the record must not render as though there were
+      // nothing to read: "this build knows no external agent" and "the call
+      // failed" are different facts, and only one of them is true here.
       setStatus(null);
       setPreviews([]);
+      setLoadError(errorText(e));
     }
   }, [notify]);
 
@@ -185,10 +192,12 @@ export default function Cutover() {
       {result && <ResultPanel result={result} />}
 
       <Section title={t("cutover.plans.section")} hint={t("cutover.plans.hint")}>
-        {previews === null ? (
+        {loadError ? (
+          <Empty>{t("cutover.load_failed", { err: loadError })}</Empty>
+        ) : previews === null ? (
           <Empty>{t("common.loading")}</Empty>
         ) : previews.length === 0 ? (
-          <Empty>{t("takeover.none")}</Empty>
+          <Empty>{t("cutover.none")}</Empty>
         ) : (
           <div className="list">
             {previews.map((preview) => (

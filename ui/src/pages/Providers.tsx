@@ -275,15 +275,19 @@ export default function Providers({
     : 0;
 
   /*
-   * Whether any provider publishes a balance at all.
+   * Whether any provider has a balance to ask for at all.
    *
    * The gate for the refresh-all button. A provider with `preset: "none"` has
    * nothing to ask for, so on an installation where every provider is like that
    * the button would press, spend a request per provider, and change nothing —
    * which is the same "control this build cannot serve" problem the account
    * section below guards against, in the other direction.
+   *
+   * A provider that *declares accounts* is counted too, because the balance of
+   * a panel-backed provider does not come from the relay: it comes from the
+   * panel, read with the user's access token. The relay publishes nothing.
    */
-  const anyBalance = config.providers.some((p) => p.balance.preset !== "none");
+  const anyBalance = config.providers.some((p) => hasBalanceSource(p, snapshot));
 
   return (
     <>
@@ -353,7 +357,7 @@ export default function Providers({
                           : ` · ${t("providers.openai_dialect")}`}
                   </span>
                 </div>
-                {p.balance.preset !== "none" && (
+                {hasBalanceSource(p, snapshot) && (
                   <BalanceChip status={balances[p.id]} />
                 )}
               </button>
@@ -525,6 +529,44 @@ function CcSwitchRow({
       </td>
     </tr>
   );
+}
+
+/**
+ * Whether this provider has a balance to ask for.
+ *
+ * Two sources, and a provider may have either or both:
+ *
+ * - It **publishes** a balance of its own, at a relay endpoint the probe
+ *   names — DeepSeek's `/user/balance`, OpenRouter's `/credits`, and the
+ *   rest of that family.
+ * - It **declares accounts**, and the panel those accounts are users of holds
+ *   the wallet. A NewAPI relay serves `/v1` and publishes no balance there,
+ *   while the panel that owns the balance publishes one — to the **user's
+ *   access token**, which is the credential an account carries rather than the
+ *   relay key the provider carries. Reading it needs the account subsystem, so
+ *   the second source only counts in a build that has one: offering a button
+ *   that cannot work is the failure this avoids.
+ *
+ * The two are asked through the same command, so a provider with both is
+ * answered by its own endpoint and the panel is the fallback.
+ */
+function hasBalanceSource(p: Provider, snapshot: Snapshot): boolean {
+  if (p.balance.preset !== "none") return true;
+  return hasPanelBalance(p, snapshot);
+}
+
+/**
+ * Whether this provider's balance comes from the panel rather than the relay.
+ *
+ * Split out from [`hasBalanceSource`] because the two answer different
+ * questions: one asks "is there anything to ask for", the other asks "where
+ * would the answer come from". The page's hint is the second question, and
+ * giving a panel hint to a provider with no account would send the user to
+ * declare one for a provider that publishes its own balance instead.
+ */
+function hasPanelBalance(p: Provider, snapshot: Snapshot): boolean {
+  if (!snapshot.account_available) return false;
+  return (p.accounts ?? []).some((a) => a.enabled);
 }
 
 /** Balance state as one quiet chip: what is left, or that the check failed. */
@@ -832,6 +874,60 @@ function AccountSection({
 }
 
 /**
+ * The credential field, holding its own draft.
+ *
+ * The draft used to live in `ProviderDrawer`, one component above a catalogue
+ * table that can be as long as the provider's own model list — a gateway
+ * publishing several hundred models puts several hundred Radix selects in that
+ * table. Typing a 40-character key therefore re-rendered all of them forty
+ * times, and it measured: 325 ms a keystroke against a 600-row catalogue, where
+ * a keystroke into a field that owned its own draft costs one frame. Nothing
+ * above this field reads the draft, so the drawer no longer re-renders while a
+ * key is being typed.
+ *
+ * Not [`TextField`]: that commits on blur, and a credential must never reach
+ * the store half-written because focus moved.
+ */
+function ApiKeyField({
+  providerId,
+  busy,
+  run,
+}: {
+  providerId: string;
+  busy: boolean;
+  run: (task: () => Promise<Snapshot>) => Promise<boolean>;
+}) {
+  const { t } = useI18n();
+  const [draft, setDraft] = useState("");
+
+  const saveKey = async () => {
+    const value = draft.trim();
+    if (!value) return;
+    const ok = await run(() => api.setKey(providerId, value));
+    if (ok) setDraft("");
+  };
+
+  return (
+    <Section title={t("providers.api_key")} hint={t("providers.api_key_hint")}>
+      <div className="controls">
+        <input
+          type="password"
+          aria-label={t("providers.api_key")}
+          autoComplete="off"
+          placeholder="sk-…"
+          value={draft}
+          onChange={(e) => setDraft(e.currentTarget.value)}
+          onKeyDown={(e) => e.key === "Enter" && void saveKey()}
+        />
+        <Button kind="primary" onClick={saveKey} disabled={busy || !draft.trim()}>
+          {t("providers.save_key")}
+        </Button>
+      </div>
+    </Section>
+  );
+}
+
+/**
  * One provider in full: credential, endpoint, dialect quirks and the models
  * it offers. Saving a key never round-trips the config — it goes to the
  * credential store alone, and the drawer shows only whether one exists.
@@ -860,7 +956,6 @@ function ProviderDrawer({
   const { t } = useI18n();
   const notify = useToast();
   const hasKey = snapshot.keys[provider.id] ?? false;
-  const [keyDraft, setKeyDraft] = useState("");
   const [discovered, setDiscovered] = useState<DiscoveredModel[] | null>(null);
   const [discovering, setDiscovering] = useState(false);
   const [checkingBalance, setCheckingBalance] = useState(false);
@@ -902,12 +997,6 @@ function ProviderDrawer({
    */
   const visibleDiscovered = (discovered ?? []).filter((d) => !freeOnly || d.free);
 
-  const saveKey = async () => {
-    const value = keyDraft.trim();
-    if (!value) return;
-    const ok = await run(() => api.setKey(providerId, value));
-    if (ok) setKeyDraft("");
-  };
   const discover = async () => {
     const generation = ++discoveryGeneration.current;
     setDiscovering(true);
@@ -1034,22 +1123,7 @@ function ProviderDrawer({
       />
 
       {!hasKey && provider.key_ref !== "" && (
-        <Section title={t("providers.api_key")} hint={t("providers.api_key_hint")}>
-          <div className="controls">
-            <input
-              type="password"
-              aria-label={t("providers.api_key")}
-              autoComplete="off"
-              placeholder="sk-…"
-              value={keyDraft}
-              onChange={(e) => setKeyDraft(e.currentTarget.value)}
-              onKeyDown={(e) => e.key === "Enter" && void saveKey()}
-            />
-            <Button kind="primary" onClick={saveKey} disabled={busy || !keyDraft.trim()}>
-              {t("providers.save_key")}
-            </Button>
-          </div>
-        </Section>
+        <ApiKeyField providerId={providerId} busy={busy} run={run} />
       )}
 
       <Section title={t("providers.models_section")} hint={t("providers.models_hint")}>
@@ -1340,7 +1414,16 @@ function ProviderDrawer({
         </div>
       </Section>
 
-      <Section title={t("providers.balance")} hint={t("providers.balance_hint")}>
+      <Section
+        title={t("providers.balance")}
+        hint={
+          hasPanelBalance(provider, snapshot)
+            ? t("providers.balance_hint_panel")
+            : provider.balance.preset !== "none"
+              ? t("providers.balance_hint")
+              : t("providers.balance_hint_none")
+        }
+      >
         <div className="controls">
           <Field label={t("field.probe")}>
             <Select
@@ -1367,7 +1450,12 @@ function ProviderDrawer({
                   setCheckingBalance(false),
                 );
               }}
-              disabled={busy || checkingBalance || provider.balance.preset === "none"}
+              disabled={busy || checkingBalance || !hasBalanceSource(provider, snapshot)}
+              title={
+                hasBalanceSource(provider, snapshot)
+                  ? undefined
+                  : t("providers.balance_no_source")
+              }
             >
               {checkingBalance ? t("providers.checking") : t("providers.check_now")}
             </Button>

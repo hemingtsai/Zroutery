@@ -306,7 +306,14 @@ const en = {
   "providers.bearer_auth_hint":
     "For relays that read Authorization: Bearer instead of x-api-key; both headers are sent, so either check passes",
   "providers.balance": "Balance",
-  "providers.balance_hint": "Some providers publish the credit that is left.",
+  "providers.balance_hint":
+    "Some providers publish the credit that is left, at an endpoint of their own. Pick the one yours uses, and Zroutery asks it with the provider's key.",
+  "providers.balance_hint_panel":
+    "This provider publishes no balance of its own — a NewAPI relay serves /v1 and keeps the wallet in the panel. The figure below comes from the panel its accounts belong to, read with the account's user access token. Declare an account and store that token as its credential to make this work.",
+  "providers.balance_hint_none":
+    "This provider publishes no balance of its own, and it declares no account whose panel could report one. Either pick a probe above if the provider has such an endpoint, or declare an account and store the panel's user access token as its credential.",
+  "providers.balance_no_source":
+    "This provider has no balance to ask for: it publishes none, and it declares no account whose panel could report one.",
   "field.probe": "Probe",
   "providers.check_now": "Check now",
   "providers.checking": "Checking…",
@@ -593,6 +600,10 @@ const en = {
   "cutover.plans.section": "Cutover plans",
   "cutover.plans.hint":
     "Each plan below is built from the client's real configuration path and this gateway's real address, and changes nothing until you confirm it.",
+  "cutover.none":
+    "This build knows no external client to cut over. Install and run one so its configuration file exists, then refresh this page.",
+  "cutover.load_failed":
+    "The migration record could not be read: {err}. Nothing on this page has changed a client's configuration.",
   "cutover.step.not_reversible": "cannot be undone",
   "cutover.step.reversible": "restored by a rollback",
   "cutover.run": "Run this cutover",
@@ -1277,7 +1288,12 @@ const zh: Dict = {
   "providers.bearer_auth": "同时发送 Bearer 认证",
   "providers.bearer_auth_hint": "用于读 Authorization: Bearer 而非 x-api-key 的中转。",
   "providers.balance": "余额",
-  "providers.balance_hint": "部分提供商公布剩余额度。",
+  "providers.balance_hint": "部分提供商在自己的接口上公布剩余额度。选择你所用的那个,Zroutery 会用该提供商的密钥去查询。",
+  "providers.balance_hint_panel":
+    "该提供商自身不公布余额 —— NewAPI 中转只提供 /v1,钱包在面板里。下面的数字来自其账户所属的面板,使用账户的用户访问令牌读取。声明一个账户并把该令牌存为它的凭据,即可生效。",
+  "providers.balance_hint_none":
+    "该提供商自身不公布余额,也没有声明任何账户可供其面板上报。若该提供商确有此类接口,请在上方选择探针;否则请声明一个账户,并把面板的用户访问令牌存为它的凭据。",
+  "providers.balance_no_source": "该提供商没有可查询的余额:自身不公布,也没有声明任何账户可供其面板上报。",
   "field.probe": "探针",
   "providers.check_now": "立即查询",
   "providers.checking": "查询中…",
@@ -1502,6 +1518,8 @@ const zh: Dict = {
   "cutover.persist_error": "记录未能写入磁盘:{err}",
   "cutover.plans.section": "切换计划",
   "cutover.plans.hint": "下面的每个计划都依据客户端真实的配置路径与本网关真实的地址生成,在你确认之前不会改动任何内容。",
+  "cutover.none": "此构建没有已知的外部客户端可供切换。安装并运行一个,使其配置文件存在,然后刷新本页。",
+  "cutover.load_failed": "迁移记录读取失败:{err}。本页没有改动过任何客户端的配置。",
   "cutover.step.not_reversible": "无法撤销",
   "cutover.step.reversible": "回滚时还原",
   "cutover.run": "执行此次切换",
