@@ -7,6 +7,13 @@
 //! what cannot be added, and that a provider with no accounts does not
 //! pretend to have a balance.
 
+// The sum under test is the one `state::balances` only has when the account
+// subsystem is in the build: `sum_account_quotas` and
+// `zroutery_core::account` are both behind it. Without this the suite is
+// compiled in the combinations that have no account subsystem, and it fails
+// there on an import rather than on a claim.
+#![cfg(any(feature = "account", feature = "newapi"))]
+
 use super::balances::{has_balance_source, sum_account_quotas};
 use zroutery_core::account::types::AccountQuota;
 use zroutery_core::config::{AccountConfig, ProviderConfig, ProviderKind};
