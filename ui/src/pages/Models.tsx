@@ -408,6 +408,10 @@ function ModelDrawer({
             t("common.enabled"),
             <Toggle
               label=""
+              // The visible label is empty because the row beside it already
+              // says "Enabled" — which left the switch itself with no name at
+              // all, announcing as "checkbox, unchecked" and nothing more.
+              ariaLabel={t("common.enabled")}
               checked={m.enabled}
               onChange={(enabled) =>
                 onUpdate((model) => {

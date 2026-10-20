@@ -418,6 +418,15 @@ function Shell() {
               trigger={
                 <>
                   <StatusDot tone={server.running ? "ok" : "danger"} />
+                  {/*
+                    * The dot is the state, and the dot is a colour. Without this
+                    * the button announced itself as "Gateway" and said nothing
+                    * about whether the proxy was running, which is the one
+                    * thing a person opening this menu needs to know.
+                    */}
+                  <span className="visually-hidden">
+                    {server.running ? t("status.running") : t("status.stopped")}
+                  </span>
                   {t("settings.gateway")}
                 </>
               }
