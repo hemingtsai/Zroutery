@@ -103,6 +103,10 @@ const en = {
     "No panel access token is stored for this account, so probing and sign-in have nothing to authenticate with. Set the account's credential to the panel's access token (personal settings → access token).",
   "err.classifier_candidate":
     "Auto Mode candidate {model} is not a configured model, so it is skipped. Remove it in Routing → Auto Mode, or add the model back.",
+  "err.no_account_balance":
+    "No account of {provider} reported a balance. The panel's user access token has to be stored as the account's credential — the relay's own key authenticates /v1, and no dashboard endpoint accepts it.",
+  "err.mixed_currencies":
+    "These accounts report their balances in different currencies, so they cannot be added into one figure. The provider's balance is left unshown rather than shown as a number that cannot be spent.",
   // -------------------------------------------------------------- accounts
   "accounts.title": "Accounts",
   "accounts.title_hint":
@@ -1093,6 +1097,10 @@ const zh: Dict = {
     "该账户尚未存储面板访问令牌,探测与签到都无法认证。请先把账户凭据设置为面板的访问令牌(个人设置 → 访问令牌)。",
   "err.classifier_candidate":
     "自动审核候选模型 {model} 不在已配置模型中,会被自动跳过。可在 路由 → 自动审核 中移除该候选,或恢复对应模型。",
+  "err.no_account_balance":
+    "{provider} 的账户都没有上报余额。必须把面板的用户访问令牌存为该账户的凭据 —— 中转自身的密钥只能用于 /v1,面板接口一概不接受。",
+  "err.mixed_currencies":
+    "这些账户以不同币种上报余额,无法合并成一个数字。与其给出一个无法消费的数值,不如不显示该提供商的余额。",
   "accounts.title": "账户",
   "accounts.title_hint": "仅声明:探测、分账户余额与签到会读取它。请求转发不按账户区分。",
   "accounts.empty": "未声明账户。所有请求都使用提供商自身的密钥。",
@@ -1917,6 +1925,22 @@ export function describeBackendError(
   }
   if (/no panel access token is stored/i.test(raw)) {
     return t("err.no_panel_token");
+  }
+  // The panel-backed balance path. Two conditions an operator can act on, and
+  // both would otherwise arrive as raw English from the desktop layer.
+  //
+  // The first is the usual cause: the account has no panel token, so the
+  // panel refused the account's own key — or there is no account at all. The
+  // provider's name is carried because it is the thing to act on.
+  const noBalance = raw.match(/no account of (.+?) reported a balance/);
+  if (noBalance) {
+    return t("err.no_account_balance", { provider: noBalance[1] });
+  }
+  // The second is a declaration that cannot be summed. The currencies are
+  // named by the backend, and the message is the same either way: a figure
+  // that cannot be spent is not a balance.
+  if (/different currencies/i.test(raw)) {
+    return t("err.mixed_currencies");
   }
   // A config issue that crosses the bridge in English; the model name, when the
   // message carries one, is the part worth keeping verbatim.

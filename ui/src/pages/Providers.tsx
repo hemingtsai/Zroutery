@@ -24,6 +24,7 @@ import {
   type Snapshot,
   tierName,
 } from "../api";
+import { describeBackendError } from "../i18n";
 import {
   Badge,
   Button,
@@ -959,6 +960,9 @@ function ProviderDrawer({
   const [discovered, setDiscovered] = useState<DiscoveredModel[] | null>(null);
   const [discovering, setDiscovering] = useState(false);
   const [checkingBalance, setCheckingBalance] = useState(false);
+  // Hoisted so the type is narrowed once rather than at two separate index
+  // reads, and so the translation has one string to work with.
+  const balanceError = snapshot.balances[provider.id]?.error ?? null;
   // The tier each catalogue row is about to be added as. Keys are the discovered
   // model ids; "" means "no class yet" — the model lands unclassified and the
   // Models page banner keeps counting it until a class is assigned.
@@ -1461,8 +1465,8 @@ function ProviderDrawer({
             </Button>
           </div>
         </div>
-        {snapshot.balances[provider.id]?.error && (
-          <p className="field-hint">{snapshot.balances[provider.id].error}</p>
+        {balanceError && (
+          <p className="field-hint">{describeBackendError(t, balanceError)}</p>
         )}
       </Section>
 
