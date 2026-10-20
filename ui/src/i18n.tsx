@@ -351,6 +351,7 @@ const en = {
   "account.phase.not_supported": "this provider does not offer check-in",
   "account.phase.failed": "check-in failed",
   "account.phase.cancelled": "cancelled",
+  "account.phase.cancelling": "cancelling…",
   /*
    * Six scheduler decisions, six sentences. The reasons an account does not run
    * on a timer are different enough that a shared "nothing happened" would send
@@ -594,8 +595,12 @@ const en = {
     "A cutover finished and the record kept its state. There is no rollback from a completed run: the record has no transition out of it, even though the snapshot is still on disk. Nothing is half-applied, so nothing needs undoing.",
   "cutover.state.hint.rolled_back":
     "A cutover was rolled back and the files it captured were restored. This record admits one run, so choosing a client below starts over from the original file.",
-  "cutover.state.hint.interrupted":
-    "This record says a cutover started and did not finish. The snapshot below is the only copy of the original file; until it is restored or the cutover completed, the client's configuration is whatever the run left behind.",
+  "cutover.state.hint.prepared":
+    "This record says a cutover staged its document and stopped there. Nothing was written to the client's file yet, and the snapshot below is the only copy of the original — until it is restored or the cutover completed, the client's configuration is whatever the run left behind.",
+  "cutover.state.hint.verified":
+    "This record says a cutover staged its document, confirmed the endpoint answered, and stopped before switching. The client's file has not been changed, and the snapshot below is the only copy of the original.",
+  "cutover.state.hint.switched":
+    "This record says a cutover switched and stopped before finishing. The client's file has been replaced and the snapshot below is the only copy of the original — restoring it is the only way back.",
   "cutover.state.hint.failed":
     "This cutover failed partway. Its snapshot is the only way back to the original file, so the rollback below is the one action that matters.",
   "cutover.snapshot.none": "No rollback snapshot has been captured.",
@@ -1331,6 +1336,7 @@ const zh: Dict = {
   "account.phase.not_supported": "该平台不支持签到",
   "account.phase.failed": "签到失败",
   "account.phase.cancelled": "已取消",
+  "account.phase.cancelling": "正在取消…",
   /*
    * 六个决策，六句话。账户不自动运行的原因彼此差别足够大，共用一个「没有动作」会把
    * 人引去改一个本来没错的设置：其中一个是用户自己的选择，一个是声明缺了一块，只有
@@ -1519,8 +1525,12 @@ const zh: Dict = {
     "一次切换已完成,记录保留了它的状态。已完成的运行没有回滚路径:记录里没有离开该状态的迁移,尽管快照仍在磁盘上。此时不存在半应用状态,也就无需撤销。",
   "cutover.state.hint.rolled_back":
     "一次切换已回滚,其捕获的文件已还原。该记录只允许运行一次,因此在下方选择客户端会从原文件重新开始。",
-  "cutover.state.hint.interrupted":
-    "该记录表明一次切换已开始但未结束。下方快照是原文件唯一的副本;在还原或完成之前,客户端的配置就是那次运行留下的样子。",
+  "cutover.state.hint.prepared":
+    "该记录表明一次切换已暂存好文档并停在此处。尚未写入客户端文件,下方快照是原文件唯一的副本;在还原或完成之前,客户端的配置就是那次运行留下的样子。",
+  "cutover.state.hint.verified":
+    "该记录表明一次切换已暂存文档、确认端点作答,并在切换前停下。客户端文件尚未改动,下方快照是原文件唯一的副本。",
+  "cutover.state.hint.switched":
+    "该记录表明一次切换已完成切换但未收尾。客户端文件已被替换,下方快照是原文件唯一的副本 —— 还原它是唯一的退路。",
   "cutover.state.hint.failed":
     "这次切换中途失败。它的快照是回到原文件的唯一途径,所以下面的回滚是真正要紧的那一个操作。",
   "cutover.snapshot.none": "尚未捕获任何回滚快照。",

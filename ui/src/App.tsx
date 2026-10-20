@@ -327,6 +327,10 @@ function Shell() {
             // later index at a different page, which measures a healthy surface
             // and reports it as a pass. `data-page` survives the insert.
             data-page={item.id}
+            // Which page is open is carried by the `active` class alone, and a
+            // class is invisible to a screen reader: the nav read as eight
+            // identical buttons with no indication of where you were.
+            aria-current={page === item.id ? "page" : undefined}
             onClick={() => setPage(item.id)}
           >
             {t(item.labelKey)}

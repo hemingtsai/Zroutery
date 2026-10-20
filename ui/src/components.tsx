@@ -45,11 +45,21 @@ export function ToastProvider({ children }: { children: ReactNode }) {
       {children}
       <div className="toast-host" role="status" aria-live="polite">
         {toasts.map((toast) => (
+          /*
+           * The message is the name; "Dismiss" is the tooltip.
+           *
+           * `aria-label` replaces the content for the accessibility tree, so
+           * with one on the button the live region announced "Dismiss" — for
+           * every toast in the app. A copy confirmation, a failed check-in, the
+           * outcome of a cutover: all of them were announced as the word
+           * "Dismiss", and a screen-reader user was told nothing about what had
+           * happened.
+           */
           <button
             key={toast.id}
             className={`toast toast-${toast.kind}`}
             onClick={() => dismiss(toast)}
-            aria-label={t("common.dismiss")}
+            title={t("common.dismiss")}
           >
             {toast.text}
           </button>
@@ -77,6 +87,60 @@ export type ConfirmRequest = {
   onConfirm: () => void;
 };
 
+/**
+ * The open modal overlays, innermost last.
+ *
+ * Two modal surfaces can be open at once — a confirmation raised from inside a
+ * drawer — and each of them pulls the focus back when it lands outside itself.
+ * With two roots that are not nested, that is a fight: the confirm focuses its
+ * button, the drawer pulls it back, the confirm pulls it again, and the
+ * recursion only ends when the stack does.
+ *
+ * The stack says which one is on top, and a guard that is not the top stands
+ * down. That is the whole model, and it does not depend on the two surfaces
+ * being nested in the DOM — which they are not, and must not be: a
+ * confirmation raised from a drawer is rendered by the page, and moving it
+ * into the drawer to make the DOM agree would couple two components that have
+ * no reason to know about each other.
+ */
+const overlayStack: symbol[] = [];
+
+function pushOverlay(id: symbol) {
+  overlayStack.push(id);
+}
+
+function popOverlay(id: symbol) {
+  const at = overlayStack.lastIndexOf(id);
+  if (at >= 0) overlayStack.splice(at, 1);
+}
+
+/** The overlay currently on top, if any. */
+function topOverlay(): symbol | undefined {
+  return overlayStack[overlayStack.length - 1];
+}
+
+/**
+ * The focus guard every modal surface shares.
+ *
+ * Called with the surface's own root. The surface claims the focus only when
+ * it is the top overlay: a modal above it is responsible for the focus, and
+ * the surface below must not pull it back.
+ */
+function claimFocus(root: HTMLElement | null, id: symbol, event: FocusEvent) {
+  if (!root) return;
+  if (topOverlay() !== id) return;
+  const target = event.target;
+  if (!(target instanceof Node)) return;
+  // The nearest dialog ancestor of the focus target owns it. If that is not
+  // us, the focus belongs to a modal we are not.
+  const owner =
+    target instanceof Element
+      ? target.closest('[role="dialog"],[role="alertdialog"]')
+      : null;
+  if (owner && owner !== root) return;
+  if (!root.contains(target)) root.focus();
+}
+
 export function ConfirmDialog({
   request,
   onClose,
@@ -88,6 +152,8 @@ export function ConfirmDialog({
   const panelRef = useRef<HTMLDivElement>(null);
   const restoreTo = useRef<Element | null>(null);
   const wasOpen = useRef(false);
+  const overlayId = useRef<symbol | null>(null);
+  if (overlayId.current === null) overlayId.current = Symbol("confirm");
   const { t } = useI18n();
 
   /*
@@ -120,11 +186,19 @@ export function ConfirmDialog({
 
   useEffect(() => {
     if (!request) return;
+    const id = overlayId.current!;
+    pushOverlay(id);
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      // Only the top overlay answers Escape. A confirmation raised from inside
+      // a drawer would otherwise be dismissed together with the drawer, which
+      // is two things happening from one keypress.
+      if (e.key === "Escape" && topOverlay() === id) onClose();
     };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      popOverlay(id);
+    };
   }, [request, onClose]);
 
   /*
@@ -138,15 +212,16 @@ export function ConfirmDialog({
    */
   useEffect(() => {
     if (!request) return;
+    const id = overlayId.current!;
     const keepInside = (event: FocusEvent) => {
-      const root = panelRef.current;
-      if (!root) return;
-      const target = event.target;
-      if (target instanceof Node && !root.contains(target)) root.focus();
+      claimFocus(panelRef.current, id, event);
     };
     document.addEventListener("focusin", keepInside);
     const onTab = (e: KeyboardEvent) => {
       if (e.key !== "Tab") return;
+      // The top overlay traps the keyboard. A dialog below one would otherwise
+      // pull the focus back as the user tabbed out of the dialog above it.
+      if (topOverlay() !== id) return;
       const root = panelRef.current;
       if (!root) return;
       const focusable = Array.from(
@@ -709,25 +784,29 @@ export function Drawer({
 }) {
   const panel = useRef<HTMLElement>(null);
   const restoreTo = useRef<Element | null>(null);
+  const overlayId = useRef<symbol | null>(null);
+  if (overlayId.current === null) overlayId.current = Symbol("drawer");
   const titleId = useId();
 
   useEffect(() => {
+    const id = overlayId.current!;
+    pushOverlay(id);
     const previous = document.activeElement;
     restoreTo.current = previous instanceof HTMLElement ? previous : null;
     const first = panel.current?.querySelector<HTMLElement>(
       "input, select, textarea, button:not([disabled]), [tabindex]:not([tabindex='-1'])",
     );
     (first ?? panel.current)?.focus();
-    // Nothing behind the drawer may hold focus while it is open.
+    // Nothing behind the drawer may hold focus while it is open — unless a
+    // modal is open on top of it, in which case that modal owns the focus and
+    // the two must not pull it back and forth.
     const keepInside = (event: FocusEvent) => {
-      const root = panel.current;
-      if (!root) return;
-      const target = event.target;
-      if (target instanceof Node && !root.contains(target)) root.focus();
+      claimFocus(panel.current, id, event);
     };
     document.addEventListener("focusin", keepInside);
     return () => {
       document.removeEventListener("focusin", keepInside);
+      popOverlay(id);
       const target = restoreTo.current;
       if (target instanceof HTMLElement && target.isConnected) target.focus();
     };
@@ -735,6 +814,11 @@ export function Drawer({
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // Only the top overlay answers Escape, and only the top overlay traps
+      // the keyboard. A confirmation raised from inside this drawer is a
+      // separate overlay: Escape there closes the confirmation and leaves the
+      // drawer open, which is what one keypress should do.
+      if (topOverlay() !== overlayId.current) return;
       if (e.key === "Escape") {
         onClose();
         return;

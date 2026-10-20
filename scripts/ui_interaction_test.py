@@ -2308,6 +2308,79 @@ def case_ui10_the_menu_moves_with_the_arrow_keys(devtools) -> list[str]:
     return failures
 
 
+def case_ui11_a_confirmation_inside_a_drawer_does_not_fight_it(devtools) -> list[str]:
+    """A modal on top of a modal, which is the case that used to recurse.
+
+    The provider drawer and the confirm dialog both pull the focus back when it
+    lands outside them, and their roots are not nested: the drawer is a panel,
+    the confirmation is rendered by the page. Two guards that each pull the
+    focus to their own root, with roots that differ, fight each other — the
+    confirmation focuses its button, the drawer pulls it back, the confirmation
+    pulls it again, and the recursion only ends when the stack does.
+
+    So a confirmation raised from inside a drawer is the case to drive, and it
+    is the path to both of the app's irreversible actions.
+
+    The second half is the same sequence: Escape there must close the
+    confirmation and leave the drawer open. One keypress, one thing closed.
+    """
+    failures: list[str] = []
+    seed(devtools, **CUTOVER_QUERY)
+    devtools.click_selector('[data-page="providers"]')
+    devtools.wait_for("Boolean(document.querySelector('.page .list-row'))", "the provider rows")
+
+    # Open the drawer with a real click, so it holds the focus the way it does
+    # for a person.
+    point = devtools.evaluate(
+        """
+        (() => {
+          const row = document.querySelector('.page .list-row');
+          if (!row) return null;
+          const r = row.getBoundingClientRect();
+          return {x: r.left + r.width / 2, y: r.top + r.height / 2};
+        })()
+        """
+    )
+    if point is None:
+        failures.append("the providers page offered no row to open")
+        return failures
+    devtools.click(point)
+    devtools.wait_for("Boolean(document.querySelector('.drawer'))", "the provider drawer")
+
+    # Now raise a confirmation from inside it.
+    devtools.evaluate(
+        """
+        (() => {
+          const drawer = document.querySelector('.drawer');
+          const button = [...drawer.querySelectorAll('button')]
+            .find((b) => b.textContent.includes('Remove provider'));
+          if (button) button.click();
+        })()
+        """
+    )
+    devtools.wait_for("Boolean(document.querySelector('.confirm'))", "the confirmation")
+
+    inside = devtools.evaluate(
+        "document.querySelector('.confirm').contains(document.activeElement)"
+    )
+    if not inside:
+        failures.append(
+            "the confirmation opened without taking the focus; the drawer and the confirmation are "
+            "pulling it from each other"
+        )
+    if not devtools.evaluate("Boolean(document.querySelector('.drawer'))"):
+        failures.append("the drawer closed when the confirmation opened")
+
+    # Escape closes the confirmation, and only the confirmation.
+    devtools.press_key("Escape")
+    devtools.wait_for("document.querySelector('.confirm') === null", "the confirmation to close")
+    if not devtools.evaluate("Boolean(document.querySelector('.drawer'))"):
+        failures.append(
+            "one Escape closed the confirmation AND the drawer; one keypress should close one thing"
+        )
+    return failures
+
+
 CASES = (
     {"label": "UI-1 two nested edits in sequence (first save delayed)", "run": case_ui1_nested_rebase},
     {"label": "UI-2 moved candidate renumbers priority", "run": case_ui2_candidate_priority},
@@ -2345,6 +2418,11 @@ CASES = (
     {
         "label": "UI-10 a menu moves with the arrow keys",
         "run": case_ui10_the_menu_moves_with_the_arrow_keys,
+        "query": CUTOVER_QUERY,
+    },
+    {
+        "label": "UI-11 a confirmation inside a drawer does not fight it",
+        "run": case_ui11_a_confirmation_inside_a_drawer_does_not_fight_it,
         "query": CUTOVER_QUERY,
     },
 )
