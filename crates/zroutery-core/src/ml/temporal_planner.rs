@@ -743,8 +743,10 @@ mod tests {
             &order,
             NOW,
         );
-        let mut tweaked = TemporalConfig::default();
-        tweaked.scarcity_sensitivity = 9.0;
+        let tweaked = TemporalConfig {
+            scarcity_sensitivity: 9.0,
+            ..Default::default()
+        };
         let other = TemporalPlanner::new(tweaked).plan(
             &[bucket("a", ResourceKind::FreeAllowance)],
             &demand(1.0),

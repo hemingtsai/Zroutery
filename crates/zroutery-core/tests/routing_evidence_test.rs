@@ -219,8 +219,10 @@ fn correlated_traffic_is_not_counted_as_independent_evidence() {
 #[test]
 fn clustering_can_be_switched_off_and_the_choice_is_visible() {
     let data = observations(100, 0.4, HOUR);
-    let mut naive = EvidenceConfig::default();
-    naive.clustering = Clustering::None;
+    let naive = EvidenceConfig {
+        clustering: Clustering::None,
+        ..Default::default()
+    };
     assert_eq!(measure(&data, &naive).clusters, 100);
     assert_eq!(measure(&data, &EvidenceConfig::default()).clusters, 100);
     assert_eq!(measure(&data, &naive).clustering, Clustering::None);
@@ -314,8 +316,10 @@ fn the_gate_blocks_when_the_interval_includes_zero() {
     )
     .expect("training")
     .report;
-    let mut config = zroutery_core::ml::PromotionConfig::default();
-    config.required_baseline = "baseline.priority".to_string();
+    let config = zroutery_core::ml::PromotionConfig {
+        required_baseline: "baseline.priority".to_string(),
+        ..Default::default()
+    };
 
     let decision = PromotionGate::new(config).evaluate(&report, &thin, None);
     let criterion = decision
@@ -349,8 +353,10 @@ fn an_evaluation_over_thin_traffic_is_blocked_not_supported() {
     // 20 traces, spread so they are not degenerate on the pair floor alone. The
     // verdict must still be blocked, and must say the evidence was too thin.
     let traces = build(20, HOUR);
-    let mut config = EvaluationConfig::default();
-    config.min_traces = 10;
+    let config = EvaluationConfig {
+        min_traces: 10,
+        ..Default::default()
+    };
     let report = evaluate(&traces, &candidate(), &config, None, BASE).expect("evaluate");
 
     match &report.verdict {

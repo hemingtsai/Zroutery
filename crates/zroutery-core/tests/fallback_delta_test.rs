@@ -297,8 +297,10 @@ fn a_tolerance_stricter_than_the_measurement_fails_the_criterion() {
     .expect("comparison");
     let report = training(&traces);
 
-    let mut exactly_zero = PromotionConfig::default();
-    exactly_zero.max_fallback_rate_delta = 0.0;
+    let exactly_zero = PromotionConfig {
+        max_fallback_rate_delta: 0.0,
+        ..Default::default()
+    };
     let held = PromotionGate::new(exactly_zero)
         .evaluate(&report, &comparison, None)
         .criteria
@@ -310,8 +312,10 @@ fn a_tolerance_stricter_than_the_measurement_fails_the_criterion() {
         "a measured 0.0 delta must satisfy a 0.0 tolerance"
     );
 
-    let mut negative = PromotionConfig::default();
-    negative.max_fallback_rate_delta = -0.01;
+    let negative = PromotionConfig {
+        max_fallback_rate_delta: -0.01,
+        ..Default::default()
+    };
     let failed = PromotionGate::new(negative)
         .evaluate(&report, &comparison, None)
         .criteria
@@ -332,8 +336,10 @@ fn the_default_config_still_names_a_fallback_tolerance() {
     assert!(config.max_fallback_rate_delta >= 0.0);
     // Changing it must change the config identity, so a promotion decision records
     // the tolerance that was actually applied.
-    let mut other = PromotionConfig::default();
-    other.max_fallback_rate_delta = config.max_fallback_rate_delta + 0.01;
+    let other = PromotionConfig {
+        max_fallback_rate_delta: config.max_fallback_rate_delta + 0.01,
+        ..Default::default()
+    };
     assert_ne!(config.identity(), other.identity());
 }
 

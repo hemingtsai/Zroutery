@@ -309,8 +309,10 @@ fn a_body_without_task_evidence_refuses_any_task_quality_claim() {
     // tasks got done — so it must report exactly that, rather than folding a routing
     // win into a quality claim.
     let fixture = Fixture::build(60);
-    let mut config = EvaluationConfig::default();
-    config.min_coverage = 0.0;
+    let config = EvaluationConfig {
+        min_coverage: 0.0,
+        ..Default::default()
+    };
     let report = evaluate(&fixture.traces, &candidate(), &config, None, 1).expect("evaluate");
 
     assert!(matches!(
@@ -482,8 +484,10 @@ fn a_promotion_verdict_is_not_invented_without_a_training_report() {
     // the model was fitted on. With no training report it cannot be consulted at all,
     // and an absent verdict is the honest answer.
     let fixture = Fixture::build(60);
-    let mut config = EvaluationConfig::default();
-    config.min_coverage = 0.0;
+    let config = EvaluationConfig {
+        min_coverage: 0.0,
+        ..Default::default()
+    };
     let report = evaluate(&fixture.traces, &candidate(), &config, None, 1).expect("evaluate");
     if report.verdict.is_promotable() {
         assert_eq!(report.promotion_verdict, None);

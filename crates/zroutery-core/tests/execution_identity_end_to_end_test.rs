@@ -534,7 +534,7 @@ async fn a_trace_records_the_execution_identity_alongside_the_samples() {
     assert!(!trace.samples.is_empty());
     assert_eq!(trace.decision_id, trace.input.decision_id);
     assert!(!trace.request_id.is_empty());
-    assert_eq!(trace.execution_identity.coverage() > 0.0, true);
+    assert!(trace.execution_identity.coverage() > 0.0);
     // And the routing identity inside the samples is untouched.
     assert!(trace.request_sample().is_some() || trace.attempt_samples().count() > 0);
 
