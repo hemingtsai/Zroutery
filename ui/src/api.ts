@@ -1429,6 +1429,43 @@ export function onGatewayStateChanged(handler: () => void): Promise<UnlistenFn> 
 }
 
 /**
+ * A `zroutery://` link, handed over from the desktop shell.
+ *
+ * The name is a pair with `DEEP_LINK_EVENT` in `src-tauri/src/shell.rs`, the
+ * same way `GATEWAY_STATE_EVENT` is a pair with the one in `tray.rs`. The
+ * payload is the URL as a string, because the shell does not know what the
+ * pages are called — that is the window layer's business, and the shell is
+ * the one that has to keep working when the window does not exist yet.
+ */
+export const DEEP_LINK_EVENT = "zroutery://deep-link";
+
+export function onDeepLink(handler: (url: string) => void): Promise<UnlistenFn> {
+  return listen(DEEP_LINK_EVENT, (event) => handler(String(event.payload ?? "")));
+}
+
+/**
+ * The page a `zroutery://` link names, or `null` when it names none.
+ *
+ * The host of the URL is the page: `zroutery://providers` opens the providers
+ * page, and `zroutery://providers/settings` would open the same one, because
+ * the path is a sub-view of the page and a sub-view is not a page.
+ *
+ * A link that names nothing is not an error — a scheme that can be pointed at
+ * by a person typing it has to be able to arrive with a path that means
+ * nothing to the application — so it returns `null` and the caller keeps the
+ * page it was on. The name is matched exactly rather than loosely: a link
+ * that opened the wrong page would be worse than one that opened none.
+ */
+export function pageForDeepLink(url: string): string | null {
+  // Only this application's own scheme is acted on. The shell only emits its
+  // own, but a link is user input and this is the boundary where that matters.
+  if (!url.startsWith("zroutery://")) return null;
+  const rest = url.slice("zroutery://".length);
+  const host = rest.split(/[/?#]/, 1)[0]?.toLowerCase() ?? "";
+  return host.length > 0 ? host : null;
+}
+
+/**
  * Which gateway command the *current* state calls for.
  *
  * Reading this from a rendered snapshot misreads the state whenever the

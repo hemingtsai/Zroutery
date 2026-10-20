@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, errorText, gatewayAction, onGatewayStateChanged, type AppConfig, type Snapshot } from "./api";
+import { api, errorText, gatewayAction, onDeepLink, onGatewayStateChanged, pageForDeepLink, type AppConfig, type Snapshot } from "./api";
 import { Banner, MenuItem, Popover, StatusDot, ToastProvider, useToast } from "./components";
 import { describeBackendError, I18nProvider, useI18n } from "./i18n";
 import Overview from "./pages/Overview";
@@ -28,6 +28,34 @@ type Page =
   | "routing"
   | "activity"
   | "settings";
+
+/** Every page, in the order the navigation lists them. */
+const PAGES: Page[] = [
+  "overview",
+  "models",
+  "providers",
+  "accounts",
+  "takeover",
+  "cutover",
+  "routing",
+  "activity",
+  "settings",
+];
+
+/**
+ * The page a `zroutery://` link names, or `null` when it names none.
+ *
+ * The link's host is the page name: `zroutery://providers` opens the
+ * providers page. A link that names a page this build does not have opens
+ * none, and says so — a link that opened the wrong page would be worse than
+ * one that opened nothing, and the shell has already brought the window
+ * forward by the time this runs.
+ */
+function pageForLink(url: string): Page | null {
+  const named = pageForDeepLink(url);
+  if (!named) return null;
+  return PAGES.includes(named as Page) ? (named as Page) : null;
+}
 
 const NAV: { id: Page; labelKey: Parameters<ReturnType<typeof useI18n>["t"]>[0] }[] = [
   { id: "overview", labelKey: "nav.overview" },
@@ -232,6 +260,39 @@ function Shell() {
       document.removeEventListener("visibilitychange", onVisibility);
     };
   }, [refresh]);
+
+  /*
+   * A `zroutery://` link opens the page it names.
+   *
+   * The desktop shell brings the window forward and hands the URL over; this
+   * is where the URL becomes a page. The shell cannot do it — it does not
+   * know what the pages are called, and it has to keep working when the
+   * window does not exist yet — and the window cannot be the one that waits
+   * for a link, because on Windows and Linux a link *starts* the application.
+   *
+   * A link that names a page this build does not have opens none. The shell
+   * has already brought the window forward by then, so the operator sees the
+   * dashboard rather than a page that does not exist.
+   */
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+    void onDeepLink((url) => {
+      const target = pageForLink(url);
+      if (target) setPage(target);
+    })
+      .then((off) => {
+        if (cancelled) off();
+        else unlisten = off;
+      })
+      .catch(() => {
+        // No event bridge (a plain browser): there are no links to open.
+      });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
 
   // Overview and Activity show live state; their pages poll the counters
   // only. A failure is reported rather than swallowed: silence would look

@@ -2381,6 +2381,62 @@ def case_ui11_a_confirmation_inside_a_drawer_does_not_fight_it(devtools) -> list
     return failures
 
 
+def case_ui12_a_deep_link_opens_the_page_it_names(devtools) -> list[str]:
+    """A `zroutery://` link opens the page it names.
+
+    The desktop shell brings the window forward and hands the URL over; the
+    window turns the URL into a page. A link that named a page this build does
+    not have must open none, and a link in another scheme must be ignored
+    entirely — the shell only emits its own, but a link is user input and the
+    boundary is where that matters.
+    """
+    failures: list[str] = []
+    seed(devtools, **CUTOVER_QUERY)
+
+    delivered = devtools.evaluate(
+        "window.__zrEmit('zroutery://deep-link', 'zroutery://providers')"
+    )
+    if not delivered:
+        failures.append(
+            "nothing was listening for the deep-link event, so a link could not open anything"
+        )
+    devtools.wait_for(
+        "document.querySelector('.page').innerText.includes('端点') "
+        "|| document.querySelector('.page').innerText.includes('Base URL')",
+        "the providers page",
+    )
+    if not devtools.evaluate(
+        "Boolean(document.querySelector('[data-page=\"providers\"]')?.getAttribute('aria-current'))"
+    ):
+        failures.append("the link did not move the navigation to the page it named")
+
+    # A link that names a page this build does not have opens none.
+    before = devtools.evaluate(
+        "document.querySelector('.nav-item.active')?.getAttribute('data-page')"
+    )
+    devtools.evaluate(
+        "window.__zrEmit('zroutery://deep-link', 'zroutery://no-such-page')"
+    )
+    after = devtools.evaluate(
+        "document.querySelector('.nav-item.active')?.getAttribute('data-page')"
+    )
+    if after != before:
+        failures.append(
+            "a link naming a page this build does not have moved the dashboard to %r" % after
+        )
+
+    # A link in another scheme is not ours to act on.
+    devtools.evaluate(
+        "window.__zrEmit('zroutery://deep-link', 'https://example.com/providers')"
+    )
+    other = devtools.evaluate(
+        "document.querySelector('.nav-item.active')?.getAttribute('data-page')"
+    )
+    if other != before:
+        failures.append("a link in another scheme moved the dashboard to %r" % other)
+    return failures
+
+
 CASES = (
     {"label": "UI-1 two nested edits in sequence (first save delayed)", "run": case_ui1_nested_rebase},
     {"label": "UI-2 moved candidate renumbers priority", "run": case_ui2_candidate_priority},
@@ -2423,6 +2479,11 @@ CASES = (
     {
         "label": "UI-11 a confirmation inside a drawer does not fight it",
         "run": case_ui11_a_confirmation_inside_a_drawer_does_not_fight_it,
+        "query": CUTOVER_QUERY,
+    },
+    {
+        "label": "UI-12 a deep link opens the page it names",
+        "run": case_ui12_a_deep_link_opens_the_page_it_names,
         "query": CUTOVER_QUERY,
     },
 )
