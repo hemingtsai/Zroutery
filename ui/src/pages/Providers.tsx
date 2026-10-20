@@ -473,7 +473,9 @@ const ProviderRow = memo(function ProviderRow({
         }
       />
       <div className="row-main">
-        <span className="row-title">{name}</span>
+        <span className="row-title truncate" title={name}>
+          {name}
+        </span>
         <span className="row-sub">
           <span className="mono">{baseUrl}</span>
           {modelCount > 0 && ` · ${t("count.models", { n: modelCount })}`}

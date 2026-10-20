@@ -283,7 +283,9 @@ function AccountRow({
   return (
     <div className="account-maint">
       <div className="row-main">
-        <span className="row-title mono">{accountId}</span>
+        <span className="row-title mono truncate" title={accountId}>
+          {accountId}
+        </span>
         <Badge tone={statusTone}>
           {STATUS_KEYS.has(status)
             ? t(`accounts.status.${status}` as Parameters<typeof t>[0])

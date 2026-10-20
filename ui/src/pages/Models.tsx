@@ -355,7 +355,16 @@ const ModelListRow = memo(function ModelListRow({
         state={status === "off" ? t("status.disabled") : t("status.enabled")}
       />
       <div className="row-main">
-        <span className="row-title mono">{id}</span>
+        {/*
+         * A model id can be long, and an id that is longer than the row makes
+         * the row wider than the page. The text is clipped rather than
+         * truncated away: it is still in the document, and the row's own
+         * accessible name carries it in full, so nothing is lost but the
+         * pixels.
+         */}
+        <span className="row-title mono truncate" title={id}>
+          {id}
+        </span>
         <span className="row-sub">{providerLine}</span>
       </div>
       <span className="col-num">{price}</span>
