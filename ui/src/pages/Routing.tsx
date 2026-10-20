@@ -910,7 +910,7 @@ function AutoModeDrawer({
                     </td>
                     <td>
                       <CompactNumber
-                        ariaLabel={`Priority for ${c.model}`}
+                        ariaLabel={t("routing.priority_for", { model: c.model })}
                         value={c.priority}
                         min={0}
                         integer
@@ -931,7 +931,7 @@ function AutoModeDrawer({
                       <div className="row gap">
                         <Button
                           kind="ghost"
-                          ariaLabel={`Move ${c.model} up`}
+                          ariaLabel={t("routing.move_up", { model: c.model })}
                           disabled={place < 1}
                           onClick={() => moveCandidate(c.model, -1)}
                         >
@@ -939,7 +939,7 @@ function AutoModeDrawer({
                         </Button>
                         <Button
                           kind="ghost"
-                          ariaLabel={`Move ${c.model} down`}
+                          ariaLabel={t("routing.move_down", { model: c.model })}
                           disabled={
                             place < 0 || place >= classifier.candidates.length - 1
                           }

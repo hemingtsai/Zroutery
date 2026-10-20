@@ -510,7 +510,7 @@ function ModelDrawer({
             label={t("models.f_max_tokens")}
             hint={t("models.f_max_tokens_hint")}
             min={1}
-            placeholder="unlimited"
+            placeholder={t("models.price_unlimited")}
             integer
             value={m.max_output_tokens}
             onCommit={(max_output_tokens) =>
@@ -537,7 +537,7 @@ function ModelDrawer({
         <div className="grid-two">
           <Toggle
             label={t("models.tool_use")}
-            ariaLabel="Tool use"
+            ariaLabel={t("models.tool_use")}
             checked={m.capabilities.tools}
             onChange={(v) =>
               onUpdate((model) => {
@@ -547,7 +547,7 @@ function ModelDrawer({
           />
           <Toggle
             label={t("models.vision")}
-            ariaLabel="Vision"
+            ariaLabel={t("models.vision")}
             checked={m.capabilities.vision}
             onChange={(v) =>
               onUpdate((model) => {
@@ -557,7 +557,7 @@ function ModelDrawer({
           />
           <Toggle
             label={t("models.thinking")}
-            ariaLabel="Extended thinking"
+            ariaLabel={t("models.thinking")}
             checked={m.capabilities.thinking}
             onChange={(v) =>
               onUpdate((model) => {
@@ -620,14 +620,14 @@ function PriceFields({
     <div className="controls">
       <TextField
         label={t("field.currency")}
-        ariaLabel="Currency"
+        ariaLabel={t("field.currency")}
         hint={t("field.currency_hint")}
         value={current.currency}
         onCommit={(currency) => patch({ currency: currency.trim().toUpperCase() || "USD" })}
       />
       <NumberField
         label={t("field.input")}
-        ariaLabel="Input price"
+        ariaLabel={t("models.input_price")}
         hint={t("field.input_hint")}
         min={0}
         value={current.input_per_mtok}
@@ -635,7 +635,7 @@ function PriceFields({
       />
       <NumberField
         label={t("field.output")}
-        ariaLabel="Output price"
+        ariaLabel={t("models.output_price")}
         hint={t("field.output_hint")}
         min={0}
         value={current.output_per_mtok}
@@ -645,7 +645,7 @@ function PriceFields({
         label={t("models.cache_read")}
         hint={t("models.cache_read_hint")}
         min={0}
-        placeholder="same as input"
+        placeholder={t("models.price_same_as_input")}
         value={current.cache_read_per_mtok}
         onCommit={(v) => patch({ cache_read_per_mtok: v })}
       />
@@ -653,7 +653,7 @@ function PriceFields({
         label={t("models.cache_write")}
         hint={t("models.cache_write_hint")}
         min={0}
-        placeholder="not billed"
+        placeholder={t("models.price_not_billed")}
         value={current.cache_write_per_mtok}
         onCommit={(v) => patch({ cache_write_per_mtok: v })}
       />

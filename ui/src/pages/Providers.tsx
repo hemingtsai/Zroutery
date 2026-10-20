@@ -1380,7 +1380,7 @@ function ProviderDrawer({
         <div className="row gap wrap">
           <Button
             kind="ghost"
-            ariaLabel="Fetch models"
+            ariaLabel={t("providers.fetch")}
             onClick={() => void discover()}
             disabled={busy || discovering}
           >

@@ -853,6 +853,7 @@ export function Drawer({
   const overlayId = useRef<symbol | null>(null);
   if (overlayId.current === null) overlayId.current = Symbol("drawer");
   const titleId = useId();
+  const { t } = useI18n();
 
   useEffect(() => {
     const id = overlayId.current!;
@@ -928,7 +929,7 @@ export function Drawer({
           <div className="drawer-title" id={titleId}>
             {title}
           </div>
-          <button className="linky" onClick={onClose} title="Close (Esc)" aria-label="Close">
+          <button className="linky" onClick={onClose} title={t("common.close")} aria-label={t("common.close")}>
             ×
           </button>
         </header>

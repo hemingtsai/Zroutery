@@ -1472,7 +1472,25 @@ def case_ui3_drawer_isolation(devtools: DevTools) -> list[str]:
     # Now ask B for its catalogue, with A's request held up well past the
     # switch. A's answer landing while B is on screen must not appear in B.
     devtools.evaluate("window.__zrStub.setDelay('fetch_provider_models', 1500)")
-    devtools.click_selector("button[aria-label='Fetch models']")
+    # Found by its visible text rather than by its accessible name. The name was
+    # an English literal and is now translated, and a gate that pins a
+    # translated string fails the moment the wording is improved — which is the
+    # opposite of what a gate is for.
+    point = devtools.evaluate(
+        """
+        (() => {
+          const button = [...document.querySelectorAll('.drawer button')]
+            .find((b) => b.textContent.includes('Fetch catalogue'));
+          if (!button) return null;
+          const r = button.getBoundingClientRect();
+          return {x: r.left + r.width / 2, y: r.top + r.height / 2};
+        })()
+        """
+    )
+    if point is None:
+        failures.append("the provider drawer offered no way to fetch its catalogue")
+        return failures
+    devtools.click(point)
     devtools.wait_for(
         "Boolean(window.__zrStub.last('fetch_provider_models'))", "the catalogue request", timeout=15.0
     )
