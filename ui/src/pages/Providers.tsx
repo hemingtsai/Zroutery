@@ -1092,7 +1092,7 @@ function ProviderDrawer({
   // The tier each catalogue row is about to be added as. Keys are the discovered
   // model ids; "" means "no class yet" — the model lands unclassified and the
   // Models page banner keeps counting it until a class is assigned.
-  const [tierChoice, setTierChoice] = useState<Record<string, ModelTier | "">>({});
+  const [tierChoice, setTierChoice] = useState<Record<string, ModelTier | "none">>({});
   const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
   // The free tier's catalogue is the whole Zen list, paid models included, so
   // this defaults on for that one kind: the operator is looking for the free
@@ -1153,9 +1153,9 @@ function ProviderDrawer({
     ],
     [namingStyle, t],
   );
-  const catalogueTierOptions = useMemo<{ value: ModelTier | ""; label: string }[]>(
+  const catalogueTierOptions = useMemo<{ value: ModelTier | "none"; label: string }[]>(
     () => [
-      { value: "", label: t("models.no_tier") },
+      { value: "none", label: t("models.no_tier") },
       ...TIERS.map((c) => ({ value: c, label: virtualId(c, namingStyle) })),
     ],
     [namingStyle, t],
@@ -1196,7 +1196,7 @@ function ProviderDrawer({
   };
 
   const addDiscovered = useCallback(
-    (id: string, tier: ModelTier | "") => {
+    (id: string, tier: ModelTier | "none") => {
       const model = discoveredById.get(id);
       if (!model) return;
       // Adding a model is a config mutation; the provider page reaches into the
@@ -1216,7 +1216,7 @@ function ProviderDrawer({
         next.models.push({
           provider_id: providerId,
           upstream_model: model.id,
-          tier: tier === "" ? null : tier,
+          tier: tier === "none" ? null : tier,
           priority: 0,
           weight: 1,
           enabled: true,
@@ -1247,7 +1247,7 @@ function ProviderDrawer({
    * touched reads "" — "no class yet", which lands the model unclassified —
    * and the Models page banner keeps counting it until a class is assigned.
    */
-  const chooseTier = useCallback((id: string, tier: ModelTier | "") => {
+  const chooseTier = useCallback((id: string, tier: ModelTier | "none") => {
     setTierChoice((current) => ({ ...current, [id]: tier }));
   }, []);
 
@@ -1422,7 +1422,7 @@ function ProviderDrawer({
                       id={d.id}
                       pricing={d.pricing}
                       free={d.free}
-                      tier={tierChoice[d.id] ?? ""}
+                      tier={tierChoice[d.id] ?? "none"}
                       options={catalogueTierOptions}
                       added={configuredNames.has(d.id)}
                       onTier={chooseTier}
@@ -1813,11 +1813,11 @@ const DiscoveredModelRow = memo(function DiscoveredModelRow({
   id: string;
   pricing: DiscoveredModel["pricing"];
   free: boolean;
-  tier: ModelTier | "";
-  options: { value: ModelTier | ""; label: string }[];
+  tier: ModelTier | "none";
+  options: { value: ModelTier | "none"; label: string }[];
   added: boolean;
-  onTier: (id: string, tier: ModelTier | "") => void;
-  onAdd: (id: string, tier: ModelTier | "") => void;
+  onTier: (id: string, tier: ModelTier | "none") => void;
+  onAdd: (id: string, tier: ModelTier | "none") => void;
 }) {
   const { t } = useI18n();
   return (

@@ -1929,6 +1929,20 @@ def _cutover_query(status, **extra):
     }
 
 
+# A provider that publishes a catalogue, so the drawer's catalogue table has a
+# row in it and the tier dropdown on that row can be read.
+PROVIDER_CATALOGUE_QUERY = {
+    "catalogues": {
+        "deepseek": [
+            {
+                "id": "deepseek-chat",
+                "pricing": {"input": 0.001, "output": 0.002},
+                "free": False,
+            }
+        ]
+    }
+}
+
 CUTOVER_QUERY = _cutover_query(
     {
         "state": "detected",
@@ -2437,6 +2451,66 @@ def case_ui12_a_deep_link_opens_the_page_it_names(devtools) -> list[str]:
     return failures
 
 
+def case_ui13_a_catalogue_row_says_no_tier_rather_than_a_dash(devtools) -> list[str]:
+    """The catalogue row's tier, and the empty string it used to mean "no tier".
+
+    Radix cannot show an option whose value is the empty string *and* show its
+    placeholder at the same time: the placeholder is what an empty value draws.
+    So an option that meant "no tier" and carried the empty string was never
+    shown — the dropdown said a generic dash while the option itself was
+    marked as the chosen one.
+
+    The fix gives that option a sentinel of its own, and the row now says what
+    it means. The case drives the real thing: open the provider, fetch its
+    catalogue, and read the tier dropdown.
+    """
+    failures: list[str] = []
+    seed(devtools, **PROVIDER_CATALOGUE_QUERY)
+    devtools.click_selector('[data-page="providers"]')
+    devtools.wait_for("Boolean(document.querySelector('.page .list-row'))", "the provider rows")
+
+    devtools.click_selector(".page .list-row")
+    devtools.wait_for("Boolean(document.querySelector('.drawer'))", "the provider drawer")
+
+    devtools.evaluate(
+        """
+        (() => {
+          const button = [...document.querySelectorAll('.drawer button')]
+            .find((b) => b.textContent.includes('Fetch catalogue'));
+          if (button) button.click();
+        })()
+        """
+    )
+    devtools.wait_for(
+        "document.querySelectorAll('.drawer .table').length >= 2 && "
+        "document.querySelectorAll('.drawer .table')[1].querySelectorAll('tbody tr').length > 0",
+        "the catalogue table",
+    )
+
+    # The catalogue table is the second one in the drawer: the first is the
+    # models this provider already has. Matching on the model's name would be
+    # ambiguous — the configured model's exposed id contains the catalogue
+    # model's upstream id.
+    tier = devtools.evaluate(
+        """
+        (() => {
+          const tables = document.querySelectorAll('.drawer .table');
+          const row = tables[tables.length - 1].querySelector('tbody tr');
+          const trigger = row && row.querySelector('[role="combobox"]');
+          return trigger ? trigger.textContent.trim() : null;
+        })()
+        """
+    )
+    if tier is None:
+        failures.append("the catalogue row carried no tier dropdown at all")
+    elif "no tier" not in tier:
+        failures.append(
+            "the tier dropdown says %r where it should say which tier the model is in; an option "
+            "whose value is the empty string can never be shown" % tier
+        )
+    return failures
+
+
 CASES = (
     {"label": "UI-1 two nested edits in sequence (first save delayed)", "run": case_ui1_nested_rebase},
     {"label": "UI-2 moved candidate renumbers priority", "run": case_ui2_candidate_priority},
@@ -2485,6 +2559,11 @@ CASES = (
         "label": "UI-12 a deep link opens the page it names",
         "run": case_ui12_a_deep_link_opens_the_page_it_names,
         "query": CUTOVER_QUERY,
+    },
+    {
+        "label": "UI-13 a catalogue row says no tier rather than a dash",
+        "run": case_ui13_a_catalogue_row_says_no_tier_rather_than_a_dash,
+        "query": PROVIDER_CATALOGUE_QUERY,
     },
 )
 

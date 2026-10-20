@@ -336,7 +336,24 @@ export function Select<T extends string>({
   const valueId = useId();
   return (
     <RadixSelect.Root
-      value={value ?? undefined}
+      /*
+       * `null` becomes the empty string, and the difference matters.
+       *
+       * Radix treats `undefined` as "uncontrolled" and keeps its own state, so
+       * a select that is handed `null` shows the placeholder once and then
+       * keeps whatever was last chosen — the "add a model" combobox displayed
+       * the model that had just been added, and stopped reading as an
+       * add-control. The empty string is controlled *and* is what Radix treats
+       * as "nothing selected", so the placeholder comes back when the value
+       * does.
+       *
+       * A caller that wants an empty-string *option* — a real "no tier"
+       * choice — must use a sentinel of its own, which is what the catalogue
+       * row does. Radix cannot show an option whose value is the empty string
+       * and show the placeholder at the same time, so the two cannot share
+       * the mark.
+       */
+      value={value ?? ""}
       onValueChange={(next) => onChange(next as T)}
       disabled={disabled}
     >
