@@ -1,3 +1,5 @@
+#![cfg(feature = "ml")]
+
 //! Does an offline evaluation refuse to conclude more than its evidence supports?
 //!
 //! The promotion gate is threshold-only: its floors are a paired-request count and a

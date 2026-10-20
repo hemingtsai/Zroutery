@@ -1,3 +1,5 @@
+#![cfg(feature = "ml")]
+
 //! Trace schema v2: execution identity, task evidence, and backwards compatibility.
 //!
 //! The properties under test are the ones that make a trace usable as *evidence*

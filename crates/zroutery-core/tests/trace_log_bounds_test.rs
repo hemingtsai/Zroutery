@@ -1,3 +1,5 @@
+#![cfg(feature = "ml")]
+
 //! What the durable trace log costs, and what destroying it does.
 //!
 //! The `tail` tests exist because the previous implementation was wrong in a way

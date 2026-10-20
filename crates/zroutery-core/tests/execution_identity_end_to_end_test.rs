@@ -1,3 +1,5 @@
+#![cfg(feature = "ml")]
+
 //! End-to-end proof that the upstream's declared model survives normalisation.
 //!
 //! # What is under test

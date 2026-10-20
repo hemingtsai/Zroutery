@@ -85,24 +85,23 @@ RATCHET = "ratchet"
 # Combinations that are known not to build, with the reason. Keyed by package name
 # and the exact subset, so a neighbouring subset cannot inherit an exemption.
 #
-# Empty for the desktop crate: every combination its manifest permits must build.
-KNOWN_UNSUPPORTED_MATRIX: Dict[str, Dict[FrozenSet[str], str]] = {
-    "zroutery-core": {
-        frozenset(): (
-            "`zroutery-core` does not compile with no features: `server/mod.rs` reads "
-            "`config.ml_routing` unconditionally. Pre-existing; predates the account "
-            "work and is recorded rather than fixed here."
-        ),
-        frozenset({"account"}): (
-            "Same cause: the unconditional `ml_routing` read is in shared server "
-            "code, not in an account module."
-        ),
-        frozenset({"account", "newapi"}): (
-            "Same cause. Reaching this subset means `newapi` was enabled without "
-            "`ml`, which is legal as a command line and does not build."
-        ),
-    },
-}
+# EMPTY, and that is a change rather than an accident. `zroutery-core` used to
+# carry three exemptions for the subsets without `ml`, on the grounds that
+# "`server/mod.rs` reads `config.ml_routing` unconditionally". That read is gone
+# from the code — the module does not mention `ml_routing` at all — so the
+# exemption was describing a cause that had been removed, and the gate's own
+# ratchet caught it: an exemption for a subset that now builds is a gate that
+# stops checking that subset.
+#
+# The last of the three was not the library at all but the *test* targets:
+# several integration suites reach into `zroutery_core::ml::`, which is behind
+# the feature, so a subset without `ml` could not build them. Those suites now
+# carry the same `#![cfg(feature = "ml")]` the other twenty do, and the subsets
+# build.
+#
+# Empty for the desktop crate too: every combination its manifest permits must
+# build.
+KNOWN_UNSUPPORTED_MATRIX: Dict[str, Dict[FrozenSet[str], str]] = {}
 
 # A feature list longer than this is a signal the matrix has outgrown a power-set
 # enumeration, and the honest response is to stop rather than to spend twenty

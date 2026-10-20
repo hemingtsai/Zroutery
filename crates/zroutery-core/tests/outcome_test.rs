@@ -1,3 +1,5 @@
+#![cfg(feature = "ml")]
+
 //! Stage 5 Outcome & Feedback integration tests.
 //!
 //! These tests verify the full chain: construction, classification, serialization,

@@ -1,3 +1,5 @@
+#![cfg(feature = "ml")]
+
 //! When a tier has no usable candidate and the fallback policy escalates, the
 //! answer comes from a tier the caller did not ask for.
 //!

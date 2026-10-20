@@ -1,3 +1,5 @@
+#![cfg(feature = "ml")]
+
 //! Read-only correlation projection: what it joins, what it refuses, and what
 //! it refuses to leak.
 //!

@@ -1,3 +1,5 @@
+#![cfg(feature = "ml")]
+
 //! The paired fallback delta, and the promotion criterion that reads it.
 //!
 //! `PairedDeltas::fallback_rate_delta` was a hardcoded `0.0`, so every comparison

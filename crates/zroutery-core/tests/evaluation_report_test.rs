@@ -1,3 +1,5 @@
+#![cfg(feature = "ml")]
+
 //! The offline evaluation entry point, and its refusal to overclaim.
 //!
 //! The behaviours under test are the ones where a routing evaluation most easily
