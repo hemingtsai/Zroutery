@@ -784,30 +784,6 @@ export function MenuItem({
   );
 }
 
-export function Card({
-  title,
-  actions,
-  children,
-  tone,
-}: {
-  title?: ReactNode;
-  actions?: ReactNode;
-  children: ReactNode;
-  tone?: "warn" | "danger";
-}) {
-  return (
-    <section className={`card ${tone ? `card-${tone}` : ""}`}>
-      {(title || actions) && (
-        <header className="card-head">
-          {title && <h2>{title}</h2>}
-          {actions && <div className="row gap">{actions}</div>}
-        </header>
-      )}
-      {children}
-    </section>
-  );
-}
-
 /**
  * A page's opening line. The page name itself lives in the main bar; repeating
  * it bigger in the content is a web-app habit, so only the summary line and

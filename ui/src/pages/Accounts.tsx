@@ -481,7 +481,14 @@ function ReconcileTable({ report }: { report: ReconcileReport }) {
     return <Empty>{t("accounts.probe_none")}</Empty>;
   }
   return (
-    <table className="table">
+    /*
+     * A live region, because the report arrives on its own: the operator
+     * presses "probe every account", the probe runs against a remote panel,
+     * and the answer appears here. Without a live region the answer is a
+     * silent change in a table, and the difference between "probed" and "not
+     * probed" — the distinction the report exists to keep — is only visible.
+     */
+    <table className="table" role="status">
       <thead>
         <tr>
           <th>{t("field.provider")}</th>
