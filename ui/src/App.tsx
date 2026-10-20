@@ -409,7 +409,13 @@ function Shell() {
       <div className="main">
         <header className="mainbar">
           {busy && <div className="busybar" aria-hidden />}
-          <span className="page-title">{t(NAV.find((n) => n.id === page)!.labelKey)}</span>
+          {/*
+            * The page's name is a heading, so a screen-reader user can navigate
+            * by it. Everything else about it — the size, the weight, the
+            * uppercase — is in the stylesheet, and a heading's only other
+            * difference is a margin the user agent would add.
+            */}
+          <h1 className="page-title">{t(NAV.find((n) => n.id === page)!.labelKey)}</h1>
           <div className="mainbar-right">
             {/* The gateway lives here, not in a bottom strip: top of the
                 window is where a desktop app keeps global state. */}

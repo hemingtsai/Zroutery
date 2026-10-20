@@ -673,6 +673,8 @@ const en = {
     "Nothing was put back: no file was restored. The state machine advanced, and the configuration on disk is unchanged rather than reverted.",
   "cutover.result.ok": "The cutover finished and the endpoint answered as Zroutery.",
   "cutover.toast_applied": "Cutover finished for {agent}.",
+  "cutover.toast_failed":
+    "The cutover failed with {n} error(s). The report below says which step stopped it, and the rollback is the way back.",
   "cutover.toast_rolled_back": "Restored {n} file(s).",
   "cutover.toast_nothing_restored": "Nothing was restored.",
   "cutover.agent.claude": "Claude Code",
@@ -1627,6 +1629,7 @@ const zh: Dict = {
     "没有还原任何内容：未恢复任何文件。状态机前进了，而磁盘上的配置是被保持原样，而非被回退。",
   "cutover.result.ok": "切换已完成，端点以 Zroutery 的身份作答。",
   "cutover.toast_applied": "{agent} 的切换已完成。",
+  "cutover.toast_failed": "切换失败,{n} 处错误。下面的报告会说明是哪一步停下的,回滚就是退路。",
   "cutover.toast_rolled_back": "已还原 {n} 个文件。",
   "cutover.toast_nothing_restored": "未还原任何内容。",
   "cutover.agent.claude": "Claude Code",

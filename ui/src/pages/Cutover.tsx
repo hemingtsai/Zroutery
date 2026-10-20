@@ -127,6 +127,17 @@ export default function Cutover() {
       setResult(outcome);
       if (outcome.errors.length === 0) {
         notify("ok", t("cutover.toast_applied", { agent: t(`cutover.agent.${agent}` as TKey) }));
+      } else {
+        /*
+         * A failed run used to say nothing at all.
+         *
+         * The toast was for the success case only, so the report — which is
+         * on the page, in a region a screen reader does not hear — was the only
+         * account of what went wrong. And the report is the one thing the
+         * operator needs: the run failed, here is the step, here is the
+         * reason, and the rollback below is the way back.
+         */
+        notify("error", t("cutover.toast_failed", { n: outcome.errors.length }));
       }
       await load();
     } catch (e) {
@@ -377,7 +388,7 @@ function ResultPanel({ result }: { result: MigrationResult }) {
           : "warn";
 
   return (
-    <Section title={t("cutover.result.title")}>
+    <Section title={t("cutover.result.title")} live>
       <div className="list-row">
         <div className="row-main">
           <Badge tone={tone}>{t(`cutover.state.${result.state}` as TKey)}</Badge>

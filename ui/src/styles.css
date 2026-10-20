@@ -322,6 +322,12 @@ code,
   color: var(--text-2);
   text-transform: uppercase;
   letter-spacing: 0.05em;
+  /*
+   * The title is an `h1`, and a heading carries a margin the user agent sets.
+   * Everything else about it is declared above, so the margin is the only thing
+   * that would move it — and it is the only thing that would move it.
+   */
+  margin: 0;
 }
 
 .mainbar-right {
@@ -437,6 +443,12 @@ code,
   font-size: 18px;
   font-weight: 600;
   color: var(--text);
+  /*
+   * The title is a heading, and a heading carries a margin the user agent
+   * sets. Everything else about it is declared above, so the margin is the only
+   * thing that would move it — and it is the only thing that would move it.
+   */
+  margin: 0;
 }
 
 .section-hint {

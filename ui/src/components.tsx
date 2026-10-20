@@ -805,16 +805,32 @@ export function Section({
   hint,
   actions,
   children,
+  role,
+  live,
 }: {
   title: ReactNode;
   hint?: ReactNode;
   actions?: ReactNode;
   children: ReactNode;
+  /** Announce this section's content as a status, for a result that arrives. */
+  role?: "status" | "alert";
+  /** Shorthand for `role="status"`. */
+  live?: boolean;
 }) {
+  const titleId = useId();
   return (
-    <section className="section">
+    <section
+      className="section"
+      // A named region: a section whose title is a span is not exposed as one
+      // at all, so a screen-reader user cannot jump between the parts of a
+      // page. The title names it.
+      aria-labelledby={titleId}
+      role={role ?? (live ? "status" : undefined)}
+    >
       <div className="section-head">
-        <span className="section-title">{title}</span>
+        <h2 className="section-title" id={titleId}>
+          {title}
+        </h2>
         {actions}
       </div>
       {hint && <p className="section-hint">{hint}</p>}
