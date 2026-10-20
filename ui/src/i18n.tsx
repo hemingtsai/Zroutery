@@ -21,12 +21,10 @@ import {
 
 export type Lang = "en" | "zh";
 
-const en = {
+export const en = {
   // ------------------------------------------------------------ shared
   "common.dismiss": "Dismiss",
-  "common.ok": "OK",
   "common.cancel": "Cancel",
-  "common.confirm": "Confirm",
   "common.loading": "Loading…",
   "common.remove": "Remove",
   "common.delete": "Delete",
@@ -59,9 +57,6 @@ const en = {
   "status.enabled": "Enabled",
   "status.disabled": "Disabled",
   "status.no_key": "No credential stored",
-  "status.stop_gateway": "Gateway running — click to stop",
-  "status.start_gateway": "Gateway stopped — click to start",
-  "status.counts": "{providers} providers · {models} models",
   "appearance.title": "Appearance",
   "theme.system": "Follow system",
   "theme.light": "Light",
@@ -75,8 +70,6 @@ const en = {
   "lang.zh": "简体中文",
   "lang.en": "English",
   "action.hide": "Hide",
-  "action.quit": "Quit",
-  "action.quit_title": "Stop the gateway and quit",
   "toast.copied": "Copied.",
   "toast.queued_discarded":
     "The save failed, so edits queued behind it were dropped.",
@@ -367,9 +360,6 @@ const en = {
   "providers.balance_failed": "check failed",
 
   // ------------------------------------------------------- account maintenance
-  "account.section": "Accounts",
-  "account.section_hint":
-    "Each account checks in through its own browser window, so one account's session is never used for another.",
   // Phase names are the vocabulary the backend publishes. Each one is a distinct
   // state rather than a colour, because they call for different things from the
   // person looking at them.
@@ -735,7 +725,6 @@ const en = {
   "routing.no_election": "No election has been held this run.",
   "routing.no_election_tiers": "No tier had an enabled model to measure.",
   "routing.primary": "primary",
-  "routing.review_drawer": "Auto review",
   "routing.route_review": "Route permission checks",
   "routing.route_review_hint":
     "Permission checks go to the pool below instead of the conversation's model",
@@ -937,7 +926,6 @@ const en = {
     "{names} is configured but never tried, and exploration is off, so no traffic will ever reach it. Raising ml_routing.exploration_probability above 0 does reach it, but it blocks promotion of any learned model: the gate needs the model and the baseline compared on the same requests, which exploration prevents, so routing stays deterministic either way. Give it top priority instead.",
   "ml.blind_spot_count": "{n} unreachable",
   "ml.collected": "Collected",
-  "ml.refused": "Refused",
   "ml.samples": "samples",
   "ml.traces": "traces",
   "ml.criteria": "Gate criteria",
@@ -1047,7 +1035,6 @@ const en = {
   "ml.log_path": "File",
   "ml.log_unreadable": "The log could not be counted, so this is not a count of zero.",
   "ml.log_appended": "Appended",
-  "ml.log_nothing": "Nothing to record",
   "ml.log_refused": "Refused",
   "ml.log_io_errors": "Write errors",
   "ml.log_empty": "No history has been recorded yet.",
@@ -1064,12 +1051,10 @@ const en = {
 export type TKey = keyof typeof en;
 type Dict = Record<TKey, string>;
 
-const zh: Dict = {
+export const zh: Dict = {
   // ------------------------------------------------------------ shared
   "common.dismiss": "知道了",
-  "common.ok": "确定",
   "common.cancel": "取消",
-  "common.confirm": "确认",
   "common.loading": "加载中…",
   "common.remove": "移除",
   "common.delete": "删除",
@@ -1102,9 +1087,6 @@ const zh: Dict = {
   "status.enabled": "已启用",
   "status.disabled": "已禁用",
   "status.no_key": "未存储凭据",
-  "status.stop_gateway": "网关运行中 — 点击停止",
-  "status.start_gateway": "网关已停止 — 点击启动",
-  "status.counts": "{providers} 个提供商 · {models} 个模型",
   "appearance.title": "外观",
   "theme.system": "跟随系统",
   "theme.light": "浅色",
@@ -1118,8 +1100,6 @@ const zh: Dict = {
   "lang.zh": "简体中文",
   "lang.en": "English",
   "action.hide": "隐藏",
-  "action.quit": "退出",
-  "action.quit_title": "停止网关并退出",
   "toast.copied": "已复制。",
   "toast.queued_discarded": "保存失败，排队中的修改已丢弃。",
 
@@ -1393,8 +1373,6 @@ const zh: Dict = {
   "providers.balance_failed": "查询失败",
 
   // ------------------------------------------------------- account maintenance
-  "account.section": "账户",
-  "account.section_hint": "每个账户用各自的浏览器窗口签到，会话互不共用。",
   "account.phase.idle": "尚未签到",
   "account.phase.running": "正在签到…",
   "account.phase.waiting_for_user": "需要人工验证 — 请在已打开的窗口中完成",
@@ -1691,7 +1669,6 @@ const zh: Dict = {
   "routing.no_election": "本次运行尚未进行选举。",
   "routing.no_election_tiers": "没有层级有可测量的启用模型。",
   "routing.primary": "主选",
-  "routing.review_drawer": "自动审查",
   "routing.route_review": "路由权限检查",
   "routing.route_review_hint": "权限检查走下方模型池，而非会话模型",
   "routing.review_failover": "池内失败转移",
@@ -1870,7 +1847,6 @@ const zh: Dict = {
     "{names} 已配置但排不上队，永远收不到请求。打开探索可以触达，但会阻断学习型模型的提升。给它最高优先级。",
   "ml.blind_spot_count": "{n} 个无法触达",
   "ml.collected": "已采集",
-  "ml.refused": "已拒绝",
   "ml.samples": "样本",
   "ml.traces": "轨迹",
   "ml.criteria": "门禁条件",
@@ -1945,7 +1921,6 @@ const zh: Dict = {
   "ml.log_path": "文件",
   "ml.log_unreadable": "无法统计该日志，这不代表零条记录。",
   "ml.log_appended": "已追加",
-  "ml.log_nothing": "无可记录内容",
   "ml.log_refused": "已拒绝",
   "ml.log_io_errors": "写入错误",
   "ml.log_empty": "尚未记录任何历史。",
@@ -1959,7 +1934,7 @@ const zh: Dict = {
   "bytes.value": "{n} 字节",
 };
 
-const dicts: Record<Lang, Dict> = { en: en as Dict, zh };
+export const dicts: Record<Lang, Dict> = { en: en as Dict, zh };
 
 function interpolate(template: string, params?: Record<string, string | number>): string {
   if (!params) return template;
