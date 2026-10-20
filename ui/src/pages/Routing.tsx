@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   TIERS,
   tierMembers,
@@ -62,15 +62,47 @@ export default function Routing({
 }) {
   const { config, health } = snapshot;
   const { t } = useI18n();
-  const rows = modelRows(snapshot);
   const [edit, setEdit] = useState<"default" | "auto" | null>(null);
 
-  const cooling = new Set(
-    health.filter((h) => h.cooldown_remaining_secs > 0).map((h) => h.model_id),
+  /*
+   * The route picture, derived from the configuration rather than from the
+   * render.
+   *
+   * The page's own state is which tab is open and which drawer is mounted,
+   * and neither of those changes what a request reaches — but both change far
+   * more often than the configuration does. Everything below is keyed on the
+   * configuration, so switching tabs or opening a drawer costs one render of
+   * the picture rather than another pass over the model list.
+   */
+  const rows = useMemo(
+    () => modelRows(snapshot),
+    [snapshot.config.models, snapshot.exposed_ids],
   );
 
-  const tierRoutes = TIERS
-    .map((tier) => ({ tier, members: tierMembers(rows, config.providers, tier) }));
+  /**
+   * The providers, by id.
+   *
+   * Every route in the flow asked the provider list for a name by scanning
+   * it, and the vision fallback asked the same question once per model: one
+   * render cost O(models x providers). One map answers both.
+   */
+  const providerById = useMemo(
+    () => new Map(config.providers.map((p) => [p.id, p])),
+    [config.providers],
+  );
+
+  const cooling = useMemo(
+    () =>
+      new Set(
+        health.filter((h) => h.cooldown_remaining_secs > 0).map((h) => h.model_id),
+      ),
+    [health],
+  );
+
+  const tierRoutes = useMemo(
+    () => TIERS.map((tier) => ({ tier, members: tierMembers(rows, config.providers, tier) })),
+    [rows, config.providers],
+  );
 
   const patchVision = (patch: Partial<AppConfig["vision"]>) => {
     void save((cfg) => {
@@ -88,27 +120,32 @@ export default function Routing({
    * matters here — offering a model that cannot see as the thing that describes
    * images would make the fallback substitute one failure for another.
    */
-  const visionCapable = rows.filter(
-    (r) =>
-      r.model.enabled &&
-      r.model.capabilities.vision &&
-      config.providers.find((p) => p.id === r.model.provider_id)?.enabled,
+  const visionCapable = useMemo(
+    () =>
+      rows.filter(
+        (r) =>
+          r.model.enabled &&
+          r.model.capabilities.vision &&
+          providerById.get(r.model.provider_id)?.enabled,
+      ),
+    [rows, providerById],
   );
 
   // The pool in the order the router would try it. Every strategy pool is
   // ranked by priority, so the page follows the numbers rather than the array.
-  const classifierCandidates = config.classifier.enabled
-    ? orderCandidatesByPriority(
-        config.classifier.candidates
-          .filter((c) => c.enabled)
-          .map((c) => ({
-            priority: c.priority,
-            model: c.model,
-            row: rows.find((r) => r.id === c.model || r.model.aliases.includes(c.model)),
-          }))
-          .filter((c): c is typeof c & { row: ModelRow } => Boolean(c.row)),
-      )
-    : [];
+  const classifierCandidates = useMemo(() => {
+    if (!config.classifier.enabled) return [];
+    return orderCandidatesByPriority(
+      config.classifier.candidates
+        .filter((c) => c.enabled)
+        .map((c) => ({
+          priority: c.priority,
+          model: c.model,
+          row: rows.find((r) => r.id === c.model || r.model.aliases.includes(c.model)),
+        }))
+        .filter((c): c is typeof c & { row: ModelRow } => Boolean(c.row)),
+    );
+  }, [config.classifier.enabled, config.classifier.candidates, rows]);
 
   const [tab, setTab] = useState<"ml" | "main" | "auto">(snapshot.ml_available ? "ml" : "main");
 
@@ -150,7 +187,7 @@ export default function Routing({
                         <StatusDot tone={cooling.has(r.id) ? "warn" : "ok"} />
                         {r.id}
                         <span className="flow-provider">
-                          {config.providers.find((p) => p.id === r.model.provider_id)?.name}
+                          {providerById.get(r.model.provider_id)?.name}
                         </span>
                       </span>
                     </span>
@@ -270,7 +307,7 @@ export default function Routing({
                         <StatusDot tone={cooling.has(r.id) ? "warn" : "ok"} />
                         {r.id}
                         <span className="flow-provider">
-                          {config.providers.find((p) => p.id === r.model.provider_id)?.name}
+                          {providerById.get(r.model.provider_id)?.name}
                         </span>
                       </span>
                     </span>
@@ -708,7 +745,10 @@ function AutoModeDrawer({
 }) {
   const classifier = snapshot.config.classifier;
   const { t } = useI18n();
-  const rows = modelRows(snapshot);
+  const rows = useMemo(
+    () => modelRows(snapshot),
+    [snapshot.config.models, snapshot.exposed_ids],
+  );
 
   const patch = (mutate: Partial<AppConfig["classifier"]>) => {
     void onSave((cfg) => {
@@ -762,14 +802,45 @@ function AutoModeDrawer({
     });
   };
 
-  const available = rows.filter((r) => !classifier.candidates.some((c) => c.model === r.id));
-  const knownModel = (c: ClassifierCandidate) =>
-    rows.some((r) => r.id === c.model || r.model.aliases.includes(c.model));
-  const canMove = (model: string, delta: -1 | 1) => {
-    const index = classifier.candidates.findIndex((c) => c.model === model);
-    const swap = index + delta;
-    return index >= 0 && swap >= 0 && swap < classifier.candidates.length;
-  };
+  /*
+   * The pool, and the models around it.
+   *
+   * Three questions were answered by walking: which models are not in the
+   * pool (once per model), whether a pool entry names a model that exists
+   * (once per entry, and twice per row), and where an entry sits in the pool
+   * (once per entry, and twice per row). The answers are the same ones the
+   * walks gave — a set of names, a set of known ids, and a place in the pool
+   * — and they cost one pass over the configuration each instead of one pass
+   * per row.
+   */
+  const candidateModels = useMemo(
+    () => new Set(classifier.candidates.map((c) => c.model)),
+    [classifier.candidates],
+  );
+  const knownIds = useMemo(() => {
+    const known = new Set<string>();
+    for (const row of rows) {
+      known.add(row.id);
+      for (const alias of row.model.aliases) known.add(alias);
+    }
+    return known;
+  }, [rows]);
+  const candidatePlaces = useMemo(() => {
+    const places = new Map<string, number>();
+    classifier.candidates.forEach((c, index) => {
+      if (!places.has(c.model)) places.set(c.model, index);
+    });
+    return places;
+  }, [classifier.candidates]);
+
+  const available = useMemo(
+    () => rows.filter((r) => !candidateModels.has(r.id)),
+    [rows, candidateModels],
+  );
+  const ordered = useMemo(
+    () => orderCandidatesByPriority(classifier.candidates),
+    [classifier.candidates],
+  );
 
   return (
     <Drawer title={t("route.auto_review")} onClose={onClose}>
@@ -817,61 +888,67 @@ function AutoModeDrawer({
         ) : (
           <table className="table">
             <tbody>
-              {orderCandidatesByPriority(classifier.candidates).map((c) => (
-                <tr key={c.model} className={knownModel(c) ? "" : "row-warn"}>
-                  <td className="mono">
-                    {c.model}
-                    {!knownModel(c) && (
-                      <>
-                        {" "}
-                        <Badge tone="warn">{t("routing.not_configured")}</Badge>
-                      </>
-                    )}
-                  </td>
-                  <td>
-                    <CompactNumber
-                      ariaLabel={`Priority for ${c.model}`}
-                      value={c.priority}
-                      min={0}
-                      integer
-                      onCommit={(v) => patchCandidate(c.model, { priority: v ?? 0 })}
-                    />
-                  </td>
-                  <td>
-                    <input
-                      type="checkbox"
-                      aria-label={`Enable ${c.model}`}
-                      checked={c.enabled}
-                      onChange={(e) =>
-                        patchCandidate(c.model, { enabled: e.currentTarget.checked })
-                      }
-                    />
-                  </td>
-                  <td>
-                    <div className="row gap">
-                      <Button
-                        kind="ghost"
-                        ariaLabel={`Move ${c.model} up`}
-                        disabled={!canMove(c.model, -1)}
-                        onClick={() => moveCandidate(c.model, -1)}
-                      >
-                        ↑
-                      </Button>
-                      <Button
-                        kind="ghost"
-                        ariaLabel={`Move ${c.model} down`}
-                        disabled={!canMove(c.model, 1)}
-                        onClick={() => moveCandidate(c.model, 1)}
-                      >
-                        ↓
-                      </Button>
-                      <Button kind="ghost" onClick={() => removeCandidate(c.model)}>
-                        {t("common.remove")}
-                      </Button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
+              {ordered.map((c) => {
+                const known = knownIds.has(c.model);
+                const place = candidatePlaces.get(c.model) ?? -1;
+                return (
+                  <tr key={c.model} className={known ? "" : "row-warn"}>
+                    <td className="mono">
+                      {c.model}
+                      {!known && (
+                        <>
+                          {" "}
+                          <Badge tone="warn">{t("routing.not_configured")}</Badge>
+                        </>
+                      )}
+                    </td>
+                    <td>
+                      <CompactNumber
+                        ariaLabel={`Priority for ${c.model}`}
+                        value={c.priority}
+                        min={0}
+                        integer
+                        onCommit={(v) => patchCandidate(c.model, { priority: v ?? 0 })}
+                      />
+                    </td>
+                    <td>
+                      <input
+                        type="checkbox"
+                        aria-label={`Enable ${c.model}`}
+                        checked={c.enabled}
+                        onChange={(e) =>
+                          patchCandidate(c.model, { enabled: e.currentTarget.checked })
+                        }
+                      />
+                    </td>
+                    <td>
+                      <div className="row gap">
+                        <Button
+                          kind="ghost"
+                          ariaLabel={`Move ${c.model} up`}
+                          disabled={place < 1}
+                          onClick={() => moveCandidate(c.model, -1)}
+                        >
+                          ↑
+                        </Button>
+                        <Button
+                          kind="ghost"
+                          ariaLabel={`Move ${c.model} down`}
+                          disabled={
+                            place < 0 || place >= classifier.candidates.length - 1
+                          }
+                          onClick={() => moveCandidate(c.model, 1)}
+                        >
+                          ↓
+                        </Button>
+                        <Button kind="ghost" onClick={() => removeCandidate(c.model)}>
+                          {t("common.remove")}
+                        </Button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         )}

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   api,
   BALANCE_PRESETS,
@@ -16,7 +16,6 @@ import {
   type CcSwitchPreview,
   type DiscoveredModel,
   type Maintenance,
-  type ModelEntry,
   type ModelTier,
   type Provider,
   type ProviderClientProfile,
@@ -145,17 +144,38 @@ export default function Providers({
   const notify = useToast();
   const [openId, setOpenId] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
-  const [nameError, setNameError] = useState<string | null>(null);
-
-  const [newName, setNewName] = useState("");
-  const [newKind, setNewKind] = useState<ProviderKind>("openai_compatible");
-  const [newBaseUrl, setNewBaseUrl] = useState("");
 
   const [ccPreview, setCcPreview] = useState<CcSwitchPreview | null>(null);
   const [ccLoading, setCcLoading] = useState(false);
   const [ccSelected, setCcSelected] = useState<Record<string, boolean>>({});
   const isMounted = useRef(true);
   useEffect(() => () => { isMounted.current = false; }, []);
+
+  /**
+   * How many models each provider owns.
+   *
+   * Every row of the list used to ask the model list this question on its
+   * own — one scan of the whole model list per row — so a single render cost
+   * O(providers x models), and the number it wanted was a count. Counting
+   * once and looking the answer up makes the render O(models), and the number
+   * on the row is the same either way.
+   */
+  const modelCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const model of config.models) {
+      counts.set(model.provider_id, (counts.get(model.provider_id) ?? 0) + 1);
+    }
+    return counts;
+  }, [config.models]);
+
+  /**
+   * Opening a provider, and nothing else.
+   *
+   * The list is drawn one memoised row at a time, so the callback a row is
+   * given has to be the same function every render: a new one would make
+   * every row look changed and re-render the whole list to open a drawer.
+   */
+  const openProvider = useCallback((id: string) => setOpenId(id), []);
 
   /**
    * Apply an edit to the provider the save is actually about.
@@ -173,52 +193,6 @@ export default function Providers({
       mutate(provider);
       return next;
     });
-  };
-
-  const addProvider = () => {
-    const name = newName.trim();
-    if (!name) return;
-    const id = slugify(name);
-    if (config.providers.some((p) => p.id === id)) {
-      setNameError(t("providers.duplicate", { id }));
-      return;
-    }
-    void save((cfg) => {
-      if (cfg.providers.some((p) => p.id === id)) {
-        setNameError(t("providers.duplicate", { id }));
-        return null;
-      }
-      const next = structuredClone(cfg);
-      next.providers.push({
-        id,
-        name: name.trim(),
-        kind: newKind,
-        base_url: newBaseUrl.trim() || defaultBaseUrl(newKind),
-        key_ref: `provider:${id}`,
-        extra_headers: {},
-        client_profile: defaultClientProfile(newKind),
-        bearer_auth: false,
-        enabled: true,
-        timeout_secs: 600,
-        connect_timeout_secs: 15,
-        anthropic_version: null,
-        balance: { preset: "none", custom: null },
-        quirks: {
-          use_max_completion_tokens: false,
-          drop_temperature: false,
-          drop_top_p: false,
-          drop_stop: false,
-          stream_usage: true,
-          system_as_developer: false,
-          send_reasoning_effort: false,
-        },
-      });
-      return next;
-    });
-    setNewName("");
-    setNewBaseUrl("");
-    setNameError(null);
-    setOpenId(id);
   };
 
   /**
@@ -271,9 +245,7 @@ export default function Providers({
   };
 
   const open = config.providers.find((p) => p.id === openId) ?? null;
-  const openModelCount = open
-    ? config.models.filter((m) => m.provider_id === open.id).length
-    : 0;
+  const openModelCount = open ? (modelCounts.get(open.id) ?? 0) : 0;
 
   /*
    * Whether any provider has a balance to ask for at all.
@@ -333,37 +305,21 @@ export default function Providers({
         </div>
       ) : (
         <div className="list">
-          {config.providers.map((p) => {
-            const models = config.models.filter((m) => m.provider_id === p.id);
-            const status = !p.enabled ? "off" : keys[p.id] || p.key_ref === "" ? "ok" : "warn";
-            return (
-              <button
-                key={p.id}
-                className={`list-row ${openId === p.id ? "selected" : ""}`}
-                onClick={() => setOpenId(p.id)}
-                aria-label={t("providers.open_row", { name: p.name })}
-              >
-                <StatusDot tone={status} />
-                <div className="row-main">
-                  <span className="row-title">{p.name}</span>
-                  <span className="row-sub">
-                    <span className="mono">{p.base_url}</span>
-                    {models.length > 0 && ` · ${t("count.models", { n: models.length })}`}
-                    {p.kind === "anthropic"
-                      ? ` · ${t("providers.anthropic_dialect")}`
-                      : p.kind === "opencode_zen_free"
-                        ? ` · ${t("providers.opencode_zen_dialect")}`
-                        : p.kind === "opencode_console"
-                          ? ` · ${t("providers.opencode_console_dialect")}`
-                          : ` · ${t("providers.openai_dialect")}`}
-                  </span>
-                </div>
-                {hasBalanceSource(p, snapshot) && (
-                  <BalanceChip status={balances[p.id]} />
-                )}
-              </button>
-            );
-          })}
+          {config.providers.map((p) => (
+            <ProviderRow
+              key={p.id}
+              id={p.id}
+              name={p.name}
+              baseUrl={p.base_url}
+              kind={p.kind}
+              modelCount={modelCounts.get(p.id) ?? 0}
+              status={!p.enabled ? "off" : keys[p.id] || p.key_ref === "" ? "ok" : "warn"}
+              selected={openId === p.id}
+              showBalance={hasBalanceSource(p, snapshot)}
+              balance={balances[p.id]}
+              onOpen={openProvider}
+            />
+          ))}
         </div>
       )}
 
@@ -371,43 +327,12 @@ export default function Providers({
           over every provider's accounts, not a property of this page's list, and
           the drawer never had a good place to put a cross-provider report. */}
 
-      <Section title={t("providers.add_section")} hint={t("providers.add_hint")}>
-        <div className="controls">
-          <Field label={t("field.name")} danger={Boolean(nameError)} hint={nameError ?? undefined}>
-            <input
-              value={newName}
-              placeholder="DeepSeek"
-              className={nameError ? "input-error" : undefined}
-              onChange={(e) => {
-                setNewName(e.currentTarget.value);
-                setNameError(null);
-              }}
-              onKeyDown={(e) => e.key === "Enter" && addProvider()}
-            />
-          </Field>
-          <Field label={t("field.api_dialect")}>
-            <Segment
-              ariaLabel={t("field.api_dialect")}
-              value={newKind}
-              onChange={(kind) => setNewKind(kind)}
-              options={KINDS.map((k) => ({ value: k.id, label: t(k.labelKey) }))}
-            />
-          </Field>
-          <Field label={t("field.base_url")} hint={t("field.base_url_hint")}>
-            <input
-              value={newBaseUrl}
-              placeholder={defaultBaseUrl(newKind)}
-              onChange={(e) => setNewBaseUrl(e.currentTarget.value)}
-              onKeyDown={(e) => e.key === "Enter" && addProvider()}
-            />
-          </Field>
-          <div className="field-actions">
-            <Button kind="primary" onClick={addProvider} disabled={busy || !newName.trim()}>
-              {t("providers.add")}
-            </Button>
-          </div>
-        </div>
-      </Section>
+      <AddProviderForm
+        providers={config.providers}
+        save={save}
+        busy={busy}
+        onAdded={openProvider}
+      />
 
       {ccPreview && (
         <Section
@@ -477,6 +402,180 @@ export default function Providers({
         />
       )}
     </>
+  );
+}
+
+/**
+ * One provider in the list, memoised.
+ *
+ * The list is the only thing on this page that grows with the configuration,
+ * and the row is the only thing in it that is drawn once per provider. It
+ * takes every string it prints already resolved — the name, the endpoint, the
+ * model count, the dialect — plus the values that change on their own: the
+ * status dot, whether it is the open provider, and the balance reading
+ * beside it.
+ *
+ * The markup is the row's own button, unchanged: a component boundary is not
+ * a node, so the list draws exactly what it drew before.
+ */
+const ProviderRow = memo(function ProviderRow({
+  id,
+  name,
+  baseUrl,
+  kind,
+  modelCount,
+  status,
+  selected,
+  showBalance,
+  balance,
+  onOpen,
+}: {
+  id: string;
+  name: string;
+  baseUrl: string;
+  kind: ProviderKind;
+  modelCount: number;
+  status: "ok" | "warn" | "danger" | "off";
+  selected: boolean;
+  showBalance: boolean;
+  balance: BalanceStatus | undefined;
+  onOpen: (id: string) => void;
+}) {
+  const { t } = useI18n();
+  return (
+    <button
+      className={`list-row ${selected ? "selected" : ""}`}
+      onClick={() => onOpen(id)}
+      aria-label={t("providers.open_row", { name })}
+    >
+      <StatusDot tone={status} />
+      <div className="row-main">
+        <span className="row-title">{name}</span>
+        <span className="row-sub">
+          <span className="mono">{baseUrl}</span>
+          {modelCount > 0 && ` · ${t("count.models", { n: modelCount })}`}
+          {` · ${t(kindLabelKey(kind))}`}
+        </span>
+      </div>
+      {showBalance && <BalanceChip status={balance} />}
+    </button>
+  );
+});
+
+/**
+ * The add-a-provider form, with its own drafts.
+ *
+ * The drafts used to live in the page above, so typing a provider name
+ * re-rendered the whole list — and every row of it re-counted the models it
+ * owns, which is a walk over every model in the configuration. Nothing above
+ * this form reads a draft, so the form owns them now and a keystroke costs
+ * one input.
+ *
+ * The form is still the same form: the same fields, in the same order, with
+ * the same names, and the provider it adds still opens its own drawer.
+ */
+function AddProviderForm({
+  providers,
+  save,
+  busy,
+  onAdded,
+}: {
+  providers: Provider[];
+  save: (mutate: (config: AppConfig) => AppConfig | null) => Promise<boolean>;
+  busy: boolean;
+  /** The provider that was added, so the page can open its drawer. */
+  onAdded: (id: string) => void;
+}) {
+  const { t } = useI18n();
+  const [newName, setNewName] = useState("");
+  const [newKind, setNewKind] = useState<ProviderKind>("openai_compatible");
+  const [newBaseUrl, setNewBaseUrl] = useState("");
+  const [nameError, setNameError] = useState<string | null>(null);
+
+  const addProvider = () => {
+    const name = newName.trim();
+    if (!name) return;
+    const id = slugify(name);
+    if (providers.some((p) => p.id === id)) {
+      setNameError(t("providers.duplicate", { id }));
+      return;
+    }
+    void save((cfg) => {
+      if (cfg.providers.some((p) => p.id === id)) {
+        setNameError(t("providers.duplicate", { id }));
+        return null;
+      }
+      const next = structuredClone(cfg);
+      next.providers.push({
+        id,
+        name: name.trim(),
+        kind: newKind,
+        base_url: newBaseUrl.trim() || defaultBaseUrl(newKind),
+        key_ref: `provider:${id}`,
+        extra_headers: {},
+        client_profile: defaultClientProfile(newKind),
+        bearer_auth: false,
+        enabled: true,
+        timeout_secs: 600,
+        connect_timeout_secs: 15,
+        anthropic_version: null,
+        balance: { preset: "none", custom: null },
+        quirks: {
+          use_max_completion_tokens: false,
+          drop_temperature: false,
+          drop_top_p: false,
+          drop_stop: false,
+          stream_usage: true,
+          system_as_developer: false,
+          send_reasoning_effort: false,
+        },
+      });
+      return next;
+    });
+    setNewName("");
+    setNewBaseUrl("");
+    setNameError(null);
+    onAdded(id);
+  };
+
+  return (
+    <Section title={t("providers.add_section")} hint={t("providers.add_hint")}>
+      <div className="controls">
+        <Field label={t("field.name")} danger={Boolean(nameError)} hint={nameError ?? undefined}>
+          <input
+            value={newName}
+            placeholder="DeepSeek"
+            className={nameError ? "input-error" : undefined}
+            onChange={(e) => {
+              setNewName(e.currentTarget.value);
+              setNameError(null);
+            }}
+            onKeyDown={(e) => e.key === "Enter" && addProvider()}
+          />
+        </Field>
+        <Field label={t("field.api_dialect")}>
+          <Segment
+            ariaLabel={t("field.api_dialect")}
+            value={newKind}
+            onChange={(kind) => setNewKind(kind)}
+            options={KINDS.map((k) => ({ value: k.id, label: t(k.labelKey) }))}
+          />
+        </Field>
+        <Field label={t("field.base_url")} hint={t("field.base_url_hint")}>
+          <input
+            value={newBaseUrl}
+            placeholder={defaultBaseUrl(newKind)}
+            onChange={(e) => setNewBaseUrl(e.currentTarget.value)}
+            onKeyDown={(e) => e.key === "Enter" && addProvider()}
+          />
+        </Field>
+        <div className="field-actions">
+          <Button kind="primary" onClick={addProvider} disabled={busy || !newName.trim()}>
+            {t("providers.add")}
+          </Button>
+        </div>
+      </div>
+    </Section>
   );
 }
 
@@ -953,7 +1052,6 @@ function ProviderDrawer({
   onUpdate: (mutate: (provider: Provider) => void) => void;
   onRemove: () => void;
 }) {
-  const models = snapshot.config.models.filter((m) => m.provider_id === provider.id);
   const { t } = useI18n();
   const notify = useToast();
   const hasKey = snapshot.keys[provider.id] ?? false;
@@ -993,13 +1091,65 @@ function ProviderDrawer({
   const providerId = provider.id;
 
   /**
+   * The provider's own models, and the names they answer to.
+   *
+   * The catalogue table asks "is this model already added?" once per
+   * published model, and the answer used to be a scan of the provider's own
+   * list: one lookup per row, so one render cost O(published x configured).
+   * A set answers it in one step, and the two answers are the same.
+   */
+  const models = useMemo(
+    () => snapshot.config.models.filter((m) => m.provider_id === providerId),
+    [snapshot.config.models, providerId],
+  );
+  const configuredNames = useMemo(
+    () => new Set(models.map((m) => m.upstream_model)),
+    [models],
+  );
+
+  /**
+   * The tier menus, once.
+   *
+   * Both tables offer the same tiers under the same naming style, and each
+   * row used to build the menu for itself: `virtualId` allocates its own
+   * lookup table on every call, so a catalogue of six hundred models built
+   * six hundred copies of it, twice, on every render of the drawer. One
+   * array per table, rebuilt when the naming style changes, is the whole
+   * menu.
+   */
+  const namingStyle = snapshot.config.routing.naming_style;
+  const modelTierOptions = useMemo<{ value: ModelTier | "none"; label: string }[]>(
+    () => [
+      { value: "none", label: t("models.no_tier") },
+      ...TIERS.map((c) => ({ value: c, label: virtualId(c, namingStyle) })),
+    ],
+    [namingStyle, t],
+  );
+  const catalogueTierOptions = useMemo<{ value: ModelTier | ""; label: string }[]>(
+    () => [
+      { value: "", label: t("models.no_tier") },
+      ...TIERS.map((c) => ({ value: c, label: virtualId(c, namingStyle) })),
+    ],
+    [namingStyle, t],
+  );
+
+  /**
    * What the catalogue table shows.
    *
    * The filter reads `free` off the entry rather than inferring it from a price:
    * a source that publishes no price for a genuinely free model leaves
    * `pricing` null, so "no price" and "free" are not the same test.
    */
-  const visibleDiscovered = (discovered ?? []).filter((d) => !freeOnly || d.free);
+  const visibleDiscovered = useMemo(
+    () => (discovered ?? []).filter((d) => !freeOnly || d.free),
+    [discovered, freeOnly],
+  );
+
+  /** The catalogue by name, so a row can be added without a second search. */
+  const discoveredById = useMemo(
+    () => new Map((discovered ?? []).map((d) => [d.id, d])),
+    [discovered],
+  );
 
   const discover = async () => {
     const generation = ++discoveryGeneration.current;
@@ -1017,76 +1167,117 @@ function ProviderDrawer({
     }
   };
 
-  const addDiscovered = (model: DiscoveredModel, tier: ModelTier | "") => {
-    // Adding a model is a config mutation; the provider page reaches into the
-    // same save pipeline every other page uses. The tier rides along so an
-    // operator who knows the class does not have to visit the Models page to
-    // finish the sentence.
-    void save((cfg) => {
-      if (
-        cfg.models.some(
-          (m) => m.provider_id === provider.id && m.upstream_model === model.id,
-        )
-      ) {
-        notify("error", t("models.duplicate", { model: model.id }));
-        return null;
-      }
-      const next = structuredClone(cfg);
-      next.models.push({
-        provider_id: provider.id,
-        upstream_model: model.id,
-        tier: tier === "" ? null : tier,
-        priority: 0,
-        weight: 1,
-        enabled: true,
-        capabilities: {
-          vision: false,
-          tools: true,
-          thinking: false,
-          structured_output: false,
-          audio: false,
-          video: false,
-          files: false,
-        },
-        display_name: null,
-        aliases: [],
-        max_output_tokens: null,
-        pricing: model.pricing,
+  const addDiscovered = useCallback(
+    (id: string, tier: ModelTier | "") => {
+      const model = discoveredById.get(id);
+      if (!model) return;
+      // Adding a model is a config mutation; the provider page reaches into the
+      // same save pipeline every other page uses. The tier rides along so an
+      // operator who knows the class does not have to visit the Models page to
+      // finish the sentence.
+      void save((cfg) => {
+        if (
+          cfg.models.some(
+            (m) => m.provider_id === providerId && m.upstream_model === model.id,
+          )
+        ) {
+          notify("error", t("models.duplicate", { model: model.id }));
+          return null;
+        }
+        const next = structuredClone(cfg);
+        next.models.push({
+          provider_id: providerId,
+          upstream_model: model.id,
+          tier: tier === "" ? null : tier,
+          priority: 0,
+          weight: 1,
+          enabled: true,
+          capabilities: {
+            vision: false,
+            tools: true,
+            thinking: false,
+            structured_output: false,
+            audio: false,
+            video: false,
+            files: false,
+          },
+          display_name: null,
+          aliases: [],
+          max_output_tokens: null,
+          pricing: model.pricing,
+        });
+        return next;
       });
-      return next;
-    });
-  };
+    },
+    [save, providerId, discoveredById, notify, t],
+  );
+
+  /**
+   * The tier a catalogue row is about to be added as.
+   *
+   * The choice lives in a map keyed by model id, so a row that has not been
+   * touched reads "" — "no class yet", which lands the model unclassified —
+   * and the Models page banner keeps counting it until a class is assigned.
+   */
+  const chooseTier = useCallback((id: string, tier: ModelTier | "") => {
+    setTierChoice((current) => ({ ...current, [id]: tier }));
+  }, []);
+
+  /**
+   * The tier of a model this provider already has.
+   *
+   * Models live at the config level, not on the provider, so the class edit
+   * is its own save rather than a provider-field mutation.
+   */
+  const setModelTier = useCallback(
+    (upstreamModel: string, next: ModelTier | "none") => {
+      void save((cfg) => {
+        const nextCfg = structuredClone(cfg);
+        const entry = nextCfg.models.find(
+          (e) => e.provider_id === providerId && e.upstream_model === upstreamModel,
+        );
+        if (!entry) return null;
+        entry.tier = next === "none" ? null : next;
+        return nextCfg;
+      });
+    },
+    [save, providerId],
+  );
 
   /** Remove one configured model, with the confirmation the list row uses. */
-  const removeModel = (model: ModelEntry) => {
-    setConfirm({
-      title: t("confirm.remove_model"),
-      body: t("confirm.remove_model_body"),
-      confirmLabel: t("models.remove"),
-      danger: true,
-      onConfirm: () =>
-        void save((cfg) => {
-          const index = cfg.models.findIndex(
-            (m) =>
-              m.provider_id === provider.id && m.upstream_model === model.upstream_model,
-          );
-          if (index < 0) return null;
-          const next = structuredClone(cfg);
-          // The Auto Mode pool names models by exposed id or alias; deleting the
-          // model deletes its pool membership with it, so the reference cannot
-          // dangle behind the removal.
-          const gone = [
-            previewId(provider.id, model.upstream_model),
-            ...model.aliases,
-          ];
-          next.models.splice(index, 1);
-          next.classifier.candidates = next.classifier.candidates.filter(
-            (c) => !gone.includes(c.model),
-          );
-          return next;
-        }),
-    });
-  };
+  const removeModel = useCallback(
+    (upstreamModel: string) => {
+      const model = models.find((m) => m.upstream_model === upstreamModel);
+      if (!model) return;
+      setConfirm({
+        title: t("confirm.remove_model"),
+        body: t("confirm.remove_model_body"),
+        confirmLabel: t("models.remove"),
+        danger: true,
+        onConfirm: () =>
+          void save((cfg) => {
+            const index = cfg.models.findIndex(
+              (m) => m.provider_id === providerId && m.upstream_model === upstreamModel,
+            );
+            if (index < 0) return null;
+            const next = structuredClone(cfg);
+            // The Auto Mode pool names models by exposed id or alias; deleting the
+            // model deletes its pool membership with it, so the reference cannot
+            // dangle behind the removal.
+            const gone = [
+              previewId(providerId, model.upstream_model),
+              ...model.aliases,
+            ];
+            next.models.splice(index, 1);
+            next.classifier.candidates = next.classifier.candidates.filter(
+              (c) => !gone.includes(c.model),
+            );
+            return next;
+          }),
+      });
+    },
+    [models, providerId, save, t],
+  );
 
   return (
     <Drawer
@@ -1142,49 +1333,16 @@ function ProviderDrawer({
             </thead>
             <tbody>
               {models.map((m) => (
-                <tr key={m.upstream_model}>
-                  <td className="mono">{previewId(provider.id, m.upstream_model)}</td>
-                  <td>
-                    <Select
-                      ariaLabel={t("models.tier")}
-                      value={m.tier ?? "none"}
-                      disabled={busy}
-                      onChange={(next) =>
-                        // Models live at the config level, not on the provider,
-                        // so the class edit is its own save rather than a
-                        // provider-field mutation.
-                        void save((cfg) => {
-                          const nextCfg = structuredClone(cfg);
-                          const entry = nextCfg.models.find(
-                            (e) =>
-                              e.provider_id === provider.id &&
-                              e.upstream_model === m.upstream_model,
-                          );
-                          if (!entry) return null;
-                          entry.tier = next === "none" ? null : next;
-                          return nextCfg;
-                        })
-                      }
-                      options={[
-                        { value: "none", label: t("models.no_tier") },
-                        ...TIERS.map((c) => ({
-                          value: c,
-                          label: virtualId(c, snapshot.config.routing.naming_style),
-                        })),
-                      ]}
-                    />
-                  </td>
-                  <td>
-                    <Button
-                      kind="ghost"
-                      ariaLabel={t("models.remove")}
-                      disabled={busy}
-                      onClick={() => removeModel(m)}
-                    >
-                      {t("common.remove")}
-                    </Button>
-                  </td>
-                </tr>
+                <ConfiguredModelRow
+                  key={m.upstream_model}
+                  providerId={providerId}
+                  upstreamModel={m.upstream_model}
+                  tier={m.tier ?? "none"}
+                  options={modelTierOptions}
+                  disabled={busy}
+                  onTier={setModelTier}
+                  onRemove={removeModel}
+                />
               ))}
             </tbody>
           </table>
@@ -1231,39 +1389,17 @@ function ProviderDrawer({
                 </thead>
                 <tbody>
                   {visibleDiscovered.map((d) => (
-                    <tr key={d.id}>
-                      <td className="mono">
-                        {d.id} {d.free && <Badge tone="ok">{t("providers.free_badge")}</Badge>}
-                      </td>
-                      <td className="muted">
-                        {d.pricing
-                          ? `${d.pricing.input_per_mtok} / ${d.pricing.output_per_mtok} ${d.pricing.currency}`
-                          : "—"}
-                      </td>
-                      <td>
-                        <Select
-                          ariaLabel={t("models.tier")}
-                          value={tierChoice[d.id] ?? ""}
-                          onChange={(next) => setTierChoice({ ...tierChoice, [d.id]: next })}
-                          options={[
-                            { value: "", label: t("models.no_tier") },
-                            ...TIERS.map((c) => ({
-                              value: c,
-                              label: virtualId(c, snapshot.config.routing.naming_style),
-                            })),
-                          ]}
-                        />
-                      </td>
-                      <td>
-                        <Button
-                          kind="ghost"
-                          onClick={() => addDiscovered(d, tierChoice[d.id] ?? "")}
-                          disabled={models.some((m) => m.upstream_model === d.id)}
-                        >
-                          {t("cc.add")}
-                        </Button>
-                      </td>
-                    </tr>
+                    <DiscoveredModelRow
+                      key={d.id}
+                      id={d.id}
+                      pricing={d.pricing}
+                      free={d.free}
+                      tier={tierChoice[d.id] ?? ""}
+                      options={catalogueTierOptions}
+                      added={configuredNames.has(d.id)}
+                      onTier={chooseTier}
+                      onAdd={addDiscovered}
+                    />
                   ))}
                 </tbody>
               </table>
@@ -1559,3 +1695,117 @@ function ProviderDrawer({
     </Drawer>
   );
 }
+
+/**
+ * One model this provider already has, memoised.
+ *
+ * A row of this table carries a select, and a select is the most expensive
+ * thing in the drawer. The row therefore takes the menu it offers, the tier
+ * it currently holds and two stable callbacks — so a change to one row's
+ * tier, or the confirmation that opens when a row is removed, leaves every
+ * other row's select untouched.
+ *
+ * The markup is the row's own three cells, unchanged.
+ */
+const ConfiguredModelRow = memo(function ConfiguredModelRow({
+  providerId,
+  upstreamModel,
+  tier,
+  options,
+  disabled,
+  onTier,
+  onRemove,
+}: {
+  providerId: string;
+  upstreamModel: string;
+  tier: ModelTier | "none";
+  options: { value: ModelTier | "none"; label: string }[];
+  disabled: boolean;
+  onTier: (upstreamModel: string, tier: ModelTier | "none") => void;
+  onRemove: (upstreamModel: string) => void;
+}) {
+  const { t } = useI18n();
+  return (
+    <tr>
+      <td className="mono">{previewId(providerId, upstreamModel)}</td>
+      <td>
+        <Select
+          ariaLabel={t("models.tier")}
+          value={tier}
+          disabled={disabled}
+          onChange={(next) => onTier(upstreamModel, next)}
+          options={options}
+        />
+      </td>
+      <td>
+        <Button
+          kind="ghost"
+          ariaLabel={t("models.remove")}
+          disabled={disabled}
+          onClick={() => onRemove(upstreamModel)}
+        >
+          {t("common.remove")}
+        </Button>
+      </td>
+    </tr>
+  );
+});
+
+/**
+ * One model the provider publishes, memoised.
+ *
+ * The catalogue is the largest thing in the drawer: a gateway can publish
+ * several hundred models, and every one of them carries a select. The row
+ * takes its price, its free flag, the tier it is about to be added as and
+ * whether it is already configured — all of them values that change on their
+ * own — so choosing a tier in one row does not re-render the other five
+ * hundred.
+ *
+ * The markup is the row's own four cells, unchanged.
+ */
+const DiscoveredModelRow = memo(function DiscoveredModelRow({
+  id,
+  pricing,
+  free,
+  tier,
+  options,
+  added,
+  onTier,
+  onAdd,
+}: {
+  id: string;
+  pricing: DiscoveredModel["pricing"];
+  free: boolean;
+  tier: ModelTier | "";
+  options: { value: ModelTier | ""; label: string }[];
+  added: boolean;
+  onTier: (id: string, tier: ModelTier | "") => void;
+  onAdd: (id: string, tier: ModelTier | "") => void;
+}) {
+  const { t } = useI18n();
+  return (
+    <tr>
+      <td className="mono">
+        {id} {free && <Badge tone="ok">{t("providers.free_badge")}</Badge>}
+      </td>
+      <td className="muted">
+        {pricing
+          ? `${pricing.input_per_mtok} / ${pricing.output_per_mtok} ${pricing.currency}`
+          : "—"}
+      </td>
+      <td>
+        <Select
+          ariaLabel={t("models.tier")}
+          value={tier}
+          onChange={(next) => onTier(id, next)}
+          options={options}
+        />
+      </td>
+      <td>
+        <Button kind="ghost" onClick={() => onAdd(id, tier)} disabled={added}>
+          {t("cc.add")}
+        </Button>
+      </td>
+    </tr>
+  );
+});
