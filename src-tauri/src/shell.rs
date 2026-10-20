@@ -256,39 +256,27 @@ fn window_is_visible(app: &AppHandle) -> bool {
         .unwrap_or(false)
 }
 
-// TODO(deep-link routing): a link opens the application and brings the
-// window forward, and the URL is handed to the dashboard as an event
-// (`DEEP_LINK_EVENT`, payload: the URL as a string). Turning that URL into
-// a *page* is a frontend change, and `ui/` is not this crate's to edit, so
-// it is deliberately not made here.
+// The link reaches a *page*, and the two halves of that are a pair.
 //
-// A follow-up has to change exactly two places:
-//
-//   1. `ui/src/api.ts` — add a listener helper next to
-//      `onGatewayStateChanged`, which is the file's existing pattern for
-//      an event that arrives from Rust:
-//
-//          export const DEEP_LINK_EVENT = "zroutery://deep-link";
-//
-//          export function onDeepLink(
-//            handler: (url: string) => void,
-//          ): Promise<UnlistenFn> {
-//            return listen(DEEP_LINK_EVENT, (event) => handler(event.payload));
-//          }
-//
-//      The event name has to match `DEEP_LINK_EVENT` in
-//      `src-tauri/src/shell.rs`; the two are a pair, the same way
+//   1. `ui/src/api.ts` — `DEEP_LINK_EVENT` and `onDeepLink`, next to
+//      `onGatewayStateChanged`, which is the file's existing pattern for an
+//      event that arrives from Rust. The event name has to match
+//      `DEEP_LINK_EVENT` here; the two are a pair, the same way
 //      `GATEWAY_STATE_EVENT` is.
 //
 //   2. `ui/src/App.tsx` — the `Shell` component keeps the current page in
 //      `const [page, setPage] = useState<Page>("overview")` (the `Page`
 //      union is declared at the top of the file), and nothing outside the
-//      component can change it today. The deep-link handler has to be
-//      wired into `Shell` — next to the `onGatewayStateChanged` effect —
-//      and call `setPage` with the page the URL names, e.g.
-//      `zroutery://providers` becomes `setPage("providers")`.
+//      component can change it. The handler is wired into `Shell` — next to
+//      the `onGatewayStateChanged` effect — and calls `setPage` with the page
+//      the URL names: `zroutery://providers` becomes `setPage("providers")`.
 //
-// Until that lands, a link opens the application and stops there.
+// A third path exists because of when the link arrives. A link that reaches a
+// running application is delivered as an event, and the dashboard is
+// listening. A link that *started* the application was announced before the
+// dashboard had finished loading, so there was no listener and the event went
+// to nobody. The shell keeps the last link it received
+// ([`deep_link_current`]), and the dashboard asks for it as it mounts.
 
 #[cfg(test)]
 mod tests {
