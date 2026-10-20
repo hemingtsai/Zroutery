@@ -96,6 +96,18 @@ tauri = { version = "2", features = ["tray-icon", "macos-private-api", "image-pn
 tauri-plugin-clipboard-manager = "2"
 tauri-plugin-autostart = "2"
 
+# The desktop-native shell: one process at a time, a way to summon the
+# window from another application, a `zroutery://` URL scheme, and a
+# notification for a failure the operator cannot see on screen.
+#
+# Unconditional on purpose: the feature table above is the product's own
+# switchboard, and a desktop shell that changes shape with the ML stack
+# would make the packaged binary depend on a learning flag.
+tauri-plugin-single-instance = "2"
+tauri-plugin-global-shortcut = "2"
+tauri-plugin-notification = "2"
+tauri-plugin-deep-link = "2"
+
 # Each platform uses its native credential store: the macOS keychain or the
 # Windows Credential Manager. Both backends exist in the same keyring version
 # under target-specific features.

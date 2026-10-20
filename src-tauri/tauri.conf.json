@@ -30,6 +30,13 @@
       "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: asset: http://asset.localhost; connect-src 'self' ipc: http://ipc.localhost"
     }
   },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["zroutery"]
+      }
+    }
+  },
   "bundle": {
     "active": true,
     "targets": [

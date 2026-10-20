@@ -14,6 +14,8 @@ pub mod migration;
 mod migration_commands;
 pub mod platform;
 pub mod secrets;
+#[cfg(desktop)]
+mod shell;
 pub mod state;
 pub mod store;
 pub mod takeover_commands;
@@ -45,8 +47,34 @@ pub fn run() {
         .with_writer(log_buffer.clone())
         .init();
 
-    let app = tauri::Builder::default()
-        .plugin(tauri_plugin_clipboard_manager::init())
+    let mut builder = tauri::Builder::default();
+
+    // The single-instance plugin is registered before every other plugin on
+    // purpose. A second launch has to be seen before anything else starts,
+    // or the second process would carry on into the setup below and fight
+    // the first one for the gateway port. Its callback runs on the main
+    // thread of the *first* instance, and its job is to bring that window
+    // forward.
+    #[cfg(desktop)]
+    {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            shell::on_second_launch(app, &argv);
+        }));
+    }
+
+    builder = builder.plugin(tauri_plugin_clipboard_manager::init());
+
+    // The notification plugin carries the failures nobody is looking at, and
+    // the deep-link plugin owns the `zroutery://` scheme. The global
+    // shortcut plugin is registered later, in the setup, because a desktop
+    // that refuses global shortcuts must not stop the application.
+    #[cfg(desktop)]
+    {
+        builder = builder.plugin(tauri_plugin_notification::init());
+        builder = builder.plugin(tauri_plugin_deep_link::init());
+    }
+
+    let app = builder
         .invoke_handler(tauri::generate_handler![
             commands::get_snapshot,
             commands::get_activity,
@@ -183,6 +211,13 @@ pub fn run() {
 
             tray::build(app.handle())?;
 
+            // The desktop shell: the chord that summons this window from
+            // another application, and the `zroutery://` scheme that opens
+            // it. Registered after the tray so a link that starts the
+            // application finds a window that is already there.
+            #[cfg(desktop)]
+            shell::install(app.handle());
+
             // Debug-only hook so the quit path can be exercised without a
             // pointer: it runs exactly the code the tray item runs.
             #[cfg(debug_assertions)]
@@ -205,6 +240,14 @@ pub fn run() {
                     if let Err(e) = desktop.start().await {
                         tracing::error!("autostart failed: {e}");
                         desktop.set_warning(Some(format!("The proxy could not start: {e}")));
+                        // That warning is a banner in the dashboard, so a
+                        // notification would repeat it — but only while
+                        // that window is on screen. A login launch usually
+                        // has no window at all, and then this is the only
+                        // report the operator will get that their gateway
+                        // is not running.
+                        #[cfg(desktop)]
+                        shell::notify_startup_failure(&handle, &e);
                     }
                 }
                 tray::refresh(&handle, &desktop).await;

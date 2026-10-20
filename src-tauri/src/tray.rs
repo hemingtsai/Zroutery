@@ -61,16 +61,17 @@ fn labels() -> Labels {
 /// Whether the OS UI language is Chinese.
 ///
 /// The tray is drawn by the OS before any webview exists, so the webview's
-/// locale cannot inform it — this reads the system directly.
+/// locale cannot inform it — this reads the system directly. The shell's
+/// notifications are drawn by the OS as well, so they read the same way.
 #[cfg(target_os = "windows")]
-fn system_language_is_chinese() -> bool {
+pub(crate) fn system_language_is_chinese() -> bool {
     // PRIMARYLANGID of the user's default UI language: 0x04 is Chinese.
     let lang = unsafe { windows_sys::Win32::Globalization::GetUserDefaultUILanguage() } & 0x3ff;
     lang == 0x04
 }
 
 #[cfg(not(target_os = "windows"))]
-fn system_language_is_chinese() -> bool {
+pub(crate) fn system_language_is_chinese() -> bool {
     std::env::var("LANG")
         .or_else(|_| std::env::var("LC_ALL"))
         .map(|v| v.to_ascii_lowercase().starts_with("zh"))
@@ -154,6 +155,13 @@ fn on_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
                     desktop.stop().await;
                 } else if let Err(e) = desktop.start().await {
                     tracing::error!("cannot start proxy from tray: {e}");
+                    // The tray menu has nowhere to write an error down and
+                    // the dashboard was not asked to start anything, so
+                    // nothing on screen says this happened. The operator
+                    // has to be told: they clicked "start" and the gateway
+                    // is not running, and the reason is not in the menu.
+                    #[cfg(desktop)]
+                    crate::shell::notify_gateway_failure(&app, &e);
                 }
                 refresh(&app, &desktop).await;
                 // The window owns the status display and did not run this
