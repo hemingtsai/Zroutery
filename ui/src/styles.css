@@ -28,7 +28,17 @@
   /* Type */
   --text: #000000;
   --text-2: #555555;
-  --muted: #999999;
+  /*
+   * The workhorse quiet colour, and it used to fail on the text it carries.
+   *
+   * `--muted` was #999999 on white — 2.85:1 — and it is the colour of the
+   * field hints at 11px, the section hints, the empty states, the table
+   * headings, the timestamps, the placeholder text, and the text actions that
+   * are the primary affordance on several pages. All of that is body text,
+   * which needs 4.5:1. #767676 is 4.54:1 on white and still reads as quieter
+   * than `--text-2` at 7.46:1.
+   */
+  --muted: #767676;
 
   /* Primary action: black */
   --primary: #000000;
@@ -36,8 +46,13 @@
   --on-primary: #ffffff;
 
   /* Status — as small dots and quiet text */
-  --ok: #27834a;
-  --warn: #a66b00;
+  /* The light theme's badge text sits on its own tinted background, and both
+     tones were under 4.5:1 there: `--ok` was 4.15:1 on `--ok-bg` and
+     `--warn` was 3.95:1 on `--warn-bg`. These are 12px labels, so they are
+     body text and need 4.5:1 — 5.71:1 and 5.27:1 now. The dark theme's own
+     values already pass and are left alone. */
+  --ok: #1f6b3a;
+  --warn: #8a5a00;
   --danger: #b42318;
   --warn-bg: #f6f1e7;
   --danger-bg: #f5e9e7;
@@ -87,7 +102,9 @@
   --line-strong: #2a2a2a;
   --text: #e0e0e0;
   --text-2: #888888;
-  --muted: #555555;
+  /* 5.47:1 on #111111, where #555555 managed 2.53:1 — the same quiet-colour
+     failure the light theme had, on the same body text. */
+  --muted: #8a8a8a;
   --primary: #ffffff;
   --primary-hover: #cccccc;
   --on-primary: #000000;
@@ -1041,9 +1058,26 @@ input:focus-visible,
 .nav-item:focus-visible,
 .list-row:focus-visible,
 .segment-item:focus-visible,
-.disclosure-head:focus-visible {
+.disclosure-head:focus-visible,
+.bar-action:focus-visible,
+.menu-item:focus-visible,
+.timeline-item:focus-visible,
+.chip-remove:focus-visible {
   outline: 2px solid var(--text);
   outline-offset: 0;
+}
+
+/*
+ * A line the markup marks as a warning.
+ *
+ * Thirteen places in the dashboard ask for this — a failed probe, a rollback
+ * that restored nothing, a conflict somebody changed behind the takeover — and
+ * there was no rule for it, so every one of them rendered in the ordinary
+ * body colour. The distinction the markup was asking for did not exist on
+ * screen, and the warning was the one thing on the page that had no voice.
+ */
+.warn-text {
+  color: var(--warn);
 }
 
 /*
@@ -1312,6 +1346,18 @@ input::placeholder {
 .select-item[data-highlighted] {
   background: var(--hover);
   color: var(--text);
+  /*
+   * The highlight alone was not a focus indicator.
+   *
+   * `--hover` is #f5f5f5 on #ffffff — 1.09:1 — and the checked option's
+   * `--selected` is 1.14:1, so the only surviving cue was the text colour
+   * changing from `--text-2` to `--text`, which is also what the selected
+   * option looks like. A keyboard user could not tell which option had the
+   * focus. The ring is drawn inside, because an outside one would be clipped
+   * by the list's own edge.
+   */
+  outline: 2px solid var(--text);
+  outline-offset: -2px;
 }
 
 .select-item[data-state="checked"] {
