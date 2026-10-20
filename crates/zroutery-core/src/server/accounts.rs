@@ -180,10 +180,43 @@ impl AppState {
     #[cfg(feature = "account")]
     pub async fn reconcile_accounts(&self) -> ReconcileReport {
         let config = self.registry().snapshot();
+        let providers: Vec<&ProviderConfig> = config.providers.iter().collect();
+        self.reconcile_providers(&providers).await
+    }
+
+    /// Probe one provider's declared accounts and publish the result.
+    ///
+    /// The per-provider half of [`Self::reconcile_accounts`], and it exists for a
+    /// reason the all-provider sweep cannot serve: a panel that asks for one
+    /// provider's balance must not pay for a request to every other provider to
+    /// get it. The sweep exists for a page that refreshes everything at once,
+    /// and the cost model of the two is different.
+    ///
+    /// A provider id that names nothing yields an empty report rather than an
+    /// error, because the caller is asking about a balance and the answer to
+    /// "that provider is gone" is the same as "that provider has no accounts".
+    #[cfg(feature = "account")]
+    pub async fn reconcile_provider_accounts(&self, provider_id: &str) -> ReconcileReport {
+        let config = self.registry().snapshot();
+        let providers: Vec<&ProviderConfig> = config
+            .providers
+            .iter()
+            .filter(|p| p.id == provider_id)
+            .collect();
+        self.reconcile_providers(&providers).await
+    }
+
+    /// The loop both entry points share.
+    ///
+    /// Split out so the per-provider path cannot drift from the sweep: the two
+    /// differ only in which providers they are handed, and a second copy of the
+    /// loop is a second set of rules for what counts as a declared account.
+    #[cfg(feature = "account")]
+    async fn reconcile_providers(&self, providers: &[&ProviderConfig]) -> ReconcileReport {
         let store = &self.accounts;
         let mut outcomes = Vec::new();
 
-        for provider in &config.providers {
+        for provider in providers {
             if !provider.enabled {
                 continue;
             }

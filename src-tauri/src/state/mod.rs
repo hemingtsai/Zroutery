@@ -150,6 +150,8 @@ mod helpers;
 mod lifecycle;
 mod migration;
 #[cfg(test)]
+mod balance_tests;
+#[cfg(test)]
 mod migration_tests;
 // `any`, not `ml`: `ml.rs` is the learned model, but it also holds
 // `reconcile_accounts`, which is gated on `account` alone. Gating the module
