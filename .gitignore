@@ -27,3 +27,11 @@ src-tauri/gen
 
 # IDE
 .zcode/
+
+# Python bytecode. The gates are Python scripts, and one that imports another
+# leaves a __pycache__ behind; the tree should not be dirty for having run them.
+__pycache__/
+*.pyc
+
+# Local screenshots written by the browser tooling.
+.openchamber/
