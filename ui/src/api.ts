@@ -65,18 +65,50 @@ export type BalancePreset =
   | "sub2api"
   | "custom";
 
-export const BALANCE_PRESETS: { id: BalancePreset; label: string; hint: string }[] = [
-  { id: "none", label: "Not supported", hint: "OpenAI and Anthropic publish no balance" },
-  { id: "deep_seek", label: "DeepSeek", hint: "/user/balance" },
-  { id: "moonshot", label: "Moonshot", hint: "/users/me/balance" },
-  { id: "silicon_flow", label: "SiliconFlow", hint: "/user/info" },
-  { id: "open_router", label: "OpenRouter", hint: "/credits" },
+/**
+ * The balance probes a provider can be asked at.
+ *
+ * The labels are translation *keys*, not words. They used to be English
+ * literals, which made the whole "Probe" dropdown English inside a Chinese
+ * interface — the one dropdown whose options are all descriptions rather than
+ * product names.
+ *
+ * `hint` says what the probe asks for, and it used to have no rendering path
+ * at all: the data was there and nothing showed it. It is a key for the same
+ * reason, and the page renders the chosen one.
+ */
+export const BALANCE_PRESETS: {
+  id: BalancePreset;
+  labelKey: string;
+  hintKey: string;
+}[] = [
+  {
+    id: "none",
+    labelKey: "balance_preset.none",
+    hintKey: "balance_hint.none",
+  },
+  { id: "deep_seek", labelKey: "balance_preset.deep_seek", hintKey: "balance_hint.deep_seek" },
+  { id: "moonshot", labelKey: "balance_preset.moonshot", hintKey: "balance_hint.moonshot" },
+  {
+    id: "silicon_flow",
+    labelKey: "balance_preset.silicon_flow",
+    hintKey: "balance_hint.silicon_flow",
+  },
+  {
+    id: "open_router",
+    labelKey: "balance_preset.open_router",
+    hintKey: "balance_hint.open_router",
+  },
   {
     id: "sub2api",
-    label: "Sub2API relay",
-    hint: "/v1/usage — wallet, key quota or subscription",
+    labelKey: "balance_preset.sub2api",
+    hintKey: "balance_hint.sub2api",
   },
-  { id: "custom", label: "Custom endpoint", hint: "your own path and JSON pointers" },
+  {
+    id: "custom",
+    labelKey: "balance_preset.custom",
+    hintKey: "balance_hint.custom",
+  },
 ];
 
 export interface BalanceProbe {

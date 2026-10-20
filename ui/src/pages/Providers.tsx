@@ -1084,6 +1084,11 @@ function ProviderDrawer({
   // Hoisted so the type is narrowed once rather than at two separate index
   // reads, and so the translation has one string to work with.
   const balanceError = snapshot.balances[provider.id]?.error ?? null;
+  // What the chosen probe asks for, said under the dropdown.
+  const presetHint = (() => {
+    const preset = BALANCE_PRESETS.find((p) => p.id === provider.balance.preset);
+    return preset ? t(preset.hintKey as Parameters<typeof t>[0]) : null;
+  })();
   // The tier each catalogue row is about to be added as. Keys are the discovered
   // model ids; "" means "no class yet" — the model lands unclassified and the
   // Models page banner keeps counting it until a class is assigned.
@@ -1601,9 +1606,18 @@ function ProviderDrawer({
                   };
                 })
               }
-              options={BALANCE_PRESETS.map((p) => ({ value: p.id, label: p.label }))}
+              options={BALANCE_PRESETS.map((p) => ({
+                value: p.id,
+                label: t(p.labelKey as Parameters<typeof t>[0]),
+              }))}
             />
           </Field>
+          {/*
+            * What the chosen probe asks for. The data was in the table all
+            * along and nothing showed it, so the operator had to know that
+            * "DeepSeek" meant "/user/balance" by recognising the provider.
+            */}
+          {presetHint && <p className="field-hint">{presetHint}</p>}
           <div className="field-actions">
             <Button
               kind="ghost"
