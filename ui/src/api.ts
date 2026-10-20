@@ -1592,21 +1592,6 @@ export function defaultProbe(): BalanceProbe {
   };
 }
 
-export function scopeLabel(scope: BudgetScope, style: NamingStyle = "internal"): string {
-  switch (scope.kind) {
-    case "global":
-      return "everything";
-    case "provider":
-      return `provider ${scope.id}`;
-    case "tier":
-      return virtualId(scope.tier, style);
-  }
-}
-
-export function periodLabel(period: BudgetPeriod): string {
-  return period === "day" ? "today" : "this month";
-}
-
 /** The virtual model id a tier is exposed as. */
 export function virtualId(tier: ModelTier, style: NamingStyle = "internal"): string {
   const map: Record<NamingStyle, Record<ModelTier, string>> = {

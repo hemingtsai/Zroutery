@@ -213,6 +213,13 @@ impl Desktop {
             // Say *why* rather than "no balance": the usual cause is a
             // credential the panel will not accept, and that is a thing the
             // user can fix.
+            //
+            // When the probe said why, that reason is the message. It is
+            // specific — "the stored credential is a relay API key, and the
+            // dashboard authenticates with the panel's access token" — and
+            // wrapping it in a sentence about *no account reporting a
+            // balance* would bury the one line the user can act on behind a
+            // summary of what did not happen.
             return Err(if failures.is_empty() {
                 format!(
                     "no account of {} reported a balance. Declare an account and store the \
@@ -221,11 +228,7 @@ impl Desktop {
                     provider.name
                 )
             } else {
-                format!(
-                    "no account of {} reported a balance: {}",
-                    provider.name,
-                    failures.join("; ")
-                )
+                failures.join("; ")
             });
         }
 
