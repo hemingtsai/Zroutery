@@ -316,7 +316,16 @@ function AccountRow({
             {t("accounts.last_failure")} {ago(balance.last_failure)}
           </span>
         )}
-        <span className="row-sub">{phaseLabel}</span>
+        {/*
+         * The phase is the row's answer to "what is this account doing", and
+         * it changes on its own: the browser asks a human, the human answers,
+         * the check-in settles. A live region announces those changes, because
+         * the alternative is a row that silently becomes "checked in" while the
+         * operator is looking at something else.
+         */}
+        <span className="row-sub" role="status">
+          {phaseLabel}
+        </span>
         {view.last_completed_at !== null && (
           <span className="row-sub muted">
             · {t("account.last_checkin")} {ago(view.last_completed_at)}
@@ -708,6 +717,10 @@ async function startBrowser(
   }
   try {
     await api.startCheckin(providerId, accountId);
+    // The press is acknowledged. The browser then runs on its own — it may
+    // need a human, and it will say so in the row — so what is announced here
+    // is that the attempt started, not what it will end as.
+    notify("ok", t("account.started"));
   } catch (e) {
     notify("error", `${t("account.start_failed")}: ${errorText(e)}`);
   }
@@ -721,6 +734,7 @@ async function resumeBrowser(
 ): Promise<void> {
   try {
     await api.resumeCheckin(providerId, accountId);
+    notify("ok", t("account.resumed"));
   } catch (e) {
     notify("error", `${t("account.resume_failed")}: ${errorText(e)}`);
   }
@@ -734,6 +748,7 @@ async function cancelBrowser(
 ): Promise<void> {
   try {
     await api.cancelCheckin(providerId, accountId);
+    notify("ok", t("account.cancelled"));
   } catch (e) {
     notify("error", `${t("account.cancel_failed")}: ${errorText(e)}`);
   }

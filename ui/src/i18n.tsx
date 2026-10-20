@@ -429,6 +429,9 @@ const en = {
   "account.need_selector":
     "This account has no check-in control. Set the check-in button selector in the provider's account settings to a CSS selector for that button, for example button.checkin.",
   "account.start_failed": "Could not start the check-in",
+  "account.started": "The check-in has started. The browser will ask for a human if it needs one.",
+  "account.resumed": "The check-in has resumed.",
+  "account.cancelled": "The check-in was cancelled.",
   "account.resume_failed": "Could not continue the check-in",
   "account.cancel_failed": "Could not cancel the check-in",
 
@@ -1439,6 +1442,9 @@ const zh: Dict = {
   "account.need_path": "未配置签到页面。请在该提供商的账户设置中把签到页路径指向带有签到按钮的面板页。",
   "account.need_selector": "未配置签到按钮选择器。请在该提供商的账户设置中把签到按钮选择器填成该按钮的 CSS 选择器，例如 button.checkin。",
   "account.start_failed": "无法开始签到",
+  "account.started": "签到已开始。若需要人工验证，浏览器会提示。",
+  "account.resumed": "签到已继续。",
+  "account.cancelled": "签到已取消。",
   "account.resume_failed": "无法继续签到",
   "account.cancel_failed": "无法取消签到",
 
