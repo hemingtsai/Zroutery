@@ -24,7 +24,7 @@ import {
   useToast,
   type ConfirmRequest,
 } from "../components";
-import { useI18n } from "../i18n";
+import { useI18n, describeBackendError } from "../i18n";
 
 /**
  * Settings is deliberately the most conventional page: gateway transport,
@@ -385,7 +385,7 @@ export default function Settings({
                   try {
                     setRevealed(await api.revealToken());
                   } catch (e) {
-                    notify("error", errorText(e));
+                    notify("error", describeBackendError(t, errorText(e)));
                   }
                 }}
                 title={t("settings.reveal_title")}

@@ -20,7 +20,7 @@
  * something, which is the failure mode this subsystem exists to prevent.
  */
 import { useCallback, useEffect, useState } from "react";
-import { useI18n, type TKey } from "../i18n";
+import { useI18n, describeBackendError, type TKey } from "../i18n";
 import { Badge, Button, ConfirmDialog, Empty, Section, Select, useToast } from "../components";
 import type { ConfirmRequest } from "../components";
 import {
@@ -85,7 +85,7 @@ export default function Takeover() {
       setViews([...next].sort((a, b) => (order.get(a.agent) ?? 99) - (order.get(b.agent) ?? 99)));
       setLoadError(null);
     } catch (e) {
-      notify("error", errorText(e));
+      notify("error", describeBackendError(t, errorText(e)));
       // The empty list is kept, but the failure is remembered as one. A page
       // that could not read the takeover record must not render as though
       // there were no external agents: "this build knows no external agent" and
@@ -107,7 +107,7 @@ export default function Takeover() {
       notify("ok", t("takeover.toast_adopted", { agent: t(`takeover.agent.${agent}`) }));
       await load();
     } catch (e) {
-      notify("error", errorText(e));
+      notify("error", describeBackendError(t, errorText(e)));
     } finally {
       setActing(null);
     }
@@ -132,7 +132,7 @@ export default function Takeover() {
       notify("ok", `${t("takeover.toast_released")}${parts.length ? ` · ${parts.join(" · ")}` : ""}`);
       await load();
     } catch (e) {
-      notify("error", errorText(e));
+      notify("error", describeBackendError(t, errorText(e)));
     } finally {
       setActing(null);
     }

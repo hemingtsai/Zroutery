@@ -99,7 +99,7 @@ export default function Accounts({
       // a probe result beside balances from before it ran.
       await run(api.snapshot);
     } catch (e) {
-      notify("error", errorText(e));
+      notify("error", describeBackendError(t, errorText(e)));
     } finally {
       setProbing(false);
     }

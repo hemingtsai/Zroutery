@@ -227,7 +227,7 @@ export default function Providers({
       }
       setCcSelected(selection);
     } catch (e) {
-      notify("error", errorText(e));
+      notify("error", describeBackendError(t, errorText(e)));
     } finally {
       setCcLoading(false);
     }
@@ -1184,7 +1184,7 @@ function ProviderDrawer({
       if (ids.length === 0) notify("error", t("providers.empty_catalogue", { name: provider.name }));
     } catch (e) {
       if (generation !== discoveryGeneration.current) return;
-      notify("error", errorText(e));
+      notify("error", describeBackendError(t, errorText(e)));
     } finally {
       if (generation === discoveryGeneration.current) setDiscovering(false);
     }

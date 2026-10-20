@@ -28,7 +28,7 @@
  * actually says.
  */
 import { useCallback, useEffect, useState } from "react";
-import { useI18n, type TKey } from "../i18n";
+import { useI18n, describeBackendError, type TKey } from "../i18n";
 import { Badge, Button, ConfirmDialog, Empty, Section, useToast } from "../components";
 import type { ConfirmRequest } from "../components";
 import {
@@ -97,7 +97,7 @@ export default function Cutover() {
       );
       setLoadError(null);
     } catch (e) {
-      notify("error", errorText(e));
+      notify("error", describeBackendError(t, errorText(e)));
       // The empty list is kept, but the failure is remembered as one. A page
       // that cannot read the record must not render as though there were
       // nothing to read: "this build knows no external agent" and "the call
@@ -130,7 +130,7 @@ export default function Cutover() {
       }
       await load();
     } catch (e) {
-      notify("error", errorText(e));
+      notify("error", describeBackendError(t, errorText(e)));
     } finally {
       setActing(null);
     }
@@ -152,7 +152,7 @@ export default function Cutover() {
       }
       await load();
     } catch (e) {
-      notify("error", errorText(e));
+      notify("error", describeBackendError(t, errorText(e)));
     } finally {
       setRollingBack(false);
     }
@@ -406,12 +406,12 @@ function ResultPanel({ result }: { result: MigrationResult }) {
 
           {result.errors.map((message, index) => (
             <p key={index} className="row-sub warn-text">
-              <strong>{t("cutover.result.errors")}:</strong> {message}
+              <strong>{t("cutover.result.errors")}:</strong> {describeBackendError(t, message)}
             </p>
           ))}
           {result.warnings.map((message, index) => (
             <p key={index} className="row-sub muted">
-              <strong>{t("cutover.result.warnings")}:</strong> {message}
+              <strong>{t("cutover.result.warnings")}:</strong> {describeBackendError(t, message)}
             </p>
           ))}
         </div>
