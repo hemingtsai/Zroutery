@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, errorText, gatewayAction, onDeepLink, onGatewayStateChanged, pageForDeepLink, type AppConfig, type Snapshot } from "./api";
+import { api, deepLinkCurrent, errorText, gatewayAction, onDeepLink, onGatewayStateChanged, pageForDeepLink, type AppConfig, type Snapshot } from "./api";
 import { Banner, MenuItem, Popover, StatusDot, ToastProvider, useToast } from "./components";
 import { describeBackendError, I18nProvider, useI18n } from "./i18n";
 import Overview from "./pages/Overview";
@@ -277,10 +277,13 @@ function Shell() {
   useEffect(() => {
     let cancelled = false;
     let unlisten: (() => void) | undefined;
-    void onDeepLink((url) => {
+
+    const open = (url: string) => {
       const target = pageForLink(url);
       if (target) setPage(target);
-    })
+    };
+
+    void onDeepLink(open)
       .then((off) => {
         if (cancelled) off();
         else unlisten = off;
@@ -288,6 +291,17 @@ function Shell() {
       .catch(() => {
         // No event bridge (a plain browser): there are no links to open.
       });
+
+    // And the link that *started* this application, which was announced before
+    // there was a listener for it.
+    void deepLinkCurrent()
+      .then((url) => {
+        if (!cancelled && url) open(url);
+      })
+      .catch(() => {
+        // No such command in a build without the desktop shell.
+      });
+
     return () => {
       cancelled = true;
       unlisten?.();

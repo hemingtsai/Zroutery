@@ -126,6 +126,11 @@ pub fn run() {
             migration_commands::migration_previews,
             migration_commands::migration_apply,
             migration_commands::migration_rollback,
+            // The link that started this process, for a dashboard that was not
+            // listening yet when it arrived. Desktop only: the scheme is a
+            // property of the installed application.
+            #[cfg(desktop)]
+            shell::deep_link_current,
             #[cfg(feature = "account-maint")]
             checkin_commands::start_checkin,
             #[cfg(all(feature = "account-maint", feature = "newapi"))]
@@ -217,7 +222,6 @@ pub fn run() {
             // application finds a window that is already there.
             #[cfg(desktop)]
             shell::install(app.handle());
-
             // Debug-only hook so the quit path can be exercised without a
             // pointer: it runs exactly the code the tray item runs.
             #[cfg(debug_assertions)]

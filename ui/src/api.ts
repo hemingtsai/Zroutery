@@ -1476,6 +1476,20 @@ export function onDeepLink(handler: (url: string) => void): Promise<UnlistenFn> 
 }
 
 /**
+ * The link that started this application, if one did.
+ *
+ * A link that arrives while the application is already running is delivered as
+ * an event, and the listener above catches it. A link that *started* the
+ * application is announced before the dashboard has finished loading, so there
+ * is no listener yet and the event goes to nobody. The shell keeps it, and
+ * this asks for it — which is what makes "open this application with a link"
+ * and "the application was already running" land on the same page.
+ */
+export function deepLinkCurrent(): Promise<string | null> {
+  return invoke<string | null>("deep_link_current");
+}
+
+/**
  * The page a `zroutery://` link names, or `null` when it names none.
  *
  * The host of the URL is the page: `zroutery://providers` opens the providers
@@ -1491,8 +1505,9 @@ export function onDeepLink(handler: (url: string) => void): Promise<UnlistenFn> 
 export function pageForDeepLink(url: string): string | null {
   // Only this application's own scheme is acted on. The shell only emits its
   // own, but a link is user input and this is the boundary where that matters.
-  if (!url.startsWith("zroutery://")) return null;
-  const rest = url.slice("zroutery://".length);
+  const text = String(url ?? "");
+  if (!text.startsWith("zroutery://")) return null;
+  const rest = text.slice("zroutery://".length);
   const host = rest.split(/[/?#]/, 1)[0]?.toLowerCase() ?? "";
   return host.length > 0 ? host : null;
 }

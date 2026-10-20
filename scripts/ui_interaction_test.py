@@ -148,6 +148,9 @@ HARNESS = """
     // snapshot free of account flags, so a case that wants the page has to ask
     // for it by seeding an `account` payload.
     account: query("account") || null,
+    // The link that started this application, when a case wants to drive the
+    // path where the dashboard was not listening yet.
+    deepLink: query("deepLink") || null,
     commandLog: [],
     delays: {},
   };
@@ -292,6 +295,9 @@ HARNESS = """
       }
       case "get_ml_traces":
         return state.ml ? clone(state.ml.traces) : null;
+      case "deep_link_current":
+        // The link that started this application, if one did.
+        return state.deepLink || null;
       case "migration_status":
         return state.migration ? clone(state.migration.status) : null;
       case "migration_previews":
@@ -403,7 +409,7 @@ HARNESS = """
     // the snapshot, so a case that seeds it has to be able to install it. A key
     // missing from this list is a seed that is silently dropped and a case that
     // times out with no explanation.
-    for (const key of ["config", "server", "keys", "catalogues", "account", "ml", "migration"]) {
+    for (const key of ["config", "server", "keys", "catalogues", "account", "ml", "migration", "deepLink"]) {
       if (seed && seed[key] !== undefined) state[key] = clone(seed[key]);
     }
     if (seed && seed.delays) state.delays = { ...seed.delays };
@@ -2589,6 +2595,40 @@ def case_ui14_a_select_inside_a_drawer_keeps_its_focus(devtools) -> list[str]:
     return failures
 
 
+def case_ui15_the_link_that_started_the_application_opens_its_page(devtools) -> list[str]:
+    """A link that *started* the application, which is a different path.
+
+    A link that arrives while the application is already running is delivered
+    as an event, and the dashboard is listening. A link that started the
+    application was announced before the dashboard had finished loading, so
+    there was no listener and the event went to nobody — the shell keeps the
+    link, and the dashboard asks for it when it mounts.
+
+    The case drives the second path: the application is already on the
+    overview, and the link says the providers page.
+    """
+    failures: list[str] = []
+    # The harness has already loaded the page with this case's query, which
+    # carries the link. That is the path: the application came up because of
+    # the link, so the dashboard asked for it as it mounted.
+    devtools.wait_for("Boolean(document.querySelector('.nav-item'))", "the shell")
+    devtools.wait_for(
+        "document.querySelector('.nav-item.active') && "
+        "document.querySelector('.nav-item.active').getAttribute('data-page') === 'providers'",
+        "the providers page",
+        timeout=15.0,
+    )
+    active = devtools.evaluate(
+        "document.querySelector('.nav-item.active')?.getAttribute('data-page')"
+    )
+    if active != "providers":
+        failures.append(
+            "the link that started the application did not open its page; the navigation says %r"
+            % active
+        )
+    return failures
+
+
 CASES = (
     {"label": "UI-1 two nested edits in sequence (first save delayed)", "run": case_ui1_nested_rebase},
     {"label": "UI-2 moved candidate renumbers priority", "run": case_ui2_candidate_priority},
@@ -2647,6 +2687,11 @@ CASES = (
         "label": "UI-14 a select inside a drawer keeps its focus",
         "run": case_ui14_a_select_inside_a_drawer_keeps_its_focus,
         "query": CUTOVER_QUERY,
+    },
+    {
+        "label": "UI-15 the link that started the application opens its page",
+        "run": case_ui15_the_link_that_started_the_application_opens_its_page,
+        "query": {**CUTOVER_QUERY, "deepLink": "zroutery://providers"},
     },
 )
 

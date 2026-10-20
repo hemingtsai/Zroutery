@@ -37,6 +37,32 @@ pub const DEEP_LINK_SCHEME: &str = "zroutery";
 /// the two are recognisable as a pair.
 pub const DEEP_LINK_EVENT: &str = "zroutery://deep-link";
 
+/// The last link this process received, if any.
+///
+/// A link that *started* the application is announced before the dashboard has
+/// finished loading, so there is no listener for it yet and the event goes to
+/// nobody. The link is kept here instead, and the dashboard asks for it when
+/// it mounts — so "this link started the application" and "the application was
+/// already running and the link arrived" both land on the same page.
+static LAST_DEEP_LINK: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// The last link this process received, for the dashboard to ask about.
+#[tauri::command]
+pub fn deep_link_current() -> Option<String> {
+    LAST_DEEP_LINK
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .clone()
+}
+
+/// Remember a link, so a dashboard that was not listening can still find it.
+fn remember_deep_link(url: &str) {
+    let mut slot = LAST_DEEP_LINK
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    *slot = Some(url.to_string());
+}
+
 /// The chord that summons the window from another application.
 ///
 /// `CommandOrControl` is Ctrl on Windows and Linux and Command on macOS,
@@ -179,6 +205,7 @@ fn install_deep_links(app: &AppHandle) {
 /// arrives here is already ours to announce.
 fn announce_deep_link(app: &AppHandle, url: &str) {
     tracing::info!("deep link opened: {url}");
+    remember_deep_link(url);
     let _ = app.emit(DEEP_LINK_EVENT, url);
     summon(app);
 }
