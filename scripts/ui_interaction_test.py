@@ -2529,6 +2529,66 @@ def case_ui13_a_catalogue_row_says_no_tier_rather_than_a_dash(devtools) -> list[
     return failures
 
 
+def case_ui14_a_select_inside_a_drawer_keeps_its_focus(devtools) -> list[str]:
+    """A dropdown inside a drawer, opened and navigated with the keyboard.
+
+    Radix portals a select's menu to the document body, which puts it outside
+    the drawer's own root — and the drawer pulls the focus back whenever it
+    lands outside. Two focus managers, two roots, and the menu is in neither.
+
+    The question is whether the keyboard can still move through the options.
+    This drives it: open a drawer, open a dropdown in it, press the arrow key
+    that moves to the next option, and read where the focus ended up. It has to
+    be on a menu item — on the drawer, the menu is open but the keyboard has
+    been thrown out of it.
+    """
+    failures: list[str] = []
+    seed(devtools, **CUTOVER_QUERY)
+    devtools.click_selector('[data-page="providers"]')
+    devtools.wait_for("Boolean(document.querySelector('.page .list-row'))", "the provider rows")
+    devtools.click_selector(".page .list-row")
+    devtools.wait_for("Boolean(document.querySelector('.drawer'))", "the provider drawer")
+
+    # Open a dropdown that lives inside the drawer.
+    point = devtools.evaluate(
+        """
+        (() => {
+          const trigger = document.querySelector('.drawer [role="combobox"]');
+          if (!trigger) return null;
+          const r = trigger.getBoundingClientRect();
+          return {x: r.left + r.width / 2, y: r.top + r.height / 2};
+        })()
+        """
+    )
+    if point is None:
+        failures.append("the drawer offered no dropdown to open")
+        return failures
+    devtools.click(point)
+    devtools.wait_for("Boolean(document.querySelector('.select-menu'))", "the dropdown menu")
+
+    # The arrow key that moves to the next option.
+    devtools.press_key("ArrowDown")
+    landed = devtools.evaluate(
+        """
+        (() => {
+          const active = document.activeElement;
+          if (!active) return "nothing";
+          const inMenu = Boolean(active.closest('.select-menu'));
+          const inDrawer = Boolean(active.closest('.drawer'));
+          if (inMenu) return "menu";
+          if (inDrawer) return "drawer";
+          return "elsewhere:" + (active.tagName || "?");
+        })()
+        """
+    )
+    if landed != "menu":
+        failures.append(
+            "the focus left the open dropdown and landed %r; the drawer pulled it back out of a "
+            "menu that Radix had portalled outside the drawer's own root" % landed
+        )
+    return failures
+
+
 CASES = (
     {"label": "UI-1 two nested edits in sequence (first save delayed)", "run": case_ui1_nested_rebase},
     {"label": "UI-2 moved candidate renumbers priority", "run": case_ui2_candidate_priority},
@@ -2582,6 +2642,11 @@ CASES = (
         "label": "UI-13 a catalogue row says no tier rather than a dash",
         "run": case_ui13_a_catalogue_row_says_no_tier_rather_than_a_dash,
         "query": PROVIDER_CATALOGUE_QUERY,
+    },
+    {
+        "label": "UI-14 a select inside a drawer keeps its focus",
+        "run": case_ui14_a_select_inside_a_drawer_keeps_its_focus,
+        "query": CUTOVER_QUERY,
     },
 )
 

@@ -134,6 +134,13 @@ function claimFocus(root: HTMLElement | null, id: symbol, event: FocusEvent) {
   if (topOverlay() !== id) return;
   const target = event.target;
   if (!(target instanceof Node)) return;
+  // A portalled overlay — a select's menu, a popover — is not this surface's
+  // to own. Radix renders one outside the surface's own root, and it manages
+  // the focus while it is open. A surface that pulled the focus back out of it
+  // would make the overlay unusable: the arrow key would move the selection,
+  // the focus would be pulled away, and the menu would sit open with the
+  // keyboard pointing at nothing.
+  if (isInsidePortalledOverlay(target)) return;
   // The nearest dialog ancestor of the focus target owns it. If that is not
   // us, the focus belongs to a modal we are not.
   const owner =
@@ -142,6 +149,20 @@ function claimFocus(root: HTMLElement | null, id: symbol, event: FocusEvent) {
       : null;
   if (owner && owner !== root) return;
   if (!root.contains(target)) root.focus();
+}
+
+/**
+ * Whether a focus target is inside an overlay Radix portalled to the document.
+ *
+ * The marker is Radix's own: the popper's content wrapper carries
+ * `data-radix-popper-content-wrapper`, and it is the one attribute that says
+ * "this element is somewhere else on the page, on purpose".
+ */
+function isInsidePortalledOverlay(target: Node): boolean {
+  return (
+    target instanceof Element &&
+    target.closest("[data-radix-popper-content-wrapper]") !== null
+  );
 }
 
 export function ConfirmDialog({
@@ -909,6 +930,11 @@ export function Drawer({
       if (e.key !== "Tab") return;
       const root = panel.current;
       if (!root) return;
+      // A portalled overlay that is open owns the keyboard while it is open —
+      // Radix traps the focus inside a select's own menu. The drawer's trap
+      // must not reach in and take it back, or Shift+Tab from the first option
+      // would throw the user out of the menu into the drawer behind it.
+      if (isInsidePortalledOverlay(document.activeElement ?? root)) return;
       const focusable = Array.from(
         root.querySelectorAll<HTMLElement>(
           "a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])",
