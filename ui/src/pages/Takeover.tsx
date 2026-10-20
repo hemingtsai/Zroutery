@@ -67,6 +67,7 @@ export default function Takeover() {
   const notify = useToast();
 
   const [views, setViews] = useState<TakeoverView[] | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [acting, setActing] = useState<TakeoverAgent | null>(null);
   const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
   // Per-agent release strategy, preselected to the safe default: a release
@@ -82,9 +83,15 @@ export default function Takeover() {
       // enumerated; an agent added server-side still shows up (appended).
       const order = new Map(AGENTS.map((agent, index) => [agent, index]));
       setViews([...next].sort((a, b) => (order.get(a.agent) ?? 99) - (order.get(b.agent) ?? 99)));
+      setLoadError(null);
     } catch (e) {
       notify("error", errorText(e));
+      // The empty list is kept, but the failure is remembered as one. A page
+      // that could not read the takeover record must not render as though
+      // there were no external agents: "this build knows no external agent" and
+      // "the call failed" are different facts, and only one of them is true.
       setViews([]);
+      setLoadError(errorText(e));
     }
   }, [notify]);
 
@@ -134,7 +141,9 @@ export default function Takeover() {
   return (
     <>
       <Section title={t("takeover.section")} hint={t("takeover.section_hint")}>
-        {views === null ? (
+        {loadError ? (
+          <Empty>{t("takeover.load_failed", { err: loadError })}</Empty>
+        ) : views === null ? (
           <Empty>{t("common.loading")}</Empty>
         ) : views.length === 0 ? (
           <Empty>{t("takeover.none")}</Empty>

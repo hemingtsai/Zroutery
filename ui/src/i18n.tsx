@@ -498,6 +498,8 @@ const en = {
   "takeover.section_hint":
     "Point an external coding agent at this gateway by writing the address and token into its own configuration file, and restore the original values on release. Requests still choose a tier by the names the client already sends; Zroutery never picks one for you.",
   "takeover.none": "No external agent is known to this build.",
+  "takeover.load_failed":
+    "The takeover record could not be read: {err}. Nothing on this page has changed a client's configuration.",
   "takeover.agent.claude": "Claude Code",
   "takeover.agent.codex": "Codex CLI",
   "takeover.agent.opencode": "OpenCode",
@@ -1427,6 +1429,7 @@ const zh: Dict = {
   "takeover.section_hint":
     "把外部编码 Agent 的配置指向本机网关:写入网关地址与令牌到它自己的配置文件,释放时恢复原值。请求仍按客户端原本发送的模型名选择层级,Zroutery 不替你选。",
   "takeover.none": "此构建没有已知的外部 Agent。",
+  "takeover.load_failed": "接管记录读取失败:{err}。本页没有改动过任何客户端的配置。",
   "takeover.agent.claude": "Claude Code",
   "takeover.agent.codex": "Codex CLI",
   "takeover.agent.opencode": "OpenCode",
