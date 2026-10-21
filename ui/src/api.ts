@@ -1248,13 +1248,15 @@ export const api = {
    */
   rollbackMlModel: () => invoke<MlRollback>("rollback_ml_model"),
   /**
-   * Run one promotion round over the durable history.
+   * Run one promotion round over the recorded traffic.
    *
    * `install` defaults to false and this side passes it explicitly rather than
    * relying on that default: judging a model and installing it are separate
    * acts, and only the second changes what every later request is served by.
    * `baseline` names the comparison the gate must beat; the evidence floors are
    * not caller-controlled in either the command or the HTTP twin.
+   *
+   * Call only when `snapshot.ml_available` is true.
    */
   mlPromote: (install: boolean, baseline?: string) =>
     invoke<MlPromotionRound>("run_ml_promotion_round", { install, baseline }),
@@ -1263,6 +1265,8 @@ export const api = {
    *
    * Read-only and streaming inside the backend: this is a button a panel polls,
    * not a request path, so it must not load a year of traffic into memory.
+   *
+   * Call only when `snapshot.ml_available` is true.
    */
   mlTraces: () => invoke<MlTraceInfo>("get_ml_traces"),
   /**
@@ -1272,6 +1276,8 @@ export const api = {
    * deliberate: the promotion round trains from the whole log, so a policy that
    * fired on its own would change what the next model learns from without
    * anyone asking.
+   *
+   * Call only when `snapshot.ml_available` is true.
    */
   clearMlTraces: () => invoke<MlTraceClear>("clear_ml_traces"),
   /**
@@ -1344,7 +1350,10 @@ export const api = {
   /** Drop one account's own credential; it resolves to the provider's key again. */
   clearAccountKey: (provider_id: string, account_id: string) =>
     invoke<Snapshot>("clear_account_key", { providerId: provider_id, accountId: account_id }),
-  /** Remove one account declaration, and the credential only it referenced. */
+  /** Remove one account declaration, and the credential only it referenced.
+   *
+   * Call only when `snapshot.account_available` is true.
+   */
   removeAccount: (provider_id: string, account_id: string) =>
     invoke<Snapshot>("remove_account", { providerId: provider_id, accountId: account_id }),
   /**

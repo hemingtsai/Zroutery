@@ -146,6 +146,25 @@ jobs:
           set -euo pipefail
           python3 scripts/orch_docs_test.py
 
+      # Every command the dashboard calls, against every command the backend
+      # registers.
+      #
+      # A control the interface offers and the backend cannot serve is the same
+      # defect as a provider kind a build cannot use: the operator is told the
+      # thing works, and it does not. The OpenCode provider kinds were found by
+      # reading, and the four undocumented feature-gated calls by running this;
+      # it is here so the next one is found by running it.
+      #
+      # The self-test answers "could this tool see a failure?" — a harness that
+      # cannot distinguish caught from missed reports confidence it never
+      # measured, which is how this project's failing test names were lost five
+      # times.
+      - name: The interface calls only commands the backend registers
+        run: |
+          set -euo pipefail
+          python3 -B scripts/command_surface_test.py --self-test
+          python3 -B scripts/command_surface_test.py
+
   desktop:
     name: workspace tests and end-to-end smoke
     runs-on: macos-latest

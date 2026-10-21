@@ -292,6 +292,7 @@ complained, while the gate it named was no longer being run.
 | all features | `cargo test -p zroutery-core --all-features` | the `ml` surface on its own |
 | boundary | `cargo test -p zroutery-core --all-features --test activation_test` | the shipped product cannot name the installer |
 | docs | `python -B scripts/orch_docs_test.py` | node records, DAG and evidence registry agree |
+| command surface | `python -B scripts/command_surface_test.py` | every command the dashboard calls is registered, and every feature-gated one names the flag that guards it |
 | contract | `python -B scripts/commit_contract_test.py --base <rev> --head <rev>` | commit subjects and trailers over the range |
 | toolchain | `python -B scripts/toolchain_gate.py` | the local toolchain is the build CI resolves, so a green matrix speaks to CI |
 | minimum toolchain | `cargo +1.89.0 check --workspace --locked --all-targets`, the version `Cargo.toml` declares | the declared minimum really builds the locked tree, test targets included |
