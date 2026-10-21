@@ -2513,9 +2513,37 @@ fn nothing_in_the_shipped_product_can_name_this_module() {
         "the desktop app must expose the ml feature as a named package feature, \
          so it can be turned off; the manifest is:\n{manifest}"
     );
+    // And it ships by default.
+    //
+    // This is a membership check and not an equality check, and the difference
+    // is the property itself: what is asserted here is that the desktop app
+    // ships *with* the learning stack, not that the learning stack is the only
+    // thing it ships. The default list carries the account subsystem, the
+    // NewAPI panel adapter, the browser check-in and the OpenCode stack as
+    // well, because the dashboard offers all of them and an interface that
+    // offers a capability the build does not contain is an interface that
+    // tells the operator the thing works and then does not do it.
+    //
+    // An equality check would have failed on that change while the property it
+    // stands for still held, which is a gate measuring the wrong thing — and
+    // the escape hatch above still holds, so the learning stack can still be
+    // turned off by whoever wants it off.
+    let default_line = manifest
+        .lines()
+        .find(|line| line.trim_start().starts_with("default = ["))
+        .expect("the manifest declares a default feature list");
+    let defaults: Vec<&str> = default_line
+        .trim()
+        .trim_start_matches("default = [")
+        .trim_end_matches(']')
+        .split(',')
+        .map(|feature| feature.trim().trim_matches('"'))
+        .filter(|feature| !feature.is_empty())
+        .collect();
     assert!(
-        manifest.contains("default = [\"ml\"]"),
-        "the desktop app ships with the learning stack by default"
+        defaults.contains(&"ml"),
+        "the desktop app ships with the learning stack by default; the default \
+         feature list is {defaults:?}"
     );
     // And it is not enabled by a bare feature reference on the dependency, which
     // would make it impossible to turn off without editing the manifest.

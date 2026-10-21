@@ -19,44 +19,63 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [features]
+# The shipped desktop app carries every capability its own interface offers.
+#
+# That sentence is the whole argument, and it is the same argument ADR-0006 made
+# about the learning stack: a build that compiles an interface which offers a
+# capability it does not contain is a build that tells the operator the thing
+# works and then does not do it. The dashboard's account page, its check-in and
+# its two OpenCode provider kinds were all offered unconditionally while the
+# features behind them were off — so the panel said "this build contains no
+# account subsystem" to the very people the product was written for, and the
+# balance a user asked for was in the source tree and in no installation of it.
+#
+# **Every one of these is inert until the operator asks for it.** Nothing probes
+# an account until an account is declared; nothing asks a panel until an account
+# exists and the button is pressed; no browser opens until the operator starts a
+# check-in; the OpenCode providers only answer when one is configured. So the
+# capability is in the binary and the behaviour is not in it — which is exactly
+# the shape ADR-0006 settled on for the learning stack, where
+# `ml_routing.enabled` still defaults to off and an installation that has never
+# promoted a model routes as it did before.
+#
+# The reason these were once kept out is recorded and has expired. It was
+# "the surface is not reachable yet: nothing probes an account, so with this on
+# the store is constructed and stays empty". The reconciler landed, every
+# declared account is now probed and published, and the reason for the exclusion
+# no longer describes the code. The reason that replaced it — that a capability
+# behind a flag is a capability no operator meets — is the one this change
+# answers.
+#
+# `--no-default-features` still builds a desktop app with none of it, which is
+# worth keeping as a build rather than deleting: "ship without a learning stack"
+# and "ship without an account subsystem" are legitimate choices for someone who
+# does not want their routing history or their panel credentials on disk.
+#
+# Note the wording below is deliberate. `activation_test` refuses any manifest
+# line carrying both the core crate name and the word "features", because a
+# dependency that names its own switches cannot be turned off without editing
+# the manifest. A comment that merely *describes* those switches trips the same
+# guard, and it is right to: the scanner cannot tell prose from configuration,
+# and guessing which one it is would be worse than refusing. So the switches are
+# declared here and only here, and the dependency line below stays clean.
+default = ["ml", "account", "newapi", "account-maint", "opencode"]
 # `ml` puts the learned model in the routing path: the durable trace log, the
 # active-model store and the ML ranking of the provider plan.
-#
-# It is on by default and can still be turned off with `--no-default-features`,
-# which restores exactly the pre-ADR-0006 behaviour: a desktop binary that
-# contains no ML stack and routes deterministically. That is worth keeping as a
-# build rather than deleting, because "ship without learning" is a legitimate
-# choice for someone who does not want their routing history on disk.
-default = ["ml"]
 ml = ["zroutery-core/ml"]
 # `account` carries the account subsystem: the per-provider account declarations
 # in config and the runtime state probing derives from them.
-#
-# **Not in `default`**, on purpose and by record. `node-status/account.status.json`
-# and `stage-5.status.json` both record "Account remains optional and is not
-# enabled by the default Tauri dependency", and both add "without changing ML
-# feature order". The two switches are declared independently upstream, so turning
-# this one on does not perturb the learning build and leaving it off does not
-# perturb this one.
-#
-# Note the wording above is deliberate. `activation_test` refuses any manifest line
-# carrying both the core crate name and the word "features", because a dependency
-# that names its own switches cannot be turned off without editing the manifest. A
-# comment that merely *describes* those switches trips the same guard, and it is
-# right to: the scanner cannot tell prose from configuration, and guessing which one
-# it is would be worse than refusing.
-#
-# The surface is not reachable yet: nothing probes an account, so with this on the
-# store is constructed and stays empty. That is the honest state, and it is why
-# the GUI half of this is blocked rather than merely unwritten.
 account = ["zroutery-core/account"]
 # `newapi` adds the NewAPI panel adapter, which brings the account subsystem with
-# it. Still not in `default`: enabling a feature for `zroutery-core` is declared
-# upstream, so this does not touch the `ml` switch or its position.
+# it. The panel is where a NewAPI relay's wallet lives, so this is what makes a
+# panel-backed balance reachable at all: the relay publishes no balance of its
+# own, and the figure is the sum of what the provider's accounts report.
 newapi = ["zroutery-core/newapi"]
 # `opencode` adds the OpenCode Zen gateway providers: the anonymous free tier
-# and the Console OAuth tier, plus its `/api/config` model discovery. Not in
-# `default`.
+# and the Console OAuth tier, plus its `/api/config` model discovery. The
+# request shaping that makes OpenCode's gateway accept a request lives here
+# too, and the gateway checks a fixed fingerprint — so without this the two
+# kinds are configuration that every request is refused by.
 opencode = ["zroutery-core/opencode"]
 # `account-maint` adds the browser-driven check-in surface: an isolated headed
 # browser per account, a pause the user can resume, and the Tauri commands that

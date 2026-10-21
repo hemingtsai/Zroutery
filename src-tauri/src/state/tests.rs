@@ -51,7 +51,130 @@ async fn the_snapshot_reports_this_build_s_account_availability() {
         snapshot.account_maintenance_available,
         cfg!(feature = "account-maint")
     );
+    assert_eq!(
+        snapshot.opencode_available,
+        cfg!(feature = "opencode"),
+        "the snapshot must report the OpenCode stack exactly as this build has it"
+    );
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The shipped app carries every capability the dashboard has a flag for.
+///
+/// The defect this exists to prevent is the one E-155 found: the desktop's
+/// default feature list was `["ml"]`, so the account subsystem, the browser
+/// check-in and the OpenCode stack were absent from the *installed* app while
+/// the dashboard offered all three — and the account page told the operator
+/// that this build contains no account subsystem.
+///
+/// The flag is the dashboard's contract and the default list is the build's
+/// decision, so this checks the two against each other and against the
+/// manifest, rather than against `cfg!` — which is what the first draft of
+/// this gate did, and which can only fail on a broken feature graph.
+///
+/// Two properties, and the second is the one that bites:
+///
+/// 1. Every feature an availability flag names is a feature the package
+///    actually declares. A flag reading `cfg!(feature = "account_maint")`
+///    against a package that declares `account-maint` is false forever, and
+///    the dashboard would hide a capability the build has.
+/// 2. Every capability the dashboard has a flag for is in the shipped default
+///    list. Dropping one is a decision, and a decision belongs in this file
+///    rather than in an edit nobody notices.
+#[test]
+fn the_shipped_app_carries_every_capability_the_dashboard_has_a_flag_for() {
+    let manifest = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml"),
+    )
+    .expect("the desktop manifest is readable");
+
+    let (declared, defaults) = feature_table(&manifest);
+
+    // The capability features, and the flag that tells the dashboard about
+    // each. `newapi` is not here: it has no flag of its own, because the
+    // panel adapter is reached through the account subsystem and the HTTP
+    // check-in, and a flag for it would be a third answer to a question two
+    // flags already answer.
+    let capabilities = ["ml", "account", "account-maint", "opencode"];
+
+    for capability in capabilities {
+        assert!(
+            declared.iter().any(|feature| feature == capability),
+            "the desktop package does not declare the feature `{capability}`, so the \
+             flag that reports it can never be true"
+        );
+        assert!(
+            defaults.iter().any(|feature| feature == capability),
+            "the shipped app does not carry the `{capability}` capability, while the \
+             dashboard has a flag for it — so the shipped app would offer a control it \
+             cannot serve. The default list is {defaults:?}."
+        );
+    }
+
+    // And the default list names only features that exist, because a default
+    // that names a feature nobody declared is a build that cannot be made.
+    for feature in &defaults {
+        assert!(
+            declared.iter().any(|declared| declared == feature),
+            "the default feature list names `{feature}`, which the package does not \
+             declare"
+        );
+    }
+}
+
+/// The package's declared features and its default list, read from the manifest.
+///
+/// A small reader rather than a TOML parser, because the manifest is the
+/// project's own file and the shape of the thing being read is fixed: a
+/// `[features]` section, one `name = ["a", "b"]` per line.
+fn feature_table(manifest: &str) -> (Vec<String>, Vec<String>) {
+    let mut declared: Vec<String> = Vec::new();
+    let mut defaults: Vec<String> = Vec::new();
+    let mut in_features = false;
+
+    for line in manifest.lines() {
+        let line = line.trim();
+        if line.starts_with('[') {
+            in_features = line == "[features]";
+            continue;
+        }
+        if !in_features || line.is_empty() {
+            continue;
+        }
+        // A trailing comment is stripped before the line is read, because a
+        // comment after the closing bracket would otherwise be read as part of
+        // the last value — and a manifest line with a comment on it is
+        // perfectly ordinary.
+        let line = match line.split_once('#') {
+            Some((before, _)) => before.trim(),
+            None => line,
+        };
+        if line.is_empty() {
+            continue;
+        }
+        let Some((name, values)) = line.split_once('=') else {
+            continue;
+        };
+        let name = name.trim();
+        let values = values.trim();
+        if !values.starts_with('[') {
+            continue;
+        }
+        let list: Vec<String> = values
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .split(',')
+            .map(|value| value.trim().trim_matches('"').to_string())
+            .filter(|value| !value.is_empty())
+            .collect();
+        if name == "default" {
+            defaults = list;
+        } else {
+            declared.push(name.to_string());
+        }
+    }
+
+    (declared, defaults)
 }
 
 /// And the two must be able to disagree, or declaring them separately is
