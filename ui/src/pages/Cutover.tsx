@@ -349,8 +349,8 @@ function StepsTable({ steps }: { steps: MigrationPreview["steps"] }) {
     <table className="table">
       <thead>
         <tr>
-          <th>{t("cutover.plans.section")}</th>
-          <th>{t("takeover.table.next")}</th>
+          <th>{t("cutover.table.undo")}</th>
+          <th>{t("cutover.table.step")}</th>
         </tr>
       </thead>
       <tbody>
@@ -359,12 +359,40 @@ function StepsTable({ steps }: { steps: MigrationPreview["steps"] }) {
             <td className="muted">
               {step.reversible ? t("cutover.step.reversible") : t("cutover.step.not_reversible")}
             </td>
-            <td>{step.description}</td>
+            <td>{stepSentence(t, step)}</td>
           </tr>
         ))}
       </tbody>
     </table>
   );
+}
+
+/**
+ * One step, in the reader's language.
+ *
+ * The plan sends the values its sentence is built from, because a sentence
+ * that names a client, a port, a file or an endpoint cannot be translated
+ * without them. The backend's own English sentence is the fallback for a kind
+ * this build has no translation for — so a plan that grows a step shows its
+ * English sentence rather than an empty cell.
+ */
+function stepSentence(
+  t: (key: TKey, params?: Record<string, string | number>) => string,
+  step: MigrationPreview["steps"][number],
+): string {
+  const params = step.params;
+  switch (step.kind) {
+    case "stop_external":
+      return t("cutover.step.stop_external", { name: params.subject ?? "" });
+    case "start_zroutery":
+      return t("cutover.step.start_zroutery", { port: params.port ?? "" });
+    case "copy_config":
+      return t("cutover.step.copy_config", { path: params.path ?? "" });
+    case "verify_endpoint":
+      return t("cutover.step.verify_endpoint", { url: params.url ?? "" });
+    default:
+      return step.description;
+  }
 }
 
 /**

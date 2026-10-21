@@ -54,6 +54,33 @@ pub struct PlanStepView {
     pub description: String,
     /// Whether a rollback restores what this step changed.
     pub reversible: bool,
+    /// The values this step's sentence is built from.
+    ///
+    /// The window says the step in the reader's language, and a sentence that
+    /// names a client, a port, a file or an endpoint cannot be translated
+    /// without them — so the plan sends them, and the window words them. The
+    /// English description beside them is the fallback for a kind the window
+    /// has no translation for, and it is also what the plan record keeps.
+    pub params: StepParams,
+}
+
+/// The values one step's sentence is built from.
+///
+/// One field per kind, and each kind uses exactly one: a step about a process
+/// names the process, a step about a port names the port, a step about a file
+/// names the file, and a step about an endpoint names the endpoint. They are
+/// separate fields rather than one list of strings because a list would leave
+/// the window guessing which is which.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct StepParams {
+    /// The client or process the step is about.
+    pub subject: Option<String>,
+    /// The port, when the step is about one.
+    pub port: Option<u16>,
+    /// The file the step installs over, when it installs one.
+    pub path: Option<String>,
+    /// The endpoint the step asks, when it asks one.
+    pub url: Option<String>,
 }
 
 /// One client's cutover, as the panel reviews it.
@@ -196,10 +223,38 @@ pub fn preview_of(
                 kind: action_kind(&step.action),
                 description: step.description.clone(),
                 reversible: step.reversible,
+                params: step_params(&step.action),
             })
             .collect(),
         fingerprint: fingerprint(plan, config_path),
         blocked_reason,
+    }
+}
+
+/// The values one step's sentence is built from, read off the action.
+///
+/// Read off the action rather than parsed back out of the English sentence:
+/// the sentence is for the plan record, and a window that had to recover the
+/// values from prose would be guessing at its own protocol.
+fn step_params(action: &MigrationAction) -> StepParams {
+    match action {
+        MigrationAction::StopExternal { process_name } => StepParams {
+            subject: Some(process_name.clone()),
+            ..StepParams::default()
+        },
+        MigrationAction::StartZroutery { port } => StepParams {
+            port: Some(*port),
+            ..StepParams::default()
+        },
+        MigrationAction::CopyConfig { dest, .. } => StepParams {
+            path: Some(dest.clone()),
+            ..StepParams::default()
+        },
+        MigrationAction::VerifyEndpoint { url, .. } => StepParams {
+            url: Some(url.clone()),
+            ..StepParams::default()
+        },
+        _ => StepParams::default(),
     }
 }
 

@@ -864,6 +864,24 @@ export interface MigrationStepView {
   description: string;
   /** Whether a rollback puts back what this step changed. */
   reversible: boolean;
+  /**
+   * The values this step's sentence is built from.
+   *
+   * The window words the step in the reader's language, and a sentence that
+   * names a client, a port, a file or an endpoint cannot be translated without
+   * them. `description` is the backend's own English sentence and the fallback
+   * for a kind this build has no translation for.
+   */
+  params: {
+    /** The client or process the step is about. */
+    subject: string | null;
+    /** The port, when the step is about one. */
+    port: number | null;
+    /** The file the step installs over, when it installs one. */
+    path: string | null;
+    /** The endpoint the step asks, when it asks one. */
+    url: string | null;
+  };
 }
 
 /**

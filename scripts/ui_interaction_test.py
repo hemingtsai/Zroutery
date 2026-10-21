@@ -1932,12 +1932,57 @@ def _cutover_query(status, **extra):
                             "kind": kind,
                             "description": description,
                             "reversible": kind == "copy_config",
+                            "params": params,
                         }
-                        for kind, description in (
-                            ("stop_external", "check whether %s is still running" % agent),
-                            ("start_zroutery", "check that port 8787 is free"),
-                            ("copy_config", "install the staged document"),
-                            ("verify_endpoint", "confirm /health answers as Zroutery"),
+                        for kind, description, params in (
+                            # The descriptions here deliberately leave the
+                            # values out, because the gate is that the window
+                            # words the step with them. A fixture whose
+                            # description already named the port and the file
+                            # would make the window's sentence and the
+                            # backend's sentence the same string, and a gate
+                            # that cannot tell them apart is a gate that
+                            # cannot fail.
+                            (
+                                "stop_external",
+                                "check whether the client is still running",
+                                {
+                                    "subject": agent,
+                                    "port": None,
+                                    "path": None,
+                                    "url": None,
+                                },
+                            ),
+                            (
+                                "start_zroutery",
+                                "check that the port is free",
+                                {
+                                    "subject": None,
+                                    "port": 8787,
+                                    "path": None,
+                                    "url": None,
+                                },
+                            ),
+                            (
+                                "copy_config",
+                                "install the staged document",
+                                {
+                                    "subject": None,
+                                    "port": None,
+                                    "path": path,
+                                    "url": None,
+                                },
+                            ),
+                            (
+                                "verify_endpoint",
+                                "confirm the endpoint answers as Zroutery",
+                                {
+                                    "subject": None,
+                                    "port": None,
+                                    "path": None,
+                                    "url": "http://127.0.0.1:8787/health",
+                                },
+                            ),
                         )
                     ],
                 }
@@ -2059,6 +2104,40 @@ def case_ui7_cutover_confirmation_and_honest_rollback(devtools) -> list[str]:
         failures.append(
             "the blocked client renders %d button(s); it must render none" % gemini_buttons
         )
+
+    # (5) The plan is worded in the reader's language, with the values the
+    # backend sent. The fixture's descriptions deliberately omit those values,
+    # so a page that rendered the backend's English sentence instead of its own
+    # would show a sentence with no port and no file in it — which is what
+    # this checks for, and why the sentences are read out of the table's cells
+    # rather than out of the page: the page also shows the client's own path,
+    # and a whole-page search would find it there and pass for the wrong
+    # reason.
+    cells = devtools.evaluate(
+        """
+        [...document.querySelectorAll('.page table td')].map((td) => td.textContent.trim())
+        """
+    )
+    for expected in (
+        "claude is still running",
+        "port 8787 is free",
+        "install the staged document over C:/Users/dev/.claude/settings.json",
+        "confirm http://127.0.0.1:8787/health answers as Zroutery",
+    ):
+        if not any(expected in cell for cell in cells):
+            failures.append(
+                "the plan does not word the step with the values the backend sent: %r is in no "
+                "cell of %r" % (expected, cells)
+            )
+    for backend_sentence in (
+        "check whether the client is still running",
+        "check that the port is free",
+    ):
+        if any(backend_sentence in cell for cell in cells):
+            failures.append(
+                "the plan shows the backend's own sentence (%r) instead of wording the step"
+                % backend_sentence
+            )
 
     # (2) One live run button per migratable client, and none for the blocked one.
     # Checked before anything runs: once the stub has moved the record to

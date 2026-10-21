@@ -641,6 +641,22 @@ export const en = {
     "The migration record could not be read: {err}. Nothing on this page has changed a client's configuration.",
   "cutover.step.not_reversible": "cannot be undone",
   "cutover.step.reversible": "restored by a rollback",
+  // The plan's own sentences, in the reader's language. The backend sends the
+  // values each one is built from, because a sentence that names a client, a
+  // port, a file or an endpoint cannot be translated without them — and a
+  // Chinese table with English sentences down the middle of it is a page that
+  // reads as half-made.
+  "cutover.step.stop_external": "check whether {name} is still running",
+  "cutover.step.start_zroutery": "check that port {port} is free",
+  "cutover.step.copy_config": "install the staged document over {path}",
+  "cutover.step.verify_endpoint": "confirm {url} answers as Zroutery",
+  // The two column headers of the plan table. The first says what the column
+  // holds — whether a rollback puts the step back — and the second names the
+  // step. Both used to repeat the section's own title, which is how a table
+  // ends up with two headers that say the same thing and neither of them
+  // names its column.
+  "cutover.table.undo": "Undo",
+  "cutover.table.step": "Step",
   "cutover.run": "Run this cutover",
   "cutover.running": "Running…",
   "cutover.rollback": "Roll back",
@@ -1592,6 +1608,12 @@ export const zh: Dict = {
   "cutover.load_failed": "迁移记录读取失败：{err}。本页没有改动过任何客户端的配置。",
   "cutover.step.not_reversible": "无法撤销",
   "cutover.step.reversible": "回滚时还原",
+  "cutover.step.stop_external": "检查 {name} 是否仍在运行",
+  "cutover.step.start_zroutery": "检查端口 {port} 是否空闲",
+  "cutover.step.copy_config": "把暂存文档安装到 {path}",
+  "cutover.step.verify_endpoint": "确认 {url} 以 Zroutery 的身份应答",
+  "cutover.table.undo": "可撤销性",
+  "cutover.table.step": "步骤",
   "cutover.run": "执行此次切换",
   "cutover.running": "执行中…",
   "cutover.rollback": "回滚",

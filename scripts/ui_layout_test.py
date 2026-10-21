@@ -560,10 +560,20 @@ HARNESS = """
     config_path: path,
     fingerprint: "fp-" + agent,
     blocked_reason: null,
+    // The values each step's sentence is built from, as the backend sends
+    // them: the window words the step in the reader's language, and a
+    // sentence that names a client, a port, a file or an endpoint cannot be
+    // translated without them.
     steps: kinds.map((k) => ({
       kind: k[0],
       description: k[1],
       reversible: k[0] === "copy_config",
+      params: {
+        subject: k[0] === "stop_external" ? agent : null,
+        port: k[0] === "start_zroutery" ? 8787 : null,
+        path: k[0] === "copy_config" ? path : null,
+        url: k[0] === "verify_endpoint" ? "http://127.0.0.1:8787/health" : null,
+      },
     })),
   });
   const MIGRATION_PREVIEWS = [
