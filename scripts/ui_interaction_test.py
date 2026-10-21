@@ -115,9 +115,15 @@ HARNESS = """
   const GATEWAY_EVENT = __GATEWAY_EVENT__;
 
   // The case labels below are English; the app follows the system language, so
-  // pin the preference before the bundle reads it.
+  // pin the preference before the bundle reads it. A case that wants to check
+  // the Chinese page asks for it — `?lang=zh` — because the claim it is
+  // checking is about that page, and a case that ran on the English one would
+  // pass on a translation that never happened.
   try {
-    localStorage.setItem("zroutery-lang", "en");
+    localStorage.setItem(
+      "zroutery-lang",
+      new URLSearchParams(location.search).get("lang") || "en",
+    );
   } catch (err) {
     // A browser that refuses storage still renders; only the labels differ.
   }
@@ -2848,6 +2854,142 @@ def case_ui17_a_panel_backed_balance_is_shown_and_askable(devtools: DevTools) ->
     return failures
 
 
+# The backend's own sentences and the Chinese the interface owes for each.
+#
+# These are the *reassurance* class: a failure that says what is still in
+# place and what to do about it. Every one of them is a message the desktop
+# can put in front of an operator, and every one of them used to arrive in
+# English on a Chinese page — the sentences the interface does not restate are
+# technical strings that name a setting, and those are fine in English.
+#
+# The Chinese fragment is what must appear; the English must not.
+BACKEND_ERRORS = (
+    (
+        "cannot preserve C:/Users/dev/.zroutery/config.json as "
+        "C:/Users/dev/.zroutery/config.json.bak: access denied; it was left as "
+        "it is, so fix or move it and start again",
+        "配置无法另存为",
+    ),
+    (
+        "cannot preserve C:/Users/dev/.zroutery/config.json: "
+        "C:/Users/dev/.zroutery/config.json.bak already exists",
+        "因为该文件已经存在",
+    ),
+    (
+        "the copy of C:/Users/dev/.zroutery/config.json in "
+        "C:/Users/dev/.zroutery/config.json.bak does not match it; "
+        "C:/Users/dev/.zroutery/config.json was left as it is",
+        "的副本与它不一致",
+    ),
+    (
+        "the copy of C:/Users/dev/.zroutery/config.json in "
+        "C:/Users/dev/.zroutery/config.json.bak cannot be read back (access "
+        "denied); C:/Users/dev/.zroutery/config.json was left as it is",
+        "的副本无法回读",
+    ),
+    (
+        "the change to 127.0.0.1:8787 was refused and the previous "
+        "configuration and gateway are still in place (access denied)",
+        "之前的配置与网关仍在原位",
+    ),
+    (
+        "cannot use the new address: access denied; the gateway is still "
+        "listening on 127.0.0.1:8787 and the configuration was not changed",
+        "网关仍在",
+    ),
+    (
+        "cannot use the new address: access denied; the configuration was not changed",
+        "配置未被改动",
+    ),
+    (
+        "cannot listen on 127.0.0.1:8787: address already in use; the previous "
+        "gateway was restored",
+        "之前的网关已恢复",
+    ),
+    (
+        "cannot listen on 127.0.0.1:8787: address already in use; the previous "
+        "gateway could not be restored either: access denied",
+        "之前的网关也未能恢复",
+    ),
+    (
+        "no rollback snapshot could be taken of C:/Users/dev/.claude/settings.json "
+        "— the file could not be read, so a cutover could not be undone. Fix the "
+        "file's permissions and try again.",
+        "无法为",
+    ),
+    (
+        "no account `acct-0` on provider `deepseek`",
+        "上不存在账户",
+    ),
+    (
+        "cannot bind 127.0.0.1:8787: cannot assign requested address",
+        "无法绑定",
+    ),
+)
+
+
+def case_ui18_a_backend_failure_is_restated_in_chinese(devtools) -> list[str]:
+    """The backend's own sentences are re-stated in the reader's language.
+
+    The interface restates a handful of the desktop's English messages and
+    passes the rest through unchanged, and the ones it restates are the ones
+    that carry advice: what is still in place, and what to do about it. A
+    failure an operator has to act on arriving in English, on a page written
+    in Chinese, is a page that reads as half-made.
+
+    So the page is put in Chinese and each of the desktop's own sentences is
+    shown to it, and what has to appear is the Chinese — and what must not
+    appear is the English the backend wrote.
+
+    The drawer is left open across the whole table: the seed re-reads the
+    snapshot without remounting the page, so the drawer survives and each
+    message only costs a re-read.
+    """
+    failures: list[str] = []
+
+    # The page is in Chinese, because the claim is about the Chinese page.
+    # The harness pins the language from `?lang=`, and this case asks for it:
+    # a case that ran on the English page would pass on a translation that
+    # never happened.
+    seed(devtools, **CUTOVER_QUERY)
+    devtools.click_selector('[data-page="providers"]')
+    devtools.wait_for("Boolean(document.querySelector('.page .list-row'))", "the provider rows")
+    devtools.evaluate(
+        """
+        (() => {
+          const rows = [...document.querySelectorAll('.page .list-row')];
+          const row = rows.find((r) => r.textContent.includes('DeepSeek'));
+          if (row) row.click();
+        })()
+        """
+    )
+    devtools.wait_for("document.querySelector('.drawer') !== null", "the provider drawer")
+
+    for message, expected in BACKEND_ERRORS:
+        seed(
+            devtools,
+            balances={
+                "deepseek": {
+                    "checked_at": "2026-10-21T00:00:00Z",
+                    "balance": None,
+                    "error": message,
+                }
+            },
+        )
+        body = devtools.evaluate("document.querySelector('.drawer').innerText")
+        if expected not in body:
+            failures.append(
+                "the backend's sentence is not restated in Chinese: %r is missing from %r"
+                % (expected, body)
+            )
+        if message[:28] in body:
+            failures.append(
+                "the backend's own English is still shown: %r" % message[:40]
+            )
+
+    return failures
+
+
 CASES = (
     {"label": "UI-1 two nested edits in sequence (first save delayed)", "run": case_ui1_nested_rebase},
     {"label": "UI-2 moved candidate renumbers priority", "run": case_ui2_candidate_priority},
@@ -2922,10 +3064,28 @@ CASES = (
         "run": case_ui17_a_panel_backed_balance_is_shown_and_askable,
         "query": CUTOVER_QUERY,
     },
+    {
+        "label": "UI-18 a backend failure is restated in chinese",
+        "run": case_ui18_a_backend_failure_is_restated_in_chinese,
+        "query": {**CUTOVER_QUERY, "lang": "zh"},
+    },
 )
 
 
 def main() -> int:
+    # The console has to be able to print what the gate found.
+    #
+    # A failure message that names a Chinese sentence cannot be reported on a
+    # console that cannot encode it, and the encoding error hides the finding
+    # behind a crash: the gate reports a crash instead of a failure, which is
+    # a report about the harness rather than about the product. This case
+    # reads the page in Chinese on purpose, so it needs this.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
     if not os.path.exists(os.path.join(DIST, "index.html")):
         print("ui/dist is missing; run `pnpm --dir ui build` first")
         return 2

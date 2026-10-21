@@ -106,6 +106,34 @@ export const en = {
     "No account of {provider} reported a balance. The panel's user access token has to be stored as the account's credential — the relay's own key authenticates /v1, and no dashboard endpoint accepts it.",
   "err.mixed_currencies":
     "These accounts report their balances in different currencies, so they cannot be added into one figure. The provider's balance is left unshown rather than shown as a number that cannot be spent.",
+  // The reassurance class: a failure that says what is still in place and what
+  // to do about it. These are the messages an operator meets when something
+  // goes wrong, and they are the ones whose English would otherwise be the
+  // only English on a Chinese page.
+  "err.backup_exists":
+    "The configuration cannot be preserved as {backup}, because that file already exists. Move or remove it and try again.",
+  "err.preserve_failed":
+    "The configuration cannot be preserved as {backup}: {err}. It was left as it is, so fix or move it and start again.",
+  "err.copy_mismatch":
+    "The copy of {path} in {backup} does not match it, so {path} was left as it is.",
+  "err.copy_unreadable":
+    "The copy of {path} in {backup} cannot be read back ({err}), so {path} was left as it is.",
+  "err.change_refused":
+    "The change to {addr} was refused, and the previous configuration and gateway are still in place ({err}).",
+  "err.address_not_changed":
+    "The new address cannot be used: {err}. The configuration was not changed.",
+  "err.address_not_changed_running":
+    "The new address cannot be used: {err}. The gateway is still listening on {addr}, and the configuration was not changed.",
+  "err.listen_failed_restored":
+    "The gateway could not listen on {addr}: {err}. The previous gateway was restored.",
+  "err.listen_failed_not_restored":
+    "The gateway could not listen on {addr}: {err}. The previous gateway could not be restored either: {restore}",
+  "err.no_rollback_snapshot":
+    "No rollback snapshot could be taken of {path} — the file could not be read, so a cutover could not be undone. Fix the file's permissions and try again.",
+  "err.no_such_account":
+    "There is no account {account} on provider {provider}.",
+  "err.bind_other":
+    "The proxy could not start: {addr} could not be bound ({err}). Pick a different port in Settings.",
   // -------------------------------------------------------------- accounts
   "accounts.title": "Accounts",
   "accounts.title_hint":
@@ -1147,6 +1175,24 @@ export const zh: Dict = {
     "{provider} 的账户都没有上报余额。必须把面板的用户访问令牌存为该账户的凭据 —— 中转自身的密钥只能用于 /v1,面板接口一概不接受。",
   "err.mixed_currencies":
     "这些账户以不同币种上报余额，无法合并成一个数字。与其给出一个无法消费的数值，不如不显示该提供商的余额。",
+  "err.backup_exists":
+    "配置无法另存为 {backup}，因为该文件已经存在。请移动或删除它后重试。",
+  "err.preserve_failed":
+    "配置无法另存为 {backup}：{err}。它保持原样，请修复或移动后重新开始。",
+  "err.copy_mismatch": "{backup} 中 {path} 的副本与它不一致，因此 {path} 保持原样。",
+  "err.copy_unreadable":
+    "{backup} 中 {path} 的副本无法回读({err})，因此 {path} 保持原样。",
+  "err.change_refused": "对 {addr} 的更改被拒绝，之前的配置与网关仍在原位({err})。",
+  "err.address_not_changed": "无法使用新的地址：{err}。配置未被改动。",
+  "err.address_not_changed_running":
+    "无法使用新的地址：{err}。网关仍在 {addr} 上监听，配置未被改动。",
+  "err.listen_failed_restored": "网关无法在 {addr} 上监听：{err}。之前的网关已恢复。",
+  "err.listen_failed_not_restored":
+    "网关无法在 {addr} 上监听：{err}。之前的网关也未能恢复：{restore}",
+  "err.no_rollback_snapshot":
+    "无法为 {path} 捕获回滚快照 —— 文件无法读取，因此这次切换无法撤销。请修正该文件的权限后重试。",
+  "err.no_such_account": "提供商 {provider} 上不存在账户 {account}。",
+  "err.bind_other": "代理无法启动：无法绑定 {addr}({err})。请在设置里换一个端口。",
   "accounts.title": "账户",
   "accounts.title_hint": "仅声明：探测、分账户余额与签到会读取它。请求转发不按账户区分。",
   "accounts.empty": "未声明账户。所有请求都使用提供商自身的密钥。",
@@ -1995,6 +2041,10 @@ export function describeBackendError(
     if (/os error 10013|access denied|permission denied/i.test(raw)) {
       return t("err.bind_denied", { addr: bind[1] });
     }
+    // Any other reason the socket could not be taken is still the socket, and
+    // still the one thing the operator can change.
+    const detail = raw.match(/cannot bind \S+: (.+)$/);
+    return t("err.bind_other", { addr: bind[1], err: detail ? detail[1] : "" });
   }
   // The panel refused the credential. The two shapes it takes are the same
   // advice with different causes: a stored relay key (refused at construction,
@@ -2030,6 +2080,82 @@ export function describeBackendError(
   const candidate = raw.match(/`([^`]+)` is not a configured model/);
   if (candidate) {
     return t("err.classifier_candidate", { model: candidate[1] });
+  }
+
+  // The reassurance class: a failure that says what is still in place and what
+  // to do about it. These are the messages an operator meets when something
+  // has gone wrong, and every one of them carries a clause that is advice
+  // rather than a technical string — so every one of them is re-stated here.
+  //
+  // The technical half of each message (the path, the address, the operating
+  // system's own words) is carried through verbatim, because it is the part
+  // that identifies the thing to act on.
+  const preserved = raw.match(/cannot preserve (.+?) as (.+?): ([^;]+); it was left as it is/);
+  if (preserved) {
+    return t("err.preserve_failed", {
+      path: preserved[1],
+      backup: preserved[2],
+      err: preserved[3],
+    });
+  }
+  const backupExists = raw.match(/cannot preserve (.+?): (.+?) already exists/);
+  if (backupExists) {
+    return t("err.backup_exists", { path: backupExists[1], backup: backupExists[2] });
+  }
+  const copyUnreadable = raw.match(/the copy of (.+?) in (.+?) cannot be read back \(([^)]+)\)/);
+  if (copyUnreadable) {
+    return t("err.copy_unreadable", {
+      path: copyUnreadable[1],
+      backup: copyUnreadable[2],
+      err: copyUnreadable[3],
+    });
+  }
+  const copyMismatch = raw.match(/the copy of (.+?) in (.+?) does not match it/);
+  if (copyMismatch) {
+    return t("err.copy_mismatch", { path: copyMismatch[1], backup: copyMismatch[2] });
+  }
+  const changeRefused = raw.match(
+    /the change to (.+?) was refused and the previous configuration and gateway are still in place \(([^)]+)\)/,
+  );
+  if (changeRefused) {
+    return t("err.change_refused", { addr: changeRefused[1], err: changeRefused[2] });
+  }
+  const stillListening = raw.match(
+    /cannot use the new address: ([^;]+); the gateway is still listening on (.+?) and the configuration was not changed/,
+  );
+  if (stillListening) {
+    return t("err.address_not_changed_running", {
+      err: stillListening[1],
+      addr: stillListening[2],
+    });
+  }
+  const addressNotChanged = raw.match(
+    /cannot use the new address: ([^;]+); the configuration was not changed/,
+  );
+  if (addressNotChanged) {
+    return t("err.address_not_changed", { err: addressNotChanged[1] });
+  }
+  const listenFailed = raw.match(/cannot listen on (.+?): ([^;]+); the previous gateway was restored/);
+  if (listenFailed) {
+    return t("err.listen_failed_restored", { addr: listenFailed[1], err: listenFailed[2] });
+  }
+  const listenNotRestored = raw.match(
+    /cannot listen on (.+?): ([^;]+); the previous gateway could not be restored either: (.+)$/,
+  );
+  if (listenNotRestored) {
+    return t("err.listen_failed_not_restored", {
+      addr: listenNotRestored[1],
+      err: listenNotRestored[2],
+      restore: listenNotRestored[3],
+    });
+  }
+  const noSnapshot = raw.match(/no rollback snapshot could be taken of (.+?) —/);
+  if (noSnapshot) {
+    return t("err.no_rollback_snapshot", { path: noSnapshot[1] });
+  }
+  const noAccount = raw.match(/(?:no|unknown) account `?(.+?)`? on provider `?(.+?)`?$/);
+  if (noAccount) {
+    return t("err.no_such_account", { account: noAccount[1], provider: noAccount[2] });
   }
   return raw;
 }
