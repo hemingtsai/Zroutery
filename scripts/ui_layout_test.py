@@ -319,6 +319,10 @@ SNAPSHOT = {
     "account_available": True,
     "account_maintenance_available": True,
     "api_checkin_available": True,
+    # The OpenCode stack is in this build, so the provider kinds it unlocks are
+    # offered. A build without it declares them too and cannot make them work,
+    # which is what the interaction suite covers.
+    "opencode_available": True,
     "checkin": [
         {
             "provider_id": "deepseek",

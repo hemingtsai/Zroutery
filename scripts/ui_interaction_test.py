@@ -202,6 +202,10 @@ HARNESS = """
       account_available: Boolean(state.account),
       account_maintenance_available: Boolean(state.account),
       api_checkin_available: Boolean(state.account && state.account.api),
+      // Whether this build can talk to OpenCode's gateway. On by default,
+      // because a build with the stack is the ordinary case; a case that wants
+      // the other one seeds `opencode: false`.
+      opencode_available: state.opencode !== false,
       checkin: state.account ? clone(state.account.checkin || []) : undefined,
       account_events: state.account ? clone(state.account.events || []) : undefined,
       account_balances: state.account ? clone(state.account.balances || []) : undefined,
@@ -409,7 +413,7 @@ HARNESS = """
     // the snapshot, so a case that seeds it has to be able to install it. A key
     // missing from this list is a seed that is silently dropped and a case that
     // times out with no explanation.
-    for (const key of ["config", "server", "keys", "catalogues", "account", "ml", "migration", "deepLink"]) {
+    for (const key of ["config", "server", "keys", "catalogues", "account", "ml", "migration", "deepLink", "opencode"]) {
       if (seed && seed[key] !== undefined) state[key] = clone(seed[key]);
     }
     if (seed && seed.delays) state.delays = { ...seed.delays };
@@ -2629,6 +2633,56 @@ def case_ui15_the_link_that_started_the_application_opens_its_page(devtools) -> 
     return failures
 
 
+def case_ui16_a_build_without_the_opencode_stack_offers_its_kinds(devtools) -> list[str]:
+    """A build that cannot talk to OpenCode must not offer OpenCode.
+
+    The two OpenCode provider kinds and the `opencode_cli` client profile are
+    configuration rather than code, so they survive every build — but the
+    request shaping that makes OpenCode's gateway accept a request does not, and
+    the gateway checks a fixed fingerprint and rejects anything else. A provider
+    of those kinds in a build without the shaping is a provider whose every
+    request is refused.
+
+    So the kinds and the profile are offered only where they work. The case
+    reads the dropdown in both builds.
+    """
+    failures: list[str] = []
+
+    def kinds_on_screen() -> str:
+        return devtools.evaluate(
+            """
+            (() => {
+              const section = [...document.querySelectorAll('section')]
+                .find((s) => s.textContent.includes('API'));
+              if (!section) return '';
+              const items = [...section.querySelectorAll('[role="radio"]')];
+              return items.map((i) => i.textContent.trim()).join('|');
+            })()
+            """
+        )
+
+    # The build with the stack offers the kinds.
+    seed(devtools, **{**CUTOVER_QUERY})
+    devtools.click_selector('[data-page="providers"]')
+    devtools.wait_for("Boolean(document.querySelector('.page .list-row'))", "the provider rows")
+    with_stack = kinds_on_screen()
+    if "OpenCode" not in with_stack:
+        failures.append(
+            "a build with the OpenCode stack does not offer its kinds: %r" % with_stack
+        )
+
+    # The build without it does not.
+    seed(devtools, **{**CUTOVER_QUERY, "opencode": False})
+    devtools.click_selector('[data-page="providers"]')
+    devtools.wait_for("Boolean(document.querySelector('.page .list-row'))", "the provider rows")
+    without_stack = kinds_on_screen()
+    if "OpenCode" in without_stack:
+        failures.append(
+            "a build without the OpenCode stack still offers its kinds: %r" % without_stack
+        )
+    return failures
+
+
 CASES = (
     {"label": "UI-1 two nested edits in sequence (first save delayed)", "run": case_ui1_nested_rebase},
     {"label": "UI-2 moved candidate renumbers priority", "run": case_ui2_candidate_priority},
@@ -2692,6 +2746,11 @@ CASES = (
         "label": "UI-15 the link that started the application opens its page",
         "run": case_ui15_the_link_that_started_the_application_opens_its_page,
         "query": {**CUTOVER_QUERY, "deepLink": "zroutery://providers"},
+    },
+    {
+        "label": "UI-16 a build without the opencode stack offers its kinds",
+        "run": case_ui16_a_build_without_the_opencode_stack_offers_its_kinds,
+        "query": CUTOVER_QUERY,
     },
 )
 

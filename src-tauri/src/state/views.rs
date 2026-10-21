@@ -100,6 +100,19 @@ pub struct Snapshot {
     /// can hold a browser but no adapter, and reading one flag for the other
     /// would offer the HTTP check-in to a build whose command does not exist.
     pub api_checkin_available: bool,
+    /// Whether this build can actually talk to OpenCode's gateway.
+    ///
+    /// The two OpenCode provider kinds and the `opencode_cli` client profile
+    /// are *not* feature-gated, so a build without the feature still accepts
+    /// them as configuration — and then cannot make them work. The gateway
+    /// checks a fixed fingerprint and rejects anything else, and the shaping
+    /// that produces it lives behind the feature. So a provider of those kinds
+    /// in a build without the feature is a provider whose every request is
+    /// refused, and the dashboard would have offered it as though it were not.
+    ///
+    /// Same reasoning as [`Self::ml_available`]: the dashboard asks rather than
+    /// discovering by sending a request that is bound to be rejected.
+    pub opencode_available: bool,
     /// What each declared account is doing, newest observation last.
     #[cfg(feature = "account-maint")]
     pub checkin: Vec<CheckinView>,

@@ -65,6 +65,21 @@ const KINDS: { id: ProviderKind; labelKey: KindLabelKey }[] = [
   { id: "opencode_console", labelKey: "providers.opencode_console_dialect" },
 ];
 
+/**
+ * The provider kinds this build can actually serve.
+ *
+ * The two OpenCode kinds are configuration rather than code, so they survive
+ * every build — but the request shaping that makes OpenCode's gateway accept a
+ * request does not, and the gateway checks a fixed fingerprint and rejects
+ * anything else. Offering them in a build that cannot shape the request is
+ * offering a provider whose every request is refused, so they are offered only
+ * where they work.
+ */
+function kindsFor(opencodeAvailable: boolean): { id: ProviderKind; labelKey: KindLabelKey }[] {
+  if (opencodeAvailable) return KINDS;
+  return KINDS.filter((k) => k.id !== "opencode_zen_free" && k.id !== "opencode_console");
+}
+
 const CLIENT_PROFILES: { id: ProviderClientProfile; labelKey: ProfileLabelKey }[] = [
   { id: "auto", labelKey: "providers.profile_auto" },
   { id: "native", labelKey: "providers.profile_native" },
@@ -72,6 +87,19 @@ const CLIENT_PROFILES: { id: ProviderClientProfile; labelKey: ProfileLabelKey }[
   { id: "codex", labelKey: "providers.profile_codex" },
   { id: "opencode_cli", labelKey: "providers.profile_opencode_cli" },
 ];
+
+/**
+ * The client profiles this build can actually shape a request with.
+ *
+ * The `opencode_cli` profile exists to make a request look like the OpenCode
+ * CLI, which is what OpenCode's gateway accepts. Without the shaping behind
+ * it, a request wearing that identity is refused — so the profile is offered
+ * only where the shaping is.
+ */
+function clientProfilesFor(opencodeAvailable: boolean): { id: ProviderClientProfile; labelKey: ProfileLabelKey }[] {
+  if (opencodeAvailable) return CLIENT_PROFILES;
+  return CLIENT_PROFILES.filter((c) => c.id !== "opencode_cli");
+}
 
 /**
  * Whether this kind targets OpenCode's gateway.
@@ -331,6 +359,7 @@ export default function Providers({
         providers={config.providers}
         save={save}
         busy={busy}
+        opencodeAvailable={snapshot.opencode_available}
         onAdded={openProvider}
       />
 
@@ -503,11 +532,14 @@ function AddProviderForm({
   providers,
   save,
   busy,
+  opencodeAvailable,
   onAdded,
 }: {
   providers: Provider[];
   save: (mutate: (config: AppConfig) => AppConfig | null) => Promise<boolean>;
   busy: boolean;
+  /** Whether this build can talk to OpenCode's gateway at all. */
+  opencodeAvailable: boolean;
   /** The provider that was added, so the page can open its drawer. */
   onAdded: (id: string) => void;
 }) {
@@ -583,7 +615,7 @@ function AddProviderForm({
             ariaLabel={t("field.api_dialect")}
             value={newKind}
             onChange={(kind) => setNewKind(kind)}
-            options={KINDS.map((k) => ({ value: k.id, label: t(k.labelKey) }))}
+            options={kindsFor(opencodeAvailable).map((k) => ({ value: k.id, label: t(k.labelKey) }))}
           />
         </Field>
         <Field label={t("field.base_url")} hint={t("field.base_url_hint")}>
@@ -1498,7 +1530,7 @@ function ProviderDrawer({
                   }
                 })
               }
-              options={KINDS.map((k) => ({ value: k.id, label: t(k.labelKey) }))}
+              options={kindsFor(snapshot.opencode_available).map((k) => ({ value: k.id, label: t(k.labelKey) }))}
             />
           </Field>
           <NumberField
@@ -1574,7 +1606,7 @@ function ProviderDrawer({
                       value: c.id,
                       label: t(c.labelKey),
                     }))
-                  : CLIENT_PROFILES.map((c) => ({ value: c.id, label: t(c.labelKey) }))
+                  : clientProfilesFor(snapshot.opencode_available).map((c) => ({ value: c.id, label: t(c.labelKey) }))
               }
             />
           </Field>

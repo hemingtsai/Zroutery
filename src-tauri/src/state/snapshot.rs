@@ -73,6 +73,12 @@ impl Desktop {
             // same reason the other two are — a command that was never registered
             // and a command that failed are the same event to the webview.
             api_checkin_available: cfg!(all(feature = "account-maint", feature = "newapi")),
+            // The OpenCode provider kinds and the `opencode_cli` profile are
+            // configuration, not code, so they survive every build — but the
+            // shaping that makes OpenCode's gateway accept a request does not.
+            // A build without the feature can therefore be *told* to use them
+            // and will have every request refused.
+            opencode_available: cfg!(feature = "opencode"),
             #[cfg(feature = "account-maint")]
             checkin: self.checkin_views().await,
             #[cfg(feature = "account-maint")]

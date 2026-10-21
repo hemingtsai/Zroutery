@@ -571,6 +571,18 @@ export interface Snapshot {
    * build.
    */
   api_checkin_available: boolean;
+  /**
+   * Whether this build can actually talk to OpenCode's gateway.
+   *
+   * The two OpenCode provider kinds and the `opencode_cli` client profile are
+   * configuration rather than code, so they survive every build — but the
+   * request shaping that makes OpenCode's gateway accept a request does not,
+   * and the gateway checks a fixed fingerprint and rejects anything else. A
+   * build without the feature can therefore be *told* to use them and will have
+   * every request refused, so the kinds and the profile are offered only where
+   * they work.
+   */
+  opencode_available: boolean;
   /** What each declared account's check-in is doing. */
   checkin?: CheckinView[];
   /** Observed resource events, newest first. */
