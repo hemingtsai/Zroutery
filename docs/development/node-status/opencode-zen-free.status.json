@@ -19,7 +19,9 @@
   ],
   "blocked_by": [],
   "unblock_condition": "Not blocked; implemented, unit- and integration-tested, and live-verified against the real gateway.",
-  "evidence": [],
+  "evidence": [
+    "E-155"
+  ],
   "source_references": [
     "crates/zroutery-core/src/opencode/mod.rs",
     "crates/zroutery-core/src/config/mod.rs",
@@ -34,6 +36,7 @@
     "Shipped in ce74028 (identity/shaping/collapse), 337f050 (collapse wiring, kinds, discovery, exclusion) and 3a8e5f1 (integration test).",
     "Live smoke is #[ignore] (needs the network and is subject to the per-IP free-tier rate limit).",
     "Provider B (OPENCODE-CONSOLE) is a separate node and is not started.",
-    "Evidence rows for the evidence-registry are still to be added (the registry already has a pre-existing gap: CLIENT-IDENTITY cites E-120, which is undefined)."
+    "Evidence rows for the evidence-registry are still to be added (the registry already has a pre-existing gap: CLIENT-IDENTITY cites E-120, which is undefined).",
+    "THE KINDS AND THE PROFILE WERE OFFERED BY A BUILD THAT CANNOT MAKE THEM WORK, AND THAT IS NOW SAID OUT LOUD. The two provider kinds and the `opencode_cli` client profile are configuration rather than code -- plain variants of `ProviderKind` and `ProviderClientProfile`, neither behind a `cfg` -- so they survive every build. The request shaping that makes OpenCode's gateway accept a request is not configuration, and the gateway checks a fixed fingerprint and rejects anything else. A build without the feature could therefore be *told* to use OpenCode and would have every request refused, and the desktop app is such a build: it ships the `ml` feature and not `opencode`. The snapshot now carries `opencode_available` and the providers page offers the kinds and the profile only where they work. **THE DECISION LEFT OPEN IS THE PRODUCT'S, NOT THE CODE'S**: enabling the `opencode` feature in the shipped desktop app would make the two providers work there, and nothing here prevents that. What is settled is that a build without the stack no longer offers a provider it cannot serve. The account subsystem is the precedent -- it is also opt-in, and it already had a flag and an honest empty state; the inconsistency was that the OpenCode kinds had neither. See E-155."
   ]
 }

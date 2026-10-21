@@ -18,7 +18,9 @@
   ],
   "blocked_by": [],
   "unblock_condition": "Not blocked; implemented and tested against a fake Console.",
-  "evidence": [],
+  "evidence": [
+    "E-155"
+  ],
   "source_references": [
     "crates/zroutery-core/src/opencode/oauth.rs",
     "crates/zroutery-core/src/opencode/console.rs",
@@ -31,6 +33,7 @@
   "notes": [
     "Shipped in 409f0c7 (device-code OAuth, console resolver, x-opencode-org-id) and the B2b/B3 work that follows it (pipeline key wiring, /api/config discovery, the src-tauri opencode feature).",
     "No live smoke: the Console tier needs a real Console login, which the field testing did not obtain; verification is unit + fake-console only.",
-    "Evidence rows for the evidence-registry are still to be added (the registry already has a pre-existing gap: CLIENT-IDENTITY cites E-120, which is undefined)."
+    "Evidence rows for the evidence-registry are still to be added (the registry already has a pre-existing gap: CLIENT-IDENTITY cites E-120, which is undefined).",
+    "THE KINDS AND THE PROFILE WERE OFFERED BY A BUILD THAT CANNOT MAKE THEM WORK, AND THAT IS NOW SAID OUT LOUD. The two provider kinds and the `opencode_cli` client profile are configuration rather than code -- plain variants of `ProviderKind` and `ProviderClientProfile`, neither behind a `cfg` -- so they survive every build. The request shaping that makes OpenCode's gateway accept a request is not configuration, and the gateway checks a fixed fingerprint and rejects anything else. A build without the feature could therefore be *told* to use OpenCode and would have every request refused, and the desktop app is such a build: it ships the `ml` feature and not `opencode`. The snapshot now carries `opencode_available` and the providers page offers the kinds and the profile only where they work. **THE DECISION LEFT OPEN IS THE PRODUCT'S, NOT THE CODE'S**: enabling the `opencode` feature in the shipped desktop app would make the two providers work there, and nothing here prevents that. What is settled is that a build without the stack no longer offers a provider it cannot serve. The account subsystem is the precedent -- it is also opt-in, and it already had a flag and an honest empty state; the inconsistency was that the OpenCode kinds had neither. See E-155."
   ]
 }
