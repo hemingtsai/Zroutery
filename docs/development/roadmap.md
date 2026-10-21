@@ -316,7 +316,7 @@ real-provider E2E, or automatic model activation is authorized by this roadmap.
 | `I4` | `FAILED` | Make restore/rollback apply conflict resolution and report restoration failures accurately. |
 | `UI` | `DONE` | Existing provider/model/routing/activity/settings UI builds and is integrated. |
 | `UI-LAYOUT` | `DONE` | Current fixture, real browser assertions, and fail-closed missing-browser behavior pass. |
-| `UI-NEW-TRACKS` | `PARTIAL` | Account, takeover, check-in, ML and the migration cutover all have commands and surfaces; what is left is the path a cutover only reaches with a live gateway answering. |
+| `UI-NEW-TRACKS` | `DONE` | Account, takeover, check-in, ML and the migration cutover all have commands and surfaces, and the cutover's completed path runs end to end against a real endpoint. |
 | `OBSERVABILITY` | `DONE` | One addressable record per request joins decision, failure and usage, correlated on UUID-derived identifiers and refusing rather than guessing. |
 | `CLIENT-IDENTITY` | `DONE` | A provider's client profile decides the fingerprint presented upstream and which of the client's own headers travel with it, as an allowlist that can never carry an auth header. Independent of the ML path. |
 

@@ -56,7 +56,7 @@ failed node. Historical tags are not graph edges.
 | `I4` | `DONE` | none |
 | `UI` | `DONE` | `STAGE-1` |
 | `UI-LAYOUT` | `DONE` | `UI` |
-| `UI-NEW-TRACKS` | `PARTIAL` | `UI`, `ACCOUNT`, `NEWAPI`, `I2`, `I3`, `I4` |
+| `UI-NEW-TRACKS` | `DONE` | `UI`, `ACCOUNT`, `NEWAPI`, `I2`, `I3`, `I4` |
 | `OBSERVABILITY` | `DONE` | none |
 | `CLIENT-IDENTITY` | `DONE` | none |
 | `OPENCODE-ZEN-FREE` | `DONE` | `CLIENT-IDENTITY` |
