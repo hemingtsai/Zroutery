@@ -1,5 +1,22 @@
 # Account surface: the ordered slices
 
+> **Superseded in part — 2026-10-21.** This plan was written against the records as
+> they stood then, and it is left as it was written, because a plan that is rewritten
+> after the fact is not a record. Two things in it have since been overtaken by events
+> and are marked where they occur: the node table at the top quoted every one of these
+> nodes as `PARTIAL` or `BLOCKED`, and all of them are now `DONE`; and the constraint
+> below — *Account ships as an opt-in feature; it must not join `default = ["ml"]`* —
+> was written against a sentence that has since expired. The reason for the exclusion
+> was that the surface was not reachable: "nothing probes an account, so with this on the
+> store is constructed and stays empty". The reconciler landed, that sentence stopped
+> describing the code, and the desktop's default feature list now carries `account`,
+> `newapi` and `account-maint`, so the shipped app holds the capability. "Optional"
+> now means what it should have meant: the capability is in the binary and the behaviour
+> is not — nothing probes an account until an account is declared, and
+> `--no-default-features` still builds the app without any of it. The other constraint,
+> *without changing ML feature order*, is untouched and was honoured: `ml` is still first
+> in the default list and the core's own feature table is unchanged. See E-158.
+
 ## Why this is a decomposition and not a task
 
 The request was to put the Account component in the GUI. The repository already
