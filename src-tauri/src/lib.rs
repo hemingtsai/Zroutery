@@ -12,6 +12,8 @@ mod commands;
 mod logs;
 pub mod migration;
 mod migration_commands;
+#[cfg(test)]
+mod migration_tests;
 pub mod platform;
 pub mod secrets;
 #[cfg(desktop)]

@@ -108,13 +108,18 @@ pub fn staging_path(config_dir: &Path, agent: AgentType) -> PathBuf {
 /// 1. `StopExternal` — advisory. The client was not started by this migration,
 ///    so it is reported rather than killed; "still running" has to be visible
 ///    before a config underneath it is rewritten.
-/// 2. `StartZroutery` — the port must be free, checked before anything is
-///    written rather than discovered when the endpoint does not answer.
+/// 2. `StartZroutery` — a report of whether the port is free, and it does
+///    not fail when it is not. The port this cutover switches to is usually
+///    Zroutery's own, and Zroutery is usually already running there, so a port
+///    in use is the ordinary case. What the operator needs to know is not
+///    "is the number taken" but "is the holder the right service", and only
+///    the endpoint check can answer that.
 /// 3. `CopyConfig` — installs the staged document, backing up whatever was
 ///    there.
 /// 4. `VerifyEndpoint` — proves the gateway answered *and* answered as
 ///    Zroutery, which is the step that makes a completed cutover mean
-///    something.
+///    something. It is the last step, and it is the one that decides: the file
+///    has been replaced by the time it runs, which is why the snapshot exists.
 pub fn build_plan(
     config_dir: &Path,
     agent: AgentType,

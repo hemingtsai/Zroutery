@@ -127,8 +127,19 @@ pub enum MigrationAction {
     },
     /// Stop a child this migration started, and wait for it to actually exit.
     StopOwned { label: String },
-    /// Check that a port is free, so the switch does not collide with something
-    /// already bound.
+    /// Report whether a port is free, so a switch knows what it is about to
+    /// collide with.
+    ///
+    /// **It does not fail when the port is taken**, and that is deliberate
+    /// rather than a gap. The port a cutover switches to is usually Zroutery's
+    /// own, and Zroutery is usually already running there — so a port in use
+    /// is the ordinary case, not a collision. What decides whether the holder
+    /// is the right service is the endpoint check and its body marker, which
+    /// can tell "Zroutery is serving" from "something else is serving"; a port
+    /// number cannot tell them apart at all.
+    ///
+    /// So this is a report, and the step that needs a guarantee asks
+    /// [`MigrationAction::VerifyEndpoint`] for one.
     StartZroutery { port: u16 },
     /// Require a real answer from `url`, judged by `expect`.
     VerifyEndpoint {
