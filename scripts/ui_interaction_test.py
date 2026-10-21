@@ -151,6 +151,10 @@ HARNESS = """
     // The link that started this application, when a case wants to drive the
     // path where the dashboard was not listening yet.
     deepLink: query("deepLink") || null,
+    // The balance readings the dashboard renders as chips. Seedable, because a
+    // provider whose balance comes from its panel has to be shown *reading* to
+    // be shown at all: a provider with no reading yet renders a dash.
+    balances: query("balances") || {},
     commandLog: [],
     delays: {},
   };
@@ -192,7 +196,7 @@ HARNESS = """
       warning: null,
       config_path: "/tmp/ui_interaction/config.json",
       version: "0.8.0",
-      balances: {},
+      balances: clone(state.balances || {}),
       election: null,
       budgets: [],
       ml_available: Boolean(state.ml),
@@ -413,7 +417,7 @@ HARNESS = """
     // the snapshot, so a case that seeds it has to be able to install it. A key
     // missing from this list is a seed that is silently dropped and a case that
     // times out with no explanation.
-    for (const key of ["config", "server", "keys", "catalogues", "account", "ml", "migration", "deepLink", "opencode"]) {
+    for (const key of ["config", "server", "keys", "catalogues", "account", "ml", "migration", "deepLink", "opencode", "balances"]) {
       if (seed && seed[key] !== undefined) state[key] = clone(seed[key]);
     }
     if (seed && seed.delays) state.delays = { ...seed.delays };
@@ -2683,6 +2687,88 @@ def case_ui16_a_build_without_the_opencode_stack_offers_its_kinds(devtools) -> l
     return failures
 
 
+def case_ui17_a_panel_backed_balance_is_shown_and_askable(devtools: DevTools) -> list[str]:
+    """A relay whose balance comes from its panel shows the figure, and can be asked.
+
+    This is the NewAPI case, and it is the one the balance work was for. The
+    relay serves `/v1` and publishes no balance there, so the figure lives in
+    the panel that owns the wallet — and only the account's own credential can
+    read it. A dashboard that hid that provider's balance, or that disabled
+    the button that fetches it, would be a dashboard telling the operator the
+    relay has nothing to report when the relay never claimed to.
+
+    Two readings, and both are about what the operator is shown:
+
+    * the chip carries the figure the panel reported, and
+    * the button that asks the panel is enabled, because there is something to
+      ask.
+    """
+    failures: list[str] = []
+
+    # The accounts-page fixture already declares two accounts on the DeepSeek
+    # provider, and a provider with an account of its own is a provider whose
+    # balance comes from a panel. Reusing it rather than spelling out a third
+    # declaration is deliberate: the fixture convention is that an account
+    # carries its maintenance block, and a hand-written one that left it out
+    # would crash the drawer for a reason that has nothing to do with this case.
+    seed(
+        devtools,
+        **ACCOUNT_QUERY,
+        balances={
+            "deepseek": {
+                "checked_at": "2026-10-21T00:00:00Z",
+                "balance": {
+                    "currency": "USD",
+                    "remaining": 12.5,
+                    "total": 100.0,
+                    "used": 87.5,
+                },
+                "error": None,
+            }
+        },
+    )
+    devtools.click_selector('[data-page="providers"]')
+    devtools.wait_for("Boolean(document.querySelector('.page .list-row'))", "the provider rows")
+
+    body = devtools.evaluate("document.querySelector('.page').innerText")
+    if "12.50 USD" not in body:
+        failures.append("the panel's figure is not rendered on the provider row: %r" % body)
+
+    # The button that asks the panel is enabled. A disabled button here would
+    # be the exact defect the balance work fixed, and it would look like a
+    # provider that simply has nothing to report. It lives in the provider's
+    # own drawer, so the drawer is opened first — by name, because the row
+    # that carries the panel's reading is the one under test and an index
+    # would be an accident waiting to happen.
+    devtools.evaluate(
+        """
+        (() => {
+          const rows = [...document.querySelectorAll('.list-row')];
+          const row = rows.find((r) => r.textContent.includes('DeepSeek'));
+          if (row) row.click();
+        })()
+        """
+    )
+    devtools.wait_for("document.querySelector('.drawer') !== null", "the provider drawer")
+    enabled = devtools.evaluate(
+        """
+        (() => {
+          const drawer = document.querySelector('.drawer');
+          if (!drawer) return null;
+          const buttons = [...drawer.querySelectorAll('button')];
+          const check = buttons.find((b) => b.textContent.includes('Check now'));
+          return check ? !check.disabled : null;
+        })()
+        """
+    )
+    if enabled is None:
+        failures.append("there is no button that asks for the balance")
+    elif not enabled:
+        failures.append("the button that asks the panel for the balance is disabled")
+
+    return failures
+
+
 CASES = (
     {"label": "UI-1 two nested edits in sequence (first save delayed)", "run": case_ui1_nested_rebase},
     {"label": "UI-2 moved candidate renumbers priority", "run": case_ui2_candidate_priority},
@@ -2750,6 +2836,11 @@ CASES = (
     {
         "label": "UI-16 a build without the opencode stack offers its kinds",
         "run": case_ui16_a_build_without_the_opencode_stack_offers_its_kinds,
+        "query": CUTOVER_QUERY,
+    },
+    {
+        "label": "UI-17 a panel backed balance is shown and askable",
+        "run": case_ui17_a_panel_backed_balance_is_shown_and_askable,
         "query": CUTOVER_QUERY,
     },
 )

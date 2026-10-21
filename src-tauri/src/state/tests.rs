@@ -750,8 +750,12 @@ async fn a_successful_rebind_commits_the_document_and_moves_the_listener() {
 /// A credential store that keeps secrets in memory and can be told to
 /// refuse a deletion, so provider removal is exercised without the real
 /// keychain.
+///
+/// `pub(super)` so the panel-balance suite can store a credential too: it
+/// needs a secret in the store to probe with, and a second store would be a
+/// second set of rules about what a reference resolves to.
 #[derive(Default)]
-struct FakeSecrets {
+pub(super) struct FakeSecrets {
     entries: Mutex<std::collections::HashMap<String, String>>,
     refuse_delete: bool,
 }

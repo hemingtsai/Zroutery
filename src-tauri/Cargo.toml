@@ -89,7 +89,6 @@ account-maint = ["newapi"]
 
 [dependencies]
 zroutery-core = { path = "../crates/zroutery-core" }
-
 chrono = { workspace = true }
 futures-util = { workspace = true }
 serde = { workspace = true }
@@ -138,3 +137,13 @@ keyring = { version = "3.6.3", features = ["windows-native"] }
 # Reading the user's UI language for the tray menu, which is drawn before any
 # webview (and its locale machinery) exists.
 windows-sys = { version = "0.60", features = ["Win32_Globalization"] }
+
+# A panel on a real socket, for the balance path.
+#
+# Dev-only, and deliberately not the core crate's own mock: that one is inside
+# the adapter's test module and cannot be reached from here. The desktop's
+# suite has to stand up its own panel, because the path it drives is the
+# desktop's — the provider's configuration, the secret store, the reconciler,
+# the store and the sum — and the adapter is only one link of it.
+[dev-dependencies]
+axum = { workspace = true }

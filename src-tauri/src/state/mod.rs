@@ -153,6 +153,11 @@ mod lifecycle;
 mod migration;
 #[cfg(test)]
 mod migration_tests;
+// The panel-backed balance, driven end to end against a panel on a real
+// socket. Gated on `newapi` inside the file: the panel adapter is the half
+// this needs, and a build without it has no panel to ask.
+#[cfg(test)]
+mod panel_balance_tests;
 // `any`, not `ml`: `ml.rs` is the learned model, but it also holds
 // `reconcile_accounts`, which is gated on `account` alone. Gating the module
 // on `ml` took the reconciler with it, so every combination carrying `newapi`
