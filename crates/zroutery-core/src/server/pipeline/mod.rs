@@ -561,6 +561,14 @@ fn prepare(
     mode: crate::upstream::EncodeMode,
 ) -> Result<(Option<String>, Value)> {
     let key = state.api_key(&candidate.provider)?;
+    // A decision endpoint is not asked a chat. It is asked a question, in its
+    // own protocol, and the body is the decision shape: the state the client
+    // sent, and the one typed question the Auto Mode's question becomes.
+    if candidate.provider.kind.is_decision() {
+        let (state_text, instructions) = crate::upstream::decision_question(req);
+        let body = crate::upstream::build_decision_body(&state_text, &instructions);
+        return Ok((key, body));
+    }
     let body = crate::upstream::encode_for_mode(
         &candidate.provider,
         req,
@@ -806,6 +814,20 @@ async fn buffered_upstream(
     body: &Value,
     client: &ClientIdentity,
 ) -> Result<crate::ir::ChatResponse> {
+    // A decision endpoint answers with a probability rather than a message, so
+    // the answer is read as a probability and then *spoken back* in the
+    // client's own protocol. Nothing downstream has to know which kind of
+    // model answered, and the client sees exactly what a language model's
+    // verdict would have looked like.
+    if candidate.provider.kind.is_decision() {
+        let decision = state
+            .upstream
+            .send_decision(&candidate.provider, key, body)
+            .await?;
+        let threshold = candidate.provider.decision.threshold;
+        let verdict = crate::classifier::verdict_from_decision(Some(decision), threshold);
+        return Ok(decision_response(verdict, &candidate.entry.upstream_model));
+    }
     #[cfg(feature = "opencode")]
     if client.profile == crate::config::ProviderClientProfile::OpenCodeCli {
         use futures_util::StreamExt as _;
@@ -830,6 +852,29 @@ async fn buffered_upstream(
         .upstream
         .send_with_identity(&candidate.provider, key, body, client)
         .await
+}
+
+/// The answer a decision model's probability is spoken back as.
+///
+/// A decision endpoint has no message of its own — it has a probability — and
+/// the client that asked the question expects a verdict in its own protocol.
+/// So the verdict is written as the text a language model's answer would have
+/// been, and the rest of the pipeline carries it unchanged.
+fn decision_response(
+    verdict: crate::classifier::ClassifierVerdict,
+    model: &str,
+) -> crate::ir::ChatResponse {
+    crate::ir::ChatResponse {
+        id: "zroutery-decision".to_string(),
+        model: model.to_string(),
+        content: vec![crate::ir::ContentBlock::text(
+            crate::classifier::verdict_text(verdict),
+        )],
+        stop_reason: crate::ir::StopReason::EndTurn,
+        stop_sequence: None,
+        usage: crate::ir::Usage::default(),
+        passthrough: Default::default(),
+    }
 }
 
 // Eleven arguments, and each one is a distinct piece of the request that this
@@ -1554,8 +1599,7 @@ fn reject(
     headers: &HeaderMap,
     error: &Error,
 ) {
-    let mut lifecycle =
-        RequestLifecycle::new(
+    let mut lifecycle = RequestLifecycle::new(
         state,
         dialect,
         streaming,

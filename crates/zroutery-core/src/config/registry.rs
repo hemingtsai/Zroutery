@@ -8,7 +8,7 @@ use super::model::{ModelCapabilities, ModelTier};
 use super::provider::default_weight;
 use super::provider::ProviderKind;
 use super::provider::{
-    default_connect_timeout, default_timeout, default_true, ProviderClientProfile,
+    default_connect_timeout, default_timeout, default_true, DecisionConfig, ProviderClientProfile,
 };
 use crate::billing::{BalanceConfig, BaseDepth, Pricing};
 pub use crate::protocol::ProviderQuirks;
@@ -59,6 +59,13 @@ pub struct ProviderConfig {
     /// How to ask this provider for the remaining credit, when it can be asked.
     #[serde(default)]
     pub balance: BalanceConfig,
+    /// How to ask this provider for a decision, when it answers decisions.
+    ///
+    /// Only meaningful for a provider of kind
+    /// [`ProviderKind::Decision`](crate::config::ProviderKind::Decision); every
+    /// other kind ignores it.
+    #[serde(default)]
+    pub decision: DecisionConfig,
     /// Accounts this provider hosts, when it hosts any.
     ///
     /// `#[serde(default)]` is what every optional field on this struct already
@@ -258,6 +265,11 @@ impl ProviderConfig {
                 ProviderKind::OpenCodeZenFree | ProviderKind::OpenCodeConsole => {
                     ProviderClientProfile::OpenCodeCli
                 }
+                // A decision endpoint is asked a question, not a chat, and the
+                // profile decides how the request is presented. Nothing about a
+                // decision request is a client impersonation, so it presents
+                // its own identity.
+                ProviderKind::Decision => ProviderClientProfile::Native,
                 ProviderKind::OpenAICompatible => ProviderClientProfile::Auto,
             },
             bearer_auth: false,
@@ -267,6 +279,7 @@ impl ProviderConfig {
             anthropic_version: None,
             quirks: ProviderQuirks::default(),
             balance: BalanceConfig::default(),
+            decision: DecisionConfig::default(),
             accounts: Vec::new(),
         }
     }
@@ -322,6 +335,9 @@ impl ProviderConfig {
             ProviderKind::OpenAICompatible
             | ProviderKind::OpenCodeZenFree
             | ProviderKind::OpenCodeConsole => format!("{with_v1}/chat/completions"),
+            // A decision endpoint has no chat url. Its url carries the
+            // decision path, and the upstream asks it directly.
+            ProviderKind::Decision => self.decision.url(&self.base_url),
         }
     }
 
@@ -348,6 +364,10 @@ impl ProviderConfig {
                     format!("{base}/v1/models")
                 }
             }
+            // A decision endpoint publishes no catalogue: it answers questions,
+            // it does not serve models. The model is declared by hand on the
+            // models page, so there is nothing to list and nothing to fetch.
+            ProviderKind::Decision => self.decision.url(&self.base_url),
         }
     }
 }

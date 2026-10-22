@@ -44,6 +44,7 @@ use errors::truncate;
 use headers::anonymous_identity;
 
 mod catalogue;
+mod decision;
 mod encode;
 mod errors;
 mod headers;
@@ -55,6 +56,7 @@ mod stream;
 mod tests;
 
 pub use catalogue::DiscoveredModel;
+pub use decision::{build_body as build_decision_body, question_of as decision_question, Decision};
 pub use encode::{encode_for, encode_for_mode, EncodeMode};
 pub use headers::{build_headers, build_headers_for_identity, build_headers_for_profile};
 
@@ -212,5 +214,66 @@ impl Upstream {
         let json: Value = serde_json::from_str(&text)
             .map_err(|e| Error::BadUpstreamPayload(format!("{e}: {}", truncate(&text, 500))))?;
         protocol::decode_response(provider.kind.dialect(), json)
+    }
+
+    /// Ask a decision endpoint for an answer.
+    ///
+    /// A decision endpoint is not a chat endpoint: it takes a state and a set
+    /// of typed questions, and answers with probabilities. So the body is the
+    /// decision shape rather than the provider's dialect, the url is the
+    /// decision path rather than the chat path, and what comes back is a
+    /// probability rather than a message.
+    ///
+    /// The answer is returned as it arrived. Turning a probability into the
+    /// verdict the Auto Mode expects is the Auto Mode's business, not the
+    /// transport's.
+    pub async fn send_decision(
+        &self,
+        provider: &ProviderConfig,
+        api_key: Option<&str>,
+        body: &Value,
+    ) -> Result<Decision> {
+        let identity = anonymous_identity(provider);
+        let request = self
+            .client()
+            .post(provider.decision.url(&provider.base_url))
+            .headers(build_headers_for_identity(provider, api_key, &identity)?)
+            .json(body);
+
+        let response =
+            tokio::time::timeout(Duration::from_secs(provider.timeout_secs), request.send())
+                .await
+                .map_err(|_| Error::Timeout(provider.timeout_secs))?
+                .map_err(|source| Error::Transport {
+                    provider: provider.name.clone(),
+                    source,
+                })?;
+
+        let status = response.status();
+        let text =
+            tokio::time::timeout(Duration::from_secs(provider.timeout_secs), response.text())
+                .await
+                .map_err(|_| Error::Timeout(provider.timeout_secs))?
+                .map_err(|source| Error::Transport {
+                    provider: provider.name.clone(),
+                    source,
+                })?;
+
+        if !status.is_success() {
+            return Err(Error::Upstream {
+                provider: provider.name.clone(),
+                status: status.as_u16(),
+                body: truncate(&text, 2000),
+            });
+        }
+
+        let json: Value = serde_json::from_str(&text)
+            .map_err(|e| Error::BadUpstreamPayload(format!("{e}: {}", truncate(&text, 500))))?;
+        decision::parse_answer(&json).ok_or_else(|| {
+            Error::BadUpstreamPayload(format!(
+                "the decision endpoint answered with no probability: {}",
+                truncate(&text, 500)
+            ))
+        })
     }
 }

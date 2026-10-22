@@ -335,6 +335,16 @@ export const en = {
     "Locked. OpenCode's gateway checks this fingerprint and the config refuses any other profile.",
   "providers.opencode_zen_dialect": "OpenCode Zen (free)",
   "providers.opencode_console_dialect": "OpenCode Console",
+  "providers.decision_dialect": "Decision model",
+  "providers.decision": "Decisions",
+  "providers.decision_hint":
+    "A decision endpoint answers typed questions with probabilities instead of writing text. It serves the Auto Mode's decisions and nothing else, so its model is added to the Auto Mode pool by hand and never answers a chat request.",
+  "providers.decision_path": "Decision path",
+  "providers.decision_path_hint":
+    "The path the decision endpoint answers on, joined to the base URL. The reference service answers at /v1/systemone.",
+  "providers.decision_threshold": "Required confidence",
+  "providers.decision_threshold_hint":
+    "How sure the answer has to be before the Auto Mode acts on it. Below this the action is blocked, because a decision that is not sure has not cleared it. 0.5 lets the model's own majority decide.",
   "providers.free_badge": "free",
   "providers.free_only": "Free models only",
   "providers.free_only_hint":
@@ -1387,6 +1397,16 @@ export const zh: Dict = {
     "已锁定。OpenCode 网关会校验该指纹，配置校验也不接受其他取值。",
   "providers.opencode_zen_dialect": "OpenCode Zen(免费)",
   "providers.opencode_console_dialect": "OpenCode Console",
+  "providers.decision_dialect": "决策模型",
+  "providers.decision": "决策",
+  "providers.decision_hint":
+    "决策接口不写文字，而是用概率回答有类型的问题。它只服务于自动审核的决策，因此它的模型需要手动加入自动审核池，永远不会应答聊天请求。",
+  "providers.decision_path": "决策接口路径",
+  "providers.decision_path_hint":
+    "决策接口应答的路径，与 Base URL 相接。参考服务使用 /v1/systemone。",
+  "providers.decision_threshold": "所需置信度",
+  "providers.decision_threshold_hint":
+    "自动审核据此行动前，答案需要有多确定。低于该值则拦截 —— 没有把握的决策不算放行。设为 0.5 则由模型自身的多数票决定。",
   "providers.free_badge": "免费",
   "providers.free_only": "仅显示免费模型",
   "providers.free_only_hint":

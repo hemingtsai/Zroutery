@@ -26,6 +26,89 @@ pub enum ProviderKind {
     /// [`ProviderClientProfile::OpenCodeCli`]. Serves main traffic only.
     #[serde(rename = "opencode_console")]
     OpenCodeConsole,
+    /// A decision endpoint: a model that answers typed questions instead of
+    /// generating text.
+    ///
+    /// The System One family — Jev and the models built in its shape — takes a
+    /// state and a set of typed questions and answers with calibrated
+    /// probabilities over the choices. It cannot generate prose at all, so it
+    /// serves the Auto Mode pool and nothing else: a decision endpoint is not
+    /// eligible for a tier, and the Auto Mode is the only thing that knows how
+    /// to ask it a question.
+    ///
+    /// The wire protocol is not OpenAI's, so nothing here may treat it as one.
+    /// The upstream speaks to it in the decision protocol, and the value
+    /// [`Self::dialect`] returns is only ever reached by code that asks a
+    /// decision endpoint to chat — which nothing does.
+    Decision,
+}
+
+/// How to ask a decision endpoint for an answer.
+///
+/// Only meaningful for a provider of kind [`ProviderKind::Decision`]; every
+/// other kind ignores it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DecisionConfig {
+    /// The path on the provider's base url that answers decisions.
+    ///
+    /// Configurable rather than fixed, because the decision-model family does
+    /// not agree on one path: the reference service answers at
+    /// `/v1/systemone`, and the gateways that front it each publish their own.
+    /// The path is joined to the base url as it stands, so a base url that
+    /// already ends in `/v1` is not given a second one.
+    #[serde(default = "DecisionConfig::default_path")]
+    pub path: String,
+    /// The confidence the answer must carry, in either direction, before it is
+    /// acted on.
+    ///
+    /// A decision model answers with a probability rather than a verdict, and
+    /// a probability of 0.4 is not the same claim as a probability of 0.99. The
+    /// Auto Mode is a security gate, so an answer that is not confident has not
+    /// cleared the action and the action is blocked. The default is the
+    /// detector's own floor, for the same reason: this is the gate, and the
+    /// gate is closed unless the evidence is strong.
+    ///
+    /// Lower it to 0.5 to let a calibrated model's own majority decide, which
+    /// is what a decision model is for.
+    #[serde(default = "DecisionConfig::default_threshold")]
+    pub threshold: f64,
+}
+
+impl Default for DecisionConfig {
+    fn default() -> Self {
+        Self {
+            path: Self::default_path(),
+            threshold: Self::default_threshold(),
+        }
+    }
+}
+
+impl DecisionConfig {
+    fn default_path() -> String {
+        "/v1/systemone".to_string()
+    }
+
+    fn default_threshold() -> f64 {
+        0.85
+    }
+
+    /// The full url of the decision endpoint.
+    ///
+    /// The base url is used as it stands: a base that already ends in `/v1` is
+    /// not given a second one, and a path that already begins with `/v1` is
+    /// not given a third.
+    pub fn url(&self, base_url: &str) -> String {
+        let base = base_url.trim_end_matches('/');
+        let path = self.path.trim();
+        if path.is_empty() {
+            return base.to_string();
+        }
+        if path.starts_with("/v1") {
+            format!("{base}{path}")
+        } else {
+            format!("{base}/v1{path}")
+        }
+    }
 }
 
 impl ProviderKind {
@@ -35,6 +118,14 @@ impl ProviderKind {
             ProviderKind::OpenAICompatible
             | ProviderKind::OpenCodeZenFree
             | ProviderKind::OpenCodeConsole => Dialect::OpenAI,
+            // A decision endpoint has no chat dialect. The upstream speaks to
+            // it in the decision protocol and never reaches this value, because
+            // nothing asks a decision endpoint to chat: it is not eligible for
+            // a tier, and the Auto Mode pool is the only thing that may reach
+            // it. The value is the OpenAI one so that a caller which reached it
+            // by mistake would fail at the wire rather than silently encode a
+            // request the endpoint cannot answer.
+            ProviderKind::Decision => Dialect::OpenAI,
         }
     }
 
@@ -47,6 +138,16 @@ impl ProviderKind {
         )
     }
 
+    /// Whether this provider answers typed questions instead of generating
+    /// text.
+    ///
+    /// A decision endpoint cannot serve main traffic — it has no answer for a
+    /// request that wants prose — so it is eligible for the Auto Mode pool and
+    /// for nothing else.
+    pub fn is_decision(&self) -> bool {
+        matches!(self, ProviderKind::Decision)
+    }
+
     /// Default base url shown in the GUI when creating a provider.
     pub fn default_base_url(&self) -> &'static str {
         match self {
@@ -54,6 +155,7 @@ impl ProviderKind {
             ProviderKind::OpenAICompatible => "https://api.openai.com/v1",
             ProviderKind::OpenCodeZenFree => "https://opencode.ai/zen",
             ProviderKind::OpenCodeConsole => "https://opencode.ai/inference/openai/v1",
+            ProviderKind::Decision => "https://api.typesafe.ai",
         }
     }
 }

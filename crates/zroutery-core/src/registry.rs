@@ -203,11 +203,27 @@ impl Registry {
     }
 
     /// All usable models of a tier, in the order the router will try them.
+    ///
+    /// A decision endpoint's model is not one of them, whatever tier it is
+    /// filed under: a decision model answers typed questions and cannot answer
+    /// a request that wants prose, so it is not a candidate for main traffic
+    /// and the Auto Mode pool is the only place it may be reached. Filing it
+    /// under a tier would put it in front of requests it cannot answer.
     pub fn tier_members(&self, tier: ModelTier) -> Vec<&ModelEntry> {
         self.index
             .by_tier
             .get(&tier)
-            .map(|members| members.iter().map(|i| &self.config.models[*i]).collect())
+            .map(|members| {
+                members
+                    .iter()
+                    .map(|i| &self.config.models[*i])
+                    .filter(|entry| {
+                        !self
+                            .provider_of(entry)
+                            .is_ok_and(|provider| provider.kind.is_decision())
+                    })
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
@@ -231,6 +247,11 @@ impl Registry {
 
     /// The listing returned by `GET /v1/models`: concrete models first, then any
     /// tier id that currently has at least one usable member.
+    ///
+    /// A decision endpoint's model is not in the listing. It answers the Auto
+    /// Mode's questions and nothing else, so publishing it would invite a
+    /// client to ask for a model that cannot answer it. The Auto Mode pool
+    /// refers to it by id in the configuration, which is where it belongs.
     pub fn list(&self) -> Vec<ModelInfo> {
         let style = self.config.routing.naming_style;
         let mut out: Vec<ModelInfo> = Vec::new();
@@ -240,6 +261,9 @@ impl Registry {
             }
             let provider = self.config.provider(&m.provider_id);
             if provider.map(|p| !p.enabled).unwrap_or(true) {
+                continue;
+            }
+            if provider.is_some_and(|p| p.kind.is_decision()) {
                 continue;
             }
             out.push(ModelInfo {
@@ -259,10 +283,15 @@ impl Registry {
         out.sort_by(|a, b| a.id.cmp(&b.id));
 
         for tier in ModelTier::ALL {
-            // One pass over the precomputed member list per tier.
-            let Some(members) = self.index.by_tier.get(&tier) else {
+            // One pass over the usable member list per tier. A decision
+            // endpoint's model is not a usable member of a tier, so it is
+            // neither counted here nor advertised as one: a tier whose only
+            // member is a decision model serves nothing, and advertising it
+            // would offer a class that answers nothing.
+            let members = self.tier_members(tier);
+            if members.is_empty() {
                 continue;
-            };
+            }
             // A virtual tier is only advertised as capable when every usable
             // member is declared capable.  An unknown member must not turn a
             // soft capability into a capability pass in the public listing.
@@ -275,7 +304,7 @@ impl Registry {
                 video: true,
                 files: true,
             };
-            for m in members.iter().map(|i| &self.config.models[*i]) {
+            for m in &members {
                 caps.tools &= m.capabilities.tools;
                 caps.vision &= m.capabilities.vision;
                 caps.thinking &= m.capabilities.thinking;

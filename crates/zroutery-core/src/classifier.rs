@@ -366,6 +366,61 @@ pub fn parse_verdict(text: &str) -> ClassifierVerdict {
     ClassifierVerdict::Unparseable
 }
 
+/// The verdict a decision model's answer carries.
+///
+/// A decision model answers with a probability, and a probability is not a
+/// verdict. This is where the two meet.
+///
+/// The Auto Mode asks a binary question — the action proceeds or it does not —
+/// and a decision model answers that question with the probability of "yes".
+/// The model's confidence in either direction is therefore `noul` on one side
+/// and `1 - noul` on the other, and the threshold is the confidence it must
+/// have before the answer is acted on at all.
+///
+/// **The Auto Mode is fail-closed, so an answer that is not confident has not
+/// cleared the action.** A model that is 60% sure is not a model that has
+/// approved anything, and the answer in the middle band blocks rather than
+/// allowing. That is the same rule the text verdict follows: an answer that
+/// cannot be read has not approved anything.
+///
+/// `None` — no answer at all, or one that is not a probability — is the
+/// unparseable case, and it blocks.
+pub fn verdict_from_decision(
+    decision: Option<crate::upstream::Decision>,
+    threshold: f64,
+) -> ClassifierVerdict {
+    let Some(decision) = decision else {
+        return ClassifierVerdict::Unparseable;
+    };
+    let threshold = threshold.clamp(0.5, 1.0);
+    if decision.noul >= threshold {
+        // Confident that the action must be blocked.
+        return ClassifierVerdict::Block;
+    }
+    if decision.noul <= 1.0 - threshold {
+        // Confident that the action may proceed.
+        return ClassifierVerdict::Allow;
+    }
+    // Neither confident enough to act on, and the gate is closed.
+    ClassifierVerdict::Unparseable
+}
+
+/// The text a verdict is spoken in.
+///
+/// The client that asked the question expects the answer in its own protocol,
+/// and the verdict is spoken back in it — so a decision model's probability
+/// reaches the client in exactly the shape a language model's answer would
+/// have reached it, and nothing downstream has to know which kind of model
+/// answered.
+pub fn verdict_text(verdict: ClassifierVerdict) -> String {
+    match verdict {
+        ClassifierVerdict::Allow => "<block>no</block>".to_string(),
+        ClassifierVerdict::Block => "<block>yes</block>".to_string(),
+        // An unparseable answer is not an allow, so it is spoken as a block.
+        ClassifierVerdict::Unparseable => "<block>yes</block>".to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

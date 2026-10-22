@@ -188,6 +188,37 @@ impl AppConfig {
                     subject: Some(p.id.clone()),
                 });
             }
+            // A decision endpoint is asked a question, so it has two settings
+            // that have to make sense: where the endpoint is, and how sure the
+            // answer has to be. Both are refused here rather than clamped,
+            // because a clamped threshold would quietly change what the Auto
+            // Mode blocks.
+            if p.kind.is_decision() {
+                if p.decision.path.trim().is_empty() {
+                    issues.push(ConfigIssue {
+                        severity: IssueSeverity::Error,
+                        code: "provider.decision_path_empty".into(),
+                        message: format!(
+                            "Provider `{}` answers decisions but has no decision path, so there \
+                             is nowhere to ask it",
+                            p.name
+                        ),
+                        subject: Some(p.id.clone()),
+                    });
+                }
+                if !(0.5..=1.0).contains(&p.decision.threshold) {
+                    issues.push(ConfigIssue {
+                        severity: IssueSeverity::Error,
+                        code: "provider.decision_threshold_invalid".into(),
+                        message: format!(
+                            "Provider `{}` needs a required confidence between 0.5 and 1; a lower \
+                             value would let the proxy allow an action the model is not sure about",
+                            p.name
+                        ),
+                        subject: Some(p.id.clone()),
+                    });
+                }
+            }
             if p.timeout_secs == 0 {
                 issues.push(ConfigIssue {
                     severity: IssueSeverity::Error,

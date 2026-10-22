@@ -49,7 +49,8 @@ type KindLabelKey =
   | "providers.openai_dialect"
   | "providers.anthropic_dialect"
   | "providers.opencode_zen_dialect"
-  | "providers.opencode_console_dialect";
+  | "providers.opencode_console_dialect"
+  | "providers.decision_dialect";
 
 type ProfileLabelKey =
   | "providers.profile_auto"
@@ -63,6 +64,7 @@ const KINDS: { id: ProviderKind; labelKey: KindLabelKey }[] = [
   { id: "anthropic", labelKey: "providers.anthropic_dialect" },
   { id: "opencode_zen_free", labelKey: "providers.opencode_zen_dialect" },
   { id: "opencode_console", labelKey: "providers.opencode_console_dialect" },
+  { id: "decision", labelKey: "providers.decision_dialect" },
 ];
 
 /**
@@ -122,6 +124,8 @@ function defaultBaseUrl(kind: ProviderKind): string {
       return "https://opencode.ai/zen";
     case "opencode_console":
       return "https://opencode.ai/inference/openai/v1";
+    case "decision":
+      return "https://api.typesafe.ai";
     default:
       return "https://api.openai.com/v1";
   }
@@ -577,6 +581,7 @@ function AddProviderForm({
         connect_timeout_secs: 15,
         anthropic_version: null,
         balance: { preset: "none", custom: null },
+        decision: { path: "/v1/systemone", threshold: 0.85 },
         quirks: {
           use_max_completion_tokens: false,
           drop_temperature: false,
@@ -1685,6 +1690,47 @@ function ProviderDrawer({
           <p className="field-hint">{describeBackendError(t, balanceError)}</p>
         )}
       </Section>
+
+      {/* A decision endpoint is asked a question, not a chat, so it has settings
+          of its own: where the decision endpoint lives, and how sure the answer
+          has to be before the Auto Mode acts on it. */}
+      {provider.kind === "decision" && (
+        <Section
+          title={t("providers.decision")}
+          hint={t("providers.decision_hint")}
+        >
+          <div className="grid-two">
+            <Field label={t("providers.decision_path")} hint={t("providers.decision_path_hint")}>
+              <input
+                value={provider.decision.path}
+                onChange={(e) =>
+                  onUpdate((p) => {
+                    p.decision.path = e.currentTarget.value;
+                  })
+                }
+              />
+            </Field>
+            <Field
+              label={t("providers.decision_threshold")}
+              hint={t("providers.decision_threshold_hint")}
+            >
+              <input
+                type="number"
+                min={0.5}
+                max={1}
+                step={0.05}
+                value={provider.decision.threshold}
+                onChange={(e) =>
+                  onUpdate((p) => {
+                    const parsed = Number(e.currentTarget.value);
+                    p.decision.threshold = Number.isFinite(parsed) ? parsed : 0.85;
+                  })
+                }
+              />
+            </Field>
+          </div>
+        </Section>
+      )}
 
       <Section title={t("providers.compatibility")} hint={t("providers.compatibility_hint")}>
         <div className="grid-two">

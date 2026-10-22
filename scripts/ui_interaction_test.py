@@ -161,6 +161,8 @@ HARNESS = """
     // provider whose balance comes from its panel has to be shown *reading* to
     // be shown at all: a provider with no reading yet renders a dash.
     balances: query("balances") || {},
+    // A decision provider, merged into the default configuration.
+    decisionProvider: query("decisionProvider") || null,
     commandLog: [],
     delays: {},
   };
@@ -179,6 +181,14 @@ HARNESS = """
       const patch = state.account.providerAccounts;
       const provider = config.providers.find((p) => p.id === patch.providerId);
       if (provider) provider.accounts = clone(patch.accounts);
+    }
+    // A decision provider, for the case that checks what its own drawer
+    // offers. It merges into the default configuration for the same reason the
+    // account declarations do: a whole-config seed would have to spell out
+    // every field the shell reads, and would drift the moment the
+    // configuration grows one.
+    if (state.decisionProvider) {
+      config.providers = [...config.providers, clone(state.decisionProvider)];
     }
     return {
       config,
@@ -423,7 +433,7 @@ HARNESS = """
     // the snapshot, so a case that seeds it has to be able to install it. A key
     // missing from this list is a seed that is silently dropped and a case that
     // times out with no explanation.
-    for (const key of ["config", "server", "keys", "catalogues", "account", "ml", "migration", "deepLink", "opencode", "balances"]) {
+    for (const key of ["config", "server", "keys", "catalogues", "account", "ml", "migration", "deepLink", "opencode", "balances", "decisionProvider"]) {
       if (seed && seed[key] !== undefined) state[key] = clone(seed[key]);
     }
     if (seed && seed.delays) state.delays = { ...seed.delays };
@@ -2990,6 +3000,87 @@ def case_ui18_a_backend_failure_is_restated_in_chinese(devtools) -> list[str]:
     return failures
 
 
+# A decision provider, merged into the default configuration by the harness.
+#
+# A whole-configuration seed, which the harness normally avoids, because the
+# configuration grows a field and the seed would drift. This is spelled out
+# here because a decision provider *is* a different kind of provider, and the
+# case is about what the drawer offers for one — so the seed has to be one,
+# and it has to say so.
+DECISION_PROVIDER = {
+    "id": "jev",
+    "name": "Jev",
+    "kind": "decision",
+    "base_url": "https://api.typesafe.ai",
+    "key_ref": "provider:jev",
+    "extra_headers": {},
+    "client_profile": "native",
+    "bearer_auth": False,
+    "enabled": True,
+    "timeout_secs": 600,
+    "connect_timeout_secs": 15,
+    "anthropic_version": None,
+    "balance": {"preset": "none", "custom": None},
+    "decision": {"path": "/v1/systemone", "threshold": 0.85},
+    "quirks": {},
+}
+
+
+def case_ui19_a_decision_provider_offers_its_own_settings(devtools) -> list[str]:
+    """A decision endpoint is asked a question, so it has settings of its own.
+
+    The provider drawer's sections are chosen by what the provider *is*: a
+    relay publishes a balance, a decision endpoint answers a typed question.
+    A decision provider therefore carries the path its endpoint answers on and
+    the confidence the answer must carry before the Auto Mode acts on it — and
+    a relay carries neither, because neither means anything for it.
+
+    So the drawer shows the decision section for a decision provider and not
+    for a relay, and the values it shows are the ones that were saved.
+    """
+    failures: list[str] = []
+
+    seed(devtools, decisionProvider=DECISION_PROVIDER)
+    devtools.click_selector('[data-page="providers"]')
+    devtools.wait_for("Boolean(document.querySelector('.page .list-row'))", "the provider rows")
+    devtools.evaluate(
+        """
+        (() => {
+          const rows = [...document.querySelectorAll('.page .list-row')];
+          const row = rows.find((r) => r.textContent.includes('Jev'));
+          if (row) row.click();
+        })()
+        """
+    )
+    devtools.wait_for("document.querySelector('.drawer') !== null", "the provider drawer")
+
+    body = devtools.evaluate("document.querySelector('.drawer').innerText")
+    if "Required confidence" not in body:
+        failures.append("the decision provider's own settings are not in the drawer: %r" % body)
+    if "/v1/systemone" not in body:
+        failures.append("the decision path is not shown: %r" % body)
+
+    # And a relay carries neither, because neither means anything for it.
+    seed(devtools, **CUTOVER_QUERY)
+    devtools.click_selector('[data-page="providers"]')
+    devtools.wait_for("Boolean(document.querySelector('.page .list-row'))", "the provider rows")
+    devtools.evaluate(
+        """
+        (() => {
+          const rows = [...document.querySelectorAll('.page .list-row')];
+          const row = rows.find((r) => r.textContent.includes('DeepSeek'));
+          if (row) row.click();
+        })()
+        """
+    )
+    devtools.wait_for("document.querySelector('.drawer') !== null", "the provider drawer")
+    relay = devtools.evaluate("document.querySelector('.drawer').innerText")
+    if "Required confidence" in relay:
+        failures.append("a relay is offered the decision settings, which mean nothing for it")
+
+    return failures
+
+
 CASES = (
     {"label": "UI-1 two nested edits in sequence (first save delayed)", "run": case_ui1_nested_rebase},
     {"label": "UI-2 moved candidate renumbers priority", "run": case_ui2_candidate_priority},
@@ -3068,6 +3159,11 @@ CASES = (
         "label": "UI-18 a backend failure is restated in chinese",
         "run": case_ui18_a_backend_failure_is_restated_in_chinese,
         "query": {**CUTOVER_QUERY, "lang": "zh"},
+    },
+    {
+        "label": "UI-19 a decision provider offers its own settings",
+        "run": case_ui19_a_decision_provider_offers_its_own_settings,
+        "query": CUTOVER_QUERY,
     },
 )
 

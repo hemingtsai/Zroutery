@@ -98,6 +98,16 @@ pub fn build_headers_for_identity(
                         .map_err(|_| Error::internal("API key contains invalid characters"))?,
                 );
             }
+            // A decision endpoint takes the same bearer credential the rest of
+            // the OpenAI-shaped family does: the key is the panel's own access
+            // token, and it is presented verbatim after `Bearer `.
+            ProviderKind::Decision => {
+                headers.insert(
+                    AUTHORIZATION,
+                    HeaderValue::from_str(&format!("Bearer {key}"))
+                        .map_err(|_| Error::internal("API key contains invalid characters"))?,
+                );
+            }
         }
     }
 

@@ -17,7 +17,8 @@ export type ProviderKind =
   | "anthropic"
   | "openai_compatible"
   | "opencode_zen_free"
-  | "opencode_console";
+  | "opencode_console"
+  | "decision";
 /** Mirrors `ProviderClientProfile` in `zroutery-core::config`: the client
  * identity presented upstream, and which of that client's own headers are
  * forwarded with it. */
@@ -168,8 +169,23 @@ export interface Provider {
   anthropic_version: string | null;
   quirks: ProviderQuirks;
   balance: BalanceConfig;
+  /** How to ask this provider for a decision, when it answers decisions.
+   *
+   * Only meaningful for a provider of kind `decision`; every other kind
+   * ignores it. */
+  decision: DecisionConfig;
   /** Accounts this provider hosts, when it hosts any. */
   accounts?: Account[];
+}
+
+/** How to ask a decision endpoint for an answer. */
+export interface DecisionConfig {
+  /** The path on the provider's base url that answers decisions. */
+  path: string;
+  /** The confidence the answer must carry, in either direction, before it is
+   * acted on. Below it the Auto Mode blocks, because the gate is closed
+   * unless the evidence is strong. */
+  threshold: number;
 }
 
 export interface ModelCapabilities {
