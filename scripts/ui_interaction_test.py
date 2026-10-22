@@ -3093,6 +3093,10 @@ def case_ui19_a_decision_provider_offers_its_own_settings(devtools) -> list[str]
         failures.append("the decision provider's own settings are not in the drawer: %r" % body)
     if "/v1/systemone" not in body:
         failures.append("the decision path is not shown: %r" % body)
+    if "cannot answer a request that wants prose" not in body:
+        failures.append(
+            "the provider's drawer does not say why its model's tier is locked: %r" % body
+        )
 
     # And the model on it is not offered a tier. The router excludes a decision
     # model from every tier pool, so a tier the dashboard let the operator pick

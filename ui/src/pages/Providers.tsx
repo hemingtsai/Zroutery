@@ -1430,7 +1430,13 @@ function ProviderDrawer({
             does not serve models. So there is nothing to fetch, and the model is
             declared by hand on the models page. */}
         {provider.kind === "decision" ? (
-          <p className="field-hint">{t("providers.decision_no_catalogue")}</p>
+          <>
+            {/* The tier is not this model's to choose — the router excludes a
+                decision model from every tier pool — and a control that refuses
+                for no visible reason is a control that looks broken. */}
+            <p className="field-hint">{t("models.tier_decision_hint")}</p>
+            <p className="field-hint">{t("providers.decision_no_catalogue")}</p>
+          </>
         ) : (
           <div className="row gap wrap">
             <Button
