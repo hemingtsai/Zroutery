@@ -1416,6 +1416,7 @@ function ProviderDrawer({
                   tier={m.tier ?? "none"}
                   options={modelTierOptions}
                   disabled={busy}
+                  tierLocked={provider.kind === "decision"}
                   onTier={setModelTier}
                   onRemove={removeModel}
                 />
@@ -1425,16 +1426,23 @@ function ProviderDrawer({
         ) : (
           <Empty>{t("providers.models_none")}</Empty>
         )}
-        <div className="row gap wrap">
-          <Button
-            kind="ghost"
-            ariaLabel={t("providers.fetch")}
-            onClick={() => void discover()}
-            disabled={busy || discovering}
-          >
-            {discovering ? t("providers.discovering") : t("providers.fetch")}
-          </Button>
-        </div>
+        {/* A decision endpoint publishes no catalogue: it answers questions, it
+            does not serve models. So there is nothing to fetch, and the model is
+            declared by hand on the models page. */}
+        {provider.kind === "decision" ? (
+          <p className="field-hint">{t("providers.decision_no_catalogue")}</p>
+        ) : (
+          <div className="row gap wrap">
+            <Button
+              kind="ghost"
+              ariaLabel={t("providers.fetch")}
+              onClick={() => void discover()}
+              disabled={busy || discovering}
+            >
+              {discovering ? t("providers.discovering") : t("providers.fetch")}
+            </Button>
+          </div>
+        )}
         {discovered && discovered.length > 0 && (
           <>
             <div className="controls">
@@ -1839,6 +1847,7 @@ const ConfiguredModelRow = memo(function ConfiguredModelRow({
   tier,
   options,
   disabled,
+  tierLocked,
   onTier,
   onRemove,
 }: {
@@ -1847,6 +1856,13 @@ const ConfiguredModelRow = memo(function ConfiguredModelRow({
   tier: ModelTier | "none";
   options: { value: ModelTier | "none"; label: string }[];
   disabled: boolean;
+  /** Whether the tier is not this model's to choose.
+   *
+   * A decision model answers the Auto Mode's questions and cannot answer a
+   * request that wants prose, so a tier would be a promise the router cannot
+   * keep. The control is disabled rather than hidden, so that the row still
+   * shows what the model is and where the tier would have gone. */
+  tierLocked: boolean;
   onTier: (upstreamModel: string, tier: ModelTier | "none") => void;
   onRemove: (upstreamModel: string) => void;
 }) {
@@ -1858,7 +1874,7 @@ const ConfiguredModelRow = memo(function ConfiguredModelRow({
         <Select
           ariaLabel={t("models.tier_for", { model: previewId(providerId, upstreamModel) })}
           value={tier}
-          disabled={disabled}
+          disabled={disabled || tierLocked}
           onChange={(next) => onTier(upstreamModel, next)}
           options={options}
         />

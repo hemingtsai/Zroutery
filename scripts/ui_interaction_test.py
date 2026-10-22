@@ -163,6 +163,8 @@ HARNESS = """
     balances: query("balances") || {},
     // A decision provider, merged into the default configuration.
     decisionProvider: query("decisionProvider") || null,
+    // A model on that provider.
+    decisionModel: query("decisionModel") || null,
     commandLog: [],
     delays: {},
   };
@@ -189,6 +191,11 @@ HARNESS = """
     // configuration grows one.
     if (state.decisionProvider) {
       config.providers = [...config.providers, clone(state.decisionProvider)];
+    }
+    // A model on the decision provider, for the case that checks the tier
+    // control is not offered where a tier cannot be kept.
+    if (state.decisionModel) {
+      config.models = [...config.models, clone(state.decisionModel)];
     }
     return {
       config,
@@ -433,7 +440,7 @@ HARNESS = """
     // the snapshot, so a case that seeds it has to be able to install it. A key
     // missing from this list is a seed that is silently dropped and a case that
     // times out with no explanation.
-    for (const key of ["config", "server", "keys", "catalogues", "account", "ml", "migration", "deepLink", "opencode", "balances", "decisionProvider"]) {
+    for (const key of ["config", "server", "keys", "catalogues", "account", "ml", "migration", "deepLink", "opencode", "balances", "decisionProvider", "decisionModel"]) {
       if (seed && seed[key] !== undefined) state[key] = clone(seed[key]);
     }
     if (seed && seed.delays) state.delays = { ...seed.delays };
@@ -3025,6 +3032,33 @@ DECISION_PROVIDER = {
     "quirks": {},
 }
 
+# A model on the decision provider.
+#
+# A decision model cannot serve main traffic, so the dashboard must not offer
+# a tier for it: the router would exclude the model from every tier pool, and
+# a tier the router silently ignores is a promise the dashboard cannot keep.
+DECISION_MODEL = {
+    "provider_id": "jev",
+    "upstream_model": "jev",
+    "tier": None,
+    "priority": 0,
+    "weight": 1,
+    "enabled": True,
+    "capabilities": {
+        "vision": False,
+        "tools": False,
+        "thinking": False,
+        "structured_output": False,
+        "audio": False,
+        "video": False,
+        "files": False,
+    },
+    "display_name": None,
+    "aliases": [],
+    "max_output_tokens": None,
+    "pricing": None,
+}
+
 
 def case_ui19_a_decision_provider_offers_its_own_settings(devtools) -> list[str]:
     """A decision endpoint is asked a question, so it has settings of its own.
@@ -3059,6 +3093,49 @@ def case_ui19_a_decision_provider_offers_its_own_settings(devtools) -> list[str]
         failures.append("the decision provider's own settings are not in the drawer: %r" % body)
     if "/v1/systemone" not in body:
         failures.append("the decision path is not shown: %r" % body)
+
+    # And the model on it is not offered a tier. The router excludes a decision
+    # model from every tier pool, so a tier the dashboard let the operator pick
+    # would be one the router silently ignores.
+    #
+    # The provider's drawer is closed first: a drawer left open over the
+    # models page would be the drawer the case found, and it is the wrong one.
+    devtools.evaluate(
+        """
+        (() => {
+          const close = document.querySelector('.drawer-head button');
+          if (close) close.click();
+        })()
+        """
+    )
+    seed(devtools, decisionProvider=DECISION_PROVIDER, decisionModel=DECISION_MODEL)
+    devtools.click_selector('[data-page="models"]')
+    devtools.wait_for("Boolean(document.querySelector('.page .list-row'))", "the model rows")
+    devtools.evaluate(
+        """
+        (() => {
+          const rows = [...document.querySelectorAll('.page .list-row')];
+          const row = rows.find((r) => r.textContent.includes('jev'));
+          if (row) row.click();
+        })()
+        """
+    )
+    devtools.wait_for("document.querySelector('.drawer') !== null", "the model drawer")
+    model = devtools.evaluate("document.querySelector('.drawer').innerText")
+    if "cannot answer a request that wants prose" not in model:
+        failures.append("the decision model's tier is not explained: %r" % model)
+    locked = devtools.evaluate(
+        """
+        (() => {
+          const drawer = document.querySelector('.drawer');
+          if (!drawer) return null;
+          const trigger = drawer.querySelector('[role="combobox"]');
+          return trigger ? trigger.disabled || trigger.getAttribute('data-disabled') === 'true' : null;
+        })()
+        """
+    )
+    if locked is not True:
+        failures.append("the decision model's tier control is not disabled: %r" % locked)
 
     # And a relay carries neither, because neither means anything for it.
     seed(devtools, **CUTOVER_QUERY)

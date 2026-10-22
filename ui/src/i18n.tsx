@@ -345,6 +345,11 @@ export const en = {
   "providers.decision_threshold": "Required confidence",
   "providers.decision_threshold_hint":
     "How sure the answer has to be before the Auto Mode acts on it. Below this the action is blocked, because a decision that is not sure has not cleared it. 0.5 lets the model's own majority decide.",
+  "providers.decision_no_catalogue":
+    "A decision endpoint publishes no catalogue — it answers questions rather than serving models. Declare the model on the models page.",
+  "models.tier_decision": "Why no tier",
+  "models.tier_decision_hint":
+    "A decision model answers the Auto Mode's questions and cannot answer a request that wants prose, so it is not filed under a tier. Add it to the Auto Mode pool instead.",
   "providers.free_badge": "free",
   "providers.free_only": "Free models only",
   "providers.free_only_hint":
@@ -1407,6 +1412,11 @@ export const zh: Dict = {
   "providers.decision_threshold": "所需置信度",
   "providers.decision_threshold_hint":
     "自动审核据此行动前，答案需要有多确定。低于该值则拦截 —— 没有把握的决策不算放行。设为 0.5 则由模型自身的多数票决定。",
+  "providers.decision_no_catalogue":
+    "决策接口不提供模型目录 —— 它回答问题，而不是供应模型。请在模型页面手动添加该模型。",
+  "models.tier_decision": "为何没有层级",
+  "models.tier_decision_hint":
+    "决策模型只回答自动审核的问题，无法应答需要成文的请求，因此不归入任何层级。请改为把它加入自动审核池。",
   "providers.free_badge": "免费",
   "providers.free_only": "仅显示免费模型",
   "providers.free_only_hint":

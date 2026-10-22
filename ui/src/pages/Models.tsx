@@ -1,4 +1,4 @@
-import { memo, useCallback, useMemo, useState } from "react";
+import { memo, useCallback, useMemo, useState, type ReactNode } from "react";
 import {
   TIERS,
   emptyPricing,
@@ -401,49 +401,66 @@ function ModelDrawer({
   const m = row.model;
   const { t } = useI18n();
   const status = !m.enabled || provider?.enabled === false ? "off" : "ok";
+  // A decision model answers the Auto Mode's questions and cannot answer a
+  // request that wants prose, so a tier would be a promise the router cannot
+  // keep. The control is disabled rather than hidden, and the reason is beside
+  // it — a hidden control would leave the row looking like an oversight.
+  const tierLocked = provider?.kind === "decision";
+
+  // The rows are built before the markup so that the explanation of a locked
+  // tier can be *added* rather than spliced in: a conditional inside the
+  // array literal is a tuple the compiler cannot type.
+  const rows: [ReactNode, ReactNode][] = [
+    [t("models.provider"), provider?.name ?? t("models.missing_provider")],
+    [t("models.upstream"), <span className="mono">{m.upstream_model}</span>],
+    [
+      t("models.tier"),
+      <Select<ModelTier | "none">
+        ariaLabel={t("models.tier_for", { model: m.upstream_model })}
+        value={m.tier ?? "none"}
+        disabled={busy || tierLocked}
+        onChange={(next) =>
+          onUpdate((model) => {
+            model.tier = next === "none" ? null : next;
+          })
+        }
+        options={[
+          { value: "none", label: "—" },
+          ...TIERS.map((c) => ({ value: c, label: virtualId(c, namingStyle) })),
+        ]}
+      />,
+    ],
+    [
+      t("common.enabled"),
+      <Toggle
+        label=""
+        // The visible label is empty because the row beside it already
+        // says "Enabled" — which left the switch itself with no name at
+        // all, announcing as "checkbox, unchecked" and nothing more.
+        ariaLabel={t("common.enabled")}
+        checked={m.enabled}
+        onChange={(enabled) =>
+          onUpdate((model) => {
+            model.enabled = enabled;
+          })
+        }
+      />,
+    ],
+    [
+      t("models.aliases"),
+      m.aliases.length ? <span className="mono">{m.aliases.join(", ")}</span> : t("common.dash"),
+    ],
+  ];
+  if (tierLocked) {
+    rows.push([
+      t("models.tier_decision"),
+      <span className="muted">{t("models.tier_decision_hint")}</span>,
+    ]);
+  }
 
   return (
     <Drawer title={<><StatusDot tone={status} /> <span className="mono">{row.id}</span></>} onClose={onClose}>
-      <KeyValue
-        rows={[
-          [t("models.provider"), provider?.name ?? t("models.missing_provider")],
-          [t("models.upstream"), <span className="mono">{m.upstream_model}</span>],
-          [
-            t("models.tier"),
-            <Select<ModelTier | "none">
-              ariaLabel={t("models.tier_for", { model: m.upstream_model })}
-              value={m.tier ?? "none"}
-              disabled={busy}
-              onChange={(next) =>
-                onUpdate((model) => {
-                  model.tier = next === "none" ? null : next;
-                })
-              }
-              options={[
-                { value: "none", label: "—" },
-                ...TIERS.map((c) => ({ value: c, label: virtualId(c, namingStyle) })),
-              ]}
-            />,
-          ],
-          [
-            t("common.enabled"),
-            <Toggle
-              label=""
-              // The visible label is empty because the row beside it already
-              // says "Enabled" — which left the switch itself with no name at
-              // all, announcing as "checkbox, unchecked" and nothing more.
-              ariaLabel={t("common.enabled")}
-              checked={m.enabled}
-              onChange={(enabled) =>
-                onUpdate((model) => {
-                  model.enabled = enabled;
-                })
-              }
-            />,
-          ],
-          [t("models.aliases"), m.aliases.length ? <span className="mono">{m.aliases.join(", ")}</span> : t("common.dash")],
-        ]}
-      />
+      <KeyValue rows={rows} />
 
       <Section title={t("models.performance")}>
         {health ? (
