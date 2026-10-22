@@ -10,9 +10,9 @@ use crate::billing::{Cost, Pricing};
 use crate::config::{ModelTier, RoutingConfig};
 use crate::error::Error;
 use crate::failure::ClassifiedFailure;
-use crate::ir::{Dialect, Usage};
 #[cfg(feature = "ml")]
 use crate::ir::ChatRequest;
+use crate::ir::{Dialect, Usage};
 #[cfg(feature = "ml")]
 use crate::ml::ShadowInput;
 use crate::outcome::{Attempt as OutcomeAttempt, CandidateIdentity, Outcome};
