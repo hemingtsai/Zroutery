@@ -800,6 +800,8 @@ export const en = {
   "routing.automatic": "automatic",
   "routing.verdict_parsing": "Verdict parsing",
   "routing.verdict_only": "<block>yes|no</block> only",
+  "routing.verdict_only_hint":
+    "A decision model in the pool answers with a probability instead, and the threshold on its provider decides what counts as a verdict.",
   "routing.no_verdict": "When no verdict",
   "routing.fails_closed": "fails closed — the client asks the user",
   "routing.fail_closed_note":
@@ -1782,6 +1784,8 @@ export const zh: Dict = {
   "routing.automatic": "自动",
   "routing.verdict_parsing": "判定解析",
   "routing.verdict_only": "仅 <block>yes|no</block>",
+  "routing.verdict_only_hint":
+    "若池中有决策模型，它以概率作答，由该提供商的阈值决定何时算作判定。",
   "routing.no_verdict": "无判定时",
   "routing.fails_closed": "失败关闭 —— 由客户端询问用户",
   "routing.fail_closed_note": "候选出错、超时或无法判定时转移到下一个;全部失败则查询失败。",

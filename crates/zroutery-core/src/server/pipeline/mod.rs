@@ -865,7 +865,13 @@ fn decision_response(
     model: &str,
 ) -> crate::ir::ChatResponse {
     crate::ir::ChatResponse {
-        id: "zroutery-decision".to_string(),
+        // An id of its own, and not a constant: the decision protocol has no
+        // id to carry, and two answers that shared one would be two answers a
+        // client could not tell apart.
+        id: format!(
+            "zroutery-decision-{}",
+            chrono::Utc::now().timestamp_millis()
+        ),
         model: model.to_string(),
         content: vec![crate::ir::ContentBlock::text(
             crate::classifier::verdict_text(verdict),

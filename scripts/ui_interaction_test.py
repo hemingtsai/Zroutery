@@ -3162,6 +3162,54 @@ def case_ui19_a_decision_provider_offers_its_own_settings(devtools) -> list[str]
     return failures
 
 
+def case_ui20_the_auto_mode_editor_names_the_decision_answer(devtools) -> list[str]:
+    """The Auto Mode's editor says how a verdict arrives, and names both ways.
+
+    The editor told the operator that a verdict is parsed *only* from
+    `<block>yes|no</block>`. That was true while every candidate answered in
+    prose, and it stopped being true when a decision model could answer with a
+    probability instead — so the sentence the operator reads was wrong about
+    the thing it describes.
+
+    So the editor names both: the tag a language model answers with, and the
+    probability a decision model answers with.
+    """
+    failures: list[str] = []
+
+    seed(devtools, **CUTOVER_QUERY)
+    devtools.click_selector('[data-page="routing"]')
+    devtools.wait_for("Boolean(document.querySelector('#tab-auto'))", "the auto mode tab")
+    devtools.click_selector("#tab-auto")
+    devtools.wait_for("Boolean(document.querySelector('.page .linky'))", "the edit control")
+    devtools.evaluate(
+        """
+        (() => {
+          // The inactive tab's panel is still mounted, so the first match for
+          // the edit control may be a hidden one — and clicking a hidden
+          // button does nothing. `offsetParent` is null for a hidden element
+          // and set for a visible one.
+          //
+          // The label is the harness's own language, which is English: the
+          // harness pins it, and a case that looked for the Chinese label
+          // would find nothing and time out.
+          const edit = [...document.querySelectorAll('.page .linky')]
+            .find((b) => b.textContent.includes('Edit') && b.offsetParent !== null);
+          if (edit) edit.click();
+        })()
+        """
+    )
+    devtools.wait_for("document.querySelector('.drawer') !== null", "the auto mode drawer")
+
+    body = devtools.evaluate("document.querySelector('.drawer').innerText")
+    if "<block>yes|no</block>" not in body:
+        failures.append("the editor no longer says how a language model answers: %r" % body)
+    if "probability" not in body:
+        failures.append(
+            "the editor does not say how a decision model answers: %r" % body
+        )
+    return failures
+
+
 CASES = (
     {"label": "UI-1 two nested edits in sequence (first save delayed)", "run": case_ui1_nested_rebase},
     {"label": "UI-2 moved candidate renumbers priority", "run": case_ui2_candidate_priority},
@@ -3244,6 +3292,11 @@ CASES = (
     {
         "label": "UI-19 a decision provider offers its own settings",
         "run": case_ui19_a_decision_provider_offers_its_own_settings,
+        "query": CUTOVER_QUERY,
+    },
+    {
+        "label": "UI-20 the auto mode editor names the decision answer",
+        "run": case_ui20_the_auto_mode_editor_names_the_decision_answer,
         "query": CUTOVER_QUERY,
     },
 )

@@ -979,6 +979,10 @@ function AutoModeDrawer({
               t("routing.verdict_parsing"),
               <span>
                 <code>{t("routing.verdict_only")}</code>
+                {/* A decision model in the pool answers with a probability
+                    rather than a tag, so the parsing is not the whole of how a
+                    verdict arrives. */}
+                <span className="muted"> · {t("routing.verdict_only_hint")}</span>
               </span>,
             ],
             [t("routing.no_verdict"), t("routing.fails_closed")],
