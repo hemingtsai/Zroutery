@@ -1,5 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, costText, totalsText, type RequestRecord, type Snapshot } from "../api";
+import {
+  api,
+  costText,
+  isSideKind,
+  totalsText,
+  type RequestKind,
+  type RequestRecord,
+  type Snapshot,
+} from "../api";
 import {
   Badge,
   Button,
@@ -67,7 +75,19 @@ export default function Activity({
       ? Math.round(((summary.requests - summary.failures) / summary.requests) * 1000) / 10
       : null;
 
-  const classifier = summary.per_kind.find((k) => k.kind === "auto_mode");
+  const classifier = (() => {
+    // Every side kind is Auto review traffic, whatever protocol it was asked in.
+    const sides = summary.per_kind.filter((k) => isSideKind(k.kind as RequestKind));
+    if (sides.length === 0) return undefined;
+    return {
+      kind: "auto_mode",
+      requests: sides.reduce((n, k) => n + k.requests, 0),
+      failures: sides.reduce((n, k) => n + k.failures, 0),
+      avg_latency_ms: sides.length
+        ? sides.reduce((n, k) => n + k.avg_latency_ms, 0) / sides.length
+        : 0,
+    };
+  })();
   const open = recent.find((r) => r.id === openId) ?? null;
 
   const logPane = (
@@ -265,7 +285,7 @@ function TimelineRow({
   record: RequestRecord;
   onOpen: () => void;
 }) {
-  const isAuto = record.kind === "auto_mode";
+  const isAuto = isSideKind(record.kind);
   const { t } = useI18n();
   return (
     <button type="button" className="timeline-item" onClick={onOpen}>
@@ -315,7 +335,7 @@ function RequestDrawer({ record, onClose }: { record: RequestRecord; onClose: ()
             tone={record.ok ? "ok" : "danger"}
             state={record.ok ? t("status.succeeded") : t("status.failed")}
           />
-          {record.kind === "auto_mode" ? t("activity.review") : t("activity.request")}
+          {isSideKind(record.kind) ? t("activity.review") : t("activity.request")}
         </>
       }
       onClose={onClose}
@@ -334,7 +354,7 @@ function RequestDrawer({ record, onClose }: { record: RequestRecord; onClose: ()
           [t("models.provider"), record.provider_name ?? t("common.dash")],
           [
             t("activity.kind"),
-            record.kind === "auto_mode" ? t("kind.check_kv") : t("kind.main_kv"),
+            isSideKind(record.kind) ? t("kind.check_kv") : t("kind.main_kv"),
           ],
           ["API", record.ingress],
           [

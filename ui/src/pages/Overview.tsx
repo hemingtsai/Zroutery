@@ -1,4 +1,12 @@
-import { api, tierMembers, modelRows, TIERS, virtualId, type Snapshot } from "../api";
+import {
+  api,
+  isSideKind,
+  tierMembers,
+  modelRows,
+  TIERS,
+  virtualId,
+  type Snapshot,
+} from "../api";
 import { StatusDot, useToast } from "../components";
 import { useI18n } from "../i18n";
 
@@ -174,7 +182,7 @@ export default function Overview({
                     {new Date(r.at).toLocaleTimeString([], { hour12: false })}
                   </span>
                   <span className="timeline-kind">
-                    {r.kind === "auto_mode" ? t("kind.review") : t("kind.main")}
+                    {isSideKind(r.kind) ? t("kind.review") : t("kind.main")}
                   </span>
                   <span className="timeline-main-cell">
                     <StatusDot

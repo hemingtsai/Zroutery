@@ -148,6 +148,15 @@ export interface ProviderQuirks {
   stream_usage: boolean;
   system_as_developer: boolean;
   send_reasoning_effort: boolean;
+  /**
+   * Make Responses history portable across upstreams.
+   *
+   * Off by default: it trades reasoning continuity for portability by dropping
+   * reasoning items and history ids an earlier upstream issued. Turn it on for
+   * a relay that may serve one conversation through several accounts or
+   * resources (AgentRouter, CC Switch, an aggregate endpoint).
+   */
+  portable_history: boolean;
 }
 
 export interface Provider {
@@ -241,6 +250,8 @@ export interface BuiltinDetectors {
   anthropic_beta: boolean;
   xml_classifier_signature: boolean;
   model_1m_signature: boolean;
+  /** Codex Guardian's auto-review prompt; see the Rust `is_codex_guardian`. */
+  codex_guardian_signature: boolean;
 }
 
 export interface DetectionConfig {
@@ -340,7 +351,19 @@ export interface VisionConfig {
 }
 
 /** What a request was for: the main conversation or a side query. */
-export type RequestKind = "main" | "auto_mode";
+export type RequestKind = "main" | "auto_mode" | "codex_guardian";
+
+/**
+ * Whether a request is a side query rather than the conversation itself.
+ *
+ * Every side kind is served from the Auto review pool and reported as review
+ * traffic, whatever protocol the client asked in (`<block>` for Claude Code,
+ * JSON `outcome` for Codex's Guardian). Testing a record against one kind by
+ * name would show the other as ordinary traffic.
+ */
+export function isSideKind(kind: RequestKind): boolean {
+  return kind !== "main";
+}
 
 export interface RoutingConfig {
   strategy: RoutingStrategy;
@@ -590,6 +613,15 @@ export interface Snapshot {
    */
   api_checkin_available: boolean;
   /**
+   * Whether this build can capture a NewAPI panel token in a browser.
+   *
+   * Needs `account-maint` (the browser registry) and `account` (the credential
+   * path); `account-maint` does not imply the desktop `account` feature, so a
+   * build can hold a browser and not the command. The dashboard asks before
+   * offering the button.
+   */
+  token_capture_available: boolean;
+  /**
    * Whether this build can actually talk to OpenCode's gateway.
    *
    * The two OpenCode provider kinds and the `opencode_cli` client profile are
@@ -715,6 +747,30 @@ export interface CheckinScheduleView {
   decision: string;
   next_due_at: number | null;
   last_settled_at: number | null;
+}
+
+/**
+ * One browser token capture's state.
+ *
+ * Never carries the token: the secret goes from the page to the system
+ * credential store, and the dashboard only learns whether it exists.
+ */
+export interface TokenCaptureView {
+  provider_id: string;
+  account_id: string;
+  /**
+   * `idle` | `opening` | `waiting` | `needs_verification` | `stored` |
+   * `captured` | `failed` | `cancelled` | `unsupported`.
+   *
+   * `stored` means the secret is in the credential store and the account
+   * declaration has not been pointed at it yet; the UI calls
+   * `completeTokenCapture` to finish.
+   */
+  phase: string;
+  message: string | null;
+  username: string | null;
+  /** Whether a browser window is open for this account right now. */
+  browser_held: boolean;
 }
 /**
  * One observed thing that happened to an account's resources.
@@ -1365,6 +1421,42 @@ export const api = {
       accountId: account_id,
     }),
   /**
+   * Open the account's isolated browser on the panel's sign-in page and wait
+   * for a durable token.
+   *
+   * Returns as soon as the browser is up; poll `tokenCaptureStatus` for the
+   * rest. Call only when `snapshot.token_capture_available` is true.
+   */
+  startTokenCapture: (provider_id: string, account_id: string) =>
+    invoke<TokenCaptureView>("start_token_capture", {
+      providerId: provider_id,
+      accountId: account_id,
+    }),
+  /** Read one capture's phase. Cheap enough to poll. */
+  tokenCaptureStatus: (provider_id: string, account_id: string) =>
+    invoke<TokenCaptureView>("get_token_capture_status", {
+      providerId: provider_id,
+      accountId: account_id,
+    }),
+  /** Stop a capture and close its browser. */
+  cancelTokenCapture: (provider_id: string, account_id: string) =>
+    invoke<TokenCaptureView>("cancel_token_capture", {
+      providerId: provider_id,
+      accountId: account_id,
+    }),
+  /**
+   * Point the account declaration at the token the capture stored.
+   *
+   * Called after the phase is `stored`; the driver has already written the
+   * secret, and this reads the configuration as it is now rather than one the
+   * UI captured while the browser was open.
+   */
+  completeTokenCapture: (provider_id: string, account_id: string) =>
+    invoke<TokenCaptureView>("complete_token_capture", {
+      providerId: provider_id,
+      accountId: account_id,
+    }),
+  /**
    * Probe every declared, enabled account and return what the reconciler did.
    *
    * One call covers every provider, so a caller that wants this per provider has
@@ -1740,6 +1832,7 @@ export function emptyProvider(
       stream_usage: true,
       system_as_developer: false,
       send_reasoning_effort: false,
+      portable_history: false,
     },
     balance: { preset: "none", custom: null },
     decision: { path: "/v1/systemone", threshold: 0.85 },

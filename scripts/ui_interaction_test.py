@@ -229,6 +229,7 @@ HARNESS = """
       account_available: Boolean(state.account),
       account_maintenance_available: Boolean(state.account),
       api_checkin_available: Boolean(state.account && state.account.api),
+      token_capture_available: Boolean(state.account && state.account.token),
       // Whether this build can talk to OpenCode's gateway. On by default,
       // because a build with the stack is the ordinary case; a case that wants
       // the other one seeds `opencode: false`.
@@ -323,6 +324,38 @@ HARNESS = """
           else views.push(answer);
         }
         return answer;
+      }
+      case "start_token_capture":
+      case "get_token_capture_status":
+      case "cancel_token_capture":
+      case "complete_token_capture": {
+        state.commandLog.push({ cmd, args: clone(args) });
+        const key = args.providerId + "/" + args.accountId;
+        const found = (state.tokenCaptures ||= {})[key];
+        const idle = {
+          provider_id: args.providerId,
+          account_id: args.accountId,
+          phase: "idle",
+          message: null,
+          username: null,
+          browser_held: false,
+        };
+        if (cmd === "start_token_capture") {
+          const waiting = { ...idle, phase: "waiting", browser_held: true };
+          state.tokenCaptures[key] = waiting;
+          return waiting;
+        }
+        if (cmd === "cancel_token_capture") {
+          const cancelled = { ...idle, phase: "cancelled" };
+          state.tokenCaptures[key] = cancelled;
+          return cancelled;
+        }
+        if (cmd === "complete_token_capture") {
+          const captured = { ...idle, phase: "captured", username: "alice" };
+          state.tokenCaptures[key] = captured;
+          return captured;
+        }
+        return found ? clone(found) : idle;
       }
       case "get_ml_traces":
         return state.ml ? clone(state.ml.traces) : null;
@@ -1785,6 +1818,7 @@ def connect(debugging_port: int, url: str) -> DevTools:
 ACCOUNT_QUERY = {
     "account": {
         "api": True,
+        "token": True,
         "providerAccounts": {
             "providerId": "deepseek",
             "accounts": [
@@ -3589,6 +3623,77 @@ def case_ui24_catalogue_import_adds_several_models(devtools) -> list[str]:
     return failures
 
 
+def case_ui25_the_browser_token_capture_runs_and_cancels(devtools) -> list[str]:
+    """The account row can ask the browser for a panel token, and stop it.
+
+    Nothing secret is involved in this harness: it proves the control exists on
+    an account row, starts the command with the account's ids, shows the phase
+    the backend reports, and lets the operator cancel. The token itself never
+    reaches the page — there is no field for it — so the case also checks that
+    the view text does not grow a token-shaped string.
+    """
+    failures: list[str] = []
+
+    seed(devtools, **ACCOUNT_QUERY)
+    devtools.click_selector('[data-page="accounts"]')
+    devtools.wait_for(
+        "Boolean([...document.querySelectorAll('button')]"
+        ".find((b) => b.textContent.includes('Get token in browser')))",
+        "the capture button",
+    )
+    devtools.evaluate(
+        """
+        (() => {
+          const b = [...document.querySelectorAll('button')]
+            .find((x) => x.textContent.includes('Get token in browser'));
+          if (b) b.click();
+        })()
+        """
+    )
+    devtools.wait_for(
+        "Boolean(window.__zrStub.log('start_token_capture').length)",
+        "the capture command",
+        timeout=15.0,
+    )
+    call = devtools.evaluate("window.__zrStub.last('start_token_capture')")
+    if not call or call["args"]["providerId"] != "deepseek" or call["args"]["accountId"] != "main":
+        failures.append("the capture was not asked for the account that owns the button: %r" % (call,))
+
+    devtools.wait_for(
+        "Boolean([...document.querySelectorAll('*')]"
+        ".find((e) => e.childElementCount === 0"
+        " && e.textContent.includes('Sign in in the browser window')))",
+        "the waiting phase",
+        timeout=15.0,
+    )
+    body = devtools.evaluate("document.body.innerText")
+    if "panel-token" in body or "eyJ" in body:
+        failures.append("a token-shaped string reached the page")
+
+    # Cancel: the backend reports `cancelled`, and the start control returns.
+    devtools.evaluate(
+        """
+        (() => {
+          const b = [...document.querySelectorAll('button')]
+            .find((x) => x.textContent.trim() === 'Cancel');
+          if (b) b.click();
+        })()
+        """
+    )
+    devtools.wait_for(
+        "Boolean(window.__zrStub.log('cancel_token_capture').length)",
+        "the cancel command",
+        timeout=15.0,
+    )
+    devtools.wait_for(
+        "Boolean([...document.querySelectorAll('button')]"
+        ".find((b) => b.textContent.includes('Get token in browser')))",
+        "the start control to come back",
+        timeout=15.0,
+    )
+    return failures
+
+
 CASES = (
     {"label": "UI-1 two nested edits in sequence (first save delayed)", "run": case_ui1_nested_rebase},
     {"label": "UI-2 moved candidate renumbers priority", "run": case_ui2_candidate_priority},
@@ -3694,6 +3799,11 @@ CASES = (
         "label": "UI-24 catalogue import adds several models in one save",
         "run": case_ui24_catalogue_import_adds_several_models,
         "query": {"catalogues": {"deepseek": []}},
+    },
+    {
+        "label": "UI-25 the browser token capture runs and cancels",
+        "run": case_ui25_the_browser_token_capture_runs_and_cancels,
+        "query": ACCOUNT_QUERY,
     },
 )
 

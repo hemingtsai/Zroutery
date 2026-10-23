@@ -100,8 +100,16 @@ export const en = {
     "The stored credential is a relay API key (sk-…), which the dashboard does not accept. Copy the access token from the panel's personal settings → access token page, and set it as this account's credential.",
   "err.no_panel_token":
     "No panel access token is stored for this account, so probing and sign-in have nothing to authenticate with. Set the account's credential to the panel's access token (personal settings → access token).",
+  "err.capture_open":
+    "A token capture is already open for this account. Finish the sign-in in that window, or cancel it, before starting another.",
+  "err.no_browser":
+    "No Chromium browser was found. Set the browser executable in this account's maintenance settings, or install Chrome or Edge.",
+  "err.capture_rejected":
+    "The panel rejected the token it handed back. Sign in to the panel again and complete any verification step before capturing.",
+  "err.capture_closed":
+    "The browser was closed before a token was captured. Start the capture again and leave the window open until it finishes.",
   "err.classifier_candidate":
-    "Auto Mode candidate {model} is not a configured model, so it is skipped. Remove it in Routing → Auto Mode, or add the model back.",
+    "Auto Mode candidate {model} is not a configured model, so it is skipped. Remove it in Routing → Auto review, or add the model back.",
   "err.no_account_balance":
     "No account of {provider} reported a balance. The panel's user access token has to be stored as the account's credential — the relay's own key authenticates /v1, and no dashboard endpoint accepts it.",
   "err.mixed_currencies":
@@ -163,6 +171,19 @@ export const en = {
   "accounts.remove_body":
     "The declaration is removed, and its own stored key with it. Observations keyed by this pair stay until the id is reused.",
   "accounts.checkin": "Browser check-in",
+  "accounts.login_path": "Panel sign-in path",
+  "accounts.login_path_hint":
+    "Used by the browser token capture. Current NewAPI signs in at /sign-in; older forks use /login.",
+  "token_capture.start": "Get token in browser",
+  "token_capture.starting": "Opening…",
+  "token_capture.captured": "Token stored",
+  "token_capture.failed": "Token capture failed",
+  "token_capture.cancelled": "The token capture was cancelled.",
+  "token_capture.done": "The panel token is stored as this account's credential.",
+  "token_capture.phase.opening": "Opening the browser…",
+  "token_capture.phase.waiting": "Sign in in the browser window…",
+  "token_capture.phase.needs_verification": "Finish the verification in the browser…",
+  "token_capture.phase.stored": "Verifying and storing…",
   "accounts.interval": "Interval (seconds)",
   "accounts.interval_hint": "Empty means the scheduler never acts on its own.",
   "accounts.checkin_path": "Check-in page path",
@@ -358,18 +379,18 @@ export const en = {
   "providers.decision_dialect": "Decision model",
   "providers.decision": "Decisions",
   "providers.decision_hint":
-    "A decision endpoint answers typed questions with probabilities instead of writing text. It serves the Auto Mode's decisions and nothing else, so its model is added to the Auto Mode pool by hand and never answers a chat request.",
+    "A decision endpoint answers typed questions with calibrated probabilities instead of writing text. It serves Auto review only: its model is added to the pool by hand and never answers a chat request. Jev — OpenCode Zen's free model among others — is the reference family.",
   "providers.decision_path": "Decision path",
   "providers.decision_path_hint":
     "The path the decision endpoint answers on, joined to the base URL. The reference service answers at /v1/systemone.",
   "providers.decision_threshold": "Required confidence",
   "providers.decision_threshold_hint":
-    "How sure the answer has to be before the Auto Mode acts on it. Below this the action is blocked, because a decision that is not sure has not cleared it. 0.5 lets the model's own majority decide.",
+    "How sure the answer must be, in either direction, before Auto review acts on it. At or above this probability the action is blocked; at or below one minus this it is allowed; anything between is not a verdict and blocks. 0.5 lets the model's own majority decide.",
   "providers.decision_no_catalogue":
     "A decision endpoint publishes no catalogue — it answers questions rather than serving models. Declare the model on the models page.",
   "models.tier_decision": "Why no tier",
   "models.tier_decision_hint":
-    "A decision model answers the Auto Mode's questions and cannot answer a request that wants prose, so it is not filed under a tier. Add it to the Auto Mode pool instead.",
+    "A decision model answers Auto review's questions and cannot answer a request that wants prose, so it is not filed under a tier. Add it to the Auto review pool instead.",
   "providers.free_badge": "free",
   "providers.free_only": "Free models only",
   "providers.free_only_hint":
@@ -418,6 +439,9 @@ export const en = {
   "quirk.drop_stop_hint": "Never applied to Auto review queries",
   "quirk.system_as_developer": "System as developer role",
   "quirk.reasoning_effort": "Translate thinking to reasoning_effort",
+  "quirk.portable_history": "Portable Responses history",
+  "quirk.portable_history_hint":
+    "For a relay that may answer from another account or resource (AgentRouter, CC Switch, an aggregate endpoint). It drops reasoning items, history item ids and previous_response_id before forwarding, because those name resources the next upstream did not create; the trade-off is that prior reasoning no longer reaches the model. Only Responses requests are affected.",
   "providers.remove": "Remove provider",
   "providers.removed_models_notice": "Removed {n} models that belonged to that provider.",
   "providers.balance_failed": "check failed",
@@ -806,7 +830,7 @@ export const en = {
   "routing.primary": "primary",
   "routing.route_review": "Route permission checks",
   "routing.route_review_hint":
-    "Permission checks go to the pool below instead of the conversation's model",
+    "Permission checks from Claude Code's Auto Mode and Codex's Guardian go to the pool below instead of the conversation's model",
   "routing.review_failover": "Fail over inside the pool",
   "routing.review_failover_hint": "Try the next candidate when one errors",
   "routing.pool": "Pool",
@@ -827,11 +851,11 @@ export const en = {
   "routing.verdict_parsing": "Verdict parsing",
   "routing.verdict_only": "<block>yes|no</block> only",
   "routing.verdict_only_hint":
-    "A decision model in the pool answers with a probability instead, and the threshold on its provider decides what counts as a verdict.",
+    "Claude Code asks for <block>yes|no</block>; Codex's Guardian asks for a JSON outcome. A decision model in the pool answers with a probability instead, and the threshold on its provider decides what counts as a verdict.",
   "routing.no_verdict": "When no verdict",
   "routing.fails_closed": "fails closed — the client asks the user",
   "routing.fail_closed_note":
-    "A candidate that errors, times out, or answers without a verdict is failed over; if none can answer, the query fails rather than being approved. Zroutery never interprets a model's prose as permission.",
+    "A candidate that errors, times out, or answers in the wrong protocol is failed over; if none can answer, the query fails rather than being approved. A decision answer that is confident neither way blocks instead of failing over. Zroutery never interprets a model's prose as permission.",
 
   // ------------------------------------------------------------ activity
   "activity.lede_none": "Nothing yet. Point a client at the gateway to see traffic here.",
@@ -1211,9 +1235,17 @@ export const zh: Dict = {
   "err.relay_key":
     "存储的凭据是中转 sk- 密钥，面板认证不接受它。请到面板 个人设置 → 访问令牌 复制访问令牌，并重新设置该账户的凭据。",
   "err.no_panel_token":
-    "该账户尚未存储面板访问令牌，探测与签到都无法认证。请先把账户凭据设置为面板的访问令牌(个人设置 → 访问令牌)。",
+    "该账户尚未存储面板访问令牌,探测与签到都无法认证。请先把账户凭据设置为面板的访问令牌(个人设置 → 访问令牌)。",
+  "err.capture_open":
+    "该账户已有一个获取令牌的流程未结束。请先在那个窗口完成登录或取消它,再重新开始。",
+  "err.no_browser":
+    "未找到 Chromium 浏览器。请在该账户的维护设置中指定浏览器路径,或安装 Chrome / Edge。",
+  "err.capture_rejected":
+    "面板拒绝了它返回的令牌。请重新登录面板、完成所有验证后再获取。",
+  "err.capture_closed":
+    "浏览器在拿到令牌前被关闭。请重新开始获取,并保持窗口打开直到完成。",
   "err.classifier_candidate":
-    "自动审核候选模型 {model} 不在已配置模型中，会被自动跳过。可在 路由 → 自动审核 中移除该候选，或恢复对应模型。",
+    "自动审查候选模型 {model} 不在已配置模型中，会被自动跳过。可在 路由 → 自动审查 中移除该候选，或恢复对应模型。",
   "err.no_account_balance":
     "{provider} 的账户都没有上报余额。必须把面板的用户访问令牌存为该账户的凭据 —— 中转自身的密钥只能用于 /v1,面板接口一概不接受。",
   "err.mixed_currencies":
@@ -1262,6 +1294,19 @@ export const zh: Dict = {
   "accounts.remove_body":
     "声明会被删除，其独立存储的密钥一并删除。以该 ID 为键的观测记录在 ID 复用前保留。",
   "accounts.checkin": "浏览器签到",
+  "accounts.login_path": "面板登录路径",
+  "accounts.login_path_hint":
+    "浏览器获取令牌时使用。当前 NewAPI 的登录页是 /sign-in;旧分支使用 /login。",
+  "token_capture.start": "用浏览器获取令牌",
+  "token_capture.starting": "正在打开…",
+  "token_capture.captured": "令牌已保存",
+  "token_capture.failed": "获取令牌失败",
+  "token_capture.cancelled": "已取消获取令牌。",
+  "token_capture.done": "面板令牌已存为该账户的凭据。",
+  "token_capture.phase.opening": "正在打开浏览器…",
+  "token_capture.phase.waiting": "请在浏览器窗口中登录…",
+  "token_capture.phase.needs_verification": "请在浏览器中完成验证…",
+  "token_capture.phase.stored": "正在验证并保存…",
   "accounts.interval": "间隔(秒)",
   "accounts.interval_hint": "留空表示调度器不会自动执行。",
   "accounts.checkin_path": "签到页路径",
@@ -1453,18 +1498,18 @@ export const zh: Dict = {
   "providers.decision_dialect": "决策模型",
   "providers.decision": "决策",
   "providers.decision_hint":
-    "决策接口不写文字，而是用概率回答有类型的问题。它只服务于自动审核的决策，因此它的模型需要手动加入自动审核池，永远不会应答聊天请求。",
+    "决策接口不写文字，而是用经过校准的概率回答有类型的问题。它只服务于自动审查:模型需手动加入池中,永远不会应答聊天请求。Jev(包括 OpenCode Zen 的免费模型)是参考家族。",
   "providers.decision_path": "决策接口路径",
   "providers.decision_path_hint":
     "决策接口应答的路径，与 Base URL 相接。参考服务使用 /v1/systemone。",
   "providers.decision_threshold": "所需置信度",
   "providers.decision_threshold_hint":
-    "自动审核据此行动前，答案需要有多确定。低于该值则拦截 —— 没有把握的决策不算放行。设为 0.5 则由模型自身的多数票决定。",
+    "自动审查据此行动前,答案在两个方向上都需有多确定。概率不低于该值则拦截;不高于 1 减该值则放行;中间地带不构成判定,按拦截处理。设为 0.5 则由模型自身的多数票决定。",
   "providers.decision_no_catalogue":
     "决策接口不提供模型目录 —— 它回答问题，而不是供应模型。请在模型页面手动添加该模型。",
   "models.tier_decision": "为何没有层级",
   "models.tier_decision_hint":
-    "决策模型只回答自动审核的问题，无法应答需要成文的请求，因此不归入任何层级。请改为把它加入自动审核池。",
+    "决策模型只回答自动审查的问题,无法应答需要成文的请求,因此不归入任何层级。请改为把它加入自动审查池。",
   "providers.free_badge": "免费",
   "providers.free_only": "仅显示免费模型",
   "providers.free_only_hint":
@@ -1509,6 +1554,9 @@ export const zh: Dict = {
   "quirk.drop_stop_hint": "从不作用于自动审查请求",
   "quirk.system_as_developer": "system 消息用 developer 角色",
   "quirk.reasoning_effort": "将 thinking 转为 reasoning_effort",
+  "quirk.portable_history": "跨上游可移植的 Responses 历史",
+  "quirk.portable_history_hint":
+    "适用于可能由其他账户或资源应答的中转(AgentRouter、CC Switch、聚合端点)。转发前会删除 reasoning 项、历史 item id 与 previous_response_id,因为它们指向下一个上游并未创建的资源;代价是此前的推理不再传给模型。仅影响 Responses 请求。",
   "providers.remove": "移除提供商",
   "providers.removed_models_notice": "已移除属于该提供商的 {n} 个模型。",
   "providers.balance_failed": "查询失败",
@@ -1817,7 +1865,7 @@ export const zh: Dict = {
   "routing.no_election_tiers": "没有层级有可测量的启用模型。",
   "routing.primary": "主选",
   "routing.route_review": "路由权限检查",
-  "routing.route_review_hint": "权限检查走下方模型池，而非会话模型",
+  "routing.route_review_hint": "Claude Code 自动审查与 Codex Guardian 的权限检查走下方模型池,而非会话模型",
   "routing.review_failover": "池内失败转移",
   "routing.review_failover_hint": "出错时尝试下一个候选",
   "routing.pool": "模型池",
@@ -1837,10 +1885,10 @@ export const zh: Dict = {
   "routing.verdict_parsing": "判定解析",
   "routing.verdict_only": "仅 <block>yes|no</block>",
   "routing.verdict_only_hint":
-    "若池中有决策模型，它以概率作答，由该提供商的阈值决定何时算作判定。",
+    "Claude Code 要求 <block>yes|no</block>;Codex 的 Guardian 要求 JSON outcome。若池中有决策模型,它以概率作答,由该提供商的阈值决定何时算作判定。",
   "routing.no_verdict": "无判定时",
   "routing.fails_closed": "失败关闭 —— 由客户端询问用户",
-  "routing.fail_closed_note": "候选出错、超时或无法判定时转移到下一个;全部失败则查询失败。",
+  "routing.fail_closed_note": "候选出错、超时或协议不符时转移到下一个;全部失败则查询失败。决策模型在两个方向都没有把握时按拦截处理,而不是转移。Zroutery 不会把模型的散文当作许可。",
 
   // ------------------------------------------------------------ activity
   "activity.lede_none": "暂无数据。将客户端指向网关即可在此看到流量。",
@@ -2144,6 +2192,19 @@ export function describeBackendError(
   }
   if (/no panel access token is stored/i.test(raw)) {
     return t("err.no_panel_token");
+  }
+  // The browser token capture: four failures an operator can act on.
+  if (/a token capture is already open/i.test(raw)) {
+    return t("err.capture_open");
+  }
+  if (/no Chromium browser was found/i.test(raw)) {
+    return t("err.no_browser");
+  }
+  if (/the panel rejected the captured token/i.test(raw)) {
+    return t("err.capture_rejected");
+  }
+  if (/the browser was closed before a token was captured/i.test(raw)) {
+    return t("err.capture_closed");
   }
   // The panel-backed balance path. Two conditions an operator can act on, and
   // both would otherwise arrive as raw English from the desktop layer.

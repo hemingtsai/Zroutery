@@ -23,6 +23,7 @@
  */
 import { useState } from "react";
 import { useI18n, describeBackendError, type TKey } from "../i18n";
+import { BrowserTokenButton } from "../BrowserTokenButton";
 import { Badge, Button, Empty, NumberField, Section, Toggle, useToast } from "../components";
 import {
   api,
@@ -194,6 +195,7 @@ export default function Accounts({
                   })
                 }
                 onHttpCheckin={() => void checkInHttp(provider.id, account.account_id)}
+                run={run}
                 onBrowserStart={() =>
                   void startBrowser(
                     provider.id,
@@ -228,6 +230,7 @@ function AccountRow({
   snapshot,
   checking,
   busy,
+  run,
   onDeclare,
   onHttpCheckin,
   onBrowserStart,
@@ -240,6 +243,8 @@ function AccountRow({
   snapshot: Snapshot;
   checking: boolean;
   busy: boolean;
+  /** Reloads the snapshot after an action that changes what the page shows. */
+  run: (task: () => Promise<Snapshot>) => Promise<boolean>;
   /** Edits this account's maintenance declaration through the save pipeline. */
   onDeclare: (mutate: (maintenance: Maintenance) => void) => void;
   onHttpCheckin: () => void;
@@ -399,6 +404,14 @@ function AccountRow({
               </>
             )}
           </>
+        )}
+        {snapshot.token_capture_available && (
+          <BrowserTokenButton
+            providerId={provider.id}
+            accountId={accountId}
+            run={run}
+            busy={busy}
+          />
         )}
       </div>
 

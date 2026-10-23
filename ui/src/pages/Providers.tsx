@@ -26,6 +26,7 @@ import {
   tierName,
 } from "../api";
 import { describeBackendError } from "../i18n";
+import { BrowserTokenButton } from "../BrowserTokenButton";
 import {
   Badge,
   Button,
@@ -907,6 +908,14 @@ function AccountSection({
                   >
                     {t("accounts.set_key")}
                   </Button>
+                  {snapshot.token_capture_available && (
+                    <BrowserTokenButton
+                      providerId={provider.id}
+                      accountId={a.account_id}
+                      run={run}
+                      busy={busy}
+                    />
+                  )}
                   {hasOwnRef(a) && (
                     <Button
                       kind="ghost"
@@ -992,6 +1001,18 @@ function AccountSection({
                   onCommit={(v) =>
                     edit(a.account_id, (d) => {
                       d.maintenance.checkin_interval_secs = v;
+                    })
+                  }
+                />
+                <TextField
+                  label={t("accounts.login_path")}
+                  hint={t("accounts.login_path_hint")}
+                  value={a.maintenance.login_path ?? ""}
+                  placeholder="/sign-in"
+                  wide
+                  onCommit={(v) =>
+                    edit(a.account_id, (d) => {
+                      d.maintenance.login_path = v.trim() || null;
                     })
                   }
                 />
@@ -1814,6 +1835,16 @@ function ProviderDrawer({
             onChange={(v) =>
               onUpdate((p) => {
                 p.quirks.send_reasoning_effort = v;
+              })
+            }
+          />
+          <Toggle
+            label={t("quirk.portable_history")}
+            hint={t("quirk.portable_history_hint")}
+            checked={provider.quirks.portable_history}
+            onChange={(v) =>
+              onUpdate((p) => {
+                p.quirks.portable_history = v;
               })
             }
           />
