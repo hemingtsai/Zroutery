@@ -3093,6 +3093,14 @@ def case_ui19_a_decision_provider_offers_its_own_settings(devtools) -> list[str]
         failures.append("the decision provider's own settings are not in the drawer: %r" % body)
     if "/v1/systemone" not in body:
         failures.append("the decision path is not shown: %r" % body)
+    # The summary's *Endpoint* row is where an operator checks the address, and
+    # for a decision provider that address is the base url plus the path — the
+    # base alone is the half of it that is not called.
+    if "https://api.typesafe.ai/v1/systemone" not in body:
+        failures.append(
+            "the endpoint row does not say the url the decision endpoint is called at: %r"
+            % body
+        )
     if "cannot answer a request that wants prose" not in body:
         failures.append(
             "the provider's drawer does not say why its model's tier is locked: %r" % body
@@ -3210,6 +3218,94 @@ def case_ui20_the_auto_mode_editor_names_the_decision_answer(devtools) -> list[s
     return failures
 
 
+def case_ui21_the_auto_mode_pool_marks_a_decision_candidate(devtools) -> list[str]:
+    """A decision candidate is in the pool by name, and says what it is.
+
+    A decision model looks like any other row in the Auto Mode's pool, but it
+    is asked a typed question and answers with a probability instead of a tag.
+    The choice between one and a chat model is a choice between the two ways a
+    verdict arrives, so the menu that offers it and the row it lands in both
+    say which one it is — before and after it is added.
+    """
+    failures: list[str] = []
+
+    seed(devtools, decisionProvider=DECISION_PROVIDER, decisionModel=DECISION_MODEL)
+    devtools.click_selector('[data-page="routing"]')
+    devtools.wait_for("Boolean(document.querySelector('#tab-auto'))", "the auto mode tab")
+    devtools.click_selector("#tab-auto")
+    devtools.wait_for("Boolean(document.querySelector('.page .linky'))", "the edit control")
+    devtools.evaluate(
+        """
+        (() => {
+          // The inactive tab's panel stays mounted, so click the visible edit
+          // control rather than the first one in the document.
+          const edit = [...document.querySelectorAll('.page .linky')]
+            .find((b) => b.textContent.includes('Edit') && b.offsetParent !== null);
+          if (edit) edit.click();
+        })()
+        """
+    )
+    devtools.wait_for("document.querySelector('.drawer') !== null", "the auto mode drawer")
+
+    # The add menu says which kind of model an entry is, before it is added.
+    # The harness pins English, so the label it looks for is the English one.
+    devtools.click_selector('.drawer [aria-label^="Add a model"]')
+    devtools.wait_for(
+        "Boolean(document.querySelector('.select-menu [role=\"option\"]'))",
+        "the add-model menu",
+    )
+    labels = devtools.evaluate(
+        """
+        [...document.querySelectorAll('.select-menu [role="option"]')]
+          .map((option) => option.textContent)
+        """
+    )
+    jev = next((label for label in labels if "jev-jev" in label), None)
+    if jev is None:
+        failures.append("the decision model is not offered by the add menu: %r" % labels)
+    elif "Decision model" not in jev:
+        failures.append("the add menu does not say what the decision model is: %r" % jev)
+
+    # Add it, through a real click on the menu item, and read the row it lands
+    # in: the badge and the menu label are the same fact on either side of the
+    # choice.
+    point = devtools.evaluate(
+        """
+        (() => {
+          const item = [...document.querySelectorAll('.select-menu [role="option"]')]
+            .find((option) => option.textContent.includes('jev-jev'));
+          if (!item) return null;
+          const rect = item.getBoundingClientRect();
+          return {x: rect.left + rect.width / 2, y: rect.top + rect.height / 2};
+        })()
+        """
+    )
+    if point is None:
+        failures.append("the decision model's menu item has no place to click")
+        return failures
+    devtools.click(point)
+    devtools.wait_for(
+        "Boolean([...document.querySelectorAll('.drawer .table tbody tr')]"
+        ".find((row) => row.textContent.includes('jev-jev')))",
+        "the decision candidate in the pool",
+    )
+    row = devtools.evaluate(
+        """
+        (() => {
+          const row = [...document.querySelectorAll('.drawer .table tbody tr')]
+            .find((candidate) => candidate.textContent.includes('jev-jev'));
+          return row ? row.innerText : null;
+        })()
+        """
+    )
+    if row is None:
+        failures.append("the decision model was not added to the pool")
+    elif "Decision model" not in row:
+        failures.append("the pool row does not say the candidate is a decision model: %r" % row)
+
+    return failures
+
+
 CASES = (
     {"label": "UI-1 two nested edits in sequence (first save delayed)", "run": case_ui1_nested_rebase},
     {"label": "UI-2 moved candidate renumbers priority", "run": case_ui2_candidate_priority},
@@ -3298,6 +3394,10 @@ CASES = (
         "label": "UI-20 the auto mode editor names the decision answer",
         "run": case_ui20_the_auto_mode_editor_names_the_decision_answer,
         "query": CUTOVER_QUERY,
+    },
+    {
+        "label": "UI-21 the auto mode pool marks a decision candidate",
+        "run": case_ui21_the_auto_mode_pool_marks_a_decision_candidate,
     },
 )
 

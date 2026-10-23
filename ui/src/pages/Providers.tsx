@@ -132,6 +132,24 @@ function defaultBaseUrl(kind: ProviderKind): string {
 }
 
 /**
+ * The url a decision provider is asked at, mirroring `DecisionConfig::url` in
+ * `zroutery-core::config`.
+ *
+ * The base is used as it stands and `/v1` is added to a path that does not
+ * already begin with it, so `/v1/systemone` and `/systemone` name the same
+ * endpoint — and a path that starts with neither still names one, just not the
+ * one the operator may have meant. The drawer shows the result, because the
+ * *Endpoint* row is where an operator checks the address and this is the
+ * address the request goes to.
+ */
+function decisionUrl(baseUrl: string, path: string): string {
+  const base = baseUrl.replace(/\/+$/, "");
+  const trimmed = path.trim();
+  if (trimmed === "") return base;
+  return trimmed.startsWith("/v1") ? `${base}${trimmed}` : `${base}/v1${trimmed}`;
+}
+
+/**
  * Mirrors the `client_profile` arm of `ProviderConfig::new`.
  *
  * The OpenCode arm is not a preference: `config.rs` rejects any OpenCode
@@ -1167,6 +1185,18 @@ function ProviderDrawer({
   const providerId = provider.id;
 
   /**
+   * The address this provider is called at.
+   *
+   * A relay's base url is its endpoint. A decision endpoint's is the base url
+   * plus the path it answers on, and the summary's *Endpoint* row has to say
+   * the address the request goes to rather than the base it starts from.
+   */
+  const endpoint =
+    provider.kind === "decision"
+      ? decisionUrl(provider.base_url, provider.decision.path)
+      : provider.base_url;
+
+  /**
    * The provider's own models, and the names they answer to.
    *
    * The catalogue table asks "is this model already added?" once per
@@ -1367,7 +1397,7 @@ function ProviderDrawer({
     >
       <KeyValue
         rows={[
-          [t("providers.endpoint"), <span className="mono">{provider.base_url}</span>],
+          [t("providers.endpoint"), <span className="mono">{endpoint}</span>],
           [t("providers.dialect"), t(kindLabelKey(provider.kind))],
           [
             t("providers.auth"),

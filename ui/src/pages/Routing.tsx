@@ -831,6 +831,26 @@ function AutoModeDrawer({
     }
     return known;
   }, [rows]);
+
+  /**
+   * The candidates that answer with a probability rather than with text.
+   *
+   * A decision model is in the pool by name and looks like every other row in
+   * it, but it is asked a typed question and answers in its own protocol. The
+   * add menu and the row say which ones those are, because the choice between
+   * a chat model and a decision model is a choice between two ways a verdict
+   * arrives — and the row explaining the two is a few lines below them.
+   */
+  const decisionIds = useMemo(() => {
+    const kinds = new Map(snapshot.config.providers.map((p) => [p.id, p.kind]));
+    const ids = new Set<string>();
+    for (const row of rows) {
+      if (kinds.get(row.model.provider_id) !== "decision") continue;
+      ids.add(row.id);
+      for (const alias of row.model.aliases) ids.add(alias);
+    }
+    return ids;
+  }, [rows, snapshot.config.providers]);
   const candidatePlaces = useMemo(() => {
     const places = new Map<string, number>();
     classifier.candidates.forEach((c, index) => {
@@ -901,6 +921,14 @@ function AutoModeDrawer({
                   <tr key={c.model} className={known ? "" : "row-warn"}>
                     <td className="mono">
                       {c.model}
+                      {decisionIds.has(c.model) && (
+                        <>
+                          {" "}
+                          <Badge tone="neutral">
+                            {t("routing.decision_candidate")}
+                          </Badge>
+                        </>
+                      )}
                       {!known && (
                         <>
                           {" "}
@@ -920,7 +948,7 @@ function AutoModeDrawer({
                     <td>
                       <input
                         type="checkbox"
-                        aria-label={`Enable ${c.model}`}
+                        aria-label={t("routing.enable_for", { model: c.model })}
                         checked={c.enabled}
                         onChange={(e) =>
                           patchCandidate(c.model, { enabled: e.currentTarget.checked })
@@ -965,7 +993,12 @@ function AutoModeDrawer({
               value={null}
               placeholder={t("routing.add_model")}
               onChange={(model) => addCandidate(model)}
-              options={available.map((r) => ({ value: r.id, label: r.id }))}
+              options={available.map((r) => ({
+                value: r.id,
+                label: decisionIds.has(r.id)
+                  ? `${r.id} · ${t("routing.decision_candidate")}`
+                  : r.id,
+              }))}
             />
           </div>
         )}
