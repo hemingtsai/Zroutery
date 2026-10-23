@@ -155,6 +155,13 @@ function decisionUrl(baseUrl: string, path: string): string {
  * The OpenCode arm is not a preference: `config.rs` rejects any OpenCode
  * provider whose configured profile is not `opencode_cli`, so creating or
  * re-kinding one without it produces a config that will not validate.
+ *
+ * A decision endpoint is `native` for the same kind of reason — not a
+ * validation rule but a fact about the request. The decision body is not a
+ * chat, so there is no client identity to impersonate, and `ProviderConfig::new`
+ * files it as native. Offering `auto` here would let the dashboard create a
+ * provider whose identity differs from the one the backend's own constructor
+ * would have given it.
  */
 function defaultClientProfile(kind: ProviderKind): ProviderClientProfile {
   switch (kind) {
@@ -163,6 +170,8 @@ function defaultClientProfile(kind: ProviderKind): ProviderClientProfile {
     case "opencode_zen_free":
     case "opencode_console":
       return "opencode_cli";
+    case "decision":
+      return "native";
     default:
       return "auto";
   }
