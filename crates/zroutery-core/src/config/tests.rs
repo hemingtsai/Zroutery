@@ -203,6 +203,29 @@ fn validate_flags_unclassified_and_empty_tiers() {
 }
 
 #[test]
+fn a_decision_model_is_not_nagged_about_a_tier() {
+    let mut cfg = sample();
+    cfg.providers.push(ProviderConfig::new(
+        "jev",
+        "Jev",
+        ProviderKind::Decision,
+    ));
+    cfg.models
+        .push(ModelEntry::for_upstream("jev", "jev-1.13-free", None));
+
+    let issues = cfg.validate();
+    assert!(
+        !issues.iter().any(|i| i.code == "model.unclassified"
+            && i.subject.as_deref() == Some("jev-jev-1.13-free")),
+        "a decision model is deliberately outside every tier: {issues:?}"
+    );
+    assert!(!cfg
+        .unclassified_models()
+        .iter()
+        .any(|m| m.exposed_id() == "jev-jev-1.13-free"));
+}
+
+#[test]
 fn validate_flags_a_tier_whose_only_members_are_on_disabled_providers() {
     let mut cfg = sample();
     cfg.providers[0].enabled = false;

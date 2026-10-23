@@ -370,9 +370,24 @@ function Shell() {
     [run],
   );
 
-  const unclassified = useMemo(
-    () => snapshot?.config.models.filter((m) => m.tier === null) ?? [],
+  // A decision model is deliberately outside every tier: it answers typed
+  // questions and cannot serve a request that wants prose. Counting it would
+  // nag about a classification that has no answer.
+  const decisionProviders = useMemo(
+    () =>
+      new Set(
+        (snapshot?.config.providers ?? [])
+          .filter((p) => p.kind === "decision")
+          .map((p) => p.id),
+      ),
     [snapshot],
+  );
+  const unclassified = useMemo(
+    () =>
+      snapshot?.config.models.filter(
+        (m) => m.tier === null && !decisionProviders.has(m.provider_id),
+      ) ?? [],
+    [snapshot, decisionProviders],
   );
 
   if (!snapshot) {

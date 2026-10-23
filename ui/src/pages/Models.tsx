@@ -85,7 +85,16 @@ export default function Models({
   );
   const healthById = useMemo(() => new Map(health.map((h) => [h.model_id, h])), [health]);
 
-  const unclassified = useMemo(() => rows.filter((r) => r.model.tier === null), [rows]);
+  // A decision model has no tier by design; see `AppConfig::unclassified_models`.
+  const unclassified = useMemo(
+    () =>
+      rows.filter(
+        (r) =>
+          r.model.tier === null &&
+          providerById.get(r.model.provider_id)?.kind !== "decision",
+      ),
+    [rows, providerById],
+  );
   const cooling = useMemo(
     () => new Set(health.filter((h) => h.cooldown_remaining_secs > 0).map((h) => h.model_id)),
     [health],

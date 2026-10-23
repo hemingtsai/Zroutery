@@ -119,8 +119,24 @@ impl AppConfig {
     }
 
     /// Models that the user still has to classify. The GUI nags about these.
+    ///
+    /// A decision model is not one of them. It answers typed questions and
+    /// cannot serve a request that wants prose, so it is deliberately outside
+    /// every tier; a warning asking the user to classify it would be a nag with
+    /// no answer, and the Auto review pool is where it belongs instead.
     pub fn unclassified_models(&self) -> Vec<&ModelEntry> {
-        self.models.iter().filter(|m| m.tier.is_none()).collect()
+        self.models
+            .iter()
+            .filter(|m| m.tier.is_none() && !self.is_decision_model(m))
+            .collect()
+    }
+
+    /// Whether this model belongs to a decision endpoint.
+    fn is_decision_model(&self, model: &ModelEntry) -> bool {
+        self.providers
+            .iter()
+            .find(|p| p.id == model.provider_id)
+            .is_some_and(|p| p.kind.is_decision())
     }
 
     pub fn validate(&self) -> Vec<ConfigIssue> {
@@ -283,7 +299,7 @@ impl AppConfig {
                     });
                 }
             }
-            if m.tier.is_none() {
+            if m.tier.is_none() && !self.is_decision_model(m) {
                 issues.push(ConfigIssue {
                     severity: IssueSeverity::Warning,
                     code: "model.unclassified".into(),
