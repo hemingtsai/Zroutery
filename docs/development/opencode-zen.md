@@ -342,3 +342,22 @@ not evidence the provider is down, so it must not cool the whole provider.
    pure-chat client on the free tier can lose its answer to an injected
    placeholder call; the response-side filter still strips the call.
 3. Whether to add the local `auth.json` import as a convenience login for B.
+
+## Zen's System One decision endpoint (not the `OPENCODE-*` chat kinds)
+
+The note above is about the two **chat** kinds, and it stays true: a free-tier
+chat model is never an Auto review candidate. Zen also serves a different lane,
+`https://opencode.ai/zen/v1/systemone`, which takes a state and a typed question
+and answers with a calibrated probability (`{answers:{...}}`). It is a **decision
+endpoint**, configured as `ProviderKind::Decision`, and it is the free Jev model
+(`jev-1.13-free`) that the Auto review preset adds: keyless while the promotion
+lasts, `x-opencode-client` naming the caller, a 4-second timeout and a 0.6
+required confidence.
+
+The two lanes do not overlap: the decision endpoint cannot answer a chat, and
+Auto review does not accept an `OPENCODE-*` chat provider. The request shape
+lives in `upstream::decision`, and the body names its model (`model` in the
+JSON body, not the URL). On 2026-10-23 both Zen and TypeSafe answered HTTP 451
+from the machine this was written on, so the endpoint is covered by a mock on a
+real socket and an optional `#[ignore]` live probe; the free promotion has not
+been verified live from here.

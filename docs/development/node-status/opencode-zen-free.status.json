@@ -21,7 +21,8 @@
   "unblock_condition": "Not blocked; implemented, unit- and integration-tested, and live-verified against the real gateway.",
   "evidence": [
     "E-155",
-    "E-158"
+    "E-158",
+    "E-175"
   ],
   "source_references": [
     "crates/zroutery-core/src/opencode/mod.rs",

@@ -14,7 +14,8 @@
   "blocked_by": [],
   "unblock_condition": "Retain exact run/SHA and do not generalize to unrun local gates.",
   "evidence": [
-    "E-015"
+    "E-015",
+    "E-177"
   ],
   "source_references": [
     "docs/development/repository-audit-2026-09-25.md",

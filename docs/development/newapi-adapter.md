@@ -173,3 +173,32 @@ nothing consumes `AccountProvider` yet:
    test / show quota and usage), reusing `probe_status` for the connection test.
 4. Decide who polls `refresh` — on demand, or a background store keyed by
    `AccountId`.
+
+## Capturing the panel token in a browser
+
+The account credential is the panel's personal access token (or a login JWT the
+adapter can renew). Typing it means finding the panel's token page; the desktop
+app can instead open the account's isolated browser profile on the sign-in page
+(`MaintenanceConfig::login_path`, default `/sign-in`; older forks use `/login`),
+let the operator sign in, and capture the credential the page already holds.
+
+What crosses the boundary is only the minted personal token: the page-side probe
+finds a bearer (an installed fetch/XHR interceptor, `localStorage` for older
+forks, or one same-origin `POST /api/user/auth/refresh` per document), asks
+`GET /api/user/token` **once**, and returns the durable token. Rust verifies it
+with `NewApiAdapter::authenticate(ApiKey)` against `GET /api/user/self` and
+stores it in the keychain. The browser's own credential never leaves the page,
+and the token never enters a snapshot, a view, or a log.
+
+Caveats:
+
+* Minting `GET /api/user/token` **rotates the legacy single personal token**;
+  the panel's previously issued personal token stops working. The UI says so.
+  Newer NewAPI moves to scoped `/api/user/access_tokens`; that endpoint is not
+  used here, so a panel that removed `/api/user/token` reports
+  `unsupported_panel` rather than storing a short-lived JWT.
+* Capture and check-in share the one-browser-per-account lock; starting one
+  refuses the other with a message naming the open operation.
+* A panel that asks for a security proof answers 403; the capture reports
+  `needs_verification`, keeps the browser open, and resumes after the operator
+  completes it.

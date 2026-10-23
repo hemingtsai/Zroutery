@@ -25,7 +25,8 @@
     "E-046",
     "E-047",
     "E-049",
-    "E-051"
+    "E-051",
+    "E-171"
   ],
   "source_references": [
     "docs/development/decisions/0004-failure-outcome-authority.md",
