@@ -246,6 +246,11 @@ export const en = {
   "models.f_weight_hint": "Tie breaking among equal priorities",
   "models.f_max_tokens": "Max output tokens",
   "models.f_max_tokens_hint": "Caps what clients may ask for",
+  "models.f_context_window": "Context window",
+  "models.f_context_window_hint":
+    "Tokens the model accepts, when known. Advertised in /v1/models; the upstream stays the authority on what it serves.",
+  "models.context_set_1m": "Set 1M",
+  "models.context_unknown": "unknown",
   "models.f_aliases_hint": "Comma separated short names",
   "models.tool_use": "Tool use",
   "models.vision": "Vision",
@@ -1320,6 +1325,11 @@ export const zh: Dict = {
   "models.f_weight_hint": "同优先级时的加权随机",
   "models.f_max_tokens": "最大输出 token",
   "models.f_max_tokens_hint": "限制客户端可请求的上限",
+  "models.f_context_window": "上下文长度",
+  "models.f_context_window_hint":
+    "模型可接受的 token 数,已知时填写。会在 /v1/models 中公布;上游仍是实际服务能力的权威。",
+  "models.context_set_1m": "设为 1M",
+  "models.context_unknown": "未知",
   "models.f_aliases_hint": "逗号分隔的短名称",
   "models.tool_use": "工具调用",
   "models.vision": "视觉",

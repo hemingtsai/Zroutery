@@ -1,6 +1,7 @@
 import { memo, useCallback, useMemo, useState, type ReactNode } from "react";
 import {
   TIERS,
+  contextText,
   emptyModel,
   emptyPricing,
   modelRows,
@@ -535,6 +536,35 @@ function ModelDrawer({
               })
             }
           />
+          <NumberField
+            label={t("models.f_context_window")}
+            hint={
+              m.context_window !== null
+                ? `${contextText(m.context_window)} · ${t("models.f_context_window_hint")}`
+                : t("models.f_context_window_hint")
+            }
+            min={1}
+            placeholder={t("models.context_unknown")}
+            integer
+            value={m.context_window}
+            onCommit={(context_window) =>
+              onUpdate((model) => {
+                model.context_window = context_window;
+              })
+            }
+          />
+          <div className="field-actions">
+            <Button
+              kind="ghost"
+              onClick={() =>
+                onUpdate((model) => {
+                  model.context_window = 1_000_000;
+                })
+              }
+            >
+              {t("models.context_set_1m")}
+            </Button>
+          </div>
           <TextField
             label={t("models.aliases")}
             hint={t("models.f_aliases_hint")}

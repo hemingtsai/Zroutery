@@ -214,6 +214,8 @@ export interface ModelEntry {
   display_name: string | null;
   aliases: string[];
   max_output_tokens: number | null;
+  /** The model's context window in tokens, when known. */
+  context_window: number | null;
   /** Entered by hand, like the tier. Without it a request is logged unpriced. */
   pricing: Pricing | null;
 }
@@ -959,6 +961,16 @@ export interface DiscoveredModel {
   id: string;
   pricing: Pricing | null;
   /**
+   * Context window in tokens, when the source publishes it. Kept so a model
+   * added from a catalogue starts with the window its provider declares
+   * instead of an empty field.
+   */
+  context_window?: number | null;
+  /** Maximum output tokens, when the source publishes it. */
+  max_output?: number | null;
+  /** Capability flags, when the source publishes them. */
+  capabilities?: ModelCapabilities | null;
+  /**
    * Whether the provider's source marks this model as served on a zero-cost
    * tier. Always present — the Rust side defaults it to `false` rather than
    * omitting it.
@@ -1669,6 +1681,7 @@ export function emptyModel(
     display_name: null,
     aliases: [],
     max_output_tokens: null,
+    context_window: null,
     pricing: null,
     ...overrides,
   };
@@ -1751,6 +1764,24 @@ export const classMembers = tierMembers;
  */
 export function previewId(providerId: string, upstreamModel: string): string {
   return `${providerId.trim()}-${upstreamModel.trim()}`.replace(/[^A-Za-z0-9._-]/g, "-");
+}
+
+/**
+ * A token count as the short form a catalogue and a drawer use: `1M`, `200K`.
+ *
+ * The underlying number is kept exactly; only the label rounds, and only to one
+ * decimal, so 1,048,576 still reads as `1M` and 1,500,000 as `1.5M`.
+ */
+export function contextText(tokens: number | null | undefined): string {
+  if (tokens === null || tokens === undefined) return "—";
+  const short = (value: number, unit: number, suffix: string) => {
+    const scaled = value / unit;
+    const rounded = Number.isInteger(scaled) ? scaled : Number(scaled.toFixed(1));
+    return `${rounded}${suffix}`;
+  };
+  if (tokens >= 1_000_000) return short(tokens, 1_000_000, "M");
+  if (tokens >= 1_000) return short(tokens, 1_000, "K");
+  return String(tokens);
 }
 
 export function slugify(value: string): string {

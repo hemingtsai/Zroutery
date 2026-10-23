@@ -445,6 +445,15 @@ pub struct ModelEntry {
     /// Hard cap on `max_tokens` sent upstream.
     #[serde(default)]
     pub max_output_tokens: Option<u32>,
+    /// The model's context window in tokens, when the operator knows it.
+    ///
+    /// Metadata the provider catalogue often publishes and the configuration
+    /// used to drop. It is advertised in `GET /v1/models` and shown in the
+    /// dashboard; it is not a request cap (that is `max_output_tokens`) and the
+    /// proxy does not truncate a transcript to fit it — the upstream is the
+    /// authority on what it accepts.
+    #[serde(default)]
+    pub context_window: Option<u32>,
     /// What the provider charges for this model. Entered by hand, like the tier;
     /// without it a request is logged with no cost rather than a guessed one.
     #[serde(default)]
@@ -478,6 +487,7 @@ impl ModelEntry {
             display_name: None,
             aliases: Vec::new(),
             max_output_tokens: None,
+            context_window: None,
             pricing: None,
         }
     }

@@ -1305,6 +1305,11 @@ function ProviderDrawer({
           emptyModel(providerId, model.id, {
             tier: tier === "none" ? null : tier,
             pricing: model.pricing,
+            // The catalogue often knows the window and the output cap; keeping
+            // them here is what makes the mark survive the add.
+            context_window: model.context_window ?? null,
+            max_output_tokens: model.max_output ?? null,
+            ...(model.capabilities ? { capabilities: model.capabilities } : {}),
           }),
         );
         return next;

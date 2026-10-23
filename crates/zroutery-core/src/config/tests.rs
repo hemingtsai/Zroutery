@@ -203,6 +203,44 @@ fn validate_flags_unclassified_and_empty_tiers() {
 }
 
 #[test]
+fn a_context_window_is_optional_and_survives_a_round_trip() {
+    let mut cfg = sample();
+    cfg.models[0].context_window = Some(1_000_000);
+    let json = serde_json::to_string(&cfg).unwrap();
+    let back: AppConfig = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.models[0].context_window, Some(1_000_000));
+
+    // A document written before the field existed parses with it unset, so no
+    // configuration needs migrating.
+    let old = r#"{"server":{"auth_token":"zr-x"},"providers":[{"id":"p","name":"P","kind":"openai_compatible","base_url":"https://example.com"}],"models":[{"provider_id":"p","upstream_model":"m"}]}"#;
+    let parsed: AppConfig = serde_json::from_str(old).unwrap();
+    assert_eq!(parsed.models[0].context_window, None);
+}
+
+#[test]
+fn a_context_window_must_be_positive_and_fit_the_output_cap() {
+    let mut cfg = sample();
+    cfg.models[0].context_window = Some(0);
+    let issues = cfg.validate();
+    assert!(
+        issues
+            .iter()
+            .any(|i| i.code == "model.context_window_zero"),
+        "{issues:?}"
+    );
+
+    cfg.models[0].context_window = Some(100);
+    cfg.models[0].max_output_tokens = Some(200);
+    let issues = cfg.validate();
+    assert!(
+        issues
+            .iter()
+            .any(|i| i.code == "model.output_exceeds_context"),
+        "{issues:?}"
+    );
+}
+
+#[test]
 fn a_decision_model_is_not_nagged_about_a_tier() {
     let mut cfg = sample();
     cfg.providers.push(ProviderConfig::new(

@@ -103,6 +103,12 @@ pub struct ModelInfo {
     /// Extra ids that also resolve to this model.
     pub aliases: Vec<String>,
     pub capabilities: ModelCapabilities,
+    /// The model's context window, when the operator declared one.
+    ///
+    /// Additive and omitted when unknown, so a listing written before this
+    /// field existed is byte-identical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<u32>,
 }
 
 impl Registry {
@@ -278,6 +284,7 @@ impl Registry {
                 member_count: 0,
                 aliases: m.aliases.clone(),
                 capabilities: m.capabilities.clone(),
+                context_window: m.context_window,
             });
         }
         out.sort_by(|a, b| a.id.cmp(&b.id));
@@ -313,6 +320,16 @@ impl Registry {
                 caps.video &= m.capabilities.video;
                 caps.files &= m.capabilities.files;
             }
+            // A virtual id routes to one of its members, and the client cannot
+            // know which: the only window true of every routing is the smallest
+            // one. If any member's window is unknown, the tier's window is
+            // unknown too, for the same reason — advertising the known minimum
+            // would overstate the members that did not declare one.
+            let context_window = members
+                .iter()
+                .all(|m| m.context_window.is_some())
+                .then(|| members.iter().filter_map(|m| m.context_window).min())
+                .flatten();
             out.push(ModelInfo {
                 id: tier.virtual_id_styled(style).to_string(),
                 display_name: format!("{} (auto)", tier.display_name(style)),
@@ -322,6 +339,7 @@ impl Registry {
                 member_count: members.len(),
                 aliases: Vec::new(),
                 capabilities: caps,
+                context_window,
             });
         }
         out
@@ -419,6 +437,52 @@ mod tests {
             .unwrap();
         assert_eq!(info.display_name, "gpt-5.3-sol");
         assert_eq!(info.provider_name.as_deref(), Some("OpenAI"));
+    }
+
+    #[test]
+    fn the_listing_advertises_a_declared_context_window() {
+        let mut cfg = brief_config();
+        cfg.models[0].context_window = Some(1_000_000);
+        cfg.models[1].context_window = Some(200_000);
+        let r = registry(cfg);
+        let listing = r.list();
+        let concrete = listing
+            .iter()
+            .find(|m| m.id == "deepseek-deepseek-v4-flash")
+            .unwrap();
+        assert_eq!(concrete.context_window, Some(1_000_000));
+        // A virtual id says the smallest window every routing can honour. The
+        // reasoning tier holds one member whose window is unknown, so the tier
+        // makes no claim rather than overstating it.
+        assert_eq!(
+            listing
+                .iter()
+                .find(|m| m.id == "fast-class")
+                .unwrap()
+                .context_window,
+            Some(1_000_000)
+        );
+        assert_eq!(
+            listing
+                .iter()
+                .find(|m| m.id == "reasoning-class")
+                .unwrap()
+                .context_window,
+            None
+        );
+        // Additive and omitted when unset: an older listing is unchanged.
+        assert_eq!(
+            serde_json::to_value(concrete).unwrap()["context_window"],
+            serde_json::json!(1_000_000)
+        );
+        let unknown = listing
+            .iter()
+            .find(|m| m.id == "openai-gpt-5.3-sol")
+            .unwrap();
+        assert!(serde_json::to_value(unknown)
+            .unwrap()
+            .get("context_window")
+            .is_none());
     }
 
     #[test]

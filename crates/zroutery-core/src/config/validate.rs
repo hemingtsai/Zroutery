@@ -309,6 +309,27 @@ impl AppConfig {
                     subject: Some(exposed.clone()),
                 });
             }
+            if m.context_window == Some(0) {
+                issues.push(ConfigIssue {
+                    severity: IssueSeverity::Error,
+                    code: "model.context_window_zero".into(),
+                    message: format!("Model `{exposed}` declares a zero-token context window"),
+                    subject: Some(exposed.clone()),
+                });
+            } else if let (Some(window), Some(output)) = (m.context_window, m.max_output_tokens) {
+                if output > window {
+                    issues.push(ConfigIssue {
+                        severity: IssueSeverity::Warning,
+                        code: "model.output_exceeds_context".into(),
+                        message: format!(
+                            "Model `{exposed}` allows {output} output tokens from a {window}-token \
+                             context window; the output cap cannot exceed the window it is cut \
+                             from"
+                        ),
+                        subject: Some(exposed.clone()),
+                    });
+                }
+            }
             if let Some(pricing) = &m.pricing {
                 for problem in pricing.problems() {
                     issues.push(ConfigIssue {
