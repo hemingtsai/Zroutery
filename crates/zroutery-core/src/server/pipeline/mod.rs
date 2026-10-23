@@ -566,7 +566,14 @@ fn prepare(
     // sent, and the one typed question the Auto Mode's question becomes.
     if candidate.provider.kind.is_decision() {
         let (state_text, instructions) = crate::upstream::decision_question(req);
-        let body = crate::upstream::build_decision_body(&state_text, &instructions);
+        // The model travels in the body, not the URL: a decision endpoint serves
+        // several models at one path, and the one the operator configured is the
+        // one that must answer.
+        let body = crate::upstream::build_decision_body(
+            &state_text,
+            &instructions,
+            &candidate.entry.upstream_model,
+        );
         return Ok((key, body));
     }
     let body = crate::upstream::encode_for_mode(

@@ -52,6 +52,8 @@ struct DecisionMock {
 
 #[derive(Default)]
 struct DecisionInner {
+    /// A response body to send instead of the probability answer.
+    raw: Option<Value>,
     /// The probability every answer carries.
     noul: f64,
     /// Every body the endpoint received.
@@ -64,6 +66,13 @@ impl DecisionMock {
     fn answering(noul: f64) -> Self {
         let mock = Self::default();
         mock.inner.lock().unwrap().noul = noul;
+        mock
+    }
+
+    /// Answer with `body` instead of the probability the mock was built with.
+    fn answering_raw(body: Value) -> Self {
+        let mock = Self::default();
+        mock.inner.lock().unwrap().raw = Some(body);
         mock
     }
 
@@ -91,14 +100,28 @@ async fn decide(
             .unwrap_or_default()
             .to_string(),
     );
+    if let Some(raw) = inner.raw.clone() {
+        drop(inner);
+        return Json(raw).into_response();
+    }
     let noul = inner.noul;
     drop(inner);
-    Json(json!({ "decision": { "type": "noul", "noul": noul } })).into_response()
+    // The family's answer lives under `answers`; that envelope is part of the
+    // protocol, not a shape a mock may skip.
+    Json(json!({ "answers": { "decision": { "type": "noul", "noul": noul } } })).into_response()
 }
 
 /// A decision endpoint on a real port, answering with `noul`.
 async fn start_decision_endpoint(noul: f64) -> (String, DecisionMock) {
-    let mock = DecisionMock::answering(noul);
+    start_mock(DecisionMock::answering(noul)).await
+}
+
+/// A decision endpoint that answers with `body` instead.
+async fn start_raw_endpoint(body: Value) -> (String, DecisionMock) {
+    start_mock(DecisionMock::answering_raw(body)).await
+}
+
+async fn start_mock(mock: DecisionMock) -> (String, DecisionMock) {
     let app = axum::Router::new()
         .route("/v1/systemone", post(decide))
         .with_state(mock.clone());
@@ -127,13 +150,14 @@ fn config_for(base: &str, threshold: f64) -> AppConfig {
 
     // No tier: a decision model is not a candidate for main traffic, and a
     // tier it was filed under would put it in front of requests it cannot
-    // answer.
-    cfg.models = vec![ModelEntry::for_upstream("jev", "jev", None)];
+    // answer. The upstream model differs from the provider id on purpose: the
+    // body must name the model, not the provider.
+    cfg.models = vec![ModelEntry::for_upstream("jev", "jev-1.13-free", None)];
 
     cfg.classifier = ClassifierConfig {
         enabled: true,
         candidates: vec![ClassifierCandidate {
-            model: "jev-jev".into(),
+            model: "jev-jev-1.13-free".into(),
             priority: 10,
             enabled: true,
         }],
@@ -153,7 +177,11 @@ struct Harness {
 
 impl Harness {
     async fn start(cfg: AppConfig) -> Harness {
-        let state = Arc::new(AppState::new(cfg, secrets()));
+        Harness::start_with(cfg, secrets()).await
+    }
+
+    async fn start_with(cfg: AppConfig, secrets: Arc<MemorySecretStore>) -> Harness {
+        let state = Arc::new(AppState::new(cfg, secrets));
         let server = ServerHandle::start(Arc::clone(&state)).await.unwrap();
         Harness {
             base: format!("http://{}", server.addr),
@@ -207,19 +235,31 @@ async fn a_confident_yes_blocks_the_action() {
         "a confident yes must block, and the client must see the tag: {text}"
     );
 
-    // The question went out in the decision protocol: the state is what the
-    // client sent, and the question is the role the client gave the model.
+    // The question went out in the decision protocol: the model is named in the
+    // body, the state is what the client sent, and the question is the role the
+    // client gave the model, pinned to "yes means block".
     let bodies = mock.bodies();
     assert_eq!(bodies.len(), 1, "the endpoint was asked {bodies:?}");
     let body = &bodies[0];
+    assert_eq!(
+        body["model"], "jev-1.13-free",
+        "the body must name the configured upstream model, not the provider: {body}"
+    );
     assert_eq!(body["state"], "should this run?");
     assert_eq!(
         body["questions"]["decision"]["type"], "noul",
         "the Auto Mode asks a binary question: {body}"
     );
-    assert_eq!(
-        body["questions"]["decision"]["instructions"],
-        "You are a security monitor for autonomous AI coding agents."
+    let instructions = body["questions"]["decision"]["instructions"]
+        .as_str()
+        .expect("instructions are a string");
+    assert!(
+        instructions.starts_with("You are a security monitor for autonomous AI coding agents."),
+        "the client's question must reach the model: {instructions}"
+    );
+    assert!(
+        instructions.contains(zroutery_core::upstream::BLOCK_POLARITY),
+        "the answer direction has to be stated: {instructions}"
     );
 
     // And the credential was presented the way the family presents it.
@@ -283,9 +323,51 @@ async fn a_decision_model_is_not_offered_for_main_traffic() {
         "a decision model is not a tier member"
     );
     assert!(
-        !registry.list().iter().any(|m| m.id == "jev-jev"),
+        !registry.list().iter().any(|m| m.id == "jev-jev-1.13-free"),
         "a decision model is not published to clients"
     );
+}
+
+/// A keyless decision endpoint is asked without an `Authorization` header.
+///
+/// This is the shape OpenCode Zen's free promotion has: the model answers with
+/// no credential at all, and an empty `key_ref` is the configuration's way of
+/// saying so.
+#[tokio::test]
+async fn a_keyless_decision_endpoint_is_asked_without_a_credential() {
+    let (base, mock) = start_decision_endpoint(0.02).await;
+    let mut cfg = config_for(&base, 0.85);
+    cfg.providers[0].key_ref = String::new();
+    let h = Harness::start_with(cfg, Arc::new(MemorySecretStore::new())).await;
+
+    let (status, text) = h.ask().await;
+    assert_eq!(status, 200, "the body was {text}");
+    assert!(
+        text.contains("<block>no</block>"),
+        "a confident no must allow: {text}"
+    );
+    assert_eq!(
+        mock.keys(),
+        vec![String::new()],
+        "a keyless endpoint must not be sent an Authorization header"
+    );
+    h.shutdown().await;
+}
+
+/// An `answers` envelope that does not carry the answer is an error, not an
+/// allow. The gate must not recover a verdict from a body it could not parse.
+#[tokio::test]
+async fn a_malformed_answers_envelope_is_an_error() {
+    let (base, _mock) = start_raw_endpoint(json!({ "answers": {} })).await;
+    let h = Harness::start(config_for(&base, 0.85)).await;
+
+    let (status, text) = h.ask().await;
+    assert_ne!(status, 200, "a malformed answer must fail the query: {text}");
+    assert!(
+        !text.contains("<block>no</block>"),
+        "a malformed answer must never allow the action: {text}"
+    );
+    h.shutdown().await;
 }
 
 /// A decision endpoint that answers with no probability is no answer at all.
@@ -314,4 +396,38 @@ async fn an_endpoint_that_answers_with_no_probability_is_no_verdict() {
         verdict_from_decision(Some(unsure), 0.85),
         ClassifierVerdict::Unparseable
     );
+}
+
+/// A live probe of a real System One endpoint, run only when asked.
+///
+/// Zen and TypeSafe both answered HTTP 451 ("not available in your region")
+/// from the machine this was written on, so this is not a gate and no live pass
+/// is claimed. Point `ZROUTERY_LIVE_DECISION_URL` at an endpoint (and set
+/// `ZROUTERY_LIVE_DECISION_MODEL`, optional `ZROUTERY_LIVE_DECISION_KEY`) and
+/// run with `--ignored` to exercise the real wire.
+#[tokio::test]
+#[ignore = "requires ZROUTERY_LIVE_DECISION_URL and a reachable endpoint"]
+async fn the_live_decision_endpoint_answers_a_probability() {
+    let Ok(url) = std::env::var("ZROUTERY_LIVE_DECISION_URL") else {
+        return;
+    };
+    let model =
+        std::env::var("ZROUTERY_LIVE_DECISION_MODEL").unwrap_or_else(|_| "jev-latest".into());
+    let body = zroutery_core::upstream::build_decision_body(
+        "A harmless test question.",
+        "Is the action described in the state dangerous?",
+        &model,
+    );
+    let mut request = reqwest::Client::new().post(&url).json(&body);
+    if let Ok(key) = std::env::var("ZROUTERY_LIVE_DECISION_KEY") {
+        request = request.bearer_auth(key);
+    }
+    let response = request.send().await.expect("the live endpoint answers");
+    let status = response.status();
+    let text = response.text().await.expect("the live endpoint has a body");
+    assert!(status.is_success(), "HTTP {status}: {text}");
+    let json: Value = serde_json::from_str(&text).expect("the live answer is JSON");
+    let decision = zroutery_core::upstream::parse_decision_answer(&json)
+        .unwrap_or_else(|| panic!("the live answer has no probability: {text}"));
+    assert!((0.0..=1.0).contains(&decision.noul));
 }

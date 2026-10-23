@@ -24,11 +24,22 @@
 //! }
 //! ```
 //!
-//! and the answer is the same map with the answer in place of the question:
+//! and the answer is the same map with the answer in place of the question,
+//! under an `answers` envelope:
 //!
 //! ```json
-//! { "decision": { "type": "noul", "noul": 0.97 } }
+//! { "answers": { "decision": { "type": "noul", "noul": 0.97 } } }
 //! ```
+//!
+//! The envelope is part of the protocol, not a wrapper a host may omit. A
+//! response that carries `answers` but not the answer is no answer at all; it
+//! is not re-read from the top level, because that would turn a malformed
+//! envelope into a verdict. A flat response is still accepted when `answers` is
+//! absent, for hosts and fixtures written against the earlier shape.
+//!
+//! The request also names the model it is asking: the System One family routes
+//! by the body's `model`, and a request without one is answered by whatever the
+//! endpoint defaults to — which is not the model the operator configured.
 //!
 //! The family also has a `choice` (one of N options, with the distribution
 //! over them) and a `score` (a point on an ordered scale). Only the binary
@@ -51,6 +62,16 @@ use crate::ir::{ChatRequest, ContentBlock, Role};
 /// whichever key the answer happens to use.
 pub const QUESTION_KEY: &str = "decision";
 
+/// The sentence that fixes what "yes" means.
+///
+/// The client's own classifier prompt asks the question; this only pins the
+/// direction of the answer. The verdict mapping in
+/// [`crate::classifier::verdict_from_decision`] treats a high `noul` as
+/// *block*, and a model left to infer the polarity from a prompt that may be
+/// phrased either way is a calibration risk the proxy does not need.
+pub const BLOCK_POLARITY: &str =
+    "Answer yes only when the action must not proceed; answer no when it may proceed.";
+
 /// One answer from a decision endpoint.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Decision {
@@ -62,23 +83,42 @@ pub struct Decision {
 }
 
 /// The body a decision endpoint is asked with.
-pub fn build_body(state: &str, instructions: &str) -> Value {
+///
+/// `model` is part of the body rather than the URL: the family's endpoint
+/// serves several models at one path, and omitting the field asks whatever the
+/// endpoint defaults to.
+pub fn build_body(state: &str, instructions: &str, model: &str) -> Value {
     json!({
+        "model": model,
         "state": state,
         "questions": {
-            QUESTION_KEY: { "type": "noul", "instructions": instructions }
+            QUESTION_KEY: {
+                "type": "noul",
+                "instructions": format!("{instructions}\n\n{BLOCK_POLARITY}")
+            }
         }
     })
 }
 
 /// Read the answer out of a decision endpoint's response.
 ///
+/// The answer lives under `answers`. When `answers` is present, only it is
+/// read: a malformed envelope is `None`, never a fallback to the top level,
+/// because a security gate must not recover a verdict from a response whose
+/// protocol it could not parse. A response with no `answers` key at all is read
+/// as a flat document, which keeps hosts and fixtures written against the
+/// earlier shape working.
+///
 /// `None` for anything that is not a probability: no answer, an answer of the
 /// wrong type, a number outside `0..=1`, a number that is not a number. The
 /// caller treats a missing answer as no verdict at all, which is the fail-closed
 /// case.
 pub fn parse_answer(answer: &Value) -> Option<Decision> {
-    let noul = answer.get(QUESTION_KEY)?.get("noul")?.as_f64()?;
+    let answers = match answer.get("answers") {
+        Some(answers) => answers,
+        None => answer,
+    };
+    let noul = answers.get(QUESTION_KEY)?.get("noul")?.as_f64()?;
     if !noul.is_finite() || !(0.0..=1.0).contains(&noul) {
         return None;
     }
@@ -124,31 +164,55 @@ mod tests {
     use crate::ir::{Message, SystemPart};
 
     #[test]
-    fn the_body_asks_one_binary_question() {
-        let body = build_body("the transcript", "is this dangerous");
+    fn the_body_names_the_model_and_asks_one_binary_question() {
+        let body = build_body("the transcript", "is this dangerous", "jev-1.13-free");
+        assert_eq!(body["model"], "jev-1.13-free");
         assert_eq!(body["state"], "the transcript");
         assert_eq!(body["questions"][QUESTION_KEY]["type"], "noul");
-        assert_eq!(
-            body["questions"][QUESTION_KEY]["instructions"],
-            "is this dangerous"
-        );
+        let instructions = body["questions"][QUESTION_KEY]["instructions"]
+            .as_str()
+            .expect("instructions are a string");
+        assert!(instructions.starts_with("is this dangerous"));
+        assert!(instructions.contains(BLOCK_POLARITY));
     }
 
     #[test]
-    fn a_probability_is_read() {
-        let answer = json!({ "decision": { "type": "noul", "noul": 0.97 } });
+    fn a_probability_is_read_from_the_answers_envelope() {
+        let answer = json!({ "answers": { "decision": { "type": "noul", "noul": 0.97 } } });
         assert_eq!(parse_answer(&answer), Some(Decision { noul: 0.97 }));
+    }
+
+    #[test]
+    fn a_flat_answer_is_read_when_there_is_no_envelope() {
+        let answer = json!({ "decision": { "type": "noul", "noul": 0.02 } });
+        assert_eq!(parse_answer(&answer), Some(Decision { noul: 0.02 }));
+    }
+
+    #[test]
+    fn a_malformed_envelope_is_no_answer_rather_than_a_flat_one() {
+        // The top-level probability must not rescue a response whose envelope
+        // does not carry it: that is exactly the kind of quiet recovery a
+        // security gate must not do.
+        for answer in [
+            json!({ "answers": null, "decision": { "type": "noul", "noul": 0.97 } }),
+            json!({ "answers": {}, "decision": { "type": "noul", "noul": 0.97 } }),
+            json!({ "answers": { "decision": {} }, "decision": { "noul": 0.97 } }),
+            json!({ "answers": { "decision": { "noul": "high" } }, "decision": { "noul": 0.97 } }),
+        ] {
+            assert_eq!(parse_answer(&answer), None, "for {answer}");
+        }
     }
 
     #[test]
     fn an_answer_that_is_not_a_probability_is_no_answer() {
         for answer in [
             json!({}),
-            json!({ "decision": {} }),
-            json!({ "decision": { "type": "noul" } }),
-            json!({ "decision": { "type": "noul", "noul": "high" } }),
-            json!({ "decision": { "type": "noul", "noul": 1.5 } }),
-            json!({ "decision": { "type": "noul", "noul": -0.1 } }),
+            json!({ "answers": {} }),
+            json!({ "answers": { "decision": {} } }),
+            json!({ "answers": { "decision": { "type": "noul" } } }),
+            json!({ "answers": { "decision": { "type": "noul", "noul": "high" } } }),
+            json!({ "answers": { "decision": { "type": "noul", "noul": 1.5 } } }),
+            json!({ "answers": { "decision": { "type": "noul", "noul": -0.1 } } }),
         ] {
             assert_eq!(parse_answer(&answer), None, "for {answer}");
         }

@@ -56,7 +56,10 @@ mod stream;
 mod tests;
 
 pub use catalogue::DiscoveredModel;
-pub use decision::{build_body as build_decision_body, question_of as decision_question, Decision};
+pub use decision::{
+    build_body as build_decision_body, parse_answer as parse_decision_answer,
+    question_of as decision_question, Decision, BLOCK_POLARITY,
+};
 pub use encode::{encode_for, encode_for_mode, EncodeMode};
 pub use headers::{build_headers, build_headers_for_identity, build_headers_for_profile};
 
