@@ -71,13 +71,6 @@ export default function Overview({
           >
             {t("action.copy_base_url")}
           </button>
-          <span className="text-actions-sep">·</span>
-          <button type="button"
-            className="linky"
-            onClick={() => api.copyToken().then(() => notify("ok", t("toast.copied")))}
-          >
-            {t("action.copy_token")}
-          </button>
         </div>
       </div>
 

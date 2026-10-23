@@ -24,14 +24,13 @@
 import { useState } from "react";
 import { useI18n, describeBackendError, type TKey } from "../i18n";
 import { BrowserTokenButton } from "../BrowserTokenButton";
-import { Badge, Button, Empty, NumberField, Section, Toggle, useToast } from "../components";
+import { Badge, Button, Empty, PageHead, Section, useToast } from "../components";
 import {
   api,
   errorText,
   type AccountBalance,
   type AccountEvent,
   type AccountSyncOutcome,
-  type AppConfig,
   type CheckinView,
   type Maintenance,
   type Provider,
@@ -50,12 +49,10 @@ function ago(unix_secs: number): string {
 
 export default function Accounts({
   snapshot,
-  save,
   run,
   busy,
 }: {
   snapshot: Snapshot;
-  save: (mutate: (config: AppConfig) => AppConfig | null) => Promise<boolean>;
   run: (task: () => Promise<Snapshot>) => Promise<boolean>;
   busy: boolean;
 }) {
@@ -81,6 +78,18 @@ export default function Accounts({
   const withAccounts = (snapshot.config.providers ?? []).filter(
     (p) => (p.accounts ?? []).length > 0,
   );
+
+  // With nothing declared there is nothing to probe, so the page is the
+  // explanation and where to declare one — not a disabled probe button over an
+  // empty list.
+  if (withAccounts.length === 0) {
+    return (
+      <>
+        <PageHead lede={t("accounts.lede")} />
+        <Empty>{t("accounts.none")}</Empty>
+      </>
+    );
+  }
 
   /**
    * Probe every declared, enabled account, in one call.
@@ -137,7 +146,7 @@ export default function Accounts({
 
   return (
     <>
-      {withAccounts.length === 0 && <Empty>{t("accounts.none")}</Empty>}
+      <PageHead lede={t("accounts.lede")} />
 
       <Section
         title={t("accounts.probe_section")}
@@ -182,18 +191,6 @@ export default function Accounts({
                 snapshot={snapshot}
                 checking={checking === `${provider.id}/${account.account_id}`}
                 busy={busy}
-                onDeclare={(mutate) =>
-                  void save((cfg) => {
-                    const next = structuredClone(cfg);
-                    const target = next.providers.find((p) => p.id === provider.id);
-                    const declaration = target?.accounts?.find(
-                      (a) => a.account_id === account.account_id,
-                    );
-                    if (!declaration) return null;
-                    mutate(declaration.maintenance);
-                    return next;
-                  })
-                }
                 onHttpCheckin={() => void checkInHttp(provider.id, account.account_id)}
                 run={run}
                 onBrowserStart={() =>
@@ -231,7 +228,6 @@ function AccountRow({
   checking,
   busy,
   run,
-  onDeclare,
   onHttpCheckin,
   onBrowserStart,
   onBrowserResume,
@@ -245,8 +241,6 @@ function AccountRow({
   busy: boolean;
   /** Reloads the snapshot after an action that changes what the page shows. */
   run: (task: () => Promise<Snapshot>) => Promise<boolean>;
-  /** Edits this account's maintenance declaration through the save pipeline. */
-  onDeclare: (mutate: (maintenance: Maintenance) => void) => void;
   onHttpCheckin: () => void;
   onBrowserStart: () => void;
   onBrowserResume: () => void;
@@ -415,28 +409,6 @@ function AccountRow({
         )}
       </div>
 
-      {/*
-        The one declaration this runtime row needs, declared where it runs. The
-        provider drawer owns the full declaration, but an operator reading "不会
-        自动运行" should not have to hunt for the drawer to fix it: the switch
-        and the interval are exactly the two lines the scheduler reads, so they
-        are editable right here, through the same config save.
-      */}
-      <div className="controls">
-        <Toggle
-          label={t("accounts.auto_section")}
-          checked={maintenance.checkin_enabled}
-          onChange={(v) => onDeclare((m) => { m.checkin_enabled = v; })}
-        />
-        <NumberField
-          label={t("accounts.interval")}
-          hint={t("accounts.interval_hint")}
-          min={1}
-          integer
-          value={maintenance.checkin_interval_secs}
-          onCommit={(v) => onDeclare((m) => { m.checkin_interval_secs = v; })}
-        />
-      </div>
     </div>
   );
 }

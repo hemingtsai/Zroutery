@@ -2620,7 +2620,7 @@ def case_ui12_a_deep_link_opens_the_page_it_names(devtools) -> list[str]:
 
 
 def case_ui13_a_catalogue_row_says_no_tier_rather_than_a_dash(devtools) -> list[str]:
-    """The catalogue row's tier, and the empty string it used to mean "no tier".
+    """The catalogue import's batch tier, and the empty string it used to mean.
 
     Radix cannot show an option whose value is the empty string *and* show its
     placeholder at the same time: the placeholder is what an empty value draws.
@@ -2628,53 +2628,39 @@ def case_ui13_a_catalogue_row_says_no_tier_rather_than_a_dash(devtools) -> list[
     shown — the dropdown said a generic dash while the option itself was
     marked as the chosen one.
 
-    The fix gives that option a sentinel of its own, and the row now says what
-    it means. The case drives the real thing: open the provider, fetch its
-    catalogue, and read the tier dropdown.
+    The fix gives that option a sentinel of its own, and the control now says
+    what it means. Catalogue import lives on the Models page, so the case opens
+    the import panel there and reads the batch tier.
     """
     failures: list[str] = []
     seed(devtools, **PROVIDER_CATALOGUE_QUERY)
-    devtools.click_selector('[data-page="providers"]')
-    devtools.wait_for("Boolean(document.querySelector('.page .list-row'))", "the provider rows")
-
-    devtools.click_selector(".page .list-row")
-    devtools.wait_for("Boolean(document.querySelector('.drawer'))", "the provider drawer")
+    devtools.click_selector('[data-page="models"]')
+    devtools.wait_for("Boolean(document.querySelector('.list-row'))", "the model rows")
 
     devtools.evaluate(
         """
         (() => {
-          const button = [...document.querySelectorAll('.drawer button')]
-            .find((b) => b.textContent.includes('Fetch catalogue'));
-          if (button) button.click();
+          const b = [...document.querySelectorAll('button')]
+            .find((x) => x.textContent.includes("Browse the provider's catalogue"));
+          if (b) b.click();
         })()
         """
     )
     devtools.wait_for(
-        "document.querySelectorAll('.drawer .table').length >= 2 && "
-        "document.querySelectorAll('.drawer .table')[1].querySelectorAll('tbody tr').length > 0",
-        "the catalogue table",
+        "Boolean(document.querySelector('[aria-label="Add selected as"]'))",
+        "the batch tier control",
+        timeout=15.0,
     )
-
-    # The catalogue table is the second one in the drawer: the first is the
-    # models this provider already has. Matching on the model's name would be
-    # ambiguous — the configured model's exposed id contains the catalogue
-    # model's upstream id.
     tier = devtools.evaluate(
-        """
-        (() => {
-          const tables = document.querySelectorAll('.drawer .table');
-          const row = tables[tables.length - 1].querySelector('tbody tr');
-          const trigger = row && row.querySelector('[role="combobox"]');
-          return trigger ? trigger.textContent.trim() : null;
-        })()
-        """
+        "(() => { const t = document.querySelector('[aria-label=\"Add selected as\"]');"
+        " return t ? t.textContent.trim() : null; })()"
     )
     if tier is None:
-        failures.append("the catalogue row carried no tier dropdown at all")
+        failures.append("the catalogue import carried no batch tier control")
     elif "no tier" not in tier:
         failures.append(
-            "the tier dropdown says %r where it should say which tier the model is in; an option "
-            "whose value is the empty string can never be shown" % tier
+            "the tier dropdown says %r where it should say which tier the batch is added as; an "
+            "option whose value is the empty string can never be shown" % tier
         )
     return failures
 
@@ -3100,7 +3086,7 @@ def case_ui19_a_decision_provider_offers_its_own_settings(devtools) -> list[str]
     The provider drawer's sections are chosen by what the provider *is*: a
     relay publishes a balance, a decision endpoint answers a typed question.
     A decision provider therefore carries the path its endpoint answers on and
-    the confidence the answer must carry before the Auto Mode acts on it — and
+    the confidence the answer must carry before Auto review acts on it — and
     a relay carries neither, because neither means anything for it.
 
     So the drawer shows the decision section for a decision provider and not
@@ -3135,12 +3121,7 @@ def case_ui19_a_decision_provider_offers_its_own_settings(devtools) -> list[str]
             "the endpoint row does not say the url the decision endpoint is called at: %r"
             % body
         )
-    if "cannot answer a request that wants prose" not in body:
-        failures.append(
-            "the provider's drawer does not say why its model's tier is locked: %r" % body
-        )
-
-    # And the model on it is not offered a tier. The router excludes a decision
+    # The model on it is not offered a tier. The router excludes a decision
     # model from every tier pool, so a tier the dashboard let the operator pick
     # would be one the router silently ignores.
     #

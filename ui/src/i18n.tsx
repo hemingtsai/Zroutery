@@ -40,7 +40,7 @@ export const en = {
   // ------------------------------------------------------------------ app
   "app.live_stopped": "Live updates stopped: {err}",
   "app.exposed":
-    "The gateway is bound to {host}, so other machines on your network can use your API keys. Keep authentication enabled or switch back to 127.0.0.1.",
+    "Listening on {host} exposes the gateway and your API keys to your network. Keep authentication on, or bind to 127.0.0.1.",
   "app.no_auth": "Authentication is off: any local process can spend your API credit.",
   "nav.overview": "Overview",
   "nav.models": "Models",
@@ -91,15 +91,15 @@ export const en = {
   // Raw backend text is English and technical; the few conditions an operator
   // can actually act on are re-stated here and matched in describeBackendError.
   "err.bind_in_use":
-    "The proxy could not start: {addr} is already in use — another Zroutery instance (or a leftover headless process) may still be running. Stop that process, or pick a different port in Settings.",
+    "Port {addr} is already in use. Stop the other Zroutery process or choose a different port in Settings.",
   "err.bind_denied":
-    "The proxy could not start: the system refused {addr}. Windows sometimes reserves port ranges — pick a different port in Settings.",
+    "The proxy could not start: the system refused {addr}. Windows sometimes reserves port ranges; pick a different port in Settings.",
   "err.credentials_rejected":
-    "The panel rejected this credential. Dashboard authentication needs the panel's access token (personal settings → access token), not the relay's sk- API key.",
+    "The panel rejected this credential. Use its personal access token (personal settings → access token), not a relay sk- key.",
   "err.relay_key":
-    "The stored credential is a relay API key (sk-…), which the dashboard does not accept. Copy the access token from the panel's personal settings → access token page, and set it as this account's credential.",
+    "This is a relay API key (sk-…); the panel dashboard does not accept it. Use the personal access token from personal settings → access token.",
   "err.no_panel_token":
-    "No panel access token is stored for this account, so probing and sign-in have nothing to authenticate with. Set the account's credential to the panel's access token (personal settings → access token).",
+    "No panel token is stored for this account. Set its credential to the panel's personal access token.",
   "err.capture_open":
     "A token capture is already open for this account. Finish the sign-in in that window, or cancel it, before starting another.",
   "err.no_browser":
@@ -109,11 +109,11 @@ export const en = {
   "err.capture_closed":
     "The browser was closed before a token was captured. Start the capture again and leave the window open until it finishes.",
   "err.classifier_candidate":
-    "Auto Mode candidate {model} is not a configured model, so it is skipped. Remove it in Routing → Auto review, or add the model back.",
+    "Auto review candidate {model} is not a configured model and is skipped. Remove it in Routing → Auto review or add the model.",
   "err.no_account_balance":
-    "No account of {provider} reported a balance. The panel's user access token has to be stored as the account's credential — the relay's own key authenticates /v1, and no dashboard endpoint accepts it.",
+    "No account of {provider} reported a balance. Store the panel's personal access token as an account credential; relay keys do not work for the dashboard.",
   "err.mixed_currencies":
-    "These accounts report their balances in different currencies, so they cannot be added into one figure. The provider's balance is left unshown rather than shown as a number that cannot be spent.",
+    "The accounts report different currencies, so their balances cannot be summed. No total is shown.",
   // The reassurance class: a failure that says what is still in place and what
   // to do about it. These are the messages an operator meets when something
   // goes wrong, and they are the ones whose English would otherwise be the
@@ -137,7 +137,7 @@ export const en = {
   "err.listen_failed_not_restored":
     "The gateway could not listen on {addr}: {err}. The previous gateway could not be restored either: {restore}",
   "err.no_rollback_snapshot":
-    "No rollback snapshot could be taken of {path} — the file could not be read, so a cutover could not be undone. Fix the file's permissions and try again.",
+    "Could not snapshot {path}: the file is unreadable, so the cutover cannot be undone. Fix its permissions and retry.",
   "err.no_such_account":
     "There is no account {account} on provider {provider}.",
   "err.bind_other":
@@ -145,31 +145,33 @@ export const en = {
   // -------------------------------------------------------------- accounts
   "accounts.title": "Accounts",
   "accounts.title_hint":
-    "Declarations only: probing, per-account balances and check-in read them. Requests do not route by account.",
+    "Accounts hosted by this provider. They feed probing, balances and check-in; requests still use the provider's key.",
   "accounts.empty": "No accounts declared. Every request uses the provider's own key.",
+  "accounts.lede":
+    "Balance, check-in and panel token for each declared account. Declarations are edited in the provider's account section.",
   "accounts.add": "Add account",
   "accounts.id_label": "Account ID",
   "accounts.id_hint":
-    "Stable name within this provider — the (provider, account) pair keys its runtime state.",
+    "Stable name within this provider. The (provider, account) pair identifies its runtime state.",
   "accounts.key_label_add": "Panel access token (optional)",
   "accounts.key_hint_add":
-    "Leave empty to resolve to the provider's key — but note that a relay key (sk-…) cannot authenticate the dashboard; paste the panel's access token here.",
+    "Optional. Empty uses the provider's key. For a NewAPI panel, paste the personal access token; an sk- relay key will not work.",
   "accounts.duplicate": "Account `{id}` already exists on this provider.",
   "accounts.key_store_failed": "The account was saved, but storing its key failed.",
   "accounts.set_key": "Set credential",
   "accounts.key_label": "Panel access token",
   "accounts.key_hint":
-    "From the panel's personal settings → access token. Stored in the system credential store, never shown again. A relay key (sk-…) cannot authenticate the dashboard.",
+    "Personal access token from the panel (personal settings → access token). Stored in the system credential store and never shown again.",
   "accounts.clear_key": "Clear credential",
   "accounts.clear_key_title": "Clear account {id}'s credential",
   "accounts.clear_key_body":
-    "The account resolves to the provider's key again. Its own stored secret is deleted unless another declaration references it.",
+    "The account uses the provider's key again. Its stored secret is deleted unless another account shares it.",
   "accounts.own_key": "Own credential",
   "accounts.no_key": "Credential not stored",
   "accounts.follows_provider": "Provider's credential",
   "accounts.remove_title": "Remove account {id}",
   "accounts.remove_body":
-    "The declaration is removed, and its own stored key with it. Observations keyed by this pair stay until the id is reused.",
+    "Removes the declaration and its stored key. Observed data remains until the id is reused.",
   "accounts.checkin": "Browser check-in",
   "accounts.login_path": "Panel sign-in path",
   "accounts.login_path_hint":
@@ -185,9 +187,9 @@ export const en = {
   "token_capture.phase.needs_verification": "Finish the verification in the browser…",
   "token_capture.phase.stored": "Verifying and storing…",
   "accounts.interval": "Interval (seconds)",
-  "accounts.interval_hint": "Empty means the scheduler never acts on its own.",
+  "accounts.interval_hint": "Empty disables automatic runs.",
   "accounts.checkin_path": "Check-in page path",
-  "accounts.checkin_path_hint": "Panel-relative, e.g. /checkin — no default on purpose.",
+  "accounts.checkin_path_hint": "Panel-relative path, e.g. /checkin. No default is set.",
   "accounts.checkin_selector": "Check-in button selector",
   "accounts.checkin_selector_hint": "CSS selector the browser clicks. No default on purpose.",
   "error.title": "The dashboard hit a bug",
@@ -233,14 +235,14 @@ export const en = {
   "models.pick_provider_name": "Pick a provider and fill in the model name.",
   "models.duplicate": "That provider already offers “{model}”.",
   "models.unclassified":
-    "{n} models have no tier yet: {ids}. They stay callable by their exact id, but they are excluded from *-class routing until you pick a tier.",
-  "models.lede_none": "Every model Zroutery exposes, one per provider offering.",
-  "models.exposed": "{n} exposed",
+    "{n} models have no tier: {ids}. They stay callable by exact id but do not participate in *-class routing.",
+  "models.lede_none": "Models you add to a provider appear here.",
+  "models.exposed": "{n} models · open one to edit, or add from a catalogue.",
   "models.empty": "No models.",
   "models.empty_hint": "Add one below, or import from CC Switch on the Providers page.",
   "models.no_tier": "no tier",
   "models.add_section": "Add a model",
-  "models.add_hint": "Tiers are assigned after, by hand — Zroutery never guesses a tier.",
+  "models.add_hint": "Assign a tier after adding; Zroutery does not guess one.",
   "field.provider": "Provider",
   "field.model_name": "Model name",
   "models.add": "Add model",
@@ -269,7 +271,7 @@ export const en = {
   "models.f_max_tokens_hint": "Caps what clients may ask for",
   "models.f_context_window": "Context window",
   "models.f_context_window_hint":
-    "Tokens the model accepts, when known. Advertised in /v1/models; the upstream stays the authority on what it serves.",
+    "Context the model accepts, when known. Advertised in /v1/models; the upstream remains authoritative.",
   "models.context_set_1m": "Set 1M",
   "models.context_unknown": "unknown",
   "models.f_aliases_hint": "Comma separated short names",
@@ -342,7 +344,6 @@ export const en = {
   "cc.already": "already here",
   "cc.imported_notice":
     "Imported {n} providers. Keys went straight into the credential store.",
-  "cc.add": "Add",
   "providers.endpoint": "Endpoint",
   "providers.dialect": "Dialect",
   "providers.auth": "Authentication",
@@ -354,9 +355,6 @@ export const en = {
   "providers.api_key_hint": "Stored in the OS credential store, never the config file.",
   "providers.save_key": "Save key",
   "providers.models_section": "Models",
-  "providers.models_hint": "Fetch the provider's catalogue, then add what you want to expose.",
-  "providers.fetch": "Fetch catalogue",
-  "providers.discovering": "Fetching…",
   "providers.empty_catalogue": "{name} returned an empty model list.",
   "providers.configuration": "Configuration",
   "field.timeout": "Timeout (s)",
@@ -367,11 +365,11 @@ export const en = {
   "providers.client_profile": "Client identity",
   "providers.client_profile_hint":
     "Who Zroutery presents as upstream. Claude Code and Codex also forward that client's own headers.",
-  "providers.profile_auto": "Auto — detect from the client",
-  "providers.profile_native": "Native — no client identity",
-  "providers.profile_claude_code": "Claude Code — with its headers",
-  "providers.profile_codex": "Codex — with its headers",
-  "providers.profile_opencode_cli": "OpenCode CLI — locked for OpenCode providers",
+  "providers.profile_auto": "Auto · detect from the client",
+  "providers.profile_native": "Native · no client identity",
+  "providers.profile_claude_code": "Claude Code · with its headers",
+  "providers.profile_codex": "Codex · with its headers",
+  "providers.profile_opencode_cli": "OpenCode CLI · locked for OpenCode providers",
   "providers.client_profile_locked_hint":
     "Locked. OpenCode's gateway checks this fingerprint and the config refuses any other profile.",
   "providers.opencode_zen_dialect": "OpenCode Zen (free)",
@@ -379,38 +377,38 @@ export const en = {
   "providers.decision_dialect": "Decision model",
   "providers.decision": "Decisions",
   "providers.decision_hint":
-    "A decision endpoint answers typed questions with calibrated probabilities instead of writing text. It serves Auto review only: its model is added to the pool by hand and never answers a chat request. Jev — OpenCode Zen's free model among others — is the reference family.",
+    "Answers typed questions with a probability instead of text. Used only by Auto review; add its model to the pool by hand. Jev (including OpenCode Zen's free model) is the reference family.",
   "providers.decision_path": "Decision path",
   "providers.decision_path_hint":
-    "The path the decision endpoint answers on, joined to the base URL. The reference service answers at /v1/systemone.",
+    "Path joined to the base URL. The reference service answers at /v1/systemone.",
   "providers.decision_threshold": "Required confidence",
   "providers.decision_threshold_hint":
-    "How sure the answer must be, in either direction, before Auto review acts on it. At or above this probability the action is blocked; at or below one minus this it is allowed; anything between is not a verdict and blocks. 0.5 lets the model's own majority decide.",
+    "Confidence Auto review needs before acting. At or above it the action is blocked; at or below 1 minus it, allowed; in between, blocked. 0.5 lets the model's majority decide.",
   "providers.decision_no_catalogue":
-    "A decision endpoint publishes no catalogue — it answers questions rather than serving models. Declare the model on the models page.",
+    "A decision endpoint has no model catalogue. Add its model on the Models page.",
   "models.tier_decision": "Why no tier",
   "models.tier_decision_hint":
-    "A decision model answers Auto review's questions and cannot answer a request that wants prose, so it is not filed under a tier. Add it to the Auto review pool instead.",
+    "Decision models serve Auto review only and cannot answer chat, so they have no tier. Add it to the Auto review pool.",
   "providers.free_badge": "free",
   "providers.free_only": "Free models only",
   "providers.free_only_hint":
-    "Marks entries the provider's own catalogue lists at zero cost. It does not promise the model will answer: a free model can still be region-blocked or shut down upstream.",
+    "Shows models the catalogue marks as free. A free model can still be rate-limited, region-blocked or retired.",
   "providers.catalogue_shown": "Showing {shown} of {total} models",
   "providers.catalogue_total": "{total} models",
   "providers.catalogue_no_free":
-    "The catalogue lists {total} models and none of them is marked free. Turn the filter off to see them.",
+    "The catalogue has {total} models and none is marked free. Turn the filter off to see them.",
   "providers.bearer_auth": "Also send Bearer auth",
   "providers.bearer_auth_hint":
     "For relays that read Authorization: Bearer instead of x-api-key; both headers are sent, so either check passes",
   "providers.balance": "Balance",
   "providers.balance_hint":
-    "Some providers publish the credit that is left, at an endpoint of their own. Pick the one yours uses, and Zroutery asks it with the provider's key.",
+    "Providers that publish remaining credit at their own endpoint. Pick the endpoint yours uses; the provider key is sent.",
   "providers.balance_hint_panel":
-    "This provider publishes no balance of its own — a NewAPI relay serves /v1 and keeps the wallet in the panel. The figure below comes from the panel its accounts belong to, read with the account's user access token. Declare an account and store that token as its credential to make this work.",
+    "A NewAPI relay keeps the wallet in its panel. The figure comes from the panel of this provider's accounts, read with an account's personal access token.",
   "providers.balance_hint_none":
-    "This provider publishes no balance of its own, and it declares no account whose panel could report one. Either pick a probe above if the provider has such an endpoint, or declare an account and store the panel's user access token as its credential.",
+    "This provider publishes no balance and declares no panel account. Pick a probe above, or declare an account with a personal access token.",
   "providers.balance_no_source":
-    "This provider has no balance to ask for: it publishes none, and it declares no account whose panel could report one.",
+    "This provider has no balance source: it publishes none and declares no panel account.",
   "balance_preset.none": "Not supported",
   "balance_preset.deep_seek": "DeepSeek",
   "balance_preset.moonshot": "Moonshot",
@@ -441,7 +439,7 @@ export const en = {
   "quirk.reasoning_effort": "Translate thinking to reasoning_effort",
   "quirk.portable_history": "Portable Responses history",
   "quirk.portable_history_hint":
-    "For a relay that may answer from another account or resource (AgentRouter, CC Switch, an aggregate endpoint). It drops reasoning items, history item ids and previous_response_id before forwarding, because those name resources the next upstream did not create; the trade-off is that prior reasoning no longer reaches the model. Only Responses requests are affected.",
+    "For relays that may answer from another account or upstream (AgentRouter, CC Switch). Removes reasoning items, history item ids and previous_response_id before forwarding. Prior reasoning no longer reaches the model. Responses requests only.",
   "providers.remove": "Remove provider",
   "providers.removed_models_notice": "Removed {n} models that belonged to that provider.",
   "providers.balance_failed": "check failed",
@@ -453,7 +451,7 @@ export const en = {
   "account.phase.idle": "not checked in yet",
   "account.phase.running": "checking in…",
   "account.phase.waiting_for_user":
-    "needs human verification — finish it in the open window",
+    "Needs human verification. Finish it in the open window.",
   "account.phase.succeeded": "checked in",
   "account.phase.already_completed": "already checked in today",
   "account.phase.not_supported": "this provider does not offer check-in",
@@ -471,9 +469,9 @@ export const en = {
   "account.balance_amount": "{remaining} {unit} left of {total}",
   "account.schedule.disabled": "Check-in is switched off for this account",
   "account.schedule.not_applicable":
-    "Check-in is switched on but cannot be acted on — set the check-in page and its trigger selector",
+    "Check-in is on but cannot run. Set the check-in page and its trigger selector.",
   "account.schedule.needs_first_observation":
-    "No check-in has run for this account yet, so there is no due time to count down from. Start one once to hand it over to the schedule",
+    "No check-in has run yet, so there is no due time. Run one to start the schedule.",
   "account.schedule.no_policy":
     "No check-in interval is set, so nothing will run automatically even though this account has been checked in before",
   "account.schedule.not_due": "Scheduled",
@@ -500,11 +498,11 @@ export const en = {
   "account.cancel": "Cancel",
   "account.close_browser": "Close window",
   "account.not_enabled":
-    "Check-in is switched off for this account. Turn it on in its maintenance settings first.",
+    "Check-in is off for this account. Enable it in the provider's account settings.",
   "account.need_path":
-    "This account has no check-in page. Set the check-in page path in the provider's account settings to the page that carries the check-in control.",
+    "No check-in page is set. Add it in the provider's account settings.",
   "account.need_selector":
-    "This account has no check-in control. Set the check-in button selector in the provider's account settings to a CSS selector for that button, for example button.checkin.",
+    "No check-in control is set. Add its CSS selector in the provider's account settings, e.g. button.checkin.",
   "account.start_failed": "Could not start the check-in",
   "account.started": "The check-in has started. The browser will ask for a human if it needs one.",
   "account.resumed": "The check-in has resumed.",
@@ -542,16 +540,16 @@ export const en = {
   "accounts.empty_build":
     "This build does not contain the account subsystem, so declared accounts cannot be probed or checked in.",
   "accounts.none":
-    "No provider declares an account yet. Add one on the Providers page, in a provider's Accounts section.",
+    "No accounts declared. Add one in a provider's Accounts section on the Providers page.",
   "accounts.probe_section": "Account probe",
   "accounts.probe_hint":
-    "Ask each declared account's platform what state it is in, and publish the result. One request per account, so it happens when you press the button and never on its own. An account that is switched off is not probed at all, so it does not appear in the report.",
+    "Ask each enabled account's panel for its current state. One request per account, only when you press the button.",
   "accounts.probe_now": "Probe every account",
   "accounts.probing": "Probing…",
   "accounts.probe_idle":
-    "Nothing has been probed yet. Until you press the button, no account has been asked.",
+    "No probe has run yet.",
   "accounts.probe_none":
-    "The probe ran and found nothing: no provider declares an enabled account.",
+    "The probe found no enabled declared account.",
   "accounts.probe_outcome": "Outcome",
   "accounts.provider_disabled": "provider disabled",
   "accounts.own_key_stored": "its own access token is stored",
@@ -565,17 +563,16 @@ export const en = {
    * a stale one.
    */
   "accounts.auth_hint":
-    "The panel rejected this credential. Accounts authenticate with the panel's access token (personal settings → access token), not with the relay's sk- API key.",
+    "The panel rejected this credential. Accounts need the panel's personal access token, not a relay sk- key.",
   "accounts.last_failure": "last probe failed",
-  "accounts.auto_section": "Automatic check-in",
   "accounts.checkin_api": "Check in (direct)",
   "accounts.checkin_api_hint":
-    "Sign in over the panel's API with the stored credential — no browser. Only works when the instance does not require a challenge.",
+    "Checks in over the panel API with the stored token; no browser. Fails if the panel requires a challenge.",
   "accounts.checking": "Checking in…",
   "accounts.checkin_api_failed": "Direct check-in failed",
   "accounts.events_section": "Account events",
   "accounts.events_hint":
-    "What the provider said happened to each account's resources, newest first, with where each figure was read from.",
+    "Recent account events, newest first, with the source of each figure.",
   "accounts.events_none": "Nothing observed yet.",
   "accounts.events_when": "When",
   "accounts.events_what": "What",
@@ -595,7 +592,7 @@ export const en = {
   "account.sync.refreshed": "Probed",
   "account.sync.partially_reported": "Reported without",
   "account.sync.unsupported":
-    "No backend in this build can ask this provider — not probed",
+    "No backend in this build can ask this provider; not probed.",
   "account.sync.failed": "Probe failed",
 
   // ------------------------------------------------------------ takeover
@@ -608,7 +605,7 @@ export const en = {
    */
   "takeover.section": "Agent takeover",
   "takeover.section_hint":
-    "Point an external coding agent at this gateway by writing the address and token into its own configuration file, and restore the original values on release. Requests still choose a tier by the names the client already sends; Zroutery never picks one for you.",
+    "Write the gateway address and token into a client's own config, and restore the original values on release. Requests still choose a tier by the model name the client sends.",
   "takeover.none": "No external agent is known to this build.",
   "takeover.load_failed":
     "The takeover record could not be read: {err}. Nothing on this page has changed a client's configuration.",
@@ -626,29 +623,29 @@ export const en = {
   "takeover.state.released": "released",
   "takeover.state.error": "error",
   "takeover.hint.unsupported":
-    "Gemini CLI's endpoint can only be set through an environment variable, which no configuration file records — a takeover could redirect the key while the client kept talking to Google. Not offered.",
+    "Gemini CLI's endpoint is only settable through an environment variable, which no config file records. Not offered.",
   "takeover.hint.not_detected":
-    "No config for {agent} was found on this machine. Install and run it once so its configuration file exists, then refresh this page.",
+    "No {agent} config found. Install and run it once, then refresh.",
   "takeover.hint.ready":
-    "Everything is in place: adopting would write {n} field(s) listed below and record the values they hold now.",
+    "Ready: adopting writes the {n} field(s) below and records their current values.",
   "takeover.confirm_inline":
-    "Adopting edits {agent}'s own configuration file. Zroutery restores exactly these fields on release; everything else in the file stays yours.",
+    "Adopting edits {agent}'s config file. Release restores exactly these fields; the rest of the file is untouched.",
   "takeover.hint.active":
-    "This client is pointed at the gateway and its managed fields still match what Zroutery wrote. Releasing restores the values recorded at adoption.",
+    "This client points at the gateway and its managed fields match what Zroutery wrote.",
   "takeover.hint.degraded":
-    "The fields are written, but Zroutery cannot prove the takeover is in effect — no request from this client has been confirmed yet. Releasing still restores the recorded values.",
+    "The fields are written, but no request from this client has confirmed them yet.",
   "takeover.hint.conflict":
-    "{n} managed field(s) no longer hold the values Zroutery wrote — something changed them behind the takeover. Choose, per release, whether to keep those edits or overwrite them.",
+    "{n} managed field(s) changed outside Zroutery. Choose on release whether to keep those edits or restore the recorded values.",
   "takeover.hint.released":
-    "A previous takeover was released and the original values were restored. Taking over again records the current values as the ones to restore.",
+    "Released; original values restored. Taking over again records the current values.",
   "takeover.blocker.no_token":
-    "Zroutery has no gateway token yet, so there is nothing for a client to authenticate with. Set or regenerate the token in Settings → Gateway first.",
+    "No gateway token yet. Set or regenerate it in Settings → Gateway.",
   "takeover.blocker.no_classes":
-    "No enabled model is assigned to a tier yet, so an agent pointed here would have nothing to ask for. Assign a tier to at least one enabled model first.",
+    "No enabled model has a tier, so an agent would have nothing to ask for. Assign a tier first.",
   "takeover.reason.unverified":
     "The takeover has not been confirmed by a real request from this client yet.",
   "takeover.reason.token_changed":
-    "The gateway token has changed since this client was taken over — release and take over again to hand the client the new one.",
+    "The gateway token changed after this client was taken over. Release and take over again to hand it the new token.",
   "takeover.table.field": "Field",
   "takeover.table.current": "Current value",
   "takeover.table.next": "After adoption",
@@ -664,12 +661,12 @@ export const en = {
   "takeover.strategy.skip": "Skip changed fields",
   "takeover.confirm_adopt_title": "Take over {agent}?",
   "takeover.confirm_adopt_body":
-    "{n} field(s) in {agent}'s configuration will be rewritten and managed from then on. The values they hold now are recorded and restored on release.",
+    "{n} field(s) in {agent}'s config will be rewritten and managed. Their current values are recorded for release.",
   "takeover.confirm_adopt_again_body":
     "{agent}'s configuration will be rewritten and managed from then on, with the current values recorded for release.",
   "takeover.confirm_release_title": "Release {agent}?",
   "takeover.confirm_release_body":
-    "The managed fields in {agent}'s configuration will be restored to the values recorded at adoption, and Zroutery stops managing them.",
+    "The managed fields in {agent}'s config will be restored to the recorded values; Zroutery stops managing them.",
   "takeover.toast_adopted": "{agent} is now taken over.",
   "takeover.toast_released": "Released.",
   "takeover.report_kept": "kept {n} of your edit(s)",
@@ -691,7 +688,7 @@ export const en = {
   "nav.cutover": "Cutover",
   "cutover.section": "Configuration cutover",
   "cutover.section_hint":
-    "Move an external client's configuration onto this gateway as a typed, verified plan — with the original file captured byte for byte first, so a run that fails partway can be put back exactly as it was. Use the Takeover page for putting a client on the gateway and taking it off again; this page is the undo.",
+    "Move a client's configuration onto this gateway as a verified plan, with the original file captured first so a failed run can be undone. Use Takeover to switch a client on or off; this page is the undo.",
   "cutover.state.section": "Migration record",
   "cutover.state.detected": "nothing run yet",
   "cutover.state.prepared": "interrupted while preparing",
@@ -703,25 +700,25 @@ export const en = {
   "cutover.state.hint.detected":
     "No cutover has been run from this record. Nothing on this page has changed a client's configuration.",
   "cutover.state.hint.completed":
-    "A cutover finished and the record kept its state. There is no rollback from a completed run: the record has no transition out of it, even though the snapshot is still on disk. Nothing is half-applied, so nothing needs undoing.",
+    "A cutover completed. There is no rollback from this state; the snapshot stays on disk.",
   "cutover.state.hint.rolled_back":
-    "A cutover was rolled back and the files it captured were restored. This record admits one run, so choosing a client below starts over from the original file.",
+    "Rolled back; captured files were restored. Starting again uses the original file.",
   "cutover.state.hint.prepared":
-    "This record says a cutover staged its document and stopped there. Nothing was written to the client's file yet, and the snapshot below is the only copy of the original — until it is restored or the cutover completed, the client's configuration is whatever the run left behind.",
+    "The document was staged; the client file was not written. The snapshot is the only copy of the original.",
   "cutover.state.hint.verified":
-    "This record says a cutover staged its document, confirmed the endpoint answered, and stopped before switching. The client's file has not been changed, and the snapshot below is the only copy of the original.",
+    "Staged and verified; the client file was not changed. The snapshot is the only copy of the original.",
   "cutover.state.hint.switched":
-    "This record says a cutover switched and stopped before finishing. The client's file has been replaced and the snapshot below is the only copy of the original — restoring it is the only way back.",
+    "Switched; the client file was replaced. Restoring the snapshot is the only way back.",
   "cutover.state.hint.failed":
-    "This cutover failed partway. Its snapshot is the only way back to the original file, so the rollback below is the one action that matters.",
+    "Failed partway. Roll back from the snapshot below.",
   "cutover.snapshot.none": "No rollback snapshot has been captured.",
   "cutover.snapshot.files": "{n} file(s) captured, restorable byte for byte.",
   "cutover.not_durable":
-    "This build's migration record is not durable, so a restart cannot recover an interrupted cutover. Nothing will be written until it is.",
+    "This build's migration record is not durable; an interrupted cutover cannot be recovered after a restart.",
   "cutover.persist_error": "The record is not reaching disk: {err}",
   "cutover.plans.section": "Cutover plans",
   "cutover.plans.hint":
-    "Each plan below is built from the client's real configuration path and this gateway's real address, and changes nothing until you confirm it.",
+    "Each plan uses the client's real config path and this gateway's address. Nothing changes until you confirm.",
   "cutover.none":
     "This build knows no external client to cut over. Install and run one so its configuration file exists, then refresh this page.",
   "cutover.load_failed":
@@ -749,15 +746,15 @@ export const en = {
   "cutover.rollback": "Roll back",
   "cutover.rolling_back": "Rolling back…",
   "cutover.already_run":
-    "This record has already run a cutover and admits one run only. Review the migration record above; reset it by removing the record from the configuration directory if you intend to start again.",
+    "This record allows one cutover and has already run. Remove the record from the config directory to start over.",
   "cutover.rollback_unavailable":
-    "A rollback is only offered from a failed run, because that is the only state with a permitted transition back.",
+    "Rollback is offered only after a failed run.",
   "cutover.confirm_run_title": "Replace {agent}'s configuration?",
   "cutover.confirm_run_body":
-    "{n} step(s) will run. The file is captured byte for byte before anything is written, so this can be undone — but only while the run fails rather than succeeds. An external process running at cutover time is reported, not stopped.",
+    "{n} step(s). The file is captured before writing, so a failed run can be undone. A running external process is reported, not stopped.",
   "cutover.confirm_rollback_title": "Put the configuration file back?",
   "cutover.confirm_rollback_body":
-    "{n} file(s) will be overwritten with the bytes captured before the cutover ran. Anything edited in the file since is lost, and the cutover's own changes are lost with it.",
+    "{n} file(s) will be overwritten with the bytes captured before the cutover. Later edits and the cutover's changes are lost.",
   "cutover.result.title": "Last run",
   "cutover.result.steps": "{done} of {total} step(s)",
   "cutover.result.duration": "{ms} ms",
@@ -765,13 +762,13 @@ export const en = {
   "cutover.result.warnings": "Warnings",
   "cutover.result.restored": "Restored {n} file(s)",
   "cutover.result.restore_failed":
-    "{n} file(s) could not be put back. The state says rolled back, but the configuration on disk is not what it was — fix these by hand.",
+    "{n} file(s) could not be restored; the configuration on disk is not what it was. Fix them by hand.",
   "cutover.result.rolled_back_nothing":
-    "Nothing was put back: no file was restored. The state machine advanced, and the configuration on disk is unchanged rather than reverted.",
+    "Nothing was restored. The state advanced but the files on disk are unchanged.",
   "cutover.result.ok": "The cutover finished and the endpoint answered as Zroutery.",
   "cutover.toast_applied": "Cutover finished for {agent}.",
   "cutover.toast_failed":
-    "The cutover failed with {n} error(s). The report below says which step stopped it, and the rollback is the way back.",
+    "The cutover failed with {n} error(s). The report below names the step that stopped it; roll back to restore.",
   "cutover.toast_rolled_back": "Restored {n} file(s).",
   "cutover.toast_nothing_restored": "Nothing was restored.",
   "cutover.agent.claude": "Claude Code",
@@ -781,7 +778,7 @@ export const en = {
 
   // ------------------------------------------------------------- routing
   "routing.lede":
-    "Where a request goes, by its purpose. Zroutery serves any client that speaks Anthropic or OpenAI.",
+    "How requests are routed, by purpose. Works with any Anthropic or OpenAI client.",
   "routing.default_hint": "Every ordinary request, by the tier the client asks for.",
   "routing.edit": "Edit",
   "tier.hint.fast": "cheap and fast",
@@ -792,16 +789,16 @@ export const en = {
   "tier.name.standard": "Standard",
   "tier.name.reasoning": "Reasoning",
   "tier.name.frontier": "Frontier",
-  "routing.tier_empty": "Empty — requests for {id} fail until a model joins this tier.",
+  "routing.tier_empty": "Empty. Requests for {id} fail until a model joins this tier.",
   "routing.fallback_n": "fallback {n}",
   "routing.request": "request",
   "routing.side_query": "Side query",
   "routing.review_hint_on": "Permission checks go to their own pool of models.",
-  "routing.review_hint_off": "Off — permission checks follow Default routing.",
+  "routing.review_hint_off": "Off. Permission checks follow Default routing.",
   "routing.verdict": "verdict",
   "routing.next": "next",
-  "routing.review_no_candidate": "Enabled, no candidate live — permission checks will fail.",
-  "routing.review_off": "Off. Enable to review permission checks on a model of your own choosing.",
+  "routing.review_no_candidate": "Enabled, but no candidate is live. Permission checks will fail.",
+  "routing.review_off": "Off. Turn on to review permission checks with the pool below.",
   "routing.default_drawer": "Default routing",
   "field.strategy": "Strategy",
   "strategy.priority": "Priority",
@@ -830,18 +827,18 @@ export const en = {
   "routing.primary": "primary",
   "routing.route_review": "Route permission checks",
   "routing.route_review_hint":
-    "Permission checks from Claude Code's Auto Mode and Codex's Guardian go to the pool below instead of the conversation's model",
+    "Permission checks go to the pool below instead of the conversation's model. Covers Claude Code Auto Mode and Codex Guardian.",
   "routing.review_failover": "Fail over inside the pool",
   "routing.review_failover_hint": "Try the next candidate when one errors",
   "routing.pool": "Pool",
   "routing.pool_hint":
-    "Models from the Models page — providers, keys and prices are reused, nothing is configured twice.",
+    "Models come from the Models page; provider, key and price settings are reused.",
   "routing.no_candidates": "No candidates yet. Pick a model below.",
   "routing.not_configured": "not a configured model",
   "routing.decision_candidate": "Decision model",
   "routing.add_jev": "Add OpenCode Zen's free Jev",
   "routing.add_jev_hint":
-    "Adds a keyless System One decision model and puts it first in the pool. It answers with a probability; the required confidence is 0.6. The free promotion is limited-time, it can be region-blocked, and the check text is sent to OpenCode Zen.",
+    "Adds the keyless OpenCode Zen Jev decision model at the top of the pool. Probability threshold 0.6. The free promotion can end or be region-blocked; check text is sent to Zen.",
   "routing.jev_added": "Jev was added first in the pool, and Auto review is on.",
   "routing.enable_for": "Enable {model}",
   "routing.add_model": "Add a model…",
@@ -851,18 +848,18 @@ export const en = {
   "routing.verdict_parsing": "Verdict parsing",
   "routing.verdict_only": "<block>yes|no</block> only",
   "routing.verdict_only_hint":
-    "Claude Code asks for <block>yes|no</block>; Codex's Guardian asks for a JSON outcome. A decision model in the pool answers with a probability instead, and the threshold on its provider decides what counts as a verdict.",
+    "Claude Code expects <block>yes|no</block>; Codex Guardian expects JSON `outcome`. A decision model answers with a probability, and its provider threshold decides the verdict.",
   "routing.no_verdict": "When no verdict",
-  "routing.fails_closed": "fails closed — the client asks the user",
+  "routing.fails_closed": "fails closed; the client asks the user",
   "routing.fail_closed_note":
-    "A candidate that errors, times out, or answers in the wrong protocol is failed over; if none can answer, the query fails rather than being approved. A decision answer that is confident neither way blocks instead of failing over. Zroutery never interprets a model's prose as permission.",
+    "Errors, timeouts and wrong-protocol answers fail over. If no candidate answers, the query fails rather than approving. An unconfident decision blocks. Prose is never treated as permission.",
 
   // ------------------------------------------------------------ activity
   "activity.lede_none": "Nothing yet. Point a client at the gateway to see traffic here.",
   "activity.lede": "{requests} requests · {rate}% succeeded · {in} in / {out} out tokens",
   "activity.reset": "Reset counters",
   "activity.review_line":
-    "Auto review: {n} checks · {failed} failed · avg {latency} — counted separately from main traffic.",
+    "Auto review: {n} checks · {failed} failed · avg {latency} (separate from main traffic).",
   "activity.nothing": "Nothing yet.",
   "activity.health": "Model health",
   "activity.tab_group": "Activity subjects",
@@ -878,7 +875,7 @@ export const en = {
   "activity.clear_health": "Clear the health of {id}",
   "activity.spend": "Spend",
   "activity.spend_hint":
-    "Computed from the prices you entered and the usage each provider reported. A floor, not a bill.",
+    "Estimated from configured prices and reported usage; not a bill.",
   "activity.estimated": "estimated spend",
   "activity.n_failed": "{n} failed",
   "activity.request": "Request",
@@ -939,7 +936,7 @@ export const en = {
   "settings.origin_notice": "An origin looks like https://example.com, with no path.",
   "settings.budgets": "Budgets",
   "settings.budgets_hint":
-    "A limit stops spending once it is reached; the request that crosses the line completes, the next is stopped.",
+    "A limit stops spending once reached. The request that crosses it completes; the next is rejected.",
   "budget.covers": "Covers",
   "budget.window": "Window",
   "budget.limit": "Limit",
@@ -996,7 +993,7 @@ export const en = {
   "win.silent_start_hint": "No main window on launch; the tray is the only presence",
   "win.keep_in_tray": "Keep in tray on close",
   "win.keep_in_tray_hint":
-    "Closing the window leaves Zroutery running in the tray; off — closing quits and stops the gateway",
+    "On: closing the window keeps Zroutery in the tray. Off: closing quits and stops the gateway.",
   "win.window_actions": "Hide or quit",
   "win.window_actions_hint":
     "Hide keeps the gateway running in the tray; quit stops the gateway and ends the process",
@@ -1004,7 +1001,7 @@ export const en = {
   "win.quit": "Quit",
   "vision.title": "Vision fallback",
   "vision.hint":
-    "Models that cannot see still receive the image's content: a vision model describes it, and the description travels in its place. Failing that, an honest placeholder — never a silent drop.",
+    "Models without vision receive a description of the image; if none can be produced, a placeholder is used. Images are never silently dropped.",
   "vision.enable": "Describe images for non-vision models",
   "vision.model": "Vision model",
   "vision.model_hint":
@@ -1035,7 +1032,7 @@ export const en = {
   "ml.with_no_model": "with no model, to gather evidence",
   "ml.never_tried": "Never tried",
   "ml.blind_spot_warning":
-    "{names} is configured but never tried, and exploration is off, so no traffic will ever reach it. Raising ml_routing.exploration_probability above 0 does reach it, but it blocks promotion of any learned model: the gate needs the model and the baseline compared on the same requests, which exploration prevents, so routing stays deterministic either way. Give it top priority instead.",
+    "{names} is configured but never receives traffic with exploration off. Give it top priority, or turn exploration on (which blocks learned-model promotion).",
   "ml.blind_spot_count": "{n} unreachable",
   "ml.collected": "Collected",
   "ml.samples": "samples",
@@ -1097,7 +1094,7 @@ export const en = {
   // configuration, the status document or the promotion endpoint declares the
   // prerequisite, so the panel that shows the counters has to say it.
   "ml.learning_blocked":
-    "Learned routing is on but nothing is being collected, and every endpoint looks healthy. Shadow evaluation is off, so no request retains the decision-time input a sample is built from and every one of them is discarded before ingestion — {n} so far. A promotion round now has nothing to learn from. Turn shadow evaluation on to collect evidence.",
+    "Learned routing is on but shadow evaluation is off, so no samples are collected ({n} discarded). Turn shadow evaluation on.",
   "ml.learning_blocked_short": "Learning is blocked",
   "ml.ingested": "Requests stored",
   "ml.dropped_no_decision": "Discarded for want of a decision",
@@ -1110,20 +1107,20 @@ export const en = {
   // request that follows.
   "ml.round": "Promotion round",
   "ml.round_hint":
-    "Train a candidate from the recorded history and ask the gate whether it beats the baseline. Judging installs nothing; nothing here is scheduled, so a round happens when you ask for one.",
+    "Train a candidate from recorded history and ask the gate whether it beats the baseline. Nothing is installed or scheduled automatically.",
   "ml.round_judge": "Judge a candidate",
   "ml.round_judging": "Judging…",
-  "ml.round_judged": "Candidate judged — not installed",
+  "ml.round_judged": "Candidate judged, not installed.",
   "ml.round_install": "Install the authorised candidate",
   "ml.round_installing": "Installing…",
   "ml.round_install_hint":
-    "Only offered once the gate has authorised a candidate. This changes what every later request is served by.",
+    "Available after the gate authorizes a candidate. Changes which model serves later requests.",
   "ml.round_none": "No round could be run.",
   "ml.round_records": "Records read",
   "ml.round_candidate": "Candidate",
   "ml.round_choices": "What the candidate would have chosen",
   "ml.round_single_choice":
-    "The candidate named one choice on every request. That is not a learned ranking, whatever the verdict above says.",
+    "The candidate chose the same option on every request, so it is not a learned ranking.",
   "ml.round_installed": "Installed and serving",
   "ml.round_not_installed": "Judged, not installed",
   "ml.round_serving_now": "Serving now",
@@ -1141,7 +1138,7 @@ export const en = {
   // change what the next model learns. The dialog states that consequence.
   "ml.log": "Recorded history",
   "ml.log_hint":
-    "The durable evidence the round trains from. There is no automatic retention, because a policy that fired on its own would change what the next model learns without you asking.",
+    "The evidence rounds train from. Retention is manual; nothing changes the next model on its own.",
   "ml.log_records": "Records",
   "ml.log_size": "On disk",
   "ml.log_path": "File",
@@ -1156,7 +1153,7 @@ export const en = {
   "ml.log_clear_nothing": "There was nothing recorded to delete.",
   "confirm.clear_traces": "Delete recorded history",
   "confirm.clear_traces_body":
-    "The {n} recorded requests are removed and cannot be recovered. The next promotion round trains only on records written from here on — which is what any model promoted after this learns from. Nothing is scheduled, so nothing else changes on its own.",
+    "The {n} recorded requests are deleted permanently. Later rounds train only on records written after this.",
   "bytes.value": "{n} bytes",
 } as const;
 
@@ -1182,7 +1179,7 @@ export const zh: Dict = {
   // ------------------------------------------------------------------ app
   "app.live_stopped": "实时更新已停止：{err}",
   "app.exposed":
-    "网关绑定在 {host}，局域网内其他机器可用你的 API key。保持认证开启，或改回 127.0.0.1。",
+    "监听 {host} 时，同一网络的其他设备可以使用网关和你的 API 密钥。请保持认证开启，或改回 127.0.0.1。",
   "app.no_auth": "认证已关闭：本机任何进程都能消耗你的 API 额度。",
   "nav.overview": "概览",
   "nav.models": "模型",
@@ -1227,29 +1224,29 @@ export const zh: Dict = {
   "confirm.regenerate_token": "重新生成令牌",
   "confirm.regenerate_token_body": "现有客户端会全部失效，直到换用新令牌。",
   "err.bind_in_use":
-    "代理无法启动：{addr} 端口已被占用——可能另一个 Zroutery 实例(或残留的无头进程)还在运行。结束那个进程，或在设置里换一个端口后重试。",
+    "{addr} 已被占用。请停止另一个 Zroutery 进程，或在设置中换一个端口。",
   "err.bind_denied":
-    "代理无法启动：系统拒绝绑定 {addr}，可能落在 Windows 保留端口段。在设置里换一个端口通常即可解决。",
+    "代理无法启动：系统拒绝了 {addr}。Windows 有时会保留端口段，请在设置中换一个端口。",
   "err.credentials_rejected":
-    "面板拒绝了该凭据。面板认证使用 个人设置 → 访问令牌 生成的访问令牌，而不是中转的 sk- API 密钥。",
+    "面板拒绝了此凭据。请使用面板 个人设置 → 访问令牌 中的个人访问令牌，而不是中转的 sk- 密钥。",
   "err.relay_key":
-    "存储的凭据是中转 sk- 密钥，面板认证不接受它。请到面板 个人设置 → 访问令牌 复制访问令牌，并重新设置该账户的凭据。",
+    "这是中转 API 密钥(sk-…)，面板不接受。请改用 个人设置 → 访问令牌 中的个人访问令牌。",
   "err.no_panel_token":
-    "该账户尚未存储面板访问令牌,探测与签到都无法认证。请先把账户凭据设置为面板的访问令牌(个人设置 → 访问令牌)。",
+    "该账户未存储面板令牌。请把凭据设置为面板的个人访问令牌。",
   "err.capture_open":
-    "该账户已有一个获取令牌的流程未结束。请先在那个窗口完成登录或取消它,再重新开始。",
+    "该账户已有一个获取令牌的流程未结束。请先在那个窗口完成登录或取消它，再重新开始。",
   "err.no_browser":
-    "未找到 Chromium 浏览器。请在该账户的维护设置中指定浏览器路径,或安装 Chrome / Edge。",
+    "未找到 Chromium 浏览器。请在该账户的维护设置中指定浏览器路径，或安装 Chrome / Edge。",
   "err.capture_rejected":
     "面板拒绝了它返回的令牌。请重新登录面板、完成所有验证后再获取。",
   "err.capture_closed":
-    "浏览器在拿到令牌前被关闭。请重新开始获取,并保持窗口打开直到完成。",
+    "浏览器在拿到令牌前被关闭。请重新开始获取，并保持窗口打开直到完成。",
   "err.classifier_candidate":
-    "自动审查候选模型 {model} 不在已配置模型中，会被自动跳过。可在 路由 → 自动审查 中移除该候选，或恢复对应模型。",
+    "自动审查候选 {model} 不是已配置模型，已被跳过。请在 路由 → 自动审查 中移除，或重新添加该模型。",
   "err.no_account_balance":
-    "{provider} 的账户都没有上报余额。必须把面板的用户访问令牌存为该账户的凭据 —— 中转自身的密钥只能用于 /v1,面板接口一概不接受。",
+    "{provider} 没有账户上报余额。请把面板的个人访问令牌存为账户凭据；中转密钥不能用于面板接口。",
   "err.mixed_currencies":
-    "这些账户以不同币种上报余额，无法合并成一个数字。与其给出一个无法消费的数值，不如不显示该提供商的余额。",
+    "各账户余额币种不同，无法相加，因此不显示总额。",
   "err.backup_exists":
     "配置无法另存为 {backup}，因为该文件已经存在。请移动或删除它后重试。",
   "err.preserve_failed":
@@ -1265,34 +1262,35 @@ export const zh: Dict = {
   "err.listen_failed_not_restored":
     "网关无法在 {addr} 上监听：{err}。之前的网关也未能恢复：{restore}",
   "err.no_rollback_snapshot":
-    "无法为 {path} 捕获回滚快照 —— 文件无法读取，因此这次切换无法撤销。请修正该文件的权限后重试。",
+    "无法为 {path} 创建快照：文件不可读，切换将无法回滚。请修复权限后重试。",
   "err.no_such_account": "提供商 {provider} 上不存在账户 {account}。",
   "err.bind_other": "代理无法启动：无法绑定 {addr}({err})。请在设置里换一个端口。",
   "accounts.title": "账户",
-  "accounts.title_hint": "仅声明：探测、分账户余额与签到会读取它。请求转发不按账户区分。",
+  "accounts.title_hint": "该提供商下的账户。用于探测、余额与签到；请求仍使用提供商的密钥。",
   "accounts.empty": "未声明账户。所有请求都使用提供商自身的密钥。",
+  "accounts.lede": "每个已声明账户的余额、签到与面板令牌。声明在提供商的账户设置中编辑。",
   "accounts.add": "添加账户",
   "accounts.id_label": "账户 ID",
-  "accounts.id_hint": "在此提供商内的稳定名称——(提供商，账户) 二元组是运行状态的键。",
+  "accounts.id_hint": "在该提供商内保持稳定。用 (提供商, 账户) 组合标识其运行状态。",
   "accounts.key_label_add": "面板访问令牌(可选)",
   "accounts.key_hint_add":
-    "留空则沿用提供商自身的密钥;但注意中转密钥(sk- 开头)无法用于面板认证，请在此填入面板的访问令牌。",
+    "可选。留空则使用提供商的密钥。NewAPI 面板请粘贴个人访问令牌；sk- 中转密钥不可用。",
   "accounts.duplicate": "该提供商下已存在账户 `{id}`。",
   "accounts.key_store_failed": "账户已保存，但写入凭据失败。",
   "accounts.set_key": "设置凭据",
   "accounts.key_label": "面板访问令牌",
   "accounts.key_hint":
-    "来自面板 个人设置 → 访问令牌，生成后复制到这里。存入系统凭据库，不会再次显示。中转密钥(sk- 开头)无法用于面板认证。",
+    "面板 个人设置 → 访问令牌 中的个人访问令牌。保存在系统凭据库中，之后不再显示。",
   "accounts.clear_key": "清除凭据",
   "accounts.clear_key_title": "清除账户 {id} 的凭据",
   "accounts.clear_key_body":
-    "该账户将重新沿用提供商密钥;其独立存储的凭据会被删除，除非其他声明仍在引用。",
+    "该账户将重新使用提供商的密钥。若没有其他账户共享，其已存密钥会被删除。",
   "accounts.own_key": "独立凭据",
   "accounts.no_key": "凭据未存",
   "accounts.follows_provider": "沿用提供商凭据",
   "accounts.remove_title": "删除账户 {id}",
   "accounts.remove_body":
-    "声明会被删除，其独立存储的密钥一并删除。以该 ID 为键的观测记录在 ID 复用前保留。",
+    "删除该声明及其已存密钥。观测数据会保留到该 id 再次被使用。",
   "accounts.checkin": "浏览器签到",
   "accounts.login_path": "面板登录路径",
   "accounts.login_path_hint":
@@ -1308,9 +1306,9 @@ export const zh: Dict = {
   "token_capture.phase.needs_verification": "请在浏览器中完成验证…",
   "token_capture.phase.stored": "正在验证并保存…",
   "accounts.interval": "间隔(秒)",
-  "accounts.interval_hint": "留空表示调度器不会自动执行。",
+  "accounts.interval_hint": "留空则不自动执行。",
   "accounts.checkin_path": "签到页路径",
-  "accounts.checkin_path_hint": "面板相对路径，如 /checkin——刻意不设默认值。",
+  "accounts.checkin_path_hint": "面板相对路径，例如 /checkin。默认留空。",
   "accounts.checkin_selector": "签到按钮选择器",
   "accounts.checkin_selector_hint": "浏览器点击的 CSS 选择器。刻意不设默认值。",
   "error.title": "界面出现了问题",
@@ -1355,14 +1353,14 @@ export const zh: Dict = {
   // -------------------------------------------------------------- models
   "models.pick_provider_name": "请选择提供商并填写模型名。",
   "models.duplicate": "该提供商已提供“{model}”。",
-  "models.unclassified": "{n} 个模型尚未分层：{ids}。可按完整 id 调用，但不参与分层路由。",
-  "models.lede_none": "Zroutery 暴露的每个模型，每个提供商型号一条。",
-  "models.exposed": "已暴露 {n} 个",
+  "models.unclassified": "{n} 个模型尚未分层：{ids}。仍可按完整 id 调用，但不参与分层路由。",
+  "models.lede_none": "添加到提供商的模型会显示在这里。",
+  "models.exposed": "{n} 个模型 · 点击编辑，或从目录添加。",
   "models.empty": "暂无模型。",
   "models.empty_hint": "在下方添加，或在提供商页从 CC Switch 导入。",
   "models.no_tier": "未分层",
   "models.add_section": "添加模型",
-  "models.add_hint": "层级需手动指定，不自动推断。",
+  "models.add_hint": "添加后再指定层级；Zroutery 不会自动推断。",
   "field.provider": "提供商",
   "field.model_name": "模型名",
   "models.add": "添加模型",
@@ -1380,7 +1378,7 @@ export const zh: Dict = {
   "models.failures": "失败数",
   "models.last_error": "最近错误",
   "models.configuration": "配置",
-  "models.f_model_name_hint": "发送到上游;重命名会改变暴露 id",
+  "models.f_model_name_hint": "发送到上游；重命名会改变暴露 id",
   "models.f_display": "显示名",
   "models.f_display_hint": "显示在 /v1/models",
   "models.f_priority": "优先级",
@@ -1391,7 +1389,7 @@ export const zh: Dict = {
   "models.f_max_tokens_hint": "限制客户端可请求的上限",
   "models.f_context_window": "上下文长度",
   "models.f_context_window_hint":
-    "模型可接受的 token 数,已知时填写。会在 /v1/models 中公布;上游仍是实际服务能力的权威。",
+    "模型可接受的上下文长度(已知时)。会在 /v1/models 公布；上游仍是权威。",
   "models.context_set_1m": "设为 1M",
   "models.context_unknown": "未知",
   "models.f_aliases_hint": "逗号分隔的短名称",
@@ -1401,7 +1399,7 @@ export const zh: Dict = {
   "models.name_taken": "`{id}` 已被另一个模型使用。",
   "models.exposed_as": "暴露为 {id}",
   "models.rename_required": "模型名称不能为空。",
-  "models.rename_failed": "重命名未能保存;没有引用被改动。",
+  "models.rename_failed": "重命名未能保存；没有引用被改动。",
   "models.import_browse": "浏览提供商目录",
   "models.import_hide": "收起目录",
   "models.import_search": "筛选目录",
@@ -1447,7 +1445,7 @@ export const zh: Dict = {
   "providers.anthropic_dialect": "Anthropic",
   "providers.provider_off": "(已停用)",
   "providers.add_section": "添加提供商",
-  "providers.add_hint": "端点、凭证与协议;模型在各自的页面配置。",
+  "providers.add_hint": "端点、凭证与协议；模型在各自的页面配置。",
   "field.name": "名称",
   "field.api_dialect": "API 协议",
   "field.base_url": "Base URL",
@@ -1461,7 +1459,6 @@ export const zh: Dict = {
   "cc.active": "使用中",
   "cc.already": "已存在",
   "cc.imported_notice": "已导入 {n} 个提供商。密钥已直接存入凭据管理器。",
-  "cc.add": "添加",
   "providers.endpoint": "端点",
   "providers.dialect": "协议",
   "providers.auth": "认证",
@@ -1473,9 +1470,6 @@ export const zh: Dict = {
   "providers.api_key_hint": "存储在系统凭据管理器，绝不写入配置文件。",
   "providers.save_key": "保存密钥",
   "providers.models_section": "模型",
-  "providers.models_hint": "抓取提供商目录，再添加要暴露的模型。",
-  "providers.fetch": "抓取目录",
-  "providers.discovering": "抓取中…",
   "providers.empty_catalogue": "{name} 返回了空模型列表。",
   "providers.configuration": "配置",
   "field.timeout": "超时 (秒)",
@@ -1486,11 +1480,11 @@ export const zh: Dict = {
   "providers.client_profile": "客户端身份",
   "providers.client_profile_hint":
     "以什么身份访问上游。选 Claude Code 或 Codex 时会转发该客户端的请求头。",
-  "providers.profile_auto": "自动 — 识别调用方",
-  "providers.profile_native": "原生 — 不伪装任何客户端",
-  "providers.profile_claude_code": "Claude Code — 带其请求头",
-  "providers.profile_codex": "Codex — 带其请求头",
-  "providers.profile_opencode_cli": "OpenCode CLI — OpenCode 提供商固定使用",
+  "providers.profile_auto": "自动 · 识别调用方",
+  "providers.profile_native": "原生 · 不伪装客户端",
+  "providers.profile_claude_code": "Claude Code · 带其请求头",
+  "providers.profile_codex": "Codex · 带其请求头",
+  "providers.profile_opencode_cli": "OpenCode CLI · OpenCode 提供商固定使用",
   "providers.client_profile_locked_hint":
     "已锁定。OpenCode 网关会校验该指纹，配置校验也不接受其他取值。",
   "providers.opencode_zen_dialect": "OpenCode Zen(免费)",
@@ -1498,35 +1492,35 @@ export const zh: Dict = {
   "providers.decision_dialect": "决策模型",
   "providers.decision": "决策",
   "providers.decision_hint":
-    "决策接口不写文字，而是用经过校准的概率回答有类型的问题。它只服务于自动审查:模型需手动加入池中,永远不会应答聊天请求。Jev(包括 OpenCode Zen 的免费模型)是参考家族。",
+    "用概率回答有类型的问题，不生成文字。仅用于自动审查；模型需手动加入池中。Jev(包括 OpenCode Zen 免费模型)是参考家族。",
   "providers.decision_path": "决策接口路径",
   "providers.decision_path_hint":
-    "决策接口应答的路径，与 Base URL 相接。参考服务使用 /v1/systemone。",
+    "与 Base URL 拼接的路径。参考服务使用 /v1/systemone。",
   "providers.decision_threshold": "所需置信度",
   "providers.decision_threshold_hint":
-    "自动审查据此行动前,答案在两个方向上都需有多确定。概率不低于该值则拦截;不高于 1 减该值则放行;中间地带不构成判定,按拦截处理。设为 0.5 则由模型自身的多数票决定。",
+    "自动审查行动前所需的置信度。不低于该值则拦截；不高于 1 减该值则放行；中间按拦截。0.5 由模型多数票决定。",
   "providers.decision_no_catalogue":
-    "决策接口不提供模型目录 —— 它回答问题，而不是供应模型。请在模型页面手动添加该模型。",
+    "决策接口没有模型目录。请在模型页手动添加模型。",
   "models.tier_decision": "为何没有层级",
   "models.tier_decision_hint":
-    "决策模型只回答自动审查的问题,无法应答需要成文的请求,因此不归入任何层级。请改为把它加入自动审查池。",
+    "决策模型只服务自动审查，不能应答聊天，因此不归入层级。请加入自动审查池。",
   "providers.free_badge": "免费",
   "providers.free_only": "仅显示免费模型",
   "providers.free_only_hint":
-    "依据提供商自己的目录标注为零成本。不代表该模型一定能用：免费模型仍可能被地区屏蔽或在上游下线。",
+    "仅显示目录标记为免费的模型。免费模型仍可能限流、地区屏蔽或下线。",
   "providers.catalogue_shown": "显示 {total} 个中的 {shown} 个",
   "providers.catalogue_total": "共 {total} 个模型",
   "providers.catalogue_no_free":
-    "目录共 {total} 个模型，其中没有一个标记为免费。关闭筛选即可查看。",
+    "目录共 {total} 个模型，没有标记为免费的。关闭筛选即可查看。",
   "providers.bearer_auth": "同时发送 Bearer 认证",
   "providers.bearer_auth_hint": "用于读 Authorization: Bearer 而非 x-api-key 的中转。",
   "providers.balance": "余额",
-  "providers.balance_hint": "部分提供商在自己的接口上公布剩余额度。选择你所用的那个，Zroutery 会用该提供商的密钥去查询。",
+  "providers.balance_hint": "部分提供商在自己的接口公布剩余额度。选择对应接口，Zroutery 会用提供商密钥查询。",
   "providers.balance_hint_panel":
-    "该提供商自身不公布余额 —— NewAPI 中转只提供 /v1,钱包在面板里。下面的数字来自其账户所属的面板，使用账户的用户访问令牌读取。声明一个账户并把该令牌存为它的凭据，即可生效。",
+    "NewAPI 中转的钱包在面板里。余额来自该提供商账户所属的面板，使用账户的个人访问令牌读取。",
   "providers.balance_hint_none":
-    "该提供商自身不公布余额，也没有声明任何账户可供其面板上报。若该提供商确有此类接口，请在上方选择探针;否则请声明一个账户，并把面板的用户访问令牌存为它的凭据。",
-  "providers.balance_no_source": "该提供商没有可查询的余额：自身不公布，也没有声明任何账户可供其面板上报。",
+    "该提供商不公布余额，也没有可供查询的面板账户。请在上方选择探针，或声明账户并保存个人访问令牌。",
+  "providers.balance_no_source": "该提供商没有可查询的余额来源：自身不公布，也未声明面板账户。",
   "balance_preset.none": "不支持",
   "balance_preset.deep_seek": "DeepSeek",
   "balance_preset.moonshot": "Moonshot",
@@ -1546,7 +1540,7 @@ export const zh: Dict = {
   "providers.check_now": "立即查询",
   "providers.checking": "查询中…",
   "providers.compatibility": "兼容性",
-  "providers.compatibility_hint": "用于偏离标准协议的提供商;除非请求失败，否则保持全部关闭。",
+  "providers.compatibility_hint": "用于偏离标准协议的提供商；除非请求失败，否则保持全部关闭。",
   "quirk.max_completion_tokens": "使用 max_completion_tokens",
   "quirk.drop_temperature": "丢弃 temperature",
   "quirk.drop_top_p": "丢弃 top_p",
@@ -1556,7 +1550,7 @@ export const zh: Dict = {
   "quirk.reasoning_effort": "将 thinking 转为 reasoning_effort",
   "quirk.portable_history": "跨上游可移植的 Responses 历史",
   "quirk.portable_history_hint":
-    "适用于可能由其他账户或资源应答的中转(AgentRouter、CC Switch、聚合端点)。转发前会删除 reasoning 项、历史 item id 与 previous_response_id,因为它们指向下一个上游并未创建的资源;代价是此前的推理不再传给模型。仅影响 Responses 请求。",
+    "适用于可能由其他账户或上游应答的中转(AgentRouter、CC Switch)。转发前删除 reasoning 项、历史 item id 与 previous_response_id;此前的推理不再传给模型。仅影响 Responses 请求。",
   "providers.remove": "移除提供商",
   "providers.removed_models_notice": "已移除属于该提供商的 {n} 个模型。",
   "providers.balance_failed": "查询失败",
@@ -1564,7 +1558,7 @@ export const zh: Dict = {
   // ------------------------------------------------------- account maintenance
   "account.phase.idle": "尚未签到",
   "account.phase.running": "正在签到…",
-  "account.phase.waiting_for_user": "需要人工验证 — 请在已打开的窗口中完成",
+  "account.phase.waiting_for_user": "需要人工验证。请在已打开的窗口中完成。",
   "account.phase.succeeded": "已签到",
   "account.phase.already_completed": "今天已签到",
   "account.phase.not_supported": "该平台不支持签到",
@@ -1580,9 +1574,9 @@ export const zh: Dict = {
 "account.balance_amount": "剩 {remaining} {unit}，总额 {total}",
 "account.schedule.disabled": "该账户未开启签到",
   "account.schedule.not_applicable":
-    "已开启签到但无法执行，请补全签到页面路径与签到按钮选择器。",
+    "签到已开启但无法执行。请设置签到页面和触发按钮选择器。",
   "account.schedule.needs_first_observation":
-    "尚未签到过一次，没有可倒数的到期时间。手动签到一次后交给日程。",
+    "尚未签到，暂无到期时间。签到一次后开始计时。",
   "account.schedule.no_policy":
     "尚未设置签到周期，不会自动签到。设置签到周期后生效。",
   "account.schedule.not_due": "已排期",
@@ -1605,9 +1599,9 @@ export const zh: Dict = {
   "account.resume": "在已打开的窗口中继续",
   "account.cancel": "取消",
   "account.close_browser": "关闭窗口",
-  "account.not_enabled": "该账户未开启签到，请先在下方或提供商的账户设置中启用。",
-  "account.need_path": "未配置签到页面。请在该提供商的账户设置中把签到页路径指向带有签到按钮的面板页。",
-  "account.need_selector": "未配置签到按钮选择器。请在该提供商的账户设置中把签到按钮选择器填成该按钮的 CSS 选择器，例如 button.checkin。",
+  "account.not_enabled": "该账户未启用签到。请在提供商的账户设置中开启。",
+  "account.need_path": "未设置签到页面。请在提供商的账户设置中填写。",
+  "account.need_selector": "未设置签到按钮。请在提供商的账户设置中填写 CSS 选择器，例如 button.checkin。",
   "account.start_failed": "无法开始签到",
   "account.started": "签到已开始。若需要人工验证，浏览器会提示。",
   "account.resumed": "签到已继续。",
@@ -1623,13 +1617,13 @@ export const zh: Dict = {
   "nav.accounts": "账户",
   "nav.takeover": "接管",
   "accounts.empty_build": "此构建未包含账户子系统，声明的账户无法探测或签到。",
-  "accounts.none": "还没有任何提供商声明账户。在提供商页的账户区块里添加一个。",
+  "accounts.none": "尚未声明账户。请在提供商页的账户设置中添加。",
   "accounts.probe_section": "账户探测",
-  "accounts.probe_hint": "询问各账户的平台状态并报告结果。每个账户一次请求，仅在你点击时运行。已关闭的账户完全不探测，也不会出现在报告里。",
+  "accounts.probe_hint": "向每个已启用账户的面板查询当前状态。每个账户一次请求，仅在点击时执行。",
   "accounts.probe_now": "探测所有账户",
   "accounts.probing": "探测中…",
-  "accounts.probe_idle": "尚未探测。点击之前，没有任何账户被问过。",
-  "accounts.probe_none": "探测完成，但没有已启用的账户可供探测。",
+  "accounts.probe_idle": "尚未进行探测。",
+  "accounts.probe_none": "探测未发现已启用且已声明的账户。",
   "accounts.probe_outcome": "结果",
   "accounts.provider_disabled": "提供商已停用",
   "accounts.own_key_stored": "已存面板访问令牌",
@@ -1637,15 +1631,14 @@ export const zh: Dict = {
   "accounts.shared_key": "共用提供商凭据",
   // 凭据类型提示。面板 API 认的是站点「访问令牌」(面板个人设置页里的那一串),
   // 中转的 sk- 密钥在那里只会被当成密码错误。说清楚两者的区别,声明才能被修好。
-  "accounts.auth_hint": "面板拒绝了该凭据。账户认证用面板的访问令牌(个人设置 → 访问令牌),不是中转的 sk- API 密钥。",
+  "accounts.auth_hint": "面板拒绝了此凭据。账户需要面板的个人访问令牌，而不是中转 sk- 密钥。",
   "accounts.last_failure": "上次探测失败",
-  "accounts.auto_section": "自动签到",
   "accounts.checkin_api": "直接签到",
-  "accounts.checkin_api_hint": "用已存凭据通过面板 API 签到，不开浏览器。仅当站点未开启人机验证时可用。",
+  "accounts.checkin_api_hint": "使用已存令牌通过面板 API 签到，不打开浏览器。面板要求验证时会失败。",
   "accounts.checking": "签到中…",
   "accounts.checkin_api_failed": "直接签到失败",
   "accounts.events_section": "账户事件",
-  "accounts.events_hint": "平台声称的账户资源变动，最新在前，并标明每个数字的出处。",
+  "accounts.events_hint": "最近的账户事件，最新在前，并标注数字来源。",
   "accounts.events_none": "还没有观察到任何事件。",
   "accounts.events_when": "时间",
   "accounts.events_what": "事件",
@@ -1661,7 +1654,7 @@ export const zh: Dict = {
   // 若归为「正常 / 异常」两类，无人能够询问的账户就会被显示成有问题的账户。
   "account.sync.refreshed": "已探测",
   "account.sync.partially_reported": "未上报",
-  "account.sync.unsupported": "此构建中没有后端能询问该平台 —— 未探测",
+  "account.sync.unsupported": "此构建没有能询问该平台的后端；未探测。",
   "account.sync.failed": "探测失败",
 
   // ------------------------------------------------------------- 接管
@@ -1670,7 +1663,7 @@ export const zh: Dict = {
   // 做决定;归并成「在管/不在管」两类,恰好会藏住这些时刻。
   "takeover.section": "Agent 接管",
   "takeover.section_hint":
-    "把外部编码 Agent 的配置指向本机网关：写入网关地址与令牌到它自己的配置文件，释放时恢复原值。请求仍按客户端原本发送的模型名选择层级，Zroutery 不替你选。",
+    "把网关地址与令牌写入客户端自己的配置，释放时恢复原值。客户端仍按它发送的模型名选择层级。",
   "takeover.none": "此构建没有已知的外部 Agent。",
   "takeover.load_failed": "接管记录读取失败：{err}。本页没有改动过任何客户端的配置。",
   "takeover.agent.claude": "Claude Code",
@@ -1687,28 +1680,28 @@ export const zh: Dict = {
   "takeover.state.released": "已释放",
   "takeover.state.error": "出错",
   "takeover.hint.unsupported":
-    "Gemini CLI 的接入端点只能通过环境变量设置，而环境变量不在这份清单能记录、能恢复的配置文件里——接管会改掉密钥，客户端却仍然连着 Google。因此不提供。",
+    "Gemini CLI 只能通过环境变量设置端点，配置文件无法记录，因此不提供接管。",
   "takeover.hint.not_detected":
-    "本机没有找到 {agent} 的配置文件。先安装并运行一次，让它的配置文件生成，然后刷新本页。",
+    "未找到 {agent} 的配置。请安装并运行一次后刷新。",
   "takeover.hint.ready":
-    "条件已齐备：接管将写入下面列出的 {n} 个字段，并记录它们当前的原值。",
+    "已就绪：接管会写入下方 {n} 个字段，并记录当前值。",
   "takeover.confirm_inline":
-    "接管会修改 {agent} 自己的配置文件。释放时只恢复这些字段;文件里其余内容不受影响。",
+    "接管会修改 {agent} 的配置文件。释放时只恢复这些字段，其余内容不动。",
   "takeover.hint.active":
-    "该客户端已指向本网关，受管字段与 Zroutery 写入的值一致。释放会恢复接管时记录的原值。",
+    "该客户端已指向网关，托管字段与写入值一致。",
   "takeover.hint.degraded":
-    "字段已写入，但 Zroutery 尚不能证明接管已生效——还没有确认到来自该客户端的真实请求。释放仍会恢复已记录的值。",
+    "字段已写入，但尚未收到该客户端的请求确认。",
   "takeover.hint.conflict":
-    "{n} 个受管字段的值已不是 Zroutery 写入的内容——有程序在接管之外改动了它。释放时可以选择保留这些修改，或恢复 Zroutery 的值。",
+    "{n} 个托管字段被外部修改。释放时请选择保留这些修改，还是恢复记录值。",
   "takeover.hint.released":
-    "上一次接管已释放，原值已恢复。再次接管会把当前值记录为新的恢复点。",
+    "已释放并恢复原值。再次接管会记录当前值。",
   "takeover.blocker.no_token":
-    "Zroutery 还没有网关令牌，客户端没有可用的凭据。请先在「设置 → 网关」中设置或重新生成令牌。",
+    "尚无网关令牌。请在 设置 → 网关 中设置或重新生成。",
   "takeover.blocker.no_classes":
-    "还没有已启用模型被分配到层级，指向这里的 Agent 将无模型可请求。请先给至少一个已启用模型指定层级。",
+    "没有已启用的分层模型，客户端无可请求的模型。请先分配层级。",
   "takeover.reason.unverified": "接管尚未被该客户端的真实请求确认过。",
   "takeover.reason.token_changed":
-    "网关令牌在该客户端被接管后发生过变化——请释放并重新接管，把新令牌交给客户端。",
+    "接管后网关令牌已变更。请释放并重新接管，把新令牌写入客户端。",
   "takeover.table.field": "字段",
   "takeover.table.current": "当前值",
   "takeover.table.next": "接管后",
@@ -1724,12 +1717,12 @@ export const zh: Dict = {
   "takeover.strategy.skip": "跳过已改动的字段",
   "takeover.confirm_adopt_title": "接管 {agent}?",
   "takeover.confirm_adopt_body":
-    "{agent} 配置中的 {n} 个字段将被改写并进入托管。字段当前的原值会被记录，释放时恢复。",
+    "{agent} 配置中的 {n} 个字段将被改写并托管。当前值已记录，供释放时恢复。",
   "takeover.confirm_adopt_again_body":
     "{agent} 的配置将被改写并进入托管，当前值会作为新的恢复点记录下来。",
   "takeover.confirm_release_title": "释放 {agent}?",
   "takeover.confirm_release_body":
-    "{agent} 配置中的受管字段将恢复为接管时记录的原值，Zroutery 不再托管它们。",
+    "{agent} 配置中的托管字段将恢复为记录值，Zroutery 不再管理它们。",
   "takeover.toast_adopted": "{agent} 已接管。",
   "takeover.toast_released": "已释放。",
   "takeover.report_kept": "保留 {n} 处修改",
@@ -1748,7 +1741,7 @@ export const zh: Dict = {
   "nav.cutover": "切换",
   "cutover.section": "配置切换",
   "cutover.section_hint":
-    "以类型化、可验证的计划，把外部客户端的配置迁移到本网关 —— 并在动手前逐字节留存原文件，使中途失败的运行可以被原样还原。把客户端接上/摘下网关请用「接管」页;这一页负责的是撤销。",
+    "把客户端配置切换到本网关：先完整备份原文件，失败时可精确还原。启停客户端请用接管页，此页负责回滚。",
   "cutover.state.section": "迁移记录",
   "cutover.state.detected": "尚未运行",
   "cutover.state.prepared": "在准备阶段中断",
@@ -1759,23 +1752,23 @@ export const zh: Dict = {
   "cutover.state.failed": "已失败",
   "cutover.state.hint.detected": "该记录未运行过任何切换。本页没有改动过任何客户端的配置。",
   "cutover.state.hint.completed":
-    "一次切换已完成，记录保留了它的状态。已完成的运行没有回滚路径：记录里没有离开该状态的迁移，尽管快照仍在磁盘上。此时不存在半应用状态，也就无需撤销。",
+    "切换已完成，此状态不可回滚；快照仍保留在磁盘上。",
   "cutover.state.hint.rolled_back":
-    "一次切换已回滚，其捕获的文件已还原。该记录只允许运行一次，因此在下方选择客户端会从原文件重新开始。",
+    "已回滚并恢复文件。再次运行会从原文件开始。",
   "cutover.state.hint.prepared":
-    "该记录表明一次切换已暂存好文档并停在此处。尚未写入客户端文件，下方快照是原文件唯一的副本;在还原或完成之前，客户端的配置就是那次运行留下的样子。",
+    "文档已暂存，客户端文件尚未写入。快照是原文件的唯一副本。",
   "cutover.state.hint.verified":
-    "该记录表明一次切换已暂存文档、确认端点作答，并在切换前停下。客户端文件尚未改动，下方快照是原文件唯一的副本。",
+    "已暂存并验证，客户端文件未改动。快照是原文件的唯一副本。",
   "cutover.state.hint.switched":
-    "该记录表明一次切换已完成切换但未收尾。客户端文件已被替换，下方快照是原文件唯一的副本 —— 还原它是唯一的退路。",
+    "已切换，客户端文件已被替换。恢复快照是唯一的退路。",
   "cutover.state.hint.failed":
-    "这次切换中途失败。它的快照是回到原文件的唯一途径，所以下面的回滚是真正要紧的那一个操作。",
+    "中途失败。请用下方快照回滚。",
   "cutover.snapshot.none": "尚未捕获任何回滚快照。",
   "cutover.snapshot.files": "已捕获 {n} 个文件，可逐字节还原。",
-  "cutover.not_durable": "此构建的迁移记录不持久，因此重启后无法恢复被中断的切换。落盘之前不会写入任何内容。",
+  "cutover.not_durable": "此构建的迁移记录不持久，重启后无法恢复中断的切换。",
   "cutover.persist_error": "记录未能写入磁盘：{err}",
   "cutover.plans.section": "切换计划",
-  "cutover.plans.hint": "下面的每个计划都依据客户端真实的配置路径与本网关真实的地址生成，在你确认之前不会改动任何内容。",
+  "cutover.plans.hint": "每个计划使用客户端的真实配置路径和本网关地址。确认前不会修改任何文件。",
   "cutover.none": "此构建没有已知的外部客户端可供切换。安装并运行一个，使其配置文件存在，然后刷新本页。",
   "cutover.load_failed": "迁移记录读取失败：{err}。本页没有改动过任何客户端的配置。",
   "cutover.step.not_reversible": "无法撤销",
@@ -1790,14 +1783,14 @@ export const zh: Dict = {
   "cutover.running": "执行中…",
   "cutover.rollback": "回滚",
   "cutover.rolling_back": "回滚中…",
-  "cutover.already_run": "该记录已运行过一次切换，且只允许运行一次。请查看上方的迁移记录;若确要重来，请从配置目录中删除该记录。",
-  "cutover.rollback_unavailable": "只有失败的运行才提供回滚，因为那是唯一存在允许回退迁移的状态。",
-  "cutover.confirm_run_title": "替换 {agent} 的配置?",
+  "cutover.already_run": "该记录只允许一次切换且已运行。如要重新开始，请从配置目录删除该记录。",
+  "cutover.rollback_unavailable": "只有失败后才会提供回滚。",
+  "cutover.confirm_run_title": "替换 {agent} 的配置？",
   "cutover.confirm_run_body":
-    "将运行 {n} 个步骤。在写入任何内容之前会逐字节捕获该文件，因此这一步可以撤销 —— 但仅限于运行失败的情形;若运行成功则不适用。切换时仍在运行的外部进程只会被报告，不会被停止。",
-  "cutover.confirm_rollback_title": "把配置文件还原回去?",
+    "共 {n} 步。写入前会完整备份，失败可回滚。检测到运行中的外部进程时只报告，不停止。",
+  "cutover.confirm_rollback_title": "把配置文件还原回去？",
   "cutover.confirm_rollback_body":
-    "{n} 个文件将被覆盖为切换运行前捕获的字节。此后在文件中所做的修改会丢失，切换本身的改动也一并丢失。",
+    "将用切换前的备份覆盖 {n} 个文件。之后的修改和切换本身的改动都会丢失。",
   "cutover.result.title": "最近一次运行",
   "cutover.result.steps": "{total} 步中的 {done} 步",
   "cutover.result.duration": "{ms} 毫秒",
@@ -1805,12 +1798,12 @@ export const zh: Dict = {
   "cutover.result.warnings": "警告",
   "cutover.result.restored": "已还原 {n} 个文件",
   "cutover.result.restore_failed":
-    "{n} 个文件未能还原。状态显示已回滚，但磁盘上的配置并非原样 —— 请手工处理这些文件。",
+    "{n} 个文件未能恢复，磁盘配置与原来不同。请手动修复。",
   "cutover.result.rolled_back_nothing":
-    "没有还原任何内容：未恢复任何文件。状态机前进了，而磁盘上的配置是被保持原样，而非被回退。",
+    "没有文件被恢复。状态已推进，磁盘文件未变。",
   "cutover.result.ok": "切换已完成，端点以 Zroutery 的身份作答。",
   "cutover.toast_applied": "{agent} 的切换已完成。",
-  "cutover.toast_failed": "切换失败,{n} 处错误。下面的报告会说明是哪一步停下的,回滚就是退路。",
+  "cutover.toast_failed": "切换失败，共 {n} 个错误。下方报告会指出停在哪一步；回滚即可恢复。",
   "cutover.toast_rolled_back": "已还原 {n} 个文件。",
   "cutover.toast_nothing_restored": "未还原任何内容。",
   "cutover.agent.claude": "Claude Code",
@@ -1819,7 +1812,7 @@ export const zh: Dict = {
   "cutover.agent.gemini": "Gemini CLI",
 
   // ------------------------------------------------------------- routing
-  "routing.lede": "按请求目的分流。服务兼容 Anthropic 或 OpenAI 协议的客户端。",
+  "routing.lede": "按用途展示请求的路由方式。兼容任何 Anthropic 或 OpenAI 客户端。",
   "routing.default_hint": "所有普通请求，按客户端请求的层级。",
   "routing.edit": "编辑",
   "tier.hint.fast": "便宜且快",
@@ -1830,16 +1823,16 @@ export const zh: Dict = {
   "tier.name.standard": "标准",
   "tier.name.reasoning": "推理",
   "tier.name.frontier": "前沿",
-  "routing.tier_empty": "为空 —— 在有模型加入该层级前，{id} 的请求会失败。",
+  "routing.tier_empty": "为空。在有模型加入该层级前，对 {id} 的请求会失败。",
   "routing.fallback_n": "备选 {n}",
   "routing.request": "请求",
   "routing.side_query": "侧查询",
   "routing.review_hint_on": "权限检查走独立的模型池。",
-  "routing.review_hint_off": "关闭 —— 权限检查跟随默认路由。",
+  "routing.review_hint_off": "已关闭。权限检查跟随默认路由。",
   "routing.verdict": "判定",
   "routing.next": "下一个",
-  "routing.review_no_candidate": "已启用，但无可用候选 —— 权限检查将失败。",
-  "routing.review_off": "关闭。启用后可自选模型执行权限审查。",
+  "routing.review_no_candidate": "已启用，但没有可用候选。权限检查将失败。",
+  "routing.review_off": "已关闭。开启后权限检查走下方模型池。",
   "routing.default_drawer": "默认路由",
   "field.strategy": "策略",
   "strategy.priority": "优先级",
@@ -1856,7 +1849,7 @@ export const zh: Dict = {
   "routing.failover_hint": "出错时尝试下一个模型",
   "routing.claude_names": "理解 Claude 模型名",
   "routing.claude_names_hint": "claude-*-sonnet-* 映射到对应层级",
-  "routing.aliases_note": "其余必须是完整 id,或下面配置的某个客户端别名。",
+  "routing.aliases_note": "其余必须是完整 id，或下面配置的某个客户端别名。",
   "routing.election": "选举",
   "routing.election_hint": "每模型一次极小请求测量延迟与价格，然后固定顺序。",
   "routing.rerun": "立即重跑",
@@ -1865,18 +1858,18 @@ export const zh: Dict = {
   "routing.no_election_tiers": "没有层级有可测量的启用模型。",
   "routing.primary": "主选",
   "routing.route_review": "路由权限检查",
-  "routing.route_review_hint": "Claude Code 自动审查与 Codex Guardian 的权限检查走下方模型池,而非会话模型",
+  "routing.route_review_hint": "权限检查走下方模型池，而非会话模型。包括 Claude Code 自动审查与 Codex Guardian。",
   "routing.review_failover": "池内失败转移",
   "routing.review_failover_hint": "出错时尝试下一个候选",
   "routing.pool": "模型池",
-  "routing.pool_hint": "模型来自模型页，提供商、密钥与价格复用其配置。",
+  "routing.pool_hint": "模型来自模型页，提供商、密钥与价格设置直接复用。",
   "routing.no_candidates": "暂无候选。在下方选择模型。",
   "routing.not_configured": "不是已配置的模型",
   "routing.decision_candidate": "决策模型",
   "routing.add_jev": "添加 OpenCode Zen 免费 Jev",
   "routing.add_jev_hint":
-    "添加一个无需凭据的 System One 决策模型,并把它放在池首。它以概率作答,所需置信度为 0.6。免费推广有期限,也可能按地区被屏蔽;检查文本会发送给 OpenCode Zen。",
-  "routing.jev_added": "已把 Jev 放在池首,并开启自动审查。",
+    "把无需凭据的 OpenCode Zen Jev 决策模型加到池首。阈值 0.6。免费推广可能结束或按地区屏蔽；检查文本会发送给 Zen。",
+  "routing.jev_added": "已把 Jev 放在池首，并开启自动审查。",
   "routing.enable_for": "启用 {model}",
   "routing.add_model": "添加模型…",
   "routing.behaviour": "行为",
@@ -1885,16 +1878,16 @@ export const zh: Dict = {
   "routing.verdict_parsing": "判定解析",
   "routing.verdict_only": "仅 <block>yes|no</block>",
   "routing.verdict_only_hint":
-    "Claude Code 要求 <block>yes|no</block>;Codex 的 Guardian 要求 JSON outcome。若池中有决策模型,它以概率作答,由该提供商的阈值决定何时算作判定。",
+    "Claude Code 期望 <block>yes|no</block>;Codex Guardian 期望 JSON outcome。决策模型以概率作答，由提供商阈值决定判定。",
   "routing.no_verdict": "无判定时",
-  "routing.fails_closed": "失败关闭 —— 由客户端询问用户",
-  "routing.fail_closed_note": "候选出错、超时或协议不符时转移到下一个;全部失败则查询失败。决策模型在两个方向都没有把握时按拦截处理,而不是转移。Zroutery 不会把模型的散文当作许可。",
+  "routing.fails_closed": "失败关闭；由客户端询问用户",
+  "routing.fail_closed_note": "出错、超时或协议不符会转移到下一个；全部失败则查询失败，不会放行。决策模型无把握时拦截。散文不会被当作许可。",
 
   // ------------------------------------------------------------ activity
   "activity.lede_none": "暂无数据。将客户端指向网关即可在此看到流量。",
   "activity.lede": "{requests} 个请求 · {rate}% 成功 · 输入 {in} / 输出 {out} token",
   "activity.reset": "重置计数",
-  "activity.review_line": "自动审查：{n} 次检查 · {failed} 失败 · 平均 {latency}(与主流量分开计数)",
+  "activity.review_line": "自动审查：{n} 次检查 · 失败 {failed} · 平均 {latency}(与主流量分开统计)。",
   "activity.nothing": "暂无数据。",
   "activity.health": "模型健康",
   "activity.tab_group": "活动的两个主题",
@@ -1909,7 +1902,7 @@ export const zh: Dict = {
   "activity.cooling": "冷却 {n}s",
   "activity.clear_health": "清除 {id} 的健康状态",
   "activity.spend": "花费",
-  "activity.spend_hint": "按你录入的价格与各提供商上报的用量估算。是下限，不是账单。",
+  "activity.spend_hint": "根据填写的价格与上报用量估算，不是账单。",
   "activity.estimated": "预估花费",
   "activity.n_failed": "{n} 失败",
   "activity.request": "请求",
@@ -1967,9 +1960,9 @@ export const zh: Dict = {
   "field.allowed_origin": "允许的来源",
   "field.allowed_origin_hint": "协议、主机与端口，不含路径",
   "settings.add_origin": "添加来源",
-  "settings.origin_notice": "来源格式形如 https://example.com,不含路径。",
+  "settings.origin_notice": "来源格式形如 https://example.com，不含路径。",
   "settings.budgets": "预算",
-  "settings.budgets_hint": "限额在到达后停止花费;越线的那次请求会完成，下一次被拦截。",
+  "settings.budgets_hint": "限额达到后停止消费。越线的那次请求会完成，下一次被拒绝。",
   "budget.covers": "覆盖",
   "budget.window": "周期",
   "budget.limit": "限额",
@@ -2014,16 +2007,16 @@ export const zh: Dict = {
   "win.silent_start_hint": "启动时不显示主窗口，仅在系统托盘运行",
   "win.keep_in_tray": "关闭窗口时保留在托盘",
   "win.keep_in_tray_hint":
-    "关闭窗口后继续在后台运行;关闭则退出并停止网关。",
+    "开启：关闭窗口后 Zroutery 留在托盘。关闭：关闭窗口即退出并停止网关。",
   "win.window_actions": "隐藏或退出",
-  "win.window_actions_hint": "隐藏则网关继续在托盘运行;退出会停止网关并结束进程。",
+  "win.window_actions_hint": "隐藏则网关继续在托盘运行；退出会停止网关并结束进程。",
   "win.hide_to_tray": "隐藏到托盘",
   "win.quit": "退出",
   "vision.title": "视觉降级",
-  "vision.hint": "不支持视觉的模型仍会收到图片的内容：由视觉模型生成描述，代替原图发过去。描述失败时换上占位文本，不静默丢弃。",
+  "vision.hint": "不支持视觉的模型会收到图片描述；无法生成描述时使用占位符。图片不会被静默丢弃。",
   "vision.enable": "为不支持视觉的模型描述图片",
   "vision.model": "视觉模型",
-  "vision.model_hint": "模型页中一个支持视觉的现有模型;复用其提供商与价格",
+  "vision.model_hint": "模型页中一个支持视觉的现有模型；复用其提供商与价格",
   "vision.model_required": "请先在模型页选择一个支持视觉的模型。",
   "vision.placeholder": "占位符",
   "vision.placeholder_hint": "无法生成描述时，替代图片的文本",
@@ -2035,7 +2028,7 @@ export const zh: Dict = {
   "ml.inert": "模型已提升但学习型路由为关闭，不会被调用。",
   "ml.off": "未安装模型。路由为确定性路由。",
   "ml.exploring": "探索 {pct}%",
-  "ml.no_state_dir": "未配置持久化状态目录，重启后不保留内容，也无法提升模型。",
+  "ml.no_state_dir": "未配置持久状态目录，重启后数据不会保留，也无法晋级模型。",
   "ml.installed": "已安装",
   "ml.none": "无",
   "ml.gate": "授权依据",
@@ -2048,7 +2041,7 @@ export const zh: Dict = {
   "ml.with_no_model": "无模型时为采集证据而尝试",
   "ml.never_tried": "从未尝试",
   "ml.blind_spot_warning":
-    "{names} 已配置但排不上队，永远收不到请求。打开探索可以触达，但会阻断学习型模型的提升。给它最高优先级。",
+    "{names} 已配置但在关闭探索时收不到流量。请把它设为最高优先级，或开启探索(会阻止学习模型晋级)。",
   "ml.blind_spot_count": "{n} 个无法触达",
   "ml.collected": "已采集",
   "ml.samples": "样本",
@@ -2086,27 +2079,27 @@ export const zh: Dict = {
 
   // ----------------------------------------------- learned routing: collection
   "ml.learning_blocked":
-    "影子评估已关闭，{n} 条请求在入库前被丢弃，提升轮次无内容可学。打开影子评估即可开始采集。",
+    "学习路由已开启，但影子评估关闭，未收集样本(已丢弃 {n} 次)。请开启影子评估。",
   "ml.learning_blocked_short": "学习已被阻断",
   "ml.ingested": "已入库请求",
   "ml.dropped_no_decision": "因缺少决策而丢弃",
 
   // -------------------------------------------- learned routing: promotion round
   "ml.round": "提升轮次",
-  "ml.round_hint": "用已记录的历史训练一个候选模型，由门禁判断是否胜过基线。不会自动运行。",
+  "ml.round_hint": "用已记录历史训练候选，并由门禁判断是否优于基线。不会自动安装或定时执行。",
   "ml.round_judge": "判断候选模型",
   "ml.round_judging": "判断中…",
-  "ml.round_judged": "候选模型已评判 —— 未安装",
+  "ml.round_judged": "候选模型已评判，未安装。",
   "ml.round_install": "安装已获授权的候选模型",
   "ml.round_installing": "安装中…",
   "ml.round_install_hint":
-    "只有在门禁授权候选模型之后才会出现。安装会改变此后每一个请求由谁来服务。",
+    "门禁通过候选后才可用。会改变之后请求使用的模型。",
   "ml.round_none": "无法运行轮次。",
   "ml.round_records": "已读记录数",
   "ml.round_candidate": "候选模型",
   "ml.round_choices": "候选模型本会如何选择",
   "ml.round_single_choice":
-    "候选模型每次都选同一个，并未学到排序。",
+    "候选在所有请求上都选择同一项，不构成学习到的排序。",
   "ml.round_installed": "已安装并正在服务",
   "ml.round_not_installed": "已评判，未安装",
   "ml.round_serving_now": "当前正在服务",
@@ -2119,7 +2112,7 @@ export const zh: Dict = {
 
   // ------------------------------------------------ learned routing: the log
   "ml.log": "已记录的历史",
-  "ml.log_hint": "提升轮次的训练数据。不会自动清理，清理时机由你决定。",
+  "ml.log_hint": "训练所用的记录。清理需手动执行，不会自动影响下一个模型。",
   "ml.log_records": "记录数",
   "ml.log_size": "占用空间",
   "ml.log_path": "文件",
@@ -2134,7 +2127,7 @@ export const zh: Dict = {
   "ml.log_clear_nothing": "没有已记录的内容可删除。",
   "confirm.clear_traces": "删除已记录的历史",
   "confirm.clear_traces_body":
-    "{n} 条记录会被删除且无法恢复，之后的提升轮次只能使用新写入的记录训练。没有定时任务，所以不会有别的东西自行变化。",
+    "将永久删除 {n} 条请求记录。之后的训练只使用此后写入的记录。",
   "bytes.value": "{n} 字节",
 };
 

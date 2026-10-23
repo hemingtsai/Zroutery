@@ -413,6 +413,9 @@ export default function Models({
             })}
           </p>
         )}
+        {providerById.get(draft.provider_id)?.kind === "decision" && (
+          <p className="field-hint">{t("providers.decision_no_catalogue")}</p>
+        )}
         {nameError && <p className="field-hint field-hint-danger">{nameError}</p>}
         {!config.providers.length && <p className="field-hint">{t("models.add_provider_first")}</p>}
         {draft.provider_id && (
@@ -945,6 +948,7 @@ function CatalogueImport({
             {provider.kind === "opencode_zen_free" && (
               <Toggle
                 label={t("providers.free_only")}
+                hint={t("providers.free_only_hint")}
                 checked={freeOnly}
                 onChange={setFreeOnly}
               />
@@ -966,8 +970,20 @@ function CatalogueImport({
               {t("models.import_add", { n: chosenCount })}
             </Button>
           </div>
+          <p className="muted">
+            {freeOnly
+              ? t("providers.catalogue_shown", {
+                  shown: visible.length,
+                  total: models.length,
+                })
+              : t("providers.catalogue_total", { total: models.length })}
+          </p>
           {visible.length === 0 ? (
-            <p className="empty">{t("models.import_empty")}</p>
+            <p className="empty">
+              {freeOnly
+                ? t("providers.catalogue_no_free", { total: models.length })
+                : t("models.import_empty")}
+            </p>
           ) : (
             <div className="list">
               {visible.map((entry) => (
@@ -985,6 +1001,7 @@ function CatalogueImport({
                   {entry.context_window != null && (
                     <span className="muted mono">{contextText(entry.context_window)}</span>
                   )}
+                  {entry.free && <Badge>{t("providers.free_badge")}</Badge>}
                   {configured.has(entry.id) && (
                     <Badge tone="ok">{t("models.import_added")}</Badge>
                   )}

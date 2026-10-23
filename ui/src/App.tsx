@@ -32,13 +32,13 @@ type Page =
 /** Every page, in the order the navigation lists them. */
 const PAGES: Page[] = [
   "overview",
-  "models",
   "providers",
+  "models",
+  "routing",
   "accounts",
+  "activity",
   "takeover",
   "cutover",
-  "routing",
-  "activity",
   "settings",
 ];
 
@@ -59,13 +59,13 @@ function pageForLink(url: string): Page | null {
 
 const NAV: { id: Page; labelKey: Parameters<ReturnType<typeof useI18n>["t"]>[0] }[] = [
   { id: "overview", labelKey: "nav.overview" },
-  { id: "models", labelKey: "nav.models" },
   { id: "providers", labelKey: "nav.providers" },
+  { id: "models", labelKey: "nav.models" },
+  { id: "routing", labelKey: "nav.routing" },
   { id: "accounts", labelKey: "nav.accounts" },
+  { id: "activity", labelKey: "nav.activity" },
   { id: "takeover", labelKey: "nav.takeover" },
   { id: "cutover", labelKey: "nav.cutover" },
-  { id: "routing", labelKey: "nav.routing" },
-  { id: "activity", labelKey: "nav.activity" },
   { id: "settings", labelKey: "nav.settings" },
 ];
 
@@ -604,7 +604,7 @@ function Shell() {
               <Providers snapshot={snapshot} save={save} run={run} busy={busy} />
             )}
             {page === "accounts" && (
-              <Accounts snapshot={snapshot} save={save} run={run} busy={busy} />
+              <Accounts snapshot={snapshot} run={run} busy={busy} />
             )}
             {page === "takeover" && <Takeover />}
             {page === "cutover" && <Cutover />}

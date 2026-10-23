@@ -3,22 +3,16 @@ import {
   api,
   BALANCE_PRESETS,
   defaultProbe,
-  emptyModel,
   emptyProvider,
   errorText,
   money,
-  previewId,
   slugify,
-  virtualId,
-  TIERS,
   type Account,
   type AppConfig,
   type BalanceStatus,
   type CcProviderDraft,
   type CcSwitchPreview,
-  type DiscoveredModel,
   type Maintenance,
-  type ModelTier,
   type Provider,
   type ProviderClientProfile,
   type ProviderKind,
@@ -26,7 +20,6 @@ import {
   tierName,
 } from "../api";
 import { describeBackendError } from "../i18n";
-import { BrowserTokenButton } from "../BrowserTokenButton";
 import {
   Badge,
   Button,
@@ -908,14 +901,6 @@ function AccountSection({
                   >
                     {t("accounts.set_key")}
                   </Button>
-                  {snapshot.token_capture_available && (
-                    <BrowserTokenButton
-                      providerId={provider.id}
-                      accountId={a.account_id}
-                      run={run}
-                      busy={busy}
-                    />
-                  )}
                   {hasOwnRef(a) && (
                     <Button
                       kind="ghost"
@@ -1157,10 +1142,7 @@ function ProviderDrawer({
   onRemove: () => void;
 }) {
   const { t } = useI18n();
-  const notify = useToast();
   const hasKey = snapshot.keys[provider.id] ?? false;
-  const [discovered, setDiscovered] = useState<DiscoveredModel[] | null>(null);
-  const [discovering, setDiscovering] = useState(false);
   const [checkingBalance, setCheckingBalance] = useState(false);
   // Hoisted so the type is narrowed once rather than at two separate index
   // reads, and so the translation has one string to work with.
@@ -1170,25 +1152,6 @@ function ProviderDrawer({
     const preset = BALANCE_PRESETS.find((p) => p.id === provider.balance.preset);
     return preset ? t(preset.hintKey as Parameters<typeof t>[0]) : null;
   })();
-  // The tier each catalogue row is about to be added as. Keys are the discovered
-  // model ids; "" means "no class yet" — the model lands unclassified and the
-  // Models page banner keeps counting it until a class is assigned.
-  const [tierChoice, setTierChoice] = useState<Record<string, ModelTier | "none">>({});
-  const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
-  // The free tier's catalogue is the whole Zen list, paid models included, so
-  // this defaults on for that one kind: the operator is looking for the free
-  // models and the paid ones can only fail on an unauthenticated provider.
-  const [freeOnly, setFreeOnly] = useState(provider.kind === "opencode_zen_free");
-  // Which catalogue request is allowed to answer. Switching providers (or
-  // closing the drawer) bumps it, so a slow response for the provider that was
-  // open a moment ago cannot land in the current one's list.
-  const discoveryGeneration = useRef(0);
-  useEffect(
-    () => () => {
-      discoveryGeneration.current += 1;
-    },
-    [],
-  );
 
   /**
    * The provider this instance edits, frozen at mount.
@@ -1211,183 +1174,10 @@ function ProviderDrawer({
       ? decisionUrl(provider.base_url, provider.decision.path)
       : provider.base_url;
 
-  /**
-   * The provider's own models, and the names they answer to.
-   *
-   * The catalogue table asks "is this model already added?" once per
-   * published model, and the answer used to be a scan of the provider's own
-   * list: one lookup per row, so one render cost O(published x configured).
-   * A set answers it in one step, and the two answers are the same.
-   */
+  /** How many models this provider contributes, for the summary row. */
   const models = useMemo(
     () => snapshot.config.models.filter((m) => m.provider_id === providerId),
     [snapshot.config.models, providerId],
-  );
-  const configuredNames = useMemo(
-    () => new Set(models.map((m) => m.upstream_model)),
-    [models],
-  );
-
-  /**
-   * The tier menus, once.
-   *
-   * Both tables offer the same tiers under the same naming style, and each
-   * row used to build the menu for itself: `virtualId` allocates its own
-   * lookup table on every call, so a catalogue of six hundred models built
-   * six hundred copies of it, twice, on every render of the drawer. One
-   * array per table, rebuilt when the naming style changes, is the whole
-   * menu.
-   */
-  const namingStyle = snapshot.config.routing.naming_style;
-  const modelTierOptions = useMemo<{ value: ModelTier | "none"; label: string }[]>(
-    () => [
-      { value: "none", label: t("models.no_tier") },
-      ...TIERS.map((c) => ({ value: c, label: virtualId(c, namingStyle) })),
-    ],
-    [namingStyle, t],
-  );
-  const catalogueTierOptions = useMemo<{ value: ModelTier | "none"; label: string }[]>(
-    () => [
-      { value: "none", label: t("models.no_tier") },
-      ...TIERS.map((c) => ({ value: c, label: virtualId(c, namingStyle) })),
-    ],
-    [namingStyle, t],
-  );
-
-  /**
-   * What the catalogue table shows.
-   *
-   * The filter reads `free` off the entry rather than inferring it from a price:
-   * a source that publishes no price for a genuinely free model leaves
-   * `pricing` null, so "no price" and "free" are not the same test.
-   */
-  const visibleDiscovered = useMemo(
-    () => (discovered ?? []).filter((d) => !freeOnly || d.free),
-    [discovered, freeOnly],
-  );
-
-  /** The catalogue by name, so a row can be added without a second search. */
-  const discoveredById = useMemo(
-    () => new Map((discovered ?? []).map((d) => [d.id, d])),
-    [discovered],
-  );
-
-  const discover = async () => {
-    const generation = ++discoveryGeneration.current;
-    setDiscovering(true);
-    try {
-      const ids = await api.fetchModels(provider);
-      if (generation !== discoveryGeneration.current) return;
-      setDiscovered(ids);
-      if (ids.length === 0) notify("error", t("providers.empty_catalogue", { name: provider.name }));
-    } catch (e) {
-      if (generation !== discoveryGeneration.current) return;
-      notify("error", describeBackendError(t, errorText(e)));
-    } finally {
-      if (generation === discoveryGeneration.current) setDiscovering(false);
-    }
-  };
-
-  const addDiscovered = useCallback(
-    (id: string, tier: ModelTier | "none") => {
-      const model = discoveredById.get(id);
-      if (!model) return;
-      // Adding a model is a config mutation; the provider page reaches into the
-      // same save pipeline every other page uses. The tier rides along so an
-      // operator who knows the class does not have to visit the Models page to
-      // finish the sentence.
-      void save((cfg) => {
-        if (
-          cfg.models.some(
-            (m) => m.provider_id === providerId && m.upstream_model === model.id,
-          )
-        ) {
-          notify("error", t("models.duplicate", { model: model.id }));
-          return null;
-        }
-        const next = structuredClone(cfg);
-        next.models.push(
-          emptyModel(providerId, model.id, {
-            tier: tier === "none" ? null : tier,
-            pricing: model.pricing,
-            // The catalogue often knows the window and the output cap; keeping
-            // them here is what makes the mark survive the add.
-            context_window: model.context_window ?? null,
-            max_output_tokens: model.max_output ?? null,
-            ...(model.capabilities ? { capabilities: model.capabilities } : {}),
-          }),
-        );
-        return next;
-      });
-    },
-    [save, providerId, discoveredById, notify, t],
-  );
-
-  /**
-   * The tier a catalogue row is about to be added as.
-   *
-   * The choice lives in a map keyed by model id, so a row that has not been
-   * touched reads "" — "no class yet", which lands the model unclassified —
-   * and the Models page banner keeps counting it until a class is assigned.
-   */
-  const chooseTier = useCallback((id: string, tier: ModelTier | "none") => {
-    setTierChoice((current) => ({ ...current, [id]: tier }));
-  }, []);
-
-  /**
-   * The tier of a model this provider already has.
-   *
-   * Models live at the config level, not on the provider, so the class edit
-   * is its own save rather than a provider-field mutation.
-   */
-  const setModelTier = useCallback(
-    (upstreamModel: string, next: ModelTier | "none") => {
-      void save((cfg) => {
-        const nextCfg = structuredClone(cfg);
-        const entry = nextCfg.models.find(
-          (e) => e.provider_id === providerId && e.upstream_model === upstreamModel,
-        );
-        if (!entry) return null;
-        entry.tier = next === "none" ? null : next;
-        return nextCfg;
-      });
-    },
-    [save, providerId],
-  );
-
-  /** Remove one configured model, with the confirmation the list row uses. */
-  const removeModel = useCallback(
-    (upstreamModel: string) => {
-      const model = models.find((m) => m.upstream_model === upstreamModel);
-      if (!model) return;
-      setConfirm({
-        title: t("confirm.remove_model"),
-        body: t("confirm.remove_model_body"),
-        confirmLabel: t("models.remove"),
-        danger: true,
-        onConfirm: () =>
-          void save((cfg) => {
-            const index = cfg.models.findIndex(
-              (m) => m.provider_id === providerId && m.upstream_model === upstreamModel,
-            );
-            if (index < 0) return null;
-            const next = structuredClone(cfg);
-            // The Auto Mode pool names models by exposed id or alias; deleting the
-            // model deletes its pool membership with it, so the reference cannot
-            // dangle behind the removal.
-            const gone = [
-              previewId(providerId, model.upstream_model),
-              ...model.aliases,
-            ];
-            next.models.splice(index, 1);
-            next.classifier.candidates = next.classifier.candidates.filter(
-              (c) => !gone.includes(c.model),
-            );
-            return next;
-          }),
-      });
-    },
-    [models, providerId, save, t],
   );
 
   return (
@@ -1432,111 +1222,6 @@ function ProviderDrawer({
         <ApiKeyField providerId={providerId} busy={busy} run={run} />
       )}
 
-      <Section title={t("providers.models_section")} hint={t("providers.models_hint")}>
-        {models.length > 0 ? (
-          <table className="table">
-            <thead>
-              <tr>
-                <th>{t("field.model_name")}</th>
-                <th>{t("models.tier")}</th>
-                <th />
-              </tr>
-            </thead>
-            <tbody>
-              {models.map((m) => (
-                <ConfiguredModelRow
-                  key={m.upstream_model}
-                  providerId={providerId}
-                  upstreamModel={m.upstream_model}
-                  tier={m.tier ?? "none"}
-                  options={modelTierOptions}
-                  disabled={busy}
-                  tierLocked={provider.kind === "decision"}
-                  onTier={setModelTier}
-                  onRemove={removeModel}
-                />
-              ))}
-            </tbody>
-          </table>
-        ) : (
-          <Empty>{t("providers.models_none")}</Empty>
-        )}
-        {/* A decision endpoint publishes no catalogue: it answers questions, it
-            does not serve models. So there is nothing to fetch, and the model is
-            declared by hand on the models page. */}
-        {provider.kind === "decision" ? (
-          <>
-            {/* The tier is not this model's to choose — the router excludes a
-                decision model from every tier pool — and a control that refuses
-                for no visible reason is a control that looks broken. */}
-            <p className="field-hint">{t("models.tier_decision_hint")}</p>
-            <p className="field-hint">{t("providers.decision_no_catalogue")}</p>
-          </>
-        ) : (
-          <div className="row gap wrap">
-            <Button
-              kind="ghost"
-              ariaLabel={t("providers.fetch")}
-              onClick={() => void discover()}
-              disabled={busy || discovering}
-            >
-              {discovering ? t("providers.discovering") : t("providers.fetch")}
-            </Button>
-          </div>
-        )}
-        {discovered && discovered.length > 0 && (
-          <>
-            <div className="controls">
-              <Toggle
-                label={t("providers.free_only")}
-                hint={t("providers.free_only_hint")}
-                checked={freeOnly}
-                onChange={setFreeOnly}
-              />
-            </div>
-            <p className="muted">
-              {freeOnly
-                ? t("providers.catalogue_shown", {
-                    shown: visibleDiscovered.length,
-                    total: discovered.length,
-                  })
-                : t("providers.catalogue_total", { total: discovered.length })}
-            </p>
-            {visibleDiscovered.length > 0 ? (
-              <table className="table">
-                <thead>
-                  <tr>
-                    <th>{t("field.model_name")}</th>
-                    <th>{t("models.price")}</th>
-                    <th>{t("models.tier")}</th>
-                    <th />
-                  </tr>
-                </thead>
-                <tbody>
-                  {visibleDiscovered.map((d) => (
-                    <DiscoveredModelRow
-                      key={d.id}
-                      id={d.id}
-                      pricing={d.pricing}
-                      free={d.free}
-                      tier={tierChoice[d.id] ?? "none"}
-                      options={catalogueTierOptions}
-                      added={configuredNames.has(d.id)}
-                      onTier={chooseTier}
-                      onAdd={addDiscovered}
-                    />
-                  ))}
-                </tbody>
-              </table>
-            ) : (
-              <div className="empty-state">
-                <p>{t("providers.catalogue_no_free", { total: discovered.length })}</p>
-              </div>
-            )}
-          </>
-        )}
-        <ConfirmDialog request={confirm} onClose={() => setConfirm(null)} />
-      </Section>
 
       <Section title={t("providers.configuration")}>
         <div className="controls">
@@ -1881,124 +1566,3 @@ function ProviderDrawer({
   );
 }
 
-/**
- * One model this provider already has, memoised.
- *
- * A row of this table carries a select, and a select is the most expensive
- * thing in the drawer. The row therefore takes the menu it offers, the tier
- * it currently holds and two stable callbacks — so a change to one row's
- * tier, or the confirmation that opens when a row is removed, leaves every
- * other row's select untouched.
- *
- * The markup is the row's own three cells, unchanged.
- */
-const ConfiguredModelRow = memo(function ConfiguredModelRow({
-  providerId,
-  upstreamModel,
-  tier,
-  options,
-  disabled,
-  tierLocked,
-  onTier,
-  onRemove,
-}: {
-  providerId: string;
-  upstreamModel: string;
-  tier: ModelTier | "none";
-  options: { value: ModelTier | "none"; label: string }[];
-  disabled: boolean;
-  /** Whether the tier is not this model's to choose.
-   *
-   * A decision model answers the Auto Mode's questions and cannot answer a
-   * request that wants prose, so a tier would be a promise the router cannot
-   * keep. The control is disabled rather than hidden, so that the row still
-   * shows what the model is and where the tier would have gone. */
-  tierLocked: boolean;
-  onTier: (upstreamModel: string, tier: ModelTier | "none") => void;
-  onRemove: (upstreamModel: string) => void;
-}) {
-  const { t } = useI18n();
-  return (
-    <tr>
-      <td className="mono">{previewId(providerId, upstreamModel)}</td>
-      <td>
-        <Select
-          ariaLabel={t("models.tier_for", { model: previewId(providerId, upstreamModel) })}
-          value={tier}
-          disabled={disabled || tierLocked}
-          onChange={(next) => onTier(upstreamModel, next)}
-          options={options}
-        />
-      </td>
-      <td>
-        <Button
-          kind="ghost"
-          ariaLabel={t("models.remove")}
-          disabled={disabled}
-          onClick={() => onRemove(upstreamModel)}
-        >
-          {t("common.remove")}
-        </Button>
-      </td>
-    </tr>
-  );
-});
-
-/**
- * One model the provider publishes, memoised.
- *
- * The catalogue is the largest thing in the drawer: a gateway can publish
- * several hundred models, and every one of them carries a select. The row
- * takes its price, its free flag, the tier it is about to be added as and
- * whether it is already configured — all of them values that change on their
- * own — so choosing a tier in one row does not re-render the other five
- * hundred.
- *
- * The markup is the row's own four cells, unchanged.
- */
-const DiscoveredModelRow = memo(function DiscoveredModelRow({
-  id,
-  pricing,
-  free,
-  tier,
-  options,
-  added,
-  onTier,
-  onAdd,
-}: {
-  id: string;
-  pricing: DiscoveredModel["pricing"];
-  free: boolean;
-  tier: ModelTier | "none";
-  options: { value: ModelTier | "none"; label: string }[];
-  added: boolean;
-  onTier: (id: string, tier: ModelTier | "none") => void;
-  onAdd: (id: string, tier: ModelTier | "none") => void;
-}) {
-  const { t } = useI18n();
-  return (
-    <tr>
-      <td className="mono">
-        {id} {free && <Badge tone="ok">{t("providers.free_badge")}</Badge>}
-      </td>
-      <td className="muted">
-        {pricing
-          ? `${pricing.input_per_mtok} / ${pricing.output_per_mtok} ${pricing.currency}`
-          : "—"}
-      </td>
-      <td>
-        <Select
-          ariaLabel={t("models.tier_for", { model: id })}
-          value={tier}
-          onChange={(next) => onTier(id, next)}
-          options={options}
-        />
-      </td>
-      <td>
-        <Button kind="ghost" onClick={() => onAdd(id, tier)} disabled={added}>
-          {t("cc.add")}
-        </Button>
-      </td>
-    </tr>
-  );
-});
