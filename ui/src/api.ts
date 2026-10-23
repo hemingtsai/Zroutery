@@ -1636,6 +1636,44 @@ export function emptyPricing(currency = "USD"): Pricing {
   };
 }
 
+/**
+ * A new model entry, mirroring `ModelEntry::for_upstream` in the core.
+ *
+ * The two constructors — the models page and the provider catalogue — used to
+ * carry their own copy of this literal, and the copies had already drifted
+ * (`max_output` and `context_window` from a catalogue were dropped by both).
+ * One constructor is the reason the next field cannot be forgotten in one of
+ * them.
+ */
+export function emptyModel(
+  provider_id: string,
+  upstream_model: string,
+  overrides: Partial<ModelEntry> = {},
+): ModelEntry {
+  return {
+    provider_id,
+    upstream_model,
+    tier: null,
+    priority: 0,
+    weight: 1,
+    enabled: true,
+    capabilities: {
+      vision: false,
+      tools: true,
+      thinking: false,
+      structured_output: false,
+      audio: false,
+      video: false,
+      files: false,
+    },
+    display_name: null,
+    aliases: [],
+    max_output_tokens: null,
+    pricing: null,
+    ...overrides,
+  };
+}
+
 export function defaultProbe(): BalanceProbe {
   return {
     path: "/user/balance",

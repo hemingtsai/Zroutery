@@ -1,6 +1,7 @@
 import { memo, useCallback, useMemo, useState, type ReactNode } from "react";
 import {
   TIERS,
+  emptyModel,
   emptyPricing,
   modelRows,
   previewId,
@@ -196,27 +197,7 @@ export default function Models({
         return null;
       }
       const next = structuredClone(cfg);
-      next.models.push({
-        provider_id: providerId,
-        upstream_model: upstream,
-        tier: null,
-        priority: 0,
-        weight: 1,
-        enabled: true,
-        capabilities: {
-          vision: false,
-          tools: true,
-          thinking: false,
-          structured_output: false,
-          audio: false,
-          video: false,
-          files: false,
-        },
-        display_name: null,
-        aliases: [],
-        max_output_tokens: null,
-        pricing: null,
-      });
+      next.models.push(emptyModel(providerId, upstream));
       return next;
     });
     setDraft({ ...draft, upstream_model: "" });

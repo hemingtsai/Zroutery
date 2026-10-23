@@ -3,6 +3,7 @@ import {
   api,
   BALANCE_PRESETS,
   defaultProbe,
+  emptyModel,
   errorText,
   money,
   previewId,
@@ -1300,27 +1301,12 @@ function ProviderDrawer({
           return null;
         }
         const next = structuredClone(cfg);
-        next.models.push({
-          provider_id: providerId,
-          upstream_model: model.id,
-          tier: tier === "none" ? null : tier,
-          priority: 0,
-          weight: 1,
-          enabled: true,
-          capabilities: {
-            vision: false,
-            tools: true,
-            thinking: false,
-            structured_output: false,
-            audio: false,
-            video: false,
-            files: false,
-          },
-          display_name: null,
-          aliases: [],
-          max_output_tokens: null,
-          pricing: model.pricing,
-        });
+        next.models.push(
+          emptyModel(providerId, model.id, {
+            tier: tier === "none" ? null : tier,
+            pricing: model.pricing,
+          }),
+        );
         return next;
       });
     },
