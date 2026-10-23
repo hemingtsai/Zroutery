@@ -47,11 +47,12 @@ jobs:
   # The declared `rust-version` used to be a sentence nothing checked: every job
   # followed the floating `stable` channel, so the workspace's stated minimum
   # could sit below what the tree actually needs without any job changing
-  # colour. It did. The locked dependencies need 1.88 (`icu_normalizer` 2.3.0
-  # and `time` 0.3.55 declare it) and the source needs 1.89 (temporary lifetime
-  # extension through a tuple-variant constructor), so the old `1.80` was not
-  # merely untested, it was false. This job pins the declared minimum and builds
-  # the locked tree with it, test targets included.
+  # colour. It did. This job exists so it cannot again. The locked dependencies
+  # need 1.90 (the desktop shell's Tauri 2.12.4 family, `muda` 0.20.0 and
+  # `tray-icon` 0.25.1 declare it) and the source needs 1.89 (temporary lifetime
+  # extension through a tuple-variant constructor), so the declaration is the
+  # higher of the two. This job pins the declared minimum and builds the locked
+  # tree with it, test targets included.
   msrv:
     name: declared minimum toolchain
     runs-on: macos-latest
@@ -59,7 +60,7 @@ jobs:
       - uses: actions/checkout@v4
       # Pinned to the declared minimum, not to `stable`. When Cargo.toml's
       # rust-version moves, this line moves with it in the same commit.
-      - uses: dtolnay/rust-toolchain@1.89.0
+      - uses: dtolnay/rust-toolchain@1.90.0
       - uses: Swatinem/rust-cache@v2
       - name: The pinned compiler is the declared minimum
         run: |
@@ -76,8 +77,9 @@ jobs:
           esac
       # `--locked` is the point: the minimum has to satisfy the dependency tree
       # the repository ships, not the one a resolver would pick today.
-      # `--all-targets` is the other half: the 1.89 floor comes from test code,
-      # so a check that skipped test targets would not prove the declaration.
+      # `--all-targets` is the other half: the declaration covers every target
+      # the repository ships, so a check that skipped test targets would not
+      # prove it.
       - name: Check the locked workspace at the declared minimum
         run: cargo check --workspace --locked --all-targets
 
