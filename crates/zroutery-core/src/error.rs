@@ -45,6 +45,13 @@ pub enum Error {
         provider: String,
         status: u16,
         body: String,
+        /// The wait the upstream asked for (`Retry-After` /
+        /// `x-ms-retry-after-ms`), when it named one.
+        ///
+        /// Not part of the message: it is a scheduling hint for the retry
+        /// policy, and putting it in the text would invite callers to parse an
+        /// English sentence for it.
+        retry_after: Option<std::time::Duration>,
     },
 
     /// Network level failure talking to the upstream.
@@ -229,13 +236,15 @@ mod tests {
         assert!(Error::Upstream {
             provider: "p".into(),
             status: 429,
-            body: String::new()
+            body: String::new(),
+            retry_after: None,
         }
         .is_retryable());
         assert!(Error::Upstream {
             provider: "p".into(),
             status: 503,
-            body: String::new()
+            body: String::new(),
+            retry_after: None,
         }
         .is_retryable());
         // WAF content blocks are provider-specific: failing over to another
@@ -243,13 +252,15 @@ mod tests {
         assert!(Error::Upstream {
             provider: "p".into(),
             status: 405,
-            body: String::new()
+            body: String::new(),
+            retry_after: None,
         }
         .is_retryable());
         assert!(!Error::Upstream {
             provider: "p".into(),
             status: 400,
-            body: String::new()
+            body: String::new(),
+            retry_after: None,
         }
         .is_retryable());
         // 500 with "invalid_request_error" in the body is a mis-classified
@@ -257,7 +268,8 @@ mod tests {
         assert!(!Error::Upstream {
             provider: "p".into(),
             status: 500,
-            body: r#"{"error":{"message":"Upstream rejected the request as invalid","type":"invalid_request_error"}}"#.into()
+            body: r#"{"error":{"message":"Upstream rejected the request as invalid","type":"invalid_request_error"}}"#.into(),
+            retry_after: None,
         }
         .is_retryable());
         assert!(!Error::invalid("bad").is_retryable());

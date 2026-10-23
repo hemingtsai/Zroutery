@@ -185,6 +185,20 @@ pub struct ProviderQuirks {
     /// Translate thinking budgets into `reasoning_effort`.
     #[serde(default)]
     pub send_reasoning_effort: bool,
+    /// Make Responses history portable across upstreams.
+    ///
+    /// Off by default because it trades reasoning continuity for portability:
+    /// the upstream no longer sees the reasoning items and item ids that an
+    /// earlier upstream issued. Turn it on for a relay that may serve one
+    /// conversation through several accounts or resources (AgentRouter, CC
+    /// Switch, an aggregate endpoint), where forwarding those references fails
+    /// with "the requested item was created under a different resource". See
+    /// `protocol::responses::sanitize`.
+    ///
+    /// Only the Responses dialect has anything to strip, so this is inert for
+    /// every other dialect.
+    #[serde(default)]
+    pub portable_history: bool,
 }
 
 impl Default for ProviderQuirks {
@@ -197,6 +211,7 @@ impl Default for ProviderQuirks {
             stream_usage: true,
             system_as_developer: false,
             send_reasoning_effort: false,
+            portable_history: false,
         }
     }
 }
@@ -226,7 +241,9 @@ pub fn encode_request(
     match dialect {
         Dialect::Anthropic => anthropic::encode_request(req, upstream_model),
         Dialect::OpenAI => openai::encode_request_with(req, upstream_model, quirks),
-        Dialect::OpenAIResponses => responses::encode_request(req, upstream_model),
+        Dialect::OpenAIResponses => {
+            responses::encode_request_with(req, upstream_model, quirks.portable_history)
+        }
         Dialect::Gemini => gemini::encode_request(req, upstream_model),
     }
 }

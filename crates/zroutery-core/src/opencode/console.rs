@@ -136,6 +136,7 @@ async fn fetch_models(
             provider: super::PROVIDER_ID.into(),
             status: status.as_u16(),
             body: String::new(),
+            retry_after: None,
         });
     }
     let json: Value = response

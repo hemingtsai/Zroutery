@@ -1571,6 +1571,7 @@ async fn a_business_failure_keeps_its_code_and_message_for_the_log() {
             provider,
             status,
             body,
+            ..
         } => {
             assert_eq!(provider, "newapi");
             assert_eq!(*status, 200);

@@ -71,7 +71,11 @@ impl ClassifierSignature {
     fn score(&self, req: &Value, system_text: &str) -> (f64, Vec<&'static str>) {
         let mut reasons = Vec::new();
         if let Some(want) = self.max_tokens {
-            if req.get("max_tokens").and_then(Value::as_u64) != Some(u64::from(want)) {
+            let got = req
+                .get("max_tokens")
+                .or_else(|| req.get("max_output_tokens"))
+                .and_then(Value::as_u64);
+            if got != Some(u64::from(want)) {
                 return (0.0, Vec::new());
             }
             reasons.push("max_tokens");
@@ -132,6 +136,15 @@ pub struct BuiltinDetectors {
     /// `[1m]`-style model modifiers, a weak positive signal on their own.
     #[serde(default = "yes")]
     pub model_1m_signature: bool,
+    /// Codex's Guardian auto-review prompt.
+    ///
+    /// The Guardian request is a normal Responses request with a very
+    /// distinctive developer message; there is no header or parameter that
+    /// marks it. The prompt markers are long and specific enough to stand on
+    /// their own, which is why this detector scores above the confidence
+    /// threshold while a single parameter match cannot.
+    #[serde(default = "yes")]
+    pub codex_guardian_signature: bool,
 }
 
 impl Default for BuiltinDetectors {
@@ -140,6 +153,7 @@ impl Default for BuiltinDetectors {
             anthropic_beta: true,
             xml_classifier_signature: true,
             model_1m_signature: true,
+            codex_guardian_signature: true,
         }
     }
 }
@@ -208,18 +222,88 @@ impl DetectionConfig {
     }
 }
 
-/// The concatenated system prompt of an Anthropic request body, in declaration
-/// order, whatever shape it arrived in (string or block array).
+/// The concatenated system/developer prompt of a request body.
+///
+/// Three shapes reach here, and the same words mean the same thing in each:
+///
+/// * Anthropic `system` — a string or a block array;
+/// * Responses `instructions` — a string or a text-part array;
+/// * Responses `input` items with role `system`/`developer` — the shape Codex's
+///   Guardian review uses for its policy and output contract.
+///
+/// A detector that read only the first shape would see the Claude Code
+/// classifier and miss every Codex review.
 fn system_text(body: &Value) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    let mut push = |text: &str| {
+        if !text.trim().is_empty() {
+            parts.push(text.trim().to_string());
+        }
+    };
     match body.get("system") {
-        Some(Value::String(s)) => s.clone(),
-        Some(Value::Array(blocks)) => blocks
-            .iter()
-            .filter_map(|b| b.get("text").and_then(Value::as_str))
-            .collect::<Vec<_>>()
-            .join("\n"),
-        _ => String::new(),
+        Some(Value::String(s)) => push(s),
+        Some(Value::Array(blocks)) => {
+            for block in blocks {
+                if let Some(text) = block.get("text").and_then(Value::as_str) {
+                    push(text);
+                }
+            }
+        }
+        _ => {}
     }
+    match body.get("instructions") {
+        Some(Value::String(s)) => push(s),
+        Some(Value::Array(blocks)) => {
+            for block in blocks {
+                if let Some(text) = block.get("text").and_then(Value::as_str) {
+                    push(text);
+                }
+            }
+        }
+        _ => {}
+    }
+    if let Some(items) = body.get("input").and_then(Value::as_array) {
+        for item in items {
+            let role = item.get("role").and_then(Value::as_str);
+            if !matches!(role, Some("system") | Some("developer")) {
+                continue;
+            }
+            match item.get("content") {
+                Some(Value::String(text)) => push(text),
+                Some(Value::Array(parts)) => {
+                    for part in parts {
+                        if let Some(text) = part.get("text").and_then(Value::as_str) {
+                            push(text);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    parts.join("\n")
+}
+
+/// Whether this request is one of Codex's Guardian review turns.
+///
+/// Guardian is a normal Responses request — same endpoint, same provider, no
+/// marker header — whose developer message contains the review policy and the
+/// JSON output contract. The phrases below are long and belong to that policy;
+/// a client prompt that happened to contain one would be asking the same
+/// question, which is the case this routing is for.
+fn is_codex_guardian(body: &Value, system: &str) -> bool {
+    let responses_shaped = body.get("input").is_some() || body.get("instructions").is_some();
+    if !responses_shaped {
+        return false;
+    }
+    let system = system.to_ascii_lowercase();
+    [
+        "first-step asynchronous security reviewer",
+        "prior guardian decisions are context, not precedent",
+        "you may use read-only tool checks to gather any additional context",
+    ]
+    .iter()
+    .any(|marker| system.contains(marker))
 }
 
 /// Classify one inbound request.
@@ -261,8 +345,22 @@ pub fn detect(headers: &HeaderMap, body: &Value, config: &DetectionConfig) -> De
         }
     }
 
-    // Levels 2 and 3: structural signatures, built-in first, then the user's.
+    // Level 2a: Codex's Guardian review is a Responses request whose developer
+    // message carries the review policy. It is short-circuited rather than
+    // scored with the Anthropic signatures: it is a different protocol, and a
+    // match that reached the shared scorer would be reported as Auto Mode and
+    // answered with a `<block>` tag Codex cannot read.
     let system = system_text(body);
+    if config.builtins.codex_guardian_signature && is_codex_guardian(body, &system) {
+        return Detection {
+            kind: RequestKind::Side(crate::query::SideQueryKind::CodexGuardian),
+            confidence: 0.97,
+            matched: Some("codex-guardian".to_string()),
+            reasons: vec!["guardian_prompt"],
+        };
+    }
+
+    // Levels 2 and 3: structural signatures, built-in first, then the user's.
     if config.builtins.xml_classifier_signature {
         for signature in DetectionConfig::builtin_signatures() {
             let (score, reasons) = signature.score(body, &system);
@@ -403,6 +501,78 @@ pub fn verdict_from_decision(
     }
     // Neither confident enough to act on, and the gate is closed.
     ClassifierVerdict::Unparseable
+}
+
+/// Read the verdict out of a classifier response's text content, in the
+/// protocol the side query asked in.
+///
+/// Auto Mode clients read `<block>yes|no</block>`; Codex's Guardian reads a
+/// JSON object whose only required field is `outcome`. The pool is shared, so
+/// the parser has to be told which question was asked — a `<block>` tag in a
+/// Guardian answer, or JSON in an Auto Mode answer, is not a verdict.
+pub fn parse_verdict_for(kind: RequestKind, text: &str) -> ClassifierVerdict {
+    match kind {
+        RequestKind::Side(crate::query::SideQueryKind::CodexGuardian) => {
+            parse_guardian_verdict(text)
+        }
+        _ => parse_verdict(text),
+    }
+}
+
+/// Read Guardian's JSON contract.
+///
+/// Codex accepts a JSON object surrounded by prose ("strict JSON" is the
+/// instruction, not a guarantee), so the outermost braces are what is parsed.
+/// Only the two contract outcomes count; anything else is unparseable and the
+/// gate stays closed.
+fn parse_guardian_verdict(text: &str) -> ClassifierVerdict {
+    let Some(start) = text.find('{') else {
+        return ClassifierVerdict::Unparseable;
+    };
+    let Some(end) = text.rfind('}') else {
+        return ClassifierVerdict::Unparseable;
+    };
+    if end <= start {
+        return ClassifierVerdict::Unparseable;
+    }
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&text[start..=end]) else {
+        return ClassifierVerdict::Unparseable;
+    };
+    match value.get("outcome").and_then(serde_json::Value::as_str) {
+        Some("allow") => ClassifierVerdict::Allow,
+        Some("deny") => ClassifierVerdict::Block,
+        _ => ClassifierVerdict::Unparseable,
+    }
+}
+
+/// The text a verdict is spoken in, for the protocol the side query used.
+pub fn verdict_text_for(kind: RequestKind, verdict: ClassifierVerdict) -> String {
+    match kind {
+        RequestKind::Side(crate::query::SideQueryKind::CodexGuardian) => {
+            guardian_verdict_json(verdict)
+        }
+        _ => verdict_text(verdict),
+    }
+}
+
+/// Speak a decision model's probability in Guardian's JSON contract.
+///
+/// Only a decision model reaches this: a chat model in the review pool is given
+/// Guardian's own prompt and its answer is passed through unchanged. The
+/// contract requires `outcome` alone; the rationale is for the person who sees
+/// the denial and explains why the proxy, not a prose model, decided.
+fn guardian_verdict_json(verdict: ClassifierVerdict) -> String {
+    match verdict {
+        ClassifierVerdict::Allow => r#"{"outcome":"allow"}"#.to_string(),
+        ClassifierVerdict::Block => {
+            r#"{"outcome":"deny","rationale":"Zroutery's Auto review decision model blocked this action."}"#
+                .to_string()
+        }
+        ClassifierVerdict::Unparseable => {
+            r#"{"outcome":"deny","rationale":"Zroutery's Auto review decision model was not confident that this action may proceed."}"#
+                .to_string()
+        }
+    }
 }
 
 /// The text a verdict is spoken in.
@@ -668,5 +838,100 @@ mod tests {
         let json = serde_json::to_string(&config).unwrap();
         let back: DetectionConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(config, back);
+    }
+
+    /// A Codex Guardian review: a Responses request whose developer message is
+    /// the review policy, not a header or a parameter.
+    fn guardian_body() -> Value {
+        json!({
+            "model": "gpt-5.1-codex-mini",
+            "stream": true,
+            "input": [
+                {"type": "message", "role": "developer", "content": [{"type": "input_text", "text":
+                    "You are acting as a first-step asynchronous security reviewer. A high-risk \
+                     decision triggers blocking Guardian review on future actions."}]},
+                {"type": "message", "role": "user", "content": [{"type": "input_text", "text":
+                    ">>> TRANSCRIPT START\nrun rm -rf build"}]}
+            ]
+        })
+    }
+
+    #[test]
+    fn codex_guardian_review_is_detected_from_its_policy() {
+        let d = detect_with(guardian_body());
+        assert_eq!(
+            d.kind,
+            RequestKind::Side(crate::query::SideQueryKind::CodexGuardian),
+            "{d:?}"
+        );
+        assert!(d.confidence >= 0.85, "{d:?}");
+        assert_eq!(d.matched.as_deref(), Some("codex-guardian"));
+    }
+
+    #[test]
+    fn the_guardian_detector_can_be_turned_off() {
+        let mut config = DetectionConfig::default();
+        config.builtins.codex_guardian_signature = false;
+        let d = detect(&HeaderMap::new(), &guardian_body(), &config);
+        assert_eq!(d.kind, RequestKind::Main, "{d:?}");
+    }
+
+    #[test]
+    fn a_guardian_answer_is_json_and_only_the_contract_outcomes_count() {
+        let kind = RequestKind::Side(crate::query::SideQueryKind::CodexGuardian);
+        assert_eq!(
+            parse_verdict_for(kind, r#"{"outcome":"allow"}"#),
+            ClassifierVerdict::Allow
+        );
+        assert_eq!(
+            parse_verdict_for(kind, r#"{"outcome":"deny","rationale":"rm -rf"}"#),
+            ClassifierVerdict::Block
+        );
+        // Codex tolerates prose around the object, so the outermost braces are
+        // parsed.
+        assert_eq!(
+            parse_verdict_for(kind, "The verdict is:\n{\"outcome\":\"allow\"}\nThanks."),
+            ClassifierVerdict::Allow
+        );
+        for text in [
+            "",
+            "allow",
+            r#"{"risk_level":"low"}"#,
+            r#"{"outcome":"maybe"}"#,
+        ] {
+            assert_eq!(
+                parse_verdict_for(kind, text),
+                ClassifierVerdict::Unparseable
+            );
+        }
+        // The same text in the other protocol is not a verdict.
+        assert_eq!(
+            parse_verdict_for(
+                RequestKind::Side(crate::query::SideQueryKind::AutoMode),
+                r#"{"outcome":"allow"}"#
+            ),
+            ClassifierVerdict::Unparseable
+        );
+    }
+
+    #[test]
+    fn a_decision_model_speaks_guardian_json() {
+        let kind = RequestKind::Side(crate::query::SideQueryKind::CodexGuardian);
+        assert_eq!(
+            verdict_text_for(kind, ClassifierVerdict::Allow),
+            r#"{"outcome":"allow"}"#
+        );
+        let denied: Value =
+            serde_json::from_str(&verdict_text_for(kind, ClassifierVerdict::Block)).unwrap();
+        assert_eq!(denied["outcome"], "deny");
+        assert!(denied["rationale"].is_string());
+        // And the Auto Mode protocol still gets its tag.
+        assert_eq!(
+            verdict_text_for(
+                RequestKind::Side(crate::query::SideQueryKind::AutoMode),
+                ClassifierVerdict::Block
+            ),
+            "<block>yes</block>"
+        );
     }
 }

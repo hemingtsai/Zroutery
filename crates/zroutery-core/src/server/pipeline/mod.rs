@@ -808,6 +808,44 @@ async fn console_key(
     Ok(key)
 }
 
+/// Send one buffered call, retrying the same candidate when the failure is
+/// one a replay can fix.
+///
+/// The candidate is not changed: a rate limit or a gateway blip is the same
+/// upstream asking for a moment, and the next candidate is the fallback's job.
+/// The policy lives in `upstream::retry_advice` so the streaming handshake and
+/// this path cannot disagree about what is retryable.
+async fn send_with_retry<F, Fut, T>(
+    provider: &crate::config::ProviderConfig,
+    can_fail_over: bool,
+    mut send: F,
+) -> Result<T>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T>>,
+{
+    let mut retries = 0u32;
+    loop {
+        match send().await {
+            Ok(value) => return Ok(value),
+            Err(err) => match crate::upstream::retry_advice(&err, retries, can_fail_over, 1) {
+                Some(delay) => {
+                    tracing::warn!(
+                        provider = %provider.name,
+                        retry = retries + 1,
+                        wait_ms = delay.as_millis(),
+                        error = %err,
+                        "retryable upstream failure, retrying the same candidate"
+                    );
+                    tokio::time::sleep(delay).await;
+                    retries += 1;
+                }
+                None => return Err(err),
+            },
+        }
+    }
+}
+
 /// Send one buffered request, folding an SSE-only upstream back into a response.
 ///
 /// OpenCode's free tier forces `stream: true` (its gate rejects a non-streaming
@@ -820,6 +858,8 @@ async fn buffered_upstream(
     key: Option<&str>,
     body: &Value,
     client: &ClientIdentity,
+    kind: RequestKind,
+    can_fail_over: bool,
 ) -> Result<crate::ir::ChatResponse> {
     // A decision endpoint answers with a probability rather than a message, so
     // the answer is read as a probability and then *spoken back* in the
@@ -827,25 +867,30 @@ async fn buffered_upstream(
     // model answered, and the client sees exactly what a language model's
     // verdict would have looked like.
     if candidate.provider.kind.is_decision() {
-        let decision = state
-            .upstream
-            .send_decision(&candidate.provider, key, body)
-            .await?;
+        let decision = send_with_retry(&candidate.provider, can_fail_over, || {
+            state.upstream.send_decision(&candidate.provider, key, body)
+        })
+        .await?;
         let threshold = candidate.provider.decision.threshold;
         let verdict = crate::classifier::verdict_from_decision(Some(decision), threshold);
-        return Ok(decision_response(verdict, &candidate.entry.upstream_model));
+        return Ok(decision_response(
+            kind,
+            verdict,
+            &candidate.entry.upstream_model,
+        ));
     }
     #[cfg(feature = "opencode")]
     if client.profile == crate::config::ProviderClientProfile::OpenCodeCli {
         use futures_util::StreamExt as _;
         let mut stream = state
             .upstream
-            .stream_with_identity(
+            .stream_with_identity_policy(
                 &candidate.provider,
                 key,
                 body,
                 &candidate.entry.upstream_model,
                 client,
+                can_fail_over,
             )
             .await?;
         let mut collector = protocol::StreamCollector::default();
@@ -855,10 +900,12 @@ async fn buffered_upstream(
         }
         return Ok(collector.finish());
     }
-    state
-        .upstream
-        .send_with_identity(&candidate.provider, key, body, client)
-        .await
+    send_with_retry(&candidate.provider, can_fail_over, || {
+        state
+            .upstream
+            .send_with_identity(&candidate.provider, key, body, client)
+    })
+    .await
 }
 
 /// The answer a decision model's probability is spoken back as.
@@ -868,6 +915,7 @@ async fn buffered_upstream(
 /// So the verdict is written as the text a language model's answer would have
 /// been, and the rest of the pipeline carries it unchanged.
 fn decision_response(
+    kind: RequestKind,
     verdict: crate::classifier::ClassifierVerdict,
     model: &str,
 ) -> crate::ir::ChatResponse {
@@ -881,7 +929,7 @@ fn decision_response(
         ),
         model: model.to_string(),
         content: vec![crate::ir::ContentBlock::text(
-            crate::classifier::verdict_text(verdict),
+            crate::classifier::verdict_text_for(kind, verdict),
         )],
         stop_reason: crate::ir::StopReason::EndTurn,
         stop_sequence: None,
@@ -941,7 +989,9 @@ async fn buffered_chat(
     let mode = encode_mode_for(kind);
     let mut last_error = Error::NoCandidate(req.model.clone());
 
-    for candidate in &plan {
+    for (index, candidate) in plan.iter().enumerate() {
+        // A later candidate means this failure is failed over, not waited on.
+        let can_fail_over = index + 1 < plan.len();
         lifecycle.attempted(candidate);
         if !kind.is_main() {
             // The three names the debugging session needs: what the client
@@ -1017,7 +1067,17 @@ async fn buffered_chat(
                 continue;
             }
         };
-        match buffered_upstream(&state, candidate, key.as_deref(), &body, &client).await {
+        match buffered_upstream(
+            &state,
+            candidate,
+            key.as_deref(),
+            &body,
+            &client,
+            kind,
+            can_fail_over,
+        )
+        .await
+        {
             Ok(mut resp) => {
                 // A placeholder we injected only to satisfy the gate must not
                 // reach a client that never declared it.
@@ -1033,7 +1093,7 @@ async fn buffered_chat(
                 // is reported, the failure is recorded and the next candidate
                 // is tried. There is no "looks safe" fallback.
                 if !kind.is_main() {
-                    match crate::classifier::parse_verdict(&resp.text()) {
+                    match crate::classifier::parse_verdict_for(kind, &resp.text()) {
                         crate::classifier::ClassifierVerdict::Allow
                         | crate::classifier::ClassifierVerdict::Block => {
                             tracing::debug!(
@@ -1045,7 +1105,7 @@ async fn buffered_chat(
                         }
                         crate::classifier::ClassifierVerdict::Unparseable => {
                             let unusable = Error::BadUpstreamPayload(format!(
-                                "classifier response from `{}` carried no <block> verdict",
+                                "classifier response from `{}` carried no verdict",
                                 candidate.model_id()
                             ));
                             lifecycle.failed_attempt(attempt_start, &unusable);
@@ -1059,7 +1119,7 @@ async fn buffered_chat(
                                 kind = kind.as_str(),
                                 candidate_model = candidate.model_id(),
                                 upstream_model = %candidate.entry.upstream_model,
-                                "classifier response had no <block> verdict; failing over"
+                                "classifier response had no verdict; failing over"
                             );
                             last_error = unusable;
                             continue;
@@ -1168,16 +1228,16 @@ async fn buffered_chat(
                         // path applies, minus the health report (this was a
                         // repaired retry, which never records health).
                         if !kind.is_main()
-                            && crate::classifier::parse_verdict(&resp.text())
+                            && crate::classifier::parse_verdict_for(kind, &resp.text())
                                 == crate::classifier::ClassifierVerdict::Unparseable
                         {
                             tracing::warn!(
                                 kind = kind.as_str(),
                                 candidate_model = candidate.model_id(),
-                                "rectified classifier response still had no <block> verdict; failing over"
+                                "rectified classifier response still had no verdict; failing over"
                             );
                             let verdict = Error::BadUpstreamPayload(format!(
-                                "classifier response from `{}` carried no <block> verdict",
+                                "classifier response from `{}` carried no verdict",
                                 candidate.model_id()
                             ));
                             lifecycle.failed_attempt(repair_start, &verdict);
@@ -1323,7 +1383,9 @@ async fn stream_chat(
     let mode = encode_mode_for(kind);
     let mut last_error = Error::NoCandidate(req.model.clone());
 
-    for candidate in &plan {
+    for (index, candidate) in plan.iter().enumerate() {
+        // A later candidate means this failure is failed over, not waited on.
+        let can_fail_over = index + 1 < plan.len();
         lifecycle.attempted(candidate);
         if !kind.is_main() {
             tracing::debug!(
@@ -1397,12 +1459,13 @@ async fn stream_chat(
         };
         match state
             .upstream
-            .stream_with_identity(
+            .stream_with_identity_policy(
                 &candidate.provider,
                 key.as_deref(),
                 &body,
                 &candidate.entry.upstream_model,
                 &client,
+                can_fail_over,
             )
             .await
         {

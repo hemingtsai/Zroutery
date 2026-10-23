@@ -34,6 +34,7 @@ fn no_upstream_body_shape_reaches_the_activity_record() {
             provider: "test-provider".into(),
             status: 401,
             body: body.into(),
+            retry_after: None,
         };
         let shown = activity_error(&error);
         assert!(

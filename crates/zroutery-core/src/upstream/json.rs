@@ -101,6 +101,7 @@ impl Upstream {
                 provider: provider.name.clone(),
                 status: status.as_u16(),
                 body: truncate(&text, 2000),
+                retry_after: None,
             });
         }
         serde_json::from_str(&text)

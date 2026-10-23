@@ -414,6 +414,7 @@ fn failure_disposition_is_a_priority_summary_not_a_second_classifier() {
         provider: "provider-a".into(),
         status: 429,
         body: "rate limited".into(),
+        retry_after: None,
     });
     assert_eq!(router.failure_disposition(&both), FailureDisposition::Retry);
     assert!(router.should_retry_failure(&both));
@@ -423,6 +424,7 @@ fn failure_disposition_is_a_priority_summary_not_a_second_classifier() {
         provider: "provider-a".into(),
         status: 500,
         body: "unclassified".into(),
+        retry_after: None,
     });
     assert_eq!(unknown.class, FailureClass::Unknown);
     assert_eq!(
@@ -506,6 +508,7 @@ fn classified_failure_adapter_preserves_fallback_and_health_authority() {
         provider: "provider-a".into(),
         status: 429,
         body: "secret upstream detail".into(),
+        retry_after: None,
     });
     assert_eq!(
         router.failure_disposition(&rate_limit),
@@ -562,6 +565,7 @@ fn neutral_failure_returns_the_half_open_probe_permit() {
         provider: "provider-a".into(),
         status: 429,
         body: "slow down".into(),
+        retry_after: None,
     });
     router.record_classified_attempt("provider-a-m", "provider-a", &rate_limit, &routing);
     assert_eq!(

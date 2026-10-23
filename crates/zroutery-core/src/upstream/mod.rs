@@ -47,6 +47,8 @@ mod catalogue;
 mod decision;
 mod encode;
 mod errors;
+
+pub(crate) use errors::retry_advice;
 mod headers;
 mod json;
 mod stream;
@@ -65,6 +67,34 @@ pub use headers::{build_headers, build_headers_for_identity, build_headers_for_p
 
 pub(super) const DEFAULT_ANTHROPIC_VERSION: &str = "2023-06-01";
 const USER_AGENT: &str = concat!("zroutery/", env!("CARGO_PKG_VERSION"));
+/// The wait an upstream asked for before the next attempt.
+///
+/// `Retry-After` is either seconds or an HTTP date; `x-ms-retry-after-ms` is a
+/// millisecond count some relays send instead. The retry policy treats the
+/// answer as a floor, never as a reason to retry early.
+pub(crate) fn retry_after(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
+    if let Some(millis) = headers
+        .get("x-ms-retry-after-ms")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim().parse::<u64>().ok())
+    {
+        return Some(Duration::from_millis(millis));
+    }
+    let value = headers
+        .get(reqwest::header::RETRY_AFTER)?
+        .to_str()
+        .ok()?
+        .trim();
+    if let Ok(seconds) = value.parse::<u64>() {
+        return Some(Duration::from_secs(seconds));
+    }
+    chrono::DateTime::parse_from_rfc2822(value).ok().map(|at| {
+        (at.with_timezone(&chrono::Utc) - chrono::Utc::now())
+            .to_std()
+            .unwrap_or_default()
+    })
+}
+
 /// Stream of canonical events coming from one upstream call.
 pub type EventStream = Pin<Box<dyn Stream<Item = Result<StreamEvent>> + Send>>;
 
@@ -197,6 +227,7 @@ impl Upstream {
                 })?;
 
         let status = response.status();
+        let retry_after = retry_after(response.headers());
         let text =
             tokio::time::timeout(Duration::from_secs(provider.timeout_secs), response.text())
                 .await
@@ -211,6 +242,7 @@ impl Upstream {
                 provider: provider.name.clone(),
                 status: status.as_u16(),
                 body: truncate(&text, 2000),
+                retry_after,
             });
         }
 
@@ -253,6 +285,7 @@ impl Upstream {
                 })?;
 
         let status = response.status();
+        let retry_after = retry_after(response.headers());
         let text =
             tokio::time::timeout(Duration::from_secs(provider.timeout_secs), response.text())
                 .await
@@ -267,6 +300,7 @@ impl Upstream {
                 provider: provider.name.clone(),
                 status: status.as_u16(),
                 body: truncate(&text, 2000),
+                retry_after,
             });
         }
 

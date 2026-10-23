@@ -93,6 +93,7 @@ fn generic_402_412_statuses_need_explicit_local_markers() {
         provider: "p".into(),
         status: 402,
         body: "payment required".into(),
+        retry_after: None,
     };
     assert!(!generic_upstream.is_retryable());
     assert!(generic_upstream.counts_against_health());
@@ -190,6 +191,7 @@ async fn every_error_variant_has_one_canonical_classification() {
                 provider: "provider-a".into(),
                 status: 503,
                 body: "temporarily unavailable".into(),
+                retry_after: None,
             },
             FailureClass::ProviderUnavailable,
         ),
@@ -445,6 +447,7 @@ fn capability_authentication_transport_timeout_and_rate_limit_are_explicit() {
         provider: "p".into(),
         status: 422,
         body: "model does not support vision".into(),
+        retry_after: None,
     });
     assert_eq!(capability.class, FailureClass::Capability);
     assert!(capability.fallbackable());
@@ -472,6 +475,7 @@ fn capability_authentication_transport_timeout_and_rate_limit_are_explicit() {
         provider: "p".into(),
         status: 429,
         body: "too many requests".into(),
+        retry_after: None,
     });
     assert_eq!(rate_limit.class, FailureClass::RateLimit);
     assert!(rate_limit.retryable());
@@ -500,6 +504,7 @@ fn legacy_error_helpers_delegate_to_the_canonical_result() {
             provider: "provider-a".into(),
             status: 429,
             body: "rate limited".into(),
+            retry_after: None,
         },
     ];
 
@@ -516,6 +521,7 @@ fn legacy_error_helpers_delegate_to_the_canonical_result() {
         provider: "provider-a".into(),
         status: 500,
         body: r#"{"type":"invalid_request_error"}"#.into(),
+        retry_after: None,
     };
     let classified = mislabeled_validation.classified();
     assert_eq!(classified.class, FailureClass::InvalidRequest);

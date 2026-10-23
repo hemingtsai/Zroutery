@@ -20,6 +20,8 @@
 //!
 //! * [`request_in`] — items and parts in, canonical IR out.
 //! * [`request_out`] — canonical IR in, a request body out.
+//! * `sanitize` — make that body portable across upstreams (history ids,
+//!   reasoning items and stored-response references belong to one resource).
 //! * [`response`] — non-streaming responses, and the wire usage shape.
 //! * [`stream_in`] — the inbound SSE parser.
 //! * [`stream_out`] — the outbound SSE encoder.
@@ -32,11 +34,12 @@
 mod request_in;
 mod request_out;
 mod response;
+mod sanitize;
 mod stream_in;
 mod stream_out;
 
 pub use request_in::{decode_history, decode_request, input_items, StoragePolicy};
-pub use request_out::encode_request;
+pub use request_out::{encode_request, encode_request_with};
 pub use response::{decode_response, encode_response};
 pub use stream_in::ResponsesStreamParser;
 pub use stream_out::ResponsesStreamEncoder;

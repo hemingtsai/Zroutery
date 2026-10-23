@@ -223,9 +223,7 @@ fn a_context_window_must_be_positive_and_fit_the_output_cap() {
     cfg.models[0].context_window = Some(0);
     let issues = cfg.validate();
     assert!(
-        issues
-            .iter()
-            .any(|i| i.code == "model.context_window_zero"),
+        issues.iter().any(|i| i.code == "model.context_window_zero"),
         "{issues:?}"
     );
 
@@ -251,7 +249,9 @@ fn the_zen_jev_preset_validates() {
     provider.base_url = "https://opencode.ai/zen".into();
     provider.key_ref = String::new();
     provider.client_profile = ProviderClientProfile::Native;
-    provider.extra_headers.insert("x-opencode-client".into(), "zroutery".into());
+    provider
+        .extra_headers
+        .insert("x-opencode-client".into(), "zroutery".into());
     provider.timeout_secs = 4;
     provider.connect_timeout_secs = 4;
     provider.decision.path = "/v1/systemone".into();
@@ -278,24 +278,26 @@ fn the_zen_jev_preset_validates() {
         .into_iter()
         .filter(|i| i.severity == IssueSeverity::Error)
         .collect();
-    assert!(errors.is_empty(), "the preset must be a valid config: {errors:?}");
+    assert!(
+        errors.is_empty(),
+        "the preset must be a valid config: {errors:?}"
+    );
 }
 
 #[test]
 fn a_decision_model_is_not_nagged_about_a_tier() {
     let mut cfg = sample();
-    cfg.providers.push(ProviderConfig::new(
-        "jev",
-        "Jev",
-        ProviderKind::Decision,
-    ));
+    cfg.providers
+        .push(ProviderConfig::new("jev", "Jev", ProviderKind::Decision));
     cfg.models
         .push(ModelEntry::for_upstream("jev", "jev-1.13-free", None));
 
     let issues = cfg.validate();
     assert!(
-        !issues.iter().any(|i| i.code == "model.unclassified"
-            && i.subject.as_deref() == Some("jev-jev-1.13-free")),
+        !issues
+            .iter()
+            .any(|i| i.code == "model.unclassified"
+                && i.subject.as_deref() == Some("jev-jev-1.13-free")),
         "a decision model is deliberately outside every tier: {issues:?}"
     );
     assert!(!cfg

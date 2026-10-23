@@ -16,9 +16,6 @@
 use serde::{Deserialize, Serialize};
 
 /// The kinds of side query Zroutery knows how to route separately.
-///
-/// Only Auto Mode exists today; the variants below are the foreseeable next
-/// ones, kept as comments so adding one is a decision rather than an accident.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SideQueryKind {
@@ -26,10 +23,12 @@ pub enum SideQueryKind {
     /// request asking a model to judge a proposed action and answer with an
     /// XML `<block>` verdict.
     AutoMode,
-    // Future:
-    // PermissionExplainer,
-    // ModelValidation,
-    // SessionSearch,
+    /// Codex's Guardian auto-review: a review request asking a model whether a
+    /// planned action may proceed, answered with a JSON `outcome` (and, for a
+    /// denial, the risk it saw). It is the same kind of question as Auto Mode
+    /// — may this action run without asking the user? — asked in a different
+    /// protocol, so it is routed to the same review pool.
+    CodexGuardian,
 }
 
 impl SideQueryKind {
@@ -37,7 +36,14 @@ impl SideQueryKind {
     pub fn as_str(&self) -> &'static str {
         match self {
             SideQueryKind::AutoMode => "auto_mode",
+            SideQueryKind::CodexGuardian => "codex_guardian",
         }
+    }
+
+    /// Whether this side query is answered with a `<block>yes|no</block>` tag
+    /// rather than Codex's JSON contract.
+    pub fn uses_block_verdict(self) -> bool {
+        matches!(self, SideQueryKind::AutoMode)
     }
 }
 
@@ -60,6 +66,7 @@ impl RequestKind {
         match self {
             RequestKind::Main => "main",
             RequestKind::Side(SideQueryKind::AutoMode) => "auto_mode",
+            RequestKind::Side(SideQueryKind::CodexGuardian) => "codex_guardian",
         }
     }
 
@@ -85,7 +92,7 @@ impl<'de> Deserialize<'de> for RequestKind {
         impl<'de> serde::de::Visitor<'de> for Visitor {
             type Value = RequestKind;
             fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                formatter.write_str("`main` or `auto_mode`")
+                formatter.write_str("`main`, `auto_mode` or `codex_guardian`")
             }
             fn visit_str<E: serde::de::Error>(
                 self,
@@ -94,7 +101,11 @@ impl<'de> Deserialize<'de> for RequestKind {
                 match value {
                     "main" => Ok(RequestKind::Main),
                     "auto_mode" => Ok(RequestKind::Side(SideQueryKind::AutoMode)),
-                    other => Err(E::unknown_variant(other, &["main", "auto_mode"])),
+                    "codex_guardian" => Ok(RequestKind::Side(SideQueryKind::CodexGuardian)),
+                    other => Err(E::unknown_variant(
+                        other,
+                        &["main", "auto_mode", "codex_guardian"],
+                    )),
                 }
             }
         }

@@ -63,6 +63,7 @@ impl RefreshBehaviour {
                 provider: "relay".to_string(),
                 status,
                 body: String::new(),
+                retry_after: None,
             }),
         }
     }

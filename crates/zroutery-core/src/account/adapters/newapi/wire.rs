@@ -73,6 +73,9 @@ impl NewApiError {
                 provider: PROVIDER_ID.into(),
                 status,
                 body: join_code_message(code, message),
+                // NewAPI's status is mapped without its headers; the retry
+                // policy still applies its class default.
+                retry_after: None,
             },
             NewApiError::Transport(source) => Error::Transport {
                 provider: PROVIDER_ID.into(),

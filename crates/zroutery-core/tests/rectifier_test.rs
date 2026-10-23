@@ -13,6 +13,7 @@ fn upstream(msg: &str, status: u16) -> Error {
         provider: "p".into(),
         status,
         body: msg.to_string(),
+        retry_after: None,
     }
 }
 

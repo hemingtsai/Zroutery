@@ -362,7 +362,10 @@ async fn a_malformed_answers_envelope_is_an_error() {
     let h = Harness::start(config_for(&base, 0.85)).await;
 
     let (status, text) = h.ask().await;
-    assert_ne!(status, 200, "a malformed answer must fail the query: {text}");
+    assert_ne!(
+        status, 200,
+        "a malformed answer must fail the query: {text}"
+    );
     assert!(
         !text.contains("<block>no</block>"),
         "a malformed answer must never allow the action: {text}"

@@ -8,7 +8,7 @@ use bytes::Bytes;
 use futures_util::{Stream, StreamExt};
 use serde_json::Value;
 
-use super::errors::{capture_failed_body, is_transient_handshake_failure, truncate};
+use super::errors::{capture_failed_body, truncate};
 use super::headers::{anonymous_identity, build_headers_for_identity};
 use super::{EventStream, Upstream};
 use crate::config::{ClientIdentity, ProviderConfig};
@@ -34,6 +34,9 @@ impl Upstream {
     /// The identity is resolved once, before the handshake retry loop, so every
     /// replayed attempt carries the same fingerprint and the same forwarded
     /// client headers — a retry must not look like a different client.
+    ///
+    /// Retries are allowed here: a caller using this form has no plan to fail
+    /// over to.
     pub async fn stream_with_identity(
         &self,
         provider: &ProviderConfig,
@@ -42,14 +45,30 @@ impl Upstream {
         upstream_model: &str,
         client: &ClientIdentity,
     ) -> Result<EventStream> {
+        self.stream_with_identity_policy(provider, api_key, body, upstream_model, client, false)
+            .await
+    }
+
+    /// Streaming call whose handshake knows whether a fallback exists.
+    ///
+    /// `can_fail_over` turns a retryable failure into a handover: with another
+    /// candidate behind this one, moving on is faster than waiting out a rate
+    /// limit, and the router already owns that decision.
+    pub async fn stream_with_identity_policy(
+        &self,
+        provider: &ProviderConfig,
+        api_key: Option<&str>,
+        body: &Value,
+        upstream_model: &str,
+        client: &ClientIdentity,
+        can_fail_over: bool,
+    ) -> Result<EventStream> {
         // The handshake (DNS, connect, TLS, request upload, response status) is
-        // retried a couple of times: transient transport failures and gateway
-        // blips (408/502/503/504) happen before any bytes of the answer exist,
-        // so replaying the request is safe and masks proxy/node flaps.
-        const HANDSHAKE_ATTEMPTS: u32 = 3;
-        let mut attempt = 0;
+        // retried by the shared policy: transient failures and gateway blips
+        // happen before any bytes of the answer exist, and a rate limit is a
+        // window that reopens. Every replay carries the same fingerprint.
+        let mut retries = 0u32;
         let response = loop {
-            attempt += 1;
             let request = self
                 .client()
                 .post(provider.chat_url())
@@ -67,25 +86,28 @@ impl Upstream {
                     });
             let response = match result {
                 Ok(response) => response,
-                Err(err) => {
-                    if attempt < HANDSHAKE_ATTEMPTS && is_transient_handshake_failure(&err) {
+                Err(err) => match super::retry_advice(&err, retries, can_fail_over, 2) {
+                    Some(delay) => {
                         tracing::warn!(
                             provider = %provider.name,
-                            attempt,
+                            retry = retries + 1,
+                            wait_ms = delay.as_millis(),
                             error = %err,
-                            "transient handshake failure, retrying"
+                            "retryable handshake failure, retrying the same candidate"
                         );
-                        tokio::time::sleep(Duration::from_millis(750 * u64::from(attempt))).await;
+                        tokio::time::sleep(delay).await;
+                        retries += 1;
                         continue;
                     }
-                    return Err(err);
-                }
+                    None => return Err(err),
+                },
             };
 
             let status = response.status();
             if status.is_success() {
                 break response;
             }
+            let retry_after = super::retry_after(response.headers());
             // Error bodies are small, but a stalled upstream must not hold the
             // request forever on this path — non-stream calls time this read.
             let text = match tokio::time::timeout(
@@ -101,15 +123,18 @@ impl Upstream {
                 provider: provider.name.clone(),
                 status: status.as_u16(),
                 body: truncate(&text, 2000),
+                retry_after,
             };
-            if attempt < HANDSHAKE_ATTEMPTS && is_transient_handshake_failure(&err) {
+            if let Some(delay) = super::retry_advice(&err, retries, can_fail_over, 2) {
                 tracing::warn!(
                     provider = %provider.name,
-                    attempt,
+                    retry = retries + 1,
+                    wait_ms = delay.as_millis(),
                     status = status.as_u16(),
-                    "transient handshake status, retrying"
+                    "retryable handshake status, retrying the same candidate"
                 );
-                tokio::time::sleep(Duration::from_millis(750 * u64::from(attempt))).await;
+                tokio::time::sleep(delay).await;
+                retries += 1;
                 continue;
             }
             // DEBUG (opt-in via ZROUTERY_CAPTURE_FAILED_BODIES=1): capture the

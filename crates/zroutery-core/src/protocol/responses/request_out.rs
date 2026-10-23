@@ -3,6 +3,7 @@
 use serde_json::{json, Map, Value};
 
 use super::request_in::encode_text_format;
+use super::sanitize;
 use crate::error::{Error, Result};
 use crate::ir::{ChatRequest, ContentBlock, MediaSource, Role, ToolChoice, ToolResultPart};
 use crate::protocol::apply_content_policy;
@@ -20,7 +21,25 @@ pub(super) fn arguments_json(input: &Value) -> String {
         other => other.to_string(),
     }
 }
+/// Encode a Responses request with the default history handling.
+///
+/// The history travels as the client sent it. Use [`encode_request_with`] with
+/// `portable_history` for a relay that may serve one conversation through
+/// several accounts or resources.
 pub fn encode_request(req: &ChatRequest, upstream_model: &str) -> Result<Value> {
+    encode_request_with(req, upstream_model, false)
+}
+
+/// Encode a Responses request, optionally making its history portable.
+///
+/// `portable_history` is the provider's [`ProviderQuirks::portable_history`]:
+/// when set, history ids and reasoning items issued by an earlier upstream are
+/// removed before the body leaves the proxy. See `sanitize`.
+pub fn encode_request_with(
+    req: &ChatRequest,
+    upstream_model: &str,
+    portable_history: bool,
+) -> Result<Value> {
     let mut input: Vec<Value> = Vec::new();
     for m in &req.messages {
         let mut parts: Vec<Value> = Vec::new();
@@ -305,5 +324,21 @@ pub fn encode_request(req: &ChatRequest, upstream_model: &str) -> Result<Value> 
             body.insert(field.to_string(), val.clone());
         }
     }
-    Ok(Value::Object(body))
+    // Only when the operator says this upstream may not be the one that issued
+    // the history: ids, reasoning blobs and `previous_response_id` name
+    // resources on another account. See `sanitize` for the full argument.
+    let mut body = Value::Object(body);
+    if portable_history {
+        let report = sanitize::make_portable(&mut body);
+        if report != sanitize::Portability::default() {
+            tracing::debug!(
+                reasoning_items = report.reasoning_items_removed,
+                include_entries = report.include_entries_removed,
+                item_ids = report.item_ids_removed,
+                previous_response_id = report.previous_response_id_removed,
+                "responses request made portable for an upstream that may not have issued its history"
+            );
+        }
+    }
+    Ok(body)
 }

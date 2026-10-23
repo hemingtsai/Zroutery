@@ -9,7 +9,8 @@ use zroutery_core::ir::{
     ToolResultPart, Usage,
 };
 use zroutery_core::protocol::responses::{
-    decode_request, decode_response, encode_request, ResponsesStreamEncoder, ResponsesStreamParser,
+    decode_request, decode_response, encode_request, encode_request_with, ResponsesStreamEncoder,
+    ResponsesStreamParser,
 };
 use zroutery_core::protocol::{SseDecoder, SseFrame, StreamEncoder, StreamParser};
 
@@ -510,8 +511,8 @@ fn native_reasoning_input_keeps_payload_and_all_summaries() {
         other => panic!("expected redacted thinking block, got {other:?}"),
     }
 
-    // Re-encoding for a native upstream echoes the opaque payload unchanged
-    // and keeps the whole summary.
+    // By default the history travels as the client sent it: re-encoding for a
+    // native upstream echoes the opaque payload unchanged and keeps the summary.
     let wire = encode_request(&req, "m").unwrap();
     let input = wire["input"].as_array().unwrap();
     assert!(
@@ -519,14 +520,14 @@ fn native_reasoning_input_keeps_payload_and_all_summaries() {
             .iter()
             .any(|item| item["type"] == "reasoning"
                 && item["encrypted_content"] == "native-opaque-blob"),
-        "opaque payload must round trip verbatim: {wire}"
+        "opaque payload must round trip verbatim by default: {wire}"
     );
     assert!(
         input
             .iter()
             .any(|item| item["type"] == "reasoning"
                 && item["summary"][0]["text"] == "first\n\nsecond"),
-        "full summary must round trip: {wire}"
+        "full summary must round trip by default: {wire}"
     );
 
     // And the wire shape decodes again.
@@ -539,6 +540,28 @@ fn native_reasoning_input_keeps_payload_and_all_summaries() {
             |block| matches!(block, ContentBlock::RedactedThinking { data }
             if data == "native-opaque-blob")
         ));
+
+    // When the provider declares portable history, the same IR leaves without
+    // the item: it names a resource at the upstream that issued it, and a relay
+    // may answer from another one. `store: false` follows for the same reason.
+    let portable = encode_request_with(&req, "m", true).unwrap();
+    assert_eq!(portable["store"], json!(false), "{portable}");
+    assert!(
+        !portable["input"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["type"] == "reasoning"),
+        "a history item issued by another upstream must not be forwarded: {portable}"
+    );
+    assert!(
+        portable.get("previous_response_id").is_none(),
+        "the upstream id names a resource this router cannot address: {portable}"
+    );
+    // The IR still keeps the payload; only the wire is stripped.
+    assert!(req.messages.iter().flat_map(|m| &m.content).any(
+        |block| matches!(block, ContentBlock::RedactedThinking { data } if data == "native-opaque-blob")
+    ));
 }
 
 #[test]
