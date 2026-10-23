@@ -892,7 +892,15 @@ function AutoModeDrawer({
   }, [classifier.candidates]);
 
   const available = useMemo(
-    () => rows.filter((r) => !candidateModels.has(r.id)),
+    () =>
+      rows.filter(
+        (r) =>
+          !candidateModels.has(r.id) &&
+          // The pool may name the model by an alias. Offering the exposed id
+          // again would add the same model twice, and the backend does not
+          // reject duplicate candidates.
+          !r.model.aliases.some((alias) => candidateModels.has(alias)),
+      ),
     [rows, candidateModels],
   );
   const ordered = useMemo(

@@ -3416,6 +3416,179 @@ def case_ui22_one_click_adds_the_zen_jev_preset(devtools) -> list[str]:
     return failures
 
 
+def case_ui23_rename_moves_the_references_it_changed(devtools) -> list[str]:
+    """Renaming a model is an identity change, and the references move with it.
+
+    The Auto review pool and the vision model name a model by its exposed id.
+    Renaming used to leave both pointing at an id that no longer existed: the
+    pool quietly skipped the candidate and the vision fallback silently degraded
+    to the placeholder. The rename now commits the model and both references in
+    one save, keeps the drawer on the renamed model, and refuses a name another
+    model already answers to.
+    """
+    failures: list[str] = []
+
+    config = json.loads(json.dumps(BASE_CONFIG))
+    config["vision"]["model"] = "deepseek-deepseek-chat"
+    # An alias on another model is the collision the name check has to see.
+    for model in config["models"]:
+        if model["provider_id"] == "anthropic":
+            model["aliases"] = ["deepseek-chat-v2"]
+    seed(devtools, config=config)
+
+    devtools.click_selector('[data-page="models"]')
+    devtools.wait_for("Boolean(document.querySelector('.list-row'))", "the models list")
+    devtools.click_selector(".list-row")
+    devtools.wait_for("Boolean(document.querySelector('.drawer'))", "the model drawer")
+
+    devtools.replace_text("[aria-label='Model name']", "deepseek-chat-v3")
+    devtools.press_key("Enter")
+    devtools.wait_for(
+        "Boolean(window.__zrStub.last('save_config'))", "the rename save", timeout=20.0
+    )
+    devtools.wait_for("!document.querySelector('.busybar')", "the save to drain", timeout=20.0)
+    saved = devtools.evaluate(
+        "(window.__zrStub.last('save_config')||{args:{config:null}}).args.config"
+    )
+    if saved is None:
+        return ["the rename issued no save_config"]
+
+    renamed = next(
+        (
+            m
+            for m in saved["models"]
+            if m["provider_id"] == "deepseek" and m["upstream_model"] == "deepseek-chat-v3"
+        ),
+        None,
+    )
+    if renamed is None:
+        failures.append("the model was not renamed")
+    candidates = [c["model"] for c in saved["classifier"]["candidates"]]
+    if "deepseek-deepseek-chat-v3" not in candidates:
+        failures.append("the auto review candidate was not moved: %r" % candidates)
+    if "deepseek-deepseek-chat" in candidates:
+        failures.append("the old id is still in the pool: %r" % candidates)
+    if saved["vision"]["model"] != "deepseek-deepseek-chat-v3":
+        failures.append("vision.model is %r" % saved["vision"]["model"])
+
+    # The drawer follows the new identity instead of closing on the old one.
+    title = devtools.evaluate(
+        "(document.querySelector('.drawer .drawer-head')||{}).innerText || ''"
+    )
+    if "deepseek-deepseek-chat-v3" not in title:
+        failures.append("the drawer did not follow the rename: %r" % title)
+
+    # A name another model already answers to is refused before the save.
+    before = devtools.evaluate("window.__zrStub.log('save_config').length")
+    devtools.replace_text("[aria-label='Model name']", "chat-v2")
+    devtools.press_key("Enter")
+    devtools.wait_for(
+        "Boolean(document.querySelector('.drawer .field-hint-danger'))",
+        "the collision to be named",
+        timeout=10.0,
+    )
+    hint = devtools.evaluate(
+        "(document.querySelector('.drawer .field-hint-danger')||{}).innerText || ''"
+    )
+    if "deepseek-chat-v2" not in hint:
+        failures.append("the collision hint does not name the taken id: %r" % hint)
+    after = devtools.evaluate("window.__zrStub.log('save_config').length")
+    if after != before:
+        failures.append("a colliding rename reached the backend: %d -> %d" % (before, after))
+
+    return failures
+
+
+def case_ui24_catalogue_import_adds_several_models(devtools) -> list[str]:
+    """The models page can import several catalogue entries in one save.
+
+    The provider drawer could add one entry at a time; this is the bulk path.
+    The case selects two rows, adds them in one save, and reads the fields that
+    used to be dropped: the context window from the catalogue and the tier the
+    batch was assigned.
+    """
+    failures: list[str] = []
+
+    seed(
+        devtools,
+        catalogues={
+            "deepseek": [
+                {"id": "deepseek-reasoner", "pricing": None, "free": False, "context_window": 1000000},
+                {"id": "deepseek-coder", "pricing": None, "free": True},
+            ]
+        },
+    )
+    devtools.click_selector('[data-page="models"]')
+    devtools.wait_for("Boolean(document.querySelector('.list-row'))", "the models list")
+
+    # The add section defaults to the first provider; open its catalogue.
+    devtools.wait_for(
+        "Boolean([...document.querySelectorAll('button')]"
+        ".find((b) => b.textContent.includes(\"Browse the provider's catalogue\")))",
+        "the catalogue button",
+    )
+    devtools.evaluate(
+        """
+        (() => {
+          const b = [...document.querySelectorAll('button')]
+            .find((x) => x.textContent.includes("Browse the provider's catalogue"));
+          if (b) b.click();
+        })()
+        """
+    )
+    devtools.wait_for(
+        "Boolean(document.querySelector(\"input[aria-label='deepseek-reasoner']\"))",
+        "the catalogue rows",
+        timeout=15.0,
+    )
+    devtools.click_selector("input[aria-label='deepseek-reasoner']")
+    devtools.click_selector("input[aria-label='deepseek-coder']")
+    devtools.wait_for(
+        "Boolean([...document.querySelectorAll('button')]"
+        ".find((b) => b.textContent.includes('Add selected (2)')))",
+        "the batch count",
+    )
+    removed = devtools.evaluate("window.__zrStub.log('save_config').length")
+    devtools.evaluate(
+        """
+        (() => {
+          const b = [...document.querySelectorAll('button')]
+            .find((x) => x.textContent.includes('Add selected (2)'));
+          if (b) b.click();
+        })()
+        """
+    )
+    devtools.wait_for(
+        "window.__zrStub.log('save_config').length > %d" % removed,
+        "the import save",
+        timeout=20.0,
+    )
+    devtools.wait_for("!document.querySelector('.busybar')", "the save to drain", timeout=20.0)
+    saved = devtools.evaluate(
+        "(window.__zrStub.last('save_config')||{args:{config:null}}).args.config"
+    )
+    if saved is None:
+        return ["the import issued no save_config"]
+
+    by_name = {m["upstream_model"]: m for m in saved["models"]}
+    reasoner = by_name.get("deepseek-reasoner")
+    coder = by_name.get("deepseek-coder")
+    if reasoner is None or coder is None:
+        failures.append("the import did not add both models: %r" % sorted(by_name))
+    else:
+        if reasoner.get("context_window") != 1000000:
+            failures.append(
+                "the catalogue context window was dropped: %r" % reasoner.get("context_window")
+            )
+        if reasoner.get("tier") is not None:
+            failures.append("the batch should land unclassified by default: %r" % reasoner.get("tier"))
+    saves = devtools.evaluate("window.__zrStub.log('save_config').length")
+    if saves != removed + 1:
+        failures.append("the batch took %d saves, not one" % (saves - removed))
+
+    return failures
+
+
 CASES = (
     {"label": "UI-1 two nested edits in sequence (first save delayed)", "run": case_ui1_nested_rebase},
     {"label": "UI-2 moved candidate renumbers priority", "run": case_ui2_candidate_priority},
@@ -3512,6 +3685,15 @@ CASES = (
     {
         "label": "UI-22 one click adds the Zen Jev preset",
         "run": case_ui22_one_click_adds_the_zen_jev_preset,
+    },
+    {
+        "label": "UI-23 rename moves the references it changed",
+        "run": case_ui23_rename_moves_the_references_it_changed,
+    },
+    {
+        "label": "UI-24 catalogue import adds several models in one save",
+        "run": case_ui24_catalogue_import_adds_several_models,
+        "query": {"catalogues": {"deepseek": []}},
     },
 )
 

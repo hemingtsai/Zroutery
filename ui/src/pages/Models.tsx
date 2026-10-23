@@ -1,15 +1,18 @@
-import { memo, useCallback, useMemo, useState, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   TIERS,
+  api,
   contextText,
   emptyModel,
   emptyPricing,
+  errorText,
   modelRows,
   previewId,
   priceText,
   virtualId,
   tierName,
   type AppConfig,
+  type DiscoveredModel,
   type ModelTier,
   type ModelEntry,
   type ModelRow,
@@ -18,7 +21,7 @@ import {
   type Provider,
   type Snapshot,
 } from "../api";
-import { useI18n } from "../i18n";
+import { describeBackendError, useI18n } from "../i18n";
 import {
   Badge,
   Banner,
@@ -71,6 +74,7 @@ export default function Models({
   const [openId, setOpenId] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
   const [nameError, setNameError] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
   const [draft, setDraft] = useState({ provider_id: config.providers[0]?.id ?? "", upstream_model: "" });
 
   /*
@@ -86,6 +90,22 @@ export default function Models({
     [config.providers],
   );
   const healthById = useMemo(() => new Map(health.map((h) => [h.model_id, h])), [health]);
+
+  /**
+   * Every name a model can be reached by, and which model owns it.
+   *
+   * The exposed id and the aliases share one namespace: validation refuses a
+   * collision between them, so an add or a rename that would collide must be
+   * refused before the save, where the operator can see which name is taken.
+   */
+  const takenNames = useMemo(() => {
+    const names = new Map<string, string>();
+    for (const row of rows) {
+      names.set(row.id, row.id);
+      for (const alias of row.model.aliases) names.set(alias, row.id);
+    }
+    return names;
+  }, [rows]);
 
   // A decision model has no tier by design; see `AppConfig::unclassified_models`.
   const unclassified = useMemo(
@@ -130,10 +150,30 @@ export default function Models({
             (r.model.tier ? ` · ${tierName(r.model.tier, t)}` : ` · ${t("models.no_tier")}`),
           price: r.model.pricing ? priceText(r.model.pricing) : t("common.dash"),
           latency: healthRow ? ms(healthRow.avg_latency_ms) : t("common.dash"),
+          // One lower-cased haystack per row, built in the same pass as the
+          // other strings: the search box then costs a `includes` per row
+          // instead of four field reads and a join on every keystroke.
+          search: [
+            r.id,
+            r.model.upstream_model,
+            r.model.display_name ?? "",
+            provider?.name ?? "",
+            ...r.model.aliases,
+          ]
+            .join(" ")
+            .toLowerCase(),
         };
       }),
     [rows, providerById, healthById, cooling, openId, t],
   );
+
+  /** The rows the search box lets through; empty query means every row. */
+  const view = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    return needle
+      ? listView.filter((row) => row.search.includes(needle))
+      : listView;
+  }, [listView, query]);
 
   const openRow = useCallback((id: string) => setOpenId(id), []);
 
@@ -174,35 +214,105 @@ export default function Models({
       next.classifier.candidates = next.classifier.candidates.filter(
         (c) => !gone.includes(c.model),
       );
+      // Vision is the other reference a removal used to leave dangling: the
+      // configured model no longer exists, so the image path silently degraded
+      // to the placeholder.
+      if (next.vision.model !== null && gone.includes(next.vision.model)) {
+        next.vision.model = null;
+      }
       return next;
     });
     setOpenId(null);
   };
 
-  const add = () => {
+  /**
+   * Rename a model, and move everything that named it by its exposed id.
+   *
+   * The upstream name *is* the identity: the exposed id is derived from it, so
+   * a rename is a new model to every reference in the configuration. The Auto
+   * Mode pool and the vision model are rewritten in the same save; an alias a
+   * reference used does not change, because the alias belongs to the model.
+   *
+   * Returns the reason it could not be done, or null. The drawer keeps the
+   * error visible under the field — a backend refusal arrives only after the
+   * optimistic input has already changed.
+   */
+  const rename = async (row: ModelRow, raw: string): Promise<string | null> => {
+    const next = raw.trim();
+    if (!next) return t("models.rename_required");
+    if (next === row.model.upstream_model) return null;
+    const newId = previewId(row.model.provider_id, next);
+    if (newId !== row.id && takenNames.has(newId)) {
+      return t("models.name_taken", { id: newId });
+    }
+
+    let committed = false;
+    const ok = await save((cfg) => {
+      const model = cfg.models.find(
+        (m) =>
+          m.provider_id === row.model.provider_id &&
+          m.upstream_model === row.model.upstream_model,
+      );
+      if (!model) return null;
+      if (
+        cfg.models.some(
+          (m) => m !== model && m.aliases.includes(newId),
+        )
+      ) {
+        return null;
+      }
+      model.upstream_model = next;
+      for (const candidate of cfg.classifier.candidates) {
+        if (candidate.model === row.id) candidate.model = newId;
+      }
+      if (cfg.vision.model === row.id) cfg.vision.model = newId;
+      committed = true;
+      return cfg;
+    });
+    if (!ok || !committed) return t("models.rename_failed");
+    setOpenId(newId);
+    return null;
+  };
+
+  const add = async () => {
     const upstream = draft.upstream_model.trim();
     const providerId = draft.provider_id;
     if (!providerId || !upstream) {
       notify("error", t("models.pick_provider_name"));
       return;
     }
-    if (config.models.some((m) => m.provider_id === providerId && m.upstream_model === upstream)) {
-      setNameError(t("models.duplicate", { model: upstream }));
+    const id = previewId(providerId, upstream);
+    if (takenNames.has(id)) {
+      setNameError(
+        config.models.some(
+          (m) => m.provider_id === providerId && m.upstream_model === upstream,
+        )
+          ? t("models.duplicate", { model: upstream })
+          : t("models.name_taken", { id }),
+      );
       return;
     }
-    void save((cfg) => {
+    let committed = false;
+    const ok = await save((cfg) => {
       if (
-        cfg.models.some((m) => m.provider_id === providerId && m.upstream_model === upstream)
+        cfg.models.some(
+          (m) => m.provider_id === providerId && m.upstream_model === upstream,
+        )
       ) {
-        setNameError(t("models.duplicate", { model: upstream }));
         return null;
       }
       const next = structuredClone(cfg);
       next.models.push(emptyModel(providerId, upstream));
+      committed = true;
       return next;
     });
-    setDraft({ ...draft, upstream_model: "" });
-    setNameError(null);
+    if (ok && committed) {
+      setDraft({ ...draft, upstream_model: "" });
+      setNameError(null);
+    } else if (ok) {
+      // The queued save found the model already there: a race, not a crash.
+      setNameError(t("models.duplicate", { model: upstream }));
+    }
   };
 
   const open = rows.find((r) => r.id === openId) ?? null;
@@ -226,14 +336,32 @@ export default function Models({
         }
       />
 
+      {rows.length > 0 && (
+        <div className="controls">
+          <input
+            aria-label={t("models.search")}
+            placeholder={t("models.search")}
+            value={query}
+            onChange={(e) => setQuery(e.currentTarget.value)}
+          />
+          {query.trim() && (
+            <span className="muted">
+              {t("models.showing", { shown: view.length, total: rows.length })}
+            </span>
+          )}
+        </div>
+      )}
+
       {rows.length === 0 ? (
         <div className="empty-state">
           <p>{t("models.empty")}</p>
           <p className="muted">{t("models.empty_hint")}</p>
         </div>
+      ) : view.length === 0 ? (
+        <p className="empty">{t("models.no_match", { query: query.trim() })}</p>
       ) : (
         <div className="list">
-          {listView.map((row) => (
+          {view.map((row) => (
             <ModelListRow key={row.id} {...row} onOpen={openRow} />
           ))}
         </div>
@@ -246,7 +374,16 @@ export default function Models({
             value={draft.provider_id || null}
             onChange={(provider_id) => setDraft({ ...draft, provider_id })}
             placeholder={t("field.provider")}
-            options={config.providers.map((p) => ({ value: p.id, label: p.name }))}
+            options={config.providers.map((p) => ({
+              value: p.id,
+              // A decision model is added by name like any other model, but it
+              // is worth saying which providers answer that way: it is the
+              // difference between a chat entry and a typed-question one.
+              label:
+                p.kind === "decision"
+                  ? `${p.name} · ${t("providers.decision_dialect")}`
+                  : p.name,
+            }))}
           />
           <input
             aria-label={t("field.model_name")}
@@ -257,14 +394,42 @@ export default function Models({
               setDraft({ ...draft, upstream_model: e.currentTarget.value });
               setNameError(null);
             }}
-            onKeyDown={(e) => e.key === "Enter" && add()}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void add();
+            }}
           />
-          <Button kind="primary" onClick={add} disabled={busy || !config.providers.length}>
+          <Button
+            kind="primary"
+            onClick={() => void add()}
+            disabled={busy || !config.providers.length}
+          >
             {t("models.add")}
           </Button>
         </div>
+        {draft.upstream_model.trim() && draft.provider_id && (
+          <p className="field-hint">
+            {t("models.exposed_as", {
+              id: previewId(draft.provider_id, draft.upstream_model),
+            })}
+          </p>
+        )}
         {nameError && <p className="field-hint field-hint-danger">{nameError}</p>}
         {!config.providers.length && <p className="field-hint">{t("models.add_provider_first")}</p>}
+        {draft.provider_id && (
+          <CatalogueImport
+            key={draft.provider_id}
+            provider={providerById.get(draft.provider_id)}
+            configured={
+              new Set(
+                config.models
+                  .filter((m) => m.provider_id === draft.provider_id)
+                  .map((m) => m.upstream_model),
+              )
+            }
+            save={save}
+            busy={busy}
+          />
+        )}
       </Section>
 
       {open && (
@@ -276,6 +441,7 @@ export default function Models({
           namingStyle={config.routing.naming_style}
           onClose={() => setOpenId(null)}
           onUpdate={(mutate) => update(open.id, mutate)}
+          onRename={(next) => rename(open, next)}
           onRemove={() =>
             setConfirm({
               title: t("confirm.remove_model"),
@@ -376,6 +542,7 @@ function ModelDrawer({
   namingStyle,
   onClose,
   onUpdate,
+  onRename,
   onRemove,
 }: {
   row: ModelRow;
@@ -387,10 +554,13 @@ function ModelDrawer({
   /** Receives the model being committed, so a nested object is merged onto
    *  the latest one rather than a copy captured at render time. */
   onUpdate: (mutate: (model: ModelEntry) => void) => void;
+  /** Renames the model; resolves to a reason it could not be done, or null. */
+  onRename: (next: string) => Promise<string | null>;
   onRemove: () => void;
 }) {
   const m = row.model;
   const { t } = useI18n();
+  const [renameError, setRenameError] = useState<string | null>(null);
   const status = !m.enabled || provider?.enabled === false ? "off" : "ok";
   // A decision model answers the Auto Mode's questions and cannot answer a
   // request that wants prose, so a tier would be a promise the router cannot
@@ -479,15 +649,14 @@ function ModelDrawer({
         <div className="controls">
           <TextField
             label={t("field.model_name")}
+            ariaLabel={t("field.model_name")}
             hint={t("models.f_model_name_hint")}
             value={m.upstream_model}
-            onCommit={(v) =>
-              v.trim() &&
-              onUpdate((model) => {
-                model.upstream_model = v;
-              })
-            }
+            onCommit={(v) => {
+              void onRename(v).then((error) => setRenameError(error));
+            }}
           />
+          {renameError && <p className="field-hint field-hint-danger">{renameError}</p>}
           <TextField
             label={t("models.f_display")}
             hint={t("models.f_display_hint")}
@@ -627,6 +796,205 @@ function ModelDrawer({
         </Button>
       </div>
     </Drawer>
+  );
+}
+
+/**
+ * Add several models from the selected provider's own catalogue.
+ *
+ * The provider drawer could already add one catalogue entry at a time, with a
+ * tier chosen per row. This is the bulk path: search, filter, select, one tier
+ * for the batch, one save. It reads the same `fetch_provider_models` command
+ * and copies the same fields — prices, the context window, the output cap and
+ * the capability flags — so an imported model is not a poorer entry than one
+ * typed by hand.
+ *
+ * A decision provider has no catalogue to browse, so the control is absent
+ * there rather than present and empty.
+ */
+function CatalogueImport({
+  provider,
+  configured,
+  save,
+  busy,
+}: {
+  provider: Provider | undefined;
+  /** Upstream names this provider already has. */
+  configured: Set<string>;
+  save: (mutate: (config: AppConfig) => AppConfig | null) => Promise<boolean>;
+  busy: boolean;
+}) {
+  const { t } = useI18n();
+  const notify = useToast();
+  const [open, setOpen] = useState(false);
+  const [models, setModels] = useState<DiscoveredModel[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [query, setQuery] = useState("");
+  const [freeOnly, setFreeOnly] = useState(provider?.kind === "opencode_zen_free");
+  const [selected, setSelected] = useState<Set<string>>(() => new Set());
+  const [tier, setTier] = useState<ModelTier | "none">("none");
+  // Which catalogue request is allowed to answer; unmounting bumps it.
+  const generation = useRef(0);
+  useEffect(
+    () => () => {
+      generation.current += 1;
+    },
+    [],
+  );
+
+  const visible = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    return (models ?? []).filter(
+      (d) =>
+        (!freeOnly || d.free) &&
+        (!needle || d.id.toLowerCase().includes(needle)),
+    );
+  }, [models, freeOnly, query]);
+
+  if (!provider || provider.kind === "decision") return null;
+
+  const load = async () => {
+    const request = ++generation.current;
+    setLoading(true);
+    try {
+      const found = await api.fetchModels(provider);
+      if (request !== generation.current) return;
+      setModels(found);
+      if (found.length === 0) {
+        notify("error", t("providers.empty_catalogue", { name: provider.name }));
+      }
+    } catch (e) {
+      if (request !== generation.current) return;
+      notify("error", describeBackendError(t, errorText(e)));
+    } finally {
+      if (request === generation.current) setLoading(false);
+    }
+  };
+
+  const toggle = (id: string) => {
+    setSelected((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const chosenCount = visible.filter(
+    (d) => selected.has(d.id) && !configured.has(d.id),
+  ).length;
+
+  const addSelected = async () => {
+    const chosen = visible.filter(
+      (d) => selected.has(d.id) && !configured.has(d.id),
+    );
+    if (chosen.length === 0) return;
+    const ok = await save((cfg) => {
+      const next = structuredClone(cfg);
+      for (const entry of chosen) {
+        if (
+          next.models.some(
+            (m) => m.provider_id === provider.id && m.upstream_model === entry.id,
+          )
+        ) {
+          continue;
+        }
+        next.models.push(
+          emptyModel(provider.id, entry.id, {
+            tier: tier === "none" ? null : tier,
+            pricing: entry.pricing,
+            context_window: entry.context_window ?? null,
+            max_output_tokens: entry.max_output ?? null,
+            ...(entry.capabilities ? { capabilities: entry.capabilities } : {}),
+          }),
+        );
+      }
+      return next;
+    });
+    if (ok) {
+      setSelected(new Set());
+      notify("ok", t("models.imported", { n: chosen.length }));
+    }
+  };
+
+  return (
+    <>
+      <div className="controls">
+        <Button
+          kind="ghost"
+          disabled={busy || loading}
+          onClick={() => {
+            const next = !open;
+            setOpen(next);
+            if (next && models === null) void load();
+          }}
+        >
+          {open ? t("models.import_hide") : t("models.import_browse")}
+        </Button>
+        {loading && <span className="muted">{t("common.loading")}</span>}
+      </div>
+      {open && models !== null && (
+        <>
+          <div className="controls">
+            <input
+              aria-label={t("models.import_search")}
+              placeholder={t("models.import_search")}
+              value={query}
+              onChange={(e) => setQuery(e.currentTarget.value)}
+            />
+            {provider.kind === "opencode_zen_free" && (
+              <Toggle
+                label={t("providers.free_only")}
+                checked={freeOnly}
+                onChange={setFreeOnly}
+              />
+            )}
+            <Select<ModelTier | "none">
+              ariaLabel={t("models.import_tier")}
+              value={tier}
+              onChange={setTier}
+              options={[
+                { value: "none", label: t("models.no_tier") },
+                ...TIERS.map((c) => ({ value: c, label: virtualId(c) })),
+              ]}
+            />
+            <Button
+              kind="primary"
+              disabled={busy || chosenCount === 0}
+              onClick={() => void addSelected()}
+            >
+              {t("models.import_add", { n: chosenCount })}
+            </Button>
+          </div>
+          {visible.length === 0 ? (
+            <p className="empty">{t("models.import_empty")}</p>
+          ) : (
+            <div className="list">
+              {visible.map((entry) => (
+                <label key={entry.id} className={`list-row ${configured.has(entry.id) ? "muted" : ""}`}>
+                  <input
+                    type="checkbox"
+                    aria-label={entry.id}
+                    checked={configured.has(entry.id) || selected.has(entry.id)}
+                    disabled={configured.has(entry.id)}
+                    onChange={() => toggle(entry.id)}
+                  />
+                  <span className="row-title mono truncate" title={entry.id}>
+                    {entry.id}
+                  </span>
+                  {entry.context_window != null && (
+                    <span className="muted mono">{contextText(entry.context_window)}</span>
+                  )}
+                  {configured.has(entry.id) && (
+                    <Badge tone="ok">{t("models.import_added")}</Badge>
+                  )}
+                </label>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+    </>
   );
 }
 
