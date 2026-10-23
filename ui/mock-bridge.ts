@@ -570,6 +570,8 @@ const snapshot = (): Json => ({
   ml_available: true,
   account_maintenance_available: true,
   account_available: true,
+  api_checkin_available: true,
+  token_capture_available: true,
   checkin: [
     {
       provider_id: "relay-main",
@@ -621,12 +623,24 @@ const snapshot = (): Json => ({
     {
       provider_id: "relay-main",
       account_id: "acct-0",
-      status: { currency: "USD", remaining: 12.5, total: null, used: null },
+      status: "active",
+      remaining: 12.5,
+      total: null,
+      used: null,
+      unit: "USD",
+      last_sync: NOW_SECS,
+      last_failure: null,
     },
     {
       provider_id: "relay-main",
       account_id: "acct-1",
-      status: { currency: "USD", remaining: 0, total: null, used: null },
+      status: "active",
+      remaining: 0,
+      total: null,
+      used: null,
+      unit: "USD",
+      last_sync: NOW_SECS,
+      last_failure: null,
     },
   ],
 });
