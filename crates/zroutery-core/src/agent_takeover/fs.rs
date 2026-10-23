@@ -28,11 +28,34 @@ thread_local! {
 }
 
 /// Give the current test thread its own agent config root.
+///
+/// The directory variables a client documents are repointed at the isolated
+/// home as well, and that is the part the first version missed. An adapter
+/// resolves its config path through `config_dir_override` **before** it falls
+/// back to the home, so an ambient `XDG_CONFIG_HOME` moved OpenCode's path out
+/// of the temp directory while the fixture wrote into it: the four OpenCode
+/// tests read a config that did not exist, failed on CI, and passed on the
+/// machine where the variables are unset. Naming the home in the fixtures and
+/// leaving the override to the environment is the same "the test is only as
+/// isolated as the machine is empty" gap the override itself was added to
+/// close.
 #[cfg(test)]
 pub(crate) fn isolate_agent_home() {
-    TEST_CONFIG_DIRS.with(|slot| slot.borrow_mut().clear());
+    let home = tempfile::TempDir::new().expect("temp agent home");
+    let root = home.path().to_path_buf();
     TEST_AGENT_HOME.with(|slot| {
-        *slot.borrow_mut() = Some(tempfile::TempDir::new().expect("temp agent home"));
+        *slot.borrow_mut() = Some(home);
+    });
+    TEST_CONFIG_DIRS.with(|slot| {
+        let mut dirs = slot.borrow_mut();
+        dirs.clear();
+        // Each entry is the value that variable's adapter joins its own path
+        // onto, matching the default under the home: `XDG_CONFIG_HOME` names
+        // the config root, `GEMINI_CLI_HOME` the home itself.
+        dirs.push(("XDG_CONFIG_HOME".to_string(), root.join(".config")));
+        dirs.push(("CLAUDE_CONFIG_DIR".to_string(), root.join(".claude")));
+        dirs.push(("CODEX_HOME".to_string(), root.join(".codex")));
+        dirs.push(("GEMINI_CLI_HOME".to_string(), root));
     });
 }
 
