@@ -38,6 +38,7 @@ AVAILABILITY_FLAGS = (
     "account_available",
     "account_maintenance_available",
     "api_checkin_available",
+    "token_capture_available",
     "opencode_available",
 )
 

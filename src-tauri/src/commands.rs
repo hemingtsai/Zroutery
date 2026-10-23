@@ -303,6 +303,87 @@ fn account_key_ref(provider_id: &str, account_id: &str) -> String {
     format!("provider:{provider_id}:account:{account_id}")
 }
 
+/// Resolve where one account's own credential would live.
+///
+/// `(key_ref, repoint)`. A declaration whose reference is empty or equal to the
+/// provider's is sharing the provider key: storing an account secret has to
+/// point it at the derived reference. A reference the operator set by hand is
+/// kept and its stored value replaced.
+#[cfg(feature = "account")]
+pub(crate) fn account_secret_target(
+    config: &AppConfig,
+    provider_id: &str,
+    account_id: &str,
+) -> Result<(String, bool), String> {
+    let provider = config
+        .provider(provider_id)
+        .ok_or_else(|| format!("unknown provider `{provider_id}`"))?;
+    let declaration = provider
+        .accounts
+        .iter()
+        .find(|a| a.account_id == account_id)
+        .ok_or_else(|| format!("unknown account `{account_id}` on provider `{provider_id}`"))?;
+    if declaration.key_ref.is_empty() || declaration.key_ref == provider.key_ref {
+        Ok((account_key_ref(provider_id, account_id), true))
+    } else {
+        Ok((declaration.key_ref.clone(), false))
+    }
+}
+
+/// Write a secret into the system credential store.
+///
+/// Keychain I/O blocks, so it is kept off the async worker thread.
+#[cfg(feature = "account")]
+pub(crate) async fn write_account_secret(
+    desktop: &Desktop,
+    key_ref: &str,
+    secret: &str,
+) -> Result<(), String> {
+    let secrets = Arc::clone(&desktop.secrets);
+    let key_ref = key_ref.to_string();
+    let secret = secret.to_string();
+    tauri::async_runtime::spawn_blocking(move || secrets.set(&key_ref, &secret))
+        .await
+        .map_err(|e| e.to_string())??;
+    Ok(())
+}
+
+/// Delete a secret from the system credential store.
+#[cfg(all(feature = "account", feature = "account-maint"))]
+pub(crate) async fn delete_account_secret(desktop: &Desktop, key_ref: &str) -> Result<(), String> {
+    let secrets = Arc::clone(&desktop.secrets);
+    let key_ref = key_ref.to_string();
+    tauri::async_runtime::spawn_blocking(move || secrets.delete(&key_ref))
+        .await
+        .map_err(|e| e.to_string())??;
+    Ok(())
+}
+
+/// Point one declaration at the reference its stored secret lives under.
+#[cfg(feature = "account")]
+pub(crate) async fn repoint_account_key(
+    desktop: &Desktop,
+    provider_id: &str,
+    account_id: &str,
+    key_ref: &str,
+) -> Result<(), String> {
+    let mut config = (*desktop.core.config()).clone();
+    let Some(declaration) = config
+        .providers
+        .iter_mut()
+        .find(|p| p.id == provider_id)
+        .and_then(|p| p.accounts.iter_mut().find(|a| a.account_id == account_id))
+    else {
+        return Err(format!(
+            "unknown account `{account_id}` on provider `{provider_id}`"
+        ));
+    };
+    declaration.key_ref = key_ref.to_string();
+    // `apply_config` reports whether the gateway had to rebind as well; a
+    // repoint changes no listener setting, so the flag is not interesting here.
+    desktop.apply_config(config).await.map(|_| ())
+}
+
 /// Store one account's own credential and point its declaration at it.
 ///
 /// An account whose `key_ref` is empty (or equal to the provider's own
@@ -327,46 +408,11 @@ pub async fn set_account_key(
     if key.len() > 4096 {
         return Err("the API key exceeds 4096 bytes".into());
     }
-    let derived = account_key_ref(&provider_id, &account_id);
-    // Where to store, and whether the declaration still says "share the
-    // provider's key" and has to be repointed. A reference the user set by
-    // hand is kept and its stored value replaced; a reference equal to the
-    // provider's is treated as sharing, because storing an account secret
-    // under the provider's address would silently rekey the whole provider.
-    let (key_ref, repoint) = {
-        let config = desktop.core.config();
-        let provider = config
-            .provider(&provider_id)
-            .ok_or_else(|| format!("unknown provider `{provider_id}`"))?;
-        let declaration = provider
-            .accounts
-            .iter()
-            .find(|a| a.account_id == account_id)
-            .ok_or_else(|| format!("unknown account `{account_id}` on provider `{provider_id}`"))?;
-        if declaration.key_ref.is_empty() || declaration.key_ref == provider.key_ref {
-            (derived.clone(), true)
-        } else {
-            (declaration.key_ref.clone(), false)
-        }
-    };
-    // Keychain I/O blocks; keep it off the async worker thread.
-    let secrets = Arc::clone(&desktop.secrets);
-    let key = key.to_string();
-    let key_ref_for_store = key_ref.clone();
-    tauri::async_runtime::spawn_blocking(move || secrets.set(&key_ref_for_store, &key))
-        .await
-        .map_err(|e| e.to_string())??;
+    let (key_ref, repoint) =
+        account_secret_target(&desktop.core.config(), &provider_id, &account_id)?;
+    write_account_secret(&desktop, &key_ref, key).await?;
     if repoint {
-        let mut config = (*desktop.core.config()).clone();
-        if let Some(declaration) = config
-            .providers
-            .iter_mut()
-            .find(|p| p.id == provider_id)
-            .and_then(|p| p.accounts.iter_mut().find(|a| a.account_id == account_id))
-        {
-            declaration.key_ref = key_ref;
-        }
-        desktop.apply_config(config).await?;
+        repoint_account_key(&desktop, &provider_id, &account_id, &key_ref).await?;
     }
     Ok(refreshed(&app, &desktop).await)
 }
@@ -877,6 +923,48 @@ pub async fn ccswitch_import(
 mod tests {
     use super::*;
     use zroutery_core::config::{ModelTier, ProviderKind};
+
+    #[cfg(feature = "account")]
+    #[test]
+    fn an_account_sharing_the_provider_key_is_repointed_to_its_own() {
+        let mut cfg = AppConfig::default();
+        let mut provider = ProviderConfig::new("relay", "Relay", ProviderKind::OpenAICompatible);
+        provider.key_ref = "provider:relay".into();
+        provider.accounts.push(Default::default());
+        cfg.providers.push(provider);
+        cfg.providers[0].accounts[0].account_id = "alice".into();
+
+        let (key_ref, repoint) =
+            account_secret_target(&cfg, "relay", "alice").expect("the account is declared");
+        assert_eq!(key_ref, "provider:relay:account:alice");
+        assert!(
+            repoint,
+            "the declaration has to move off the provider's key"
+        );
+    }
+
+    #[cfg(feature = "account")]
+    #[test]
+    fn an_account_with_its_own_reference_keeps_it() {
+        let mut cfg = AppConfig::default();
+        let mut provider = ProviderConfig::new("relay", "Relay", ProviderKind::OpenAICompatible);
+        provider.accounts.push(Default::default());
+        cfg.providers.push(provider);
+        cfg.providers[0].accounts[0].account_id = "alice".into();
+        cfg.providers[0].accounts[0].key_ref = "custom:alice".into();
+
+        let (key_ref, repoint) =
+            account_secret_target(&cfg, "relay", "alice").expect("the account is declared");
+        assert_eq!(key_ref, "custom:alice");
+        assert!(!repoint, "a hand-set reference is not moved");
+    }
+
+    #[cfg(feature = "account")]
+    #[test]
+    fn an_undeclared_account_has_no_secret_target() {
+        let cfg = AppConfig::default();
+        assert!(account_secret_target(&cfg, "relay", "alice").is_err());
+    }
 
     /// One CC Switch entry, in the order CC Switch hands it over when the same
     /// relay holds two subscriptions with different keys.

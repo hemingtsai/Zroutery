@@ -21,6 +21,8 @@ mod shell;
 pub mod state;
 pub mod store;
 pub mod takeover_commands;
+#[cfg(all(feature = "account-maint", feature = "account"))]
+mod token_capture;
 mod tray;
 
 use std::sync::Arc;
@@ -143,6 +145,14 @@ pub fn run() {
             checkin_commands::cancel_checkin,
             #[cfg(feature = "account-maint")]
             checkin_commands::get_checkin_status,
+            #[cfg(all(feature = "account-maint", feature = "account"))]
+            token_capture::start_token_capture,
+            #[cfg(all(feature = "account-maint", feature = "account"))]
+            token_capture::get_token_capture_status,
+            #[cfg(all(feature = "account-maint", feature = "account"))]
+            token_capture::cancel_token_capture,
+            #[cfg(all(feature = "account-maint", feature = "account"))]
+            token_capture::complete_token_capture,
         ])
         .setup(move |app| {
             // Menu bar only: no dock icon, no app switcher entry.
@@ -215,6 +225,11 @@ pub fn run() {
             desktop.set_warning(warning);
             app.manage(Arc::clone(&desktop));
             app.manage(log_buffer.clone());
+            // The capture's reports outlive the browser session they describe;
+            // the browser itself lives in the check-in registry, so shutdown
+            // already closes it.
+            #[cfg(all(feature = "account-maint", feature = "account"))]
+            app.manage(token_capture::TokenCaptureRuntime::default());
 
             tray::build(app.handle())?;
 

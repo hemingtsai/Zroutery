@@ -47,6 +47,32 @@ use tokio::sync::Mutex;
 
 use state::{Event, State};
 
+/// What a browser held for an account is being used for.
+///
+/// The registry is keyed on the account, not on the operation, because the
+/// isolation that matters is the profile directory: two browsers on one profile
+/// corrupt it, whatever they were opened for. The purpose is what lets a caller
+/// refuse to start the second operation and lets a status read say which one is
+/// running.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionPurpose {
+    /// A scheduled or manual check-in.
+    Checkin,
+    /// A browser held open so the operator can sign in to the panel and a token
+    /// can be captured.
+    TokenCapture,
+}
+
+impl SessionPurpose {
+    /// A phrase for a refusal message.
+    pub fn label(self) -> &'static str {
+        match self {
+            SessionPurpose::Checkin => "check-in",
+            SessionPurpose::TokenCapture => "token capture",
+        }
+    }
+}
+
 /// Identifies one account's browser, and therefore its profile.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SessionKey {
@@ -109,11 +135,57 @@ impl CheckinRuntime {
         guard.state.holds_browser()
     }
 
+    /// Whether a browser is open for this account, whatever the operation.
+    ///
+    /// [`Self::is_browser_held`] answers the check-in state machine's question
+    /// ("is this attempt paused with its window open"). This answers the process
+    /// question — a capture's browser is out with its driver for most of its
+    /// life — which is what a status view needs to tell the operator to look at
+    /// the window.
+    pub async fn holds_browser(&self, key: &SessionKey) -> bool {
+        let Some(session) = self.session(key).await else {
+            return false;
+        };
+        let guard = session.lock().await;
+        guard.browser.is_some() || guard.driving
+    }
+
     /// What is happening to one account's check-in, if anything.
+    ///
+    /// A token capture holds the same account and profile, so its state is not a
+    /// check-in state and is not reported as one. A panel asking for the
+    /// check-in phase must not be told that a capture is a pending check-in.
     pub async fn phase(&self, key: &SessionKey) -> Option<State> {
         let session = self.session(key).await?;
         let guard = session.lock().await;
-        Some(guard.state)
+        (guard.purpose == SessionPurpose::Checkin).then_some(guard.state)
+    }
+
+    /// The purpose of the browser currently held for this account, if any.
+    pub async fn purpose(&self, key: &SessionKey) -> Option<SessionPurpose> {
+        let session = self.session(key).await?;
+        let purpose = session.lock().await.purpose;
+        Some(purpose)
+    }
+
+    /// Whether a browser is held for this account for `purpose`.
+    ///
+    /// Distinct from [`Self::purpose`] so a caller that must refuse a second
+    /// operation asks one question with the answer it needs.
+    pub async fn is_active(&self, key: &SessionKey, purpose: SessionPurpose) -> bool {
+        self.purpose(key).await == Some(purpose)
+    }
+
+    /// Whether a cancel has been recorded for this account's browser.
+    ///
+    /// A driver checks this between polls; without it the Cancel button would do
+    /// nothing until the operation's own deadline.
+    pub async fn is_cancel_requested(&self, key: &SessionKey) -> bool {
+        let Some(session) = self.session(key).await else {
+            return false;
+        };
+        let requested = session.lock().await.cancel_requested;
+        requested
     }
 
     /// Start a check-in for this account.
@@ -124,12 +196,28 @@ impl CheckinRuntime {
     /// session — and the user is told to resume or cancel the existing one
     /// rather than being quietly given a second browser.
     pub async fn begin(&self, key: SessionKey) -> Result<(), StartError> {
+        self.begin_for(key, SessionPurpose::Checkin).await
+    }
+
+    /// Start an operation of `purpose` for this account.
+    ///
+    /// The purpose is recorded, not enforced twice: the refusal below is the
+    /// one rule, and it applies to every operation because every operation owns
+    /// the same profile.
+    pub async fn begin_for(
+        &self,
+        key: SessionKey,
+        purpose: SessionPurpose,
+    ) -> Result<(), StartError> {
         let mut guard = self.registry.lock().await;
         if let Some(existing) = guard.get(&key) {
-            let state = existing.lock().await.state;
-            return Err(StartError::AlreadyExists { state });
+            let session = existing.lock().await;
+            return Err(StartError::AlreadyExists {
+                state: session.state,
+                purpose: session.purpose,
+            });
         }
-        guard.insert(key, Arc::new(Mutex::new(LiveSession::new())));
+        guard.insert(key, Arc::new(Mutex::new(LiveSession::new(purpose))));
         Ok(())
     }
 
@@ -303,8 +391,12 @@ impl CheckinRuntime {
     }
 }
 
-/// One account's check-in attempt.
+/// One account's browser operation.
 struct LiveSession {
+    /// Which operation owns the profile. A check-in's state machine never
+    /// advances for a capture, so the state stays `Pending` and the purpose is
+    /// what a status read consults.
+    purpose: SessionPurpose,
     state: State,
     /// `None` before the browser is attached, and after it has been closed.
     browser: Option<cdp::BrowserSession>,
@@ -330,8 +422,9 @@ struct LiveSession {
 }
 
 impl LiveSession {
-    fn new() -> Self {
+    fn new(purpose: SessionPurpose) -> Self {
         Self {
+            purpose,
             state: State::Pending,
             browser: None,
             driving: false,
@@ -365,21 +458,39 @@ pub enum StartError {
     /// Carries its state so the caller can tell the user to *continue* it from
     /// [`State::WaitingForUser`] or to cancel it from anywhere else, rather than
     /// offering "start" for an attempt that is already half-finished.
-    AlreadyExists { state: State },
+    AlreadyExists {
+        state: State,
+        /// Which operation holds the account, so the refusal can name it.
+        purpose: SessionPurpose,
+    },
 }
 
 impl std::fmt::Display for StartError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::AlreadyExists { state } if state.awaiting_user() => write!(
+            Self::AlreadyExists {
+                state,
+                purpose: SessionPurpose::Checkin,
+            } if state.awaiting_user() => write!(
                 f,
                 "this account already has a check-in waiting for you to finish a \
                  verification; continue it instead of starting a new one"
             ),
-            Self::AlreadyExists { state } => write!(
+            Self::AlreadyExists {
+                state,
+                purpose: SessionPurpose::Checkin,
+            } => write!(
                 f,
                 "this account already has a check-in in progress ({state:?}); wait for it or \
                  cancel it first"
+            ),
+            Self::AlreadyExists {
+                purpose: SessionPurpose::TokenCapture,
+                ..
+            } => write!(
+                f,
+                "this account already has a token capture open; finish or cancel it before \
+                 starting a check-in"
             ),
         }
     }
@@ -460,7 +571,8 @@ mod tests {
         assert!(matches!(
             second,
             StartError::AlreadyExists {
-                state: State::Pending
+                state: State::Pending,
+                purpose: SessionPurpose::Checkin,
             }
         ));
     }
@@ -494,7 +606,8 @@ mod tests {
         assert_eq!(
             error,
             StartError::AlreadyExists {
-                state: State::WaitingForUser
+                state: State::WaitingForUser,
+                purpose: SessionPurpose::Checkin,
             }
         );
         // And the message tells the user to continue, not to start again — which
@@ -738,5 +851,45 @@ mod tests {
         );
         assert!(!runtime.end_driving(&key()).await);
         assert!(!runtime.is_being_driven(&key()).await);
+    }
+
+    #[tokio::test]
+    async fn a_token_capture_owns_the_account_like_a_check_in_does() {
+        let runtime = runtime();
+        runtime
+            .begin_for(key(), SessionPurpose::TokenCapture)
+            .await
+            .expect("the capture begins");
+
+        // The same profile is at stake, so the second operation is refused and
+        // the refusal names the one that is open.
+        let error = runtime
+            .begin(key())
+            .await
+            .expect_err("a second browser is refused");
+        assert_eq!(
+            error,
+            StartError::AlreadyExists {
+                state: State::Pending,
+                purpose: SessionPurpose::TokenCapture,
+            }
+        );
+        assert!(error.to_string().contains("token capture"), "{error}");
+
+        // A capture is not a check-in: the check-in phase has no answer for it,
+        // while the purpose names it plainly.
+        assert_eq!(runtime.phase(&key()).await, None);
+        assert_eq!(
+            runtime.purpose(&key()).await,
+            Some(SessionPurpose::TokenCapture)
+        );
+        assert!(
+            runtime
+                .is_active(&key(), SessionPurpose::TokenCapture)
+                .await
+        );
+        assert!(!runtime.is_active(&key(), SessionPurpose::Checkin).await);
+
+        runtime.finish(&key()).await;
     }
 }

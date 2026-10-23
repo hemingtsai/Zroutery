@@ -100,6 +100,14 @@ pub struct Snapshot {
     /// can hold a browser but no adapter, and reading one flag for the other
     /// would offer the HTTP check-in to a build whose command does not exist.
     pub api_checkin_available: bool,
+    /// Whether this build can capture a NewAPI panel token in a browser.
+    ///
+    /// Needs `account-maint` (the browser registry and the views) *and*
+    /// `account` (the credential commands this shares a reference with), and
+    /// `account-maint` does not imply the desktop `account` feature. A build
+    /// without either does not register the commands, so the dashboard asks
+    /// this flag before offering the button.
+    pub token_capture_available: bool,
     /// Whether this build can actually talk to OpenCode's gateway.
     ///
     /// The two OpenCode provider kinds and the `opencode_cli` client profile

@@ -73,6 +73,14 @@ impl Desktop {
             // same reason the other two are — a command that was never registered
             // and a command that failed are the same event to the webview.
             api_checkin_available: cfg!(all(feature = "account-maint", feature = "newapi")),
+            // The capture needs the browser registry *and* the account
+            // credential path; `account-maint` does not imply the desktop
+            // `account` feature.
+            token_capture_available: cfg!(all(
+                feature = "account-maint",
+                feature = "account",
+                feature = "newapi"
+            )),
             // The OpenCode provider kinds and the `opencode_cli` profile are
             // configuration, not code, so they survive every build — but the
             // shaping that makes OpenCode's gateway accept a request does not.

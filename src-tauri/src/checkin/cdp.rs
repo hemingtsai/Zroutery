@@ -460,6 +460,44 @@ impl ClickOutcome {
     }
 }
 
+/// Read the value out of a `Runtime.evaluate` answer.
+///
+/// The protocol nests the value under `result`, and an expression that threw
+/// puts the page's own text under `exceptionDetails`. Neither is a value, so
+/// the caller gets a typed error it can distinguish from "the page said
+/// nothing" — the poll that reads a token has to retry the former and may treat
+/// the latter as a state.
+pub fn evaluate_value(answer: &Value) -> Result<Value, BrowserError> {
+    if let Some(details) = answer.get("exceptionDetails") {
+        let description = details
+            .get("exception")
+            .and_then(|exception| {
+                exception
+                    .get("description")
+                    .and_then(Value::as_str)
+                    .or_else(|| exception.as_str())
+            })
+            .or_else(|| details.get("text").and_then(Value::as_str))
+            .unwrap_or("the page raised an exception");
+        return Err(BrowserError::Protocol {
+            method: "Runtime.evaluate".into(),
+            message: description.to_string(),
+        });
+    }
+    let result = answer.get("result").cloned().unwrap_or(Value::Null);
+    if result.get("subtype").and_then(Value::as_str) == Some("error") {
+        return Err(BrowserError::Protocol {
+            method: "Runtime.evaluate".into(),
+            message: result
+                .get("description")
+                .and_then(Value::as_str)
+                .unwrap_or("the page returned an error")
+                .to_string(),
+        });
+    }
+    Ok(result.get("value").cloned().unwrap_or(Value::Null))
+}
+
 impl BrowserSession {
     /// Send one DevTools command and wait for its answer.
     ///
@@ -601,6 +639,37 @@ impl BrowserSession {
         self.call_page(page, "Page.navigate", json!({ "url": url }))
             .await
             .map(|_| ())
+    }
+
+    /// Evaluate an expression in the page and return its value.
+    ///
+    /// `awaitPromise` is on because the useful probes are asynchronous: the
+    /// page's own storage, cookies and API are reached through promises, and a
+    /// probe that returned an unsettled promise would be read as an empty
+    /// object. The expression must therefore evaluate to a promise (or a plain
+    /// value), and everything it returns must be serialisable by
+    /// `returnByValue`.
+    ///
+    /// An exception raised in the page is a [`BrowserError`], not a value: a
+    /// probe that threw has not answered, and treating its absence as "nothing
+    /// found yet" is how a broken probe polls forever.
+    pub async fn evaluate(
+        &mut self,
+        page: &PageBinding,
+        expression: &str,
+    ) -> Result<Value, BrowserError> {
+        let result = self
+            .call_page(
+                page,
+                "Runtime.evaluate",
+                json!({
+                    "expression": expression,
+                    "returnByValue": true,
+                    "awaitPromise": true,
+                }),
+            )
+            .await?;
+        evaluate_value(&result)
     }
 
     /// Activate a control on the page as a user would.
@@ -849,6 +918,39 @@ impl BrowserSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_evaluated_value_is_read_out_of_the_result() {
+        let answer = json!({ "result": { "type": "string", "value": "ses_abc" } });
+        assert_eq!(evaluate_value(&answer).unwrap(), json!("ses_abc"));
+        // A page that returned nothing is a value (`null`), not an error.
+        assert_eq!(evaluate_value(&json!({})).unwrap(), Value::Null);
+        assert_eq!(
+            evaluate_value(&json!({ "result": { "type": "object" } })).unwrap(),
+            Value::Null
+        );
+    }
+
+    #[test]
+    fn an_exception_in_the_page_is_an_error_not_a_value() {
+        let answer = json!({
+            "exceptionDetails": {
+                "text": "Uncaught",
+                "exception": { "description": "TypeError: x is not a function" }
+            }
+        });
+        let error = evaluate_value(&answer).expect_err("a thrown probe is not a value");
+        assert!(error.to_string().contains("TypeError"), "{error}");
+    }
+
+    #[test]
+    fn a_returned_error_object_is_an_error_too() {
+        let answer = json!({
+            "result": { "type": "object", "subtype": "error", "description": "AbortError: timed out" }
+        });
+        let error = evaluate_value(&answer).expect_err("an error subtype is not a value");
+        assert!(error.to_string().contains("AbortError"), "{error}");
+    }
 
     #[test]
     fn the_profile_directory_is_always_passed() {
