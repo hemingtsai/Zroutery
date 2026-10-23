@@ -226,10 +226,14 @@ const PROBE: &str = r#"(async () => {
     promise,
     new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), ms)),
   ]);
+  // NewAPI's dashboard middleware compares the Authorization value verbatim:
+  // a `Bearer ` prefix becomes part of the compared string on older forks. The
+  // bare token is the one form every generation accepts, and it is the form the
+  // Rust adapter sends.
   const verify = async (token) => {
     try {
       const response = await withTimeout(fetch('/api/user/self', {
-        headers: { Authorization: 'Bearer ' + token },
+        headers: { Authorization: token },
         credentials: 'same-origin',
       }), 5000);
       if (!response.ok) return null;
@@ -243,7 +247,7 @@ const PROBE: &str = r#"(async () => {
     if (C.minted) return { token: C.minted };
     try {
       const response = await withTimeout(fetch('/api/user/token', {
-        headers: { Authorization: 'Bearer ' + token },
+        headers: { Authorization: token },
         credentials: 'same-origin',
       }), 8000);
       if (response.status === 403) return { needsVerification: true };

@@ -64,8 +64,9 @@ async fn whoami(
         .get("authorization")
         .and_then(|value| value.to_str().ok())
         .unwrap_or_default();
-    let accepted = bearer == panel.token || bearer == format!("Bearer {}", panel.token);
-    if accepted {
+    // The adapter and the page probe both send the bare token; a Bearer prefix
+    // is part of the compared string on older panels.
+    if bearer == panel.token {
         Json(json!({
             "success": true,
             "message": "",
