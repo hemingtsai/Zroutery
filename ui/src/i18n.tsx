@@ -800,6 +800,10 @@ export const en = {
   "routing.no_candidates": "No candidates yet. Pick a model below.",
   "routing.not_configured": "not a configured model",
   "routing.decision_candidate": "Decision model",
+  "routing.add_jev": "Add OpenCode Zen's free Jev",
+  "routing.add_jev_hint":
+    "Adds a keyless System One decision model and puts it first in the pool. It answers with a probability; the required confidence is 0.6. The free promotion is limited-time, it can be region-blocked, and the check text is sent to OpenCode Zen.",
+  "routing.jev_added": "Jev was added first in the pool, and Auto review is on.",
   "routing.enable_for": "Enable {model}",
   "routing.add_model": "Add a model…",
   "routing.behaviour": "Behaviour",
@@ -1791,6 +1795,10 @@ export const zh: Dict = {
   "routing.no_candidates": "暂无候选。在下方选择模型。",
   "routing.not_configured": "不是已配置的模型",
   "routing.decision_candidate": "决策模型",
+  "routing.add_jev": "添加 OpenCode Zen 免费 Jev",
+  "routing.add_jev_hint":
+    "添加一个无需凭据的 System One 决策模型,并把它放在池首。它以概率作答,所需置信度为 0.6。免费推广有期限,也可能按地区被屏蔽;检查文本会发送给 OpenCode Zen。",
+  "routing.jev_added": "已把 Jev 放在池首,并开启自动审查。",
   "routing.enable_for": "启用 {model}",
   "routing.add_model": "添加模型…",
   "routing.behaviour": "行为",

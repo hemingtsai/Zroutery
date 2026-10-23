@@ -1657,6 +1657,15 @@ export function emptyPricing(currency = "USD"): Pricing {
  * One constructor is the reason the next field cannot be forgotten in one of
  * them.
  */
+/**
+ * A new model entry, mirroring `ModelEntry::for_upstream` in the core.
+ *
+ * The two constructors — the models page and the provider catalogue — used to
+ * carry their own copy of this literal, and the copies had already drifted
+ * (`max_output` and `context_window` from a catalogue were dropped by both).
+ * One constructor is the reason the next field cannot be forgotten in one of
+ * them.
+ */
 export function emptyModel(
   provider_id: string,
   upstream_model: string,
@@ -1685,6 +1694,139 @@ export function emptyModel(
     pricing: null,
     ...overrides,
   };
+}
+
+/**
+ * A new provider, mirroring `ProviderConfig::new` in the core.
+ *
+ * The per-kind defaults are the ones the backend's own constructor applies:
+ * an Anthropic provider presents Claude Code, an OpenCode provider presents the
+ * CLI (the config refuses any other profile), a decision endpoint presents
+ * nothing because its request is not a chat.
+ */
+export function emptyProvider(
+  id: string,
+  name: string,
+  kind: ProviderKind,
+  base_url: string,
+  overrides: Partial<Provider> = {},
+): Provider {
+  const profile: ProviderClientProfile =
+    kind === "anthropic"
+      ? "claude_code"
+      : kind === "opencode_zen_free" || kind === "opencode_console"
+        ? "opencode_cli"
+        : kind === "decision"
+          ? "native"
+          : "auto";
+  return {
+    id,
+    name,
+    kind,
+    base_url,
+    key_ref: `provider:${id}`,
+    extra_headers: {},
+    client_profile: profile,
+    bearer_auth: false,
+    enabled: true,
+    timeout_secs: 600,
+    connect_timeout_secs: 15,
+    anthropic_version: null,
+    quirks: {
+      use_max_completion_tokens: false,
+      drop_temperature: false,
+      drop_top_p: false,
+      drop_stop: false,
+      stream_usage: true,
+      system_as_developer: false,
+      send_reasoning_effort: false,
+    },
+    balance: { preset: "none", custom: null },
+    decision: { path: "/v1/systemone", threshold: 0.85 },
+    accounts: [],
+    ...overrides,
+  };
+}
+
+/** The free Jev decision model OpenCode Zen serves without a credential. */
+export const ZEN_JEV_BASE_URL = "https://opencode.ai/zen";
+export const ZEN_JEV_PATH = "/v1/systemone";
+export const ZEN_JEV_MODEL = "jev-1.13-free";
+export const ZEN_JEV_PROVIDER_ID = "opencode-zen-jev";
+/**
+ * The confidence the Auto review acts on for this preset.
+ *
+ * 0.6 is the value openchamber measured on 31 mixed permission samples (28
+ * correct, every miss on the safe side). The decision provider's own default is
+ * stricter; the preset is the one place where a measured value is better than a
+ * policy number.
+ */
+export const ZEN_JEV_THRESHOLD = 0.6;
+
+/** Whether `provider` is the anonymous Zen Jev endpoint, whatever its id. */
+export function isZenJevProvider(provider: Provider): boolean {
+  return (
+    provider.kind === "decision" &&
+    provider.base_url.trim().replace(/\/+$/, "") === ZEN_JEV_BASE_URL &&
+    provider.decision.path.trim() === ZEN_JEV_PATH
+  );
+}
+
+/**
+ * Add the free Zen Jev decision model and put it first in the Auto review pool.
+ *
+ * One mutation for three facts that only make sense together: the provider that
+ * answers the typed question, the model that names it, and the pool member that
+ * reaches it. Returns `null` when the candidate is already there, which is what
+ * makes the button idempotent.
+ *
+ * The provider is matched by signature, not by id: a provider the operator
+ * already made for this endpoint is reused, and an id collision with a
+ * different provider gets a suffix instead of being overwritten. Priorities are
+ * shifted so Jev is asked first while the existing order is preserved — a
+ * preset that lands last would be a decision model the Auto review never asks.
+ */
+export function applyZenJevPreset(cfg: AppConfig): AppConfig | null {
+  const next = structuredClone(cfg);
+  let provider = next.providers.find(isZenJevProvider);
+  if (!provider) {
+    let id = ZEN_JEV_PROVIDER_ID;
+    for (let n = 2; next.providers.some((p) => p.id === id); n += 1) {
+      id = `${ZEN_JEV_PROVIDER_ID}-${n}`;
+    }
+    provider = emptyProvider(id, "OpenCode Zen · Jev (free)", "decision", ZEN_JEV_BASE_URL, {
+      key_ref: "",
+      extra_headers: { "x-opencode-client": "zroutery" },
+      timeout_secs: 4,
+      connect_timeout_secs: 4,
+      decision: { path: ZEN_JEV_PATH, threshold: ZEN_JEV_THRESHOLD },
+    });
+    next.providers.push(provider);
+  }
+  const providerId = provider.id;
+
+  let model = next.models.find(
+    (m) => m.provider_id === providerId && m.upstream_model === ZEN_JEV_MODEL,
+  );
+  if (!model) {
+    model = emptyModel(providerId, ZEN_JEV_MODEL);
+    next.models.push(model);
+  }
+  const modelId = previewId(providerId, ZEN_JEV_MODEL);
+  const names = new Set([modelId, ...model.aliases]);
+  if (next.classifier.candidates.some((c) => names.has(c.model))) return null;
+
+  next.classifier.candidates = next.classifier.candidates.map((c) => ({
+    ...c,
+    priority: c.priority + CANDIDATE_PRIORITY_STEP,
+  }));
+  next.classifier.candidates.push({
+    model: modelId,
+    priority: CANDIDATE_PRIORITY_STEP,
+    enabled: true,
+  });
+  next.classifier.enabled = true;
+  return next;
 }
 
 export function defaultProbe(): BalanceProbe {

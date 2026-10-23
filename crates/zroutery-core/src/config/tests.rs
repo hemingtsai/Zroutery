@@ -241,6 +241,47 @@ fn a_context_window_must_be_positive_and_fit_the_output_cap() {
 }
 
 #[test]
+fn the_zen_jev_preset_validates() {
+    let mut cfg = sample();
+    let mut provider = ProviderConfig::new(
+        "opencode-zen-jev",
+        "OpenCode Zen · Jev (free)",
+        ProviderKind::Decision,
+    );
+    provider.base_url = "https://opencode.ai/zen".into();
+    provider.key_ref = String::new();
+    provider.client_profile = ProviderClientProfile::Native;
+    provider.extra_headers.insert("x-opencode-client".into(), "zroutery".into());
+    provider.timeout_secs = 4;
+    provider.connect_timeout_secs = 4;
+    provider.decision.path = "/v1/systemone".into();
+    provider.decision.threshold = 0.6;
+    assert_eq!(
+        provider.decision.url(&provider.base_url),
+        "https://opencode.ai/zen/v1/systemone"
+    );
+    cfg.providers.push(provider);
+    cfg.models.push(ModelEntry::for_upstream(
+        "opencode-zen-jev",
+        "jev-1.13-free",
+        None,
+    ));
+    cfg.classifier.candidates.push(ClassifierCandidate {
+        model: "opencode-zen-jev-jev-1.13-free".into(),
+        priority: 10,
+        enabled: true,
+    });
+    cfg.classifier.enabled = true;
+
+    let errors: Vec<_> = cfg
+        .validate()
+        .into_iter()
+        .filter(|i| i.severity == IssueSeverity::Error)
+        .collect();
+    assert!(errors.is_empty(), "the preset must be a valid config: {errors:?}");
+}
+
+#[test]
 fn a_decision_model_is_not_nagged_about_a_tier() {
     let mut cfg = sample();
     cfg.providers.push(ProviderConfig::new(

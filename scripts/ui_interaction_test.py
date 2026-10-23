@@ -3306,6 +3306,116 @@ def case_ui21_the_auto_mode_pool_marks_a_decision_candidate(devtools) -> list[st
     return failures
 
 
+def case_ui22_one_click_adds_the_zen_jev_preset(devtools) -> list[str]:
+    """One control, one save, and the Auto mode pool is on Zen's free Jev.
+
+    The preset is three facts — the decision provider, the model that names it
+    and the pool member that reaches it — and they are only useful together. The
+    case reads the single save the button issues: the provider is keyless and
+    points at the System One path, the model is declared, the candidate is first
+    (priorities shifted, not overwritten) and Auto review is on. The second half
+    is the idempotence: once the candidate is there, the button must be gone.
+    """
+    failures: list[str] = []
+
+    devtools.click_selector('[data-page="routing"]')
+    devtools.wait_for("Boolean(document.querySelector('#tab-auto'))", "the auto review tab")
+    devtools.click_selector("#tab-auto")
+    devtools.wait_for("Boolean(document.querySelector('.page .linky'))", "the edit control")
+    devtools.evaluate(
+        """
+        (() => {
+          const edit = [...document.querySelectorAll('.page .linky')]
+            .find((b) => b.textContent.includes('Edit') && b.offsetParent !== null);
+          if (edit) edit.click();
+        })()
+        """
+    )
+    devtools.wait_for("document.querySelector('.drawer') !== null", "the auto review drawer")
+
+    button = (
+        "[...document.querySelectorAll('.drawer .controls button')]"
+        ".find((b) => b.textContent.includes(\"OpenCode Zen's free Jev\"))"
+    )
+    devtools.wait_for("Boolean(%s)" % button, "the Jev preset button")
+    point = devtools.evaluate(
+        """
+        (() => {
+          const b = %s;
+          if (!b) return null;
+          const r = b.getBoundingClientRect();
+          return {x: r.left + r.width / 2, y: r.top + r.height / 2};
+        })()
+        """
+        % button
+    )
+    if point is None:
+        return ["the Jev preset button has no place to click"]
+    devtools.click(point)
+
+    devtools.wait_for("Boolean(window.__zrStub.last('save_config'))", "the preset save")
+    devtools.wait_for("!document.querySelector('.busybar')", "the save to drain", timeout=20.0)
+    config = devtools.evaluate(
+        "(window.__zrStub.last('save_config')||{args:{config:null}}).args.config"
+    )
+    if config is None:
+        return ["the preset issued no save_config"]
+
+    provider = next((p for p in config["providers"] if p.get("kind") == "decision"), None)
+    if provider is None:
+        failures.append("the preset did not create a decision provider")
+        return failures
+    expected = {
+        "base_url": "https://opencode.ai/zen",
+        "key_ref": "",
+        "client_profile": "native",
+    }
+    for field, value in expected.items():
+        if provider.get(field) != value:
+            failures.append("provider.%s is %r, expected %r" % (field, provider.get(field), value))
+    if provider.get("extra_headers", {}).get("x-opencode-client") != "zroutery":
+        failures.append("the provider does not identify itself to Zen: %r" % provider.get("extra_headers"))
+    decision = provider.get("decision") or {}
+    if decision.get("path") != "/v1/systemone":
+        failures.append("decision.path is %r" % decision.get("path"))
+    if decision.get("threshold") != 0.6:
+        failures.append("decision.threshold is %r, expected 0.6" % decision.get("threshold"))
+
+    model = next(
+        (
+            m
+            for m in config["models"]
+            if m["provider_id"] == provider["id"] and m["upstream_model"] == "jev-1.13-free"
+        ),
+        None,
+    )
+    if model is None:
+        failures.append("the preset did not declare the jev-1.13-free model")
+
+    candidates = config["classifier"]["candidates"]
+    jev_id = "%s-jev-1.13-free" % provider["id"]
+    jev = next((c for c in candidates if c["model"] == jev_id), None)
+    if jev is None:
+        failures.append("the preset did not add %s to the pool" % jev_id)
+    else:
+        if jev["priority"] != 10:
+            failures.append("Jev is at priority %r, not first" % jev["priority"])
+        if not jev["enabled"]:
+            failures.append("the Jev candidate is disabled")
+        others = [c["priority"] for c in candidates if c["model"] != jev_id]
+        if any(p <= 10 for p in others):
+            failures.append("existing candidates were not shifted behind Jev: %r" % others)
+    if not config["classifier"]["enabled"]:
+        failures.append("the preset left Auto review off")
+
+    # Idempotence: the candidate is in the pool, so the button must be gone.
+    devtools.wait_for(
+        "!Boolean(%s)" % button, "the preset button to disappear once it has landed"
+    )
+
+    return failures
+
+
 CASES = (
     {"label": "UI-1 two nested edits in sequence (first save delayed)", "run": case_ui1_nested_rebase},
     {"label": "UI-2 moved candidate renumbers priority", "run": case_ui2_candidate_priority},
@@ -3398,6 +3508,10 @@ CASES = (
     {
         "label": "UI-21 the auto mode pool marks a decision candidate",
         "run": case_ui21_the_auto_mode_pool_marks_a_decision_candidate,
+    },
+    {
+        "label": "UI-22 one click adds the Zen Jev preset",
+        "run": case_ui22_one_click_adds_the_zen_jev_preset,
     },
 )
 

@@ -1,11 +1,15 @@
 import { useMemo, useState } from "react";
 import {
   TIERS,
+  ZEN_JEV_MODEL,
+  applyZenJevPreset,
+  isZenJevProvider,
   tierMembers,
   modelRows,
   moveCandidatePriority,
   nextCandidatePriority,
   orderCandidatesByPriority,
+  previewId,
   virtualId,
   type AppConfig,
   type ClassifierCandidate,
@@ -36,6 +40,7 @@ import {
   StatusDot,
   Toggle,
   ms,
+  useToast,
 } from "../components";
 import { useI18n } from "../i18n";
 
@@ -751,6 +756,7 @@ function AutoModeDrawer({
 }) {
   const classifier = snapshot.config.classifier;
   const { t } = useI18n();
+  const notify = useToast();
   const rows = useMemo(
     () => modelRows(snapshot),
     [snapshot.config.models, snapshot.exposed_ids],
@@ -806,6 +812,32 @@ function AutoModeDrawer({
       });
       return next;
     });
+  };
+
+  /**
+   * Whether the free Zen Jev preset is already in the pool.
+   *
+   * The pool names a model by exposed id or alias, so the check covers both;
+   * the provider is matched by signature because the operator may have made one
+   * already and named it something else.
+   */
+  const jevNames = useMemo(() => {
+    const provider = snapshot.config.providers.find(isZenJevProvider);
+    if (!provider) return null;
+    const names = new Set([previewId(provider.id, ZEN_JEV_MODEL)]);
+    const model = snapshot.config.models.find(
+      (m) => m.provider_id === provider.id && m.upstream_model === ZEN_JEV_MODEL,
+    );
+    for (const alias of model?.aliases ?? []) names.add(alias);
+    return names;
+  }, [snapshot.config.providers, snapshot.config.models]);
+  const jevInPool = jevNames
+    ? classifier.candidates.some((c) => jevNames.has(c.model))
+    : false;
+
+  const addZenJev = async () => {
+    const ok = await onSave((cfg) => applyZenJevPreset(cfg));
+    if (ok) notify("ok", t("routing.jev_added"));
   };
 
   /*
@@ -1002,6 +1034,14 @@ function AutoModeDrawer({
             />
           </div>
         )}
+        {!jevInPool && (
+          <div className="controls">
+            <Button kind="primary" disabled={busy} onClick={() => void addZenJev()}>
+              {t("routing.add_jev")}
+            </Button>
+          </div>
+        )}
+        {!jevInPool && <p className="field-hint">{t("routing.add_jev_hint")}</p>}
       </Section>
 
       <Section title={t("routing.behaviour")}>

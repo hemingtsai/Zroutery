@@ -4,6 +4,7 @@ import {
   BALANCE_PRESETS,
   defaultProbe,
   emptyModel,
+  emptyProvider,
   errorText,
   money,
   previewId,
@@ -595,31 +596,14 @@ function AddProviderForm({
         return null;
       }
       const next = structuredClone(cfg);
-      next.providers.push({
-        id,
-        name: name.trim(),
-        kind: newKind,
-        base_url: newBaseUrl.trim() || defaultBaseUrl(newKind),
-        key_ref: `provider:${id}`,
-        extra_headers: {},
-        client_profile: defaultClientProfile(newKind),
-        bearer_auth: false,
-        enabled: true,
-        timeout_secs: 600,
-        connect_timeout_secs: 15,
-        anthropic_version: null,
-        balance: { preset: "none", custom: null },
-        decision: { path: "/v1/systemone", threshold: 0.85 },
-        quirks: {
-          use_max_completion_tokens: false,
-          drop_temperature: false,
-          drop_top_p: false,
-          drop_stop: false,
-          stream_usage: true,
-          system_as_developer: false,
-          send_reasoning_effort: false,
-        },
-      });
+      next.providers.push(
+        emptyProvider(
+          id,
+          name.trim(),
+          newKind,
+          newBaseUrl.trim() || defaultBaseUrl(newKind),
+        ),
+      );
       return next;
     });
     setNewName("");
