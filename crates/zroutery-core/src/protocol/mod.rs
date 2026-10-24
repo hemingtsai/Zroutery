@@ -231,15 +231,19 @@ pub fn decode_request(dialect: Dialect, body: Value) -> Result<ChatRequest> {
 /// Encode the IR into an upstream request body for the given dialect.
 ///
 /// `quirks` only affect the OpenAI dialect; the Anthropic API has no comparable
-/// variation between implementations.
+/// variation between implementations — with one exception, and that one is
+/// dated: the 2026-10-21 revision removes the sampling parameters and confines
+/// documents to user messages, so the Anthropic arm carries the version whose
+/// behaviour the request must obey. The other arms ignore it.
 pub fn encode_request(
     dialect: Dialect,
     req: &ChatRequest,
     upstream_model: &str,
     quirks: &ProviderQuirks,
+    anthropic_version: anthropic::AnthropicApiVersion,
 ) -> Result<Value> {
     match dialect {
-        Dialect::Anthropic => anthropic::encode_request(req, upstream_model),
+        Dialect::Anthropic => anthropic::encode_request_for(req, upstream_model, anthropic_version),
         Dialect::OpenAI => openai::encode_request_with(req, upstream_model, quirks),
         Dialect::OpenAIResponses => {
             responses::encode_request_with(req, upstream_model, quirks.portable_history)

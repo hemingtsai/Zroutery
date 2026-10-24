@@ -5,6 +5,7 @@ use zroutery_core::ir::{
     Capability, ChatRequest, ChatResponse, ContentBlock, Dialect, Role, StopReason, StreamEvent,
     StructuredOutput, ThinkingConfig, ToolChoice, Usage,
 };
+use zroutery_core::protocol::anthropic::AnthropicApiVersion;
 use zroutery_core::protocol::gemini::{
     decode_request, decode_response, encode_request, encode_response, GeminiStreamEncoder,
     GeminiStreamParser,
@@ -249,8 +250,14 @@ fn decodes_camel_case_system_instruction_into_the_upstream_request() {
 
     // The instruction must survive into the request actually sent upstream,
     // not merely be parsed into the IR.
-    let upstream =
-        translate_request(Dialect::OpenAI, &req, "gpt-4o", &ProviderQuirks::default()).unwrap();
+    let upstream = translate_request(
+        Dialect::OpenAI,
+        &req,
+        "gpt-4o",
+        &ProviderQuirks::default(),
+        AnthropicApiVersion::Legacy,
+    )
+    .unwrap();
     assert_eq!(upstream["messages"][0]["role"], "system");
     assert_eq!(
         upstream["messages"][0]["content"],
@@ -314,8 +321,14 @@ fn mints_ids_for_history_without_function_call_ids() {
 
     // The same id has to survive into the forwarded OpenAI request, or the
     // upstream sees an assistant tool call with no matching tool result.
-    let upstream =
-        translate_request(Dialect::OpenAI, &req, "gpt-4o", &ProviderQuirks::default()).unwrap();
+    let upstream = translate_request(
+        Dialect::OpenAI,
+        &req,
+        "gpt-4o",
+        &ProviderQuirks::default(),
+        AnthropicApiVersion::Legacy,
+    )
+    .unwrap();
     let messages = upstream["messages"].as_array().unwrap();
     assert_eq!(messages[1]["tool_calls"][0]["id"], call_id);
     assert_eq!(messages[2]["role"], "tool");
@@ -415,8 +428,14 @@ fn maps_a_single_allowed_function_to_a_specific_tool_choice() {
     assert_eq!(req.tools.len(), 1);
     assert_eq!(req.tools[0].name, "read");
 
-    let upstream =
-        translate_request(Dialect::OpenAI, &req, "gpt-4o", &ProviderQuirks::default()).unwrap();
+    let upstream = translate_request(
+        Dialect::OpenAI,
+        &req,
+        "gpt-4o",
+        &ProviderQuirks::default(),
+        AnthropicApiVersion::Legacy,
+    )
+    .unwrap();
     assert_eq!(upstream["tool_choice"]["function"]["name"], "read");
     let tools = upstream["tools"].as_array().unwrap();
     assert_eq!(tools.len(), 1, "the excluded function must not be sent");
@@ -441,8 +460,14 @@ fn filters_declarations_when_several_allowed_functions_are_given() {
     let names: Vec<&str> = req.tools.iter().map(|tool| tool.name.as_str()).collect();
     assert_eq!(names, ["read", "list"]);
 
-    let upstream =
-        translate_request(Dialect::OpenAI, &req, "gpt-4o", &ProviderQuirks::default()).unwrap();
+    let upstream = translate_request(
+        Dialect::OpenAI,
+        &req,
+        "gpt-4o",
+        &ProviderQuirks::default(),
+        AnthropicApiVersion::Legacy,
+    )
+    .unwrap();
     assert_eq!(upstream["tool_choice"], "required");
     let tools = upstream["tools"].as_array().unwrap();
     let sent: Vec<&str> = tools
@@ -498,8 +523,14 @@ fn decodes_parameters_json_schema_tool_declaration() {
 
     // The forwarded request must carry the declared schema rather than an
     // empty object schema with no properties or constraints.
-    let upstream =
-        translate_request(Dialect::OpenAI, &req, "gpt-4o", &ProviderQuirks::default()).unwrap();
+    let upstream = translate_request(
+        Dialect::OpenAI,
+        &req,
+        "gpt-4o",
+        &ProviderQuirks::default(),
+        AnthropicApiVersion::Legacy,
+    )
+    .unwrap();
     let parameters = &upstream["tools"][0]["function"]["parameters"];
     assert_eq!(parameters["properties"]["city"]["type"], "string");
     assert_eq!(parameters["required"][0], "city");
@@ -567,8 +598,14 @@ fn normalizes_gemini_schema_types_into_json_schema() {
     assert_eq!(schema["additionalProperties"], false);
 
     // The upstream OpenAI request must carry lowercase JSON Schema types.
-    let upstream =
-        translate_request(Dialect::OpenAI, &req, "gpt-4o", &ProviderQuirks::default()).unwrap();
+    let upstream = translate_request(
+        Dialect::OpenAI,
+        &req,
+        "gpt-4o",
+        &ProviderQuirks::default(),
+        AnthropicApiVersion::Legacy,
+    )
+    .unwrap();
     let parameters = &upstream["tools"][0]["function"]["parameters"];
     assert_eq!(parameters["type"], "object");
     assert_eq!(parameters["properties"]["tags"]["items"]["type"], "string");
@@ -652,7 +689,14 @@ fn carries_the_thinking_budget_into_the_ir() {
         send_reasoning_effort: true,
         ..ProviderQuirks::default()
     };
-    let upstream = translate_request(Dialect::OpenAI, &req, "o3", &quirks).unwrap();
+    let upstream = translate_request(
+        Dialect::OpenAI,
+        &req,
+        "o3",
+        &quirks,
+        AnthropicApiVersion::Legacy,
+    )
+    .unwrap();
     assert_eq!(upstream["reasoning_effort"], "medium");
 }
 
@@ -674,7 +718,14 @@ fn a_zero_thinking_budget_disables_thinking() {
         send_reasoning_effort: true,
         ..ProviderQuirks::default()
     };
-    let upstream = translate_request(Dialect::OpenAI, &req, "o3", &quirks).unwrap();
+    let upstream = translate_request(
+        Dialect::OpenAI,
+        &req,
+        "o3",
+        &quirks,
+        AnthropicApiVersion::Legacy,
+    )
+    .unwrap();
     assert_eq!(upstream["reasoning_effort"], "none");
 }
 
@@ -753,6 +804,7 @@ fn response_schema_survives_same_dialect_re_encoding() {
         &req,
         "gemini-upstream",
         &ProviderQuirks::default(),
+        AnthropicApiVersion::Legacy,
     )
     .unwrap();
 
@@ -786,6 +838,7 @@ fn json_object_mime_type_round_trips_without_a_schema() {
         &req,
         "gemini-upstream",
         &ProviderQuirks::default(),
+        AnthropicApiVersion::Legacy,
     )
     .unwrap();
     assert_eq!(

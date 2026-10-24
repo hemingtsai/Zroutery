@@ -9,11 +9,21 @@ use crate::ir::{
 };
 use crate::protocol::{apply_content_policy, explicit_placeholder};
 
-use super::{DEFAULT_MAX_TOKENS, DEFAULT_THINKING_BUDGET, MIN_THINKING_BUDGET};
+use super::{
+    AnthropicApiVersion, DEFAULT_MAX_TOKENS, DEFAULT_THINKING_BUDGET, MIN_THINKING_BUDGET,
+};
 
 // --------------------------------------------------------------- request out
 
 pub fn encode_request(req: &ChatRequest, upstream_model: &str) -> Result<Value> {
+    encode_request_for(req, upstream_model, AnthropicApiVersion::Legacy)
+}
+
+pub fn encode_request_for(
+    req: &ChatRequest,
+    upstream_model: &str,
+    version: AnthropicApiVersion,
+) -> Result<Value> {
     let mut body = Map::new();
     body.insert("model".into(), json!(upstream_model));
     let max_tokens = req.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS);
@@ -39,18 +49,30 @@ pub fn encode_request(req: &ChatRequest, upstream_model: &str) -> Result<Value> 
     let messages: Result<Vec<Value>> = req
         .messages
         .iter()
-        .map(|m| encode_message(m, req.unsupported_content_policy))
+        .map(|m| encode_message(m, req.unsupported_content_policy, version))
         .collect();
     body.insert("messages".into(), Value::Array(messages?));
 
-    if let Some(t) = req.temperature {
-        body.insert("temperature".into(), json!(t));
-    }
-    if let Some(p) = req.top_p {
-        body.insert("top_p".into(), json!(p));
-    }
-    if let Some(k) = req.top_k {
-        body.insert("top_k".into(), json!(k));
+    /*
+     * The sampling trio is the 2026-10-21 revision's headline break: the
+     * parameters are *removed*, and a request carrying any of them — even set
+     * to the value that used to be the default — answers 400. Under the new
+     * version the fields are left off rather than forwarded: the client did
+     * have a choice when it set them, but the upstream it chose no longer
+     * offers that control, and refusing every request the client sends would
+     * make the provider version unusable rather than merely less tunable.
+     * Under the baseline the fields ride as they always have.
+     */
+    if version == AnthropicApiVersion::Legacy {
+        if let Some(t) = req.temperature {
+            body.insert("temperature".into(), json!(t));
+        }
+        if let Some(p) = req.top_p {
+            body.insert("top_p".into(), json!(p));
+        }
+        if let Some(k) = req.top_k {
+            body.insert("top_k".into(), json!(k));
+        }
     }
     if !req.stop_sequences.is_empty() {
         body.insert("stop_sequences".into(), json!(req.stop_sequences));
@@ -159,7 +181,11 @@ pub fn encode_request(req: &ChatRequest, upstream_model: &str) -> Result<Value> 
     Ok(Value::Object(body))
 }
 
-fn encode_message(m: &Message, policy: UnsupportedContentPolicy) -> Result<Value> {
+fn encode_message(
+    m: &Message,
+    policy: UnsupportedContentPolicy,
+    version: AnthropicApiVersion,
+) -> Result<Value> {
     let role = match m.role {
         Role::User => "user",
         Role::Assistant => "assistant",
@@ -181,8 +207,28 @@ fn encode_message(m: &Message, policy: UnsupportedContentPolicy) -> Result<Value
             // by Anthropic; apply the content policy.
             ContentBlock::Image {
                 source: MediaSource::Reference { .. },
+            } => {
+                if let Some(replacement) = apply_content_policy(policy, b)? {
+                    content.push(encode_block(&replacement));
+                }
             }
-            | ContentBlock::Document {
+            /*
+             * 2026-10-21 removes documents from assistant messages entirely —
+             * a document there answers 400 however it is sourced, and the
+             * nesting exemption only covers documents inside tool results,
+             * which the IR never synthesises here. Under the new version an
+             * assistant-side document is exactly the kind of content the
+             * policy exists for: representable, just not in this position, so
+             * the policy's replacement stands in for it.
+             */
+            ContentBlock::Document { .. }
+                if version == AnthropicApiVersion::V2026_10_21 && m.role == Role::Assistant =>
+            {
+                if let Some(replacement) = apply_content_policy(policy, b)? {
+                    content.push(encode_block(&replacement));
+                }
+            }
+            ContentBlock::Document {
                 source: MediaSource::Reference { .. },
             } => {
                 if let Some(replacement) = apply_content_policy(policy, b)? {

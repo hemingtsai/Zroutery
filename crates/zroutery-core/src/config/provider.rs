@@ -43,6 +43,26 @@ pub enum ProviderKind {
     Decision,
 }
 
+/// Which OpenAI surface a provider answers.
+///
+/// The two are separate protocols that happen to share a vendor: the request
+/// body, the response body and the stream events of `/v1/responses` differ
+/// from `/v1/chat/completions` in shape and in semantics (stateful items,
+/// reasoning items, tool calls as function calls). Both encoders already
+/// exist — the gateway itself serves the Responses dialect inbound — so this
+/// is a routing choice, not new code.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApiSurface {
+    /// `/v1/chat/completions` — the default, and what every OpenAI-compatible
+    /// clone has served historically.
+    #[default]
+    Chat,
+    /// `/v1/responses` — OpenAI's newer surface, and the one Codex-shaped
+    /// gateways expect.
+    Responses,
+}
+
 /// How to ask a decision endpoint for an answer.
 ///
 /// Only meaningful for a provider of kind [`ProviderKind::Decision`]; every

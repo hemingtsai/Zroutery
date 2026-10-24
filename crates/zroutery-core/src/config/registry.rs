@@ -8,9 +8,11 @@ use super::model::{ModelCapabilities, ModelTier};
 use super::provider::default_weight;
 use super::provider::ProviderKind;
 use super::provider::{
-    default_connect_timeout, default_timeout, default_true, DecisionConfig, ProviderClientProfile,
+    default_connect_timeout, default_timeout, default_true, ApiSurface, DecisionConfig,
+    ProviderClientProfile,
 };
 use crate::billing::{BalanceConfig, BaseDepth, Pricing};
+use crate::ir::Dialect;
 pub use crate::protocol::ProviderQuirks;
 
 /// One upstream account/endpoint.
@@ -39,6 +41,19 @@ pub struct ProviderConfig {
     /// Anthropic API version header. Ignored for OpenAI compatible providers.
     #[serde(default)]
     pub anthropic_version: Option<String>,
+    /// Which OpenAI surface this provider answers, when it speaks the OpenAI
+    /// protocol.
+    ///
+    /// `Chat` is the default: `/v1/chat/completions`, the shape every
+    /// "OpenAI compatible" relay has served for years. `Responses` switches
+    /// the same provider to OpenAI's `/v1/responses` — newer gateways and the
+    /// Codex-flavoured relays expose that surface, sometimes *only* that
+    /// surface, and the two are not dialects of one another: the request body,
+    /// the response body and the event stream all differ. The switch lives on
+    /// the provider rather than the request because it is a property of what
+    /// the upstream serves, not of what the client asked.
+    #[serde(default)]
+    pub api_surface: ApiSurface,
     /// Legacy Claude Code impersonation switch. New configurations use
     /// `client_profile`; this field is accepted for old documents and folded
     /// into that profile during normalization.
@@ -277,6 +292,7 @@ impl ProviderConfig {
             timeout_secs: default_timeout(),
             connect_timeout_secs: default_connect_timeout(),
             anthropic_version: None,
+            api_surface: ApiSurface::default(),
             quirks: ProviderQuirks::default(),
             balance: BalanceConfig::default(),
             decision: DecisionConfig::default(),
@@ -319,6 +335,26 @@ impl ProviderConfig {
         }
     }
 
+    /// The wire dialect requests to this provider are encoded in.
+    ///
+    /// The kind decides, except inside the OpenAI family, where the provider's
+    /// own surface choice answers: the same `/v1` base can serve Chat
+    /// Completions or Responses, and everything downstream of that choice —
+    /// the request encoder, the response decoder, the stream parser — differs.
+    /// A decision endpoint keeps the placeholder OpenAI value; nothing asks it
+    /// to chat (see [`ProviderKind::dialect`]).
+    pub fn dialect(&self) -> Dialect {
+        match self.kind {
+            ProviderKind::OpenAICompatible
+            | ProviderKind::OpenCodeZenFree
+            | ProviderKind::OpenCodeConsole => match self.api_surface {
+                ApiSurface::Chat => Dialect::OpenAI,
+                ApiSurface::Responses => Dialect::OpenAIResponses,
+            },
+            other => other.dialect(),
+        }
+    }
+
     /// Full URL for the chat endpoint of this provider.
     pub fn chat_url(&self) -> String {
         let base = self.base_url.trim_end_matches('/');
@@ -334,7 +370,10 @@ impl ProviderConfig {
             ProviderKind::Anthropic => format!("{with_v1}/messages"),
             ProviderKind::OpenAICompatible
             | ProviderKind::OpenCodeZenFree
-            | ProviderKind::OpenCodeConsole => format!("{with_v1}/chat/completions"),
+            | ProviderKind::OpenCodeConsole => match self.api_surface {
+                ApiSurface::Chat => format!("{with_v1}/chat/completions"),
+                ApiSurface::Responses => format!("{with_v1}/responses"),
+            },
             // A decision endpoint has no chat url. Its url carries the
             // decision path, and the upstream asks it directly.
             ProviderKind::Decision => self.decision.url(&self.base_url),

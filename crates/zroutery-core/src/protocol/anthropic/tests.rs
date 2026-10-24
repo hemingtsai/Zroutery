@@ -169,6 +169,89 @@ fn encode_request_fills_required_max_tokens() {
     assert_eq!(body["max_tokens"], DEFAULT_MAX_TOKENS);
     assert!(body.get("system").is_none());
 }
+#[test]
+fn the_2026_revision_strips_the_sampling_trio() {
+    let req = decode_request(json!({
+        "model": "m",
+        "messages": [{"role": "user", "content": "q"}],
+        "temperature": 0.2,
+        "top_p": 0.9,
+        "top_k": 40
+    }))
+    .unwrap();
+    assert!(
+        req.temperature.is_some(),
+        "the decode keeps the client's values"
+    );
+
+    // Baseline: the fields ride, as they have for three years.
+    let legacy = encode_request_for(&req, "m", AnthropicApiVersion::Legacy).unwrap();
+    assert_eq!(legacy["temperature"], json!(0.2));
+    assert_eq!(legacy["top_p"], json!(0.9));
+    assert_eq!(legacy["top_k"], json!(40));
+
+    // 2026-10-21: the fields are *removed* — sending any of them answers 400
+    // even at the default, so the encoder leaves them off rather than letting
+    // the upstream refuse a request the client had no way to retract.
+    let next = encode_request_for(&req, "m", AnthropicApiVersion::V2026_10_21).unwrap();
+    assert!(next.get("temperature").is_none());
+    assert!(next.get("top_p").is_none());
+    assert!(next.get("top_k").is_none());
+    assert_eq!(next["messages"], legacy["messages"]);
+}
+
+#[test]
+fn the_2026_revision_keeps_documents_out_of_assistant_messages() {
+    let doc = ContentBlock::Document {
+        source: crate::ir::MediaSource::Base64 {
+            media_type: "application/pdf".into(),
+            data: "AAAA".into(),
+        },
+    };
+    let mut req = ChatRequest::new("m", Dialect::Anthropic);
+    req.unsupported_content_policy = crate::ir::UnsupportedContentPolicy::Placeholder;
+    req.messages.push(crate::ir::Message {
+        role: crate::ir::Role::Assistant,
+        content: vec![doc],
+    });
+
+    // Baseline: an assistant-side document rides.
+    let legacy = encode_request_for(&req, "m", AnthropicApiVersion::Legacy).unwrap();
+    assert_eq!(
+        legacy["messages"][0]["content"][0]["type"],
+        json!("document")
+    );
+
+    // 2026-10-21: a document in an assistant message answers 400, so the
+    // content policy stands in for it.
+    let next = encode_request_for(&req, "m", AnthropicApiVersion::V2026_10_21).unwrap();
+    let block = &next["messages"][0]["content"][0];
+    assert_ne!(block["type"], json!("document"));
+}
+
+#[test]
+fn the_version_header_selects_from_the_configured_string() {
+    assert_eq!(AnthropicApiVersion::of(None), AnthropicApiVersion::Legacy);
+    assert_eq!(
+        AnthropicApiVersion::of(Some("2023-06-01")),
+        AnthropicApiVersion::Legacy
+    );
+    assert_eq!(
+        AnthropicApiVersion::of(Some("2026-10-21")),
+        AnthropicApiVersion::V2026_10_21
+    );
+    // A version this build has not met degrades to the full shape rather than
+    // stripping fields it may still accept.
+    assert_eq!(
+        AnthropicApiVersion::of(Some("2030-01-01")),
+        AnthropicApiVersion::Legacy
+    );
+    assert_eq!(AnthropicApiVersion::Legacy.header_value(), "2023-06-01");
+    assert_eq!(
+        AnthropicApiVersion::V2026_10_21.header_value(),
+        "2026-10-21"
+    );
+}
 
 #[test]
 fn strict_tool_schema_is_rejected_instead_of_dropped() {

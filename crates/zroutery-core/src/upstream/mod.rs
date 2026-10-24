@@ -171,7 +171,7 @@ impl Upstream {
     ) -> Result<u64> {
         const PROBE_TIMEOUT_SECS: u64 = 30;
 
-        let mut request = ChatRequest::new(upstream_model, provider.kind.dialect());
+        let mut request = ChatRequest::new(upstream_model, provider.dialect());
         request.messages.push(crate::ir::Message::user_text("ping"));
         request.max_tokens = Some(1);
         let body = encode_for(provider, &request, upstream_model, Some(1))?;
@@ -248,7 +248,7 @@ impl Upstream {
 
         let json: Value = serde_json::from_str(&text)
             .map_err(|e| Error::BadUpstreamPayload(format!("{e}: {}", truncate(&text, 500))))?;
-        protocol::decode_response(provider.kind.dialect(), json)
+        protocol::decode_response(provider.dialect(), json)
     }
 
     /// Ask a decision endpoint for an answer.

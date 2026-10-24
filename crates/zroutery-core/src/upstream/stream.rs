@@ -146,7 +146,7 @@ impl Upstream {
         let state = StreamState {
             body: Box::pin(response.bytes_stream()),
             decoder: SseDecoder::new(),
-            parser: protocol::stream_parser(provider.kind.dialect(), upstream_model),
+            parser: protocol::stream_parser(provider.dialect(), upstream_model),
             pending: VecDeque::new(),
             provider: provider.name.clone(),
             idle: Duration::from_secs(provider.timeout_secs),

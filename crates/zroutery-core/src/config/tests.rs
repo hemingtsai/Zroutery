@@ -3,7 +3,9 @@
 use super::app::AppConfig;
 use super::*;
 use crate::billing::BaseDepth;
+use crate::config::provider::ApiSurface;
 use crate::ir::CapabilityState;
+use crate::ir::Dialect;
 
 fn sample() -> AppConfig {
     let mut cfg = AppConfig::default();
@@ -132,6 +134,28 @@ fn chat_urls() {
 
     let a = ProviderConfig::new("a", "Anthropic", ProviderKind::Anthropic);
     assert_eq!(a.chat_url(), "https://api.anthropic.com/v1/messages");
+}
+
+#[test]
+fn the_responses_surface_moves_the_url_and_the_dialect() {
+    let mut p = ProviderConfig::new("r", "Relay", ProviderKind::OpenAICompatible);
+    p.base_url = "https://relay.example/v1".into();
+    assert_eq!(p.chat_url(), "https://relay.example/v1/chat/completions");
+    assert_eq!(p.dialect(), Dialect::OpenAI);
+
+    p.api_surface = ApiSurface::Responses;
+    assert_eq!(p.chat_url(), "https://relay.example/v1/responses");
+    assert_eq!(p.dialect(), Dialect::OpenAIResponses);
+
+    // The surface is an OpenAI-family choice: an Anthropic provider keeps its
+    // own protocol however the field is set (an old document could carry one),
+    // and a decision endpoint never had a chat url to move.
+    let mut a = ProviderConfig::new("a", "Anthropic", ProviderKind::Anthropic);
+    a.api_surface = ApiSurface::Responses;
+    assert_eq!(a.dialect(), Dialect::Anthropic);
+    let mut d = ProviderConfig::new("d", "Decision", ProviderKind::Decision);
+    d.api_surface = ApiSurface::Responses;
+    assert_eq!(d.dialect(), Dialect::OpenAI);
 }
 
 #[test]

@@ -1633,6 +1633,8 @@ fn responses_reasoning_effort_decode() {
         ("low", true, Some(1024u32)),
         ("medium", true, Some(4096)),
         ("high", true, Some(16384)),
+        ("xhigh", true, Some(32768)),
+        ("max", true, Some(65536)),
     ];
 
     for (effort, expected_enabled, expected_budget) in cases {
@@ -1980,7 +1982,14 @@ fn responses_structured_request() -> serde_json::Value {
 }
 
 fn encode_for_target(dialect: Dialect, req: &ChatRequest) -> serde_json::Value {
-    encode_request(dialect, req, "upstream-model", &ProviderQuirks::default()).unwrap()
+    encode_request(
+        dialect,
+        req,
+        "upstream-model",
+        &ProviderQuirks::default(),
+        anthropic::AnthropicApiVersion::Legacy,
+    )
+    .unwrap()
 }
 
 #[test]
@@ -2231,6 +2240,7 @@ fn anthropic_encoder_refuses_a_json_schema_request() {
         &req,
         "claude-sonnet",
         &ProviderQuirks::default(),
+        anthropic::AnthropicApiVersion::Legacy,
     )
     .unwrap_err();
     assert!(
@@ -2255,6 +2265,7 @@ fn anthropic_encoder_refuses_a_json_object_request() {
         &req,
         "claude-sonnet",
         &ProviderQuirks::default(),
+        anthropic::AnthropicApiVersion::Legacy,
     )
     .unwrap_err();
     assert!(

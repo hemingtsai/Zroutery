@@ -63,11 +63,18 @@ pub fn encode_for_mode(
     if let Some(cap) = max_output_tokens {
         req.max_tokens = Some(req.max_tokens.map(|m| m.min(cap)).unwrap_or(cap));
     }
+    // The provider's configured version header decides the Anthropic wire
+    // shape: 2026-10-21 strips the sampling trio and confines documents, and
+    // the same value rides the anthropic-version header so the upstream knows
+    // which contract this request claims to honour.
+    let anthropic_version =
+        crate::protocol::anthropic::AnthropicApiVersion::of(provider.anthropic_version.as_deref());
     let mut body = protocol::encode_request(
-        provider.kind.dialect(),
+        provider.dialect(),
         &req,
         upstream_model,
         &mode.apply(&provider.quirks),
+        anthropic_version,
     )?;
 
     // Claude Code profile: inject identity line as the first system block

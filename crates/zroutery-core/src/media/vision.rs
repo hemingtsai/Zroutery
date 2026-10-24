@@ -64,7 +64,7 @@ pub async fn describe(
     client_identity: Option<&str>,
     client_headers: &InboundHeaders,
 ) -> Result<ChatResponse> {
-    let mut req = ChatRequest::new(&target.entry.upstream_model, target.provider.kind.dialect());
+    let mut req = ChatRequest::new(&target.entry.upstream_model, target.provider.dialect());
     req.client_identity = client_identity.map(str::to_string);
     req.client_headers = client_headers.clone();
     req.messages.push(Message {
