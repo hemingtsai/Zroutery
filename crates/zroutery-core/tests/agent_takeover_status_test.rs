@@ -233,6 +233,7 @@ fn a_target() -> GatewayTarget {
         classes: vec![TierClass {
             model: "sonnet-class".into(),
             display_name: "Sonnet".into(),
+            effort_levels: Vec::new(),
         }],
         default_class: None,
     }
