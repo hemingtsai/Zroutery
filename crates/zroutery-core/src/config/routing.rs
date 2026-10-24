@@ -43,6 +43,18 @@ pub struct RectifierConfig {
     pub media_fallback: bool,
     #[serde(default = "default_true")]
     pub thinking_budget: bool,
+    /// Serve a reasoning request through a model whose thinking support is
+    /// unknown, with the reasoning controls removed.
+    ///
+    /// A reasoning request is a hint about how an answer should be produced,
+    /// not content that would be lost: a model that cannot reason still
+    /// answers. The alternative — rejecting the whole pool because no member
+    /// declares support — makes a tier unusable for any client that selects a
+    /// reasoning variant, which is the common shape for agent CLIs. The
+    /// attempt is marked degraded, and the dropped controls are visible in the
+    /// route decision, so the fallback is never silent.
+    #[serde(default = "default_true")]
+    pub thinking_fallback: bool,
 }
 
 impl Default for RectifierConfig {
@@ -52,6 +64,7 @@ impl Default for RectifierConfig {
             thinking_signature: true,
             media_fallback: true,
             thinking_budget: true,
+            thinking_fallback: true,
         }
     }
 }

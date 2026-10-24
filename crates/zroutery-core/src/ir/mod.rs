@@ -644,6 +644,31 @@ impl ChatRequest {
     pub fn refresh_required_capabilities(&mut self) {
         self.required_capabilities = self.compute_required_capabilities();
     }
+
+    /// Remove every reasoning control from the request.
+    ///
+    /// This is the transform behind the documented thinking remediation: a
+    /// target whose thinking support is unknown receives the request without
+    /// the controls it may not honour — the thinking configuration and any
+    /// thinking or redacted-thinking blocks carried in history. Nothing else
+    /// is touched, and the requirement vector is recomputed because it is
+    /// derived from exactly those fields.
+    ///
+    /// The caller is responsible for marking the attempt degraded; this method
+    /// only performs the transform, so a request that no longer carries a
+    /// reasoning requirement is not silently described as a capability pass.
+    pub fn drop_reasoning(&mut self) {
+        self.thinking = None;
+        for message in &mut self.messages {
+            message.content.retain(|block| {
+                !matches!(
+                    block,
+                    ContentBlock::Thinking { .. } | ContentBlock::RedactedThinking { .. }
+                )
+            });
+        }
+        self.refresh_required_capabilities();
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1034,6 +1059,44 @@ mod tests {
         });
         let caps = req.compute_required_capabilities();
         assert!(caps.contains(&Capability::Thinking));
+    }
+
+    #[test]
+    fn drop_reasoning_removes_the_config_and_history_blocks() {
+        let mut req = ChatRequest::new("m", Dialect::OpenAI);
+        req.messages.push(Message::user_text("hello"));
+        req.messages.push(Message {
+            role: Role::Assistant,
+            content: vec![
+                ContentBlock::Thinking {
+                    text: "reasoning...".into(),
+                    signature: Some("sig".into()),
+                },
+                ContentBlock::RedactedThinking {
+                    data: "opaque".into(),
+                },
+                ContentBlock::Text {
+                    text: "answer".into(),
+                    cache_control: None,
+                },
+            ],
+        });
+        req.thinking = Some(ThinkingConfig {
+            enabled: true,
+            budget_tokens: Some(4096),
+        });
+        req.refresh_required_capabilities();
+        assert!(req.required_capabilities.contains(&Capability::Thinking));
+
+        req.drop_reasoning();
+
+        assert!(req.thinking.is_none());
+        assert!(!req.required_capabilities.contains(&Capability::Thinking));
+        assert_eq!(req.messages[1].content.len(), 1);
+        assert!(matches!(
+            req.messages[1].content[0],
+            ContentBlock::Text { .. }
+        ));
     }
 
     #[test]

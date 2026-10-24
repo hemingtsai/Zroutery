@@ -21,6 +21,12 @@ impl Router {
     /// true only when at least one requirement is `Unknown` and a configured
     /// remediation covers it, while every other requirement is natively
     /// `Supported`. An `Unsupported` requirement can never be remediated.
+    ///
+    /// Two remediations exist: a vision model can describe an image the target
+    /// cannot see, and a reasoning request can be served without its reasoning
+    /// controls by a target whose thinking support is unknown. Both are
+    /// explicit configuration, both mark the candidate degraded, and neither
+    /// is a capability pass.
     pub(super) fn capability_remediation_allowed(
         &self,
         registry: &Registry,
@@ -31,14 +37,21 @@ impl Router {
             return false;
         }
         let config = registry.config();
-        let vision_remediation = config.vision.enabled
-            || (config.routing.rectifier.enabled && config.routing.rectifier.media_fallback);
+        let rectifier = &config.routing.rectifier;
+        let vision_remediation =
+            config.vision.enabled || (rectifier.enabled && rectifier.media_fallback);
+        let thinking_remediation = rectifier.enabled && rectifier.thinking_fallback;
         let mut remediated = false;
         for capability in required_capabilities {
             match member.capabilities.capability_state(*capability) {
                 crate::ir::CapabilityState::Supported => {}
                 crate::ir::CapabilityState::Unknown
                     if *capability == Capability::Vision && vision_remediation =>
+                {
+                    remediated = true;
+                }
+                crate::ir::CapabilityState::Unknown
+                    if *capability == Capability::Thinking && thinking_remediation =>
                 {
                     remediated = true;
                 }

@@ -41,7 +41,7 @@ use super::{error_response, AdmissionGuard, AppState};
 use crate::budget::Verdict;
 use crate::config::ClientIdentity;
 use crate::error::{Error, Result};
-use crate::ir::{ChatRequest, Dialect, Message, ResponseStatus, StoredResponse};
+use crate::ir::{Capability, ChatRequest, Dialect, Message, ResponseStatus, StoredResponse};
 #[cfg(feature = "ml")]
 use crate::ml::ShadowInput;
 use crate::policy::{self, ClientContext, RouteDecision, RoutingPolicy};
@@ -549,6 +549,45 @@ fn expand_continuation(
     req.messages.extend(current);
     Ok((input_items, Some(previous)))
 }
+/// Shape the request for one candidate before it is encoded.
+///
+/// Two documented remediations happen here, and only when the candidate was
+/// admitted through them: a target known not to see gets its images described,
+/// and a target whose thinking support is unknown gets the reasoning controls
+/// removed. The returned clone leaves the shared request intact, so a failed
+/// attempt does not carry its transform into the next candidate.
+///
+/// Both transforms are explicit configuration and both attempts arrive here
+/// already marked degraded by the router; neither is a silent drop.
+async fn shape_for_candidate(
+    state: &AppState,
+    candidate: &Candidate,
+    req: &ChatRequest,
+) -> ChatRequest {
+    let mut shaped = req.clone();
+    let config = state.config();
+    if config.vision.enabled && !candidate.entry.capabilities.vision {
+        let needs_vision = crate::media::collect::collect(&shaped);
+        if !needs_vision.is_empty() {
+            apply_vision_fallback(state, &mut shaped, "preflight").await;
+        }
+    }
+    let rectifier = &config.routing.rectifier;
+    if rectifier.enabled
+        && rectifier.thinking_fallback
+        && !candidate.entry.capabilities.thinking
+        && shaped.required_capabilities.contains(&Capability::Thinking)
+    {
+        tracing::debug!(
+            model = %candidate.model_id(),
+            upstream_model = %candidate.entry.upstream_model,
+            "dropping reasoning controls for a target without declared thinking support"
+        );
+        shaped.drop_reasoning();
+    }
+    shaped
+}
+
 /// Prepare one attempt: resolve the key and encode the upstream body.
 ///
 /// `mode` is derived from the request kind: classifier queries are encoded in
@@ -1007,19 +1046,10 @@ async fn buffered_chat(
         }
         let attempt_start = Instant::now();
 
-        // Preflight: a target known not to see gets the images described
-        // before the first byte leaves, so the attempt is not wasted on a
-        // rejection we could predict. Unknown capability is deliberately
-        // left alone — the upstream decides, and the rectifier reacts.
-        // And with vision fallback off entirely, nothing happens here: off
-        // means the request goes out as it came, promise kept.
-        let mut req = req.clone();
-        if state.config().vision.enabled && !candidate.entry.capabilities.vision {
-            let needs_vision = crate::media::collect::collect(&req);
-            if !needs_vision.is_empty() {
-                apply_vision_fallback(&state, &mut req, "preflight").await;
-            }
-        }
+        // Preflight: shape the request for this candidate without touching
+        // the shared copy, so a failed attempt does not leak its transform
+        // into the next one.
+        let mut req = shape_for_candidate(&state, candidate, &req).await;
 
         let (key, body) = match prepare(&state, candidate, &req, mode) {
             Ok(v) => v,
@@ -1398,19 +1428,10 @@ async fn stream_chat(
         }
         let attempt_start = Instant::now();
 
-        // Preflight: a target known not to see gets the images described
-        // before the first byte leaves, so the attempt is not wasted on a
-        // rejection we could predict. Unknown capability is deliberately
-        // left alone — the upstream decides, and the rectifier reacts.
-        // And with vision fallback off entirely, nothing happens here: off
-        // means the request goes out as it came, promise kept.
-        let mut req = req.clone();
-        if state.config().vision.enabled && !candidate.entry.capabilities.vision {
-            let needs_vision = crate::media::collect::collect(&req);
-            if !needs_vision.is_empty() {
-                apply_vision_fallback(&state, &mut req, "preflight").await;
-            }
-        }
+        // Preflight: shape the request for this candidate without touching
+        // the shared copy, so a failed attempt does not leak its transform
+        // into the next one.
+        let mut req = shape_for_candidate(&state, candidate, &req).await;
 
         let (key, body) = match prepare(&state, candidate, &req, mode) {
             Ok(v) => v,
