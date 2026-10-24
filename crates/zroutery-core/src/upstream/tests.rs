@@ -289,6 +289,48 @@ fn catalogue_prices_become_per_million_tokens() {
 }
 
 #[test]
+fn newapi_panel_prices_are_already_per_million() {
+    // A NewAPI-style panel borrows the OpenRouter field names but publishes its
+    // own per-million price in its own currency: a ¥1/¥4 model arrives as
+    // "1"/"4". Scaling that by a million is the 1,000,000 USD bug.
+    let entry = serde_json::json!({
+        "id": "tokenrhythm-deepseek-v4.1-flash-1017",
+        "pricing": { "prompt": "1", "completion": "4", "input_cache_read": "0.02" }
+    });
+    let pricing = pricing_from_catalogue(&entry).unwrap();
+    assert_eq!(pricing.currency, "?", "the panel's currency is not dollars");
+    assert_eq!(pricing.input_per_mtok, 1.0);
+    assert_eq!(pricing.output_per_mtok, 4.0);
+    assert_eq!(pricing.cache_read_per_mtok, Some(0.02));
+
+    // A cheap per-million price must not be mistaken for per-token dollars
+    // either: ¥0.5 a million arrives as "0.5", which is still per-million.
+    let cheap = serde_json::json!({
+        "id": "m", "pricing": { "prompt": "0.5", "completion": "2" }
+    });
+    let pricing = pricing_from_catalogue(&cheap).unwrap();
+    assert_eq!(pricing.currency, "?");
+    assert_eq!(pricing.input_per_mtok, 0.5);
+    assert_eq!(pricing.output_per_mtok, 2.0);
+}
+
+#[test]
+fn implausible_or_mixed_unit_prices_are_dropped() {
+    for entry in [
+        // The ×1e6 slip itself, already per-million-but-scaled by the panel:
+        // no model costs a million dollars a million tokens.
+        serde_json::json!({"id": "m", "pricing": {"prompt": "1000000", "completion": "4000000"}}),
+        // Half per-token, half per-million: no unit names this pair.
+        serde_json::json!({"id": "m", "pricing": {"prompt": "0.00000027", "completion": "4"}}),
+    ] {
+        assert!(
+            pricing_from_catalogue(&entry).is_none(),
+            "{entry} must not price a model"
+        );
+    }
+}
+
+#[test]
 fn catalogues_without_usable_prices_are_left_alone() {
     for entry in [
         serde_json::json!({"id": "m"}),
