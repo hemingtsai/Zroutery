@@ -93,11 +93,25 @@ export default function Models({
    * `modelRows` reads only these two arrays, and `exposed_ids` is parallel to
    * `config.models`, so keying on the pair is the whole input: a save that
    * replaces either rebuilds the list, and nothing else has to.
+   *
+   * The display order is the provider's name, then the model id — the order
+   * the configuration file happens to store rows in is no order at all, and at
+   * thirty-one models a list where one provider's models sit scattered across
+   * the whole height is a list that has to be read end to end to answer "what
+   * does OpenCode Zen expose". `numeric` keeps v4.10 after v4.9.
    */
-  const rows = useMemo(
-    () => modelRows(snapshot),
-    [snapshot.config.models, snapshot.exposed_ids],
-  );
+  const rows = useMemo(() => {
+    const list = modelRows(snapshot);
+    const providerName = new Map(
+      snapshot.config.providers.map((p) => [p.id, p.name.toLowerCase()]),
+    );
+    return [...list].sort(
+      (a, b) =>
+        (providerName.get(a.model.provider_id) ?? "").localeCompare(
+          providerName.get(b.model.provider_id) ?? "",
+        ) || a.id.localeCompare(b.id, undefined, { numeric: true }),
+    );
+  }, [snapshot.config.models, snapshot.config.providers, snapshot.exposed_ids]);
   const [openId, setOpenId] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
   const [nameError, setNameError] = useState<string | null>(null);
@@ -245,8 +259,14 @@ export default function Models({
             (provider?.name ?? t("models.missing_provider")) +
             (provider?.enabled === false ? ` ${t("providers.provider_off")}` : "") +
             (r.model.tier ? ` · ${tierName(r.model.tier, t)}` : ` · ${t("models.no_tier")}`),
-          price: r.model.pricing ? priceText(r.model.pricing) : t("common.dash"),
-          latency: healthRow ? ms(healthRow.avg_latency_ms) : t("common.dash"),
+          // A cell with nothing to report renders nothing. An unpriced model
+          // and a model with no traffic yet used to print an em dash each, and
+          // at thirty-one mostly-unused models the page carried sixty-two
+          // dashes of pure noise — the column belongs to the rows that have
+          // something to put in it, and the drawer holds the full story either
+          // way.
+          price: r.model.pricing ? priceText(r.model.pricing) : "",
+          latency: healthRow ? ms(healthRow.avg_latency_ms) : "",
           // One lower-cased haystack per row, built in the same pass as the
           // other strings: the search box then costs a `includes` per row
           // instead of four field reads and a join on every keystroke.
@@ -670,23 +690,33 @@ function ModelDrawer({
   const [renameError, setRenameError] = useState<string | null>(null);
   const status = !m.enabled || provider?.enabled === false ? "off" : "ok";
   // A decision model answers the Auto Mode's questions and cannot answer a
-  // request that wants prose, so a tier would be a promise the router cannot
-  // keep. The control is disabled rather than hidden, and the reason is beside
-  // it — a hidden control would leave the row looking like an oversight.
+  // request that wants prose, so no tier exists for it to hold. The drawer
+  // used to show the tier select disabled with a "—" in it — a control that
+  // refused every choice it offered — and explained itself in a row below the
+  // aliases, two screens away from the control it explained. The explanation
+  // takes the tier row's own place instead, and the select is gone entirely:
+  // a row that says why there is no choice does not also draw one.
   const tierLocked = provider?.kind === "decision";
 
-  // The rows are built before the markup so that the explanation of a locked
-  // tier can be *added* rather than spliced in: a conditional inside the
-  // array literal is a tuple the compiler cannot type.
+  // The rows are built before the markup so that the tier row and its
+  // explanation are alternatives, not one row and a patch on it: a conditional
+  // inside the array literal is a tuple the compiler cannot type.
   const rows: [ReactNode, ReactNode][] = [
     [t("models.provider"), provider?.name ?? t("models.missing_provider")],
     [t("models.upstream"), <span className="mono">{m.upstream_model}</span>],
-    [
+  ];
+  if (tierLocked) {
+    rows.push([
+      t("models.tier_decision"),
+      <span className="muted">{t("models.tier_decision_hint")}</span>,
+    ]);
+  } else {
+    rows.push([
       t("models.tier"),
       <Select<ModelTier | "none">
         ariaLabel={t("models.tier_for", { model: m.upstream_model })}
         value={m.tier ?? "none"}
-        disabled={busy || tierLocked}
+        disabled={busy}
         onChange={(next) =>
           onUpdate((model) => {
             model.tier = next === "none" ? null : next;
@@ -697,7 +727,9 @@ function ModelDrawer({
           ...TIERS.map((c) => ({ value: c, label: virtualId(c, namingStyle) })),
         ]}
       />,
-    ],
+    ]);
+  }
+  rows.push(
     [
       t("common.enabled"),
       <Toggle
@@ -718,13 +750,7 @@ function ModelDrawer({
       t("models.aliases"),
       m.aliases.length ? <span className="mono">{m.aliases.join(", ")}</span> : t("common.dash"),
     ],
-  ];
-  if (tierLocked) {
-    rows.push([
-      t("models.tier_decision"),
-      <span className="muted">{t("models.tier_decision_hint")}</span>,
-    ]);
-  }
+  );
 
   return (
     <Drawer title={<><StatusDot tone={status} /> <span className="mono">{row.id}</span></>} onClose={onClose}>
