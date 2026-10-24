@@ -523,7 +523,7 @@ mod tests {
         use crate::ir::{ChatRequest, Message};
         let mut provider = ProviderConfig::new("oc", "OpenCode", ProviderKind::OpenAICompatible);
         provider.client_profile = ProviderClientProfile::OpenCodeCli;
-        let mut req = ChatRequest::new("space-bunny-free", provider.kind.dialect());
+        let mut req = ChatRequest::new("space-bunny-free", provider.dialect());
         req.messages.push(Message::user_text("hi"));
         let body = crate::upstream::encode_for_mode(
             &provider,
@@ -736,7 +736,7 @@ mod gateway_tests {
         provider.base_url = format!("http://{addr}");
         assert_eq!(provider.client_profile, ProviderClientProfile::OpenCodeCli);
 
-        let mut req = ChatRequest::new("space-bunny-free", provider.kind.dialect());
+        let mut req = ChatRequest::new("space-bunny-free", provider.dialect());
         req.messages.push(Message::user_text("hi"));
 
         // The encoded, shaped body.
@@ -836,7 +836,7 @@ mod gateway_tests {
             "OpenCode Zen Free",
             ProviderKind::OpenCodeZenFree,
         );
-        let mut req = ChatRequest::new("space-bunny-free", provider.kind.dialect());
+        let mut req = ChatRequest::new("space-bunny-free", provider.dialect());
         req.messages
             .push(Message::user_text("Reply with the single word: pong"));
         let body = encode_for_mode(
