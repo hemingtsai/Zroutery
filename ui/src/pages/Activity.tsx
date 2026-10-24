@@ -75,6 +75,16 @@ export default function Activity({
       ? Math.round(((summary.requests - summary.failures) / summary.requests) * 1000) / 10
       : null;
 
+  /*
+   * Nothing has happened yet — no requests, no health, no spend. The page's
+   * opening line already says so and says what to do; the three sections
+   * below it used to repeat the sentence twice more and park an em dash under
+   * the word "Spend". Each section is omitted when it has nothing of its own
+   * to add, and "Reset" — a destructive action over numbers that do not
+   * exist — goes with them.
+   */
+  const idle = summary.requests === 0 && recent.length === 0 && health.length === 0;
+
   const classifier = (() => {
     // Every side kind is Auto review traffic, whatever protocol it was asked in.
     const sides = summary.per_kind.filter((k) => isSideKind(k.kind as RequestKind));
@@ -134,93 +144,97 @@ export default function Activity({
         </div>
       </div>
 
-      <Section title={t("activity.health")} hint={t("activity.health_hint")}>
-        {health.length === 0 ? (
-          <p className="empty">{t("activity.nothing")}</p>
-        ) : (
-          <div className="list">
-            {health.map((h) => (
-              <div className="list-row" key={h.model_id} style={{ cursor: "default" }}>
-                <StatusDot
-                  tone={
-                    h.cooldown_remaining_secs > 0
-                      ? "warn"
-                      : h.total_failure > h.total_success
-                        ? "danger"
-                        : "ok"
-                  }
-                />
-                <div className="row-main">
-                  <span className="row-title mono">{h.model_id}</span>
-                  <span className="row-sub">
-                    {t("activity.ok_failed", {
-                      ok: num(h.total_success),
-                      failed: num(h.total_failure),
-                    })}
-                    {h.last_error ? ` · ${h.last_error}` : ""}
-                  </span>
+      {!idle && (
+        <Section title={t("activity.health")} hint={t("activity.health_hint")}>
+          {health.length === 0 ? (
+            <p className="empty">{t("activity.nothing")}</p>
+          ) : (
+            <div className="list">
+              {health.map((h) => (
+                <div className="list-row" key={h.model_id} style={{ cursor: "default" }}>
+                  <StatusDot
+                    tone={
+                      h.cooldown_remaining_secs > 0
+                        ? "warn"
+                        : h.total_failure > h.total_success
+                          ? "danger"
+                          : "ok"
+                    }
+                  />
+                  <div className="row-main">
+                    <span className="row-title mono">{h.model_id}</span>
+                    <span className="row-sub">
+                      {t("activity.ok_failed", {
+                        ok: num(h.total_success),
+                        failed: num(h.total_failure),
+                      })}
+                      {h.last_error ? ` · ${h.last_error}` : ""}
+                    </span>
+                  </div>
+                  <span className="muted mono">{ms(h.avg_latency_ms)}</span>
+                  {h.cooldown_remaining_secs > 0 && (
+                    <Badge tone="warn">
+                      {t("activity.cooling", { n: h.cooldown_remaining_secs })}
+                    </Badge>
+                  )}
+                  <Button
+                    kind="ghost"
+                    // Every row's button is the same word, so the name carries
+                    // the model it clears the health of. Without it, a list of
+                    // twenty rows presents twenty buttons all called "Clear".
+                    ariaLabel={t("activity.clear_health", { id: h.model_id })}
+                    onClick={() => run(() => api.resetHealth(h.model_id))}
+                  >
+                    {t("common.clear")}
+                  </Button>
                 </div>
-                <span className="muted mono">{ms(h.avg_latency_ms)}</span>
-                {h.cooldown_remaining_secs > 0 && (
-                  <Badge tone="warn">
-                    {t("activity.cooling", { n: h.cooldown_remaining_secs })}
-                  </Badge>
-                )}
-                <Button
-                  kind="ghost"
-                  // Every row's button is the same word, so the name carries
-                  // the model it clears the health of. Without it, a list of
-                  // twenty rows presents twenty buttons all called "Clear".
-                  ariaLabel={t("activity.clear_health", { id: h.model_id })}
-                  onClick={() => run(() => api.resetHealth(h.model_id))}
-                >
-                  {t("common.clear")}
-                </Button>
-              </div>
-            ))}
-          </div>
-        )}
-      </Section>
+              ))}
+            </div>
+          )}
+        </Section>
+      )}
 
-      <Section title={t("activity.spend")} hint={t("activity.spend_hint")}>
-        <div className="stats">
-          <div>
-            <strong>{totalsText(summary.cost)}</strong>
-            <span>{t("activity.estimated")}</span>
+      {!idle && (
+        <Section title={t("activity.spend")} hint={t("activity.spend_hint")}>
+          <div className="stats">
+            <div>
+              <strong>{totalsText(summary.cost)}</strong>
+              <span>{t("activity.estimated")}</span>
+            </div>
           </div>
-        </div>
-        {summary.per_model.some((m) => Object.keys(m.cost).length > 0) && (
-          <table className="table">
-            <thead>
-              <tr>
-                <th>{t("field.model_name")}</th>
-                <th>{t("models.requests")}</th>
-                <th>{t("field.input")} / {t("field.output")}</th>
-                <th>{t("activity.spend")}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {summary.per_model
-                .filter((m) => Object.keys(m.cost).length > 0)
-                .map((m) => (
-                  <tr key={m.model_id}>
-                    <td className="mono">{m.model_id}</td>
-                    <td className="mono">
-                      {num(m.requests)}
-                      {m.failures > 0 && (
-                      <Badge tone="danger">{t("activity.n_failed", { n: m.failures })}</Badge>
-                    )}
-                    </td>
-                    <td className="muted mono">
-                      {num(m.input_tokens)} / {num(m.output_tokens)}
-                    </td>
-                    <td className="mono">{totalsText(m.cost)}</td>
-                  </tr>
-                ))}
-            </tbody>
-          </table>
-        )}
-      </Section>
+          {summary.per_model.some((m) => Object.keys(m.cost).length > 0) && (
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>{t("field.model_name")}</th>
+                  <th>{t("models.requests")}</th>
+                  <th>{t("field.input")} / {t("field.output")}</th>
+                  <th>{t("activity.spend")}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {summary.per_model
+                  .filter((m) => Object.keys(m.cost).length > 0)
+                  .map((m) => (
+                    <tr key={m.model_id}>
+                      <td className="mono">{m.model_id}</td>
+                      <td className="mono">
+                        {num(m.requests)}
+                        {m.failures > 0 && (
+                          <Badge tone="danger">{t("activity.n_failed", { n: m.failures })}</Badge>
+                        )}
+                      </td>
+                      <td className="muted mono">
+                        {num(m.input_tokens)} / {num(m.output_tokens)}
+                      </td>
+                      <td className="mono">{totalsText(m.cost)}</td>
+                    </tr>
+                  ))}
+              </tbody>
+            </table>
+          )}
+        </Section>
+      )}
     </>
   );
 
@@ -239,21 +253,25 @@ export default function Activity({
                 out: num(summary.output_tokens),
               })
         }
+        // Nothing to reset while nothing has been counted; a destructive
+        // button that can only clear zeros teaches doubt about every other.
         actions={
-          <Button
-            kind="ghost"
-            onClick={() =>
-              setConfirm({
-                title: t("confirm.reset_stats"),
-                body: t("confirm.reset_stats_body"),
-                confirmLabel: t("activity.reset"),
-                danger: true,
-                onConfirm: () => void run(api.clearStats),
-              })
-            }
-          >
-            {t("activity.reset")}
-          </Button>
+          summary.requests === 0 ? undefined : (
+            <Button
+              kind="ghost"
+              onClick={() =>
+                setConfirm({
+                  title: t("confirm.reset_stats"),
+                  body: t("confirm.reset_stats_body"),
+                  confirmLabel: t("activity.reset"),
+                  danger: true,
+                  onConfirm: () => void run(api.clearStats),
+                })
+              }
+            >
+              {t("activity.reset")}
+            </Button>
+          )
         }
       />
 

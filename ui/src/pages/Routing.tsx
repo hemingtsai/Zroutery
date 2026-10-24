@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import {
   TIERS,
   ZEN_JEV_MODEL,
@@ -28,6 +28,7 @@ import {
   CompactNumber,
   CommitInput,
   CommitNumber,
+  Disclosure,
   Drawer,
   Field,
   KeyValue,
@@ -43,6 +44,17 @@ import {
   useToast,
 } from "../components";
 import { useI18n } from "../i18n";
+
+/**
+ * Route rows shown before the pool's long tail folds away.
+ *
+ * A tier holds every enabled model of that class, and a real configuration
+ * holds dozens. The head of the list — who answers, who is next — is the part
+ * read on every visit; the tail matters the day an outage walks the pool to
+ * the bottom, and it is exactly as reachable one click down. Unfolded, the
+ * page was forty rows of "备选 5" that pushed the next tier off the screen.
+ */
+const SHOWN_ROUTES = 4;
 
 /**
  * Routing shows relationships first and configuration second. The page is
@@ -180,26 +192,12 @@ export default function Routing({
                     {t("routing.tier_empty", { id: virtualId(tier, config.routing.naming_style) })}
                   </span>
                 ) : (
-                  members.map((r, i) => (
-                    <span className="flow-route" key={r.id}>
-                      {i === 0 ? (
-                        <span className="flow-src">{i === 0 ? t("routing.request") : ""}</span>
-                      ) : (
-                        <span className="flow-src muted">{t("routing.fallback_n", { n: i })}</span>
-                      )}
-                      <span className="flow-arrow" aria-hidden>{"→"}</span>
-                      <span className="flow-target">
-                        <StatusDot
-                          tone={cooling.has(r.id) ? "warn" : "ok"}
-                          state={cooling.has(r.id) ? t("status.cooling") : undefined}
-                        />
-                        {r.id}
-                        <span className="flow-provider">
-                          {providerById.get(r.model.provider_id)?.name}
-                        </span>
-                      </span>
-                    </span>
-                  ))
+                  <RoutePool
+                    members={members}
+                    firstLabel={t("routing.request")}
+                    cooling={cooling}
+                    providerName={(id: string) => providerById.get(id)?.name}
+                  />
                 )}
               </div>
             </div>
@@ -299,30 +297,16 @@ export default function Routing({
             <div className="flow-routes">
               {config.classifier.enabled ? (
                 classifierCandidates.length > 0 ? (
-                  classifierCandidates.map(({ row: r }, i) => (
-                    <span className="flow-route" key={r.id}>
-                      {i === 0 ? (
-                        <span className="flow-src">
-                          {config.classifier.strategy === "priority"
-                            ? t("routing.verdict")
-                            : t("routing.next")}
-                        </span>
-                      ) : (
-                        <span className="flow-src muted">{t("routing.fallback_n", { n: i })}</span>
-                      )}
-                      <span className="flow-arrow" aria-hidden>{"→"}</span>
-                      <span className="flow-target">
-                        <StatusDot
-                          tone={cooling.has(r.id) ? "warn" : "ok"}
-                          state={cooling.has(r.id) ? t("status.cooling") : undefined}
-                        />
-                        {r.id}
-                        <span className="flow-provider">
-                          {providerById.get(r.model.provider_id)?.name}
-                        </span>
-                      </span>
-                    </span>
-                  ))
+                  <RoutePool
+                    members={classifierCandidates.map((c) => c.row)}
+                    firstLabel={
+                      config.classifier.strategy === "priority"
+                        ? t("routing.verdict")
+                        : t("routing.next")
+                    }
+                    cooling={cooling}
+                    providerName={(id) => providerById.get(id)?.name}
+                  />
                 ) : (
                   <span className="flow-empty">{t("routing.review_no_candidate")}</span>
                 )
@@ -358,7 +342,7 @@ return (
                 {
                   value: "ml",
                   label: t("routing.tab_ml"),
-                  content: <MlRouting available={snapshot.ml_available} />,
+                  content: <MlRouting available={snapshot.ml_available} snapshot={snapshot} save={save} />,
                 },
               ]
             : []),
@@ -408,6 +392,56 @@ const TIER_HINT_KEY: Record<ModelTier, "tier.hint.fast" | "tier.hint.standard" |
   reasoning: "tier.hint.reasoning",
   frontier: "tier.hint.frontier",
 };
+
+/**
+ * One pool of route lines: the head shown flat, the long tail folded.
+ *
+ * The first line is labelled by the pool's own word — "请求" for a tier,
+ * "判定" for the review pool — and the folded tail keeps its absolute
+ * fallback numbers, so a row inside the disclosure still says which place
+ * in the pool it holds rather than counting from where the fold began.
+ */
+function RoutePool({
+  members,
+  firstLabel,
+  cooling,
+  providerName,
+}: {
+  members: ModelRow[];
+  firstLabel: ReactNode;
+  cooling: Set<string>;
+  providerName: (providerId: string) => string | undefined;
+}) {
+  const { t } = useI18n();
+  const head = members.slice(0, SHOWN_ROUTES);
+  const tail = members.slice(SHOWN_ROUTES);
+  const line = (r: ModelRow, index: number) => (
+    <span className="flow-route" key={r.id}>
+      <span className={index === 0 ? "flow-src" : "flow-src muted"}>
+        {index === 0 ? firstLabel : t("routing.fallback_n", { n: index })}
+      </span>
+      <span className="flow-arrow" aria-hidden>{"→"}</span>
+      <span className="flow-target">
+        <StatusDot
+          tone={cooling.has(r.id) ? "warn" : "ok"}
+          state={cooling.has(r.id) ? t("status.cooling") : undefined}
+        />
+        {r.id}
+        <span className="flow-provider">{providerName(r.model.provider_id)}</span>
+      </span>
+    </span>
+  );
+  return (
+    <>
+      {head.map(line)}
+      {tail.length > 0 && (
+        <Disclosure title={t("routing.more_fallbacks", { n: tail.length })}>
+          {tail.map(line)}
+        </Disclosure>
+      )}
+    </>
+  );
+}
 
 /**
  * How Default routing is configured. Strategy, failover, and what happens to
@@ -629,6 +663,7 @@ function DefaultDrawer({
           <div className="setting-right">
             <Segment<NamingStyle>
               ariaLabel={t("settings.naming_style")}
+              className="segment-compact"
               value={routing.naming_style}
               onChange={(naming_style) => patch({ naming_style })}
               options={[

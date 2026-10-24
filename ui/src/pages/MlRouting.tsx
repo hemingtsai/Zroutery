@@ -17,12 +17,15 @@ import {
   Badge,
   Banner,
   Button,
+  CommitInput,
+  CommitNumber,
   ConfirmDialog,
   Disclosure,
   Empty,
   KeyValue,
   Section,
   StatusDot,
+  Toggle,
   useToast,
   num,
   type ConfirmRequest,
@@ -62,11 +65,15 @@ const POLL_MS = 2_000;
 export default function MlRouting({
   available,
   onStatus,
+  snapshot,
+  save,
 }: {
   /** Whether this build has a learning stack, from the snapshot. */
   available: boolean;
   /** Hands a freshly read status up, so the page can stop showing stale facts. */
   onStatus?: (status: MlStatus) => void;
+  snapshot?: import("../api").Snapshot;
+  save?: (mutate: (config: import("../api").AppConfig) => import("../api").AppConfig | null) => Promise<boolean>;
 }) {
   const { t } = useI18n();
   const notify = useToast();
@@ -301,13 +308,20 @@ export default function MlRouting({
         </p>
       )}
 
-      {blindIsPermanent && (
-        <p className="ml-fault" role="alert">
-          {t("ml.blind_spot_warning", {
-            names: blind.map((b) => `${b.provider_id}/${b.model_id}`).join(", "),
-          })}
-        </p>
+      {/* Detailed collection config — the 3 knobs that were invisible and caused 0 samples */}
+      {snapshot && save && (
+        <CollectionConfig snapshot={snapshot} save={save} status={status} />
       )}
+
+      {/*
+        The blind-spot warning is advice, not a failure, so it renders as a warn
+        banner and says only what to do. It used to interpolate every blind
+        model id into a danger-toned paragraph — with a real catalogue that was
+        thirty-one ids across six red lines, announced in full to a screen
+        reader, for what is one sentence of advice. The names live in the
+        disclosure beside the counters below.
+      */}
+      {blindIsPermanent && <Banner tone="warn">{t("ml.blind_spot_warning")}</Banner>}
 
       {/* -- The silent failure: on, collecting nothing, everything healthy. -- */}
       {learningBlocked && (
@@ -356,16 +370,6 @@ export default function MlRouting({
               t("ml.blind_explored"),
               `${status.routing.blind_explorations} ${t("ml.with_no_model")}`,
             ],
-            blind.length > 0 && [
-              t("ml.never_tried"),
-              <>
-                {t("ml.blind_spot_count", { n: blind.length })}
-                <StatusDot tone={blindIsPermanent ? "warn" : "ok"} />{" "}
-                <div className="muted">
-                  {blind.map((b) => `${b.provider_id}/${b.model_id}`).join(", ")}
-                </div>
-              </>,
-            ],
             [
               t("ml.collected"),
               `${count(status.dataset.samples)} ${t("ml.samples")} · ${
@@ -375,6 +379,31 @@ export default function MlRouting({
           ].filter(Boolean) as [React.ReactNode, React.ReactNode][]
         }
       />
+
+      {/*
+        The blind candidates, folded. The count is the fact a reader scans for;
+        the thirty-one ids behind it are the detail they asked for, and a
+        detail asked for is exactly what the disclosure is for. `defaultOpen`
+        stays false even at one entry: the row reads the same whatever the
+        size of the pool, and a list that opens itself is a list the reader
+        has to close.
+      */}
+      {blind.length > 0 && (
+        <Disclosure
+          title={t("ml.never_tried")}
+          count={t("ml.blind_spot_count", { n: blind.length })}
+        >
+          <ul className="ml-blind">
+            {blind.map((b) => (
+              <li key={`${b.provider_id}/${b.model_id}`}>
+                <code>
+                  {b.provider_id}/{b.model_id}
+                </code>
+              </li>
+            ))}
+          </ul>
+        </Disclosure>
+      )}
 
       {decision && <GateCriteria decision={decision} />}
 
@@ -854,4 +883,171 @@ function formatMeasure(value: number, criterion: string): string {
     default:
       return value.toFixed(4);
   }
+}
+
+function CollectionConfig({
+  snapshot,
+  save,
+  status,
+}: {
+  snapshot: import("../api").Snapshot;
+  save: (mutate: (config: import("../api").AppConfig) => import("../api").AppConfig | null) => Promise<boolean>;
+  status: import("../api").MlStatus;
+}) {
+  const { t } = useI18n();
+  const cfg = snapshot.config;
+  const shadow = cfg.shadow;
+  const ml = cfg.ml_routing;
+  // Builds without `ml` feature have neither key — show explanation instead of controls
+  if (!shadow && !ml) {
+    return (
+      <Section title={t("ml.config_title")} hint={t("ml.config_hint")}>
+        <p className="muted">{t("ml.config_unavailable")}</p>
+      </Section>
+    );
+  }
+  const shadowOn = shadow?.enabled ?? false;
+  const mlOn = ml?.enabled ?? false;
+  const canCollect = shadowOn;
+  const canServe = mlOn && !!status.durable_state;
+
+  return (
+    <Section title={t("ml.config_title")} hint={t("ml.config_hint")}>
+      {!canCollect && (
+        <Banner tone="warn">{t("ml.config_shadow_off_hint")}</Banner>
+      )}
+      {shadow && (
+        <>
+          <Toggle
+            label={t("ml.shadow_enable")}
+            hint={t("ml.shadow_enable_hint")}
+            checked={shadow.enabled}
+            onChange={(enabled) =>
+              void save((c) => {
+                const n = structuredClone(c);
+                if (!n.shadow) n.shadow = { enabled: false, max_decisions: 10000, max_age_secs: 604800 };
+                n.shadow.enabled = enabled;
+                return n;
+              })
+            }
+          />
+          <div className="setting-row">
+            <div className="setting-left">
+              <span className="setting-title">{t("ml.shadow_max_decisions")}</span>
+              <span className="setting-desc">{t("ml.shadow_max_decisions_hint")}</span>
+            </div>
+            <div className="setting-right">
+              <CommitNumber
+                min={100}
+                max={100000}
+                integer
+                value={shadow.max_decisions}
+                ariaLabel={t("ml.shadow_max_decisions")}
+                onCommit={(v) =>
+                  void save((c) => {
+                    const n = structuredClone(c);
+                    if (!n.shadow) return null;
+                    n.shadow.max_decisions = v ?? 10000;
+                    return n;
+                  })
+                }
+              />
+            </div>
+          </div>
+          <div className="setting-row">
+            <div className="setting-left">
+              <span className="setting-title">{t("ml.shadow_max_age")}</span>
+              <span className="setting-desc">{t("ml.shadow_max_age_hint")}</span>
+            </div>
+            <div className="setting-right">
+              <CommitNumber
+                min={3600}
+                max={2592000}
+                integer
+                value={shadow.max_age_secs}
+                ariaLabel={t("ml.shadow_max_age")}
+                onCommit={(v) =>
+                  void save((c) => {
+                    const n = structuredClone(c);
+                    if (!n.shadow) return null;
+                    n.shadow.max_age_secs = v ?? 604800;
+                    return n;
+                  })
+                }
+              />
+            </div>
+          </div>
+        </>
+      )}
+      {ml && (
+        <>
+          <Toggle
+            label={t("ml.routing_enable")}
+            hint={t("ml.routing_enable_hint")}
+            checked={ml.enabled}
+            onChange={(enabled) =>
+              void save((c) => {
+                const n = structuredClone(c);
+                if (!n.ml_routing) n.ml_routing = { enabled: false, state_dir: "", exploration_probability: 0, exploration_seed: 42 };
+                n.ml_routing.enabled = enabled;
+                return n;
+              })
+            }
+          />
+          <div className="setting-row">
+            <div className="setting-left">
+              <span className="setting-title">{t("ml.state_dir")}</span>
+              <span className="setting-desc">{t("ml.state_dir_hint")}</span>
+            </div>
+            <div className="setting-right">
+              <CommitInput
+                value={ml.state_dir}
+                ariaLabel={t("ml.state_dir")}
+                placeholder="ml"
+                onCommit={(state_dir) =>
+                  void save((c) => {
+                    const n = structuredClone(c);
+                    if (!n.ml_routing) return null;
+                    n.ml_routing.state_dir = state_dir.trim();
+                    return n;
+                  })
+                }
+              />
+            </div>
+          </div>
+          <div className="setting-row">
+            <div className="setting-left">
+              <span className="setting-title">{t("ml.exploration")}</span>
+              <span className="setting-desc">{t("ml.exploration_hint")}</span>
+            </div>
+            <div className="setting-right">
+              <CommitNumber
+                min={0}
+                max={1}
+                value={ml.exploration_probability}
+                ariaLabel={t("ml.exploration")}
+                onCommit={(v) =>
+                  void save((c) => {
+                    const n = structuredClone(c);
+                    if (!n.ml_routing) return null;
+                    n.ml_routing.exploration_probability = Math.max(0, Math.min(1, v ?? 0));
+                    return n;
+                  })
+                }
+              />
+            </div>
+          </div>
+          {!canServe && mlOn && (
+            <p className="field-hint">{t("ml.serve_blocked_hint")}</p>
+          )}
+        </>
+      )}
+      <KeyValue
+        rows={[
+          [t("ml.config_effect"), canCollect ? t("ml.effect_collecting") : t("ml.effect_idle")],
+          [t("ml.config_serve"), canServe ? t("ml.serve_active") : t("ml.serve_deterministic")],
+        ]}
+      />
+    </Section>
+  );
 }
