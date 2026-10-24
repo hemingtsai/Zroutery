@@ -24,13 +24,13 @@ impl Upstream {
             .get_json(provider, api_key, &provider.models_url(), 30)
             .await?;
         let mut models = extract_model_list(&json, &provider.name);
-        // OpenCode publishes no capabilities on `/models`; its catalog supplies
-        // them, plus the zero-cost free flag.
-        #[cfg(feature = "opencode")]
-        if provider.kind.is_opencode() {
-            if let Err(e) = crate::opencode::enrich(&mut models).await {
-                tracing::warn!(provider = %provider.name, "OpenCode catalog enrichment failed: {e}");
-            }
+        // A provider's `/models` route answers names and sometimes prices. The
+        // public catalogue supplies what it usually omits — capabilities, the
+        // context and output windows, and the reasoning-effort levels a client
+        // picker may offer. Manual corrections happen after import and are not
+        // touched here.
+        if let Err(e) = crate::models_dev::enrich(&mut models, provider).await {
+            tracing::warn!(provider = %provider.name, "models.dev enrichment failed: {e}");
         }
         models.sort_by(|a, b| a.id.cmp(&b.id));
         models.dedup_by(|a, b| a.id == b.id);

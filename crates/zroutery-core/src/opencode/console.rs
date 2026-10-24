@@ -174,6 +174,7 @@ pub fn models_from_config(json: &Value) -> Vec<DiscoveredModel> {
                 context_window: mapped.context_window,
                 max_output: mapped.max_output,
                 capabilities: Some(mapped.capabilities),
+                effort_levels: mapped.effort_levels,
                 free: mapped.free,
             }
         })

@@ -454,6 +454,15 @@ pub struct ModelEntry {
     /// authority on what it accepts.
     #[serde(default)]
     pub context_window: Option<u32>,
+    /// The reasoning-effort levels this model accepts, as a client picker
+    /// should offer them.
+    ///
+    /// Filled from models.dev at import time and correctable by hand. The
+    /// takeover publishes these as the client's model variants; an empty list
+    /// means the model declares no effort levels, so no picker is written
+    /// rather than one that offers levels the upstream may reject.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub effort_levels: Vec<String>,
     /// What the provider charges for this model. Entered by hand, like the tier;
     /// without it a request is logged with no cost rather than a guessed one.
     #[serde(default)]
@@ -488,6 +497,7 @@ impl ModelEntry {
             aliases: Vec::new(),
             max_output_tokens: None,
             context_window: None,
+            effort_levels: Vec::new(),
             pricing: None,
         }
     }
@@ -495,6 +505,14 @@ impl ModelEntry {
     /// The id clients use, `<provider>-<upstream model>`.
     pub fn exposed_id(&self) -> String {
         qualified_id(&self.provider_id, &self.upstream_model)
+    }
+
+    /// The effort levels to advertise for this model, in picker order.
+    ///
+    /// The stored list is normalized on read so a hand edit or an older
+    /// catalogue cannot smuggle an unencodable level into a client's config.
+    pub fn normalized_effort_levels(&self) -> Vec<String> {
+        crate::config::model::normalize_effort_levels(&self.effort_levels)
     }
 
     /// True when `id` is this model's exposed id or one of its aliases.

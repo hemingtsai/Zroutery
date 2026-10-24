@@ -39,7 +39,9 @@ mod tests;
 pub use app::{AppConfig, NotificationConfig, WindowBehavior};
 #[cfg(feature = "ml")]
 pub use ml::MlRoutingConfig;
-pub use model::{ModelCapabilities, ModelTier, NamingStyle};
+pub use model::{
+    normalize_effort_levels, ModelCapabilities, ModelTier, NamingStyle, EFFORT_LEVELS,
+};
 pub use provider::{
     passthrough_denied, resolve_client_identity, ClientIdentity, ProviderClientProfile,
     ProviderKind, PASSTHROUGH_DENIED,

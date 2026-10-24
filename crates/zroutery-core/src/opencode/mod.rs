@@ -20,12 +20,10 @@ pub mod oauth;
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, Ordering};
-use std::sync::Mutex;
-use std::time::{Duration, Instant};
 
 use serde_json::{json, Map, Value};
 
-use crate::error::{Error, Result};
+use crate::error::Result;
 use crate::ir::{ChatResponse, ContentBlock};
 
 /// The base62 alphabet OpenCode's identifiers use.
@@ -240,55 +238,20 @@ fn minimal_tool(name: &str) -> Value {
 /// `provider_id` reported in errors from this module.
 const PROVIDER_ID: &str = "opencode";
 
-/// OpenCode's public capability catalog (models.dev shape).
-const CATALOG_URL: &str = "https://models.opencode.ai/api.json";
-/// How long a fetched catalog is reused before it is fetched again.
-const CATALOG_TTL: Duration = Duration::from_secs(3600);
-
-/// One model's capabilities, mapped from the catalog.
-#[derive(Debug, Clone, PartialEq)]
-pub struct CatalogModel {
-    pub context_window: Option<u32>,
-    pub max_output: Option<u32>,
-    /// Served at zero cost on both input and output.
-    pub free: bool,
-    pub capabilities: crate::config::ModelCapabilities,
-}
-
-static CATALOG_CACHE: Mutex<Option<(Instant, HashMap<String, CatalogModel>)>> = Mutex::new(None);
-
-/// The catalog, fetched once per [`CATALOG_TTL`] and cached in memory.
+/// One model's capabilities, mapped from the catalogue.
 ///
-/// It is ~5 MB, so it is never fetched per request; the enrichment of a
-/// discovered model list pays for it at most once an hour.
+/// The OpenCode family and every other provider share one parser and one
+/// cache: models.dev is the source of record and serves the same document.
+pub use crate::models_dev::CatalogModel;
+
+/// The `opencode` section of the public catalogue.
 pub async fn catalog() -> Result<HashMap<String, CatalogModel>> {
-    if let Some((at, cached)) = CATALOG_CACHE.lock().unwrap().as_ref() {
-        if at.elapsed() < CATALOG_TTL {
-            return Ok(cached.clone());
-        }
-    }
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(30))
-        .build()
-        .map_err(|e| Error::internal(format!("opencode catalog client: {e}")))?;
-    let json: Value = client
-        .get(CATALOG_URL)
-        .send()
-        .await
-        .map_err(|source| Error::Transport {
-            provider: PROVIDER_ID.into(),
-            source,
-        })?
-        .json()
-        .await
-        .map_err(|e| Error::BadUpstreamPayload(format!("opencode catalog decode: {e}")))?;
-    let parsed = parse_catalog(&json);
-    *CATALOG_CACHE.lock().unwrap() = Some((Instant::now(), parsed.clone()));
-    Ok(parsed)
+    crate::models_dev::provider_catalog(PROVIDER_ID).await
 }
 
-/// Fill discovered models with the catalog's capabilities, windows and free
-/// flag. Ids the catalog does not describe are left untouched.
+/// Fill discovered models with the catalogue's capabilities, windows, effort
+/// levels and free flag. Ids the catalogue does not describe are left
+/// untouched.
 pub async fn enrich(models: &mut [crate::upstream::DiscoveredModel]) -> Result<()> {
     let catalog = catalog().await?;
     for model in models {
@@ -297,61 +260,18 @@ pub async fn enrich(models: &mut [crate::upstream::DiscoveredModel]) -> Result<(
             model.max_output = entry.max_output;
             model.free = entry.free;
             model.capabilities = Some(entry.capabilities.clone());
+            model.effort_levels = entry.effort_levels.clone();
         }
     }
     Ok(())
 }
 
-/// Parse the `opencode.models` map out of the catalog document.
+/// Parse the `opencode.models` map out of a catalogue document.
 pub fn parse_catalog(json: &Value) -> HashMap<String, CatalogModel> {
-    let Some(models) = json
-        .get("opencode")
-        .and_then(|provider| provider.get("models"))
-        .and_then(Value::as_object)
-    else {
-        return HashMap::new();
-    };
-    models
-        .iter()
-        .map(|(id, entry)| (id.clone(), catalog_model(entry)))
-        .collect()
+    crate::models_dev::parse_provider(json, PROVIDER_ID)
 }
 
-pub(super) fn catalog_model(entry: &Value) -> CatalogModel {
-    let limit = entry.get("limit");
-    let limit_field = |name: &str| -> Option<u32> {
-        limit
-            .and_then(|limit| limit.get(name))
-            .and_then(Value::as_u64)
-            .and_then(|value| u32::try_from(value).ok())
-    };
-    let input_modalities = entry
-        .get("modalities")
-        .and_then(|modalities| modalities.get("input"))
-        .and_then(Value::as_array);
-    let has_input = |name: &str| {
-        input_modalities.is_some_and(|list| list.iter().any(|value| value.as_str() == Some(name)))
-    };
-    let flag = |name: &str| entry.get(name).and_then(Value::as_bool).unwrap_or(false);
-    let cost = entry.get("cost");
-    let zero_cost =
-        |name: &str| cost.and_then(|cost| cost.get(name)).and_then(Value::as_f64) == Some(0.0);
-
-    CatalogModel {
-        context_window: limit_field("context"),
-        max_output: limit_field("output"),
-        free: zero_cost("input") && zero_cost("output"),
-        capabilities: crate::config::ModelCapabilities {
-            vision: has_input("image"),
-            video: has_input("video"),
-            audio: has_input("audio"),
-            files: flag("attachment"),
-            tools: flag("tool_call"),
-            thinking: flag("reasoning"),
-            structured_output: flag("structured_output"),
-        },
-    }
-}
+pub(super) use crate::models_dev::catalog_model;
 
 /// Wrap a stream so a tool call to an injected placeholder the client never
 /// declared is dropped — the gate's `bash`/`read` must not leak to a client that

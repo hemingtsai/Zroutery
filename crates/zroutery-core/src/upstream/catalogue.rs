@@ -18,6 +18,12 @@ pub struct DiscoveredModel {
     /// Capability flags, when the source publishes them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capabilities: Option<crate::config::ModelCapabilities>,
+    /// The reasoning-effort levels the model declares, in picker order.
+    ///
+    /// Empty when the catalogue describes no effort levels; a client picker is
+    /// only written for a non-empty list.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub effort_levels: Vec<String>,
     /// Whether the model is served on a zero-cost (free) tier.
     #[serde(default)]
     pub free: bool,

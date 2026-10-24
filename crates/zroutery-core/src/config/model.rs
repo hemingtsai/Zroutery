@@ -4,6 +4,28 @@ use serde::{Deserialize, Serialize};
 
 use crate::ir::CapabilityState;
 
+/// The reasoning-effort levels the gateway accepts, in the order a model picker
+/// should present them.
+///
+/// `none` and `minimal` are accepted on the wire (see the OpenAI decoders) but
+/// are not selectable "effort" levels: they turn reasoning off rather than
+/// choosing how much of it to spend.
+pub const EFFORT_LEVELS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
+
+/// Restrict declared effort levels to the accepted vocabulary and put them in
+/// [`EFFORT_LEVELS`] order.
+///
+/// A stored list may come from a catalogue, a hand edit, or an older version,
+/// so it is normalized every time it is read rather than trusted. Unknown
+/// values are dropped: they cannot be encoded to any dialect.
+pub fn normalize_effort_levels(levels: &[String]) -> Vec<String> {
+    EFFORT_LEVELS
+        .iter()
+        .filter(|level| levels.iter().any(|value| value.eq_ignore_ascii_case(level)))
+        .map(|level| (*level).to_string())
+        .collect()
+}
+
 /// Capability tier a model belongs to. Assigned manually by the user; Zroutery
 /// never guesses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -202,5 +224,26 @@ impl ModelCapabilities {
             && !self.audio
             && !self.video
             && !self.files
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn effort_levels_are_normalized_to_the_accepted_vocabulary() {
+        let stored = vec![
+            "max".to_string(),
+            "ultra".to_string(),
+            "HIGH".to_string(),
+            "low".to_string(),
+            "high".to_string(),
+        ];
+        assert_eq!(
+            normalize_effort_levels(&stored),
+            vec!["low", "high", "max"],
+            "unknown values are dropped, case is folded, and order is the picker's"
+        );
     }
 }
