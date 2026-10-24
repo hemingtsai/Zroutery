@@ -66,6 +66,7 @@ struct Recorded {
     query: String,
     bearer: Option<String>,
     cookie: Option<String>,
+    new_api_user: Option<String>,
 }
 
 struct MockState {
@@ -169,6 +170,10 @@ impl MockState {
             query: uri.query().unwrap_or("").to_string(),
             bearer: field(AUTHORIZATION),
             cookie: field(COOKIE),
+            new_api_user: headers
+                .get("new-api-user")
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_string),
         });
     }
 
@@ -193,6 +198,31 @@ impl MockState {
             .filter(|request| request.path == path)
             .count()
     }
+}
+
+/// Reject a log-surface call that does not name its user.
+///
+/// Mirrors the current new-api middleware, which the AgentRouter generation
+/// runs: the header must carry the token's own user id, and its absence is a
+/// 401 even though the Authorization token is valid. /api/user/self, which
+/// bootstraps the session, keeps accepting the bearer alone.
+fn require_new_api_user(headers: &HeaderMap) -> bool {
+    let id = headers
+        .get("new-api-user")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+    id.is_empty() || id != "7"
+}
+
+fn new_api_user_required() -> Response {
+    (
+        StatusCode::UNAUTHORIZED,
+        axum::Json(failure(
+            "AUTH_UNAUTHORIZED",
+            "no authority to operate, please login first",
+        )),
+    )
+        .into_response()
 }
 
 /// Reject the request unless it carries the expected bearer.
@@ -330,6 +360,9 @@ async fn mock_stat(
     if let Some(response) = authorize(&state, &headers) {
         return response;
     }
+    if require_new_api_user(&headers) {
+        return new_api_user_required();
+    }
     let status = *state.stat_http_status.lock().unwrap();
     if status != 200 {
         return (
@@ -350,6 +383,9 @@ async fn mock_logs(
     state.record(&method, &uri, &headers);
     if let Some(response) = authorize(&state, &headers) {
         return response;
+    }
+    if require_new_api_user(&headers) {
+        return new_api_user_required();
     }
     let query = uri.query().unwrap_or_default();
     let page: u32 = query_param(query, "p")
@@ -658,6 +694,71 @@ fn new_rejects_an_invalid_base_url() {
 }
 
 // ── authentication ───────────────────────────────────────────────────
+
+#[tokio::test]
+async fn a_configured_user_id_rides_every_call_without_a_lookup() {
+    // The AgentRouter shape: the header is demanded on /api/user/self itself,
+    // so the id cannot be learned by asking — the capture persists it into the
+    // account's maintenance settings and the adapter carries it from config.
+    // The mock gates the log surfaces with 401 without the header, and this
+    // adapter never authenticates, so success can only be the configured id.
+    let panel = MockPanel::start().await;
+    let adapter = panel.adapter_with(|config| {
+        config.new_api_user = Some("7".into());
+    });
+
+    let _report = adapter.usage_report(None, None).await.unwrap();
+
+    let calls = panel.state.requests.lock().unwrap();
+    let stat = calls
+        .iter()
+        .find(|request| request.path == "/api/log/self/stat")
+        .expect("the stat call reached the panel");
+    assert_eq!(stat.new_api_user.as_deref(), Some("7"));
+    assert!(stat.bearer.is_some());
+    // `hits` takes the same mutex, so the guard must be released first.
+    drop(calls);
+    // No session bootstrap happened to learn the id: the config already said.
+    assert_eq!(
+        panel.state.hits("/api/user/self"),
+        0,
+        "a configured id must not cost a lookup round-trip"
+    );
+}
+
+#[tokio::test]
+async fn log_surfaces_name_the_user_the_token_belongs_to() {
+    // The AgentRouter generation of new-api enforces the New-Api-User header
+    // on /api/log/* (the mock gates those routes with 401 without it), while
+    // /api/user/self bootstraps the session on the bearer alone. A usage
+    // report that succeeds therefore proves the id from the session rode the
+    // stat call — the exact header a freshly captured token was being
+    // rejected for lacking.
+    let panel = MockPanel::start().await;
+    let adapter = panel.adapter_with(|config| config.api_key = String::new());
+    adapter
+        .authenticate(NewApiAuth::ApiKey {
+            key: BEARER.to_string(),
+        })
+        .await
+        .unwrap();
+
+    // The gate answers 401 without the header, so the report coming back at
+    // all is half the proof; the recorded request is the other half.
+    let _report = adapter.usage_report(None, None).await.unwrap();
+
+    let stat = panel
+        .state
+        .requests
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|request| request.path == "/api/log/self/stat")
+        .expect("the stat call reached the panel")
+        .clone();
+    assert_eq!(stat.new_api_user.as_deref(), Some("7"));
+    assert!(stat.bearer.is_some(), "the bearer still rides alongside");
+}
 
 #[tokio::test]
 async fn authenticate_with_api_key_verifies_and_installs_the_session() {
@@ -1085,7 +1186,9 @@ async fn refresh_survives_a_failing_rate_probe() {
 
     assert_eq!(runtime.status, AccountStatus::Active);
     assert!(runtime.rate_limit.is_none());
-    assert_eq!(panel.state.hits("/api/user/self"), 1);
+    // Two self reads: one is refresh's own account state, the other learns the
+    // user id the stat surface's New-Api-User header must name.
+    assert_eq!(panel.state.hits("/api/user/self"), 2);
 }
 
 #[tokio::test]
@@ -1203,7 +1306,11 @@ async fn status_is_cached_across_refreshes() {
     adapter.refresh(&account()).await.unwrap();
 
     assert_eq!(panel.state.hits("/api/status"), 1);
-    assert_eq!(panel.state.hits("/api/user/self"), 2);
+    // Refresh one: the account state read plus the one-off lookup that learns
+    // the user id the stat surface's New-Api-User header must name. Refresh
+    // two: the state read only — the id is remembered in the session, so the
+    // lookup does not repeat. Three reads total is that caching, counted.
+    assert_eq!(panel.state.hits("/api/user/self"), 3);
 }
 
 #[tokio::test]

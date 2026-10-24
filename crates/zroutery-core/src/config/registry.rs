@@ -188,6 +188,27 @@ pub struct MaintenanceConfig {
     /// Panel-relative path of the sign-in page, when signing in needs one.
     #[serde(default)]
     pub login_path: Option<String>,
+    /// The panel's own root, when it does not share the API endpoint's host.
+    ///
+    /// Relays increasingly front their relay API with one domain and their
+    /// dashboard with another — AgentRouter answers `/v1` on
+    /// `ps.air-outer.com` while signing in on `agentrouter.org`. Without this
+    /// the dashboard root is derived from the API endpoint, and a relay like
+    /// that sends every browser capture and panel probe to a host that hosts
+    /// no panel at all: the browser opens a page that is not the dashboard,
+    /// and the probe answers with an access token that nothing verifies.
+    /// Empty means "same host as the endpoint", which is the common case.
+    #[serde(default)]
+    pub panel_url: Option<String>,
+    /// The panel user id the `New-Api-User` header must name, when the panel's
+    /// middleware demands one — the AgentRouter generation does, on
+    /// `/api/user/self` itself, so a valid token without it answers 401.
+    ///
+    /// The browser token capture learns it from the logged-in dashboard and
+    /// persists it here; a hand-configured account may type it. Empty means
+    /// the panel never wanted the header, and every call behaves as before.
+    #[serde(default)]
+    pub new_api_user: Option<String>,
     /// Explicit browser executable to drive. Empty means autodetect.
     #[serde(default)]
     pub browser_executable: String,
@@ -201,6 +222,18 @@ impl MaintenanceConfig {
     pub fn validate(&self) -> std::result::Result<(), String> {
         if self.checkin_interval_secs == Some(0) {
             return Err("checkin_interval_secs must be greater than zero when set".into());
+        }
+        if let Some(url) = self
+            .panel_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|u| !u.is_empty())
+        {
+            if !(url.starts_with("http://") || url.starts_with("https://")) {
+                return Err(
+                    "panel_url must be an http(s) panel root, e.g. https://panel.example".into(),
+                );
+            }
         }
         for (field, path) in [
             ("checkin_path", self.checkin_path.as_deref()),
@@ -258,6 +291,16 @@ impl MaintenanceConfig {
     /// to say which of those is the case.
     pub fn is_browser_checkin_configured(&self) -> bool {
         self.checkin_enabled && self.has_checkin_page() && self.checkin_selector().is_some()
+    }
+
+    /// The declared dashboard root, when this account's panel lives on its own
+    /// host. Empty means the common single-domain case: the panel is the relay
+    /// endpoint with its relay suffixes stripped, and the callers derive that.
+    pub fn panel_override(&self) -> Option<&str> {
+        self.panel_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|u| !u.is_empty())
     }
 }
 

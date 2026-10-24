@@ -163,6 +163,8 @@ fn a_maintenance_declaration_carries_no_observation_or_credential_fields() {
         checkin_path: Some("/console/personal".to_string()),
         checkin_trigger_selector: Some("button.checkin".to_string()),
         login_path: Some("/login".to_string()),
+        panel_url: None,
+        new_api_user: None,
         browser_executable: String::new(),
     };
 

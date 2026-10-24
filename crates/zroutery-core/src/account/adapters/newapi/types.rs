@@ -57,6 +57,17 @@ pub struct NewApiConfig {
     pub capabilities: AccountCapabilities,
     /// Override the `quota_per_unit` reported by `GET /api/status`.
     pub quota_per_unit: Option<f64>,
+    /// The panel user id the `New-Api-User` header must name, when the panel's
+    /// middleware demands one.
+    ///
+    /// The AgentRouter generation enforces the header on `/api/user/self`
+    /// itself — a perfectly valid token answers 401 there without it, so the
+    /// id cannot be learned by asking (the usual discovery call is the one
+    /// being refused). The browser token capture reads it from the logged-in
+    /// dashboard and persists it here; a hand-configured account may type it.
+    /// Panels that never wanted the header leave it empty and behave exactly
+    /// as before.
+    pub new_api_user: Option<String>,
     pub connect_timeout_secs: u64,
     pub request_timeout_secs: u64,
     /// Upper bound on log pages walked per usage report (`page_size` is 100, so
@@ -77,6 +88,7 @@ impl Default for NewApiConfig {
                 supports_health_check: true,
             },
             quota_per_unit: None,
+            new_api_user: None,
             connect_timeout_secs: 10,
             request_timeout_secs: 20,
             usage_page_limit: 10,

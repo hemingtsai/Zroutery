@@ -25,12 +25,16 @@
 //!
 //! # Credentials
 //!
-//! Modern NewAPI dropped cookie sessions and the `New-Api-User` header: the
-//! dashboard authenticates with `Authorization: Bearer <token>`, where the
-//! token is either a personal access token (`GET /api/user/token`) or a
-//! short-lived login JWT. A login JWT can be renewed with the `new_api_refresh`
-//! cookie through `POST /api/user/auth/refresh`; this adapter performs that
-//! renewal once when a call comes back `401`, and stores the rotated cookie.
+//! Modern NewAPI dropped cookie sessions: the dashboard authenticates with
+//! `Authorization: Bearer <token>`, where the token is either a personal
+//! access token (`GET /api/user/token`) or a short-lived login JWT. A login
+//! JWT can be renewed with the `new_api_refresh` cookie through
+//! `POST /api/user/auth/refresh`; this adapter performs that renewal once when
+//! a call comes back `401`, and stores the rotated cookie. The generation of
+//! panels after that re-introduced the `New-Api-User` id header on the log and
+//! check-in surfaces — and AgentRouter's on `/api/user/self` too — so every
+//! authenticated call carries the id once the session knows it (see
+//! `http.rs`).
 //!
 //! # Quota units
 //!
