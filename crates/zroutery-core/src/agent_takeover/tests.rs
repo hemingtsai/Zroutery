@@ -1605,9 +1605,9 @@ fn opencode_adopt_writes_the_native_block_and_release_restores_the_legacy_handba
     .unwrap();
 
     let target = a_target();
-    let fields = takeover_fields(AgentType::OpenCode, &target, None)
-        .expect("a config carrying the native key is served through it");
     let snapshot = OpenCodeAdapter.read_config().expect("the config parses");
+    let fields = takeover_fields(AgentType::OpenCode, &target, Some(&snapshot.raw))
+        .expect("a config carrying the native key is served through it");
 
     // The canonical adopt sequence: record the originals, write, record what
     // was written.
@@ -1626,20 +1626,23 @@ fn opencode_adopt_writes_the_native_block_and_release_restores_the_legacy_handba
         .expect("the native block lands");
     store.record_applied(&managed_values).unwrap();
 
-    // The native block now carries the gateway; the legacy block is untouched.
+    // The native block now carries the gateway, and the legacy block the file
+    // already had is updated with it so a v1 client follows the takeover too.
     assert_eq!(
-        patched.raw["providers"][GATEWAY_PROVIDER_ID]["settings"]["baseURL"], target.base_url,
-        "the authoritative block is the native one"
+        patched.raw["providers"][GATEWAY_PROVIDER_ID]["settings"]["baseURL"],
+        "http://127.0.0.1:8787/v1",
+        "the authoritative block is the native one, and its base is the OpenAI one"
     );
     assert_eq!(
         patched.raw["provider"][GATEWAY_PROVIDER_ID]["options"]["baseURL"],
-        "http://127.0.0.1:15721",
-        "the legacy block is neither updated nor deleted by an adopt"
+        "http://127.0.0.1:8787/v1",
+        "an existing legacy block is updated beside the native one"
     );
 
     // Release: the manifest recorded the native fields as absent (they did not
-    // exist before the adopt), so releasing removes the block and the legacy
-    // handback becomes effective again — the pre-takeover state.
+    // exist before the adopt) and the legacy fields as their original values,
+    // so releasing removes the native block and restores the legacy handback —
+    // the pre-takeover state.
     let manifest = store.release_with_restore(&OpenCodeAdapter).unwrap();
     assert_eq!(manifest.state, OwnershipState::Released);
     let after = OpenCodeAdapter
@@ -1939,17 +1942,15 @@ fn the_codex_token_goes_in_the_field_that_takes_a_literal() {
     );
 }
 
-/// Which schema generation gets managed is decided by the document, by
-/// OpenCode's own merge rule: the legacy `provider` entries and the native
-/// `providers` entries merge into one effective table, and for the same id the
-/// native (v2) one wins. Managing the losing block would be a takeover the
-/// client ignores.
+/// The native `providers` block is always written, because OpenCode 2 reads
+/// it and the merge gives it precedence for a shared id. A legacy
+/// `provider.<id>` entry the file already carries is updated beside it, so a
+/// v1 client that reads only that table follows the same takeover.
 #[test]
-fn the_opencode_field_set_follows_the_file_s_schema_generation() {
+fn the_opencode_field_set_writes_the_native_block_and_updates_an_existing_legacy_one() {
     let target = a_target();
 
-    // No document (a takeover that creates the file) gets the schema's
-    // current shape.
+    // No document (a takeover that creates the file) gets the native block.
     let created = paths(AgentType::OpenCode, &target, None);
     for expected in [
         format!("providers.{GATEWAY_PROVIDER_ID}.package"),
@@ -1967,9 +1968,7 @@ fn the_opencode_field_set_follows_the_file_s_schema_generation() {
         "the deprecated v1 key must not be written into a fresh file: {created:?}"
     );
 
-    // A v2-era file — anything carrying `providers` — is managed through the
-    // v2 block, including when a legacy block also sits in the file: the
-    // native one wins the merge for the same id.
+    // A v2-era file with no legacy gateway entry gets only the native block.
     let v2_doc = serde_json::json!({
         "providers": { "tireflow": { "package": "aisdk:@ai-sdk/openai-compatible" } }
     });
@@ -1979,22 +1978,27 @@ fn the_opencode_field_set_follows_the_file_s_schema_generation() {
         .iter()
         .any(|p| p == &format!("providers.{GATEWAY_PROVIDER_ID}.settings.apiKey")));
 
+    // A file that already has a legacy gateway entry gets both sets: the
+    // native one for OpenCode 2, the legacy one for a 1.x client reading the
+    // old table.
     let both_doc = serde_json::json!({
         "provider": { (GATEWAY_PROVIDER_ID): { "npm": "@ai-sdk/openai-compatible" } },
         "providers": { "tireflow": { "package": "aisdk:@ai-sdk/openai-compatible" } }
     });
     let both = paths(AgentType::OpenCode, &target, Some(&both_doc));
-    assert_eq!(
-        both, v2,
-        "a legacy block beside the native key changes nothing"
-    );
+    assert!(both.contains(&format!("providers.{GATEWAY_PROVIDER_ID}.settings.apiKey")));
+    assert!(both.contains(&format!("provider.{GATEWAY_PROVIDER_ID}.options.apiKey")));
 
-    // A file that only speaks v1 keeps the v1 paths, which is what that
-    // client reads.
+    // A v1-only file is taken over too: the native block is added, and the
+    // legacy entry it already has is updated rather than abandoned.
     let v1_doc = serde_json::json!({
         "provider": { (GATEWAY_PROVIDER_ID): { "npm": "@ai-sdk/openai-compatible" } }
     });
     let v1 = paths(AgentType::OpenCode, &target, Some(&v1_doc));
+    assert!(
+        v1.contains(&format!("providers.{GATEWAY_PROVIDER_ID}.settings.apiKey")),
+        "the native block must reach a v1-only file: {v1:?}"
+    );
     for expected in [
         format!("provider.{GATEWAY_PROVIDER_ID}.npm"),
         format!("provider.{GATEWAY_PROVIDER_ID}.options.baseURL"),
@@ -2003,10 +2007,27 @@ fn the_opencode_field_set_follows_the_file_s_schema_generation() {
     ] {
         assert!(v1.contains(&expected), "missing {expected} in {v1:?}");
     }
-    assert!(
-        !v1.iter().any(|p| p.starts_with("providers.")),
-        "v2 key must never be written into a v1-only file: {v1:?}"
-    );
+}
+
+/// The OpenCode base is the OpenAI base: it carries `/v1`, and a target that
+/// already does is not given a second one.
+#[test]
+fn the_opencode_base_url_carries_the_openai_version() {
+    let mut target = a_target();
+    let fields = takeover_fields(AgentType::OpenCode, &target, None).unwrap();
+    let base = fields
+        .iter()
+        .find(|f| f.path == format!("providers.{GATEWAY_PROVIDER_ID}.settings.baseURL"))
+        .expect("the base url field");
+    assert_eq!(base.value, serde_json::json!("http://127.0.0.1:8787/v1"));
+
+    target.base_url = "http://127.0.0.1:8787/v1/".into();
+    let fields = takeover_fields(AgentType::OpenCode, &target, None).unwrap();
+    let base = fields
+        .iter()
+        .find(|f| f.path == format!("providers.{GATEWAY_PROVIDER_ID}.settings.baseURL"))
+        .expect("the base url field");
+    assert_eq!(base.value, serde_json::json!("http://127.0.0.1:8787/v1"));
 }
 
 #[test]

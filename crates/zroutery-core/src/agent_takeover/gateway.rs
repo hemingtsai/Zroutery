@@ -70,10 +70,13 @@ pub const OPENCODE_CONFIG_ENV: &str = "OPENCODE_CONFIG";
 /// would be showing the user Zroutery's internals and asking them to pick the
 /// subset that happens to work.
 ///
-/// So each agent's set is a function of one [`GatewayTarget`] — and, for the
-/// clients with more than one config schema on the street, of the document
-/// being taken over. [`TakeoverStore::plan_adopt`] still refuses a caller that
-/// asks for a field this function does not produce.
+/// So each agent's set is a function of one [`GatewayTarget`]. OpenCode is the
+/// one client with two config generations on the street: the native
+/// `providers` block is always written, and a legacy `provider.<id>` entry the
+/// file already carries is updated too, so a takeover reaches both generations
+/// without adding a deprecated block to a file that never used one.
+/// [`TakeoverStore::plan_adopt`] still refuses a caller that asks for a field
+/// this function does not produce.
 ///
 /// # What it never manages
 ///
@@ -242,27 +245,20 @@ pub fn takeover_fields(
 
         AgentType::OpenCode => {
             let id = GATEWAY_PROVIDER_ID;
-            // Which block is authoritative is decided by the file, by
-            // OpenCode's own merge rule: the legacy `provider` entries and the
-            // native `providers` entries merge into one table, and for the
-            // same id the native (v2) one wins. So a file carrying the v2 key
-            // is managed through `providers.<id>` — writing the deprecated v1
-            // block there would be shadowed the moment both exist — while a
-            // file with only the legacy key keeps getting the v1 block. A
-            // missing document (a takeover that creates the file) gets the
-            // schema's current shape.
-            let v2 = match existing {
-                None => true,
-                Some(doc) => doc.get("providers").is_some(),
-            };
-            let (prefix, npm_key, options_key) = if v2 {
-                (format!("providers.{id}"), "package", "settings")
-            } else {
-                (format!("provider.{id}"), "npm", "options")
-            };
+            // The native block is the one this adapter writes — into a file of
+            // either generation. An existing legacy block is left exactly as it
+            // is; on release the native entry is removed and whatever legacy
+            // block the file had takes effect again.
+            let prefix = format!("providers.{id}");
+            // OpenCode's OpenAI-compatible provider is configured with the
+            // OpenAI base, which includes `/v1`; Zroutery's own gateway root is
+            // the Anthropic-shaped address. Writing the root makes OpenCode
+            // call paths this adapter only serves as aliases, and a v2 client
+            // that probes `{base}/models` reaches the wrong one.
+            let base_url = openai_base(&target.base_url);
             let mut out = vec![
                 ManagedField {
-                    path: format!("{prefix}.{npm_key}"),
+                    path: format!("{prefix}.package"),
                     value: serde_json::json!("@ai-sdk/openai-compatible"),
                 },
                 ManagedField {
@@ -270,11 +266,11 @@ pub fn takeover_fields(
                     value: serde_json::json!("Zroutery"),
                 },
                 ManagedField {
-                    path: format!("{prefix}.{options_key}.baseURL"),
-                    value: serde_json::json!(target.base_url),
+                    path: format!("{prefix}.settings.baseURL"),
+                    value: serde_json::json!(base_url),
                 },
                 ManagedField {
-                    path: format!("{prefix}.{options_key}.apiKey"),
+                    path: format!("{prefix}.settings.apiKey"),
                     value: serde_json::json!(target.token),
                 },
             ];
@@ -283,6 +279,40 @@ pub fn takeover_fields(
                     path: format!("{prefix}.models.{}.name", class.model),
                     value: serde_json::json!(class.display_name),
                 });
+            }
+            // A file that already carries a legacy gateway entry gets that
+            // entry updated too. OpenCode 1.x reads only `provider`, and a file
+            // with both tables is one both generations have used; leaving the
+            // legacy entry on its old token would take over only the newer
+            // client. A file without a legacy gateway entry never gains one —
+            // the deprecated table is not written into a file that did not use
+            // it.
+            if existing
+                .and_then(|doc| doc.get("provider"))
+                .and_then(|provider| provider.get(id))
+                .is_some()
+            {
+                let legacy = format!("provider.{id}");
+                out.extend([
+                    ManagedField {
+                        path: format!("{legacy}.npm"),
+                        value: serde_json::json!("@ai-sdk/openai-compatible"),
+                    },
+                    ManagedField {
+                        path: format!("{legacy}.options.baseURL"),
+                        value: serde_json::json!(base_url),
+                    },
+                    ManagedField {
+                        path: format!("{legacy}.options.apiKey"),
+                        value: serde_json::json!(target.token),
+                    },
+                ]);
+                for class in &target.classes {
+                    out.push(ManagedField {
+                        path: format!("{legacy}.models.{}.name", class.model),
+                        value: serde_json::json!(class.display_name),
+                    });
+                }
             }
             if let Some(default) = &target.default_class {
                 // OpenCode addresses a model as `<provider>/<model>`, but it
@@ -303,6 +333,20 @@ pub fn takeover_fields(
              talking to Google."
                 .into(),
         ),
+    }
+}
+
+/// The OpenAI-shaped base of a gateway address: `/v1` unless it is already there.
+///
+/// The gateway root is the Anthropic-shaped address (the Anthropic SDK appends
+/// `/v1/messages` itself). An OpenAI-compatible client appends
+/// `/chat/completions`, so its base has to carry the `/v1` the gateway serves.
+fn openai_base(base_url: &str) -> String {
+    let trimmed = base_url.trim().trim_end_matches('/');
+    if trimmed.ends_with("/v1") {
+        trimmed.to_string()
+    } else {
+        format!("{trimmed}/v1")
     }
 }
 
