@@ -65,17 +65,41 @@ impl Desktop {
         }
 
         let style = config.routing.naming_style;
+        // A class serves the union of its usable members' effort levels: a
+        // level the client selects is reachable through at least one member.
+        // Members whose provider is disabled, or that are decision endpoints,
+        // cannot serve chat traffic and must not contribute a level.
         let classes: Vec<TierClass> = ModelTier::ALL
             .iter()
-            .filter(|tier| {
-                config
+            .filter_map(|tier| {
+                let members: Vec<&zroutery_core::config::ModelEntry> = config
                     .models
                     .iter()
-                    .any(|m| m.enabled && m.tier == Some(**tier))
-            })
-            .map(|tier| TierClass {
-                model: tier.virtual_id_styled(style).to_string(),
-                display_name: capitalize(tier.as_str()),
+                    .filter(|model| {
+                        model.enabled
+                            && model.tier == Some(*tier)
+                            && config.provider(&model.provider_id).is_some_and(|provider| {
+                                provider.enabled && !provider.kind.is_decision()
+                            })
+                    })
+                    .collect();
+                if members.is_empty() {
+                    return None;
+                }
+                let declared: Vec<String> = members
+                    .iter()
+                    .flat_map(|model| model.normalized_effort_levels())
+                    .collect();
+                let effort_levels: Vec<String> = zroutery_core::config::EFFORT_LEVELS
+                    .iter()
+                    .filter(|level| declared.iter().any(|value| value == *level))
+                    .map(|level| (*level).to_string())
+                    .collect();
+                Some(TierClass {
+                    model: tier.virtual_id_styled(style).to_string(),
+                    display_name: capitalize(tier.as_str()),
+                    effort_levels,
+                })
             })
             .collect();
         if classes.is_empty() {

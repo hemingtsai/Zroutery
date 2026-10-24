@@ -17,6 +17,14 @@ pub struct TierClass {
     pub model: String,
     /// The name the client's model picker shows for it.
     pub display_name: String,
+    /// The reasoning-effort levels the class accepts, in picker order.
+    ///
+    /// A class routes to several models that may disagree about effort levels,
+    /// so this is the union of what its members declare: a level a caller
+    /// selects is reachable through at least one member. Empty means no member
+    /// declares any, and the client is given no picker rather than one whose
+    /// levels nothing can honour.
+    pub effort_levels: Vec<String>,
 }
 
 /// What Zroutery offers an agent when it takes it over.
@@ -279,6 +287,32 @@ pub fn takeover_fields(
                     path: format!("{prefix}.models.{}.name", class.model),
                     value: serde_json::json!(class.display_name),
                 });
+                // The picker's effort levels are the class's declared ones, so
+                // a client variant maps onto a control the gateway can encode
+                // and the models behind the class can honour. A class that
+                // declares none is given no variants: inventing a list would
+                // offer levels nothing behind it promised.
+                let variants: Vec<serde_json::Value> = crate::config::EFFORT_LEVELS
+                    .iter()
+                    .filter(|level| {
+                        class
+                            .effort_levels
+                            .iter()
+                            .any(|declared| declared.eq_ignore_ascii_case(level))
+                    })
+                    .map(|level| {
+                        serde_json::json!({
+                            "id": level,
+                            "settings": {"reasoningEffort": level},
+                        })
+                    })
+                    .collect();
+                if !variants.is_empty() {
+                    out.push(ManagedField {
+                        path: format!("{prefix}.models.{}.variants", class.model),
+                        value: serde_json::Value::Array(variants),
+                    });
+                }
             }
             // A file that already carries a legacy gateway entry gets that
             // entry updated too. OpenCode 1.x reads only `provider`, and a file

@@ -1698,10 +1698,12 @@ fn a_target() -> GatewayTarget {
             TierClass {
                 model: "sonnet-class".into(),
                 display_name: "Sonnet".into(),
+                effort_levels: vec!["low".into(), "medium".into(), "high".into()],
             },
             TierClass {
                 model: "haiku-class".into(),
                 display_name: "Haiku".into(),
+                effort_levels: Vec::new(),
             },
         ],
         default_class: None,
@@ -2050,6 +2052,43 @@ fn the_opencode_default_model_is_namespaced_but_the_table_is_not() {
         table.value,
         serde_json::json!("Sonnet"),
         "the table key is the bare id because opencode strips the prefix"
+    );
+}
+
+#[test]
+fn the_opencode_model_table_carries_the_declared_effort_levels() {
+    let target = a_target();
+    let fields = takeover_fields(AgentType::OpenCode, &target, None).unwrap();
+    let variants = fields
+        .iter()
+        .find(|f| f.path == format!("providers.{GATEWAY_PROVIDER_ID}.models.sonnet-class.variants"))
+        .expect("sonnet-class declares effort levels");
+    assert_eq!(
+        variants.value,
+        serde_json::json!([
+            {"id": "low", "settings": {"reasoningEffort": "low"}},
+            {"id": "medium", "settings": {"reasoningEffort": "medium"}},
+            {"id": "high", "settings": {"reasoningEffort": "high"}},
+        ])
+    );
+
+    // A class that declares no levels gets no picker: the client's own default
+    // is better than a list nothing behind the class promised.
+    assert!(fields
+        .iter()
+        .all(|f| f.path != format!("providers.{GATEWAY_PROVIDER_ID}.models.haiku-class.variants")));
+
+    // A hand-edited level the gateway cannot encode never reaches the client.
+    let mut target = a_target();
+    target.classes[0].effort_levels = vec!["low".into(), "ultra".into()];
+    let fields = takeover_fields(AgentType::OpenCode, &target, None).unwrap();
+    let variants = fields
+        .iter()
+        .find(|f| f.path == format!("providers.{GATEWAY_PROVIDER_ID}.models.sonnet-class.variants"))
+        .expect("the accepted level survives");
+    assert_eq!(
+        variants.value,
+        serde_json::json!([{"id": "low", "settings": {"reasoningEffort": "low"}}])
     );
 }
 
