@@ -58,11 +58,16 @@ pub fn panel_root(base_url: &str) -> String {
 }
 
 /// The page a token capture opens.
-pub fn login_url(base_url: &str, login_path: Option<&str>) -> Result<String, String> {
-    let root = panel_root(base_url);
+///
+/// The panel root is the caller's to name: a relay can front its API and its
+/// dashboard with different hosts, and the account's own `panel_url` override
+/// decides which host holds the sign-in page. [`login_url`] keeps the
+/// derive-from-endpoint form for callers that have not chosen a host.
+pub fn login_url_at(root: &str, login_path: Option<&str>) -> Result<String, String> {
+    let root = root.trim().trim_end_matches('/').to_string();
     if !(root.starts_with("http://") || root.starts_with("https://")) {
         return Err(format!(
-            "`{base_url}` is not an http(s) panel url, so a browser cannot open it"
+            "`{root}` is not an http(s) panel url, so a browser cannot open it"
         ));
     }
     let path = login_path
@@ -73,6 +78,15 @@ pub fn login_url(base_url: &str, login_path: Option<&str>) -> Result<String, Str
         return Err("the panel sign-in path must be relative to the panel, not a full url".into());
     }
     Ok(format!("{root}/{}", path.trim_start_matches('/')))
+}
+
+/// The derive-from-endpoint form: the panel is the relay endpoint with its
+/// relay suffixes stripped. Only the tests exercise it now — the capture
+/// itself always names a root, because the account's `panel_url` override may
+/// point somewhere the endpoint never hints at.
+#[cfg(test)]
+pub fn login_url(base_url: &str, login_path: Option<&str>) -> Result<String, String> {
+    login_url_at(&panel_root(base_url), login_path)
 }
 
 /// The scheme-and-authority part of a url, for the page's origin check.
@@ -94,6 +108,11 @@ pub enum CaptureResult {
     Ready {
         token: String,
         username: Option<String>,
+        /// The panel user the token belongs to, when the dashboard said. The
+        /// AgentRouter generation demands it as the New-Api-User header on
+        /// the very verification this capture is about to run, so it rides
+        /// back with the token and is persisted beside it.
+        user_id: Option<String>,
         source: String,
     },
     /// The panel wants the operator to complete a verification step.
@@ -132,6 +151,10 @@ pub fn parse(value: &Value) -> CaptureResult {
                     token,
                     username: json
                         .get("username")
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
+                    user_id: json
+                        .get("user_id")
                         .and_then(Value::as_str)
                         .map(str::to_string),
                     source: json
@@ -216,12 +239,42 @@ pub fn capture_expression(expected_origin: &str) -> String {
 const PROBE: &str = r#"(async () => {
   const EXPECTED_ORIGIN = __EXPECTED_ORIGIN__;
   const out = (value) => JSON.stringify(value);
+  /*
+   * The wrong origin is a *waiting* state, not an answer. The probe first runs
+   * while the panel page is still loading — `Target.createTarget` returns with
+   * the tab on `about:blank`, whose origin is the string "null", and a slow or
+   * redirecting panel spends seconds more getting there. Ending the capture
+   * on that sight is how "用浏览器获取令牌" could fail before the browser had
+   * finished standing up: one poll, one look at an unloaded tab, and the whole
+   * session was torn down. The driver keeps polling on `waiting`, the panel
+   * arrives when it arrives, and the ten-minute deadline is what bounds it.
+   */
   if (location.origin !== EXPECTED_ORIGIN) {
-    return out({ state: 'unsupported', message: 'the browser left the panel (its origin is ' + location.origin + ')' });
+    return out({ state: 'waiting' });
   }
   const C = (window.__zrCapture = window.__zrCapture || {
     installed: false, triedRefresh: false, minted: null, bearer: null
   });
+  /*
+   * The panel user id, read the way the dashboard itself reads it: the `user`
+   * entry in localStorage. The current new-api middleware wants the id on the
+   * very calls this probe makes — AgentRouter answers /api/user/self with
+   * "未提供 New-Api-User" without it — so a probe that sends only the
+   * Authorization token verifies nothing on such panels and waits forever
+   * beside a logged-in dashboard. Re-read each poll: the entry appears the
+   * moment the operator finishes signing in on this tab.
+   */
+  const userId = (() => {
+    try {
+      const user = JSON.parse(localStorage.getItem('user') || 'null');
+      return user && user.id != null ? String(user.id) : null;
+    } catch (error) { return null; }
+  })();
+  const authHeaders = (token) => {
+    const headers = { Authorization: token };
+    if (userId) headers['New-Api-User'] = userId;
+    return headers;
+  };
   const withTimeout = (promise, ms) => Promise.race([
     promise,
     new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), ms)),
@@ -233,7 +286,7 @@ const PROBE: &str = r#"(async () => {
   const verify = async (token) => {
     try {
       const response = await withTimeout(fetch('/api/user/self', {
-        headers: { Authorization: token },
+        headers: authHeaders(token),
         credentials: 'same-origin',
       }), 5000);
       if (!response.ok) return null;
@@ -247,7 +300,7 @@ const PROBE: &str = r#"(async () => {
     if (C.minted) return { token: C.minted };
     try {
       const response = await withTimeout(fetch('/api/user/token', {
-        headers: { Authorization: token },
+        headers: authHeaders(token),
         credentials: 'same-origin',
       }), 8000);
       if (response.status === 403) return { needsVerification: true };
@@ -302,7 +355,7 @@ const PROBE: &str = r#"(async () => {
     }
   }
   if (C.minted && (await verify(C.minted))) {
-    return out({ state: 'ready', token: C.minted, username: null, source: 'minted' });
+    return out({ state: 'ready', token: C.minted, username: null, user_id: userId, source: 'minted' });
   }
   const candidates = [];
   if (C.bearer) candidates.push(C.bearer);
@@ -343,7 +396,55 @@ const PROBE: &str = r#"(async () => {
     if (/^ey[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\./.test(candidate)) {
       return out({ state: 'unsupported', message: 'the panel did not return a durable access token' });
     }
-    return out({ state: 'ready', token: candidate, username: null, source: 'stored' });
+    return out({ state: 'ready', token: candidate, username: null, user_id: userId, source: 'stored' });
+  }
+  /*
+   * The cookie-session mint: some panels (AgentRouter's, measured) hold the
+   * dashboard login as an HttpOnly session cookie and send *no* Authorization
+   * header from the SPA at all — there is no bearer to intercept, on this tab
+   * or any other, however logged-in the dashboard looks. The session cookie is
+   * still a full credential at the panel's own endpoints: `GET /api/user/token`
+   * answers 200 with the personal access token when it rides `credentials`
+   * alongside the id header.
+   *
+   * The gate is a read-only session check, not a once-per-document flag: the
+   * first polls run *before* the operator has signed in, when the cookie is
+   * absent, and a one-shot attempt spent there meant the capture waited
+   * forever beside a fully logged-in dashboard. `/api/user/self` with the
+   * cookie says whether a session exists right now, costs nothing to retry,
+   * and mints nothing — so every poll asks it, and the mint runs the moment it
+   * first answers, which is the moment the sign-in completes. A mint that
+   * fails while the session is live retries on the next poll; one that
+   * succeeds returns and never repeats.
+   */
+  if (userId && !C.minted) {
+    try {
+      const session = await withTimeout(fetch('/api/user/self', {
+        credentials: 'same-origin',
+        headers: { 'New-Api-User': userId },
+      }), 5000);
+      if (session.ok) {
+        const response = await withTimeout(fetch('/api/user/token', {
+          credentials: 'same-origin',
+          headers: { 'New-Api-User': userId },
+        }), 8000);
+        if (response.status === 403) {
+          return out({ state: 'needs_verification', message: 'the panel asked for a verification step' });
+        }
+        if (response.ok) {
+          const body = await response.json();
+          const minted = typeof body.data === 'string'
+            ? body.data
+            : (body.data && (body.data.token || body.data.access_token));
+          if (body.success && typeof minted === 'string' && minted.length > 0) {
+            if (await verify(minted)) {
+              C.minted = minted;
+              return out({ state: 'ready', token: minted, username: null, user_id: userId, source: 'minted' });
+            }
+          }
+        }
+      }
+    } catch (error) {}
   }
   if (!C.triedRefresh) {
     C.triedRefresh = true;
@@ -432,13 +533,15 @@ mod tests {
 
     #[test]
     fn a_minted_token_is_read_from_the_probe() {
-        let answer =
-            json!(r#"{"state":"ready","token":"abc123","username":"alice","source":"minted"}"#);
+        let answer = json!(
+            r#"{"state":"ready","token":"abc123","username":"alice","user_id":"7","source":"minted"}"#
+        );
         assert_eq!(
             parse(&answer),
             CaptureResult::Ready {
                 token: "abc123".into(),
                 username: Some("alice".into()),
+                user_id: Some("7".into()),
                 source: "minted".into(),
             }
         );

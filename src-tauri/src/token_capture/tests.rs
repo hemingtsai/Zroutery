@@ -108,14 +108,14 @@ async fn a_minted_token_is_verified_against_the_panel() {
     // relay endpoint, not part of the dashboard.
     let root = format!("{base}/v1");
     assert_eq!(
-        verify_token(&root, "panel-token").await.unwrap(),
+        verify_token(&root, "panel-token", None).await.unwrap(),
         Some("alice".to_string())
     );
-    let rejected = verify_token(&root, "wrong-token").await;
+    let rejected = verify_token(&root, "wrong-token", None).await;
     assert!(rejected.is_err(), "a rejected token is not a session");
     // A relay key is refused before any request is sent, with the reason the
     // operator needs.
-    let relay = verify_token(&root, "sk-relay-key").await.unwrap_err();
+    let relay = verify_token(&root, "sk-relay-key", None).await.unwrap_err();
     assert!(relay.contains("relay"), "{relay}");
 }
 

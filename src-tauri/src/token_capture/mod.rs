@@ -164,7 +164,14 @@ pub async fn start_token_capture(
             "a token capture is already open for account `{account_id}`; finish or cancel it first"
         ));
     }
-    let (base_url, login_path, browser_executable) = {
+    // The dashboard root: the account's own override when its panel lives on a
+    // different host than the relay endpoint, the endpoint-derived root when it
+    // does not. Every step below — the page the browser opens, the origin the
+    // probe checks against, the verification the stored token must pass — is
+    // anchored to this one root, so a relay like AgentRouter (relay on
+    // ps.air-outer.com, sign-in on agentrouter.org) is one declaration away
+    // from working rather than one assumption from failing.
+    let (panel_root, login_path, browser_executable) = {
         let config = desktop.core.config();
         let provider = config
             .provider(&provider_id)
@@ -174,14 +181,20 @@ pub async fn start_token_capture(
             .iter()
             .find(|account| account.account_id == account_id)
             .ok_or_else(|| format!("unknown account `{account_id}` on provider `{provider_id}`"))?;
+        let base_url = provider.base_url.clone();
+        let panel_root = account
+            .maintenance
+            .panel_override()
+            .map(str::to_string)
+            .unwrap_or_else(|| script::panel_root(&base_url));
         (
-            provider.base_url.clone(),
+            panel_root,
             account.maintenance.login_path.clone(),
             account.maintenance.browser_executable.clone(),
         )
     };
 
-    let url = script::login_url(&base_url, login_path.as_deref())?;
+    let url = script::login_url_at(&panel_root, login_path.as_deref())?;
     let origin = script::origin_of(&url)
         .ok_or_else(|| format!("`{url}` has no origin a page could be checked against"))?;
     let Some(executable) = cdp::find_browser(&browser_executable) else {
@@ -242,7 +255,7 @@ pub async fn start_token_capture(
     let runtime_task = runtime.inner().clone();
     let desktop_task = Arc::clone(desktop.inner());
     tauri::async_runtime::spawn(async move {
-        drive(desktop_task, runtime_task, key, page, origin).await;
+        drive(desktop_task, runtime_task, key, page, origin, panel_root).await;
     });
 
     Ok(status_view(&desktop, &runtime, &provider_id, &account_id).await)
@@ -359,6 +372,7 @@ async fn drive(
     key: SessionKey,
     page: cdp::PageBinding,
     origin: String,
+    panel_root: String,
 ) {
     let provider_id = key.provider_id.clone();
     let account_id = key.account_id.clone();
@@ -414,6 +428,7 @@ async fn drive(
                 script::CaptureResult::Ready {
                     token,
                     username,
+                    user_id,
                     source,
                 } => {
                     final_view = Some(
@@ -421,9 +436,13 @@ async fn drive(
                             &desktop,
                             &provider_id,
                             &account_id,
-                            &token,
-                            username,
-                            &source,
+                            CapturedToken {
+                                token,
+                                username,
+                                user_id,
+                                source,
+                                panel_root: &panel_root,
+                            },
                         )
                         .await,
                     );
@@ -477,14 +496,42 @@ async fn drive(
 }
 
 /// Verify the panel's token, then store it.
+///
+/// The panel root is the capture session's own — the override the page was
+/// opened against — because the mint happened there and the verification has
+/// to ask the same host what the token is worth. Deriving the root from the
+/// relay endpoint would verify a token from one host against another, and a
+/// relay whose dashboard lives on a second domain would refuse every token it
+/// had just handed out.
+/// What a capture session handed back.
+///
+/// Grouped so the store step names the handful of facts it needs without an
+/// eight-argument signature, and so a caller cannot mix up the token with the
+/// user id or the source label.
+struct CapturedToken<'a> {
+    token: String,
+    username: Option<String>,
+    user_id: Option<String>,
+    /// Where the value was read from, for the report the user reads.
+    source: String,
+    /// The panel root the page was opened against; verification asks the same
+    /// host, never the relay endpoint.
+    panel_root: &'a str,
+}
+
 async fn store_token(
     desktop: &Desktop,
     provider_id: &str,
     account_id: &str,
-    token: &str,
-    username: Option<String>,
-    source: &str,
+    captured: CapturedToken<'_>,
 ) -> TokenCaptureView {
+    let CapturedToken {
+        token,
+        username,
+        user_id,
+        source,
+        panel_root,
+    } = captured;
     let view = |phase, message: Option<String>, username| TokenCaptureView {
         provider_id: provider_id.to_string(),
         account_id: account_id.to_string(),
@@ -499,28 +546,77 @@ async fn store_token(
             Ok(target) => target,
             Err(error) => return view(CapturePhase::Failed, Some(error), None),
         };
-    let base_url = match desktop.core.config().provider(provider_id) {
-        Some(provider) => provider.base_url.clone(),
-        None => {
-            return view(
-                CapturePhase::Failed,
-                Some(format!("unknown provider `{provider_id}`")),
-                None,
-            )
-        }
-    };
-    let verified = match verify_token(&base_url, token).await {
+    // The provider still has to exist — the capture holds no other reason to
+    // touch the relay endpoint, so the check is about the config having moved
+    // under the session rather than about a url nobody reads.
+    if desktop.core.config().provider(provider_id).is_none() {
+        return view(
+            CapturePhase::Failed,
+            Some(format!("unknown provider `{provider_id}`")),
+            None,
+        );
+    }
+    let verified = match verify_token(panel_root, &token, user_id.as_deref()).await {
         Ok(username) => username,
         Err(error) => {
-            return view(
-                CapturePhase::Failed,
-                Some(format!("the panel rejected the captured token: {error}")),
-                None,
-            )
+            /*
+             * A *network* failure to re-verify is not a rejection. The probe
+             * verified this token inside the browser minutes ago — same panel,
+             * same header, a 200 the panel itself issued — and the browser
+             * reaches the panel through the operator's proxy, which the
+             * desktop process may not share (AgentRouter is only reachable
+             * through one here). Refusing to store a token the panel just
+             * confirmed, because this process cannot dial the panel, would
+             * make the capture unusable behind every proxy setup that splits
+             * browser and app traffic. An *authorization* failure is still a
+             * refusal: that is the panel speaking, not the network.
+             */
+            let unreachable = error.contains("cannot reach upstream");
+            if !unreachable {
+                return view(
+                    CapturePhase::Failed,
+                    Some(format!("the panel rejected the captured token: {error}")),
+                    None,
+                );
+            }
+            tracing::warn!(
+                provider = provider_id,
+                "the panel is unreachable from this process; storing the token the browser verified"
+            );
+            None
         }
     };
-    if let Err(error) = write_account_secret(desktop, &key_ref, token).await {
+    if let Err(error) = write_account_secret(desktop, &key_ref, &token).await {
         return view(CapturePhase::Failed, Some(error), None);
+    }
+    /*
+     * Remember the panel user id beside the credential it names. Every later
+     * probe, check-in and usage read goes through the same middleware that
+     * just demanded the header; without this the capture succeeds once and
+     * the very next probe reports the credential it stored as rejected. A
+     * failure to persist is logged and survived — the token itself is stored,
+     * and the id can be typed into the maintenance settings by hand.
+     */
+    if let Some(id) = user_id.as_deref().filter(|id| !id.trim().is_empty()) {
+        let mut config = (*desktop.core.config()).clone();
+        let declaration = config
+            .providers
+            .iter_mut()
+            .find(|p| p.id == provider_id)
+            .and_then(|p| p.accounts.iter_mut().find(|a| a.account_id == account_id));
+        if let Some(account) = declaration {
+            if account.maintenance.new_api_user.as_deref() != Some(id) {
+                account.maintenance.new_api_user = Some(id.to_string());
+                if let Err(error) = desktop.apply_config(config).await {
+                    tracing::warn!(
+                        provider = provider_id,
+                        account = account_id,
+                        error = %error,
+                        "the panel user id could not be persisted; set it in the maintenance settings"
+                    );
+                }
+            }
+        }
     }
     view(
         CapturePhase::Stored,
@@ -532,11 +628,16 @@ async fn store_token(
 }
 
 /// Ask the panel who the token belongs to.
-async fn verify_token(base_url: &str, token: &str) -> Result<Option<String>, String> {
+async fn verify_token(
+    base_url: &str,
+    token: &str,
+    user_id: Option<&str>,
+) -> Result<Option<String>, String> {
     let base = script::panel_root(base_url);
     let adapter = NewApiAdapter::new(NewApiConfig {
         base_url: base,
         api_key: token.to_string(),
+        new_api_user: user_id.map(str::to_string),
         ..NewApiConfig::default()
     })
     .map_err(|error| error.to_string())?;

@@ -318,14 +318,22 @@ impl Desktop {
                 )
             })?;
 
-        // The panel root, with any relay suffix stripped, exactly as the adapter's
-        // own normalisation would do — it is repeated here only to pick the
-        // default conversion rate, and a base the adapter later refuses is caught
-        // by its own validation.
-        let base = panel_root(&provider.base_url);
+        // The dashboard root: the account's own override when its panel lives
+        // on a different host than the relay endpoint (AgentRouter signs in on
+        // agentrouter.org while answering /v1 on ps.air-outer.com), otherwise
+        // the endpoint with its relay suffixes stripped — the derivation the
+        // adapter would repeat anyway, repeated here to pick the default
+        // conversion rate. A base the adapter later refuses is caught by its
+        // own validation.
+        let base = account
+            .maintenance
+            .panel_override()
+            .map(|root| root.trim_end_matches('/').to_string())
+            .unwrap_or_else(|| panel_root(&provider.base_url));
         let adapter = NewApiAdapter::new(NewApiConfig {
             base_url: base,
             api_key,
+            new_api_user: account.maintenance.new_api_user.clone(),
             ..Default::default()
         })
         .map_err(|e| e.to_string())?;

@@ -590,21 +590,65 @@ impl BrowserSession {
 
     /// Open a page and attach to it, returning the binding page commands need.
     ///
-    /// Two calls rather than one: creating a target and attaching to it are
-    /// separate operations, and only the second yields the `sessionId` that
-    /// `Runtime.*` and `Page.*` commands have to carry.
+    /// **One tab, always.** A browser launched with a start url already carries
+    /// that tab, and the operator logs in wherever a tab already is — the front
+    /// one. Creating a second identical tab here used to leave the probe
+    /// polling the empty clone while the login happened in the launch tab the
+    /// probe never saw: a capture that waits forever beside a logged-in
+    /// dashboard. So an existing page tab is adopted — the one already showing
+    /// this url first, otherwise the first page tab there is, navigated to the
+    /// url — and a tab is created only when the browser has none at all.
     pub async fn open_page(&mut self, url: &str) -> Result<PageBinding, BrowserError> {
-        let target_id = self
-            .call("Target.createTarget", json!({ "url": url }))
+        let infos = self
+            .call("Target.getTargets", json!({}))
             .await?
-            .get("targetId")
+            .get("targetInfos")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let pages: Vec<&Value> = infos
+            .iter()
+            .filter(|info| info.get("type").and_then(Value::as_str) == Some("page"))
+            .collect();
+
+        let (target_id, needs_navigate) = if let Some(matching) = pages
+            .iter()
+            .find(|info| info.get("url").and_then(Value::as_str) == Some(url))
+        {
+            (Self::target_id_of(matching), false)
+        } else if let Some(first) = pages.first() {
+            (Self::target_id_of(first), true)
+        } else {
+            let created = self
+                .call("Target.createTarget", json!({ "url": url }))
+                .await?
+                .get("targetId")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .ok_or_else(|| BrowserError::Protocol {
+                    method: "Target.createTarget".into(),
+                    message: "no targetId in the answer".into(),
+                })?;
+            (created, false)
+        };
+
+        let page = self.attach(target_id).await?;
+        if needs_navigate {
+            self.navigate(&page, url).await?;
+        }
+        Ok(page)
+    }
+
+    /// The target id out of one `Target.getTargets` info entry.
+    fn target_id_of(info: &Value) -> String {
+        info.get("targetId")
             .and_then(Value::as_str)
             .map(str::to_string)
-            .ok_or_else(|| BrowserError::Protocol {
-                method: "Target.createTarget".into(),
-                message: "no targetId in the answer".into(),
-            })?;
+            .unwrap_or_default()
+    }
 
+    /// Attach to a target and enable evaluation on it.
+    async fn attach(&mut self, target_id: String) -> Result<PageBinding, BrowserError> {
         let session_id = self
             .call(
                 "Target.attachToTarget",
