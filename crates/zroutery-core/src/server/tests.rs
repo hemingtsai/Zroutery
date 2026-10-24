@@ -171,6 +171,25 @@ fn a_missing_key_is_a_precondition_not_a_silent_none() {
 }
 
 #[test]
+fn the_free_tier_is_anonymous_when_no_key_was_ever_stored() {
+    // The preset carries a key_ref, but the free gate authenticates the
+    // request shape, not a key. A missing secret must not fail the provider.
+    let state = AppState::new(
+        AppConfig::default(),
+        Arc::new(crate::config::MemorySecretStore::new()),
+    );
+    let provider = ProviderConfig::new("zen", "OpenCode Zen", ProviderKind::OpenCodeZenFree);
+    assert!(!provider.key_ref.is_empty(), "the preset names a secret");
+    assert!(state.api_key(&provider).unwrap().is_none());
+
+    // A stored key is still sent: a user may have one for another surface.
+    let with_key = Arc::new(crate::config::MemorySecretStore::new().with("provider:zen", "sk-zen"));
+    let state = AppState::new(AppConfig::default(), with_key);
+    let provider = ProviderConfig::new("zen", "OpenCode Zen", ProviderKind::OpenCodeZenFree);
+    assert_eq!(state.api_key(&provider).unwrap().as_deref(), Some("sk-zen"));
+}
+
+#[test]
 fn swapping_the_config_rebuilds_the_registry_with_it() {
     let secrets = Arc::new(crate::config::MemorySecretStore::new());
     let state = AppState::new(AppConfig::default(), secrets);

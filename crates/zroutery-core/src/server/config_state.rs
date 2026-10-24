@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use crate::config::{AppConfig, ModelTier, ProviderConfig, SecretStore};
+use crate::config::{AppConfig, ModelTier, ProviderConfig, ProviderKind, SecretStore};
 use crate::election::{self, Election, Measurement};
 use crate::error::{Error, Result};
 use crate::registry::Registry;
@@ -65,6 +65,12 @@ impl AppState {
         }
         match self.secrets.get(&provider.key_ref) {
             Some(k) if !k.is_empty() => Ok(Some(k)),
+            // The free tier is reachable without a credential — its gate is
+            // the request shape, not a key. A provider preset that carries a
+            // key_ref but never stored a secret is anonymous here, not
+            // misconfigured, and failing it would take the whole tier down for
+            // every member that happens to be reachable for free.
+            _ if provider.kind == ProviderKind::OpenCodeZenFree => Ok(None),
             _ => Err(Error::MissingApiKey(provider.name.clone())),
         }
     }
