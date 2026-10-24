@@ -308,6 +308,31 @@ function Shell() {
     };
   }, []);
 
+  /*
+   * Alt+1..9 jumps straight to the page at that position in the nav.
+   *
+   * A desktop utility is navigated from the keyboard as much as from the
+   * pointer, and the nav is a fixed list, so the position *is* the address.
+   * Matched by `code` rather than `key`, because Alt is a dead key on some
+   * layouts — Option+1 on a Mac keyboard types "¡", and a shortcut that only
+   * worked on US layouts would be a shortcut that mostly did not work.
+   * Plain digits are left alone — they are typing — and so are every other
+   * modifier combination, which belongs to the OS and the webview.
+   */
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+      const digit = /^Digit([1-9])$/.exec(e.code);
+      if (!digit) return;
+      const target = PAGES[Number(digit[1]) - 1];
+      if (!target) return;
+      e.preventDefault();
+      setPage(target);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   // Overview and Activity show live state; their pages poll the counters
   // only. A failure is reported rather than swallowed: silence would look
   // like an idle proxy.
@@ -407,7 +432,7 @@ function Shell() {
           Zroutery<span className="mono">v{snapshot.version}</span>
         </div>
 
-        {NAV.map((item) => (
+        {NAV.map((item, index) => (
           <button type="button"
             key={item.id}
             className={`nav-item ${page === item.id ? "active" : ""}`}
@@ -421,6 +446,10 @@ function Shell() {
             // class is invisible to a screen reader: the nav read as eight
             // identical buttons with no indication of where you were.
             aria-current={page === item.id ? "page" : undefined}
+            // The shortcut is the nav's position, and the tooltip is the only
+            // place a keyboard user can discover it without reading source.
+            aria-keyshortcuts={`Alt+${index + 1}`}
+            title={`Alt+${index + 1}`}
             onClick={() => setPage(item.id)}
           >
             {t(item.labelKey)}
