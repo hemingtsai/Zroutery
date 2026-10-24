@@ -1264,7 +1264,18 @@ def case_ui1_nested_rebase(devtools: DevTools) -> list[str]:
 
     devtools.click_selector('[data-page="models"]')
     devtools.wait_for("document.querySelector('.list-row') !== null", "models list")
-    devtools.click_selector(".list-row", 0)
+    # The model is found by its id, not by its position. The list is sorted by
+    # provider name, so an ordinal row is whichever provider happens to sort
+    # first, and the case asserts on the deepseek model below.
+    devtools.evaluate(
+        """
+        (() => {
+          const row = [...document.querySelectorAll('.list-row')]
+            .find((r) => r.textContent.includes('deepseek-deepseek-chat'));
+          if (row) row.click();
+        })()
+        """
+    )
     devtools.wait_for("document.querySelector('.drawer') !== null", "model drawer")
 
     # Capability switches carry their own names, so the case does not depend on
@@ -1539,32 +1550,6 @@ def case_ui3_drawer_isolation(devtools: DevTools) -> list[str]:
     devtools.wait_for("document.querySelector('.drawer') === null", "provider A drawer to close")
     devtools.click_selector(".list-row", 1)
     devtools.wait_for("document.querySelector('.drawer') !== null", "provider B drawer")
-    # Now ask B for its catalogue, with A's request held up well past the
-    # switch. A's answer landing while B is on screen must not appear in B.
-    devtools.evaluate("window.__zrStub.setDelay('fetch_provider_models', 1500)")
-    # Found by its visible text rather than by its accessible name. The name was
-    # an English literal and is now translated, and a gate that pins a
-    # translated string fails the moment the wording is improved — which is the
-    # opposite of what a gate is for.
-    point = devtools.evaluate(
-        """
-        (() => {
-          const button = [...document.querySelectorAll('.drawer button')]
-            .find((b) => b.textContent.includes('Fetch catalogue'));
-          if (!button) return null;
-          const r = button.getBoundingClientRect();
-          return {x: r.left + r.width / 2, y: r.top + r.height / 2};
-        })()
-        """
-    )
-    if point is None:
-        failures.append("the provider drawer offered no way to fetch its catalogue")
-        return failures
-    devtools.click(point)
-    devtools.wait_for(
-        "Boolean(window.__zrStub.last('fetch_provider_models'))", "the catalogue request", timeout=15.0
-    )
-    time.sleep(1.5)
 
     title = devtools.evaluate("document.querySelector('.drawer-title').textContent.trim()")
     if "Anthropic" not in title:
@@ -1575,13 +1560,6 @@ def case_ui3_drawer_isolation(devtools: DevTools) -> list[str]:
     )
     if draft_after != "":
         failures.append("the previous provider's key draft survived the switch: %r" % draft_after)
-
-    leaked = devtools.evaluate(
-        "Boolean(document.querySelector('.drawer table.table') && "
-        "document.querySelector('.drawer table.table').textContent.includes('deepseek-catalogue-only'))"
-    )
-    if leaked:
-        failures.append("the catalogue A discovered was rendered in provider B's drawer")
 
     # Saving a key for B must carry B's id and B's own draft.
     if devtools.evaluate("document.querySelector(%s) === null" % json.dumps(key_selector)):
@@ -1602,6 +1580,56 @@ def case_ui3_drawer_isolation(devtools: DevTools) -> list[str]:
             failures.append(
                 "the key saved for the second provider was %r" % call["args"]["apiKey"]
             )
+
+    # The catalogue importer lives on the Models page now, and the same hazard
+    # applies to its provider switch: the answer for the provider that was
+    # selected first must not land after another one is selected. The provider
+    # drawer is still open, and the veil is the way back out.
+    devtools.click_selector(".drawer-veil")
+    devtools.wait_for("document.querySelector('.drawer') === null", "the provider drawer to close")
+    devtools.click_selector('[data-page="models"]')
+    devtools.wait_for("Boolean(document.querySelector('.list-row'))", "the models page")
+    devtools.evaluate("window.__zrStub.setDelay('fetch_provider_models', 1500)")
+    browse = devtools.evaluate(
+        """
+        (() => {
+          const button = [...document.querySelectorAll('.page button')]
+            .find((b) => b.textContent.includes("Browse the provider's catalogue"));
+          if (!button) return null;
+          const r = button.getBoundingClientRect();
+          return {x: r.left + r.width / 2, y: r.top + r.height / 2};
+        })()
+        """
+    )
+    if browse is None:
+        failures.append("the models page offers no catalogue browser")
+        return failures
+    devtools.click(browse)
+    devtools.wait_for(
+        "Boolean(window.__zrStub.last('fetch_provider_models'))",
+        "the catalogue request",
+        timeout=15.0,
+    )
+    # Switch providers while the first answer is still in flight.
+    devtools.click_selector("[aria-label='Provider']")
+    devtools.wait_for("Boolean(document.querySelector('.select-menu'))", "the provider menu")
+    devtools.evaluate(
+        """
+        (() => {
+          const item = [...document.querySelectorAll('.select-menu [role="option"]')]
+            .find((o) => o.textContent.includes('Anthropic'));
+          if (item) item.click();
+        })()
+        """
+    )
+    time.sleep(1.8)
+    leaked = devtools.evaluate(
+        "document.querySelector('.page').innerText.includes('deepseek-catalogue-only')"
+    )
+    if leaked:
+        failures.append(
+            "the catalogue A discovered was rendered under provider B on the models page"
+        )
 
     devtools.evaluate("window.__zrStub.reset()")
     return failures
@@ -2358,7 +2386,7 @@ def case_ui8_cutover_reports_a_bare_rollback_honestly(devtools) -> list[str]:
         "document.querySelector('.page').innerText.includes('Last run')", "the run report"
     )
     body = devtools.evaluate("document.querySelector('.page').innerText")
-    if "Nothing was put back" not in body:
+    if "Nothing was restored" not in body:
         failures.append(
             "a rollback that restored no file is not reported as having restored none, even though "
             "the state machine says RolledBack — the page is reading state instead of rolled_back"
@@ -2647,7 +2675,7 @@ def case_ui13_a_catalogue_row_says_no_tier_rather_than_a_dash(devtools) -> list[
         """
     )
     devtools.wait_for(
-        "Boolean(document.querySelector('[aria-label="Add selected as"]'))",
+        "Boolean(document.querySelector('[aria-label=\"Add selected as\"]'))",
         "the batch tier control",
         timeout=15.0,
     )
@@ -2691,6 +2719,10 @@ def case_ui14_a_select_inside_a_drawer_keeps_its_focus(devtools) -> list[str]:
         (() => {
           const trigger = document.querySelector('.drawer [role="combobox"]');
           if (!trigger) return null;
+          // The provider drawer is taller than the window; a coordinate
+          // measured before scrolling lands on whatever the control's
+          // off-screen position happens to overlap.
+          trigger.scrollIntoView({block: 'center'});
           const r = trigger.getBoundingClientRect();
           return {x: r.left + r.width / 2, y: r.top + r.height / 2};
         })()
@@ -3149,20 +3181,27 @@ def case_ui19_a_decision_provider_offers_its_own_settings(devtools) -> list[str]
     )
     devtools.wait_for("document.querySelector('.drawer') !== null", "the model drawer")
     model = devtools.evaluate("document.querySelector('.drawer').innerText")
-    if "cannot answer a request that wants prose" not in model:
+    if "Why no tier" not in model or "cannot answer chat" not in model:
         failures.append("the decision model's tier is not explained: %r" % model)
+    # The drawer no longer draws a dead tier control; it explains the absence
+    # instead. Either answer is honest, so the case accepts both: no tier
+    # control at all, or one that is disabled.
     locked = devtools.evaluate(
         """
         (() => {
           const drawer = document.querySelector('.drawer');
           if (!drawer) return null;
-          const trigger = drawer.querySelector('[role="combobox"]');
-          return trigger ? trigger.disabled || trigger.getAttribute('data-disabled') === 'true' : null;
+          const triggers = [...drawer.querySelectorAll('[role="combobox"]')];
+          return triggers.every(
+            (t) => t.disabled || t.getAttribute('data-disabled') === 'true'
+          );
         })()
         """
     )
     if locked is not True:
-        failures.append("the decision model's tier control is not disabled: %r" % locked)
+        failures.append(
+            "the decision model's drawer offers a tier control it cannot honour: %r" % locked
+        )
 
     # And a relay carries neither, because neither means anything for it.
     seed(devtools, **CUTOVER_QUERY)
@@ -3453,10 +3492,22 @@ def case_ui23_rename_moves_the_references_it_changed(devtools) -> list[str]:
 
     devtools.click_selector('[data-page="models"]')
     devtools.wait_for("Boolean(document.querySelector('.list-row'))", "the models list")
-    devtools.click_selector(".list-row")
+    # By id, not by position: the list sorts by provider name, and the case
+    # renames and then asserts on the deepseek model.
+    devtools.evaluate(
+        """
+        (() => {
+          const row = [...document.querySelectorAll('.list-row')]
+            .find((r) => r.textContent.includes('deepseek-deepseek-chat'));
+          if (row) row.click();
+        })()
+        """
+    )
     devtools.wait_for("Boolean(document.querySelector('.drawer'))", "the model drawer")
 
-    devtools.replace_text("[aria-label='Model name']", "deepseek-chat-v3")
+    # The add-a-model field on the same page carries the same accessible name,
+    # so the rename is driven inside the drawer.
+    devtools.replace_text(".drawer [aria-label='Model name']", "deepseek-chat-v3")
     devtools.press_key("Enter")
     devtools.wait_for(
         "Boolean(window.__zrStub.last('save_config'))", "the rename save", timeout=20.0
@@ -3495,7 +3546,7 @@ def case_ui23_rename_moves_the_references_it_changed(devtools) -> list[str]:
 
     # A name another model already answers to is refused before the save.
     before = devtools.evaluate("window.__zrStub.log('save_config').length")
-    devtools.replace_text("[aria-label='Model name']", "chat-v2")
+    devtools.replace_text(".drawer [aria-label='Model name']", "chat-v2")
     devtools.press_key("Enter")
     devtools.wait_for(
         "Boolean(document.querySelector('.drawer .field-hint-danger'))",
