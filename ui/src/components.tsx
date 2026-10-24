@@ -567,11 +567,14 @@ export function Segment<T extends string>({
   onChange,
   options,
   ariaLabel,
+  className,
 }: {
   value: T;
   onChange: (value: T) => void;
   options: { value: T; label: ReactNode }[];
   ariaLabel?: string;
+  /** Layout modifier, e.g. `segment-compact` for three short labels. */
+  className?: string;
 }) {
   /*
    * `role="radiogroup"` is a promise, not a label.
@@ -611,7 +614,11 @@ export function Segment<T extends string>({
   const stopIndex = selected >= 0 ? selected : 0;
 
   return (
-    <div className="segment" role="radiogroup" aria-label={ariaLabel}>
+    <div
+      className={className ? `segment ${className}` : "segment"}
+      role="radiogroup"
+      aria-label={ariaLabel}
+    >
       {options.map((option, index) => (
         <button
           key={option.value}

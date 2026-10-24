@@ -58,6 +58,15 @@
   --danger-bg: #f5e9e7;
   --ok-bg: #eaf2ec;
 
+  /*
+   * The scrollbar thumb, on its own tokens because neither line colour works
+   * for both themes: the light one wants slightly more ink than `--line-strong`
+   * to be found at rest, and the dark one wants considerably more than #2a2a2a,
+   * which on #111111 was a thumb nobody could see to drag.
+   */
+  --scrollbar-thumb: #c6c6c6;
+  --scrollbar-thumb-hover: #8f8f8f;
+
   /* Serif type: Noto Serif SC Variable for a literary/editorial feel. */
   --font-sans: "Noto Serif SC Variable", "Noto Serif SC", "PingFang SC",
     "Microsoft YaHei", serif;
@@ -115,6 +124,8 @@
   --warn-bg: #2a251c;
   --danger-bg: #2c1d1a;
   --ok-bg: #1c2a20;
+  --scrollbar-thumb: #454545;
+  --scrollbar-thumb-hover: #6a6a6a;
 }
 
 * {
@@ -165,13 +176,19 @@ code,
  *
  * Two mechanisms, because they are not alternatives. `scrollbar-width: thin`
  * and `scrollbar-color` are the standardized properties and are what Firefox
- * honours; Chromium honours them only from v121, and the `::-webkit-scrollbar`
- * rules below are what cover everything older. Writing only one set leaves a
- * browser showing one of the two, which is the usual way this goes wrong.
+ * honours; Chromium honours them only from v121 — and *prefers* them to the
+ * pseudo-elements below, which is the trap: leave both sets loose and a
+ * current WebView2 draws the platform's own thin grey bar over every page,
+ * which is exactly the "default style" this block exists to replace. So the
+ * standard properties live behind a feature query that is true everywhere
+ * *except* where the crafted thumbs work: an engine that knows
+ * `::-webkit-scrollbar` also knows the query is false, and keeps its hands off.
  */
-* {
-  scrollbar-width: thin;
-  scrollbar-color: var(--line-strong) transparent;
+@supports not selector(::-webkit-scrollbar) {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--scrollbar-thumb) transparent;
+  }
 }
 
 ::-webkit-scrollbar {
@@ -190,7 +207,7 @@ code,
  * most likely to be noticed disagreeing with the panels it scrolls.
  */
 ::-webkit-scrollbar-thumb {
-  background: var(--line-strong);
+  background: var(--scrollbar-thumb);
   border-radius: var(--radius);
   /* Three of the ten pixels go to a border in the track's colour, which is what
      makes the thumb read as 4px wide against a 10px gutter without changing
@@ -200,8 +217,24 @@ code,
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--muted);
+  background: var(--scrollbar-thumb-hover);
   background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:active {
+  background: var(--text-2);
+  background-clip: content-box;
+}
+
+/* No arrow buttons, and a transparent corner where a vertical and a horizontal
+   bar meet — the drawer and the log view carry both, and the platform's grey
+   corner block is the loudest thing on an otherwise hairline surface. */
+::-webkit-scrollbar-button {
+  display: none;
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 /* ============================================================== app layout */
@@ -211,6 +244,17 @@ code,
   grid-template-columns: 200px 1fr;
   height: 100vh;
   overflow: hidden;
+  /*
+   * The positioning root, deliberately. `.visually-hidden` is absolute, and
+   * one of it rides inside every list row's status dot — thirty-one of them
+   * on the models page. With no positioned ancestor between them and the
+   * viewport, their containing block is the document itself, and the ones
+   * past the fold stretched `html` a document-height past the shell: a second
+   * scrollbar beside the page's own, and half a screen of scrollable nothing
+   * below every page. Anchoring the escapees to the shell puts them back under
+   * this `overflow: hidden` and the document back at one screen tall.
+   */
+  position: relative;
 }
 
 /* ---------------------------------------------------------------- sidebar */
@@ -226,17 +270,21 @@ code,
 }
 
 .sidebar-brand {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
   padding: 2px 10px 16px;
   font-size: 18px;
   font-weight: 600;
   letter-spacing: -0.01em;
+  white-space: nowrap;
 }
 
 .sidebar-brand .mono {
-  font-size: 11px;
+  font-size: 10px;
   color: var(--muted);
   font-weight: 400;
-  margin-left: 6px;
+  letter-spacing: -0.02em;
 }
 
 .nav-item {
@@ -504,6 +552,17 @@ code,
 
 .list-row:last-child {
   border-bottom: none;
+}
+
+/* A decision provider nested under the ordinary one it shares an endpoint
+   with: indented under its host, a step quieter, so the pair reads as one
+   place with two configurations rather than two providers with one name. */
+.list-row.row-nested {
+  padding-left: 28px;
+}
+
+.list-row.row-nested .row-title {
+  font-size: 14px;
 }
 
 .list-row:hover {
@@ -919,6 +978,18 @@ code,
   color: var(--danger);
 }
 
+/* The folded blind-candidate list inside its disclosure: one id per line, so
+   a long pool scans top to bottom instead of wrapping into a paragraph. */
+.ml-blind {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 13px;
+}
+
 .kv-key {
   color: var(--muted);
   flex: none;
@@ -1274,6 +1345,34 @@ input::placeholder {
   min-width: 220px;
 }
 
+/*
+ * Inside a drawer the strip wraps instead. Four dialect names measure wider
+ * than 420px of drawer, and a grid's columns stop at their min-content, so
+ * the strip used to push past the body and hand the drawer a horizontal
+ * scrollbar to sit beside its vertical one. Two rows of the same control
+ * keep the underline and the selection; the scrollbar does not come back.
+ */
+.drawer .segment {
+  grid-auto-flow: row;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  width: 100%;
+}
+
+/*
+ * Three short labels do fit one line inside a drawer. The general rule wraps
+ * because provider-kind names are long; a strip whose widest label is a
+ * dialect name does not need a second row, and a second row measured as a
+ * misaligned line in the layout harness.
+ */
+.drawer .segment.segment-compact {
+  grid-auto-flow: column;
+  grid-template-columns: none;
+  grid-auto-columns: auto;
+  width: auto;
+  min-width: 0;
+  max-width: 100%;
+}
+
 .segment-item {
   height: 36px;
   padding: 0 16px;
@@ -1351,6 +1450,20 @@ input::placeholder {
   padding: 4px;
   box-shadow: var(--shadow-layer);
   min-width: var(--radix-select-trigger-width);
+  /*
+   * A catalogue of thirty-one models is taller than the viewport, and a menu
+   * that runs past its own edge scrolls the page behind it — the second
+   * scrollbar a reader never asked for. The menu scrolls instead, inside the
+   * space the trigger's position leaves open. Two variables, because the
+   * available height is published by whichever wrapper this Radix build
+   * measures on; the last fallback keeps a menu without either inside the
+   * viewport by fiat.
+   */
+  max-height: min(
+    320px,
+    calc(var(--radix-select-content-available-height, var(--radix-popper-available-height, 100vh)) - 8px)
+  );
+  overflow-y: auto;
   z-index: 60;
   animation: pop-in 100ms var(--ease);
 }
@@ -1359,6 +1472,10 @@ input::placeholder {
   display: flex;
   flex-direction: column;
   gap: 1px;
+  /* The scrolling container: Radix's keyboard navigation scrolls this box, so
+     the overflow lives here and the menu frame above it only clamps. */
+  max-height: calc(100% - 2px);
+  overflow-y: auto;
 }
 
 .select-item {
@@ -1585,13 +1702,31 @@ input::placeholder {
   background: color-mix(in srgb, var(--warn-bg) 50%, transparent);
 }
 
+/*
+ * Truncation follows the row, not a fixed budget: a title takes the space its
+ * row actually has and only ellipsises when the two disagree. The old hard
+ * 220px cap cut a model id at half a wide window while three hundred pixels of
+ * empty row sat beside it — the identifier is the one thing a list row exists
+ * to show, so the cap paid the most important column for whitespace.
+ */
 .truncate {
-  max-width: 220px;
+  display: block;
+  max-width: 100%;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  display: inline-block;
-  vertical-align: bottom;
+}
+
+/*
+ * `.list-row .row-title` and the account rows declare `display: flex` for
+ * titles that pair a name with an inline badge. A truncating title is text
+ * only, and text-overflow speaks block, not flex — an anonymous flex item
+ * clips hard, without the ellipsis that says there is more. The later rule
+ * wins the tie this needs.
+ */
+.row-title.truncate {
+  display: block;
 }
 
 /* ------------------------------------------------------------- main actions */
@@ -1778,10 +1913,14 @@ input::placeholder {
 }
 
 /* One route line is itself a grid — source, arrow, target — so every value
-   in the column shares a single vertical axis, whatever its source is called. */
+   in the column shares a single vertical axis, whatever its source is called.
+   The source column spans the longest tier id this build can name;
+   "reasoning-class" in mono at this size measures ~126px, and a 110px column
+   broke the name mid-word onto a second line. The name is a single token, so
+   it may truncate visibly rather than wrap legibly. */
 .flow-route {
   display: grid;
-  grid-template-columns: 110px 26px 1fr;
+  grid-template-columns: 136px 26px 1fr;
   align-items: baseline;
   font-size: 14px;
   color: var(--text-2);
@@ -1790,6 +1929,7 @@ input::placeholder {
 .flow-route .flow-src {
   color: var(--muted);
   flex: none;
+  white-space: nowrap;
 }
 
 .flow-arrow {
@@ -2217,6 +2357,22 @@ input::placeholder {
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+/*
+ * The runtime facts — balance, phase, schedule, reward, last event — each take
+ * a whole line. As bare wrapped siblings they ran together into one paragraph:
+ * five labelled figures separated by nothing but spaces, unreadable at the
+ * exact moment the operator is trying to read one of them. The identity line
+ * above (name, badge, credential note) keeps its inline wrap, and the
+ * credential note is that line's last inline member.
+ */
+.account-maint .row-main > .row-sub {
+  flex-basis: 100%;
+}
+
+.account-maint .row-main > .row-sub-note {
+  flex-basis: auto;
 }
 
 .account-maint .row-title {

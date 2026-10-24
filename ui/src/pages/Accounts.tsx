@@ -290,7 +290,12 @@ function AccountRow({
             ? t(`accounts.status.${status}` as Parameters<typeof t>[0])
             : status}
         </Badge>
-        <span className="row-sub muted">
+        {/*
+         * The credential note is the identity line's last inline member — the
+         * class, not `:first-of-type`, is what marks it: the row title is a
+         * span too, and of-type matching would silently pick the title.
+         */}
+        <span className="row-sub row-sub-note muted">
           {ownRef
             ? ownStored
               ? t("accounts.own_key_stored")
@@ -321,17 +326,21 @@ function AccountRow({
          * The phase is the row's answer to "what is this account doing", and
          * it changes on its own: the browser asks a human, the human answers,
          * the check-in settles. A live region announces those changes, because
-         * the alternative is a row that silently becomes "checked in" while the
-         * operator is looking at something else.
+         * the alternative is a row that silently becomes "checked in" while
+         * the operator is looking at something else. The last check-in rides
+         * here rather than on a line of its own — "· checked in 6d ago" is a
+         * continuation of the phase, not a fact on its own, and a stacked
+         * layout would leave its separator hanging at the start of a line.
          */}
         <span className="row-sub" role="status">
           {phaseLabel}
+          {view.last_completed_at !== null && (
+            <span className="muted">
+              {" · "}
+              {t("account.last_checkin")} {ago(view.last_completed_at)}
+            </span>
+          )}
         </span>
-        {view.last_completed_at !== null && (
-          <span className="row-sub muted">
-            · {t("account.last_checkin")} {ago(view.last_completed_at)}
-          </span>
-        )}
         {view.failure && <span className="row-sub warn-text">{view.failure}</span>}
         {/*
           Why the scheduler is or is not acting, in its own words. Without this an

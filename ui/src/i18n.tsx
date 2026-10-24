@@ -176,6 +176,12 @@ export const en = {
   "accounts.login_path": "Panel sign-in path",
   "accounts.login_path_hint":
     "Used by the browser token capture. Current NewAPI signs in at /sign-in; older forks use /login.",
+  "accounts.panel_url": "Panel address",
+  "accounts.new_api_user": "Panel user ID",
+  "accounts.new_api_user_hint":
+    "The New-Api-User header some panels demand (AgentRouter does). Filled automatically by the browser token capture; empty sends none.",
+  "accounts.panel_url_hint":
+    "The dashboard's own root when it lives on a different host than the relay endpoint (e.g. relay on api.relay.com, panel on panel.relay.com). Empty means same host. Token capture and account probes are anchored here.",
   "token_capture.start": "Get token in browser",
   "token_capture.starting": "Opening…",
   "token_capture.captured": "Token stored",
@@ -368,7 +374,16 @@ export const en = {
   "field.timeout_hint": "Whole request, including streaming idle gaps",
   "field.connect_timeout": "Connect timeout (s)",
   "providers.f_version": "anthropic-version",
-  "providers.f_version_hint": "Empty sends the standard 2023-06-01",
+  "providers.f_version_hint":
+    "The dated API version, a mutually exclusive wire contract. 2023-06-01 is the three-year baseline. 2026-10-21 removes temperature/top_p/top_k and confines documents to user messages — requests are shaped accordingly.",
+  "providers.f_beta": "anthropic-beta",
+  "providers.f_beta_hint":
+    "Beta capabilities to request, comma or semicolon separated (e.g. context-management-2025-06-27). Empty sends none. A new Anthropic capability ships as a beta header before it reaches a dated version.",
+  "providers.api_surface": "API surface",
+  "providers.api_surface_hint":
+    "Which OpenAI protocol this endpoint answers. Responses is the newer surface some Codex-shaped gateways require; request, response and stream all differ.",
+  "providers.surface_chat": "Chat Completions",
+  "providers.surface_responses": "Responses",
   "providers.client_profile": "Client identity",
   "providers.client_profile_hint":
     "Who Zroutery presents as upstream. Claude Code and Codex also forward that client's own headers.",
@@ -798,6 +813,7 @@ export const en = {
   "tier.name.frontier": "Frontier",
   "routing.tier_empty": "Empty. Requests for {id} fail until a model joins this tier.",
   "routing.fallback_n": "fallback {n}",
+  "routing.more_fallbacks": "{n} more fallbacks",
   "routing.request": "request",
   "routing.side_query": "Side query",
   "routing.review_hint_on": "Permission checks go to their own pool of models.",
@@ -1039,7 +1055,7 @@ export const en = {
   "ml.with_no_model": "with no model, to gather evidence",
   "ml.never_tried": "Never tried",
   "ml.blind_spot_warning":
-    "{names} is configured but never receives traffic with exploration off. Give it top priority, or turn exploration on (which blocks learned-model promotion).",
+    "Configured models receive no traffic while exploration is off. Give them top priority, or turn exploration on (which blocks learned-model promotion).",
   "ml.blind_spot_count": "{n} unreachable",
   "ml.collected": "Collected",
   "ml.samples": "samples",
@@ -1093,6 +1109,30 @@ export const en = {
   "ml.gaps": "Unusable records:",
   "ml.rollback_action": "Roll back to the previous model",
   "ml.rolling_back": "Rolling back…",
+
+  "ml.config_title": "Collection settings",
+  "ml.config_hint": "Shadow writes the evidence; the trace log keeps it. No evidence, no learning.",
+  "ml.config_unavailable": "This build has no learning stack, so there is nothing to configure.",
+  "ml.shadow_enable": "Shadow evaluation",
+  "ml.shadow_enable_hint": "When off, no request retains its decision-time input and every dataset ingestion is discarded as NoDecisionTimeInput — the 0-sample state.",
+  "ml.shadow_max_decisions": "Max decisions (in memory)",
+  "ml.shadow_max_decisions_hint": "Ring size before the oldest is evicted. 10k is the default.",
+  "ml.shadow_max_age": "Max age (seconds)",
+  "ml.shadow_max_age_hint": "Retention window. 604800 = 7 days.",
+  "ml.routing_enable": "Learned routing",
+  "ml.routing_enable_hint": "When on, the promoted model may re-order the plan. Needs a state directory to promote at all.",
+  "ml.state_dir": "State directory",
+  "ml.state_dir_hint": "Where traces and the active model pointer live. Empty = in-memory only, lost on restart. e.g. ml",
+  "ml.exploration": "Exploration probability",
+  "ml.exploration_hint": "0 = deterministic; >0 explores alternative candidates but blocks promotion.",
+  "ml.config_shadow_off_hint": "Shadow is off — every request is discarded at the ingestion boundary. Turn it on to collect real samples.",
+  "ml.config_effect": "Collecting",
+  "ml.effect_collecting": "yes — samples grow with traffic",
+  "ml.effect_idle": "no — shadow is off",
+  "ml.config_serve": "Serving",
+  "ml.serve_active": "learned model re-orders the plan",
+  "ml.serve_deterministic": "deterministic (no re-ordering)",
+  "ml.serve_blocked_hint": "Learned routing is on but no durable state directory is configured, so nothing can be promoted or survive a restart.",
 
   // ----------------------------------------------- learned routing: collection
   //
@@ -1302,6 +1342,12 @@ export const zh: Dict = {
   "accounts.login_path": "面板登录路径",
   "accounts.login_path_hint":
     "浏览器获取令牌时使用。当前 NewAPI 的登录页是 /sign-in;旧分支使用 /login。",
+  "accounts.panel_url": "面板地址",
+  "accounts.new_api_user": "面板用户 ID",
+  "accounts.new_api_user_hint":
+    "部分面板(AgentRouter)要求的 New-Api-User 头。浏览器获取令牌时自动填写;留空不发送。",
+  "accounts.panel_url_hint":
+    "面板与中转端点不在同一域名时填写(例如中转在 api.relay.com、面板在 panel.relay.com)。留空表示同域。浏览器获取令牌与账户探测都以此为准。",
   "token_capture.start": "用浏览器获取令牌",
   "token_capture.starting": "正在打开…",
   "token_capture.captured": "令牌已保存",
@@ -1490,7 +1536,16 @@ export const zh: Dict = {
   "field.timeout_hint": "整个请求，含流式空闲间隔",
   "field.connect_timeout": "连接超时 (秒)",
   "providers.f_version": "anthropic-version",
-  "providers.f_version_hint": "留空发送标准 2023-06-01",
+  "providers.f_version_hint":
+    "带日期的 API 版本，互斥的线协议契约。2023-06-01 是沿用三年的基线。2026-10-21 移除了 temperature/top_p/top_k 并限制 document 只能出现在 user 消息——请求会按所选版本相应塑形。",
+  "providers.f_beta": "anthropic-beta",
+  "providers.f_beta_hint":
+    "要请求的测试性能力，逗号或分号分隔(如 context-management-2025-06-27)。留空不发送。Anthropic 的新能力都先以 beta 头形式发布。",
+  "providers.api_surface": "API 端面",
+  "providers.api_surface_hint":
+    "该端点说哪种 OpenAI 协议。Responses 是较新的端面，部分 Codex 形态的网关只认它。请求、响应与流式事件三者形状都不同。",
+  "providers.surface_chat": "Chat Completions",
+  "providers.surface_responses": "Responses",
   "providers.client_profile": "客户端身份",
   "providers.client_profile_hint":
     "以什么身份访问上游。选 Claude Code 或 Codex 时会转发该客户端的请求头。",
@@ -1839,6 +1894,7 @@ export const zh: Dict = {
   "tier.name.frontier": "前沿",
   "routing.tier_empty": "为空。在有模型加入该层级前，对 {id} 的请求会失败。",
   "routing.fallback_n": "备选 {n}",
+  "routing.more_fallbacks": "还有 {n} 个备选",
   "routing.request": "请求",
   "routing.side_query": "侧查询",
   "routing.review_hint_on": "权限检查走独立的模型池。",
@@ -2034,6 +2090,30 @@ export const zh: Dict = {
   "vision.model_required": "请先在模型页选择一个支持视觉的模型。",
   "vision.placeholder": "占位符",
   "vision.placeholder_hint": "无法生成描述时，替代图片的文本",
+  "ml.config_title": "采集设置",
+  "ml.config_hint": "Shadow 产出证据，轨迹日志保存证据。没有证据就没有学习。",
+  "ml.config_unavailable": "此构建未包含学习能力，无需配置。",
+  "ml.shadow_enable": "Shadow 评估",
+  "ml.shadow_enable_hint": "关闭时，无请求保留决策时刻输入，全部在入库边界被丢弃为 NoDecisionTimeInput — 即 0 样本状态。",
+  "ml.shadow_max_decisions": "最大决策数(内存)",
+  "ml.shadow_max_decisions_hint": "环形缓冲区大小，超限逐出最旧。默认 10000。",
+  "ml.shadow_max_age": "最长保留(秒)",
+  "ml.shadow_max_age_hint": "保留窗口。604800 = 7 天。",
+  "ml.routing_enable": "学习型路由",
+  "ml.routing_enable_hint": "开启后，已晋升模型可重排候选顺序。晋升需要先配置持久化目录。",
+  "ml.state_dir": "持久化目录",
+  "ml.state_dir_hint": "轨迹与当前模型指针的落盘位置。留空=仅内存，重启丢失。例：ml",
+  "ml.exploration": "探索概率",
+  "ml.exploration_hint": "0 = 确定性；>0 会探索其他候选，但会阻止晋升。",
+  "ml.config_shadow_off_hint": "Shadow 未开启 — 每个请求都在入库边界被丢弃。请打开以采集真实样本。",
+  "ml.config_effect": "采集中",
+  "ml.effect_collecting": "是 — 样本随流量增长",
+  "ml.effect_idle": "否 — Shadow 未开启",
+  "ml.config_serve": "生效方式",
+  "ml.serve_active": "学习模型重排候选顺序",
+  "ml.serve_deterministic": "确定性路由(不重排)",
+  "ml.serve_blocked_hint": "学习型路由已开启，但未配置持久化目录，因此无法晋升也无法跨重启保留。",
+
   // ------------------------------------------------------------ learned routing
   "ml.title": "学习型路由",
   "ml.hint": "训练出的模型是否可以重排 provider 顺序。关闭时路由保持确定性。",
@@ -2055,7 +2135,7 @@ export const zh: Dict = {
   "ml.with_no_model": "无模型时为采集证据而尝试",
   "ml.never_tried": "从未尝试",
   "ml.blind_spot_warning":
-    "{names} 已配置但在关闭探索时收不到流量。请把它设为最高优先级，或开启探索(会阻止学习模型晋级)。",
+    "已配置的模型在探索关闭时收不到流量。请把它们设为最高优先级，或开启探索(会阻止学习模型晋级)。",
   "ml.blind_spot_count": "{n} 个无法触达",
   "ml.collected": "已采集",
   "ml.samples": "样本",

@@ -95,6 +95,8 @@ const maintenance = (enabled: boolean) => ({
   checkin_path: enabled ? "/console/checkin" : null,
   checkin_trigger_selector: enabled ? "button.checkin" : null,
   login_path: enabled ? "/console/login" : null,
+  panel_url: null,
+  new_api_user: null,
   browser_executable: "chrome",
 });
 
@@ -123,6 +125,7 @@ const providers = [
     timeout_secs: 600,
     connect_timeout_secs: 15,
     anthropic_version: "2023-06-01",
+    api_surface: "chat",
     quirks: quirks(),
     balance: balanceConfig("none"),
     accounts: [
@@ -153,6 +156,7 @@ const providers = [
     timeout_secs: 300,
     connect_timeout_secs: 15,
     anthropic_version: null,
+    api_surface: "chat",
     quirks: quirks(),
     balance: balanceConfig("deep_seek"),
   },
@@ -172,6 +176,7 @@ const providers = [
     timeout_secs: 600,
     connect_timeout_secs: 20,
     anthropic_version: null,
+    api_surface: "chat",
     quirks: { ...quirks(), use_max_completion_tokens: true },
     balance: balanceConfig("none"),
   },
@@ -300,6 +305,8 @@ const appConfig = () => ({
   },
   window: { launch_on_login: false, silent_start: false, keep_in_tray: true },
   vision: { enabled: true, model: "relay-main:claude-sonnet-4-5", placeholder: "[image]" },
+  shadow: { enabled: true, max_decisions: 10000, max_age_secs: 604800 },
+  ml_routing: { enabled: true, state_dir: "ml", exploration_probability: 0, exploration_seed: 42 },
   providers,
   models,
   budgets: [
@@ -798,6 +805,183 @@ const handlers: Record<string, (args: any) => Json | Promise<Json>> = {
       context: 128_000,
     },
   ],
+  /*
+   * The takeover page, one state per agent.
+   *
+   * Four agents, four different truths: `active` for the one already held,
+   * `ready` with a real diff for the one that can be adopted now,
+   * `not_detected` for the one whose config does not exist, `unsupported` for
+   * the one this build does not write. One state repeated four times would
+   * render one AgentRow four times and leave three branches unverified — the
+   * same trap the reconcile_accounts fixture exists to avoid.
+   */
+  takeover_status: () => [
+    {
+      agent: "claude",
+      status: {
+        state: "active",
+        config_path: "C:\\Users\\operator\\.claude\\settings.json",
+        generation: 3,
+      },
+    },
+    {
+      agent: "codex",
+      status: {
+        state: "ready",
+        config_path: "C:\\Users\\operator\\.codex\\config.toml",
+        proposal: {
+          managed_fields: ["env.ANTHROPIC_BASE_URL", "env.ANTHROPIC_AUTH_TOKEN"],
+          changes: [
+            {
+              field_path: "env.ANTHROPIC_BASE_URL",
+              current: "https://relay.example.com",
+              managed: "http://127.0.0.1:8787",
+            },
+            {
+              field_path: "env.ANTHROPIC_AUTH_TOKEN",
+              current: "sk-relay-token",
+              managed: "zr-mock-gateway-token",
+            },
+          ],
+          fingerprint: "mock-takeover-1",
+        },
+      },
+    },
+    {
+      agent: "opencode",
+      status: {
+        state: "not_detected",
+        searched: [
+          "C:\\Users\\operator\\.config\\opencode\\opencode.json",
+          "C:\\Users\\operator\\opencode.json",
+        ],
+        reason: "no OpenCode configuration found",
+      },
+    },
+    {
+      agent: "gemini",
+      status: {
+        state: "unsupported",
+        reason: "this build does not manage Gemini CLI settings",
+      },
+    },
+  ],
+  takeover_adopt: () => ({
+    agent: "codex",
+    status: {
+      state: "active",
+      config_path: "C:\\Users\\operator\\.codex\\config.toml",
+      generation: 4,
+    },
+  }),
+  takeover_release: () => ({
+    agent: "claude",
+    report: {
+      strategy: "keep_external",
+      kept_external: ["env.ANTHROPIC_BASE_URL"],
+      overwritten: ["env.ANTHROPIC_AUTH_TOKEN"],
+      skipped: [],
+    },
+    conflicts: [],
+    status: {
+      state: "released",
+      config_path: "C:\\Users\\operator\\.claude\\settings.json",
+      generation: 4,
+    },
+  }),
+
+  /*
+   * The cutover page: a settled record, and previews where one agent is
+   * blocked so the page's blocked rendering is on screen too.
+   */
+  migration_status: () => ({
+    state: "completed",
+    interrupted: false,
+    has_snapshot: true,
+    snapshot_files: [
+      "C:\\Users\\operator\\.zroutery\\migration\\claude.settings.json.bak",
+      "C:\\Users\\operator\\.zroutery\\migration\\codex.config.toml.bak",
+    ],
+    durable: true,
+    persist_error: null,
+    owned_processes: [],
+  }),
+  migration_previews: () => [
+    {
+      agent: "claude",
+      config_path: "C:\\Users\\operator\\.claude\\settings.json",
+      steps: [
+        {
+          kind: "stop_external",
+          description: "check whether Claude Code is still running",
+          reversible: false,
+          params: {
+            subject: "Claude Code",
+            port: null,
+            path: null,
+            url: null,
+          },
+        },
+        {
+          kind: "copy_config",
+          description: "install the staged document over settings.json",
+          reversible: true,
+          params: {
+            subject: null,
+            port: null,
+            path: "C:\\Users\\operator\\.claude\\settings.json",
+            url: null,
+          },
+        },
+        {
+          kind: "verify_endpoint",
+          description: "confirm http://127.0.0.1:8787 answers as Zroutery",
+          reversible: false,
+          params: {
+            subject: null,
+            port: null,
+            path: null,
+            url: "http://127.0.0.1:8787",
+          },
+        },
+      ],
+      fingerprint: "mock-migration-claude-1",
+      blocked_reason: null,
+    },
+    {
+      agent: "gemini",
+      config_path: null,
+      steps: [],
+      fingerprint: "mock-migration-gemini-1",
+      blocked_reason: "no Gemini CLI configuration to cut over",
+    },
+  ],
+  migration_apply: () => ({
+    state: "completed",
+    steps_completed: 3,
+    steps_total: 3,
+    errors: [],
+    warnings: [],
+    duration_ms: 412,
+    rolled_back: false,
+    restored_files: [],
+    failed_restores: [],
+  }),
+  migration_rollback: () => ({
+    state: "rolled_back",
+    steps_completed: 3,
+    steps_total: 3,
+    errors: [],
+    warnings: [],
+    duration_ms: 261,
+    rolled_back: true,
+    restored_files: [
+      "C:\\Users\\operator\\.claude\\settings.json",
+      "C:\\Users\\operator\\.codex\\config.toml",
+    ],
+    failed_restores: [],
+  }),
+
   reveal_token: () => "zr-0123456789abcdef7c41",
   copy_text: () => null,
   copy_token: () => null,

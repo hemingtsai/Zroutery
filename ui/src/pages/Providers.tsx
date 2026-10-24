@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   api,
   BALANCE_PRESETS,
@@ -109,6 +109,20 @@ function clientProfilesFor(opencodeAvailable: boolean): { id: ProviderClientProf
  */
 function isOpencodeKind(kind: ProviderKind): boolean {
   return kind === "opencode_zen_free" || kind === "opencode_console";
+}
+
+/**
+ * Whether this kind answers only with a stored key.
+ *
+ * The Zen free gateway identifies its clients by a fixed fingerprint and sells
+ * nothing, so it issues no keys: a free provider with the default
+ * `provider:{id}` reference is *complete*, not missing a credential. The
+ * reference-based check alone called every free provider "warn" — a yellow dot
+ * with no action anywhere that could clear it, on the one kind of provider
+ * that needs nothing.
+ */
+function needsKey(kind: ProviderKind): boolean {
+  return kind !== "opencode_zen_free";
 }
 
 /** Mirrors `ProviderKind::default_base_url` in `zroutery-core::config`. */
@@ -222,6 +236,41 @@ export default function Providers({
     }
     return counts;
   }, [config.models]);
+
+  /*
+   * The list, grouped by endpoint.
+   *
+   * A decision provider is its own configuration entry — the router keeps a
+   * separate pool for it — but it is not a separate *place*: the Zen decision
+   * preset points at the same base url as the free provider beside it, and two
+   * rows with one name and one address read as a duplication. A decision
+   * provider that shares an endpoint with an ordinary one renders nested under
+   * it; one with an endpoint of its own stays a row of its own.
+   */
+  const grouped = useMemo(() => {
+    const endpoint = (url: string) => url.trim().replace(/\/+$/, "").toLowerCase();
+    const hostByEndpoint = new Map<string, string>();
+    for (const p of config.providers) {
+      if (p.kind !== "decision" && !hostByEndpoint.has(endpoint(p.base_url))) {
+        hostByEndpoint.set(endpoint(p.base_url), p.id);
+      }
+    }
+    const top: Provider[] = [];
+    const nested = new Map<string, Provider[]>();
+    for (const p of config.providers) {
+      if (p.kind === "decision") {
+        const host = hostByEndpoint.get(endpoint(p.base_url));
+        if (host !== undefined && host !== p.id) {
+          const bucket = nested.get(host) ?? [];
+          bucket.push(p);
+          nested.set(host, bucket);
+          continue;
+        }
+      }
+      top.push(p);
+    }
+    return { top, nested };
+  }, [config.providers]);
 
   /**
    * Opening a provider, and nothing else.
@@ -360,20 +409,49 @@ export default function Providers({
         </div>
       ) : (
         <div className="list">
-          {config.providers.map((p) => (
-            <ProviderRow
-              key={p.id}
-              id={p.id}
-              name={p.name}
-              baseUrl={p.base_url}
-              kind={p.kind}
-              modelCount={modelCounts.get(p.id) ?? 0}
-              status={!p.enabled ? "off" : keys[p.id] || p.key_ref === "" ? "ok" : "warn"}
-              selected={openId === p.id}
-              showBalance={hasBalanceSource(p, snapshot)}
-              balance={balances[p.id]}
-              onOpen={openProvider}
-            />
+          {grouped.top.map((p) => (
+            <Fragment key={p.id}>
+              <ProviderRow
+                id={p.id}
+                name={p.name}
+                baseUrl={p.base_url}
+                kind={p.kind}
+                modelCount={modelCounts.get(p.id) ?? 0}
+                status={
+                  !p.enabled
+                    ? "off"
+                    : keys[p.id] || p.key_ref === "" || !needsKey(p.kind)
+                      ? "ok"
+                      : "warn"
+                }
+                selected={openId === p.id}
+                showBalance={hasBalanceSource(p, snapshot)}
+                balance={balances[p.id]}
+                onOpen={openProvider}
+              />
+              {(grouped.nested.get(p.id) ?? []).map((d) => (
+                <ProviderRow
+                  key={d.id}
+                  id={d.id}
+                  name={d.name}
+                  baseUrl={d.base_url}
+                  kind={d.kind}
+                  modelCount={modelCounts.get(d.id) ?? 0}
+                  status={
+                    !d.enabled
+                      ? "off"
+                      : keys[d.id] || d.key_ref === "" || !needsKey(d.kind)
+                        ? "ok"
+                        : "warn"
+                  }
+                  selected={openId === d.id}
+                  showBalance={hasBalanceSource(d, snapshot)}
+                  balance={balances[d.id]}
+                  nested
+                  onOpen={openProvider}
+                />
+              ))}
+            </Fragment>
           ))}
         </div>
       )}
@@ -484,6 +562,7 @@ const ProviderRow = memo(function ProviderRow({
   selected,
   showBalance,
   balance,
+  nested,
   onOpen,
 }: {
   id: string;
@@ -495,12 +574,14 @@ const ProviderRow = memo(function ProviderRow({
   selected: boolean;
   showBalance: boolean;
   balance: BalanceStatus | undefined;
+  /** Rendered under the ordinary provider it shares an endpoint with. */
+  nested?: boolean;
   onOpen: (id: string) => void;
 }) {
   const { t } = useI18n();
   return (
     <button type="button"
-      className={`list-row ${selected ? "selected" : ""}`}
+      className={`list-row ${nested ? "row-nested" : ""} ${selected ? "selected" : ""}`}
       onClick={() => onOpen(id)}
       /*
        * The name carries the state as well, because the row's own content is
@@ -770,6 +851,8 @@ function blankMaintenance(): Maintenance {
     checkin_path: null,
     checkin_trigger_selector: null,
     login_path: null,
+    panel_url: null,
+    new_api_user: null,
     browser_executable: "",
   };
 }
@@ -990,6 +1073,29 @@ function AccountSection({
                   }
                 />
                 <TextField
+                  label={t("accounts.panel_url")}
+                  hint={t("accounts.panel_url_hint")}
+                  value={a.maintenance.panel_url ?? ""}
+                  placeholder="https://panel.example"
+                  wide
+                  onCommit={(v) =>
+                    edit(a.account_id, (d) => {
+                      d.maintenance.panel_url = v.trim() || null;
+                    })
+                  }
+                />
+                <TextField
+                  label={t("accounts.new_api_user")}
+                  hint={t("accounts.new_api_user_hint")}
+                  value={a.maintenance.new_api_user ?? ""}
+                  placeholder="354394"
+                  onCommit={(v) =>
+                    edit(a.account_id, (d) => {
+                      d.maintenance.new_api_user = v.trim() || null;
+                    })
+                  }
+                />
+                <TextField
                   label={t("accounts.login_path")}
                   hint={t("accounts.login_path_hint")}
                   value={a.maintenance.login_path ?? ""}
@@ -1181,15 +1287,23 @@ function ProviderDrawer({
   );
 
   return (
-    <Drawer
-      title={
-        <>
-          <StatusDot tone={provider.enabled ? (hasKey || provider.key_ref === "" ? "ok" : "warn") : "off"} />
-          {provider.name}
-        </>
-      }
-      onClose={onClose}
-    >
+      <Drawer
+        title={
+          <>
+            <StatusDot
+              tone={
+                provider.enabled
+                  ? hasKey || provider.key_ref === "" || !needsKey(provider.kind)
+                    ? "ok"
+                    : "warn"
+                  : "off"
+              }
+            />
+            {provider.name}
+          </>
+        }
+        onClose={onClose}
+      >
       <KeyValue
         rows={[
           [t("providers.endpoint"), <span className="mono">{endpoint}</span>],
@@ -1203,7 +1317,7 @@ function ProviderDrawer({
                   {t("common.remove")}
                 </Button>
               </span>
-            ) : provider.key_ref === "" ? (
+            ) : provider.key_ref === "" || !needsKey(provider.kind) ? (
               t("providers.no_cred")
             ) : (
               t("providers.no_key")
@@ -1218,7 +1332,9 @@ function ProviderDrawer({
         ]}
       />
 
-      {!hasKey && provider.key_ref !== "" && (
+      {/* A free provider has nothing to paste: the field asks for a credential
+          the kind cannot use, and the row beside it already says so. */}
+      {!hasKey && needsKey(provider.kind) && provider.key_ref !== "" && (
         <ApiKeyField providerId={providerId} busy={busy} run={run} />
       )}
 
@@ -1272,6 +1388,23 @@ function ProviderDrawer({
               options={kindsFor(snapshot.opencode_available).map((k) => ({ value: k.id, label: t(k.labelKey) }))}
             />
           </Field>
+          {isOpencodeKind(provider.kind) || provider.kind === "openai_compatible" ? (
+            <Field label={t("providers.api_surface")} hint={t("providers.api_surface_hint")}>
+              <Segment
+                ariaLabel={t("providers.api_surface")}
+                value={provider.api_surface}
+                onChange={(surface) =>
+                  onUpdate((p) => {
+                    p.api_surface = surface;
+                  })
+                }
+                options={[
+                  { value: "chat", label: t("providers.surface_chat") },
+                  { value: "responses", label: t("providers.surface_responses") },
+                ]}
+              />
+            </Field>
+          ) : null}
           <NumberField
             label={t("field.timeout")}
             hint={t("field.timeout_hint")}
@@ -1296,17 +1429,45 @@ function ProviderDrawer({
             }
           />
           {provider.kind === "anthropic" && (
-            <TextField
-              label={t("providers.f_version")}
-              hint={t("providers.f_version_hint")}
-              value={provider.anthropic_version ?? ""}
-              placeholder="2023-06-01"
-              onCommit={(v) =>
-                onUpdate((p) => {
-                  p.anthropic_version = v || null;
-                })
-              }
-            />
+            <>
+              {/*
+                The dated versions are mutually exclusive wire contracts, not
+                free-text: 2026-10-21 removes the sampling parameters and
+                confines documents, and an arbitrary string the upstream has
+                never met answers 400 for a reason the operator cannot see. Two
+                segments — the three-year baseline and the 2026 revision — so
+                the choice can only name a shape the encoder actually
+                implements.
+              */}
+              <Field label={t("providers.f_version")} hint={t("providers.f_version_hint")}>
+                <Segment
+                  ariaLabel={t("providers.f_version")}
+                  value={provider.anthropic_version ?? "2023-06-01"}
+                  onChange={(version) =>
+                    onUpdate((p) => {
+                      p.anthropic_version = version === "2023-06-01" ? null : version;
+                    })
+                  }
+                  options={[
+                    { value: "2023-06-01", label: "2023-06-01" },
+                    { value: "2026-10-21", label: "2026-10-21" },
+                  ]}
+                />
+              </Field>
+              <TextField
+                label={t("providers.f_beta")}
+                hint={t("providers.f_beta_hint")}
+                value={provider.extra_headers["anthropic-beta"] ?? ""}
+                placeholder="context-management-2025-06-27"
+                onCommit={(v) =>
+                  onUpdate((p) => {
+                    const trimmed = v.trim();
+                    if (trimmed) p.extra_headers["anthropic-beta"] = trimmed;
+                    else delete p.extra_headers["anthropic-beta"];
+                  })
+                }
+              />
+            </>
           )}
         </div>
         <div className="grid-two">

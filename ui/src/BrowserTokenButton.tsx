@@ -120,7 +120,7 @@ export function BrowserTokenButton({
   };
 
   return (
-    <div className="field-actions">
+    <>
       {!live && phase !== "captured" && (
         <Button kind="ghost" disabled={busy || starting} onClick={() => void start()}>
           {starting ? t("token_capture.starting") : t("token_capture.start")}
@@ -138,9 +138,19 @@ export function BrowserTokenButton({
       )}
       {phase === "captured" && <Badge tone="ok">{t("token_capture.captured")}</Badge>}
       {phase === "failed" && <Badge tone="danger">{t("token_capture.failed")}</Badge>}
+      {/*
+        A failure's reason stays on the page. It used to live only in a toast
+        that dismissed itself in six seconds — long enough to see that
+        something failed, far too short to read *why*, and the reason was the
+        one fact needed to fix it (an expired session, a rejected mint, a
+        verification refusal each name a different next step).
+      */}
+      {(phase === "failed" || phase === "unsupported") && view?.message && (
+        <span className="field-hint field-hint-danger">{view.message}</span>
+      )}
       {phase === "needs_verification" && view?.message && (
         <span className="field-hint">{view.message}</span>
       )}
-    </div>
+    </>
   );
 }

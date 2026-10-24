@@ -176,6 +176,13 @@ export interface Provider {
   timeout_secs: number;
   connect_timeout_secs: number;
   anthropic_version: string | null;
+  /**
+   * Which OpenAI surface this provider answers, when it speaks the OpenAI
+   * protocol. `chat` is the default; `responses` points the same base url at
+   * `/v1/responses` and switches every encoder and stream parser with it.
+   * Anthropic and decision providers ignore it.
+   */
+  api_surface: "chat" | "responses";
   quirks: ProviderQuirks;
   balance: BalanceConfig;
   /** How to ask this provider for a decision, when it answers decisions.
@@ -454,6 +461,19 @@ export interface BudgetStatus {
   used: number;
 }
 
+export interface ShadowConfig {
+  enabled: boolean;
+  max_decisions: number;
+  max_age_secs: number;
+}
+
+export interface MlRoutingConfig {
+  enabled: boolean;
+  state_dir: string;
+  exploration_probability: number;
+  exploration_seed: number;
+}
+
 export interface AppConfig {
   server: ServerConfig;
   routing: RoutingConfig;
@@ -463,6 +483,10 @@ export interface AppConfig {
   window: WindowBehavior;
   /** Vision fallback for models that cannot see. */
   vision: VisionConfig;
+  /** Shadow evaluation — the hard prerequisite for any sample. Absent in builds without `ml`. */
+  shadow?: ShadowConfig;
+  /** Learned routing — re-orders plan when enabled and durable state is configured. */
+  ml_routing?: MlRoutingConfig;
   providers: Provider[];
   models: ModelEntry[];
   budgets: Budget[];
@@ -704,6 +728,19 @@ export interface Maintenance {
    */
   checkin_trigger_selector: string | null;
   login_path: string | null;
+  /**
+   * The panel's own root, when the dashboard lives on a different host than
+   * the relay endpoint. Empty means "same host" — the common case, and the
+   * one the backend derives by stripping the endpoint's relay suffixes.
+   */
+  panel_url: string | null;
+  /**
+   * The panel user id the New-Api-User header must name, when the panel's
+   * middleware demands one (AgentRouter does, on /api/user/self itself).
+   * Filled automatically by the browser token capture; empty means the panel
+   * never wanted the header.
+   */
+  new_api_user: string | null;
   browser_executable: string;
 }
 
@@ -1837,6 +1874,7 @@ export function emptyProvider(
     timeout_secs: 600,
     connect_timeout_secs: 15,
     anthropic_version: null,
+    api_surface: "chat",
     quirks: {
       use_max_completion_tokens: false,
       drop_temperature: false,
