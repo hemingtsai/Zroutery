@@ -627,11 +627,16 @@ fn model_json(info: &crate::registry::ModelInfo) -> Value {
         "created_at": now.to_rfc3339(),
         "display_name": info.display_name,
         "owned_by": info.provider_name.clone().unwrap_or_else(|| "zroutery".into()),
+        // Additive, and omitted by JSON as `null` when undeclared. The OpenAI
+        // listing has no context field, so this is the extra that lets a client
+        // that reads it avoid inventing one; a client that does not ignores it.
+        "context_window": info.context_window,
         "zroutery": {
             "tier": info.tier,
             "virtual": info.virtual_model,
             "member_count": info.member_count,
             "provider": info.provider_name,
+            "context_window": info.context_window,
             "supports_tools": info.capabilities.tools,
             "supports_vision": info.capabilities.vision,
             "supports_thinking": info.capabilities.thinking,

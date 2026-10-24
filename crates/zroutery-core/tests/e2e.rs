@@ -1636,6 +1636,47 @@ async fn model_listing_exposes_real_and_virtual_models() {
 }
 
 #[tokio::test]
+async fn the_model_listing_carries_the_context_window() {
+    let (addr, mock) = start_mock().await;
+    let mut cfg = config_for(addr);
+    let entry = cfg
+        .models
+        .iter_mut()
+        .find(|m| m.upstream_model == "deepseek-v4-flash")
+        .expect("the harness lists this model");
+    entry.context_window = Some(1_000_000);
+    let h = Harness::start(cfg, mock).await;
+
+    let body: Value = h
+        .get("/v1/models")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let listed = body["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["id"] == "deepseek-deepseek-v4-flash")
+        .expect("the model is listed");
+    assert_eq!(listed["context_window"], 1_000_000);
+    assert_eq!(listed["zroutery"]["context_window"], 1_000_000);
+
+    // A model whose window was never declared does not get an invented one.
+    let unknown = body["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["id"] == "openai-gpt-5.3-sol")
+        .expect("the model is listed");
+    assert!(unknown["context_window"].is_null(), "{unknown}");
+
+    h.shutdown().await;
+}
+
+#[tokio::test]
 async fn unknown_and_unclassified_routing_errors() {
     let (addr, mock) = start_mock().await;
     let mut cfg = config_for(addr);
