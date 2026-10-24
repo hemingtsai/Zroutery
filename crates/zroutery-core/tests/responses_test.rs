@@ -12,6 +12,28 @@ use zroutery_core::protocol::responses::{
 use zroutery_core::protocol::{SseDecoder, SseFrame, StreamEncoder, StreamParser};
 
 #[test]
+fn reasoning_effort_supports_xhigh_and_max() {
+    for (effort, budget) in [("xhigh", 32768u32), ("max", 65536)] {
+        let body = json!({
+            "model": "gpt-5",
+            "reasoning": {"effort": effort},
+            "input": [{"type": "input_text", "text": "hi"}]
+        });
+        let req = decode_request(body).unwrap();
+        assert_eq!(
+            req.thinking.and_then(|thinking| thinking.budget_tokens),
+            Some(budget),
+            "effort={effort}"
+        );
+        let encoded = encode_request(&req, "gpt-5").unwrap();
+        assert_eq!(
+            encoded["reasoning"]["effort"], effort,
+            "the level must survive the round trip"
+        );
+    }
+}
+
+#[test]
 fn request_decodes_instructions_lifting_and_reasoning_bridge() {
     let reasoning_item = encode_thinking_block(&ContentBlock::Thinking {
         text: "past reasoning".to_string(),

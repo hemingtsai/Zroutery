@@ -8,10 +8,65 @@
 
 use serde_json::{json, Value};
 
-use crate::ir::ContentBlock;
+use crate::ir::{ContentBlock, ThinkingConfig};
 
 /// Prefix used to identify blobs produced by this bridge.
 pub const PREFIX: &str = "zroutery-reasoning-v1:";
+
+/// Budget the IR records for each OpenAI reasoning-effort level.
+///
+/// The IR carries reasoning as a token budget, so the effort vocabulary has to
+/// be expressed in tokens. These are the values both decoders use and the
+/// values the encoders map back from, which keeps `xhigh` and `max` from
+/// collapsing into `high` on a round trip.
+const LOW_BUDGET: u32 = 1024;
+const MEDIUM_BUDGET: u32 = 4096;
+const HIGH_BUDGET: u32 = 16384;
+const XHIGH_BUDGET: u32 = 32768;
+const MAX_BUDGET: u32 = 65536;
+
+/// Decode an OpenAI `reasoning_effort` value into the IR thinking config.
+///
+/// `None` means the value is not part of the OpenAI effort vocabulary; the
+/// caller turns that into its dialect's unsupported-content error. `none` and
+/// `minimal` both disable reasoning in the IR, which has no level below a
+/// budget.
+pub fn decode_effort(effort: &str) -> Option<ThinkingConfig> {
+    let enabled = |budget_tokens: u32| ThinkingConfig {
+        enabled: true,
+        budget_tokens: Some(budget_tokens),
+    };
+    Some(match effort {
+        "none" | "minimal" => ThinkingConfig {
+            enabled: false,
+            budget_tokens: None,
+        },
+        "low" => enabled(LOW_BUDGET),
+        "medium" => enabled(MEDIUM_BUDGET),
+        "high" => enabled(HIGH_BUDGET),
+        "xhigh" => enabled(XHIGH_BUDGET),
+        "max" => enabled(MAX_BUDGET),
+        _ => return None,
+    })
+}
+
+/// Encode an IR thinking config as the closest OpenAI effort level.
+///
+/// The thresholds are the decode values above, so `high`, `xhigh` and `max`
+/// survive a round trip instead of being rounded down to the nearest of the
+/// three levels this bridge used to know.
+pub fn encode_effort(thinking: &ThinkingConfig) -> &'static str {
+    if !thinking.enabled {
+        return "none";
+    }
+    match thinking.budget_tokens.unwrap_or(MEDIUM_BUDGET) {
+        budget if budget <= LOW_BUDGET => "low",
+        budget if budget < HIGH_BUDGET => "medium",
+        budget if budget < XHIGH_BUDGET => "high",
+        budget if budget < MAX_BUDGET => "xhigh",
+        _ => "max",
+    }
+}
 
 /// Encode an Anthropic thinking block into a Responses API reasoning item.
 ///
@@ -133,5 +188,38 @@ mod tests {
         assert!(decode_reasoning_item(&item).is_none());
         let item = json!({"type": "reasoning", "encrypted_content": "not-our-prefix"});
         assert!(decode_reasoning_item(&item).is_none());
+    }
+
+    #[test]
+    fn effort_vocabulary_includes_xhigh_and_max() {
+        for (effort, budget) in [
+            ("none", None),
+            ("minimal", None),
+            ("low", Some(LOW_BUDGET)),
+            ("medium", Some(MEDIUM_BUDGET)),
+            ("high", Some(HIGH_BUDGET)),
+            ("xhigh", Some(XHIGH_BUDGET)),
+            ("max", Some(MAX_BUDGET)),
+        ] {
+            let thinking = decode_effort(effort)
+                .unwrap_or_else(|| panic!("`{effort}` must be part of the vocabulary"));
+            assert_eq!(thinking.budget_tokens, budget, "effort={effort}");
+        }
+        assert!(decode_effort("ultra").is_none());
+    }
+
+    #[test]
+    fn effort_round_trips_every_level() {
+        for effort in ["none", "low", "medium", "high", "xhigh", "max"] {
+            let thinking = decode_effort(effort).unwrap();
+            assert_eq!(encode_effort(&thinking), effort, "effort={effort}");
+        }
+        // An Anthropic-style budget between the levels rounds to the lower one
+        // rather than inventing a level the vocabulary does not have.
+        let thinking = ThinkingConfig {
+            enabled: true,
+            budget_tokens: Some(20_000),
+        };
+        assert_eq!(encode_effort(&thinking), "high");
     }
 }

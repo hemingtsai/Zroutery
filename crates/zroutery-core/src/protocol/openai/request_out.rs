@@ -147,13 +147,10 @@ pub fn encode_request_with(
     }
     if let Some(th) = &req.thinking {
         if quirks.send_reasoning_effort {
-            let effort = match (th.enabled, th.budget_tokens.unwrap_or(4096)) {
-                (false, _) => "none",
-                (true, b) if b <= 1024 => "low",
-                (true, b) if b >= 16384 => "high",
-                _ => "medium",
-            };
-            body.insert("reasoning_effort".into(), json!(effort));
+            body.insert(
+                "reasoning_effort".into(),
+                json!(reasoning_bridge::encode_effort(th)),
+            );
         }
     }
     if let Some(u) = &req.metadata_user {

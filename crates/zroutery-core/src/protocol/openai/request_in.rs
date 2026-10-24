@@ -5,7 +5,7 @@ use serde_json::{json, Value};
 use crate::error::{Error, Result};
 use crate::ir::{
     ChatRequest, ContentBlock, Dialect, MediaSource, Message, Role, StructuredOutput, SystemPart,
-    ThinkingConfig, ToolChoice, ToolDef, ToolResultPart,
+    ToolChoice, ToolDef, ToolResultPart,
 };
 use crate::protocol::reasoning_bridge;
 use crate::protocol::unsupported_content;
@@ -229,30 +229,16 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
     };
 
     // Reasoning effort is the OpenAI knob; translate to a thinking budget so
-    // Anthropic upstreams get something meaningful.
+    // Anthropic upstreams get something meaningful. `xhigh` and `max` are part
+    // of the current OpenAI vocabulary and must not be rejected here.
     if let Some(effort) = obj.get("reasoning_effort") {
         let effort = effort
             .as_str()
             .ok_or_else(|| Error::invalid("`reasoning_effort` must be a string"))?;
-        req.thinking = Some(match effort {
-            "none" | "minimal" => ThinkingConfig {
-                enabled: false,
-                budget_tokens: None,
-            },
-            "low" => ThinkingConfig {
-                enabled: true,
-                budget_tokens: Some(1024),
-            },
-            "medium" => ThinkingConfig {
-                enabled: true,
-                budget_tokens: Some(4096),
-            },
-            "high" => ThinkingConfig {
-                enabled: true,
-                budget_tokens: Some(16384),
-            },
-            other => return Err(unsupported_content("reasoning effort", Some(other))),
-        });
+        req.thinking = Some(
+            reasoning_bridge::decode_effort(effort)
+                .ok_or_else(|| unsupported_content("reasoning effort", Some(effort)))?,
+        );
     }
 
     req.metadata_user = obj.get("user").and_then(Value::as_str).map(str::to_string);

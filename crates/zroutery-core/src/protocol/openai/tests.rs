@@ -188,6 +188,38 @@ fn thinking_maps_to_reasoning_effort_only_when_supported() {
 }
 
 #[test]
+fn reasoning_effort_accepts_xhigh_and_max_and_round_trips_them() {
+    for (effort, budget) in [("xhigh", 32768u32), ("max", 65536)] {
+        let req = decode_request(json!({
+            "model": "m",
+            "messages": [{"role": "user", "content": "hi"}],
+            "reasoning_effort": effort
+        }))
+        .unwrap();
+        assert_eq!(
+            req.thinking.and_then(|thinking| thinking.budget_tokens),
+            Some(budget),
+            "effort={effort}"
+        );
+    }
+
+    let quirks = ProviderQuirks {
+        send_reasoning_effort: true,
+        ..ProviderQuirks::default()
+    };
+    let req = decode_request(json!({
+        "model": "m",
+        "messages": [{"role": "user", "content": "hi"}],
+        "reasoning_effort": "max"
+    }))
+    .unwrap();
+    assert_eq!(
+        encode_request_with(&req, "up", &quirks).unwrap()["reasoning_effort"],
+        "max"
+    );
+}
+
+#[test]
 fn response_with_reasoning_and_tool_calls() {
     let resp = decode_response(json!({
         "id": "chatcmpl-9",

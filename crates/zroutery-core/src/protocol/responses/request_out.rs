@@ -288,12 +288,7 @@ pub fn encode_request_with(
         );
     }
     if let Some(th) = &req.thinking {
-        let effort = match (th.enabled, th.budget_tokens.unwrap_or(4096)) {
-            (false, _) => "none",
-            (true, b) if b <= 1024 => "low",
-            (true, b) if b >= 16384 => "high",
-            _ => "medium",
-        };
+        let effort = reasoning_bridge::encode_effort(th);
         body.insert("reasoning".into(), json!({"effort": effort}));
     }
     if let Some(temp) = req.temperature {

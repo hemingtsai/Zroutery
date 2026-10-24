@@ -5,7 +5,7 @@ use serde_json::{json, Value};
 use crate::error::{Error, Result};
 use crate::ir::{
     ChatRequest, ContentBlock, Dialect, MediaSource, Message, Role, StructuredOutput, SystemPart,
-    ThinkingConfig, ToolChoice, ToolDef, ToolResultPart, DEFAULT_STRUCTURED_OUTPUT_SCHEMA_NAME,
+    ToolChoice, ToolDef, ToolResultPart, DEFAULT_STRUCTURED_OUTPUT_SCHEMA_NAME,
 };
 use crate::protocol::reasoning_bridge;
 use crate::protocol::unsupported_content;
@@ -234,25 +234,10 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
             .get("effort")
             .and_then(Value::as_str)
             .ok_or_else(|| Error::invalid("reasoning is missing `effort`"))?;
-        req.thinking = Some(match effort {
-            "none" | "minimal" => ThinkingConfig {
-                enabled: false,
-                budget_tokens: None,
-            },
-            "low" => ThinkingConfig {
-                enabled: true,
-                budget_tokens: Some(1024),
-            },
-            "medium" => ThinkingConfig {
-                enabled: true,
-                budget_tokens: Some(4096),
-            },
-            "high" => ThinkingConfig {
-                enabled: true,
-                budget_tokens: Some(16384),
-            },
-            other => return Err(unsupported_content("reasoning effort", Some(other))),
-        });
+        req.thinking = Some(
+            reasoning_bridge::decode_effort(effort)
+                .ok_or_else(|| unsupported_content("reasoning effort", Some(effort)))?,
+        );
     }
 
     req.refresh_required_capabilities();
