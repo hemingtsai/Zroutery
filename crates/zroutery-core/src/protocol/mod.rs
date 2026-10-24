@@ -12,7 +12,7 @@ pub mod responses;
 
 use crate::error::{Error, Result};
 use crate::ir::{
-    ChatRequest, ChatResponse, ContentBlock, Dialect, StopReason, StreamEvent,
+    ChatRequest, ChatResponse, ContentBlock, Dialect, MediaSource, StopReason, StreamEvent,
     UnsupportedContentPolicy, Usage,
 };
 use serde::{Deserialize, Serialize};
@@ -136,6 +136,11 @@ pub(crate) fn explicit_placeholder(block: &ContentBlock) -> ContentBlock {
 /// placeholder text and error messages.
 fn content_label(block: &ContentBlock) -> String {
     match block {
+        ContentBlock::Text { .. } => "text".into(),
+        ContentBlock::Image {
+            source: MediaSource::Reference { .. },
+        } => "image (server-side file id)".into(),
+        ContentBlock::Image { .. } => "image".into(),
         ContentBlock::Document { .. } => "document".into(),
         ContentBlock::File { media_type, .. } => {
             let category = sanitize_type(media_type.split('/').next().unwrap_or("file"));
@@ -149,9 +154,12 @@ fn content_label(block: &ContentBlock) -> String {
             let category = sanitize_type(media_type.split('/').next().unwrap_or("video"));
             format!("video ({category})")
         }
+        ContentBlock::ToolUse { .. } => "tool use".into(),
+        ContentBlock::ToolResult { .. } => "tool result".into(),
+        ContentBlock::Thinking { .. } => "thinking".into(),
+        ContentBlock::RedactedThinking { .. } => "redacted thinking".into(),
         ContentBlock::Citation { .. } => "citation".into(),
         ContentBlock::Annotation { .. } => "annotation".into(),
-        _ => "unsupported content".into(),
     }
 }
 
