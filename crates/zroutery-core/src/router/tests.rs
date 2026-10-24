@@ -547,6 +547,126 @@ fn request_capability_filter_is_fail_closed_when_none_match() {
 }
 
 #[test]
+fn a_shared_rate_limit_gates_every_model_of_the_provider() {
+    let r = reg(cfg_with(vec![
+        ModelEntry::for_upstream("p1", "limited", Some(ModelTier::Standard)).with_priority(0),
+        ModelEntry::for_upstream("p1", "sibling", Some(ModelTier::Standard)).with_priority(1),
+        ModelEntry::for_upstream("p2", "elsewhere", Some(ModelTier::Standard)).with_priority(2),
+    ]));
+    let router = Router::new();
+    router.set_group_limited_providers(["p1".to_string()]);
+    let routing = r.config().routing.clone();
+
+    let rate_limit = crate::failure::ClassifiedFailure::from_core_error(Error::Upstream {
+        provider: "p1".into(),
+        status: 429,
+        body: "slow down".into(),
+        retry_after: None,
+    });
+    router.record_classified_attempt("p1-limited", "p1", &rate_limit, &routing);
+
+    assert!(router.is_provider_gated("p1"));
+    assert!(
+        !router.is_provider_gated("p2"),
+        "another provider's quota is unaffected"
+    );
+    // Neither the model that saw the 429 nor its sibling may be planned; the
+    // per-model circuit is still closed, because a quota is not a sick model.
+    assert!(!router.is_cooling("p1-limited"));
+    let plan = router
+        .plan(&r, &Resolution::Tier(ModelTier::Standard), &[])
+        .unwrap();
+    assert_eq!(ids(&plan), vec!["p2-elsewhere"]);
+    assert!(!router.allow_request_for("p1-sibling", "p1"));
+    assert!(router.allow_request_for("p2-elsewhere", "p2"));
+}
+
+#[test]
+fn a_rate_limit_does_not_gate_a_provider_that_does_not_share_its_quota() {
+    let r = reg(cfg_with(vec![
+        ModelEntry::for_upstream("p1", "limited", Some(ModelTier::Standard)),
+        ModelEntry::for_upstream("p1", "sibling", Some(ModelTier::Standard)),
+    ]));
+    let router = Router::new();
+    let routing = r.config().routing.clone();
+    let rate_limit = crate::failure::ClassifiedFailure::from_core_error(Error::Upstream {
+        provider: "p1".into(),
+        status: 429,
+        body: "slow down".into(),
+        retry_after: None,
+    });
+    router.record_classified_attempt("p1-limited", "p1", &rate_limit, &routing);
+    assert!(!router.is_provider_gated("p1"));
+    let plan = router
+        .plan(&r, &Resolution::Tier(ModelTier::Standard), &[])
+        .unwrap();
+    assert_eq!(ids(&plan), vec!["p1-limited", "p1-sibling"]);
+}
+
+#[test]
+fn unknown_thinking_is_remediated_to_a_degraded_candidate() {
+    // A client that selects a reasoning variant must not lose the whole tier
+    // because no member declares thinking support. The documented fallback
+    // serves an eligible member and marks it degraded.
+    let r = reg(cfg_with(vec![ModelEntry::for_upstream(
+        "p1",
+        "reasoner",
+        Some(ModelTier::Reasoning),
+    )]));
+    let router = Router::new();
+    let plan = router
+        .plan(
+            &r,
+            &Resolution::Tier(ModelTier::Reasoning),
+            &[Capability::Thinking],
+        )
+        .unwrap();
+    assert_eq!(ids(&plan), vec!["p1-reasoner"]);
+    assert!(plan[0].degraded);
+}
+
+#[test]
+fn thinking_fallback_off_keeps_unknown_thinking_fail_closed() {
+    let mut cfg = cfg_with(vec![ModelEntry::for_upstream(
+        "p1",
+        "reasoner",
+        Some(ModelTier::Reasoning),
+    )]);
+    cfg.routing.rectifier.thinking_fallback = false;
+    let r = reg(cfg);
+    let router = Router::new();
+    let err = router
+        .plan(
+            &r,
+            &Resolution::Tier(ModelTier::Reasoning),
+            &[Capability::Thinking],
+        )
+        .unwrap_err();
+    assert!(matches!(err, Error::NoCandidate(_)));
+}
+
+#[test]
+fn declared_thinking_support_is_not_degraded() {
+    let mut cfg = cfg_with(vec![ModelEntry::for_upstream(
+        "p1",
+        "reasoner",
+        Some(ModelTier::Reasoning),
+    )]);
+    cfg.models[0].capabilities.thinking = true;
+    let r = reg(cfg);
+    let router = Router::new();
+    let plan = router
+        .plan(
+            &r,
+            &Resolution::Tier(ModelTier::Reasoning),
+            &[Capability::Thinking],
+        )
+        .unwrap();
+    assert_eq!(ids(&plan), vec!["p1-reasoner"]);
+    assert!(!plan[0].degraded);
+}
+
+#[test]
 fn strict_mode_rejects_when_no_candidate_satisfies_capability() {
     let mut cfg = cfg_with(vec![
         ModelEntry::for_upstream("p1", "text-only", Some(ModelTier::Standard)),
