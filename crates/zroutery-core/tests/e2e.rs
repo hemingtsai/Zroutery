@@ -741,6 +741,202 @@ async fn openai_in_openai_out_with_tool_calls() {
 }
 
 #[tokio::test]
+async fn reasoning_effort_degrades_and_drops_the_control_for_a_non_reasoning_model() {
+    let (addr, mock) = start_mock().await;
+    let mut cfg = config_for(addr);
+    // Make the quirk observable: without the transform, the encoded body would
+    // carry reasoning_effort and the test would see it.
+    cfg.providers[0].quirks.send_reasoning_effort = true;
+    let h = Harness::start(cfg, mock).await;
+
+    let response = h
+        .post("/v1/chat/completions")
+        .json(&json!({
+            "model": "sonnet-class",
+            "reasoning_effort": "high",
+            "messages": [{"role": "user", "content": "hi"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert!(
+        response.status().is_success(),
+        "a reasoning variant must be served, not rejected: {}",
+        response.status()
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get("x-zroutery-degraded")
+            .and_then(|v| v.to_str().ok()),
+        Some("1"),
+        "the dropped reasoning control must be observable"
+    );
+    let sent = &h.mock.bodies()[0];
+    assert!(
+        sent.get("reasoning_effort").is_none(),
+        "the reasoning control reached a model that does not declare thinking support: {sent}"
+    );
+
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn reasoning_effort_degrades_in_the_streaming_path() {
+    // Agent clients stream. The preflight that drops the control must run on
+    // both attempt loops, or the fix would exist only for buffered callers.
+    let (addr, mock) = start_mock().await;
+    let mut cfg = config_for(addr);
+    cfg.providers[0].quirks.send_reasoning_effort = true;
+    let h = Harness::start(cfg, mock).await;
+
+    let response = h
+        .post("/v1/chat/completions")
+        .json(&json!({
+            "model": "sonnet-class",
+            "reasoning_effort": "high",
+            "stream": true,
+            "messages": [{"role": "user", "content": "hi"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert!(response.status().is_success());
+    assert_eq!(
+        response
+            .headers()
+            .get("x-zroutery-degraded")
+            .and_then(|v| v.to_str().ok()),
+        Some("1")
+    );
+    // Drain the stream so the upstream attempt is complete before inspecting it.
+    let _ = response.text().await.unwrap();
+    let sent = &h.mock.bodies()[0];
+    assert!(
+        sent.get("reasoning_effort").is_none(),
+        "the streaming path forwarded the dropped reasoning control: {sent}"
+    );
+
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn echoed_reasoning_history_degrades_without_losing_the_turn() {
+    let h = Harness::new().await;
+
+    let response = h
+        .post("/v1/chat/completions")
+        .json(&json!({
+            "model": "sonnet-class",
+            "messages": [
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": "hello", "reasoning_content": "prior reasoning"},
+                {"role": "user", "content": "again"}
+            ]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert!(
+        response.status().is_success(),
+        "reasoning the client echoes back must not sink the next turn: {}",
+        response.status()
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get("x-zroutery-degraded")
+            .and_then(|v| v.to_str().ok()),
+        Some("1")
+    );
+    let sent = &h.mock.bodies()[0];
+    assert!(
+        sent["messages"][1].get("reasoning_content").is_none(),
+        "the thinking block was forwarded to a target that does not declare it: {sent}"
+    );
+    assert_eq!(sent["messages"][2]["content"], "again");
+
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_declared_thinking_capability_is_not_degraded() {
+    let (addr, mock) = start_mock().await;
+    let mut cfg = config_for(addr);
+    cfg.models[1].capabilities.thinking = true;
+    cfg.providers[0].quirks.send_reasoning_effort = true;
+    let h = Harness::start(cfg, mock).await;
+
+    let response = h
+        .post("/v1/chat/completions")
+        .json(&json!({
+            "model": "sonnet-class",
+            "reasoning_effort": "xhigh",
+            "messages": [{"role": "user", "content": "hi"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert!(response.status().is_success());
+    assert!(
+        response.headers().get("x-zroutery-degraded").is_none(),
+        "native thinking support is not a degraded answer"
+    );
+    assert_eq!(
+        h.mock.bodies()[0]["reasoning_effort"],
+        "xhigh",
+        "a declared-thinking target keeps the level the client asked for"
+    );
+
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn an_opencode_rate_limit_skips_every_model_of_the_provider() {
+    let (addr, mock) = start_mock().await;
+    let mut cfg = config_for(addr);
+    let mut zen = ProviderConfig::new("zen", "OpenCode Zen", ProviderKind::OpenCodeZenFree);
+    zen.base_url = format!("http://{addr}");
+    cfg.providers = vec![zen];
+    // One model answers 429; the sibling would answer normally. Because the
+    // free tier meters by account/IP, the 429 must also take the sibling out
+    // for the cooldown instead of failing over into the same exhausted pool.
+    cfg.models = vec![
+        ModelEntry::for_upstream("zen", "limited-model", Some(ModelTier::Standard)),
+        ModelEntry::for_upstream("zen", "ok-model", Some(ModelTier::Standard)),
+    ];
+    let h = Harness::start(cfg, mock).await;
+
+    let response = h
+        .post("/v1/chat/completions")
+        .json(&json!({
+            "model": "sonnet-class",
+            "messages": [{"role": "user", "content": "hi"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    // The client sees the upstream's rate limit, not a generic "no model":
+    // the pool was skipped because of the 429, and that is what was left in
+    // `last_error`.
+    assert_eq!(response.status(), 429);
+    let sent = h.mock.bodies();
+    assert_eq!(
+        sent.len(),
+        1,
+        "the sibling was tried after the provider was rate limited: {sent:?}"
+    );
+    assert_eq!(sent[0]["model"], "limited-model");
+
+    h.shutdown().await;
+}
+
+#[tokio::test]
 async fn anthropic_client_streaming_over_an_openai_provider() {
     let (addr, mock) = start_mock().await;
     let mut cfg = config_for(addr);
