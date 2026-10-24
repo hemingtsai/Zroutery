@@ -270,13 +270,23 @@ fn encode_message_into(
                         ..
                     } => {
                         let mut text_parts = Vec::new();
+                        // OpenAI chat has no image part inside a `tool` message,
+                        // but a vision model can still receive one as a user
+                        // image part. Forward it in a follow-up user message
+                        // that names the call it belongs to rather than
+                        // refusing the whole conversation.
+                        let mut images: Vec<Value> = Vec::new();
                         for part in content {
                             match part {
                                 ToolResultPart::Text { text } => text_parts.push(text.clone()),
-                                ToolResultPart::Image { source } => {
+                                ToolResultPart::Image {
+                                    source: reference @ MediaSource::Reference { .. },
+                                } => {
                                     let image = ContentBlock::Image {
-                                        source: source.clone(),
+                                        source: reference.clone(),
                                     };
+                                    // A server-side file id cannot be resolved by
+                                    // a chat upstream; the policy decides.
                                     if let Some(replacement) = apply_content_policy(policy, &image)?
                                     {
                                         if let Some(text) = replacement.as_text() {
@@ -284,6 +294,10 @@ fn encode_message_into(
                                         }
                                     }
                                 }
+                                ToolResultPart::Image { source } => images.push(json!({
+                                    "type": "image_url",
+                                    "image_url": {"url": source.to_data_url()},
+                                })),
                             }
                         }
                         out.push(json!({
@@ -291,6 +305,16 @@ fn encode_message_into(
                             "tool_call_id": tool_use_id,
                             "content": text_parts.join("\n"),
                         }));
+                        if !images.is_empty() {
+                            let mut content = vec![json!({
+                                "type": "text",
+                                "text": format!(
+                                    "Images returned by tool call `{tool_use_id}`:"
+                                ),
+                            })];
+                            content.extend(images);
+                            out.push(json!({"role": "user", "content": Value::Array(content)}));
+                        }
                     }
                     ContentBlock::Text { text, .. } => {
                         parts.push(json!({"type": "text", "text": text}))

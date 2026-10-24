@@ -136,28 +136,52 @@ fn unknown_response_content_is_rejected_instead_of_dropped() {
 }
 
 #[test]
-fn image_tool_results_cannot_be_stringified_silently() {
-    let mut request = ChatRequest::new("m", Dialect::Anthropic);
-    request.messages.push(Message {
-        role: Role::User,
-        content: vec![ContentBlock::ToolResult {
-            tool_use_id: "call-1".into(),
-            name: "lookup".into(),
-            content: vec![ToolResultPart::Image {
-                source: MediaSource::Base64 {
-                    media_type: "image/png".into(),
-                    data: "AAAA".into(),
-                },
+fn image_tool_results_are_forwarded_or_explicitly_replaced() {
+    let request = |source| {
+        let mut request = ChatRequest::new("m", Dialect::Anthropic);
+        request.messages.push(Message {
+            role: Role::User,
+            content: vec![ContentBlock::ToolResult {
+                tool_use_id: "call-1".into(),
+                name: "lookup".into(),
+                content: vec![ToolResultPart::Image { source }],
+                is_error: false,
             }],
-            is_error: false,
-        }],
-    });
+        });
+        request
+    };
 
-    assert!(openai::encode_request_with(&request, "m", &ProviderQuirks::default()).is_err());
-    let mut placeholder = request;
-    placeholder.unsupported_content_policy = UnsupportedContentPolicy::Placeholder;
-    let encoded =
-        openai::encode_request_with(&placeholder, "m", &ProviderQuirks::default()).unwrap();
+    // A chat upstream has no image part inside a `tool` message, but a vision
+    // model can still receive one as a user image part. It is forwarded in a
+    // follow-up user message, not stringified and not lost.
+    let encoded = openai::encode_request_with(
+        &request(MediaSource::Base64 {
+            media_type: "image/png".into(),
+            data: "AAAA".into(),
+        }),
+        "m",
+        &ProviderQuirks::default(),
+    )
+    .unwrap();
+    let messages = encoded["messages"].as_array().unwrap();
+    assert_eq!(messages[0]["role"], "tool");
+    assert_eq!(messages[1]["role"], "user");
+    let content = messages[1]["content"].as_array().unwrap();
+    assert_eq!(content[0]["type"], "text");
+    assert_eq!(content[1]["type"], "image_url");
+    assert!(content[1]["image_url"]["url"]
+        .as_str()
+        .unwrap()
+        .starts_with("data:image/png;base64,"));
+
+    // A server-side file id is not resolvable by the upstream, so the explicit
+    // policy still decides what happens to it.
+    let mut reference = request(MediaSource::Reference {
+        id: "file-1".into(),
+    });
+    assert!(openai::encode_request_with(&reference, "m", &ProviderQuirks::default()).is_err());
+    reference.unsupported_content_policy = UnsupportedContentPolicy::Placeholder;
+    let encoded = openai::encode_request_with(&reference, "m", &ProviderQuirks::default()).unwrap();
     assert!(encoded["messages"][0]["content"]
         .as_str()
         .unwrap()
