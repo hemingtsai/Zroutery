@@ -2472,7 +2472,7 @@ async fn a_repaired_request_records_every_send_as_a_complete_attempt() {
     assert!(!outcome.attempts[0].success);
     assert_eq!(
         outcome.attempts[0].failure_class,
-        Some(FailureClass::InvalidRequest)
+        Some(FailureClass::ProviderRejected)
     );
     assert!(!outcome.attempts[0].rectified);
     assert!(outcome.attempts[1].is_terminal_success());
@@ -2558,7 +2558,7 @@ async fn multiple_rectifier_candidates_each_record_their_own_attempt() {
     assert_eq!(outcome.attempts.len(), 3, "one attempt per cascade send");
     assert_eq!(
         outcome.attempts[0].failure_class,
-        Some(FailureClass::InvalidRequest)
+        Some(FailureClass::ProviderRejected)
     );
     assert_eq!(
         outcome.attempts[1].failure_class,

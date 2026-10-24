@@ -604,6 +604,49 @@ fn a_rate_limit_does_not_gate_a_provider_that_does_not_share_its_quota() {
 }
 
 #[test]
+fn repeated_upstream_rejections_open_the_model_circuit() {
+    // A relay that refuses the request shape this gateway builds answers 400
+    // every time; the pool must stop choosing it instead of replaying the same
+    // refusal forever.
+    let mut cfg = cfg_with(vec![ModelEntry::for_upstream(
+        "p1",
+        "rejecting",
+        Some(ModelTier::Standard),
+    )]);
+    cfg.routing.circuit_breaker.failure_threshold = 2;
+    let r = reg(cfg);
+    let router = Router::new();
+    let routing = r.config().routing.clone();
+    let rejected = crate::failure::ClassifiedFailure::from_status(400, "bad request".into());
+
+    router.record_classified_attempt("p1-rejecting", "p1", &rejected, &routing);
+    assert!(!router.is_cooling("p1-rejecting"));
+    router.record_classified_attempt("p1-rejecting", "p1", &rejected, &routing);
+    assert!(
+        router.is_cooling("p1-rejecting"),
+        "repeated provider rejections must open the circuit"
+    );
+
+    // A request this pipeline refused locally is not provider evidence.
+    let mut cfg = cfg_with(vec![ModelEntry::for_upstream(
+        "p1",
+        "healthy",
+        Some(ModelTier::Standard),
+    )]);
+    cfg.routing.circuit_breaker.failure_threshold = 2;
+    let r = reg(cfg);
+    let router = Router::new();
+    let routing = r.config().routing.clone();
+    let local = crate::failure::ClassifiedFailure::from_core_error(Error::InvalidRequest(
+        "bad schema".into(),
+    ));
+    for _ in 0..3 {
+        router.record_classified_attempt("p1-healthy", "p1", &local, &routing);
+    }
+    assert!(!router.is_cooling("p1-healthy"));
+}
+
+#[test]
 fn unknown_thinking_is_remediated_to_a_degraded_candidate() {
     // A client that selects a reasoning variant must not lose the whole tier
     // because no member declares thinking support. The documented fallback

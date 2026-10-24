@@ -24,8 +24,18 @@ pub enum FailureClass {
     Authentication,
     /// Provider is unavailable (502, 503, 504, 529).
     ProviderUnavailable,
-    /// Upstream returned a terminal payment/precondition rejection (402/412)
-    /// without a deterministic local-configuration or budget marker.
+    /// Upstream returned a terminal rejection of a request the gateway built
+    /// (400, 402/412) without a deterministic local-configuration or budget
+    /// marker.
+    ///
+    /// The request that reached the upstream was decoded, validated and
+    /// re-encoded here, so a 400 is the provider refusing the shape this
+    /// gateway produced — an unsupported parameter, a dated wire contract it
+    /// does not implement, a model that cannot answer the translated body —
+    /// not the client's raw payload. It counts as provider evidence: repeated
+    /// rejections open the model's circuit, and a single rejection on a
+    /// locally invalid request never reaches this class because the pipeline
+    /// refuses it before an attempt.
     ProviderRejected,
     /// Protocol-level error (malformed response, unexpected format).
     Protocol,
@@ -273,7 +283,7 @@ impl FailureClass {
             }
         }
         match status {
-            400 => Self::InvalidRequest,
+            400 => Self::ProviderRejected,
             402 | 412 => Self::ProviderRejected,
             413 => Self::InvalidRequest,
             500 => Self::Unknown,
@@ -703,8 +713,16 @@ mod tests {
     // -------------------------------------------------------------------
 
     #[test]
-    fn status_400_is_invalid_request() {
-        assert_eq!(FailureClass::from_status(400), FailureClass::InvalidRequest);
+    fn status_400_is_a_provider_rejection() {
+        // The body that reached the upstream was built by this gateway, so the
+        // refusal is evidence about the provider/model contract and counts
+        // toward the circuit. A locally invalid request never gets here: the
+        // pipeline refuses it before an attempt and classifies the structural
+        // `Error::InvalidRequest` directly.
+        assert_eq!(
+            FailureClass::from_status(400),
+            FailureClass::ProviderRejected
+        );
     }
 
     #[test]

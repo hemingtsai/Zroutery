@@ -27,6 +27,26 @@ fn public_constructor_compatibility_preserves_message_and_structural_apis() {
 }
 
 #[test]
+fn an_upstream_400_is_provider_evidence_not_a_client_fault() {
+    // The request the upstream refused was decoded, validated and re-encoded
+    // by this gateway. The refusal is evidence about the provider/model
+    // contract, so it counts toward observation and the circuit.
+    let rejected = ClassifiedFailure::from_status(400, "bad request".to_string());
+    assert_eq!(rejected.class, FailureClass::ProviderRejected);
+    assert!(rejected.affects_observation());
+    assert!(rejected.affects_circuit());
+    assert!(rejected.provider_fault());
+    assert!(!rejected.retryable());
+
+    // A request this pipeline refuses before an attempt keeps its own class
+    // and never touches model health.
+    let local = ClassifiedFailure::from_core_error(Error::InvalidRequest("bad schema".into()));
+    assert_eq!(local.class, FailureClass::InvalidRequest);
+    assert!(!local.affects_circuit());
+    assert!(!local.affects_observation());
+}
+
+#[test]
 fn generic_402_412_statuses_need_explicit_local_markers() {
     // Status-only upstream responses are provider rejections, not local
     // configuration or budget decisions.
