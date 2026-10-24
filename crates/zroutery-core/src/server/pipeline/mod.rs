@@ -1071,7 +1071,10 @@ async fn buffered_chat(
         };
 
         // Enforce the half-open single-probe rule at the point of send.
-        if !state.router.allow_request(candidate.model_id()) {
+        if !state
+            .router
+            .allow_request_for(candidate.model_id(), &candidate.provider.id)
+        {
             tracing::debug!(
                 model = candidate.model_id(),
                 "half-open probe already in flight; skipping candidate"
@@ -1450,7 +1453,10 @@ async fn stream_chat(
         };
 
         // Enforce the half-open single-probe rule at the point of send.
-        if !state.router.allow_request(candidate.model_id()) {
+        if !state
+            .router
+            .allow_request_for(candidate.model_id(), &candidate.provider.id)
+        {
             tracing::debug!(
                 model = candidate.model_id(),
                 "half-open probe already in flight; skipping candidate"

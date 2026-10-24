@@ -26,6 +26,8 @@ impl Router {
             election: Mutex::new(None),
             observations: ObservationStore::new(),
             stats_store: StatsStore::new(),
+            group_limited: Mutex::new(std::collections::HashSet::new()),
+            provider_gates: Mutex::new(HashMap::new()),
         }
     }
 

@@ -93,7 +93,8 @@ impl Router {
         let remediation_capabilities = canonical_capabilities(&remediation_capabilities);
 
         for member in members {
-            let circuit_open = self.is_circuit_blocked(&member.exposed_id());
+            let circuit_open = self.is_circuit_blocked(&member.exposed_id())
+                || self.is_provider_gated(&member.provider_id);
             let check = requirements.check_with_request_capabilities(
                 &member.exposed_id(),
                 &member.provider_id,

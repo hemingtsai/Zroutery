@@ -1,5 +1,7 @@
 //! Writing health back: observations, circuit state, and the counters everything else reads.
 
+use std::time::{Duration, Instant};
+
 use super::candidate::ModelHealth;
 use super::helpers::classification_trace_label;
 use super::tiers::HealthState;
@@ -7,7 +9,7 @@ use super::Router;
 use crate::circuit_breaker::CircuitState;
 use crate::config::RoutingConfig;
 use crate::error::Error;
-use crate::failure::ClassifiedFailure;
+use crate::failure::{ClassifiedFailure, FailureClass};
 
 impl Router {
     /// Apply a canonical classified failure to the legacy health/circuit view.
@@ -79,6 +81,64 @@ impl Router {
     ) {
         self.report_classified_failure(model_id, failure, routing);
         self.record_classified_failure(model_id, provider_id, failure);
+        self.note_provider_rate_limit(provider_id, failure, routing);
+    }
+
+    /// Refresh the set of providers whose rate limit covers every model.
+    ///
+    /// Called when the configuration is built or swapped. Gates for providers
+    /// that no longer exist are dropped with the rest: a provider id is only
+    /// meaningful while something serves it.
+    pub fn set_group_limited_providers(&self, ids: impl IntoIterator<Item = String>) {
+        let ids: std::collections::HashSet<String> = ids.into_iter().collect();
+        crate::sync::lock(&self.provider_gates).retain(|id, _| ids.contains(id));
+        *crate::sync::lock(&self.group_limited) = ids;
+    }
+
+    /// Is this provider's shared cooldown still running?
+    ///
+    /// Consumes nothing — unlike [`Self::allow_request`] it never claims a
+    /// half-open probe — so eligibility filtering can ask it freely. An
+    /// elapsed window is dropped as it is read.
+    pub fn is_provider_gated(&self, provider_id: &str) -> bool {
+        let now = Instant::now();
+        let mut gates = crate::sync::lock(&self.provider_gates);
+        match gates.get(provider_id) {
+            Some(until) if now < *until => true,
+            Some(_) => {
+                // The window elapsed; drop the row so the map does not retain
+                // every provider that was ever rate limited.
+                gates.remove(provider_id);
+                false
+            }
+            None => false,
+        }
+    }
+
+    /// Open the provider-wide gate when a shared-limit provider answers 429.
+    ///
+    /// The per-model impact table deliberately keeps a rate limit off the
+    /// circuit: a quota is not a sick model. That stays true. What changes for
+    /// a group-limited provider is that the *pool* is unusable, so the gate
+    /// blocks the provider's other models for the same cooldown the circuit
+    /// breaker would have used. When the window elapses the next request
+    /// probes normally; a still-exhausted quota answers 429 again and reopens
+    /// it.
+    fn note_provider_rate_limit(
+        &self,
+        provider_id: &str,
+        failure: &ClassifiedFailure,
+        routing: &RoutingConfig,
+    ) {
+        if failure.class != FailureClass::RateLimit {
+            return;
+        }
+        if !crate::sync::lock(&self.group_limited).contains(provider_id) {
+            return;
+        }
+        let cooldown = routing.circuit_breaker.timeout_secs.max(1);
+        let until = Instant::now() + Duration::from_secs(cooldown);
+        crate::sync::lock(&self.provider_gates).insert(provider_id.to_string(), until);
     }
 
     /// Alias for [`Self::record_classified_attempt`] used by report-oriented
@@ -153,6 +213,15 @@ impl Router {
             // Models without health data are new and therefore closed.
             None => true,
         }
+    }
+
+    /// [`Self::allow_request`] plus the provider's shared rate-limit gate.
+    ///
+    /// A provider whose quota is exhausted refuses every model it serves, so
+    /// the send-time check has to see the gate the per-model breaker knows
+    /// nothing about.
+    pub fn allow_request_for(&self, model_id: &str, provider_id: &str) -> bool {
+        !self.is_provider_gated(provider_id) && self.allow_request(model_id)
     }
 
     /// Release a half-open probe permit after a rectifier retry.

@@ -50,6 +50,15 @@ impl AppState {
         // Health rows for models that no longer exist would otherwise linger
         // forever and keep appearing in the GUI snapshot.
         self.router.retain_models(|id| known.contains(id));
+        // Which providers meter the whole account rather than one model can
+        // change with the configuration, so the gate set is refreshed here.
+        self.router.set_group_limited_providers(
+            config
+                .providers
+                .iter()
+                .filter(|provider| provider.kind.is_opencode())
+                .map(|provider| provider.id.clone()),
+        );
         let registry = Arc::new(Registry::new(Arc::new(config)));
         *crate::sync::write(&self.registry) = registry;
     }

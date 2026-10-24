@@ -20,7 +20,7 @@
 //! `impl` blocks, so this is legal rather than a workaround, but it does mean
 //! the table above is the only map from a method name to a file.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 
 use crate::election::Election;
@@ -49,6 +49,20 @@ pub struct Router {
     /// Runtime statistics (percentiles, EWMA, failure breakdown) keyed by
     /// provider+model. Accumulated over the lifetime of the process.
     pub stats_store: StatsStore,
+    /// Providers whose rate limit is shared by every model they serve.
+    ///
+    /// OpenCode's free and Console tiers meter by account (or by source IP for
+    /// the anonymous free tier), so a 429 on one model means every model under
+    /// that provider is unusable at the same time. The set is refreshed from
+    /// the configuration; a provider that is not listed keeps today's
+    /// behaviour, where a rate limit is model-scoped and never opens a circuit.
+    group_limited: Mutex<HashSet<String>>,
+    /// Cooldown deadlines for those providers, keyed by provider id.
+    ///
+    /// Deliberately separate from the per-model health rows: the GUI lists
+    /// models, and a synthetic "provider" row there would be a fact that does
+    /// not exist. A gate is a time window, not a model circuit.
+    provider_gates: Mutex<HashMap<String, std::time::Instant>>,
 }
 
 impl Default for Router {

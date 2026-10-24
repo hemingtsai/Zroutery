@@ -134,9 +134,20 @@ impl AppState {
         attachment: ShadowAttachment,
     ) -> Self {
         let log_limit = config.server.log_limit;
+        // OpenCode's free and Console tiers meter by account (or source IP for
+        // the anonymous free tier), so a 429 on one model is a 429 on all of
+        // them. Other providers keep their model-scoped rate-limit handling.
+        let group_limited: Vec<String> = config
+            .providers
+            .iter()
+            .filter(|provider| provider.kind.is_opencode())
+            .map(|provider| provider.id.clone())
+            .collect();
+        let router = Router::new();
+        router.set_group_limited_providers(group_limited);
         Self {
             registry: RwLock::new(Arc::new(Registry::new(Arc::new(config)))),
-            router: Arc::new(Router::new()),
+            router: Arc::new(router),
             stats: Arc::new(Stats::new(log_limit)),
             outcomes: OutcomeLog::new(log_limit),
             upstream: Upstream::new(false, 15),
@@ -232,9 +243,17 @@ impl AppState {
         // constants.
         #[cfg(feature = "ml")]
         let shadow_config = config.shadow.clone();
+        let group_limited: Vec<String> = config
+            .providers
+            .iter()
+            .filter(|provider| provider.kind.is_opencode())
+            .map(|provider| provider.id.clone())
+            .collect();
+        let router = Router::new();
+        router.set_group_limited_providers(group_limited);
         AppState {
             registry: RwLock::new(Arc::new(Registry::new(Arc::new(config)))),
-            router: Arc::new(Router::new()),
+            router: Arc::new(router),
             stats,
             outcomes: OutcomeLog::new(log_limit),
             upstream: Upstream::new(bypass_proxy, connect_timeout_secs),

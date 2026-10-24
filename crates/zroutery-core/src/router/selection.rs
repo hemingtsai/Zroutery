@@ -86,6 +86,12 @@ impl Router {
             let mut closed = Vec::new();
             let mut half_open = Vec::new();
             for m in members {
+                // A provider whose shared quota is exhausted is unavailable as
+                // a whole: the per-model breaker has nothing to say about it,
+                // because the 429 is the account's, not the model's.
+                if self.is_provider_gated(&m.provider_id) {
+                    continue;
+                }
                 match health.get(&m.exposed_id()) {
                     Some(h) => match h.breaker.state() {
                         CircuitState::Closed => closed.push(m),
