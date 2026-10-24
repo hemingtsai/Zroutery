@@ -1413,6 +1413,41 @@ fn the_gateway_target_offers_exactly_the_tiers_that_have_enabled_models() {
     assert!(desktop.gateway_target().is_none());
 }
 
+#[test]
+fn the_gateway_target_publishes_the_union_of_effort_levels() {
+    let config: AppConfig = serde_json::from_value(serde_json::json!({
+        "server": {"auth_token": "gw-token"},
+        "providers": [
+            {"id": "p", "name": "p", "kind": "openai_compatible",
+             "base_url": "https://example.invalid"},
+            {"id": "off", "name": "off", "kind": "openai_compatible",
+             "base_url": "https://example.invalid", "enabled": false}
+        ],
+        "models": [
+            {"provider_id": "p", "upstream_model": "m-a", "tier": "fast",
+             "effort_levels": ["low", "high"]},
+            {"provider_id": "p", "upstream_model": "m-b", "tier": "fast",
+             "effort_levels": ["high", "max", "ultra"]},
+            {"provider_id": "off", "upstream_model": "m-c", "tier": "fast",
+             "effort_levels": ["medium"]}
+        ]
+    }))
+    .expect("the fixture is a valid configuration");
+    let (desktop, _dir) = desktop_with(config);
+
+    let target = desktop.gateway_target().expect("the target is servable");
+    let fast = target
+        .classes
+        .iter()
+        .find(|class| class.model == "fast-class")
+        .expect("the fast class");
+    assert_eq!(
+        fast.effort_levels,
+        ["low", "high", "max"],
+        "the union in picker order; the disabled provider and the unknown level do not contribute"
+    );
+}
+
 /// Each agent's ownership store is durable from first use: the manifest lives
 /// under the application's own config directory, so a crash cannot orphan a
 /// client config that still points at this proxy.

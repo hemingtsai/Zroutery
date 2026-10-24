@@ -142,24 +142,42 @@ impl Desktop {
                 .push("the client config could not be read right now".into());
             return Some(report);
         };
-        report.config_matches = true;
+        let Ok(fields) = takeover_fields(agent, target, Some(&snapshot.raw)) else {
+            return Some(report);
+        };
+        // Every managed field the current gateway would write must still be on
+        // disk with that value. The token alone is not enough: a client adopted
+        // before a new field existed keeps a config the current target no
+        // longer describes (the effort variants are the case that exposed
+        // this), and the status must say the config needs refreshing rather
+        // than call it healthy.
+        let paths: Vec<String> = fields.iter().map(|field| field.path.clone()).collect();
+        let live = extract_field_values(&snapshot.raw, &paths);
+        report.config_matches = fields
+            .iter()
+            .all(|field| live.get(&field.path) == Some(&field.value));
+        if !report.config_matches {
+            report.notes.push(
+                "the client config does not match what this build manages — release and take \
+                 the client over again to write the current field set"
+                    .into(),
+            );
+        }
 
-        if let Ok(fields) = takeover_fields(agent, target, Some(&snapshot.raw)) {
-            let token_paths: Vec<String> = fields
-                .iter()
-                .filter(|f| f.value == serde_json::json!(target.token))
-                .map(|f| f.path.clone())
-                .collect();
-            let live = extract_field_values(&snapshot.raw, &token_paths);
-            report.credential_ok =
-                !token_paths.is_empty() && token_paths.iter().all(|p| live.contains_key(p));
-            if !report.credential_ok {
-                report.notes.push(
-                    "the gateway token has changed since this client was taken over — \
-                     release and take over again to hand the client the new one"
-                        .into(),
-                );
-            }
+        let token_paths: Vec<String> = fields
+            .iter()
+            .filter(|f| f.value == serde_json::json!(target.token))
+            .map(|f| f.path.clone())
+            .collect();
+        let live_token = extract_field_values(&snapshot.raw, &token_paths);
+        report.credential_ok =
+            !token_paths.is_empty() && token_paths.iter().all(|p| live_token.contains_key(p));
+        if !report.credential_ok {
+            report.notes.push(
+                "the gateway token has changed since this client was taken over — \
+                 release and take over again to hand the client the new one"
+                    .into(),
+            );
         }
         Some(report)
     }
