@@ -225,6 +225,11 @@ export interface ModelEntry {
   max_output_tokens: number | null;
   /** The model's context window in tokens, when known. */
   context_window: number | null;
+  /**
+   * Reasoning-effort levels the takeover publishes as client variants, in
+   * picker order. Filled from models.dev on import and correctable by hand.
+   */
+  effort_levels: string[];
   /** Entered by hand, like the tier. Without it a request is logged unpriced. */
   pricing: Pricing | null;
 }
@@ -1027,6 +1032,13 @@ export interface DiscoveredModel {
   /** Capability flags, when the source publishes them. */
   capabilities?: ModelCapabilities | null;
   /**
+   * Reasoning-effort levels the catalogue declares for this model, in picker
+   * order. Copied into the model entry on import and editable afterwards; an
+   * empty list means the model declares none, so the takeover writes no
+   * variant picker for it.
+   */
+  effort_levels?: string[];
+  /**
    * Whether the provider's source marks this model as served on a zero-cost
    * tier. Always present — the Rust side defaults it to `false` rather than
    * omitting it.
@@ -1783,6 +1795,7 @@ export function emptyModel(
     aliases: [],
     max_output_tokens: null,
     context_window: null,
+    effort_levels: [],
     pricing: null,
     ...overrides,
   };

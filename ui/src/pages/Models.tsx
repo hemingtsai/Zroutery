@@ -42,6 +42,33 @@ import {
 } from "../components";
 
 /**
+ * Reasoning-effort levels the gateway accepts, in picker order.
+ *
+ * Must match `zroutery_core::config::EFFORT_LEVELS`: the takeover writes these
+ * as client variants, and a value outside this list is not encodable to any
+ * dialect.
+ */
+const EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
+
+/**
+ * Whether a capability set is still the shape an entry is created with.
+ *
+ * A sync fills capabilities only from this state: anything else is a decision
+ * the user made, and models.dev is not allowed to overrule it.
+ */
+function isDefaultCapabilities(capabilities: ModelEntry["capabilities"]) {
+  return (
+    capabilities.tools &&
+    !capabilities.vision &&
+    !capabilities.thinking &&
+    !capabilities.structured_output &&
+    !capabilities.audio &&
+    !capabilities.video &&
+    !capabilities.files
+  );
+}
+
+/**
  * The model list. One row per model: name, provider, class, one small status
  * dot. Everything else — pricing, capabilities, aliases, the knobs — lives in
  * the drawer, because a list is for choosing and a drawer is for knowing.
@@ -76,6 +103,76 @@ export default function Models({
   const [nameError, setNameError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [draft, setDraft] = useState({ provider_id: config.providers[0]?.id ?? "", upstream_model: "" });
+  const [syncing, setSyncing] = useState(false);
+
+  /**
+   * Fill configured models' missing metadata from models.dev.
+   *
+   * `fetch_provider_models` enriches every catalogue with models.dev, so this
+   * reaches the same source an import does. Only unset fields are filled: a
+   * context window, an output cap or an effort list the user already entered
+   * is a correction, and a capability set that differs from the default shape
+   * was edited by hand. Nothing is overwritten, which is what makes a later
+   * sync safe to run again.
+   */
+  const syncMetadata = async () => {
+    setSyncing(true);
+    try {
+      const byModel = new Map<string, DiscoveredModel>();
+      const failures: string[] = [];
+      for (const provider of config.providers) {
+        if (provider.kind === "decision") continue;
+        if (!config.models.some((m) => m.provider_id === provider.id)) continue;
+        try {
+          const found = await api.fetchModels(provider);
+          for (const entry of found) {
+            byModel.set(`${provider.id}\u0000${entry.id}`, entry);
+          }
+        } catch {
+          failures.push(provider.name);
+        }
+      }
+
+      let changed = 0;
+      await save((current) => {
+        const next = structuredClone(current);
+        for (const model of next.models) {
+          const found = byModel.get(`${model.provider_id}\u0000${model.upstream_model}`);
+          if (!found) continue;
+          let touched = false;
+          if (model.context_window === null && found.context_window != null) {
+            model.context_window = found.context_window;
+            touched = true;
+          }
+          if (model.max_output_tokens === null && found.max_output != null) {
+            model.max_output_tokens = found.max_output;
+            touched = true;
+          }
+          if (
+            (model.effort_levels ?? []).length === 0 &&
+            found.effort_levels?.length
+          ) {
+            model.effort_levels = found.effort_levels;
+            touched = true;
+          }
+          if (found.capabilities && isDefaultCapabilities(model.capabilities)) {
+            model.capabilities = found.capabilities;
+            touched = true;
+          }
+          if (touched) changed += 1;
+        }
+        return changed > 0 ? next : null;
+      });
+
+      if (changed > 0) notify("ok", t("models.synced", { n: changed }));
+      else notify("ok", t("models.sync_none"));
+      if (failures.length > 0) {
+        notify("error", t("models.sync_failed", { names: failures.join(", ") }));
+      }
+    } finally {
+      setSyncing(false);
+    }
+  };
 
   /*
    * Two index lookups instead of two linear scans.
@@ -349,6 +446,13 @@ export default function Models({
               {t("models.showing", { shown: view.length, total: rows.length })}
             </span>
           )}
+          <Button
+            kind="ghost"
+            disabled={busy || syncing}
+            onClick={() => void syncMetadata()}
+          >
+            {syncing ? t("models.syncing") : t("models.sync")}
+          </Button>
         </div>
       )}
 
@@ -784,6 +888,34 @@ function ModelDrawer({
             }
           />
         </div>
+        <div className="field-label">{t("models.effort_levels")}</div>
+        <div className="field-actions">
+          {EFFORT_LEVELS.map((level) => {
+            const declared = (m.effort_levels ?? []).includes(level);
+            return (
+              <Button
+                key={level}
+                kind={declared ? "primary" : "ghost"}
+                aria-pressed={declared}
+                disabled={busy}
+                onClick={() =>
+                  onUpdate((model) => {
+                    const current = model.effort_levels ?? [];
+                    model.effort_levels = declared
+                      ? current.filter((value) => value !== level)
+                      : EFFORT_LEVELS.filter(
+                          (candidate) =>
+                            candidate === level || current.includes(candidate),
+                        );
+                  })
+                }
+              >
+                {level}
+              </Button>
+            );
+          })}
+        </div>
+        <p className="field-hint">{t("models.effort_levels_hint")}</p>
       </Section>
 
       <Section title={t("models.price")} hint={t("models.price_hint")}>
@@ -909,6 +1041,7 @@ function CatalogueImport({
             context_window: entry.context_window ?? null,
             max_output_tokens: entry.max_output ?? null,
             ...(entry.capabilities ? { capabilities: entry.capabilities } : {}),
+            effort_levels: entry.effort_levels ?? [],
           }),
         );
       }
