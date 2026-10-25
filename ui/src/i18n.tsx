@@ -145,7 +145,7 @@ export const en = {
   // -------------------------------------------------------------- accounts
   "accounts.title": "Accounts",
   "accounts.title_hint":
-    "Accounts hosted by this provider. They feed probing, balances, check-in and, when inference keys are declared, chat traffic.",
+    "Accounts of this provider. They feed probing, balances and check-in; once an account declares inference keys, chat requests go through it too.",
   "accounts.empty": "No accounts declared. Every request uses the provider's own key.",
   "accounts.lede":
     "Balance, check-in and panel token for each declared account. Declarations are edited in the provider's account section.",
@@ -155,13 +155,13 @@ export const en = {
     "Stable name within this provider. The (provider, account) pair identifies its runtime state.",
   "accounts.key_label_add": "Panel access token (optional)",
   "accounts.key_hint_add":
-    "Optional. Empty uses the provider's key. For a NewAPI panel, paste the personal access token; an sk- relay key will not work.",
+    "Optional. Empty uses the provider's key. For a NewAPI panel, paste the personal access token; an sk- relay key will not be accepted there.",
   "accounts.duplicate": "Account `{id}` already exists on this provider.",
   "accounts.key_store_failed": "The account was saved, but storing its key failed.",
   "accounts.set_key": "Set credential",
   "accounts.key_label": "Panel access token",
   "accounts.key_hint":
-    "Personal access token from the panel (personal settings → access token). Stored in the system credential store and never shown again.",
+    "Personal access token from the panel (Settings → Access tokens). Kept in the system credential vault and never shown again.",
   "accounts.clear_key": "Clear credential",
   "accounts.clear_key_title": "Clear account {id}'s credential",
   "accounts.clear_key_body":
@@ -171,9 +171,9 @@ export const en = {
   "accounts.follows_provider": "Provider's credential",
   "accounts.inference_title": "Inference keys",
   "accounts.inference_hint":
-    "Chat credentials, tried in priority order. The panel token above only probes balances and signs in; it is never sent upstream.",
+    "The credentials chat requests are sent with, tried from the lowest priority up. The panel token above is only for balances and check-in; it is never sent as a chat credential.",
   "accounts.inference_empty":
-    "No inference key is declared. This account is skipped once any account on the provider declares a pool; until then the provider's own key is used.",
+    "No inference key declared yet. Once any account on this provider declares one, this account is skipped; until then the provider's own key is used.",
   "accounts.inference_stored": "secret stored",
   "accounts.inference_missing": "secret missing",
   "accounts.inference_priority": "priority {n}",
@@ -200,13 +200,13 @@ export const en = {
   "accounts.checkin": "Browser check-in",
   "accounts.login_path": "Panel sign-in path",
   "accounts.login_path_hint":
-    "Used by the browser token capture. Current NewAPI signs in at /sign-in; older forks use /login.",
+    "The sign-in page the browser capture opens. Current NewAPI signs in at /sign-in; older forks use /login.",
   "accounts.panel_url": "Panel address",
   "accounts.new_api_user": "Panel user ID",
   "accounts.new_api_user_hint":
-    "The New-Api-User header some panels demand (AgentRouter does). Filled automatically by the browser token capture; empty sends none.",
+    "A header some panels require (AgentRouter does). The browser token capture fills it in; empty sends no header.",
   "accounts.panel_url_hint":
-    "The dashboard's own root when it lives on a different host than the relay endpoint (e.g. relay on api.relay.com, panel on panel.relay.com). Empty means same host, which is the usual case and the right answer when the vendor's website is a separate marketing site that does not serve the panel API. Token capture and account probes are anchored here.",
+    "Fill this in only when the dashboard lives on a different host than the relay (e.g. relay api.relay.com, panel panel.relay.com). Empty means they share a host — the usual answer, since a vendor's website is often another machine that serves no panel API. Token capture and account probes use this address.",
   "token_capture.start": "Get token in browser",
   "token_capture.starting": "Opening…",
   "token_capture.captured": "Token stored",
@@ -325,7 +325,8 @@ export const en = {
   "models.vision": "Vision",
   "models.thinking": "Extended thinking",
   "models.effort_levels": "Reasoning effort levels",
-  "models.effort_levels_hint": "Variant levels the takeover offers for this model's classes. Filled from models.dev on import; correct them here when a model differs.",
+  "models.effort_levels_hint":
+    "Variant levels offered to the client during takeover. Filled from models.dev on import; correct them here when a model differs.",
   "models.sync": "Sync metadata",
   "models.syncing": "Syncing…",
   "models.synced": "Filled missing metadata for {n} models",
@@ -401,13 +402,13 @@ export const en = {
   "field.connect_timeout": "Connect timeout (s)",
   "providers.f_version": "anthropic-version",
   "providers.f_version_hint":
-    "The dated API version, a mutually exclusive wire contract. 2023-06-01 is the three-year baseline. 2026-10-21 removes temperature/top_p/top_k and confines documents to user messages — requests are shaped accordingly.",
+    "The dated Anthropic API version; one applies at a time. 2023-06-01 is the three-year baseline. 2026-10-21 drops temperature/top_p/top_k and confines documents to user messages. Requests are shaped to the version you pick.",
   "providers.f_beta": "anthropic-beta",
   "providers.f_beta_hint":
-    "Beta capabilities to request, comma or semicolon separated (e.g. context-management-2025-06-27). Empty sends none. A new Anthropic capability ships as a beta header before it reaches a dated version.",
+    "Capabilities to request as beta, separated by commas or semicolons (e.g. context-management-2025-06-27). Empty sends none. Anthropic ships a new capability as a beta header before it reaches a dated version.",
   "providers.api_surface": "API surface",
   "providers.api_surface_hint":
-    "Which OpenAI protocol this endpoint answers. Responses is the newer surface some Codex-shaped gateways require; request, response and stream all differ.",
+    "Which OpenAI API this endpoint speaks. Responses is the newer one, and some Codex gateways accept nothing else. Requests, responses and stream events are shaped differently.",
   "providers.surface_chat": "Chat Completions",
   "providers.surface_responses": "Responses",
   "providers.client_profile": "Client identity",
@@ -425,13 +426,13 @@ export const en = {
   "providers.decision_dialect": "Decision model",
   "providers.decision": "Decisions",
   "providers.decision_hint":
-    "Answers typed questions with a probability instead of text. Used only by Auto review; add its model to the pool by hand. Jev (including OpenCode Zen's free model) is the reference family.",
+    "A model of this kind answers fixed questions with a probability instead of text. It serves Auto review only, and you add it to the pool yourself. Jev (including OpenCode Zen's free model) is the reference implementation.",
   "providers.decision_path": "Decision path",
   "providers.decision_path_hint":
-    "Path joined to the base URL. The reference service answers at /v1/systemone.",
+    "Appended to the Base URL. The reference service answers at /v1/systemone.",
   "providers.decision_threshold": "Required confidence",
   "providers.decision_threshold_hint":
-    "Confidence Auto review needs before acting. At or above it the action is blocked; at or below 1 minus it, allowed; in between, blocked. 0.5 lets the model's majority decide.",
+    "How sure Auto review must be before it blocks. At or above this value, blocked; at or below one minus it, allowed; anything in between is blocked. At 0.5 the model's majority vote decides.",
   "providers.decision_no_catalogue":
     "A decision endpoint has no model catalogue. Add its model on the Models page.",
   "models.tier_decision": "Why no tier",
@@ -450,11 +451,11 @@ export const en = {
     "For relays that read Authorization: Bearer instead of x-api-key; both headers are sent, so either check passes",
   "providers.balance": "Balance",
   "providers.balance_hint":
-    "Providers that publish remaining credit at their own endpoint. Pick the endpoint yours uses; the provider key is sent.",
+    "Some providers publish remaining credit at their own endpoint. Pick the one this provider uses; Zroutery asks with the provider key.",
   "providers.balance_hint_panel":
-    "A NewAPI relay keeps the wallet in its panel. The figure comes from the panel of this provider's accounts, read with an account's personal access token.",
+    "A NewAPI relay shows the wallet in its panel. The figure is read from the panel behind this provider's accounts, using an account's personal access token.",
   "providers.balance_hint_none":
-    "This provider publishes no balance and declares no panel account. Pick a probe above, or declare an account with a personal access token.",
+    "This provider publishes no balance and has no panel account to ask. Pick a probe above, or declare an account and store its personal access token.",
   "providers.balance_no_source":
     "This provider has no balance source: it publishes none and declares no panel account.",
   "balance_preset.none": "Not supported",
@@ -477,7 +478,7 @@ export const en = {
   "providers.checking": "Checking…",
   "providers.compatibility": "Compatibility",
   "providers.compatibility_hint":
-    "For providers that deviate from the dialect; leave everything off unless a request fails.",
+    "Switches for providers that do not follow the standard protocol exactly. Leave them all off unless a request fails.",
   "quirk.max_completion_tokens": "Use max_completion_tokens",
   "quirk.drop_temperature": "Drop temperature",
   "quirk.drop_top_p": "Drop top_p",
@@ -485,9 +486,9 @@ export const en = {
   "quirk.drop_stop_hint": "Never applied to Auto review queries",
   "quirk.system_as_developer": "System as developer role",
   "quirk.reasoning_effort": "Translate thinking to reasoning_effort",
-  "quirk.portable_history": "Portable Responses history",
+  "quirk.portable_history": "Reuse Responses history across upstreams",
   "quirk.portable_history_hint":
-    "For relays that may answer from another account or upstream (AgentRouter, CC Switch). Removes reasoning items, history item ids and previous_response_id before forwarding. Prior reasoning no longer reaches the model. Responses requests only.",
+    "For relays another account or upstream may answer (AgentRouter, CC Switch). Before forwarding, reasoning items, history item ids and previous_response_id are removed, so earlier reasoning no longer reaches the model. Responses requests only.",
   "providers.remove": "Remove provider",
   "providers.removed_models_notice": "Removed {n} models that belonged to that provider.",
   "providers.balance_failed": "check failed",
@@ -887,7 +888,7 @@ export const en = {
   "routing.decision_candidate": "Decision model",
   "routing.add_jev": "Add OpenCode Zen's free Jev",
   "routing.add_jev_hint":
-    "Adds the keyless OpenCode Zen Jev decision model at the top of the pool. Probability threshold 0.6. The free promotion can end or be region-blocked; check text is sent to Zen.",
+    "Adds the keyless OpenCode Zen Jev decision model to the top of the pool with a threshold of 0.6. The free offer can end or be blocked by region, and the text being checked is sent to Zen.",
   "routing.jev_added": "Jev was added first in the pool, and Auto review is on.",
   "routing.enable_for": "Enable {model}",
   "routing.add_model": "Add a model…",
@@ -897,11 +898,11 @@ export const en = {
   "routing.verdict_parsing": "Verdict parsing",
   "routing.verdict_only": "<block>yes|no</block> only",
   "routing.verdict_only_hint":
-    "Claude Code expects <block>yes|no</block>; Codex Guardian expects JSON `outcome`. A decision model answers with a probability, and its provider threshold decides the verdict.",
+    "Claude Code wants <block>yes|no</block>; Codex Guardian wants an `outcome` field in JSON. A decision model only gives a probability, and the provider's threshold turns it into a verdict.",
   "routing.no_verdict": "When no verdict",
   "routing.fails_closed": "fails closed; the client asks the user",
   "routing.fail_closed_note":
-    "Errors, timeouts and wrong-protocol answers fail over. If no candidate answers, the query fails rather than approving. An unconfident decision blocks. Prose is never treated as permission.",
+    "An error, a timeout or a wrong-protocol answer moves to the next candidate. If none answers, the request fails instead of being allowed. An unsure decision blocks. Prose in a reply is never read as permission.",
 
   // ------------------------------------------------------------ activity
   "activity.lede_none": "Nothing yet. Point a client at the gateway to see traffic here.",
@@ -1050,7 +1051,7 @@ export const en = {
   "win.quit": "Quit",
   "vision.title": "Vision fallback",
   "vision.hint":
-    "Models without vision receive a description of the image; if none can be produced, a placeholder is used. Images are never silently dropped.",
+    "A model without vision receives a description of the image, or a placeholder when none can be produced. Images are never dropped silently.",
   "vision.enable": "Describe images for non-vision models",
   "vision.model": "Vision model",
   "vision.model_hint":
@@ -1058,6 +1059,27 @@ export const en = {
   "vision.model_required": "Pick a model that supports vision on the Models page first.",
   "vision.placeholder": "Placeholder",
   "vision.placeholder_hint": "What replaces an image when no description was possible",
+  // --------------------------------------------------------- request repair
+  "rectifier.title": "Request repair",
+  "rectifier.hint":
+    "When an upstream rejects a request, try the same provider and model again with a shape it accepts. These repairs do not count against the circuit breaker and do not switch providers.",
+  "rectifier.enable": "Repair rejected requests",
+  "rectifier.enable_hint": "Master switch: turning it off leaves every request to fail over at once.",
+  "rectifier.thinking_signature": "Repair a stale thinking signature",
+  "rectifier.thinking_signature_hint":
+    "Anthropic rejects a request whose thinking block carries an old or misplaced signature. The offending blocks are dropped and the request is sent again.",
+  "rectifier.media_fallback": "Replace an image with a description",
+  "rectifier.media_fallback_hint":
+    "A provider that refuses images gets the picture replaced by a text placeholder, so the conversation still reaches the model.",
+  "rectifier.thinking_budget": "Halve an oversized thinking budget",
+  "rectifier.thinking_budget_hint":
+    "A provider that caps the reasoning budget gets the request with the budget halved (at least 1024 tokens) so it fits.",
+  "rectifier.codex_metadata": "Strip Codex's private metadata field",
+  "rectifier.codex_metadata_hint":
+    "Some Responses endpoints reject the field internal_chat_message_metadata_passthrough. Only when they name it explicitly is it removed and the request sent again.",
+  "rectifier.thinking_fallback": "Allow a model without thinking support",
+  "rectifier.thinking_fallback_hint":
+    "A reasoning request may go to a model that does not declare thinking support, with the reasoning controls removed. The attempt is marked degraded.",
   // ------------------------------------------------------------ learned routing
   "ml.title": "Learned routing",
   "ml.hint":
@@ -1081,7 +1103,7 @@ export const en = {
   "ml.with_no_model": "with no model, to gather evidence",
   "ml.never_tried": "Never tried",
   "ml.blind_spot_warning":
-    "Configured models receive no traffic while exploration is off. Give them top priority, or turn exploration on (which blocks learned-model promotion).",
+    "With exploration off, newly configured models get no traffic. Give them top priority, or turn exploration on (which then blocks learned-model promotion).",
   "ml.blind_spot_count": "{n} unreachable",
   "ml.collected": "Collected",
   "ml.samples": "samples",
@@ -1140,7 +1162,8 @@ export const en = {
   "ml.config_hint": "Shadow writes the evidence; the trace log keeps it. No evidence, no learning.",
   "ml.config_unavailable": "This build has no learning stack, so there is nothing to configure.",
   "ml.shadow_enable": "Shadow evaluation",
-  "ml.shadow_enable_hint": "When off, no request retains its decision-time input and every dataset ingestion is discarded as NoDecisionTimeInput — the 0-sample state.",
+  "ml.shadow_enable_hint":
+    "When off, no request keeps the input it was routed on: every sample is dropped at ingestion as NoDecisionTimeInput, so the count stays at zero.",
   "ml.shadow_max_decisions": "Max decisions (in memory)",
   "ml.shadow_max_decisions_hint": "Ring size before the oldest is evicted. 10k is the default.",
   "ml.shadow_max_age": "Max age (seconds)",
@@ -1167,7 +1190,7 @@ export const en = {
   // configuration, the status document or the promotion endpoint declares the
   // prerequisite, so the panel that shows the counters has to say it.
   "ml.learning_blocked":
-    "Learned routing is on but shadow evaluation is off, so no samples are collected ({n} discarded). Turn shadow evaluation on.",
+    "Learned routing is on but shadow evaluation is off, so no samples are collected ({n} dropped). Turn shadow evaluation on.",
   "ml.learning_blocked_short": "Learning is blocked",
   "ml.ingested": "Requests stored",
   "ml.dropped_no_decision": "Discarded for want of a decision",
@@ -1339,7 +1362,8 @@ export const zh: Dict = {
   "err.no_such_account": "提供商 {provider} 上不存在账户 {account}。",
   "err.bind_other": "代理无法启动：无法绑定 {addr}({err})。请在设置里换一个端口。",
   "accounts.title": "账户",
-  "accounts.title_hint": "该提供商下的账户。用于探测、余额与签到;声明了推理 Key 时,聊天请求也按它路由。",
+  "accounts.title_hint":
+    "这个提供商下的账户。账户用于探测状态、查余额和签到；声明了推理 Key 后，聊天请求也会按它路由。",
   "accounts.empty": "未声明账户。所有请求都使用提供商自身的密钥。",
   "accounts.lede": "每个已声明账户的余额、签到与面板令牌。声明在提供商的账户设置中编辑。",
   "accounts.add": "添加账户",
@@ -1347,13 +1371,13 @@ export const zh: Dict = {
   "accounts.id_hint": "在该提供商内保持稳定。用 (提供商, 账户) 组合标识其运行状态。",
   "accounts.key_label_add": "面板访问令牌(可选)",
   "accounts.key_hint_add":
-    "可选。留空则使用提供商的密钥。NewAPI 面板请粘贴个人访问令牌；sk- 中转密钥不可用。",
+    "可选。留空则沿用提供商的密钥。NewAPI 面板请粘贴个人访问令牌，sk- 开头的中转密钥在面板上无效。",
   "accounts.duplicate": "该提供商下已存在账户 `{id}`。",
   "accounts.key_store_failed": "账户已保存，但写入凭据失败。",
   "accounts.set_key": "设置凭据",
   "accounts.key_label": "面板访问令牌",
   "accounts.key_hint":
-    "面板 个人设置 → 访问令牌 中的个人访问令牌。保存在系统凭据库中，之后不再显示。",
+    "面板里 个人设置 → 访问令牌 生成的个人访问令牌。它保存在系统凭据库中，保存后不再显示。",
   "accounts.clear_key": "清除凭据",
   "accounts.clear_key_title": "清除账户 {id} 的凭据",
   "accounts.clear_key_body":
@@ -1363,9 +1387,9 @@ export const zh: Dict = {
   "accounts.follows_provider": "沿用提供商凭据",
   "accounts.inference_title": "推理 Key",
   "accounts.inference_hint":
-    "实际发往上游的聊天凭据,按优先级依次尝试。上面的面板令牌只用于余额探测与签到,绝不会作为聊天凭据发出。",
+    "真正发往上游的聊天凭据，按优先级从小到大依次尝试。上面的面板令牌只用来查余额和签到，不会作为聊天凭据发出去。",
   "accounts.inference_empty":
-    "尚未声明推理 Key。该提供商只要有任一账户声明了池,本账户就会被跳过;在那之前使用提供商自身的密钥。",
+    "还没有声明推理 Key。只要该提供商有任何一个账户声明了推理 Key，本账户就会被跳过；在那之前，请求使用提供商自己的密钥。",
   "accounts.inference_stored": "密钥已存",
   "accounts.inference_missing": "密钥缺失",
   "accounts.inference_priority": "优先级 {n}",
@@ -1390,13 +1414,13 @@ export const zh: Dict = {
   "accounts.checkin": "浏览器签到",
   "accounts.login_path": "面板登录路径",
   "accounts.login_path_hint":
-    "浏览器获取令牌时使用。当前 NewAPI 的登录页是 /sign-in;旧分支使用 /login。",
+    "用浏览器获取令牌时打开的登录页。现在的 NewAPI 是 /sign-in，旧分支仍是 /login。",
   "accounts.panel_url": "面板地址",
   "accounts.new_api_user": "面板用户 ID",
   "accounts.new_api_user_hint":
-    "部分面板(AgentRouter)要求的 New-Api-User 头。浏览器获取令牌时自动填写;留空不发送。",
+    "有些面板（如 AgentRouter）要求这个 New-Api-User 请求头。用浏览器获取令牌时会自动填好；留空则不发送。",
   "accounts.panel_url_hint":
-    "面板与中转端点不在同一域名时填写(例如中转在 api.relay.com、面板在 panel.relay.com)。留空表示同域,这也是常见且正确的情况——厂商官网常常是另一台机器,不提供面板 API。浏览器获取令牌与账户探测都以此为准。",
+    "面板和中转地址不在同一个域名时才填（例如中转在 api.relay.com、面板在 panel.relay.com）。留空表示两者同域，多数情况都该留空：厂商官网往往是另一台机器，不提供面板接口。获取令牌和探测余额都用这个地址。",
   "token_capture.start": "用浏览器获取令牌",
   "token_capture.starting": "正在打开…",
   "token_capture.captured": "令牌已保存",
@@ -1514,7 +1538,8 @@ export const zh: Dict = {
   "models.vision": "视觉",
   "models.thinking": "扩展思考",
   "models.effort_levels": "思考强度挡位",
-  "models.effort_levels_hint": "接管时按挡位向客户端提供变体。导入时从 models.dev 自动填写，可按模型人工修正。",
+  "models.effort_levels_hint":
+    "接管时按这些挡位向客户端提供模型变体。导入时从 models.dev 自动填写，遇到偏差可以手动改。",
   "models.sync": "同步模型信息",
   "models.syncing": "同步中…",
   "models.synced": "已为 {n} 个模型补齐信息",
@@ -1587,13 +1612,13 @@ export const zh: Dict = {
   "field.connect_timeout": "连接超时 (秒)",
   "providers.f_version": "anthropic-version",
   "providers.f_version_hint":
-    "带日期的 API 版本，互斥的线协议契约。2023-06-01 是沿用三年的基线。2026-10-21 移除了 temperature/top_p/top_k 并限制 document 只能出现在 user 消息——请求会按所选版本相应塑形。",
+    "Anthropic 的带日期 API 版本，同一时间只有一个生效。2023-06-01 是沿用了三年的基线；2026-10-21 去掉了 temperature/top_p/top_k，并把 document 限制在 user 消息里。请求会按所选版本调整。",
   "providers.f_beta": "anthropic-beta",
   "providers.f_beta_hint":
-    "要请求的测试性能力，逗号或分号分隔(如 context-management-2025-06-27)。留空不发送。Anthropic 的新能力都先以 beta 头形式发布。",
+    "要以 beta 形式请求的能力，多个用逗号或分号分隔（例如 context-management-2025-06-27）。留空则不发送。Anthropic 的新能力通常先以 beta 头发布，之后才进入正式版本。",
   "providers.api_surface": "API 端面",
   "providers.api_surface_hint":
-    "该端点说哪种 OpenAI 协议。Responses 是较新的端面，部分 Codex 形态的网关只认它。请求、响应与流式事件三者形状都不同。",
+    "这个端点使用哪种 OpenAI 接口。Responses 是较新的接口，部分 Codex 网关只接受它。两者的请求、响应和流式事件格式都不同。",
   "providers.surface_chat": "Chat Completions",
   "providers.surface_responses": "Responses",
   "providers.client_profile": "客户端身份",
@@ -1611,13 +1636,13 @@ export const zh: Dict = {
   "providers.decision_dialect": "决策模型",
   "providers.decision": "决策",
   "providers.decision_hint":
-    "用概率回答有类型的问题，不生成文字。仅用于自动审查；模型需手动加入池中。Jev(包括 OpenCode Zen 免费模型)是参考家族。",
+    "这类模型不写文字，只对固定的判断题给出概率。它只服务自动审查，需要你自己加进模型池。Jev（含 OpenCode Zen 免费模型）是参考实现。",
   "providers.decision_path": "决策接口路径",
   "providers.decision_path_hint":
-    "与 Base URL 拼接的路径。参考服务使用 /v1/systemone。",
+    "接在 Base URL 后面的路径。参考服务使用 /v1/systemone。",
   "providers.decision_threshold": "所需置信度",
   "providers.decision_threshold_hint":
-    "自动审查行动前所需的置信度。不低于该值则拦截；不高于 1 减该值则放行；中间按拦截。0.5 由模型多数票决定。",
+    "自动审查要有多大把握才拦截。不低于此值就拦截，不高于 1 减此值就放行，介于两者之间按拦截处理。设为 0.5 时完全由模型的多数票决定。",
   "providers.decision_no_catalogue":
     "决策接口没有模型目录。请在模型页手动添加模型。",
   "models.tier_decision": "为何没有层级",
@@ -1634,11 +1659,12 @@ export const zh: Dict = {
   "providers.bearer_auth": "同时发送 Bearer 认证",
   "providers.bearer_auth_hint": "用于读 Authorization: Bearer 而非 x-api-key 的中转。",
   "providers.balance": "余额",
-  "providers.balance_hint": "部分提供商在自己的接口公布剩余额度。选择对应接口，Zroutery 会用提供商密钥查询。",
+  "providers.balance_hint":
+    "有些提供商在自己的接口公布剩余额度。选出该提供商使用的接口，Zroutery 会用提供商的密钥去查。",
   "providers.balance_hint_panel":
-    "NewAPI 中转的钱包在面板里。余额来自该提供商账户所属的面板，使用账户的个人访问令牌读取。",
+    "NewAPI 中转的余额显示在面板里。数字来自该提供商账户所在的面板，用账户的个人访问令牌读取。",
   "providers.balance_hint_none":
-    "该提供商不公布余额，也没有可供查询的面板账户。请在上方选择探针，或声明账户并保存个人访问令牌。",
+    "该提供商不公布余额，也没有可查询的面板账户。请在上方选一个探针，或声明账户并保存个人访问令牌。",
   "providers.balance_no_source": "该提供商没有可查询的余额来源：自身不公布，也未声明面板账户。",
   "balance_preset.none": "不支持",
   "balance_preset.deep_seek": "DeepSeek",
@@ -1659,7 +1685,8 @@ export const zh: Dict = {
   "providers.check_now": "立即查询",
   "providers.checking": "查询中…",
   "providers.compatibility": "兼容性",
-  "providers.compatibility_hint": "用于偏离标准协议的提供商；除非请求失败，否则保持全部关闭。",
+  "providers.compatibility_hint":
+    "这些开关用于不完全遵循标准协议的提供商。除非请求失败，否则保持全部关闭。",
   "quirk.max_completion_tokens": "使用 max_completion_tokens",
   "quirk.drop_temperature": "丢弃 temperature",
   "quirk.drop_top_p": "丢弃 top_p",
@@ -1667,9 +1694,9 @@ export const zh: Dict = {
   "quirk.drop_stop_hint": "从不作用于自动审查请求",
   "quirk.system_as_developer": "system 消息用 developer 角色",
   "quirk.reasoning_effort": "将 thinking 转为 reasoning_effort",
-  "quirk.portable_history": "跨上游可移植的 Responses 历史",
+  "quirk.portable_history": "跨上游复用 Responses 历史",
   "quirk.portable_history_hint":
-    "适用于可能由其他账户或上游应答的中转(AgentRouter、CC Switch)。转发前删除 reasoning 项、历史 item id 与 previous_response_id;此前的推理不再传给模型。仅影响 Responses 请求。",
+    "用于可能由别的账户或上游来接话的中转（如 AgentRouter、CC Switch）。转发前会删掉 reasoning 项、历史 item id 和 previous_response_id，所以先前的推理不会再传给模型。只影响 Responses 请求。",
   "providers.remove": "移除提供商",
   "providers.removed_models_notice": "已移除属于该提供商的 {n} 个模型。",
   "providers.balance_failed": "查询失败",
@@ -1988,7 +2015,7 @@ export const zh: Dict = {
   "routing.decision_candidate": "决策模型",
   "routing.add_jev": "添加 OpenCode Zen 免费 Jev",
   "routing.add_jev_hint":
-    "把无需凭据的 OpenCode Zen Jev 决策模型加到池首。阈值 0.6。免费推广可能结束或按地区屏蔽；检查文本会发送给 Zen。",
+    "把无需凭据的 OpenCode Zen Jev 决策模型加到池首，阈值 0.6。免费额度可能结束，也可能按地区屏蔽；被检查的文本会发送给 Zen。",
   "routing.jev_added": "已把 Jev 放在池首，并开启自动审查。",
   "routing.enable_for": "启用 {model}",
   "routing.add_model": "添加模型…",
@@ -1998,10 +2025,11 @@ export const zh: Dict = {
   "routing.verdict_parsing": "判定解析",
   "routing.verdict_only": "仅 <block>yes|no</block>",
   "routing.verdict_only_hint":
-    "Claude Code 期望 <block>yes|no</block>;Codex Guardian 期望 JSON outcome。决策模型以概率作答，由提供商阈值决定判定。",
+    "Claude Code 要的是 <block>yes|no</block>，Codex Guardian 要的是 JSON 里的 outcome。决策模型只给概率，最终判定由该提供商的阈值决定。",
   "routing.no_verdict": "无判定时",
   "routing.fails_closed": "失败关闭；由客户端询问用户",
-  "routing.fail_closed_note": "出错、超时或协议不符会转移到下一个；全部失败则查询失败，不会放行。决策模型无把握时拦截。散文不会被当作许可。",
+  "routing.fail_closed_note":
+    "出错、超时或协议不符时就换下一个；全都失败时请求失败，不会被放行。决策模型没有把握时按拦截处理。回复里的说明文字不会当作放行。",
 
   // ------------------------------------------------------------ activity
   "activity.lede_none": "暂无数据。将客户端指向网关即可在此看到流量。",
@@ -2133,18 +2161,40 @@ export const zh: Dict = {
   "win.hide_to_tray": "隐藏到托盘",
   "win.quit": "退出",
   "vision.title": "视觉降级",
-  "vision.hint": "不支持视觉的模型会收到图片描述；无法生成描述时使用占位符。图片不会被静默丢弃。",
+  "vision.hint":
+    "不支持视觉的模型收到的是图片描述；生成不了描述时用占位符代替。图片不会悄悄丢掉。",
   "vision.enable": "为不支持视觉的模型描述图片",
   "vision.model": "视觉模型",
   "vision.model_hint": "模型页中一个支持视觉的现有模型；复用其提供商与价格",
   "vision.model_required": "请先在模型页选择一个支持视觉的模型。",
   "vision.placeholder": "占位符",
   "vision.placeholder_hint": "无法生成描述时，替代图片的文本",
+  "rectifier.title": "请求修复",
+  "rectifier.hint":
+    "上游拒绝请求时，用同一个提供商、同一个模型再发一次，只是把请求改成它能接受的形状。这类修复不计入熔断，也不换提供商。",
+  "rectifier.enable": "修复被拒绝的请求",
+  "rectifier.enable_hint": "总开关：关闭后请求不再重试修复，直接走故障转移。",
+  "rectifier.thinking_signature": "修复失效的 thinking 签名",
+  "rectifier.thinking_signature_hint":
+    "Anthropic 会拒绝携带旧签名或位置不对的 thinking 块。删掉这些块后重发。",
+  "rectifier.media_fallback": "用文字描述替代图片",
+  "rectifier.media_fallback_hint":
+    "不接受图片的提供商，会收到一段文字占位描述，图片本身仍然留在请求结构里。",
+  "rectifier.thinking_budget": "把过大的思考预算减半",
+  "rectifier.thinking_budget_hint":
+    "限制了推理预算的提供商，会收到预算减半（不低于 1024 token）的请求。",
+  "rectifier.codex_metadata": "去掉 Codex 的私有元数据字段",
+  "rectifier.codex_metadata_hint":
+    "有些 Responses 端点不接受 internal_chat_message_metadata_passthrough。只有对方明确点名这个字段时才会删掉并重发。",
+  "rectifier.thinking_fallback": "允许使用不支持思考的模型",
+  "rectifier.thinking_fallback_hint":
+    "思考类请求可以发给未声明支持思考的模型，同时去掉思考相关参数；该次尝试会标记为降级。",
   "ml.config_title": "采集设置",
   "ml.config_hint": "Shadow 产出证据，轨迹日志保存证据。没有证据就没有学习。",
   "ml.config_unavailable": "此构建未包含学习能力，无需配置。",
   "ml.shadow_enable": "Shadow 评估",
-  "ml.shadow_enable_hint": "关闭时，无请求保留决策时刻输入，全部在入库边界被丢弃为 NoDecisionTimeInput — 即 0 样本状态。",
+  "ml.shadow_enable_hint":
+    "关闭后，没有请求会保留决策时的输入：样本在入库前就全部丢弃（记为 NoDecisionTimeInput），样本数因此一直是 0。",
   "ml.shadow_max_decisions": "最大决策数(内存)",
   "ml.shadow_max_decisions_hint": "环形缓冲区大小，超限逐出最旧。默认 10000。",
   "ml.shadow_max_age": "最长保留(秒)",
@@ -2185,7 +2235,7 @@ export const zh: Dict = {
   "ml.with_no_model": "无模型时为采集证据而尝试",
   "ml.never_tried": "从未尝试",
   "ml.blind_spot_warning":
-    "已配置的模型在探索关闭时收不到流量。请把它们设为最高优先级，或开启探索(会阻止学习模型晋级)。",
+    "探索关闭时，新配置的模型分不到流量。请把它们设为最高优先级，或打开探索（打开后学习模型将无法晋级）。",
   "ml.blind_spot_count": "{n} 个无法触达",
   "ml.collected": "已采集",
   "ml.samples": "样本",
@@ -2223,7 +2273,7 @@ export const zh: Dict = {
 
   // ----------------------------------------------- learned routing: collection
   "ml.learning_blocked":
-    "学习路由已开启，但影子评估关闭，未收集样本(已丢弃 {n} 次)。请开启影子评估。",
+    "学习路由已开启，但影子评估是关的，所以没有收集到样本（已丢弃 {n} 次）。请打开影子评估。",
   "ml.learning_blocked_short": "学习已被阻断",
   "ml.ingested": "已入库请求",
   "ml.dropped_no_decision": "因缺少决策而丢弃",
