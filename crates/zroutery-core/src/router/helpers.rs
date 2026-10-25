@@ -22,6 +22,26 @@ pub(super) fn classification_trace_label(failure: &ClassifiedFailure) -> String 
 
 /// Priority order with a stable tiebreak, shared by the `Priority` strategy and
 /// by `Balanced` when no election has been held (or the pool has no tier).
+///
+/// # Why the tiebreak is not optional
+///
+/// A tier holds every enabled model of that class, and a real configuration
+/// holds dozens of them — most of which share one priority, because the user
+/// sets a priority to express an intent ("this one first") rather than to
+/// number every model. So the tiebreak decides the order of almost the whole
+/// pool.
+///
+/// Without it the order of equal-priority models is whatever order the
+/// candidates happened to arrive in, and that order is not a function of the
+/// configuration: it comes from the policy's own scoring, from a hash
+/// iteration, and from whatever else contributed a candidate. Two requests
+/// with the same question could then be served by two different upstreams,
+/// which is the opposite of what a `priority` strategy promises and the reason
+/// a deterministic configuration behaved as though it were random.
+///
+/// The tiebreak is the exposed id, which is a property of the configuration
+/// alone: the same configuration always yields the same order, and the order
+/// is the same on every run and every machine.
 pub(super) fn by_priority<'a>(members: &[&'a ModelEntry]) -> Vec<&'a ModelEntry> {
     let mut sorted = members.to_vec();
     sorted.sort_by(|a, b| {

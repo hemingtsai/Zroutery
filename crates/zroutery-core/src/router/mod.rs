@@ -57,12 +57,15 @@ pub struct Router {
     /// the configuration; a provider that is not listed keeps today's
     /// behaviour, where a rate limit is model-scoped and never opens a circuit.
     group_limited: Mutex<HashSet<String>>,
-    /// Cooldown deadlines for those providers, keyed by provider id.
+    /// Cooldown deadlines for shared rate limits or empty provider wallets,
+    /// keyed by provider id. Wallet gates apply to every provider kind.
     ///
     /// Deliberately separate from the per-model health rows: the GUI lists
     /// models, and a synthetic "provider" row there would be a fact that does
     /// not exist. A gate is a time window, not a model circuit.
     provider_gates: Mutex<HashMap<String, std::time::Instant>>,
+    account_gates: Mutex<HashMap<(String, String), std::time::Instant>>,
+    key_gates: Mutex<HashMap<(String, String, String), std::time::Instant>>,
 }
 
 impl Default for Router {
@@ -84,7 +87,7 @@ mod tiers;
 #[cfg(test)]
 mod tests;
 
-pub use candidate::{Candidate, FailureDisposition, ModelHealth};
+pub use candidate::{Candidate, FailureDisposition, InferenceCredential, ModelHealth};
 pub use tiers::{
     tier_escalation_change, tiers_fully_cooling, TierAnnouncement, TierEscalationChange,
 };

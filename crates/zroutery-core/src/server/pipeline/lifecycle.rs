@@ -241,6 +241,7 @@ pub(super) struct RequestLifecycle {
     /// The exactly-once guard for the observability projection, for the same
     /// reason and on the same terms as `ingested`.
     projected: bool,
+    last_candidate: Option<Candidate>,
     /// What the upstream actually declared it ran, kept separate from the routing
     /// identity in `served` and captured *before* the response's model field is
     /// rewritten to the client-facing `exposed_id`.
@@ -319,6 +320,7 @@ impl RequestLifecycle {
             #[cfg(feature = "ml")]
             task_evidence: Vec::new(),
             projected: false,
+            last_candidate: None,
         }
     }
 
@@ -747,6 +749,8 @@ impl RequestLifecycle {
     /// The loop is about to try `candidate`: the activity record counts the
     /// attempt and names what it resolved to.
     pub(super) fn attempted(&mut self, candidate: &Candidate) {
+        self.record
+            .inference_credential(candidate.credential.as_ref());
         self.record.attempt();
         self.record
             .resolved(candidate.model_id(), &candidate.provider.name);
@@ -761,6 +765,13 @@ impl RequestLifecycle {
     /// immediately; a stream's is settled by the terminal transition, because a
     /// handshake is all that is known once the body belongs to the client.
     pub(super) fn begin_attempt(&mut self, candidate: &Candidate, rectified: bool) {
+        self.last_candidate = Some(candidate.clone());
+        self.record
+            .inference_credential(candidate.credential.as_ref());
+        tracing::debug!(model = candidate.model_id(), provider = %candidate.provider.id,
+            account = candidate.credential.as_ref().map(|key| key.account_id.as_str()),
+            inference_key = candidate.credential.as_ref().map(|key| key.key_id.as_str()),
+            rectified, "opening upstream attempt");
         // Routing provenance for the execution identity. Recorded here because this
         // runs once per send, so a failover chain leaves the identity of the
         // candidate that actually ran.
@@ -942,15 +953,12 @@ impl RequestLifecycle {
         //    handshake — and the impact table keeps a client that vanished out of
         //    provider health entirely.
         if !self.attempt_failure_accounted {
-            if let (Some(failure), Some(identity)) =
-                (terminal.classified(), self.last_attempted_identity())
+            if let (Some(failure), Some(candidate)) =
+                (terminal.classified(), self.last_candidate.as_ref())
             {
-                self.state.router.record_classified_attempt(
-                    identity.model(),
-                    identity.provider(),
-                    &failure,
-                    &self.routing,
-                );
+                self.state
+                    .router
+                    .record_candidate_failure(candidate, &failure, &self.routing);
             }
         }
 

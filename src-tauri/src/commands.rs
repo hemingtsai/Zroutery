@@ -655,6 +655,12 @@ pub async fn reset_model_health(
     model_id: String,
 ) -> Cmd<Snapshot> {
     desktop.core.router().reset(&model_id);
+    if let Ok(model) = desktop.core.registry().entry(&model_id) {
+        desktop
+            .core
+            .router()
+            .reset_provider_gate(&model.provider_id);
+    }
     Ok(refreshed(&app, &desktop).await)
 }
 

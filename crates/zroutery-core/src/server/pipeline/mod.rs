@@ -53,6 +53,7 @@ mod sse;
 
 mod budget;
 mod client;
+mod credentials;
 mod lifecycle;
 mod ml_rank;
 mod repair;
@@ -83,6 +84,13 @@ pub(super) async fn handle_chat(
         Ok(r) => r,
         Err(e) => return error_response(dialect, &e),
     };
+    // The auth middleware already validated the gateway credential. Receiving
+    // this client's chat confirms connectivity regardless of upstream success;
+    // waiting for a terminal record leaves long streams and failed sends
+    // incorrectly labelled as an unconfirmed client route.
+    state
+        .stats
+        .observe_client(&crate::client::identify(&headers, None), chrono::Utc::now());
     // Client identity is request context. It is carried alongside the IR so
     // every provider attempt, including retries and auxiliary calls, can use
     // the provider's resolved client profile, and so that the profile's
@@ -414,6 +422,22 @@ pub(super) async fn handle_chat(
     };
     // ml-ranking-block-end
 
+    // Credentials are selected only after ranking: policy and ML still see one
+    // candidate per model, while the transport may fail over between account
+    // keys without inventing extra model identities.
+    let limit = if kind.is_main() {
+        if config.routing.failover {
+            config.routing.max_attempts.max(1)
+        } else {
+            1
+        }
+    } else if config.classifier.failover {
+        config.classifier.max_attempts.max(1)
+    } else {
+        1
+    } as usize;
+    let plan = credentials::expand_inference_keys(&state, plan, limit);
+
     if req.stream {
         stream_chat(
             state,
@@ -622,6 +646,9 @@ fn prepare(
         candidate.entry.max_output_tokens,
         mode,
     )?;
+    if candidate.provider.dialect() == Dialect::OpenAI {
+        openai::validate_tool_history(&body)?;
+    }
     Ok((key, body))
 }
 
@@ -1028,7 +1055,25 @@ async fn buffered_chat(
     let mode = encode_mode_for(kind);
     let mut last_error = Error::NoCandidate(req.model.clone());
 
+    let attempt_limit = if kind.is_main() {
+        if lifecycle.routing().failover {
+            lifecycle.routing().max_attempts.max(1)
+        } else {
+            1
+        }
+    } else {
+        state.config().classifier.max_attempts.max(1)
+    } as usize;
+    let mut attempts = 0usize;
+
     for (index, candidate) in plan.iter().enumerate() {
+        if attempts >= attempt_limit {
+            break;
+        }
+        if !state.router.credential_available(candidate) {
+            continue;
+        }
+        attempts += 1;
         // A later candidate means this failure is failed over, not waited on.
         let can_fail_over = index + 1 < plan.len();
         lifecycle.attempted(candidate);
@@ -1059,22 +1104,22 @@ async fn buffered_chat(
                 // router adapter accounts for.
                 lifecycle.begin_attempt(candidate, false);
                 lifecycle.failed_attempt(attempt_start, &e);
-                state.router.record_classified_attempt(
-                    candidate.model_id(),
-                    &candidate.provider.id,
+                state.router.record_candidate_failure(
+                    candidate,
                     &e.classified(),
                     lifecycle.routing(),
                 );
+                if matches!(e, Error::InvalidRequest(_)) {
+                    last_error = e;
+                    break;
+                }
                 last_error = e;
                 continue;
             }
         };
 
         // Enforce the half-open single-probe rule at the point of send.
-        if !state
-            .router
-            .allow_request_for(candidate.model_id(), &candidate.provider.id)
-        {
+        if !state.router.allow_candidate_request(candidate) {
             tracing::debug!(
                 model = candidate.model_id(),
                 "half-open probe already in flight; skipping candidate"
@@ -1090,9 +1135,8 @@ async fn buffered_chat(
             Ok(key) => key,
             Err(e) => {
                 lifecycle.failed_attempt(attempt_start, &e);
-                state.router.record_classified_attempt(
-                    candidate.model_id(),
-                    &candidate.provider.id,
+                state.router.record_candidate_failure(
+                    candidate,
                     &e.classified(),
                     lifecycle.routing(),
                 );
@@ -1142,9 +1186,8 @@ async fn buffered_chat(
                                 candidate.model_id()
                             ));
                             lifecycle.failed_attempt(attempt_start, &unusable);
-                            state.router.record_classified_attempt(
-                                candidate.model_id(),
-                                &candidate.provider.id,
+                            state.router.record_candidate_failure(
+                                candidate,
                                 &unusable.classified(),
                                 lifecycle.routing(),
                             );
@@ -1325,9 +1368,9 @@ async fn buffered_chat(
                         // No repair was applied; the initial attempt is the
                         // failure this candidate contributes.
                         let failure = e.classified();
-                        state.router.record_classified_attempt(
-                            candidate.model_id(),
-                            &candidate.provider.id,
+                        state.router.note_candidate_retry_after(candidate, &e);
+                        state.router.record_candidate_failure(
+                            candidate,
                             &failure,
                             lifecycle.routing(),
                         );
@@ -1338,7 +1381,8 @@ async fn buffered_chat(
                         );
                         // Whether to keep going is the classified impact
                         // table's answer, asked through the router adapter.
-                        let keep_going = state.router.should_fallback_failure(&failure);
+                        let keep_going =
+                            state.router.should_fallback_candidate(candidate, &failure);
                         last_error = e;
                         if !keep_going {
                             break;
@@ -1350,9 +1394,11 @@ async fn buffered_chat(
                         // canonical classification of that failure is what the
                         // router and the outcome both record.
                         let failure = rectified_err.classified();
-                        state.router.record_classified_attempt(
-                            candidate.model_id(),
-                            &candidate.provider.id,
+                        state
+                            .router
+                            .note_candidate_retry_after(candidate, &rectified_err);
+                        state.router.record_candidate_failure(
+                            candidate,
                             &failure,
                             lifecycle.routing(),
                         );
@@ -1361,7 +1407,8 @@ async fn buffered_chat(
                             provider = candidate.provider.name.as_str(),
                             "rectifier retry failed: {rectified_err}"
                         );
-                        let keep_going = state.router.should_fallback_failure(&failure);
+                        let keep_going =
+                            state.router.should_fallback_candidate(candidate, &failure);
                         last_error = rectified_err;
                         if !keep_going {
                             break;
@@ -1416,7 +1463,25 @@ async fn stream_chat(
     let mode = encode_mode_for(kind);
     let mut last_error = Error::NoCandidate(req.model.clone());
 
+    let attempt_limit = if kind.is_main() {
+        if lifecycle.routing().failover {
+            lifecycle.routing().max_attempts.max(1)
+        } else {
+            1
+        }
+    } else {
+        state.config().classifier.max_attempts.max(1)
+    } as usize;
+    let mut attempts = 0usize;
+
     for (index, candidate) in plan.iter().enumerate() {
+        if attempts >= attempt_limit {
+            break;
+        }
+        if !state.router.credential_available(candidate) {
+            continue;
+        }
+        attempts += 1;
         // A later candidate means this failure is failed over, not waited on.
         let can_fail_over = index + 1 < plan.len();
         lifecycle.attempted(candidate);
@@ -1441,22 +1506,22 @@ async fn stream_chat(
             Err(e) => {
                 lifecycle.begin_attempt(candidate, false);
                 lifecycle.failed_attempt(attempt_start, &e);
-                state.router.record_classified_attempt(
-                    candidate.model_id(),
-                    &candidate.provider.id,
+                state.router.record_candidate_failure(
+                    candidate,
                     &e.classified(),
                     lifecycle.routing(),
                 );
+                if matches!(e, Error::InvalidRequest(_)) {
+                    last_error = e;
+                    break;
+                }
                 last_error = e;
                 continue;
             }
         };
 
         // Enforce the half-open single-probe rule at the point of send.
-        if !state
-            .router
-            .allow_request_for(candidate.model_id(), &candidate.provider.id)
-        {
+        if !state.router.allow_candidate_request(candidate) {
             tracing::debug!(
                 model = candidate.model_id(),
                 "half-open probe already in flight; skipping candidate"
@@ -1474,9 +1539,8 @@ async fn stream_chat(
             Ok(key) => key,
             Err(e) => {
                 lifecycle.failed_attempt(attempt_start, &e);
-                state.router.record_classified_attempt(
-                    candidate.model_id(),
-                    &candidate.provider.id,
+                state.router.record_candidate_failure(
+                    candidate,
                     &e.classified(),
                     lifecycle.routing(),
                 );
@@ -1577,9 +1641,9 @@ async fn stream_chat(
                         // No repair was applied; the settled attempt above is
                         // this candidate's contribution.
                         let failure = e.classified();
-                        state.router.record_classified_attempt(
-                            candidate.model_id(),
-                            &candidate.provider.id,
+                        state.router.note_candidate_retry_after(candidate, &e);
+                        state.router.record_candidate_failure(
+                            candidate,
                             &failure,
                             lifecycle.routing(),
                         );
@@ -1587,7 +1651,8 @@ async fn stream_chat(
                             model = candidate.model_id(),
                             "upstream stream handshake failed: {e}"
                         );
-                        let keep_going = state.router.should_fallback_failure(&failure);
+                        let keep_going =
+                            state.router.should_fallback_candidate(candidate, &failure);
                         last_error = e;
                         if !keep_going {
                             break;
@@ -1597,9 +1662,11 @@ async fn stream_chat(
                         // Every repair handshake was its own attempt and each
                         // failure was settled where the send happened.
                         let failure = rectified_err.classified();
-                        state.router.record_classified_attempt(
-                            candidate.model_id(),
-                            &candidate.provider.id,
+                        state
+                            .router
+                            .note_candidate_retry_after(candidate, &rectified_err);
+                        state.router.record_candidate_failure(
+                            candidate,
                             &failure,
                             lifecycle.routing(),
                         );
@@ -1607,7 +1674,8 @@ async fn stream_chat(
                             model = candidate.model_id(),
                             "rectifier stream retry failed: {rectified_err}"
                         );
-                        let keep_going = state.router.should_fallback_failure(&failure);
+                        let keep_going =
+                            state.router.should_fallback_candidate(candidate, &failure);
                         last_error = rectified_err;
                         if !keep_going {
                             break;

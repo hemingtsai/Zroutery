@@ -221,3 +221,68 @@ fn record_success_on_open_is_noop() {
     b.record_success(); // should be no-op
     assert_eq!(b.state(), CircuitState::Open);
 }
+
+/// The half-open probe is elected, not raced: many threads arriving at an open
+/// breaker once its cooldown has elapsed must produce exactly one probe.
+///
+/// This is the property the routing layer relies on when it fans a request out
+/// across candidates: `allow_request` is called from several request tasks at
+/// once, and two probes would be two pieces of evidence from one recovery
+/// attempt — the "only one probe" promise would hold on a quiet system and
+/// quietly stop holding under exactly the load that opens breakers.
+///
+/// The run repeats because the failure is an interleaving: one pass can miss
+/// it, sixteen passes with a barrier make it overwhelmingly likely to appear if
+/// the permit has stopped being atomic.
+#[test]
+fn a_half_open_probe_is_elected_once_under_concurrent_callers() {
+    use std::sync::{Arc, Barrier};
+
+    const CALLERS: usize = 16;
+    const ROUNDS: usize = 16;
+
+    for round in 0..ROUNDS {
+        let breaker = Arc::new(breaker(1));
+        assert!(breaker.allow_request());
+        breaker.record_failure();
+        assert_eq!(
+            breaker.state(),
+            CircuitState::Open,
+            "round {round}: the breaker must start open"
+        );
+        let requests_before = breaker.total_requests();
+
+        let barrier = Arc::new(Barrier::new(CALLERS));
+        let mut callers = Vec::with_capacity(CALLERS);
+        for _ in 0..CALLERS {
+            let breaker = Arc::clone(&breaker);
+            let barrier = Arc::clone(&barrier);
+            callers.push(std::thread::spawn(move || {
+                // All threads arrive together, so the window where the state
+                // flips and the permit is taken is actually contended.
+                barrier.wait();
+                breaker.allow_request()
+            }));
+        }
+        let allowed = callers
+            .into_iter()
+            .map(|caller| caller.join().expect("no probe thread panicked"))
+            .filter(|allowed| *allowed)
+            .count();
+
+        assert_eq!(
+            allowed, 1,
+            "round {round}: exactly one caller may hold the half-open probe, got {allowed}"
+        );
+        assert_eq!(
+            breaker.state(),
+            CircuitState::HalfOpen,
+            "round {round}: a probe is in flight, so the breaker stays half open"
+        );
+        assert_eq!(
+            breaker.total_requests(),
+            requests_before + 1,
+            "round {round}: only the elected probe may be counted as a request"
+        );
+    }
+}

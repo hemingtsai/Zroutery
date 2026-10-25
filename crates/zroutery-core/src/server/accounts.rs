@@ -247,7 +247,7 @@ impl AppState {
         declaration: &AccountConfig,
     ) -> Box<dyn DynAccountProvider> {
         let credential = self.credential_for(provider, declaration);
-        newapi_adapter(provider, &credential)
+        newapi_adapter(provider, declaration, &credential)
     }
 
     /// The secret this account should be probed with.
@@ -407,7 +407,11 @@ mod tests {
 /// hold one, and inferring it from the base URL would be exactly the guess this
 /// file refuses to make.
 #[cfg(feature = "newapi")]
-fn newapi_adapter(provider: &ProviderConfig, credential: &str) -> Box<dyn DynAccountProvider> {
+fn newapi_adapter(
+    provider: &ProviderConfig,
+    declaration: &AccountConfig,
+    credential: &str,
+) -> Box<dyn DynAccountProvider> {
     use crate::account::adapters::newapi::{NewApiAdapter, NewApiConfig};
 
     if provider.kind != ProviderKind::OpenAICompatible {
@@ -415,8 +419,16 @@ fn newapi_adapter(provider: &ProviderConfig, credential: &str) -> Box<dyn DynAcc
     }
 
     let mut config = NewApiConfig {
-        base_url: provider.base_url.clone(),
+        // The wallet can live on a different host than inference, and some
+        // panels require the declared user id even to answer /api/user/self.
+        // Both values belong to this account, never the first sibling account.
+        base_url: declaration
+            .maintenance
+            .panel_override()
+            .unwrap_or(&provider.base_url)
+            .to_string(),
         api_key: credential.to_string(),
+        new_api_user: declaration.maintenance.new_api_user.clone(),
         capabilities: NewApiConfig::default().capabilities,
         // The provider's own timeouts govern the panel as they govern relayed
         // traffic; leaving the adapter's defaults would mean an account probe
@@ -441,7 +453,11 @@ fn newapi_adapter(provider: &ProviderConfig, credential: &str) -> Box<dyn DynAcc
 
 /// No NewAPI backend is compiled into this build.
 #[cfg(not(feature = "newapi"))]
-fn newapi_adapter(provider: &ProviderConfig, _credential: &str) -> Box<dyn DynAccountProvider> {
+fn newapi_adapter(
+    provider: &ProviderConfig,
+    _declaration: &AccountConfig,
+    _credential: &str,
+) -> Box<dyn DynAccountProvider> {
     let _ = ProviderKind::OpenAICompatible;
     Box::new(UnreachableProvider::no_backend(&provider.id))
 }

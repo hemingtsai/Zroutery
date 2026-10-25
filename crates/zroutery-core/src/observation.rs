@@ -295,6 +295,37 @@ struct ProviderModelKey {
 }
 
 /// Stores runtime observations keyed by (provider_id, model_id).
+///
+/// # A restart empties this store
+///
+/// Nothing here is persisted. `ObservationStore::new()` starts with no entries,
+/// every signal in every observation starts as `value: None` with
+/// `observed_at: None`, and [`Signal::is_stale`] treats "never observed" as
+/// stale. So a restart does not restore the previous state of the world — it
+/// removes the evidence the router had been ordering by.
+///
+/// The operating consequences, stated so an operator is not surprised by them:
+///
+/// * **Freshness is relative to the process, not to the wall clock.** An
+///   observation is fresh for thirty seconds *after it was recorded*, and the
+///   record dies with the process. A proxy that is restarted every night has
+///   no latency knowledge every morning, no matter how busy it was the night
+///   before.
+/// * **Unknown is a weighted answer, not a missing one.**
+///   [`ObservationFreshness::Unknown`] carries weight 0.1, so an unobserved
+///   candidate is deprioritised rather than excluded. That is the deliberate
+///   choice: a restart should not lock the operator out of their own provider,
+///   but it does mean the first requests after a restart are routed on
+///   configuration rather than on measurement.
+/// * **The score moves before the evidence does.** `RuntimeObservation::score`
+///   weights a stale observation down rather than discarding it, so a
+///   provider that was slow ten minutes ago is not treated as unknown — it is
+///   treated as less known. The consequence is that the *shape* of the ranking
+///   survives a gap in traffic that the *numbers* do not.
+///
+/// The durable counterpart is the spend ledger ([`crate::budget`]): a budget
+/// that forgets on restart is not a budget, so that one is written out and
+/// these are not.
 #[derive(Debug)]
 pub struct ObservationStore {
     observations: Mutex<HashMap<ProviderModelKey, RuntimeObservation>>,

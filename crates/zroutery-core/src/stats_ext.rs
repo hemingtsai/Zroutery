@@ -7,6 +7,39 @@
 //!
 //! All mutable state lives behind a single `Mutex` per store, matching the
 //! convention established by the rest of the crate.
+//!
+//! # These numbers are process-local, and a restart starts from nothing
+//!
+//! Nothing here is written to disk. `StatsStore` is constructed empty, and the
+//! EWMA (`value: None`, `sample_count: 0`) and every percentile ring buffer are
+//! empty in the same way, so a restart does not merely lose precision: it
+//! returns the routing layer to "no evidence", which is a real operating state
+//! with a real cost.
+//!
+//! What that means for an operator, stated plainly:
+//!
+//! * **Warm-up is real.** For the first handful of requests after a restart,
+//!   latency-based scoring has no EWMA to read and the percentile bands are
+//!   empty. A strategy that orders by measured latency is ordering by *nothing*
+//!   until enough traffic has passed. The estimator is exact rather than
+//!   shrinking toward a prior, so it is honest about that rather than quietly
+//!   optimistic.
+//! * **A spike carried over is a spike still believed.** The EWMA is a decayed
+//!   average, not a window; a single bad minute keeps some weight in the score
+//!   for a while. Restarting the process is the only way to forget it, which
+//!   is a blunt instrument, not a feature to reach for during an incident.
+//! * **The ring buffer remembers the last 500 samples, not all of them.** A
+//!   p95 after a long uptime describes recent traffic; it does not describe the
+//!   whole day, and it becomes a different question after a restart.
+//! * **Failure counts are lifetime totals for this process.** They are useful
+//!   for "is this model failing now", not for "how has it behaved all week"; the
+//!   durable answer to the second question is the spend ledger and the request
+//!   log, not this store.
+//!
+//! A dashboard reading these numbers after a restart is showing a fresh warm-up,
+//! not a regression. Nothing in the routing decision assumes history that a
+//! restart can take away, and the budget guard does (see [`crate::budget`]),
+//! which is why *that* one is persisted and these are not.
 
 use std::collections::HashMap;
 use std::sync::Mutex;

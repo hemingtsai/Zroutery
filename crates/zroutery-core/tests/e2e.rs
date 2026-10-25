@@ -63,7 +63,9 @@ impl Mock {
 
 /// The mock reacts to the requested model name:
 /// * `broken*`  -> HTTP 500
-/// * `refuse*`  -> HTTP 400 (non retryable)
+/// * `refuse*`  -> HTTP 400 naming the request invalid (non retryable)
+/// * `broke*`   -> HTTP 402 with a billing marker (empty wallet)
+/// * `limited*` -> HTTP 429
 /// * `tools*`   -> answers with a tool call
 /// * `think*`   -> answers with reasoning content
 /// * anything else -> plain text answer
@@ -78,11 +80,40 @@ async fn mock_openai_chat(
         .map(str::to_string);
     mock.record("/chat/completions", key, &body);
 
+    if headers
+        .get("authorization")
+        .is_some_and(|key| key == "Bearer sk-empty-wallet")
+    {
+        return (
+            axum::http::StatusCode::PAYMENT_REQUIRED,
+            Json(json!({"error":{"code":"insufficient_balance","message":"insufficient balance"}})),
+        )
+            .into_response();
+    }
+    if headers
+        .get("authorization")
+        .is_some_and(|key| key == "Bearer sk-invalid-inference")
+    {
+        return (
+            axum::http::StatusCode::UNAUTHORIZED,
+            Json(json!({"error":{"type":"invalid_api_key","message":"invalid API key"}})),
+        )
+            .into_response();
+    }
+
     let model = body["model"].as_str().unwrap_or("").to_string();
     if model.starts_with("broken") {
         return (
             axum::http::StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({"error": {"message": "upstream exploded", "type": "server_error"}})),
+        )
+            .into_response();
+    }
+    if model.starts_with("broke") {
+        return (
+            axum::http::StatusCode::PAYMENT_REQUIRED,
+            Json(json!({"error": {"message": "insufficient balance",
+                                  "type": "insufficient_quota"}})),
         )
             .into_response();
     }
@@ -609,6 +640,269 @@ impl Harness {
 
 // ------------------------------------------------------------------ the tests
 
+fn account_keys_cfg(addr: SocketAddr) -> (AppConfig, Arc<MemorySecretStore>) {
+    use zroutery_core::config::{AccountConfig, InferenceKeyConfig};
+    let mut cfg = config_for(addr);
+    cfg.routing.max_attempts = 3;
+    cfg.routing.circuit_breaker.failure_threshold = 1;
+    cfg.providers[0].accounts = vec![
+        AccountConfig {
+            account_id: "a".into(),
+            key_ref: "panel-a".into(),
+            enabled: true,
+            inference_keys: vec![
+                InferenceKeyConfig {
+                    id: "first".into(),
+                    key_ref: "key-a1".into(),
+                    priority: 0,
+                    enabled: true,
+                },
+                InferenceKeyConfig {
+                    id: "sibling".into(),
+                    key_ref: "key-a2".into(),
+                    priority: 1,
+                    enabled: true,
+                },
+            ],
+            ..Default::default()
+        },
+        AccountConfig {
+            account_id: "b".into(),
+            key_ref: "panel-b".into(),
+            enabled: true,
+            inference_keys: vec![InferenceKeyConfig {
+                id: "backup".into(),
+                key_ref: "key-b".into(),
+                priority: 2,
+                enabled: true,
+            }],
+            ..Default::default()
+        },
+    ];
+    let mut keys = secrets();
+    let store = Arc::get_mut(&mut keys).unwrap();
+    store.insert("panel-a", "private-personal-token");
+    store.insert("panel-b", "another-personal-token");
+    store.insert("key-a1", "sk-empty-wallet");
+    store.insert("key-a2", "sk-same-empty-wallet");
+    store.insert("key-b", "sk-funded-wallet");
+    (cfg, keys)
+}
+
+#[tokio::test]
+async fn account_wallet_failure_skips_sibling_keys_but_not_other_accounts() {
+    for streaming in [false, true] {
+        let (addr, mock) = start_mock().await;
+        let (mut cfg, keys) = account_keys_cfg(addr);
+        cfg.providers[0].accounts[0]
+            .inference_keys
+            .extend(
+                (0..5).map(|index| zroutery_core::config::InferenceKeyConfig {
+                    id: format!("extra-{index}"),
+                    key_ref: format!("empty-{index}"),
+                    priority: 1,
+                    enabled: true,
+                }),
+            );
+        let h = Harness::from_state(Arc::new(AppState::new(cfg, keys)), mock).await;
+        for _ in 0..2 {
+            let response = h
+                .post("/v1/chat/completions")
+                .json(&json!({
+                    "model":"standard-class", "stream":streaming,
+                    "messages":[{"role":"user","content":"hi"}]
+                }))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), 200);
+            let _ = response.text().await.unwrap();
+        }
+        assert_eq!(
+            h.mock.keys(),
+            [
+                "Bearer sk-empty-wallet",
+                "Bearer sk-funded-wallet",
+                "Bearer sk-funded-wallet"
+            ]
+        );
+        assert!(h.state.router().is_account_gated("deepseek", "a"));
+        assert!(!h.state.router().is_provider_gated("deepseek"));
+        assert!(!h.state.router().is_circuit_open("deepseek-deepseek-v4-pro"));
+        let record = &h.state.stats().recent(1)[0];
+        assert_eq!(record.account_id.as_deref(), Some("b"));
+        assert_eq!(record.inference_key_id.as_deref(), Some("backup"));
+        h.state.set_config((*h.state.config()).clone());
+        assert!(
+            h.state.router().is_account_gated("deepseek", "a"),
+            "a config save preserves cooldown"
+        );
+        h.shutdown().await;
+    }
+}
+
+#[tokio::test]
+async fn invalid_inference_key_tries_the_same_accounts_next_key() {
+    let (addr, mock) = start_mock().await;
+    let (cfg, mut keys) = account_keys_cfg(addr);
+    Arc::get_mut(&mut keys)
+        .unwrap()
+        .insert("key-a1", "sk-invalid-inference");
+    let h = Harness::from_state(Arc::new(AppState::new(cfg, keys)), mock).await;
+    let response = h
+        .post("/v1/chat/completions")
+        .json(&json!({"model":"standard-class", "messages":[{"role":"user","content":"hi"}]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(
+        h.mock.keys(),
+        ["Bearer sk-invalid-inference", "Bearer sk-same-empty-wallet"]
+    );
+    assert!(h.state.router().is_key_gated("deepseek", "a", "first"));
+    assert!(!h.state.router().is_account_gated("deepseek", "a"));
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn disabled_inference_pool_never_borrows_the_provider_or_panel_key() {
+    let (addr, mock) = start_mock().await;
+    let (mut cfg, keys) = account_keys_cfg(addr);
+    for account in &mut cfg.providers[0].accounts {
+        account.enabled = false;
+    }
+    let h = Harness::from_state(Arc::new(AppState::new(cfg, keys)), mock).await;
+    let response = h
+        .post("/v1/chat/completions")
+        .json(&json!({"model":"standard-class", "messages":[{"role":"user","content":"hi"}]}))
+        .send()
+        .await
+        .unwrap();
+    assert!(!response.status().is_success());
+    assert_eq!(h.mock.count(), 0);
+    h.shutdown().await;
+}
+
+#[cfg(feature = "newapi")]
+#[tokio::test]
+async fn an_unreachable_account_panel_does_not_block_main_routing() {
+    let (addr, mock) = start_mock().await;
+    let mut cfg = config_for(addr);
+    let provider = &mut cfg.providers[0];
+    provider.timeout_secs = 1;
+    let mut account = zroutery_core::config::AccountConfig {
+        account_id: "panel-account".into(),
+        key_ref: "panel-token".into(),
+        enabled: true,
+        ..Default::default()
+    };
+    account.maintenance.panel_url = Some("http://127.0.0.1:1".into());
+    account.maintenance.new_api_user = Some("354394".into());
+    provider.accounts.push(account);
+    let mut keys = secrets();
+    Arc::get_mut(&mut keys)
+        .unwrap()
+        .insert("panel-token", "personal-panel-token");
+    let state = Arc::new(AppState::new(cfg, keys));
+    let h = Harness::from_state(state, mock).await;
+    let report = h.state.reconcile_provider_accounts("deepseek").await;
+    assert_eq!(report.outcomes.len(), 1);
+    let response = h
+        .post("/v1/chat/completions")
+        .json(&json!({
+            "model": "standard-class", "messages": [{"role": "user", "content": "hi"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(
+        h.mock.count(),
+        1,
+        "the inference endpoint is separate from the failed panel"
+    );
+    assert!(!h.state.router().is_provider_gated("deepseek"));
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn only_authenticated_chat_arrivals_confirm_a_client() {
+    let h = Harness::new().await;
+    let since = chrono::Utc::now() - chrono::Duration::seconds(1);
+    let identified = |request: reqwest::RequestBuilder| {
+        request
+            .header("x-opencode-client", "cli")
+            .header("x-opencode-session", "session-fixture")
+    };
+    assert_eq!(
+        identified(h.get("/v1/models"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        200
+    );
+    assert!(
+        !h.state.stats().client_seen_since("opencode", since),
+        "model discovery is not chat"
+    );
+    let body = json!({"model": "does-not-exist", "messages": [{"role": "user", "content": "hi"}]});
+    let response = identified(h.client.post(format!("{}/v1/chat/completions", h.base)))
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 401);
+    assert!(
+        !h.state.stats().client_seen_since("opencode", since),
+        "a header cannot bypass authentication"
+    );
+    let response = identified(h.post("/v1/chat/completions"))
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    assert!(!response.status().is_success());
+    assert!(
+        h.state.stats().client_seen_since("opencode", since),
+        "an upstream/routing failure does not undo gateway connectivity"
+    );
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn responses_thinking_history_can_reach_a_chat_upstream() {
+    let (addr, mock) = start_mock().await;
+    let mut cfg = config_for(addr);
+    cfg.models[1].capabilities.thinking = true;
+    let h = Harness::start(cfg, mock).await;
+    for streaming in [false, true] {
+        let response = h.post("/v1/responses").json(&json!({
+            "model": "standard-class", "stream": streaming,
+            "input": [
+                {"role": "user", "content": "hi"},
+                {"type": "reasoning", "summary": [{"type": "summary_text", "text": "history reasoning"}]},
+                {"role": "assistant", "content": [{"type": "output_text", "text": "hello"}]},
+                {"role": "user", "content": "continue"}
+            ]
+        })).send().await.unwrap();
+        let status = response.status();
+        let text = response.text().await.unwrap();
+        assert_eq!(status, 200, "{text}");
+        assert!(!text.contains("unsupported content type"));
+    }
+    assert_eq!(h.mock.count(), 2);
+    for body in h.mock.bodies() {
+        assert!(body["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|message| message["reasoning_content"] == "history reasoning"));
+    }
+    h.shutdown().await;
+}
+
 #[tokio::test]
 async fn classifier_requests_route_to_the_classifier_pool() {
     let (addr, mock) = start_mock().await;
@@ -1074,8 +1368,13 @@ async fn failover_moves_to_the_next_model_in_the_class() {
     h.shutdown().await;
 }
 
+/// A 400 from an upstream is provider evidence about the shape this gateway
+/// translated, not a statement that the client's content is unusable: another
+/// candidate may accept it, so the request moves on instead of ending at the
+/// first refusal. When every candidate refuses, the client still gets the
+/// refusal — failover never invents an answer.
 #[tokio::test]
-async fn client_errors_are_not_retried() {
+async fn an_upstream_rejection_fails_over_then_fails_closed() {
     let (addr, mock) = start_mock().await;
     let mut cfg = config_for(addr);
     cfg.models[1].upstream_model = "refuse-model".into();
@@ -1093,11 +1392,78 @@ async fn client_errors_are_not_retried() {
         .await
         .unwrap();
 
+    assert_eq!(resp.status(), 200);
+    assert_eq!(resp.headers()["x-zroutery-model"], "openai-gpt-sonnet");
+    assert_eq!(
+        h.mock.count(),
+        2,
+        "the refusal fails over to the next candidate, it is not replayed"
+    );
+    h.shutdown().await;
+
+    // Every candidate refuses the translated shape.
+    let (addr, mock) = start_mock().await;
+    let mut cfg = config_for(addr);
+    cfg.models[1].upstream_model = "refuse-model".into();
+    cfg.models.push(
+        ModelEntry::for_upstream("openai", "refuse-gpt", Some(ModelTier::Standard))
+            .with_priority(10),
+    );
+    let h = Harness::start(cfg, mock).await;
+
+    let resp = h
+        .post("/v1/messages")
+        .json(&json!({"model": "sonnet-class", "max_tokens": 10,
+                      "messages": [{"role": "user", "content": "hi"}]}))
+        .send()
+        .await
+        .unwrap();
+
     assert_eq!(resp.status(), 400);
     let body: Value = resp.json().await.unwrap();
     assert_eq!(body["type"], "error");
-    assert_eq!(body["error"]["type"], "invalid_request_error");
-    assert_eq!(h.mock.count(), 1, "a 400 must not trigger failover");
+    assert_eq!(
+        h.mock.count(),
+        2,
+        "each candidate is tried once; a refusal is never replayed"
+    );
+
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn an_empty_wallet_fails_over_and_is_then_gated() {
+    let (addr, mock) = start_mock().await;
+    let mut cfg = config_for(addr);
+    cfg.models[1].upstream_model = "broke-model".into();
+    cfg.models.push(
+        ModelEntry::for_upstream("openai", "gpt-sonnet", Some(ModelTier::Standard))
+            .with_priority(10),
+    );
+    let h = Harness::start(cfg, mock).await;
+
+    let ask = || {
+        h.post("/v1/messages")
+            .json(&json!({"model": "sonnet-class", "max_tokens": 10,
+                          "messages": [{"role": "user", "content": "hi"}]}))
+    };
+
+    // The empty wallet is evidence about the provider, not the client: the
+    // request is served by the funded candidate instead of failing with 402.
+    let resp = ask().send().await.unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_eq!(resp.headers()["x-zroutery-model"], "openai-gpt-sonnet");
+    assert_eq!(h.mock.count(), 2, "the empty provider was tried once");
+
+    // One 402 gates the whole provider. The next request must not spend an
+    // attempt on it again.
+    let resp = ask().send().await.unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_eq!(
+        h.mock.count(),
+        3,
+        "the gated provider is skipped, not retried"
+    );
 
     h.shutdown().await;
 }

@@ -27,7 +27,7 @@ fn public_constructor_compatibility_preserves_message_and_structural_apis() {
 }
 
 #[test]
-fn an_upstream_400_is_provider_evidence_not_a_client_fault() {
+fn an_upstream_400_is_provider_evidence_and_fails_over() {
     // The request the upstream refused was decoded, validated and re-encoded
     // by this gateway. The refusal is evidence about the provider/model
     // contract, so it counts toward observation and the circuit.
@@ -37,6 +37,9 @@ fn an_upstream_400_is_provider_evidence_not_a_client_fault() {
     assert!(rejected.affects_circuit());
     assert!(rejected.provider_fault());
     assert!(!rejected.retryable());
+    // Another candidate may accept the shape this one refused; one provider's
+    // 400 must not fail the client's request while candidates remain.
+    assert!(rejected.fallbackable());
 
     // A request this pipeline refuses before an attempt keeps its own class
     // and never touches model health.
@@ -47,25 +50,21 @@ fn an_upstream_400_is_provider_evidence_not_a_client_fault() {
 }
 
 #[test]
-fn generic_402_412_statuses_need_explicit_local_markers() {
-    // Status-only upstream responses are provider rejections, not local
-    // configuration or budget decisions.
+fn a_402_is_an_empty_wallet_and_a_412_stays_a_rejection() {
+    // 402 is the payment-required status. Upstream, that is the provider's
+    // wallet, so it is provider evidence: observable, circuit-tripping and
+    // fallbackable, but never retried against the same wallet.
     assert_eq!(
         FailureClass::from_status(402),
-        FailureClass::ProviderRejected
+        FailureClass::BalanceExhausted
     );
-    assert_eq!(
-        FailureClass::from_status(412),
-        FailureClass::ProviderRejected
-    );
-
     let payment = ClassifiedFailure::from_status(402, "payment required".to_string());
-    assert_eq!(payment.class, FailureClass::ProviderRejected);
+    assert_eq!(payment.class, FailureClass::BalanceExhausted);
     assert!(payment.affects_observation());
     assert!(payment.affects_circuit());
     assert!(payment.provider_fault());
     assert!(!payment.retryable());
-    assert!(!payment.fallbackable());
+    assert!(payment.fallbackable());
 
     let precondition = ClassifiedFailure::from_status(412, "precondition failed".to_string());
     assert_eq!(precondition.class, FailureClass::ProviderRejected);
@@ -73,7 +72,7 @@ fn generic_402_412_statuses_need_explicit_local_markers() {
     assert!(precondition.affects_circuit());
     assert!(precondition.provider_fault());
     assert!(!precondition.retryable());
-    assert!(!precondition.fallbackable());
+    assert!(precondition.fallbackable());
 
     // Explicit body markers are the only status-path route to local classes.
     assert_eq!(
@@ -109,13 +108,16 @@ fn generic_402_412_statuses_need_explicit_local_markers() {
     assert!(!structural_key.affects_observation());
     assert!(structural_key.fallbackable());
 
+    // The legacy helper keeps its historical meaning — "the loop may continue
+    // to another candidate" — so an empty wallet is still `true` there even
+    // though the canonical class is not retryable on the same candidate.
     let generic_upstream = Error::Upstream {
         provider: "p".into(),
         status: 402,
         body: "payment required".into(),
         retry_after: None,
     };
-    assert!(!generic_upstream.is_retryable());
+    assert!(generic_upstream.is_retryable());
     assert!(generic_upstream.counts_against_health());
 }
 
@@ -297,7 +299,7 @@ fn one_impact_table_covers_routing_health_stats_and_fault_effects() {
                 affects_observation: true,
                 affects_circuit: true,
                 retryable: false,
-                fallbackable: false,
+                fallbackable: true,
                 provider_fault: true,
             },
         ),
@@ -403,6 +405,19 @@ fn one_impact_table_covers_routing_health_stats_and_fault_effects() {
                 retryable: false,
                 fallbackable: false,
                 provider_fault: false,
+            },
+        ),
+        (
+            FailureClass::BalanceExhausted,
+            FailureImpact {
+                // No model on the provider can be paid for: observable,
+                // circuit-tripping and fallbackable, but never retried against
+                // the same empty wallet.
+                affects_observation: true,
+                affects_circuit: true,
+                retryable: false,
+                fallbackable: true,
+                provider_fault: true,
             },
         ),
         (

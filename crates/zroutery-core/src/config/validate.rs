@@ -65,6 +65,18 @@ impl AppConfig {
         let mut notes = Vec::new();
         self.routing.apply_legacy();
         for provider in &mut self.providers {
+            if provider.kind == super::provider::ProviderKind::OpenCodeZenFree
+                && matches!(
+                    provider.base_url.trim_end_matches('/'),
+                    "https://opencode.ai/zen" | "https://opencode.ai/zen/v1"
+                )
+            {
+                provider.base_url = provider.kind.default_base_url().to_string();
+                notes.push(format!(
+                    "Provider `{}` migrated to the OpenCode V2 inference endpoint",
+                    provider.name
+                ));
+            }
             #[allow(deprecated)]
             if provider.impersonate_claude_code {
                 provider.client_profile = ProviderClientProfile::ClaudeCode;
@@ -182,6 +194,35 @@ impl AppConfig {
         }
 
         for p in &self.providers {
+            let mut accounts = std::collections::HashSet::new();
+            for account in &p.accounts {
+                if account.account_id.trim().is_empty() || !accounts.insert(&account.account_id) {
+                    issues.push(ConfigIssue {
+                        severity: IssueSeverity::Error,
+                        code: "account.invalid_id".into(),
+                        message: "Account ids must be non-empty and unique within their provider"
+                            .into(),
+                        subject: Some(p.id.clone()),
+                    });
+                }
+                let mut keys = std::collections::HashSet::new();
+                for key in &account.inference_keys {
+                    if key.id.trim().is_empty() || key.id.len() > 64 || !keys.insert(&key.id) {
+                        issues.push(ConfigIssue { severity: IssueSeverity::Error, code: "account.invalid_inference_key".into(),
+                            message: "Inference key ids must be non-empty, bounded and unique within their account".into(), subject: Some(p.id.clone()) });
+                    }
+                    if key.key_ref.trim().is_empty()
+                        || self
+                            .providers
+                            .iter()
+                            .flat_map(|provider| &provider.accounts)
+                            .any(|panel| !panel.key_ref.is_empty() && panel.key_ref == key.key_ref)
+                    {
+                        issues.push(ConfigIssue { severity: IssueSeverity::Error, code: "account.inference_panel_collision".into(),
+                            message: "Inference keys must reference a secret distinct from every panel credential".into(), subject: Some(p.id.clone()) });
+                    }
+                }
+            }
             if p.kind.is_opencode()
                 && p.configured_client_profile() != ProviderClientProfile::OpenCodeCli
             {

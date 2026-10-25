@@ -114,6 +114,7 @@ fn an_account_config_carries_no_observation_fields() {
             checkin_path: Some("/console/personal".to_string()),
             ..Default::default()
         },
+        inference_keys: Vec::new(),
     };
 
     let json = serde_json::to_value(&declared).expect("an account serialises");

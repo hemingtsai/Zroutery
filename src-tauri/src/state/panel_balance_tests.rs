@@ -85,6 +85,7 @@ type Seen = Arc<Mutex<Vec<String>>>;
 struct PanelState {
     accepted: String,
     seen: Seen,
+    required_user: Option<String>,
 }
 
 /// `GET /api/status`, the public endpoint that says how the panel counts.
@@ -120,6 +121,27 @@ async fn panel_self(
         .unwrap_or_default()
         .to_string();
     state.seen.lock().unwrap().push(presented.clone());
+
+    if let Some(required) = &state.required_user {
+        let supplied = headers
+            .get("new-api-user")
+            .and_then(|value| value.to_str().ok());
+        if supplied != Some(required.as_str()) {
+            return (
+                axum::http::StatusCode::UNAUTHORIZED,
+                axum::Json(json!({
+                    "success": false, "message": "New-Api-User header missing or mismatched",
+                    "code": "AUTH_USER_ID_MISSING", "data": null,
+                })),
+            )
+                .into_response();
+        }
+        state
+            .seen
+            .lock()
+            .unwrap()
+            .push(format!("new-api-user:{required}"));
+    }
 
     if presented != state.accepted {
         return (
@@ -166,6 +188,10 @@ async fn panel_stat() -> axum::Json<serde_json::Value> {
 /// accept, so a path that asked the wrong question or presented the wrong
 /// token fails rather than being quietly satisfied.
 async fn panel(accept: &str, seen: Seen) -> String {
+    panel_with_user(accept, seen, None).await
+}
+
+async fn panel_with_user(accept: &str, seen: Seen, required_user: Option<&str>) -> String {
     let app = Router::new()
         .route("/api/status", get(panel_status))
         .route("/api/user/self", get(panel_self))
@@ -186,6 +212,7 @@ async fn panel(accept: &str, seen: Seen) -> String {
         .with_state(PanelState {
             accepted: accept.to_string(),
             seen,
+            required_user: required_user.map(str::to_string),
         });
 
     let listener = TcpListener::bind("127.0.0.1:0")
@@ -230,6 +257,34 @@ fn desktop_with(config: AppConfig) -> (Arc<super::Desktop>, std::path::PathBuf) 
         Arc::new(super::Desktop::new(dir.clone(), config, secrets)),
         dir,
     )
+}
+
+#[tokio::test]
+async fn account_probe_uses_its_panel_override_and_user_id_not_the_inference_host() {
+    let seen: Seen = Arc::new(Mutex::new(Vec::new()));
+    let panel_url = panel_with_user(PANEL_TOKEN, Arc::clone(&seen), Some("354394")).await;
+    let mut provider = relay("http://127.0.0.1:1/v1");
+    provider.accounts[0].maintenance.panel_url = Some(panel_url);
+    provider.accounts[0].maintenance.new_api_user = Some("354394".into());
+    let mut config = AppConfig::default();
+    config.providers.push(provider);
+    let (desktop, dir) = desktop_with(config);
+    desktop
+        .refresh_balance("relay")
+        .await
+        .expect("a valid panel credential plus declared user must not be rejected");
+    let snapshot = desktop.snapshot().await;
+    let balance = snapshot.balances["relay"]
+        .balance
+        .as_ref()
+        .expect("the panel reported a balance");
+    assert_eq!(balance.remaining, Some(12.0));
+    let seen = seen.lock().unwrap().clone();
+    assert!(seen.iter().any(|value| value == PANEL_TOKEN));
+    assert!(seen.iter().any(|value| value == "new-api-user:354394"));
+    assert!(!seen.iter().any(|value| value == RELAY_KEY));
+    assert!(snapshot.balances["relay"].error.is_none());
+    std::fs::remove_dir_all(dir).ok();
 }
 
 /// The panel's figure, reached through the whole path.

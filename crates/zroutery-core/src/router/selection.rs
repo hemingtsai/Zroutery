@@ -161,14 +161,7 @@ impl Router {
                 Some(tier) => self.elected_order(members, tier),
                 None => by_priority(members),
             },
-            RoutingStrategy::Priority => {
-                // Priority sorts by priority number, preserving input order
-                // within same-priority groups. This ensures that upstream
-                // ordering (e.g. from policy scoring) is respected.
-                let mut sorted: Vec<&ModelEntry> = members.to_vec();
-                sorted.sort_by_key(|m| m.priority);
-                sorted
-            }
+            RoutingStrategy::Priority => by_priority(members),
             RoutingStrategy::WeightedRandom => self.weighted_shuffle(members),
             RoutingStrategy::RoundRobin => {
                 let mut rr = crate::sync::lock(&self.rr);

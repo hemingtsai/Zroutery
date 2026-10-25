@@ -16,7 +16,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::billing::{Cost, CostTotals};
-use crate::client::{ClientFingerprint, Confidence};
+use crate::client::{ClientFingerprint, ClientId, Confidence, MAX_TRACKED_CLIENTS};
 use crate::ir::{Dialect, Usage};
 use crate::outcome::Outcome;
 use crate::policy::{DecisionReason, RouteDecision};
@@ -84,6 +84,10 @@ pub struct RequestRecord {
     /// would show different clients for the same traffic.
     #[serde(default)]
     pub client: ClientFingerprint,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inference_key_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -319,6 +323,9 @@ impl AttributionSummary {
 #[derive(Debug)]
 pub struct Stats {
     inner: Mutex<Inner>,
+    // Authenticated chat arrival, independent of completion, log eviction and
+    // "clear activity". Contains only client ids and timestamps, never payloads.
+    observed_clients: Mutex<BTreeMap<ClientId, DateTime<Utc>>>,
 }
 
 /// The single `per_model` key every unresolved request shares.
@@ -363,7 +370,38 @@ impl Stats {
                 output_tokens: 0,
                 cost: CostTotals::default(),
             }),
+            observed_clients: Mutex::new(BTreeMap::new()),
         }
+    }
+
+    /// Note an authenticated chat request at ingress, even if its upstream
+    /// fails or its stream is still open. Health/model-list probes do not call
+    /// this and therefore cannot confirm a takeover.
+    pub fn observe_client(&self, client: &ClientFingerprint, at: DateTime<Utc>) {
+        if !client.confidence.is_recognised() {
+            return;
+        }
+        let mut observed = crate::sync::lock(&self.observed_clients);
+        if let Some(previous) = observed.get_mut(&client.client_id) {
+            *previous = (*previous).max(at);
+        } else if observed.len() < MAX_TRACKED_CLIENTS {
+            observed.insert(client.client_id.clone(), at);
+        }
+    }
+
+    /// Whether this process saw a recognised client after a particular adopt.
+    /// This is traffic attribution, not client identity authentication: header
+    /// evidence remains probable, not strong.
+    pub fn client_seen_since(&self, client_id: &str, since: DateTime<Utc>) -> bool {
+        crate::sync::lock(&self.observed_clients)
+            .get(&ClientId::trusted(client_id))
+            .is_some_and(|at| *at > since)
+    }
+
+    /// A new adopt must not borrow earlier traffic, even if it happened in the
+    /// same second as the manifest's backwards-compatible timestamp.
+    pub fn forget_client_observation(&self, client_id: &str) {
+        crate::sync::lock(&self.observed_clients).remove(&ClientId::trusted(client_id));
     }
 
     pub fn set_limit(&self, limit: usize) {
@@ -593,6 +631,8 @@ impl RecordBuilder {
                 escalated_from: None,
                 routing_decision: None,
                 client: ClientFingerprint::unknown(),
+                account_id: None,
+                inference_key_id: None,
             },
         }
     }
@@ -602,6 +642,14 @@ impl RecordBuilder {
     pub fn client(&mut self, client: ClientFingerprint) -> &mut Self {
         self.record.client = client;
         self
+    }
+
+    pub fn inference_credential(
+        &mut self,
+        credential: Option<&crate::router::InferenceCredential>,
+    ) {
+        self.record.account_id = credential.map(|key| key.account_id.clone());
+        self.record.inference_key_id = credential.map(|key| key.key_id.clone());
     }
 
     /// Stamp the request's kind. Set once, before the record is finished.

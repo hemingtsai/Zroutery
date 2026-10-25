@@ -11,6 +11,14 @@ use crate::config::RoutingConfig;
 use crate::error::Error;
 use crate::failure::{ClassifiedFailure, FailureClass};
 
+/// Shortest provider gate for an empty upstream wallet.
+///
+/// The circuit breaker's timeout is tuned for transient faults, where a minute
+/// is a long time. A wallet stays empty until it is topped up, so retrying it
+/// on that timescale only spends requests: five minutes is the floor, and a
+/// longer configured cooldown still wins.
+const BALANCE_GATE_FLOOR: Duration = Duration::from_secs(300);
+
 impl Router {
     /// Apply a canonical classified failure to the legacy health/circuit view.
     ///
@@ -81,18 +89,149 @@ impl Router {
     ) {
         self.report_classified_failure(model_id, failure, routing);
         self.record_classified_failure(model_id, provider_id, failure);
-        self.note_provider_rate_limit(provider_id, failure, routing);
+        self.note_provider_gate(provider_id, failure, routing);
     }
 
     /// Refresh the set of providers whose rate limit covers every model.
     ///
-    /// Called when the configuration is built or swapped. Gates for providers
-    /// that no longer exist are dropped with the rest: a provider id is only
-    /// meaningful while something serves it.
+    /// Called when the configuration is built or swapped. This set applies
+    /// only to 429s; wallet gates also belong to ordinary paid providers and
+    /// must survive a configuration save.
     pub fn set_group_limited_providers(&self, ids: impl IntoIterator<Item = String>) {
         let ids: std::collections::HashSet<String> = ids.into_iter().collect();
-        crate::sync::lock(&self.provider_gates).retain(|id, _| ids.contains(id));
         *crate::sync::lock(&self.group_limited) = ids;
+    }
+
+    /// Drop provider gates only when the provider itself is removed.
+    pub fn retain_providers(&self, known: impl Fn(&str) -> bool) {
+        crate::sync::lock(&self.provider_gates).retain(|id, _| known(id));
+    }
+
+    /// Operator-requested retry after replenishing funds or resolving a limit.
+    pub fn reset_provider_gate(&self, provider_id: &str) {
+        crate::sync::lock(&self.provider_gates).remove(provider_id);
+        crate::sync::lock(&self.account_gates).retain(|(provider, _), _| provider != provider_id);
+        crate::sync::lock(&self.key_gates).retain(|(provider, _, _), _| provider != provider_id);
+    }
+
+    /// Credential failures belong to the wallet/key, not to the shared model
+    /// circuit. Retain their classified statistics without blocking healthy
+    /// credentials serving exactly the same exposed model.
+    pub fn record_candidate_failure(
+        &self,
+        candidate: &super::Candidate,
+        failure: &ClassifiedFailure,
+        routing: &RoutingConfig,
+    ) {
+        let Some(credential) = &candidate.credential else {
+            self.record_classified_attempt(
+                candidate.model_id(),
+                &candidate.provider.id,
+                failure,
+                routing,
+            );
+            return;
+        };
+        let cooldown = routing.circuit_breaker.timeout_secs.max(1);
+        match failure.class {
+            FailureClass::BalanceExhausted => {
+                let key = (candidate.provider.id.clone(), credential.account_id.clone());
+                let until = Instant::now()
+                    + Duration::from_secs(cooldown.max(BALANCE_GATE_FLOOR.as_secs()));
+                crate::sync::lock(&self.account_gates)
+                    .entry(key)
+                    .and_modify(|old| *old = (*old).max(until))
+                    .or_insert(until);
+            }
+            FailureClass::Authentication | FailureClass::RateLimit => {
+                let key = (
+                    candidate.provider.id.clone(),
+                    credential.account_id.clone(),
+                    credential.key_id.clone(),
+                );
+                let cooldown = if failure.class == FailureClass::Authentication {
+                    cooldown.max(BALANCE_GATE_FLOOR.as_secs())
+                } else {
+                    cooldown
+                };
+                let until = Instant::now() + Duration::from_secs(cooldown);
+                crate::sync::lock(&self.key_gates)
+                    .entry(key)
+                    .and_modify(|old| *old = (*old).max(until))
+                    .or_insert(until);
+            }
+            _ => {
+                self.record_classified_attempt(
+                    candidate.model_id(),
+                    &candidate.provider.id,
+                    failure,
+                    routing,
+                );
+                return;
+            }
+        }
+        self.release_half_open_permit(candidate.model_id());
+        self.stats_store.record_classified_failure(
+            candidate.model_id(),
+            &candidate.provider.id,
+            failure.class,
+        );
+    }
+
+    pub fn is_account_gated(&self, provider: &str, account: &str) -> bool {
+        let mut gates = crate::sync::lock(&self.account_gates);
+        gates.retain(|_, until| *until > Instant::now());
+        gates.contains_key(&(provider.to_string(), account.to_string()))
+    }
+
+    pub fn is_key_gated(&self, provider: &str, account: &str, key: &str) -> bool {
+        let mut gates = crate::sync::lock(&self.key_gates);
+        gates.retain(|_, until| *until > Instant::now());
+        gates.contains_key(&(provider.to_string(), account.to_string(), key.to_string()))
+    }
+
+    pub fn allow_candidate_request(&self, candidate: &super::Candidate) -> bool {
+        self.credential_available(candidate) && self.allow_request(candidate.model_id())
+    }
+
+    /// Read-only send planning check; unlike allow_request it claims no probe.
+    pub fn credential_available(&self, candidate: &super::Candidate) -> bool {
+        if let Some(credential) = &candidate.credential {
+            if self.is_account_gated(&candidate.provider.id, &credential.account_id)
+                || self.is_key_gated(
+                    &candidate.provider.id,
+                    &credential.account_id,
+                    &credential.key_id,
+                )
+            {
+                return false;
+            }
+        }
+        !self.is_provider_gated(&candidate.provider.id)
+    }
+
+    pub fn should_fallback_candidate(
+        &self,
+        candidate: &super::Candidate,
+        failure: &ClassifiedFailure,
+    ) -> bool {
+        failure.fallbackable()
+            || (candidate.credential.is_some() && failure.class == FailureClass::Authentication)
+    }
+
+    pub fn retain_credentials(&self, config: &crate::config::AppConfig) {
+        crate::sync::lock(&self.account_gates).retain(|(provider, account), _| {
+            config
+                .provider(provider)
+                .is_some_and(|p| p.accounts.iter().any(|a| &a.account_id == account))
+        });
+        crate::sync::lock(&self.key_gates).retain(|(provider, account, key), _| {
+            config.provider(provider).is_some_and(|p| {
+                p.accounts.iter().any(|a| {
+                    &a.account_id == account && a.inference_keys.iter().any(|k| &k.id == key)
+                })
+            })
+        });
     }
 
     /// Is this provider's shared cooldown still running?
@@ -115,30 +254,87 @@ impl Router {
         }
     }
 
-    /// Open the provider-wide gate when a shared-limit provider answers 429.
+    /// Open the provider-wide gate for a failure that makes the whole provider
+    /// unusable, not only the model that answered.
     ///
-    /// The per-model impact table deliberately keeps a rate limit off the
-    /// circuit: a quota is not a sick model. That stays true. What changes for
-    /// a group-limited provider is that the *pool* is unusable, so the gate
-    /// blocks the provider's other models for the same cooldown the circuit
-    /// breaker would have used. When the window elapses the next request
-    /// probes normally; a still-exhausted quota answers 429 again and reopens
-    /// it.
-    fn note_provider_rate_limit(
+    /// Two failures qualify, for different reasons:
+    ///
+    /// * A rate limit on a provider configured as group-limited: the shared
+    ///   quota covers every model it serves, so the gate blocks the provider
+    ///   for the cooldown the circuit breaker would have used. When the window
+    ///   elapses the next request probes normally; a still-exhausted quota
+    ///   answers 429 again and reopens it.
+    /// * An empty upstream wallet ([`FailureClass::BalanceExhausted`]): no
+    ///   model on that provider can be paid for, so gating only the model that
+    ///   happened to answer would let the next request spend another attempt on
+    ///   a sibling and return the same 402. A wallet does not refill on the
+    ///   circuit breaker's transient-fault timescale, so the gate lasts at
+    ///   least [`BALANCE_GATE_FLOOR`]. After the window new traffic may try it
+    ///   again; another payment failure reopens the gate.
+    fn note_provider_gate(
         &self,
         provider_id: &str,
         failure: &ClassifiedFailure,
         routing: &RoutingConfig,
     ) {
-        if failure.class != FailureClass::RateLimit {
-            return;
-        }
-        if !crate::sync::lock(&self.group_limited).contains(provider_id) {
-            return;
-        }
-        let cooldown = routing.circuit_breaker.timeout_secs.max(1);
+        let cooldown = match failure.class {
+            FailureClass::RateLimit => {
+                if !crate::sync::lock(&self.group_limited).contains(provider_id) {
+                    return;
+                }
+                routing.circuit_breaker.timeout_secs.max(1)
+            }
+            FailureClass::BalanceExhausted => routing
+                .circuit_breaker
+                .timeout_secs
+                .max(BALANCE_GATE_FLOOR.as_secs()),
+            FailureClass::Capability
+                if failure.status == Some(403)
+                    && crate::sync::lock(&self.group_limited).contains(provider_id) =>
+            {
+                routing
+                    .circuit_breaker
+                    .timeout_secs
+                    .max(BALANCE_GATE_FLOOR.as_secs())
+            }
+            _ => return,
+        };
         let until = Instant::now() + Duration::from_secs(cooldown);
-        crate::sync::lock(&self.provider_gates).insert(provider_id.to_string(), until);
+        crate::sync::lock(&self.provider_gates)
+            .entry(provider_id.to_string())
+            .and_modify(|previous| *previous = (*previous).max(until))
+            .or_insert(until);
+    }
+
+    /// The transport must not retry earlier than an upstream's Retry-After.
+    /// Carry it into the shared gate as well as returning it to the caller.
+    pub fn note_candidate_retry_after(&self, candidate: &super::Candidate, error: &Error) {
+        let Error::Upstream {
+            status: 429,
+            retry_after: Some(wait),
+            ..
+        } = error
+        else {
+            return;
+        };
+        let Some(until) = Instant::now().checked_add(*wait) else {
+            return;
+        };
+        if let Some(credential) = &candidate.credential {
+            crate::sync::lock(&self.key_gates)
+                .entry((
+                    candidate.provider.id.clone(),
+                    credential.account_id.clone(),
+                    credential.key_id.clone(),
+                ))
+                .and_modify(|previous| *previous = (*previous).max(until))
+                .or_insert(until);
+        } else if crate::sync::lock(&self.group_limited).contains(&candidate.provider.id) {
+            crate::sync::lock(&self.provider_gates)
+                .entry(candidate.provider.id.clone())
+                .and_modify(|previous| *previous = (*previous).max(until))
+                .or_insert(until);
+        }
     }
 
     /// Alias for [`Self::record_classified_attempt`] used by report-oriented

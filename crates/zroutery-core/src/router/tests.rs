@@ -337,6 +337,87 @@ fn weighted_random_covers_all_and_favours_weight() {
     assert!(heavy_first > 280, "heavy won only {heavy_first}/400");
 }
 
+/// The priority strategy must not depend on the order the candidates arrived in.
+///
+/// A tier holds every enabled model of that class, and most of them share one
+/// priority — the user sets a priority to say "this one first", not to number
+/// every model. So the tiebreak decides the order of nearly the whole pool,
+/// and it has to be a property of the configuration alone: the same
+/// configuration must always produce the same first choice, or a
+/// `priority` strategy behaves as though it were random and the same request
+/// is served by different upstreams.
+#[test]
+fn the_priority_strategy_breaks_ties_the_same_way_every_time() {
+    // Three models, one priority, and the configuration lists them in one
+    // order. The plan must not depend on that order.
+    let build = |muted: &[(&str, &str)]| {
+        let mut cfg = cfg_with(vec![
+            ModelEntry::for_upstream("p1", "alpha", Some(ModelTier::Standard)),
+            ModelEntry::for_upstream("p2", "bravo", Some(ModelTier::Standard)),
+            ModelEntry::for_upstream("p1", "delta", Some(ModelTier::Standard)),
+        ]);
+        // A hand-written configuration gives the three the same priority.
+        for model in cfg.models.iter_mut() {
+            model.priority = 10;
+        }
+        // `muted` names the ids to hide, so the same set can be presented in a
+        // different order and the plan compared.
+        let mut models: Vec<ModelEntry> = cfg
+            .models
+            .iter()
+            .filter(|m| {
+                !muted
+                    .iter()
+                    .any(|(p, u)| m.provider_id == *p && m.upstream_model == *u)
+            })
+            .cloned()
+            .collect();
+        models.rotate_left(1);
+        cfg.models = models;
+        reg(cfg)
+    };
+
+    let router = Router::new();
+    let first_plan = router
+        .plan(&build(&[]), &Resolution::Tier(ModelTier::Standard), &[])
+        .unwrap();
+    let first = ids(&first_plan);
+    let second_plan = router
+        .plan(&build(&[]), &Resolution::Tier(ModelTier::Standard), &[])
+        .unwrap();
+    let second = ids(&second_plan);
+
+    assert_eq!(
+        first, second,
+        "the same configuration produced two different orders"
+    );
+    assert_eq!(
+        first[0], "p1-alpha",
+        "the tiebreak is the exposed id, so the order is a property of the \
+         configuration and not of the order the models were listed in"
+    );
+}
+
+/// A priority that is set must still beat the tiebreak.
+#[test]
+fn an_explicit_priority_beats_the_tiebreak() {
+    let mut cfg = cfg_with(vec![
+        ModelEntry::for_upstream("p1", "alpha", Some(ModelTier::Standard)),
+        ModelEntry::for_upstream("p2", "bravo", Some(ModelTier::Standard)),
+    ]);
+    cfg.models[0].priority = 10;
+    cfg.models[1].priority = 5;
+    let r = reg(cfg);
+    let router = Router::new();
+    let plan = router
+        .plan(&r, &Resolution::Tier(ModelTier::Standard), &[])
+        .unwrap();
+    assert_eq!(
+        plan[0].exposed_id, "p2-bravo",
+        "the lower priority number wins"
+    );
+}
+
 // ------------------------------------------------------- classifier pool
 
 fn classifier_cfg_with(models: Vec<ModelEntry>, candidates: &[(&str, i32)]) -> AppConfig {
@@ -601,6 +682,61 @@ fn a_rate_limit_does_not_gate_a_provider_that_does_not_share_its_quota() {
         .plan(&r, &Resolution::Tier(ModelTier::Standard), &[])
         .unwrap();
     assert_eq!(ids(&plan), vec!["p1-limited", "p1-sibling"]);
+}
+
+#[test]
+fn an_empty_wallet_gates_every_model_of_the_provider() {
+    // One 402 is enough. A wallet is not a sick model: waiting for four
+    // consecutive failures per model would send the next request to a sibling
+    // and collect the same 402, once per model, before anything changed.
+    let r = reg(cfg_with(vec![
+        ModelEntry::for_upstream("p1", "broke", Some(ModelTier::Standard)).with_priority(0),
+        ModelEntry::for_upstream("p1", "sibling", Some(ModelTier::Standard)).with_priority(1),
+        ModelEntry::for_upstream("p2", "elsewhere", Some(ModelTier::Standard)).with_priority(2),
+    ]));
+    let router = Router::new();
+    let routing = r.config().routing.clone();
+
+    let empty_wallet = crate::failure::ClassifiedFailure::from_core_error(Error::Upstream {
+        provider: "p1".into(),
+        status: 402,
+        body: "insufficient balance".into(),
+        retry_after: None,
+    });
+    router.record_classified_attempt("p1-broke", "p1", &empty_wallet, &routing);
+
+    router.set_group_limited_providers(Vec::new());
+    router.retain_providers(|id| id == "p1" || id == "p2");
+    assert!(
+        router.is_provider_gated("p1"),
+        "saving config must not reopen an empty wallet"
+    );
+
+    assert!(router.is_provider_gated("p1"));
+    assert!(
+        !router.is_provider_gated("p2"),
+        "another provider's wallet is unaffected"
+    );
+    assert!(!router.allow_request_for("p1-sibling", "p1"));
+    assert!(router.allow_request_for("p2-elsewhere", "p2"));
+
+    // The whole provider leaves the plan, so the request is served by someone
+    // who can be paid rather than failing with the upstream's 402.
+    let plan = router
+        .plan(&r, &Resolution::Tier(ModelTier::Standard), &[])
+        .unwrap();
+    assert_eq!(ids(&plan), vec!["p2-elsewhere"]);
+    router.reset_provider_gate("p1");
+    assert!(
+        !router.is_provider_gated("p1"),
+        "an operator can retry after topping up"
+    );
+    router.record_classified_attempt("p1-broke", "p1", &empty_wallet, &routing);
+    router.retain_providers(|id| id == "p2");
+    assert!(
+        !router.is_provider_gated("p1"),
+        "deleting the provider clears its gate"
+    );
 }
 
 #[test]

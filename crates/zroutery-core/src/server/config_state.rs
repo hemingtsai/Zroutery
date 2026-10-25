@@ -50,6 +50,13 @@ impl AppState {
         // Health rows for models that no longer exist would otherwise linger
         // forever and keep appearing in the GUI snapshot.
         self.router.retain_models(|id| known.contains(id));
+        let providers: std::collections::HashSet<&str> = config
+            .providers
+            .iter()
+            .map(|provider| provider.id.as_str())
+            .collect();
+        self.router.retain_providers(|id| providers.contains(id));
+        self.router.retain_credentials(&config);
         // Which providers meter the whole account rather than one model can
         // change with the configuration, so the gate set is refreshed here.
         self.router.set_group_limited_providers(
@@ -69,6 +76,9 @@ impl AppState {
 
     /// Resolve a provider's secret, failing loudly when one is expected but absent.
     pub fn api_key(&self, provider: &ProviderConfig) -> Result<Option<String>> {
+        if provider.kind == ProviderKind::OpenCodeZenFree {
+            return Ok(Some("public".into()));
+        }
         if provider.key_ref.is_empty() {
             return Ok(None);
         }

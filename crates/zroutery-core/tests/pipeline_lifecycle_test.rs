@@ -59,6 +59,16 @@ impl Mock {
         self.inner.lock().unwrap().len()
     }
 
+    /// How many sends named this upstream model, in order.
+    fn count_of(&self, model: &str) -> usize {
+        self.inner
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|seen| seen.as_str() == model)
+            .count()
+    }
+
     fn bodies(&self) -> Vec<Value> {
         self.bodies.lock().unwrap().clone()
     }
@@ -162,6 +172,50 @@ async fn mock_chat(State(mock): State<Mock>, Json(body): Json<Value>) -> Respons
     }
 
     if body["stream"].as_bool().unwrap_or(false) {
+        if model.starts_with("preoutput-quota") {
+            let sse = format!(
+                "event: response.failed\ndata: {}\n\n",
+                json!({
+                    "type":"response.failed", "response":{
+                        "status":"failed", "error":{"code":"rate_limit_exceeded","message":"model token rate exceeded"}
+                    }
+                })
+            );
+            return Response::builder()
+                .header("content-type", "text/event-stream")
+                .body(axum::body::Body::from(sse))
+                .unwrap();
+        }
+        if model.starts_with("terminal-tail") {
+            // The protocol has ended, but the relay keeps TCP open. A client
+            // may stop at response.completed without waiting for EOF.
+            let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+            tx.send(openai_chunk(
+                "tail-stream",
+                json!({"role": "assistant", "content": "answer"}),
+                Value::Null,
+            ))
+            .unwrap();
+            tx.send(openai_chunk("tail-stream", json!({}), json!("stop")))
+                .unwrap();
+            tx.send(format!(
+                "data: {}\n\n",
+                json!({
+                    "id": "tail-stream", "choices": [],
+                    "usage": {"prompt_tokens": 11, "completion_tokens": 7}
+                })
+            ))
+            .unwrap();
+            let stream = futures_util::stream::unfold((rx, tx), |(mut rx, tx)| async move {
+                rx.recv()
+                    .await
+                    .map(|chunk| (Ok::<_, std::io::Error>(chunk), (rx, tx)))
+            });
+            return Response::builder()
+                .header("content-type", "text/event-stream")
+                .body(axum::body::Body::from_stream(stream))
+                .unwrap();
+        }
         if model.starts_with("hold") {
             return Response::builder()
                 .header("content-type", "text/event-stream")
@@ -279,6 +333,7 @@ async fn start_mock() -> (SocketAddr, Mock) {
     let mock = Mock::default();
     let app = axum::Router::new()
         .route("/v1/chat/completions", post(mock_chat))
+        .route("/v1/responses", post(mock_chat))
         .route("/chat/completions", post(mock_chat))
         .route("/v1/messages", post(mock_anthropic))
         .with_state(mock.clone());
@@ -393,6 +448,26 @@ async fn mock_anthropic(State(mock): State<Mock>, Json(body): Json<Value>) -> Re
             .header("content-type", "text/event-stream")
             .body(held_open_anthropic("msg_upstream"))
             .unwrap();
+    }
+
+    // The first send is a repairable request shape; the repair itself is
+    // refused with a provider failure. That failure is classified as
+    // fallbackable, which is what has to move the request to the next
+    // candidate instead of ending it here.
+    if model == "repair-fail-model" {
+        if mock.count_of(&model) == 1 {
+            return (
+                axum::http::StatusCode::BAD_REQUEST,
+                Json(json!({"error": {"type": "invalid_request_error",
+                                      "message": "thinking budget too large"}})),
+            )
+                .into_response();
+        }
+        return (
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({"error": {"type": "server_error", "message": "upstream overloaded"}})),
+        )
+            .into_response();
     }
 
     // A model family that rejects the request shape and accepts it after the
@@ -675,6 +750,83 @@ async fn wait_for_outcomes(harness: &Harness, expected: usize) {
         harness.state.outcomes().len(),
         harness.state.stats().recent(10).len()
     );
+}
+
+#[tokio::test]
+async fn response_completed_ends_the_request_without_waiting_for_upstream_eof() {
+    let (addr, mock) = start_mock().await;
+    let mut cfg = config_for(addr);
+    cfg.models = vec![model(
+        "alpha",
+        "terminal-tail-model",
+        0,
+        ModelTier::Standard,
+    )];
+    let h = Harness::start(cfg, mock).await;
+    let since = chrono::Utc::now() - chrono::Duration::seconds(1);
+    let mut response = h
+        .responses_request("standard-class", None, true)
+        .header("x-opencode-client", "cli")
+        .header("x-opencode-session", "test-session")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let mut wire = String::new();
+    loop {
+        let chunk = tokio::time::timeout(Duration::from_secs(3), response.chunk())
+            .await
+            .expect("the client must not wait for TCP EOF")
+            .unwrap()
+            .expect("response.completed arrives");
+        wire.push_str(&String::from_utf8_lossy(&chunk));
+        if wire.contains("event: response.completed") {
+            break;
+        }
+    }
+    drop(response);
+    wait_for_outcomes(&h, 1).await;
+    assert!(h.record().ok, "completed output must not become 499");
+    assert_eq!(h.record().status, 200);
+    assert_eq!(h.outcome().final_status, FinalStatus::Success);
+    assert_eq!(h.record().usage.input_tokens, 11);
+    assert_eq!(h.record().usage.output_tokens, 7);
+    assert!(h.state.stats().client_seen_since("opencode", since));
+    h.shutdown().await;
+}
+
+/// A relay's HTTP-200 error stream is still a failed handshake until any actual
+/// answer byte is released. It can fail over without publishing response.failed.
+#[tokio::test]
+async fn an_http200_quota_frame_before_output_fails_over_without_partial_replay() {
+    let (addr, mock) = start_mock().await;
+    let mut cfg = config_for(addr);
+    cfg.providers[0].api_surface = serde_json::from_value(json!("responses")).unwrap();
+    cfg.models = vec![
+        model("alpha", "preoutput-quota-model", 0, ModelTier::Standard),
+        model("beta", "good-model", 10, ModelTier::Standard),
+    ];
+    let h = Harness::start(cfg, mock).await;
+    let response = h
+        .responses_request("standard-class", Some(false), true)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let wire = response.text().await.unwrap();
+    assert!(wire.contains("event: response.completed"));
+    assert!(!wire.contains("event: response.failed"));
+    let record = h.record();
+    assert_eq!(record.resolved_model.as_deref(), Some("beta-good-model"));
+    let outcome = h.outcome();
+    assert_eq!(outcome.attempts.len(), 2);
+    assert_eq!(
+        outcome.attempts[0].failure_class,
+        Some(FailureClass::RateLimit)
+    );
+    assert!(outcome.attempts[1].is_terminal_success());
+    assert_eq!(h.mock.count(), 2);
+    h.shutdown().await;
 }
 
 // ------------------------------------------------------------------ gate 4
@@ -2453,6 +2605,32 @@ async fn repair_harness() -> Harness {
     Harness::start_with_secrets(repair_config(addr), mock, delta_secrets()).await
 }
 
+/// One candidate whose repair is refused, and a healthy candidate behind it.
+fn repair_fallback_config(mock: SocketAddr) -> AppConfig {
+    let mut cfg = repair_config(mock);
+    cfg.providers.push(provider("beta", "Beta", mock));
+    let capable = |provider: &str, upstream: &str, priority: i32| {
+        let mut entry = model(provider, upstream, priority, ModelTier::Standard);
+        // The request declares thinking, and request-derived capabilities are
+        // a hard gate, so both candidates have to declare it.
+        entry.capabilities.thinking = true;
+        entry
+    };
+    cfg.models = vec![
+        capable("delta", "repair-fail-model", 0),
+        capable("beta", "good-model", 20),
+    ];
+    cfg
+}
+
+fn repair_fallback_secrets() -> Arc<MemorySecretStore> {
+    Arc::new(
+        MemorySecretStore::new()
+            .with("provider:delta", "sk-delta")
+            .with("provider:beta", "sk-beta"),
+    )
+}
+
 /// A repaired request tells the truth about every send: the first attempt is a
 /// complete classified failure, the repair is its own attempt, and the request's
 /// single Outcome passes the schema. A repairable request shape is not punished
@@ -2494,6 +2672,78 @@ async fn a_repaired_request_records_every_send_as_a_complete_attempt() {
         "the repair is not punished"
     );
     assert!(!h.state.router().is_cooling("delta-repair-once-model"));
+
+    h.shutdown().await;
+}
+
+/// A repair that is itself refused falls over to the next candidate.
+///
+/// The first send is a repairable 400, so the rectifier sends again and the
+/// provider answers 503 — a complete attempt of its own. That failure is
+/// fallbackable, so the request has to reach the healthy candidate behind it
+/// instead of ending on the first provider. The record must keep all three
+/// sends, in order, and still produce exactly one outcome.
+#[tokio::test]
+async fn a_repaired_request_that_is_still_refused_fails_over() {
+    let (addr, mock) = start_mock().await;
+    let h = Harness::start_with_secrets(
+        repair_fallback_config(addr),
+        mock,
+        repair_fallback_secrets(),
+    )
+    .await;
+
+    let response = h.ask_thinking("standard-class", 2048, false).await;
+    assert_eq!(response.status(), 200);
+    let _ = response.text().await.unwrap();
+    wait_for_outcomes(&h, 1).await;
+
+    let outcome = h.outcome();
+    assert_eq!(outcome.final_status, FinalStatus::Success);
+    assert_eq!(
+        h.mock.count(),
+        3,
+        "the first send, its repair, and the fallback candidate"
+    );
+    assert_eq!(outcome.attempts.len(), 3);
+    assert_eq!(
+        outcome.attempts[0].candidate_model,
+        "delta-repair-fail-model"
+    );
+    assert!(!outcome.attempts[0].success);
+    assert_eq!(
+        outcome.attempts[0].failure_class,
+        Some(FailureClass::ProviderRejected)
+    );
+    assert!(!outcome.attempts[0].rectified);
+    assert_eq!(
+        outcome.attempts[1].candidate_model,
+        "delta-repair-fail-model"
+    );
+    assert!(!outcome.attempts[1].success);
+    assert!(outcome.attempts[1].rectified);
+    assert_eq!(
+        outcome.attempts[1].failure_class,
+        Some(FailureClass::ProviderUnavailable)
+    );
+    assert_eq!(outcome.attempts[2].candidate_model, "beta-good-model");
+    assert!(outcome.attempts[2].is_terminal_success());
+    assert!(outcome.validate().is_ok(), "{:?}", outcome.validate());
+
+    // The repairable 400 is not punished: only the failed repair (503) counts
+    // as evidence against the refusing candidate. The serving candidate is
+    // healthy and was never blamed for the first provider's failure.
+    let health = h.state.router().health_snapshot();
+    let delta = health
+        .iter()
+        .find(|m| m.model_id == "delta-repair-fail-model")
+        .expect("the refusing candidate has health");
+    assert_eq!(delta.total_failure, 1);
+    let beta = health
+        .iter()
+        .find(|m| m.model_id == "beta-good-model")
+        .expect("the serving candidate has health");
+    assert_eq!(beta.total_success, 1);
 
     h.shutdown().await;
 }

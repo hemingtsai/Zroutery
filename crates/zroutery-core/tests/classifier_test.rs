@@ -482,21 +482,28 @@ async fn all_candidates_failing_surfaces_an_error() {
     h.shutdown().await;
 }
 
-/// A non-retryable protocol rejection (400) fails the request rather than
-/// being replayed at every candidate — the same semantics main traffic has,
-/// and fail-closed either way.
+/// A 400 is not replayed at the same candidate, but it does fail over: the
+/// next provider's wire contract can accept the body this one refused. The
+/// request is still fail-closed in the sense that matters — it never returns a
+/// verdict no candidate produced — but one provider's rejection no longer ends
+/// the review.
 #[tokio::test]
-async fn a_non_retryable_rejection_fails_closed() {
+async fn a_rejection_fails_over_to_the_next_candidate() {
     let (addr, mock) = start_mock().await;
     let h = Harness::start(config_for(addr, &["refuse-glm", "backup-glm"]), mock).await;
 
     let resp = h.post(classifier_body()).await;
-    assert_eq!(resp.status(), 400);
-    assert_eq!(
-        h.mock.count(),
-        1,
-        "a 400 is not retried at the next candidate"
-    );
+    assert_eq!(resp.status(), 200);
+    assert_eq!(resp.headers()["x-zroutery-model"], "zai-backup-glm");
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["content"][0]["text"], "<block>no</block>");
+
+    // Each candidate is tried at most once: a 400 is never replayed against
+    // the candidate that produced it.
+    let bodies = h.mock.bodies();
+    assert_eq!(bodies.len(), 2);
+    assert_eq!(bodies[0]["model"], "refuse-glm");
+    assert_eq!(bodies[1]["model"], "backup-glm");
 
     h.shutdown().await;
 }

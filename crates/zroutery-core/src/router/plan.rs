@@ -28,6 +28,8 @@ impl Router {
             stats_store: StatsStore::new(),
             group_limited: Mutex::new(std::collections::HashSet::new()),
             provider_gates: Mutex::new(HashMap::new()),
+            account_gates: Mutex::new(HashMap::new()),
+            key_gates: Mutex::new(HashMap::new()),
         }
     }
 

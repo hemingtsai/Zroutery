@@ -6,8 +6,8 @@ use axum::http::{Method, StatusCode};
 use axum::response::Response;
 use chrono::Local;
 use serde_json::Value;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
 use super::cors::{cors_layer, origin_policy, OriginPolicy};
@@ -180,13 +180,14 @@ fn the_free_tier_is_anonymous_when_no_key_was_ever_stored() {
     );
     let provider = ProviderConfig::new("zen", "OpenCode Zen", ProviderKind::OpenCodeZenFree);
     assert!(!provider.key_ref.is_empty(), "the preset names a secret");
-    assert!(state.api_key(&provider).unwrap().is_none());
+    assert_eq!(state.api_key(&provider).unwrap().as_deref(), Some("public"));
 
-    // A stored key is still sent: a user may have one for another surface.
+    // The anonymous preset never borrows a paid credential; Console/ordinary
+    // providers are separate configurations for those credentials.
     let with_key = Arc::new(crate::config::MemorySecretStore::new().with("provider:zen", "sk-zen"));
     let state = AppState::new(AppConfig::default(), with_key);
     let provider = ProviderConfig::new("zen", "OpenCode Zen", ProviderKind::OpenCodeZenFree);
-    assert_eq!(state.api_key(&provider).unwrap().as_deref(), Some("sk-zen"));
+    assert_eq!(state.api_key(&provider).unwrap().as_deref(), Some("public"));
 }
 
 #[test]
@@ -489,5 +490,315 @@ async fn removing_a_budget_does_not_leak_an_in_flight_permit() {
         .await
         .is_ok(),
         "the released permit must still be the one the gate hands out"
+    );
+}
+
+// ---------------------------------------------------------------- bursts
+//
+// The three tests below are the performance contract of the accounting path
+// under load, stated as behaviour rather than as a benchmark: a burst of a
+// thousand charges must all survive a flush, a writer that stalls must not
+// stall the request path, and a scope at its limit must keep handing its gate
+// to the next request without deadlocking.
+
+/// The global day total in a ledger the test is about to write out.
+fn flushed_day_total(ledger: &crate::budget::Ledger) -> f64 {
+    ledger
+        .totals_for(&BudgetScope::Global, Local::now())
+        .into_iter()
+        .find(|(period, _)| *period == crate::budget::BudgetPeriod::Day)
+        .map(|(_, cost)| cost.amount)
+        .unwrap_or(0.0)
+}
+
+/// A 1k burst, flushed concurrently, loses nothing and never writes an older
+/// total over a newer one.
+///
+/// The protocol under test is `ledger_dirty` + `ledger_generation` + the flush
+/// mutex: the flusher snapshots, writes, and only clears the flag when the
+/// generation still matches. A regression here is silent — a request's spend
+/// disappears from `spend.json` and the budget lets it through again after a
+/// restart — so the assertion is on the sequence of written totals, not only on
+/// the last one.
+#[test]
+fn a_thousand_charges_survive_concurrent_flushes() {
+    const THREADS: usize = 8;
+    const PER_THREAD: usize = 125;
+    const EACH: f64 = 0.001;
+    let expected = THREADS as f64 * PER_THREAD as f64 * EACH;
+
+    let state = Arc::new(budget_scope_state());
+    let written: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::new()));
+    let stop = Arc::new(AtomicBool::new(false));
+
+    let flusher = {
+        let state = Arc::clone(&state);
+        let written = Arc::clone(&written);
+        let stop = Arc::clone(&stop);
+        std::thread::spawn(move || {
+            while !stop.load(Ordering::Acquire) {
+                let seen = Arc::clone(&written);
+                // The save closure runs with the flush lock held, so recording
+                // here records the order the writes actually happened in.
+                let _ = state.flush_ledger(|ledger| {
+                    seen.lock().unwrap().push(flushed_day_total(ledger));
+                    Ok(())
+                });
+                std::thread::yield_now();
+            }
+        })
+    };
+
+    let mut chargers = Vec::new();
+    for _ in 0..THREADS {
+        let state = Arc::clone(&state);
+        chargers.push(std::thread::spawn(move || {
+            for _ in 0..PER_THREAD {
+                state.charge(
+                    "provider",
+                    Some(ModelTier::Standard),
+                    &Cost {
+                        currency: "USD".into(),
+                        amount: EACH,
+                    },
+                );
+            }
+        }));
+    }
+    for charger in chargers {
+        charger.join().expect("no charge panicked");
+    }
+    stop.store(true, Ordering::Release);
+    flusher.join().expect("the flusher panicked");
+
+    // The final flush has to see everything the burst charged. It writes into
+    // the same log, because the flusher thread stopped on the flag rather than
+    // on the last charge: its final write may have been taken before the last
+    // charge landed, and reading *its* last value would be reading a snapshot
+    // of a race rather than the result.
+    //
+    // If the flusher already wrote everything, the ledger is no longer dirty
+    // and this flush writes nothing at all — so the assertion is on the
+    // largest total any write ever carried, not on the last one.
+    let final_total = Arc::new(Mutex::new(None::<f64>));
+    {
+        let final_total = Arc::clone(&final_total);
+        state
+            .flush_ledger(|ledger| {
+                *final_total.lock().unwrap() = Some(flushed_day_total(ledger));
+                Ok(())
+            })
+            .expect("the last flush succeeds");
+    }
+    let written_totals = written.lock().unwrap().clone();
+    let final_written = *final_total.lock().unwrap();
+    let last = written_totals
+        .iter()
+        .copied()
+        .chain(final_written)
+        .fold(0.0f64, f64::max);
+    assert!(
+        (last - expected).abs() < 1e-9,
+        "some write must contain all {THREADS}x{PER_THREAD} charges: \
+         expected {expected}, wrote {last}"
+    );
+
+    // And no flush ever wrote a total smaller than one it had already written:
+    // that is what "an older snapshot must not overwrite a newer one" means on
+    // disk, observed from the values rather than from the lock.
+    for pair in written_totals.windows(2) {
+        assert!(
+            pair[1] >= pair[0],
+            "a flush wrote an older total over a newer one: {pair:?}"
+        );
+    }
+    assert!(
+        (flushed_day_total(&state.ledger()) - expected).abs() < 1e-9,
+        "in-memory accounting must agree with the flush"
+    );
+}
+
+/// A writer that blocks inside `save` must not block the request path.
+///
+/// This is the A9 defect in miniature: the disk belongs to the desktop shell,
+/// and if a slow `std::fs::write` were called while the ledger lock was held,
+/// every charge behind it would wait for the filesystem. The test holds a
+/// writer inside `save` and proves that charges complete anyway, then that the
+/// stalled snapshot and the next flush are both honest about what they contain.
+#[test]
+fn a_stalled_writer_does_not_stall_charges() {
+    const CHARGE_THREADS: usize = 4;
+    const PER_THREAD: usize = 25;
+    const EACH: f64 = 0.001;
+
+    let state = Arc::new(state_with_charge(EACH));
+    let (entered_tx, entered_rx) = mpsc::channel::<()>();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let stalled_total = Arc::new(Mutex::new(None::<f64>));
+
+    let writer = {
+        let state = Arc::clone(&state);
+        let stalled_total = Arc::clone(&stalled_total);
+        std::thread::spawn(move || {
+            state.flush_ledger(|ledger| {
+                entered_tx.send(()).expect("the test is still listening");
+                // Blocks until the charges below have finished. If a charge
+                // needed the flush lock, this would deadlock the whole scope.
+                release_rx.recv().expect("the test releases the writer");
+                *stalled_total.lock().unwrap() = Some(flushed_day_total(ledger));
+                Ok(())
+            })
+        })
+    };
+    entered_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("the writer must reach the save closure");
+
+    let charged = Arc::new(AtomicUsize::new(0));
+    let mut chargers = Vec::new();
+    for _ in 0..CHARGE_THREADS {
+        let state = Arc::clone(&state);
+        let charged = Arc::clone(&charged);
+        chargers.push(std::thread::spawn(move || {
+            for _ in 0..PER_THREAD {
+                state.charge(
+                    "provider",
+                    Some(ModelTier::Standard),
+                    &Cost {
+                        currency: "USD".into(),
+                        amount: EACH,
+                    },
+                );
+                charged.fetch_add(1, Ordering::AcqRel);
+            }
+        }));
+    }
+
+    // Poll rather than join, so a regression fails the test instead of hanging
+    // the suite: the writer is only released on the way out.
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let target = CHARGE_THREADS * PER_THREAD;
+    while charged.load(Ordering::Acquire) < target && std::time::Instant::now() < deadline {
+        std::thread::yield_now();
+    }
+    let reached = charged.load(Ordering::Acquire);
+    let _ = release_tx.send(());
+    for charger in chargers {
+        charger.join().expect("no charge panicked");
+    }
+    writer
+        .join()
+        .expect("the writer panicked")
+        .expect("the write succeeds");
+
+    assert_eq!(
+        reached, target,
+        "charges must not wait on a writer that is inside `save`"
+    );
+    // The snapshot the stalled writer took holds exactly what existed when it
+    // started; the burst is not in it, and is not lost either.
+    let stalled = stalled_total.lock().unwrap().expect("the writer recorded");
+    assert!(
+        (stalled - EACH).abs() < 1e-9,
+        "the snapshot must be the pre-burst total, got {stalled}"
+    );
+    let mut after = None;
+    state
+        .flush_ledger(|ledger| {
+            after = Some(flushed_day_total(ledger));
+            Ok(())
+        })
+        .expect("the next flush succeeds");
+    let after = after.expect("the burst left the ledger dirty");
+    let expected = EACH + target as f64 * EACH;
+    assert!(
+        (after - expected).abs() < 1e-9,
+        "every charge that landed during the write must be flushed next time: \
+         expected {expected}, wrote {after}"
+    );
+}
+
+/// A refused request must hand its gate back, or the retry waits on the permit
+/// the refusal still holds.
+///
+/// The pipeline's shape for an over-budget request is: take the gate, check the
+/// budget, refuse, drop the guard. A guard that outlived the refusal would make
+/// the client's rectified retry — which takes the same scope — wait forever on
+/// a permit nobody is going to release.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn refused_requests_release_their_gate_for_the_retry() {
+    let state = Arc::new(budget_scope_state());
+    let scope = BudgetScope::Global;
+    let mut tasks = Vec::new();
+    for _ in 0..64 {
+        let state = Arc::clone(&state);
+        let scope = scope.clone();
+        tasks.push(tokio::spawn(async move {
+            let guard = state.admit(std::slice::from_ref(&scope)).await;
+            // The verdict is read while the gate is held, exactly as the
+            // pipeline does before deciding to refuse.
+            let _ = state.budget_verdict(&[], None);
+            drop(guard);
+        }));
+    }
+    for (index, task) in tasks.into_iter().enumerate() {
+        tokio::time::timeout(Duration::from_secs(5), task)
+            .await
+            .unwrap_or_else(|_| panic!("request {index} deadlocked on its own scope"))
+            .expect("no task panicked");
+    }
+
+    // The scope is still usable afterwards, which is the property a stranded
+    // permit would have taken away.
+    assert!(
+        tokio::time::timeout(
+            Duration::from_millis(500),
+            state.admit(std::slice::from_ref(&BudgetScope::Global))
+        )
+        .await
+        .is_ok(),
+        "the gate must be free once every refused request has dropped its guard"
+    );
+}
+
+/// The gate is still exclusive under contention, and contention still drains.
+///
+/// Exclusivity is the budget guarantee: two requests inside one scope would
+/// both read the same historical total and both pass. Draining is the liveness
+/// guarantee: a gate nobody releases is a deadlock. The counter below observes
+/// the first from inside the critical section, and the timeout observes the
+/// second.
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn a_contended_scope_stays_exclusive_and_still_drains() {
+    let state = Arc::new(budget_scope_state());
+    let inside = Arc::new(AtomicUsize::new(0));
+    let peak = Arc::new(AtomicUsize::new(0));
+    let mut tasks = Vec::new();
+
+    for _ in 0..64 {
+        let state = Arc::clone(&state);
+        let inside = Arc::clone(&inside);
+        let peak = Arc::clone(&peak);
+        tasks.push(tokio::spawn(async move {
+            let guard = state.admit(&[BudgetScope::Global]).await;
+            let now = inside.fetch_add(1, Ordering::AcqRel) + 1;
+            peak.fetch_max(now, Ordering::AcqRel);
+            // Yield so a second holder, if the gate were broken, would be
+            // observed instead of the window closing inside one poll.
+            tokio::task::yield_now().await;
+            inside.fetch_sub(1, Ordering::AcqRel);
+            drop(guard);
+        }));
+    }
+    for (index, task) in tasks.into_iter().enumerate() {
+        tokio::time::timeout(Duration::from_secs(10), task)
+            .await
+            .unwrap_or_else(|_| panic!("request {index} never got its turn"))
+            .expect("no task panicked");
+    }
+    assert_eq!(
+        peak.load(Ordering::Acquire),
+        1,
+        "two requests were inside one budget scope at once, so the overshoot bound is not real"
     );
 }

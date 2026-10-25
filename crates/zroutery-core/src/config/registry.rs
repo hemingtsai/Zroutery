@@ -124,6 +124,10 @@ pub struct AccountConfig {
     /// Whether to probe and route to this account.
     #[serde(default = "default_true")]
     pub enabled: bool,
+    /// Explicit inference credentials for this account. The existing key_ref
+    /// remains the panel credential and is never inferred to be a chat key.
+    #[serde(default)]
+    pub inference_keys: Vec<InferenceKeyConfig>,
     /// How this account's resource is kept topped up.
     ///
     /// A declaration like the rest of this struct: it says what maintenance the
@@ -132,6 +136,28 @@ pub struct AccountConfig {
     /// are held in the account store, not written here.
     #[serde(default)]
     pub maintenance: MaintenanceConfig,
+}
+
+/// One inference key attached to an account; secret material stays in keychain.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InferenceKeyConfig {
+    pub id: String,
+    pub key_ref: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub priority: i32,
+}
+
+impl Default for InferenceKeyConfig {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            key_ref: String::new(),
+            enabled: true,
+            priority: 0,
+        }
+    }
 }
 
 /// What the user asked to be done about an account's resources.

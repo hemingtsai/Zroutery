@@ -46,7 +46,9 @@ pub use provider::{
     passthrough_denied, resolve_client_identity, ClientIdentity, ProviderClientProfile,
     ProviderKind, PASSTHROUGH_DENIED,
 };
-pub use registry::{qualified_id, AccountConfig, MaintenanceConfig, ModelEntry, ProviderConfig};
+pub use registry::{
+    qualified_id, AccountConfig, InferenceKeyConfig, MaintenanceConfig, ModelEntry, ProviderConfig,
+};
 pub use routing::{
     ClassifierCandidate, ClassifierConfig, RectifierConfig, RoutingConfig, RoutingStrategy,
     VisionConfig,

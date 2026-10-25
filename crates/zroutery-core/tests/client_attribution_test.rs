@@ -55,6 +55,54 @@ fn ua(value: &str) -> HeaderMap {
     headers(&[(header::USER_AGENT.as_str(), value)])
 }
 
+#[test]
+fn takeover_confirmation_uses_recent_recognised_arrivals_not_activity_totals() {
+    let stats = Stats::new(1);
+    let adopted = chrono::Utc::now();
+    let opencode = identify(
+        &headers(&[
+            ("x-opencode-client", "cli"),
+            ("x-opencode-session", "session-fixture"),
+        ]),
+        None,
+    );
+    stats.observe_client(&opencode, adopted - chrono::Duration::seconds(1));
+    assert!(!stats.client_seen_since("opencode", adopted));
+    stats.observe_client(
+        &ClientFingerprint::unknown(),
+        adopted + chrono::Duration::seconds(1),
+    );
+    stats.observe_client(
+        &ClientFingerprint::custom("codex", ClientFamily::Cli),
+        adopted + chrono::Duration::seconds(1),
+    );
+    assert!(!stats.client_seen_since("codex", adopted));
+    stats.observe_client(&opencode, adopted + chrono::Duration::seconds(1));
+    assert!(stats.client_seen_since("opencode", adopted));
+    assert!(!stats.client_seen_since("claude_code", adopted));
+    assert_eq!(
+        stats.summary().requests,
+        0,
+        "an arrival is not a completion"
+    );
+    stats.clear();
+    assert!(
+        stats.client_seen_since("opencode", adopted),
+        "clearing activity does not undo connectivity"
+    );
+    assert!(
+        !stats.client_seen_since("opencode", adopted + chrono::Duration::seconds(2)),
+        "a new adopt needs new evidence"
+    );
+    stats.observe_client(&opencode, adopted - chrono::Duration::seconds(2));
+    assert!(
+        stats.client_seen_since("opencode", adopted),
+        "an older concurrent arrival cannot erase newer evidence"
+    );
+    stats.forget_client_observation("opencode");
+    assert!(!stats.client_seen_since("opencode", adopted));
+}
+
 /// The id, source and confidence a rule produced, as one comparable triple.
 fn triple(fingerprint: &ClientFingerprint) -> (&str, AttributionSource, Confidence) {
     (

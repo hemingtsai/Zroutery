@@ -292,9 +292,16 @@ pub(super) fn sse_body(
     futures_util::stream::unfold(state, |mut st| async move {
         loop {
             if let Some(frame) = st.pending.pop_front() {
+                if st.finished && st.pending.is_empty() {
+                    // Settle as the terminal frame is handed out, not while
+                    // earlier closing frames are still queued. A disconnect
+                    // before the terminal is delivered remains interrupted.
+                    st.finalize(StreamTerminal::Completed);
+                }
                 return Some((Ok(bytes::Bytes::from(frame.to_wire())), st));
             }
             if st.finished {
+                st.finalize(StreamTerminal::Completed);
                 return None;
             }
             // Race upstream events against cancellation signal for immediate abort.
@@ -387,6 +394,14 @@ pub(super) fn sse_body(
                     // disconnect that happens later truncates it.
                     st.emitted |= !frames.is_empty();
                     st.pending.extend(frames);
+                    // Stop is the parser's explicit protocol terminal, not TCP
+                    // EOF. Responses clients stop reading on response.completed;
+                    // waiting for another poll/EOF mislabels that normal close
+                    // as 499. Drain the queued frames, settling when the last
+                    // (terminal) frame is handed out above.
+                    if matches!(event, StreamEvent::Stop { .. }) {
+                        st.finished = true;
+                    }
                 }
                 Some(Err(err)) => {
                     st.finished = true;

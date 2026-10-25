@@ -27,6 +27,14 @@ pub struct Candidate {
     /// True when this candidate is only being tried because everything else is
     /// unavailable (open circuit) or because it is in a half-open probe.
     pub degraded: bool,
+    /// Explicit account/key selected after model ranking. No secret is held here.
+    pub credential: Option<InferenceCredential>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InferenceCredential {
+    pub account_id: String,
+    pub key_id: String,
 }
 
 impl Candidate {
@@ -36,6 +44,7 @@ impl Candidate {
             entry: entry.clone(),
             provider: provider.clone(),
             degraded,
+            credential: None,
         }
     }
 
