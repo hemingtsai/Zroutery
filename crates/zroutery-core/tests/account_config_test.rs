@@ -145,9 +145,12 @@ fn an_account_config_carries_no_observation_fields() {
         );
     }
 
+    // Five fields, and every one of them a declaration. `inference_keys` is
+    // the chat pool the routing path may use; it names keychain references and
+    // priorities, which the user chose, not readings that expire.
     assert_eq!(
         fields.len(),
-        4,
+        5,
         "AccountConfig is a declaration and nothing else; got {fields:?}"
     );
 }
