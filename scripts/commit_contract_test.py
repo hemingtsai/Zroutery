@@ -179,6 +179,7 @@ IMPERATIVE_VERBS = frozenset(
         "fix",
         "format",
         "generate",
+        "give",
         "guard",
         "handle",
         "harden",
@@ -212,11 +213,13 @@ IMPERATIVE_VERBS = frozenset(
         "persist",
         "pin",
         "plan",
+        "point",
         "preserve",
         "prevent",
         "print",
         "provide",
         "publish",
+        "raise",
         "read",
         "record",
         "recompute",
@@ -574,6 +577,18 @@ def _fixture_messages() -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
         (
             "mark imperative compatibility subject",
             "docs(workflow): mark first implementation batch running",
+        ),
+        (
+            "give imperative compatibility subject",
+            "feat(account): give an account its own pool of keys",
+        ),
+        (
+            "point imperative compatibility subject",
+            "fix(takeover): point opencode at the native block",
+        ),
+        (
+            "raise imperative compatibility subject",
+            "build(repo): raise the declared toolchain to the desktop floor",
         ),
         (
             "accept imperative compatibility subject",
