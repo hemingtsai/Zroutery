@@ -15,8 +15,5 @@
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.4"
-  },
-  "dependencies": {
-    "@radix-ui/react-select": "^2.3.7"
   }
 }
