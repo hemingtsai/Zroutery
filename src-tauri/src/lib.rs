@@ -9,6 +9,7 @@ pub mod checkin;
 #[cfg(feature = "account-maint")]
 mod checkin_commands;
 mod commands;
+#[cfg(feature = "account")]
 mod inference_commands;
 mod logs;
 pub mod migration;
@@ -16,6 +17,7 @@ mod migration_commands;
 #[cfg(test)]
 mod migration_tests;
 pub mod platform;
+mod secret_refs;
 pub mod secrets;
 #[cfg(desktop)]
 mod shell;

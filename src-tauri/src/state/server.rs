@@ -109,7 +109,7 @@ impl Desktop {
             .candidates
             .retain(|c| !gone.contains(&c.model));
 
-        let live = crate::inference_commands::referenced_secrets(&next);
+        let live = crate::secret_refs::referenced_secrets(&next);
         let mut failed = Vec::new();
         for key_ref in removed_refs {
             if live.contains(&key_ref) {
