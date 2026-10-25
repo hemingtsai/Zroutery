@@ -91,13 +91,27 @@ export function BrowserTokenButton({
 
   useEffect(() => {
     if (!live) return;
-    const timer = window.setInterval(() => {
+    // The capture keeps running in the backend while the window is in the
+    // background; polling it from here only burns IPC for a screen nobody is
+    // looking at. Skip the tick while hidden and read once on return, so the
+    // first frame after coming back is current rather than up to an interval
+    // stale.
+    const tick = () => {
+      if (document.visibilityState === "hidden") return;
       api
         .tokenCaptureStatus(providerId, accountId)
         .then(apply)
         .catch(() => {});
-    }, POLL_MS);
-    return () => window.clearInterval(timer);
+    };
+    const timer = window.setInterval(tick, POLL_MS);
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") tick();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
   }, [live, providerId, accountId, apply]);
 
   const start = async () => {
