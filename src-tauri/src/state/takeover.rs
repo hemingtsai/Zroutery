@@ -65,8 +65,7 @@ impl Desktop {
         }
 
         let style = config.routing.naming_style;
-        // A class serves the union of its usable members' effort levels: a
-        // level the client selects is reachable through at least one member.
+        // A class offers the intersection of its usable members' effort levels.
         // Members whose provider is disabled, or that are decision endpoints,
         // cannot serve chat traffic and must not contribute a level.
         let classes: Vec<TierClass> = ModelTier::ALL
@@ -86,13 +85,23 @@ impl Desktop {
                 if members.is_empty() {
                     return None;
                 }
-                let declared: Vec<String> = members
-                    .iter()
-                    .flat_map(|model| model.normalized_effort_levels())
-                    .collect();
+                // A level the class publishes must be one **every** member
+                // accepts, not merely one member. A union offered `max` to a
+                // picker whose class also holds a model that tops out at
+                // `high`; the router served the class from that member, the
+                // client sent `reasoning_effort: max`, and the upstream
+                // refused the request. An intersection shrinks the picker
+                // instead of failing the request.
                 let effort_levels: Vec<String> = zroutery_core::config::EFFORT_LEVELS
                     .iter()
-                    .filter(|level| declared.iter().any(|value| value == *level))
+                    .filter(|level| {
+                        members.iter().all(|model| {
+                            model
+                                .normalized_effort_levels()
+                                .iter()
+                                .any(|value| value == **level)
+                        })
+                    })
                     .map(|level| (*level).to_string())
                     .collect();
                 Some(TierClass {
@@ -116,10 +125,10 @@ impl Desktop {
 
     /// What this call can vouch for about a held takeover.
     ///
-    /// The desktop cannot watch a client's traffic, so `request_confirmed`
-    /// stays `None` — and the status machine answers `degraded`, never
-    /// `active`, for an unproven takeover. What *can* be checked here is the
-    /// credential: if the gateway token was regenerated after the adopt, the
+    /// Authenticated chat arrivals after this adopt confirm the client's route
+    /// to the gateway; upstream success is a separate concern. Unknown clients
+    /// and probes cannot confirm it. Also check the credential and managed
+    /// fields: if the gateway token was regenerated after the adopt, the
     /// client is still sending the old one and every request it makes will
     /// fail. That is worth a note of its own.
     fn verification_for(
@@ -142,44 +151,13 @@ impl Desktop {
                 .push("the client config could not be read right now".into());
             return Some(report);
         };
-        let Ok(fields) = takeover_fields(agent, target, Some(&snapshot.raw)) else {
-            return Some(report);
-        };
-        // Every managed field the current gateway would write must still be on
-        // disk with that value. The token alone is not enough: a client adopted
-        // before a new field existed keeps a config the current target no
-        // longer describes (the effort variants are the case that exposed
-        // this), and the status must say the config needs refreshing rather
-        // than call it healthy.
-        let paths: Vec<String> = fields.iter().map(|field| field.path.clone()).collect();
-        let live = extract_field_values(&snapshot.raw, &paths);
-        report.config_matches = fields
-            .iter()
-            .all(|field| live.get(&field.path) == Some(&field.value));
-        if !report.config_matches {
-            report.notes.push(
-                "the client config does not match what this build manages — release and take \
-                 the client over again to write the current field set"
-                    .into(),
-            );
-        }
-
-        let token_paths: Vec<String> = fields
-            .iter()
-            .filter(|f| f.value == serde_json::json!(target.token))
-            .map(|f| f.path.clone())
-            .collect();
-        let live_token = extract_field_values(&snapshot.raw, &token_paths);
-        report.credential_ok =
-            !token_paths.is_empty() && token_paths.iter().all(|p| live_token.contains_key(p));
-        if !report.credential_ok {
-            report.notes.push(
-                "the gateway token has changed since this client was taken over — \
-                 release and take over again to hand the client the new one"
-                    .into(),
-            );
-        }
-        Some(report)
+        Some(verification_from_config(
+            agent,
+            target,
+            &snapshot.raw,
+            self.core.stats(),
+            store.manifest().and_then(|manifest| manifest.adopted_at),
+        ))
     }
 
     /// Every agent's takeover reading, in `AgentType::ALL` order.
@@ -258,6 +236,9 @@ impl Desktop {
             return Err(err);
         }
         store.record_applied(&managed_values)?;
+        self.core
+            .stats()
+            .forget_client_observation(attribution_id(agent));
 
         Ok(store.inspect(
             Some(adapter.as_ref()),
@@ -292,11 +273,181 @@ impl Desktop {
     }
 }
 
+/// Verify a snapshot without opening or rewriting the user's client config.
+fn verification_from_config(
+    agent: AgentType,
+    target: &GatewayTarget,
+    raw: &serde_json::Value,
+    stats: &zroutery_core::stats::Stats,
+    adopted_at: Option<i64>,
+) -> VerificationReport {
+    let mut report = VerificationReport::unchecked();
+    let Ok(fields) = takeover_fields(agent, target, Some(raw)) else {
+        return report;
+    };
+    report.notes.clear();
+    // Every managed field the current gateway would write must still be on
+    // disk with that value. The token alone is not enough: a client adopted
+    // before a new field existed keeps a config the current target no
+    // longer describes (the effort variants are the case that exposed
+    // this), and the status must say the config needs refreshing rather
+    // than call it healthy.
+    let paths: Vec<String> = fields.iter().map(|field| field.path.clone()).collect();
+    let live = extract_field_values(raw, &paths);
+    report.config_matches = fields
+        .iter()
+        .all(|field| live.get(&field.path) == Some(&field.value));
+    if !report.config_matches {
+        report.notes.push(
+            "the client config does not match what this build manages — release and take \
+                 the client over again to write the current field set"
+                .into(),
+        );
+    }
+
+    let token_paths: Vec<String> = fields
+        .iter()
+        .filter(|f| f.value == serde_json::json!(target.token))
+        .map(|f| f.path.clone())
+        .collect();
+    let live_token = extract_field_values(raw, &token_paths);
+    report.credential_ok = !token_paths.is_empty()
+        && token_paths
+            .iter()
+            .all(|p| live_token.get(p) == Some(&serde_json::json!(target.token)));
+    if !report.credential_ok {
+        report.notes.push(
+            "the gateway token has changed since this client was taken over — \
+                 release and take over again to hand the client the new one"
+                .into(),
+        );
+    }
+    let client_id = attribution_id(agent);
+    if adopted_at
+        .and_then(|at| chrono::DateTime::from_timestamp(at, 0))
+        .is_some_and(|at| stats.client_seen_since(client_id, at))
+    {
+        report.request_confirmed = Some(true);
+    }
+    if report.request_confirmed.is_none() {
+        report
+            .notes
+            .push("this takeover has not been verified by a request from this client yet".into());
+    }
+    report
+}
+
+fn attribution_id(agent: AgentType) -> &'static str {
+    match agent {
+        AgentType::Claude => "claude_code",
+        AgentType::Codex => "codex",
+        AgentType::OpenCode => "opencode",
+        AgentType::Gemini => "gemini",
+    }
+}
+
 /// `fast` → `Fast`, for a model picker that shows words, not enum names.
 fn capitalize(word: &str) -> String {
     let mut chars = word.chars();
     match chars.next() {
         Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
         None => String::new(),
+    }
+}
+
+#[cfg(test)]
+mod verification_tests {
+    use super::*;
+    use zroutery_core::client::identify;
+    use zroutery_core::stats::Stats;
+
+    fn fixture() -> (GatewayTarget, serde_json::Value, Stats, i64) {
+        let target = GatewayTarget {
+            base_url: "http://127.0.0.1:8787".into(),
+            token: "test-gateway-token".into(),
+            classes: vec![TierClass {
+                model: "standard-class".into(),
+                display_name: "Standard".into(),
+                effort_levels: Vec::new(),
+            }],
+            default_class: None,
+        };
+        let mut raw = serde_json::json!({});
+        for field in takeover_fields(AgentType::OpenCode, &target, Some(&raw)).unwrap() {
+            let path: Vec<&str> = field.path.split('.').collect();
+            let mut cursor = &mut raw;
+            for segment in &path[..path.len() - 1] {
+                cursor = cursor
+                    .as_object_mut()
+                    .unwrap()
+                    .entry((*segment).to_string())
+                    .or_insert_with(|| serde_json::json!({}));
+            }
+            cursor
+                .as_object_mut()
+                .unwrap()
+                .insert(path[path.len() - 1].to_string(), field.value);
+        }
+        (
+            target,
+            raw,
+            Stats::new(1),
+            chrono::Utc::now().timestamp() - 10,
+        )
+    }
+
+    fn observe(stats: &Stats, at: i64) {
+        let mut headers = tauri::http::HeaderMap::new();
+        headers.insert("x-opencode-client", "cli".parse().unwrap());
+        headers.insert("x-opencode-session", "test-session".parse().unwrap());
+        stats.observe_client(
+            &identify(&headers, None),
+            chrono::DateTime::from_timestamp(at, 0).unwrap(),
+        );
+    }
+
+    #[test]
+    fn an_opencode_request_after_adopt_confirms_the_matching_config() {
+        let (target, raw, stats, adopted) = fixture();
+        let check =
+            || verification_from_config(AgentType::OpenCode, &target, &raw, &stats, Some(adopted));
+        assert_eq!(check().request_confirmed, None);
+        observe(&stats, adopted - 1);
+        assert_eq!(
+            check().request_confirmed,
+            None,
+            "old traffic cannot confirm a new adopt"
+        );
+        observe(&stats, adopted + 1);
+        let report = check();
+        assert!(report.config_matches && report.credential_ok);
+        assert_eq!(report.request_confirmed, Some(true));
+        assert!(report.notes.is_empty());
+        stats.clear();
+        assert_eq!(check().request_confirmed, Some(true));
+    }
+
+    #[test]
+    fn traffic_does_not_hide_a_changed_token_or_managed_field() {
+        let (target, mut raw, stats, adopted) = fixture();
+        observe(&stats, adopted + 1);
+        raw["providers"]["zroutery"]["settings"]["apiKey"] = serde_json::json!("old-token");
+        let report =
+            verification_from_config(AgentType::OpenCode, &target, &raw, &stats, Some(adopted));
+        assert!(!report.credential_ok);
+        assert!(!report.config_matches);
+        assert_eq!(report.request_confirmed, Some(true));
+        assert!(report
+            .notes
+            .iter()
+            .any(|note| note.contains("token has changed")));
+        raw["providers"]["zroutery"]["settings"]["apiKey"] = serde_json::json!(target.token);
+        raw["providers"]["zroutery"]["settings"]["baseURL"] =
+            serde_json::json!("http://elsewhere.invalid/v1");
+        let report =
+            verification_from_config(AgentType::OpenCode, &target, &raw, &stats, Some(adopted));
+        assert!(report.credential_ok);
+        assert!(!report.config_matches);
+        assert!(!report.notes.is_empty());
     }
 }

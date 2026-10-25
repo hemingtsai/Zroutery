@@ -75,9 +75,9 @@ async fn the_snapshot_reports_this_build_s_account_availability() {
 /// Two properties, and the second is the one that bites:
 ///
 /// 1. Every feature an availability flag names is a feature the package
-///    actually declares. A flag reading `cfg!(feature = "account_maint")`
-///    against a package that declares `account-maint` is false forever, and
-///    the dashboard would hide a capability the build has.
+///    actually declares. A flag that spells the name with an underscore where
+///    the manifest has a hyphen is false forever, and the dashboard would hide
+///    a capability the build has.
 /// 2. Every capability the dashboard has a flag for is in the shipped default
 ///    list. Dropping one is a decision, and a decision belongs in this file
 ///    rather than in an edit nobody notices.
@@ -1414,7 +1414,7 @@ fn the_gateway_target_offers_exactly_the_tiers_that_have_enabled_models() {
 }
 
 #[test]
-fn the_gateway_target_publishes_the_union_of_effort_levels() {
+fn the_gateway_target_publishes_only_the_effort_levels_every_member_accepts() {
     let config: AppConfig = serde_json::from_value(serde_json::json!({
         "server": {"auth_token": "gw-token"},
         "providers": [
@@ -1443,8 +1443,9 @@ fn the_gateway_target_publishes_the_union_of_effort_levels() {
         .expect("the fast class");
     assert_eq!(
         fast.effort_levels,
-        ["low", "high", "max"],
-        "the union in picker order; the disabled provider and the unknown level do not contribute"
+        ["high"],
+        "only the level both enabled members accept; `max` is m-b's alone and would be \
+         refused by m-a, and the disabled provider does not contribute"
     );
 }
 
