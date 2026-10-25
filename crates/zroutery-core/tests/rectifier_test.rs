@@ -2,6 +2,7 @@
 
 use serde_json::{json, Value};
 use zroutery_core::error::Error;
+use zroutery_core::rectifier::codex_metadata::{CodexMetadataRectifier, INTERNAL_FIELD};
 use zroutery_core::rectifier::media_fallback::MediaFallbackRectifier;
 use zroutery_core::rectifier::thinking_budget::ThinkingBudgetRectifier;
 use zroutery_core::rectifier::thinking_signature::ThinkingSignatureRectifier;
@@ -15,6 +16,76 @@ fn upstream(msg: &str, status: u16) -> Error {
         body: msg.to_string(),
         retry_after: None,
     }
+}
+
+#[test]
+fn codex_internal_metadata_repair_matches_only_the_named_rejection() {
+    let rectifier = CodexMetadataRectifier;
+    let body = json!({"input":[{"role":"user","content":"hi", INTERNAL_FIELD:{"content_item_metadata":[]}}]});
+    for message in [
+        "Unknown parameter: 'input[1].internal_chat_message_metadata_passthrough'",
+        "Unrecognized request argument supplied: internal_chat_message_metadata_passthrough",
+        "input[2].internal_chat_message_metadata_passthrough: Extra inputs are not permitted",
+    ] {
+        assert!(rectifier.should_apply(&upstream(message, 400), &body));
+        assert!(rectifier.should_apply(&upstream(message, 422), &body));
+        assert!(!rectifier.should_apply(&upstream(message, 429), &body));
+    }
+    for message in [
+        "Unknown parameter: input[1].metadata",
+        "invalid internal_chat_message_metadata_passthrough content",
+        "tool_call_mismatch",
+    ] {
+        assert!(!rectifier.should_apply(&upstream(message, 400), &body));
+    }
+    assert!(!rectifier.should_apply(
+        &upstream(
+            "Unknown parameter: internal_chat_message_metadata_passthrough",
+            400
+        ),
+        &json!({"input":"hi"})
+    ));
+}
+
+#[test]
+fn codex_metadata_repair_removes_only_direct_internal_fields_and_is_idempotent() {
+    let mut body = json!({
+        "metadata":{"tenant":"keep", INTERNAL_FIELD:"user metadata"},
+        "input":[
+            {"role":"user","content":"keep prompt", INTERNAL_FIELD:{"content_item_metadata":[1]}},
+            {"type":"message","role":"assistant","phase":"analysis","content":[{"type":"output_text","text":"keep answer"}], INTERNAL_FIELD:{}},
+            {"type":"function_call","call_id":"call-a","name":"run","arguments":format!("{{\"{INTERNAL_FIELD}\":\"keep tool data\"}}"), INTERNAL_FIELD:{}},
+            {"type":"function_call_output","call_id":"call-a","output":{"metadata":{"content_item_metadata":"keep", INTERNAL_FIELD:"keep result data"}}, INTERNAL_FIELD:{}},
+        ]
+    });
+    let expected = body.clone();
+    let rectifier = CodexMetadataRectifier;
+    let result = rectifier.rectify(&mut body);
+    assert!(result.applied);
+    assert!(result.details.contains("4 Responses input items"));
+    for (item, original) in body["input"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .zip(expected["input"].as_array().unwrap())
+    {
+        let mut original = original.clone();
+        original.as_object_mut().unwrap().remove(INTERNAL_FIELD);
+        assert_eq!(*item, original);
+    }
+    assert_eq!(body["metadata"], expected["metadata"]);
+    assert!(!rectifier.rectify(&mut body).applied);
+    let mut config = zroutery_core::config::RectifierConfig::default();
+    config.codex_metadata = false;
+    assert!(!zroutery_core::rectifier::from_config(&config)
+        .iter()
+        .any(|rectifier| rectifier.name() == "codex_metadata"));
+    let old: zroutery_core::config::RectifierConfig =
+        serde_json::from_value(json!({"enabled":true})).unwrap();
+    assert!(
+        old.codex_metadata,
+        "old configs enable the repair by default"
+    );
 }
 
 #[test]
@@ -210,14 +281,15 @@ fn rectifiers_apply_in_config_order() {
     let rectifiers = zroutery_core::rectifier::from_config(&config);
     assert_eq!(
         rectifiers.len(),
-        3,
-        "all three rectifiers should be enabled by default"
+        4,
+        "all four rectifiers should be enabled by default"
     );
 
     // The expected order is: thinking_signature, media_fallback, thinking_budget.
     assert_eq!(rectifiers[0].name(), "thinking_signature");
     assert_eq!(rectifiers[1].name(), "media_fallback");
     assert_eq!(rectifiers[2].name(), "thinking_budget");
+    assert_eq!(rectifiers[3].name(), "codex_metadata");
 
     // Construct an error message that matches both thinking_signature and
     // thinking_budget.  "thinking budget cannot be modified" contains

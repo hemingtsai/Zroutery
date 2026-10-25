@@ -5,6 +5,7 @@
 //! they are the same provider and the same model, and the failure was caused by
 //! a fixable request shape, not by provider health.
 
+pub mod codex_metadata;
 pub mod media_fallback;
 pub mod thinking_budget;
 pub mod thinking_signature;
@@ -47,6 +48,9 @@ pub fn from_config(config: &RectifierConfig) -> Vec<Box<dyn Rectifier>> {
     }
     if config.thinking_budget {
         out.push(Box::new(thinking_budget::ThinkingBudgetRectifier));
+    }
+    if config.codex_metadata {
+        out.push(Box::new(codex_metadata::CodexMetadataRectifier));
     }
     out
 }

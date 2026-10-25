@@ -55,6 +55,10 @@ pub struct RectifierConfig {
     /// route decision, so the fallback is never silent.
     #[serde(default = "default_true")]
     pub thinking_fallback: bool,
+    /// Repair an explicit unknown-parameter rejection of Codex's private
+    /// internal_chat_message_metadata_passthrough member on Responses items.
+    #[serde(default = "default_true")]
+    pub codex_metadata: bool,
 }
 
 impl Default for RectifierConfig {
@@ -65,6 +69,7 @@ impl Default for RectifierConfig {
             media_fallback: true,
             thinking_budget: true,
             thinking_fallback: true,
+            codex_metadata: true,
         }
     }
 }
