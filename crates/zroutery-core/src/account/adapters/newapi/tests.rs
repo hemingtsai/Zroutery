@@ -1634,6 +1634,14 @@ async fn transport_failures_surface_as_transport_errors() {
 
     let err = adapter.probe_status().await.unwrap_err();
     assert!(matches!(err, Error::Transport { .. }), "got {err:?}");
+    // The host that did not answer has to be in the message: the panel can live
+    // on a different host than the relay, so without it a wrong panel address is
+    // indistinguishable from an outage.
+    let message = err.to_string();
+    assert!(
+        message.contains("127.0.0.1"),
+        "the transport failure should name the address it could not reach, got {message}"
+    );
 }
 
 #[tokio::test]

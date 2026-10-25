@@ -78,7 +78,16 @@ impl NewApiError {
                 retry_after: None,
             },
             NewApiError::Transport(source) => Error::Transport {
-                provider: PROVIDER_ID.into(),
+                // The panel can live on another host than the relay
+                // (`maintenance.panel_url`), and "cannot reach upstream newapi"
+                // then names neither the address nor the field that is wrong —
+                // a mistyped panel host reads exactly like a transient outage.
+                // The URL the request was built for is the one fact that makes
+                // the message actionable.
+                provider: match source.url().and_then(|url| url.host_str()) {
+                    Some(host) => format!("{PROVIDER_ID} ({host})"),
+                    None => PROVIDER_ID.into(),
+                },
                 source,
             },
             NewApiError::Payload(message) => Error::BadUpstreamPayload(message),
