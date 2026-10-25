@@ -68,6 +68,10 @@ MODULE_SCOPES = (
     "model",
     "ui",
     "docs",
+    # The architecture document under `docs/development/`, which is its own
+    # boundary: a change to how the pieces fit is a different review from one to
+    # a usage note, and `docs` alone would not say which.
+    "architecture",
     "tests",
 )
 
@@ -181,6 +185,7 @@ IMPERATIVE_VERBS = frozenset(
         "gate",
         "generate",
         "give",
+        "group",
         "guard",
         "handle",
         "harden",
@@ -205,6 +210,7 @@ IMPERATIVE_VERBS = frozenset(
         "migrate",
         "model",
         "move",
+        "name",
         "normalize",
         "observe",
         "omit",
@@ -248,10 +254,12 @@ IMPERATIVE_VERBS = frozenset(
         "separate",
         "serialize",
         "set",
+        "show",
         "simplify",
         "sort",
         "split",
         "start",
+        "state",
         "stop",
         "store",
         "stream",
@@ -594,6 +602,22 @@ def _fixture_messages() -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
         (
             "gate imperative compatibility subject",
             "refactor(tauri): gate the inference commands behind the account feature",
+        ),
+        (
+            "group imperative compatibility subject",
+            "fix(ui): group a decision provider under its vendor",
+        ),
+        (
+            "name imperative compatibility subject",
+            "docs(core): name the tests behind the protocol and ml modules",
+        ),
+        (
+            "architecture documentation scope",
+            "docs(architecture): state how a learned model reaches traffic",
+        ),
+        (
+            "show imperative compatibility subject",
+            "test(account): show a panel outage leaves routing alone",
         ),
         (
             "accept imperative compatibility subject",
