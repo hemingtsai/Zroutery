@@ -263,8 +263,6 @@ jobs:
       # frontendDist at ../ui/dist, which is gitignored. Build it so the gate
       # reads the binary that actually ships, not one built without assets.
       - uses: pnpm/action-setup@v4
-        with:
-          version: '11'
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -343,8 +341,6 @@ jobs:
       - name: Rust advisories against the locked tree
         run: cargo audit --file Cargo.lock
       - uses: pnpm/action-setup@v4
-        with:
-          version: '11'
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
