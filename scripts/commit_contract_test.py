@@ -285,6 +285,9 @@ IMPERATIVE_VERBS = frozenset(
         "verify",
         "wire",
         "write",
+        # "rewrite" says what happened to a text, not what an operator gains,
+        # and every rewrite of user-facing copy here is a clarification.
+        "rewrite",
     }
 )
 
