@@ -128,6 +128,7 @@ pub const fn failure_class_wire_name(class: FailureClass) -> &'static str {
         FailureClass::Configuration => "configuration",
         FailureClass::Interrupted => "interrupted",
         FailureClass::QuotaExhausted => "quota_exhausted",
+        FailureClass::BalanceExhausted => "balance_exhausted",
         FailureClass::Unknown => "unknown",
     }
 }
