@@ -17,6 +17,7 @@ import {
   type ModelTier,
   type ModelRow,
   type NamingStyle,
+  type RectifierConfig,
   type RoutingStrategy,
   type Snapshot,
 } from "../api";
@@ -43,7 +44,7 @@ import {
   ms,
   useToast,
 } from "../components";
-import { useI18n } from "../i18n";
+import { useI18n, type TKey } from "../i18n";
 
 /**
  * Route rows shown before the pool's long tail folds away.
@@ -125,6 +126,27 @@ export default function Routing({
     void save((cfg) => {
       const next = structuredClone(cfg);
       Object.assign(next.vision, patch);
+      return next;
+    });
+  };
+
+  /**
+   * Rectifiers mutate one flag at a time and each toggle is its own save.
+   *
+   * Taking a mutator rather than a partial keeps a computed key honest: the
+   * row table names the field, and `r[field] = checked` stays typed as the
+   * booleans `RectifierConfig` declares. A document written before the
+   * rectifiers existed carries no `rectifier` object at all, so the object is
+   * created here with the backend's own defaults rather than read as absent.
+   */
+  const patchRectifier = (mutate: (rectifier: RectifierConfig) => void) => {
+    void save((cfg) => {
+      const next = structuredClone(cfg);
+      next.routing.rectifier = {
+        ...DEFAULT_RECTIFIER,
+        ...next.routing.rectifier,
+      };
+      mutate(next.routing.rectifier);
       return next;
     });
   };
@@ -271,6 +293,60 @@ export default function Routing({
     </Section>
   );
 
+  /*
+   * Rectifiers, on this page for the same reason as the vision fallback: they
+   * decide what leaves for an upstream. Each is a second attempt at the same
+   * provider with a repaired request, not a failover, so they read as repairs
+   * rather than as routing.
+   */
+  const rectifier = {
+    ...DEFAULT_RECTIFIER,
+    ...config.routing.rectifier,
+  };
+  const rectifiers = (
+    <Section title={t("rectifier.title")} hint={t("rectifier.hint")}>
+      <div className="setting-row">
+        <div className="setting-left">
+          <span className="setting-title">{t("rectifier.enable")}</span>
+          <span className="setting-desc">{t("rectifier.enable_hint")}</span>
+        </div>
+        <div className="setting-right">
+          <input
+            type="checkbox"
+            aria-label={t("rectifier.enable")}
+            checked={rectifier.enabled}
+            onChange={(e) =>
+              patchRectifier((r) => {
+                r.enabled = e.currentTarget.checked;
+              })
+            }
+          />
+        </div>
+      </div>
+      {rectifier.enabled &&
+        RECTIFIERS.map((row) => (
+          <div className="setting-row" key={row.field}>
+            <div className="setting-left">
+              <span className="setting-title">{t(row.label)}</span>
+              <span className="setting-desc">{t(row.hint)}</span>
+            </div>
+            <div className="setting-right">
+              <input
+                type="checkbox"
+                aria-label={t(row.label)}
+                checked={rectifier[row.field]}
+                onChange={(e) =>
+                  patchRectifier((r) => {
+                    r[row.field] = e.currentTarget.checked;
+                  })
+                }
+              />
+            </div>
+          </div>
+        ))}
+    </Section>
+  );
+
   const autoReview = (
     <Section
       title={t("route.auto_review")}
@@ -353,6 +429,7 @@ return (
               <>
                 {mainRoutes}
                 {visionFallback}
+                {rectifiers}
               </>
             ),
           },
@@ -385,6 +462,61 @@ return (
     </>
   );
 }
+
+/**
+ * The backend's own defaults for the rectifier switches.
+ *
+ * `RectifierConfig` in the core defaults every repair to on, and a document
+ * written before the rectifiers existed carries no `rectifier` object at all.
+ * The dashboard therefore needs the same defaults to render the switches, and
+ * needs them in one place so a new repair is added in one place.
+ */
+const DEFAULT_RECTIFIER: RectifierConfig = {
+  enabled: true,
+  thinking_signature: true,
+  media_fallback: true,
+  thinking_budget: true,
+  thinking_fallback: true,
+  codex_metadata: true,
+};
+
+/**
+ * The rectifier switches, in the order they are tried.
+ *
+ * `keyof Omit<RectifierConfig, "enabled">` is the master switch, drawn on its
+ * own above these, so the table cannot accidentally offer it twice.
+ */
+const RECTIFIERS = [
+  {
+    field: "thinking_signature",
+    label: "rectifier.thinking_signature",
+    hint: "rectifier.thinking_signature_hint",
+  },
+  {
+    field: "media_fallback",
+    label: "rectifier.media_fallback",
+    hint: "rectifier.media_fallback_hint",
+  },
+  {
+    field: "thinking_budget",
+    label: "rectifier.thinking_budget",
+    hint: "rectifier.thinking_budget_hint",
+  },
+  {
+    field: "codex_metadata",
+    label: "rectifier.codex_metadata",
+    hint: "rectifier.codex_metadata_hint",
+  },
+  {
+    field: "thinking_fallback",
+    label: "rectifier.thinking_fallback",
+    hint: "rectifier.thinking_fallback_hint",
+  },
+] as const satisfies readonly {
+  field: Exclude<keyof RectifierConfig, "enabled">;
+  label: TKey;
+  hint: TKey;
+}[];
 
 const TIER_HINT_KEY: Record<ModelTier, "tier.hint.fast" | "tier.hint.standard" | "tier.hint.reasoning" | "tier.hint.frontier"> = {
   fast: "tier.hint.fast",

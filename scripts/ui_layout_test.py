@@ -131,6 +131,16 @@ SNAPSHOT = {
             "capability_filter": True,
             "strict_capability_filter": False,
             "policies": {"policies": [], "default_policy": None, "clients": []},
+            # The request-repair switches, as the backend writes them. The
+            # dashboard reads them to draw the routing page's repair section.
+            "rectifier": {
+                "enabled": True,
+                "thinking_signature": True,
+                "media_fallback": True,
+                "thinking_budget": True,
+                "thinking_fallback": True,
+                "codex_metadata": True,
+            },
         },
         "classifier": {
             "enabled": False,

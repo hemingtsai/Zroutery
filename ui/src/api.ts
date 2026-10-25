@@ -389,6 +389,26 @@ export interface RoutingConfig {
   scoring: ScoringConfig;
   elect_on_start: boolean;
   naming_style: NamingStyle;
+  rectifier: RectifierConfig;
+}
+
+/**
+ * Repairs tried against the same upstream after it rejected a request.
+ *
+ * A repair retry is not a failover: the same provider and model are asked again
+ * with a shape the provider is known to accept, and the retry does not count
+ * against the circuit breaker. `thinking_fallback` is the exception — it is not
+ * a retry at all, but the decision that a reasoning request may go to a model
+ * declaring no thinking support, with the reasoning controls removed and the
+ * attempt marked degraded.
+ */
+export interface RectifierConfig {
+  enabled: boolean;
+  thinking_signature: boolean;
+  media_fallback: boolean;
+  thinking_budget: boolean;
+  thinking_fallback: boolean;
+  codex_metadata: boolean;
 }
 
 /** One model's place in its tier, with the numbers that put it there. */
