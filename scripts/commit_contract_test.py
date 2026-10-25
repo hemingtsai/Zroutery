@@ -51,6 +51,11 @@ MODULE_SCOPES = (
     "integration",
     "tauri",
     "workflow",
+    # The pipeline itself, as opposed to `workflow`, which is the orchestration
+    # contract under `docs/development/` as much as it is `.github/`. A change
+    # to a job's steps is a change to the pipeline, and the shorter scope says
+    # which of the two the commit is about.
+    "ci",
     "repo",
     # Current Node module boundaries.
     "routing",
@@ -614,6 +619,10 @@ def _fixture_messages() -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
         (
             "architecture documentation scope",
             "docs(architecture): state how a learned model reaches traffic",
+        ),
+        (
+            "ci pipeline scope",
+            "fix(ci): write the size table from the gate",
         ),
         (
             "show imperative compatibility subject",
