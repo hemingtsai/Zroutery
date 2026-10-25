@@ -43,6 +43,16 @@ operational UI. The Core boundary includes:
   (`crates/zroutery-core/src/error.rs`,
   `crates/zroutery-core/src/server/pipeline.rs`).
 
+Runtime statistics are process state, not durable state. The EWMA, the
+percentile rings, the per-provider failure counts and the circuit-breaker gates
+are built from what this process has served, so a restart begins with an empty
+health view: scores return to their no-sample default, the rings are empty, and a
+model that was cooling down is eligible again immediately. Spend is the
+exception — the ledger is written to disk and adopted on the next start — which
+is why a restart can look like "every model healthy, budget unchanged". An
+operator reading a fresh panel should not mistake "no samples yet" for "no
+problems".
+
 The default `zroutery-core` feature set is empty in
 `crates/zroutery-core/Cargo.toml`: every capability in that crate is declared
 there and named nowhere else, which is what keeps the core's switches
@@ -151,6 +161,28 @@ Core policy/router/observation/stats/session/account/protocol
 ML may consume Core-owned facts. Core must not depend on an ML model to make
 a production routing decision. The optional feature boundary is therefore a
 safety property, not merely a Cargo organization detail.
+
+#### How a learned model reaches traffic
+
+There is one path, and every arrow except the operator step is automatic:
+
+```text
+outcome samples (one per request)
+   └─ train ──────────────▶ frozen snapshot (immutable, content-addressed)
+                                └─ evaluate on the frozen holdout ──▶ verdict
+                                        └─ operator promotion (dashboard)
+                                                └─ pointer file
+                                                        └─ reload_active_model
+                                                                └─ router ranking
+                                                                   then exploration
+```
+
+Promotion is the one human step and the only way a model can change a route:
+there is no timer, no background loop, and no code path that promotes a snapshot
+because it scored well. Rollback rewrites the pointer and reloads, so it is the
+same path in reverse, and withdrawing a model is a runtime operation rather than
+a rebuild. That is why the train/evaluate half can stay offline and inert while
+the promotion half is audited.
 
 ### Parallel sidecars and product surfaces
 
