@@ -1384,7 +1384,7 @@ fn the_pipeline_has_no_second_failure_classifier() {
     // The canonical entry point and the router adapters are what it does use.
     assert!(source.contains(".classified()"));
     assert!(source.contains("record_classified_attempt("));
-    assert!(source.contains("should_fallback_failure("));
+    assert!(source.contains("should_fallback_candidate("));
     assert!(
         !source.contains("Some(class)"),
         "the pipeline never assembles a class of its own to hand the router"
