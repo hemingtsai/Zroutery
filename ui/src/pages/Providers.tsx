@@ -40,6 +40,7 @@ import {
   type ConfirmRequest,
 } from "../components";
 import { useI18n } from "../i18n";
+import { groupProviders } from "../providerGroups";
 
 type KindLabelKey =
   | "providers.openai_dialect"
@@ -238,39 +239,13 @@ export default function Providers({
   }, [config.models]);
 
   /*
-   * The list, grouped by endpoint.
+   * The list, grouped by vendor.
    *
-   * A decision provider is its own configuration entry — the router keeps a
-   * separate pool for it — but it is not a separate *place*: the Zen decision
-   * preset points at the same base url as the free provider beside it, and two
-   * rows with one name and one address read as a duplication. A decision
-   * provider that shares an endpoint with an ordinary one renders nested under
-   * it; one with an endpoint of its own stays a row of its own.
+   * `groupProviders` owns the rule and its tests; this page only draws the
+   * result, so a change to what counts as the same vendor cannot be made here
+   * without the case that motivated it.
    */
-  const grouped = useMemo(() => {
-    const endpoint = (url: string) => url.trim().replace(/\/+$/, "").toLowerCase();
-    const hostByEndpoint = new Map<string, string>();
-    for (const p of config.providers) {
-      if (p.kind !== "decision" && !hostByEndpoint.has(endpoint(p.base_url))) {
-        hostByEndpoint.set(endpoint(p.base_url), p.id);
-      }
-    }
-    const top: Provider[] = [];
-    const nested = new Map<string, Provider[]>();
-    for (const p of config.providers) {
-      if (p.kind === "decision") {
-        const host = hostByEndpoint.get(endpoint(p.base_url));
-        if (host !== undefined && host !== p.id) {
-          const bucket = nested.get(host) ?? [];
-          bucket.push(p);
-          nested.set(host, bucket);
-          continue;
-        }
-      }
-      top.push(p);
-    }
-    return { top, nested };
-  }, [config.providers]);
+  const grouped = useMemo(() => groupProviders(config.providers), [config.providers]);
 
   /**
    * Opening a provider, and nothing else.
