@@ -20,9 +20,37 @@ macOS 和 Windows 上它是一个常驻菜单栏 / 托盘的桌面应用，关�
 
 ### 环境
 
-- Rust 1.89 或更新（`Cargo.toml` 的 `rust-version`，CI 用 1.89.0 验证过锁定依赖能编）
-- Node 20.19+ 或 22.12+，pnpm
+- Rust 1.90（以 `Cargo.toml` 的 `rust-version` 为准，CI 的 `msrv` job 钉住它并检查锁定依赖）
+- Node 22 与 pnpm 11（`package.json` 的 `packageManager` 钉住 pnpm）
 - macOS 11+ 与 Xcode Command Line Tools，或 Windows 与 WebView2 运行时
+
+工具链怎么装、为什么是这两个版本，见下面的[工具链](#工具链)。
+
+### 工具链
+
+Rust 的版本下限是两个下界里的较高者，不是拍出来的政策数字。锁定依赖要 1.90：桌面壳的 Tauri
+2.12 家族（`tauri-build`、`tauri-utils`、`tauri-runtime`、`tauri-macros`、`muda`、
+`tray-icon` 以及各插件）自己声明 `rust-version = "1.90"`，所以这个工作区在 1.89 上根本解析不了。
+源码本身要 1.89（`ml/features.rs` 在 `let` 里构造 `Some(&ModelCapabilities { .. })`，元组变体
+构造器的临时生命周期扩展从 1.89 才成立）。声明取两者较高的那个，CI 的 `msrv` job 钉住
+`1.90.0` 并跑 `cargo check --workspace --locked --all-targets`，所以这个声明是被检查的，不是被
+写上去的。
+
+```sh
+rustup toolchain install 1.90.0
+rustup override set 1.90.0     # 可选：把本目录固定在这个版本
+corepack enable                # 提供 pnpm
+pnpm install
+```
+
+前端的 Node 与 pnpm 版本也可以单独钉：
+
+```sh
+corepack use pnpm@11.22.0
+```
+
+前端用 pnpm 11 与 Node 22，CI 的 `reachability` job 用的就是这两个版本；根 `package.json` 的
+`packageManager` 字段把 pnpm 的大版本钉住，避免本机装出的 pnpm 与 `pnpm-lock.yaml` 的格式对不上。
 
 ### 跑起来
 

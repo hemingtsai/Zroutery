@@ -2,6 +2,7 @@
   "name": "zroutery",
   "private": true,
   "version": "1.0.0-beta.1",
+  "packageManager": "pnpm@11.22.0",
   "scripts": {
     "dev": "tauri dev",
     "build": "tauri build",

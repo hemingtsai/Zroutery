@@ -36,7 +36,7 @@ on:
 
 jobs:
   installer:
-    name: NSIS install, reinstall and uninstall
+    name: NSIS and MSI install, reinstall and uninstall
     # Windows only. The evidence this repository holds about installers is
     # Windows-only, and no macOS or Linux runner can say anything about it.
     runs-on: windows-latest
@@ -55,9 +55,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       # `--bundles nsis` only. tauri.conf.json lists app and dmg, which are
       # macOS bundle formats with no Windows producer, so asking for them here
-      # fails; and the MSI path is recorded untested, so this workflow does not
-      # pretend to cover it. The committed config is deliberately left alone.
-      # `tauri.js` is invoked directly because pnpm rejects
+      # fails. `tauri.js` is invoked directly because pnpm rejects
       # `pnpm tauri build --bundles ...`.
       - name: Build the NSIS installer
         run: node node_modules/@tauri-apps/cli/tauri.js build --bundles nsis
@@ -89,3 +87,51 @@ jobs:
           python -B scripts/desktop_installer_test.py \
             --installer "${installers[0]}" \
             --built-exe target/release/zroutery.exe
+
+      # The MSI is shipped in `bundle.targets` and until this step existed no
+      # runner had ever installed one: the NSIS gate was the only installer
+      # evidence in the repository, so "the MSI builds" was a claim about the
+      # bundler and not about the artifact.
+      #
+      # Built *after* the NSIS gate on purpose. `tauri build` patches
+      # target/release/zroutery.exe with the bundle-type marker of whatever it
+      # is packaging, and the NSIS gate compares that copy against the bytes the
+      # NSIS installer embeds. Building the MSI first would leave the MSI marker
+      # there and make a correct NSIS installer look wrong.
+      - name: Build the MSI installer
+        run: node node_modules/@tauri-apps/cli/tauri.js build --bundles msi
+
+      # Silent install, check the installed binary exists, silent uninstall,
+      # check it is gone. An MSI that installs and cannot be removed is worse
+      # than no MSI, and a per-machine install is removable without a reboot on
+      # this runner.
+      - name: Install and uninstall the MSI silently
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $msi = @(Get-ChildItem target/release/bundle/msi/*.msi)
+          if ($msi.Count -ne 1) {
+            throw "expected exactly one MSI under target/release/bundle/msi, found $($msi.Count)"
+          }
+          $log = Join-Path $env:RUNNER_TEMP "msi-install.log"
+          $install = Start-Process msiexec.exe -Wait -PassThru -ArgumentList @(
+            "/i", "`"$($msi[0].FullName)`"", "/qn", "/norestart", "/l*v", "`"$log`""
+          )
+          if ($install.ExitCode -ne 0) {
+            Get-Content $log -Tail 80
+            throw "msiexec /i failed with exit code $($install.ExitCode)"
+          }
+          $installed = "C:\Program Files\Zroutery\zroutery.exe"
+          if (-not (Test-Path $installed)) {
+            throw "the MSI did not install $installed"
+          }
+          $uninstall = Start-Process msiexec.exe -Wait -PassThru -ArgumentList @(
+            "/x", "`"$($msi[0].FullName)`"", "/qn", "/norestart"
+          )
+          if ($uninstall.ExitCode -ne 0) {
+            throw "msiexec /x failed with exit code $($uninstall.ExitCode)"
+          }
+          if (Test-Path $installed) {
+            throw "the uninstall left $installed behind"
+          }
+          Write-Host "MSI installed, verified and removed cleanly"

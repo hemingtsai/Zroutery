@@ -8,6 +8,20 @@ on:
     branches: [main, dev]
   pull_request:
     branches: [main, dev]
+  # Advisories have their own clock. `cargo audit` and `pnpm audit` answer a
+  # question about the world at the moment they run, not a question about the
+  # commit: a tree that was clean when it landed becomes a finding when a CVE is
+  # published, and not one line in this repository changes when that happens. A
+  # push-and-PR-only workflow can therefore never report it.
+  #
+  # The schedule runs the whole workflow, not only the `audit` job below. That
+  # is deliberate rather than incidental: the `msrv` job pins a compiler and the
+  # `reachability` job builds the shipped binary, and both are exactly the kind
+  # of claim that rots silently between pushes. The nightly run is where that
+  # rot is found rather than discovered by a release.
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
 
 # The commit-message convention has its own workflow; this one is about the
 # code: lint and test the GUI-free core on Linux, check the declared minimum
@@ -256,10 +270,14 @@ jobs:
           node-version: '22'
       - run: pnpm install --frozen-lockfile
       - run: pnpm ui:build
+      - name: Narrow-window UI overflow gate
+        run: python -B scripts/ui_overflow_test.py
       # Deliberately no build cache in this job, so the binary under test is the
       # one this job produced.
       - name: Build the shipped desktop binary
-        run: cargo build -p zroutery --release
+        # Tauri enables custom-protocol: a plain cargo --release build still
+        # loads devUrl and therefore does not certify a self-contained UI.
+        run: node node_modules/@tauri-apps/cli/tauri.js build --no-bundle
       # RETIRED by ADR-0006, and its subject then changed underneath it. This step
       # used to fail the job if the shipped desktop executable contained any ML
       # symbol, on the reasoning that a binary cannot route on a model it does not
@@ -282,3 +300,66 @@ jobs:
       #     and nothing else keeps honest.
       - name: Build the desktop app without the learning stack
         run: cargo check -p zroutery --no-default-features
+
+  # Supply-chain advisories, on two cadences.
+  #
+  # On a pull request this job reports and does not block. An advisory published
+  # last night is not the author's defect, and a red check on an unrelated pull
+  # request teaches people to ignore the job — which is the failure mode a
+  # blocking audit has in every project that has ever had one. The nightly run
+  # above is the one that is allowed to be red, because that is the run whose
+  # failure somebody can act on.
+  #
+  # `cargo audit` is not a grep over `Cargo.toml`: it reads `Cargo.lock` and
+  # checks it against the RustSec advisory database, which is the only list that
+  # knows a transitive dependency is affected. It is installed here rather than
+  # assumed, and only when the runner does not already have it, so a future
+  # image that ships it costs nothing.
+  audit:
+    name: dependency advisories
+    runs-on: ubuntu-latest
+    # Expressions are allowed here, and the expression is the whole policy: warn
+    # on a pull request, fail on the schedule.
+    continue-on-error: ${{ github.event_name == 'pull_request' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-audit when the runner has none
+        run: |
+          set -euo pipefail
+          if command -v cargo-audit >/dev/null 2>&1; then
+            cargo audit --version
+          else
+            cargo install cargo-audit --locked
+          fi
+      # `--deny warnings` would be the wrong default here: a yanked crate or an
+      # unmaintained advisory is information, and this job's job is to surface
+      # the information rather than to decide which part of it matters.
+      #
+      # `cargo audit` reads `Cargo.lock`, so it needs the lockfile rather than
+      # a resolver run: the tree this repository ships is the tree that has to
+      # be free of advisories.
+      - name: Rust advisories against the locked tree
+        run: cargo audit --file Cargo.lock
+      - uses: pnpm/action-setup@v4
+        with:
+          version: '11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Frontend advisories against the lockfile
+        run: |
+          set -euo pipefail
+          pnpm install --frozen-lockfile
+          # `--prod` on purpose: a build-tool advisory is worth knowing about and
+          # is not shipped, and mixing the two makes the shipped surface
+          # unreadable.
+          #
+          # The registry is named explicitly because `pnpm audit` asks the
+          # registry for the advisory endpoint, and a mirror that does not
+          # implement it answers "the endpoint does not exist" — which looks
+          # like a finding and is not one. Naming the canonical registry makes
+          # the answer the same everywhere, and the mirror is still what the
+          # install above uses.
+          pnpm audit --prod --registry=https://registry.npmjs.org

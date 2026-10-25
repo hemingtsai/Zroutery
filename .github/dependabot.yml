@@ -1,0 +1,81 @@
+version: 2
+# Advisories are grouped rather than delivered one pull request at a time. The
+# point of the grouping is review cost: a Tauri minor and its five siblings are
+# one decision about one runtime, and reviewing them as five separate diffs is
+# how a security update waits behind a queue nobody reads.
+updates:
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      # The desktop shell moves as one family: `tauri` pins the versions of
+      # `tauri-runtime`, `wry`, `tao`, `muda` and `tray-icon`, so a pull request
+      # that bumps one without the rest does not build.
+      tauri:
+        patterns:
+          - "tauri"
+          - "tauri-*"
+          - "muda"
+          - "tray-icon"
+          - "tao"
+          - "wry"
+      # The server half: these are all in the request path and are reviewed
+      # together for the same reason, though they do not have to move together.
+      tokio-axum:
+        patterns:
+          - "tokio"
+          - "tokio-*"
+          - "axum"
+          - "axum-*"
+          - "tower"
+          - "tower-*"
+          - "hyper"
+          - "hyper-*"
+          - "h2"
+          - "http"
+      # Everything else, so a week of patch bumps is one review rather than
+      # fifteen. The exclusions must list exactly the groups above; a dependency
+      # claimed by two groups is the kind of configuration error Dependabot
+      # reports rather than guesses at.
+      other:
+        patterns:
+          - "*"
+        exclude-patterns:
+          - "tauri"
+          - "tauri-*"
+          - "muda"
+          - "tray-icon"
+          - "tao"
+          - "wry"
+          - "tokio"
+          - "tokio-*"
+          - "axum"
+          - "axum-*"
+          - "tower"
+          - "tower-*"
+          - "hyper"
+          - "hyper-*"
+          - "h2"
+          - "http"
+
+  # One entry, at the workspace root: `ui` has no lockfile of its own, so a
+  # `/ui` entry would be looking for a file that does not exist. `pnpm-lock.yaml`
+  # here covers the `ui` workspace member.
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      tauri:
+        patterns:
+          - "@tauri-apps/*"
+      frontend:
+        patterns:
+          - "*"
+        exclude-patterns:
+          - "@tauri-apps/*"

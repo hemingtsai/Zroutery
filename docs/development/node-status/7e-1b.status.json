@@ -50,6 +50,7 @@
     "Implemented on branch node/7e-1b-integration as 48018af and integrated into dev as 0f5c935; parent review and gates are E-065 through E-068.",
     "The seam gained one additive primitive, ShadowStore::correlate_served, because a stored record could not otherwise receive a terminal fact. No signature, checksum, or accepted behavior changed.",
     "REG-009 is only half closed: retention through production evaluation is proven, while training-side consumption does not exist yet.",
-    "Tauri still does not enable the ml feature, so the desktop app does not exercise this path in production. That is a packaging decision, not a code gap."
+    "Tauri still does not enable the ml feature, so the desktop app does not exercise this path in production. That is a packaging decision, not a code gap.",
+    "SUPERSEDED 2026-10-24 by the desktop default feature list. `src-tauri/Cargo.toml` now declares `default = [\"ml\", \"account\", \"newapi\", \"account-maint\", \"opencode\"]`, so the shipped binary contains this path and the sentence above describes the tree before E-158. Carrying it is still not exercising it: `ml_routing.enabled` defaults to `false`, so an installation that has never promoted a model routes exactly as it did before, and `--no-default-features` still builds a desktop app without the learning stack."
   ]
 }

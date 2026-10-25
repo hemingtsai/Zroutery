@@ -24,16 +24,21 @@ license = "MIT"
 rust-version = "1.90"
 
 [workspace.dependencies]
-axum = { version = "0.8.7", features = ["json"] }
+# The floors below track `Cargo.lock`, not the other way round. A floor left
+# behind the resolved version is a spec that promises a downgrade the lockfile
+# has already refused, and it makes an advisory fix look optional: `rustls` and
+# `rustls-webpki` moved for RUSTSEC-2026-0285..0382, and `tokio` for
+# RUSTSEC-2026-0386, so their floors moved with them.
+axum = { version = "0.8.9", features = ["json"] }
 bytes = "1.10.1"
-chrono = { version = "0.4.42", default-features = false, features = ["std", "clock", "serde"] }
+chrono = { version = "0.4.45", default-features = false, features = ["std", "clock", "serde"] }
 futures-util = "0.3.31"
-rand = "0.8.5"
-reqwest = { version = "0.12.24", default-features = false, features = ["json", "stream", "native-tls", "charset", "http2"] }
+rand = "0.8.7"
+reqwest = { version = "0.12.28", default-features = false, features = ["json", "stream", "native-tls", "charset", "http2"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = { version = "1.0.145", features = ["preserve_order", "float_roundtrip"] }
 thiserror = "2.0.17"
-tokio = { version = "1.48.0", features = ["rt-multi-thread", "macros", "sync", "time", "net", "signal", "fs", "process", "io-util"] }
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "signal", "fs", "process", "io-util"] }
 tower-http = { version = "0.6.6", features = ["cors"] }
 tracing = "0.1.41"
 uuid = { version = "1.18.1", features = ["v4"] }

@@ -292,10 +292,10 @@ complained, while the gate it named was no longer being run.
 | all features | `cargo test -p zroutery-core --all-features` | the `ml` surface on its own |
 | boundary | `cargo test -p zroutery-core --all-features --test activation_test` | the shipped product cannot name the installer |
 | docs | `python -B scripts/orch_docs_test.py` | node records, DAG and evidence registry agree |
-| command surface | `python -B scripts/command_surface_test.py` | every command the dashboard calls is registered, and every feature-gated one names the flag that guards it |
+| command surface | `python -B scripts/command_surface_test.py` | every command the dashboard calls is registered, every feature-gated one names the flag that guards it, and the capabilities grant exactly the commands `generate_handler!` registers |
 | contract | `python -B scripts/commit_contract_test.py --base <rev> --head <rev>` | commit subjects and trailers over the range |
 | toolchain | `python -B scripts/toolchain_gate.py` | the local toolchain is the build CI resolves, so a green matrix speaks to CI |
-| minimum toolchain | `cargo +1.89.0 check --workspace --locked --all-targets`, the version `Cargo.toml` declares | the declared minimum really builds the locked tree, test targets included |
+| minimum toolchain | `cargo +1.90.0 check --workspace --locked --all-targets`, the version `Cargo.toml` declares | the declared minimum really builds the locked tree, test targets included |
 | whitespace | `git diff --check` | no trailing damage |
 
 ### Run the Python rows through `uv`, not a system install
@@ -433,25 +433,27 @@ different cargo version numbers agreeing on the hash.
 
 ### The declared minimum is verified
 
-The workspace declares `rust-version = "1.89"`, and CI's `msrv` job pins exactly
+The workspace declares `rust-version = "1.90"`, and CI's `msrv` job pins exactly
 that compiler and runs `cargo check --workspace --locked --all-targets`. The
 declaration is therefore a claim a red job can contradict, instead of a sentence
 in a manifest that no job reads.
 
 The number is the union of two floors read off the tree rather than chosen:
 
-- the locked dependencies need 1.88 — `icu_normalizer` 2.3.0, `time` 0.3.55,
-  `darling` 0.23.0, `image` 0.25.10 and `plist` 1.10.0 all declare
-  `rust-version = "1.88.0"` — so the old `1.80` could not resolve this
-  `Cargo.lock` at all;
+- the locked dependencies need 1.90 — the desktop shell's Tauri 2.12 family
+  (`tauri-build` 2.7.3, `tauri-utils` 2.10.2, `tauri-runtime` 2.12.2,
+  `tauri-macros` 2.7.3, `muda` 0.20.0, `tray-icon` 0.25.1 and the plugins)
+  declare `rust-version = "1.90"`, so this `Cargo.lock` cannot be resolved at
+  1.89 no matter what the source itself compiles at;
 - the source needs 1.89 — `ml/features.rs` builds
   `Some(&ModelCapabilities { .. })` inside a `let`, and temporary lifetime
   extension only reaches through a tuple-variant constructor from 1.89
   ([rust-lang/rust#140593](https://github.com/rust-lang/rust/pull/140593)), so
   the test targets do not compile at 1.88.
 
-`--all-targets` is not decoration: the 1.89 floor comes from test code, so a
-check that skipped test targets would certify 1.88 and be wrong.
+`--all-targets` is not decoration: the source floor comes from test code, so a
+check that skipped test targets would certify 1.88 and be wrong. The locked
+tree's 1.90 is what lifts the declaration above the source's own floor.
 
 The toolchain row above is a different claim, and it stays local-only.
 

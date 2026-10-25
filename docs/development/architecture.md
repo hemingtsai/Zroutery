@@ -44,10 +44,82 @@ operational UI. The Core boundary includes:
   `crates/zroutery-core/src/server/pipeline.rs`).
 
 The default `zroutery-core` feature set is empty in
-`crates/zroutery-core/Cargo.toml`. The desktop dependency in
-`src-tauri/Cargo.toml` does not enable `ml` or `account`. Therefore the
-production desktop path cannot be described as an online-learning or
-account-lifecycle implementation.
+`crates/zroutery-core/Cargo.toml`: every capability in that crate is declared
+there and named nowhere else, which is what keeps the core's switches
+independently declared and the activation guard untouched.
+
+The desktop package is the other half of that picture, and the two are easy to
+confuse. `src-tauri/Cargo.toml` declares
+`default = ["ml", "account", "newapi", "account-maint", "opencode"]`, so the
+shipped application contains the learning stack, the account subsystem, the
+NewAPI panel adapter and the OpenCode provider kinds — while the dependency
+line on `zroutery-core` still names no features at all. The capability is in
+the binary because the dashboard offers it; a build that compiles an interface
+it cannot serve tells the operator the thing works and then does not do it.
+
+Carrying a capability is not the same as exercising it, and that distinction is
+the one the desktop's defaults actually rest on. `ml_routing.enabled` still
+defaults to `false`, so an installation that has never promoted a model routes
+exactly as it did before the learning stack was compiled in. Nothing probes an
+account until an account is declared; nothing asks a panel until one exists and
+the button is pressed; no browser opens until a check-in is started; the
+OpenCode kinds only answer when one is configured. `--no-default-features`
+still builds a desktop app with none of it, so "ship without the account
+subsystem" and "ship without the learning stack" remain builds rather than
+deletions.
+
+### Desktop security surface
+
+Two things decide what the dashboard's webview may reach, and neither of them is
+visible from the page that calls it.
+
+**Capabilities.** Tauri v2's ACL gates *plugin* commands by default. An
+application's own `#[tauri::command]`s are not gated at all until the
+application declares an app manifest — without one, every registered command is
+served from any local origin. `src-tauri/build.rs` now declares one with the
+full `generate_handler!` list, so each command becomes an `allow-<command>`
+permission and `src-tauri/capabilities/default.json` grants them one at a time.
+The grant list and the handler list are two files that nothing in Cargo
+connects, so `scripts/command_surface_test.py` compares them in both directions
+and fails on any difference: a registered command with no grant is a control
+that quietly does nothing, and a grant for a command nobody registers is a
+surface wider than the tree it claims to describe.
+
+The plugin side of the same file was reduced to what the webview actually
+reaches: `core:event:allow-listen` and `core:event:allow-unlisten` for
+`@tauri-apps/api/event`, which the dashboard uses for the gateway-state and
+deep-link subscriptions. Clipboard, notification, deep link and global shortcut
+are all driven from Rust (`commands.rs`, `shell.rs`, `tray.rs`), where the ACL
+does not apply, so granting them to the webview would only widen it, and the
+window drag surface went with them because no element in the dashboard carries
+a drag region. `core:default` is gone: it granted nine core plugin defaults,
+including menu and tray commands the dashboard never calls.
+
+**Content Security Policy.** `tauri.conf.json`'s `csp` names `script-src 'self'`
+explicitly. It is a clarity change rather than a tightening, and saying so is
+the point: `default-src 'self'` already applied to scripts, so the effective
+policy is unchanged. What changes is that the script rule is now visible where a
+reader looks for it, and a later edit to `default-src` cannot silently relax it.
+
+`style-src 'self' 'unsafe-inline'` keeps `'unsafe-inline'`. The dashboard passes
+inline styles (`style={{ ... }}` in `Activity.tsx`, `MlRouting.tsx`,
+`Overview.tsx` and `Routing.tsx`), and whether React's CSSOM writes would pass a
+strict `style-src` is a browser detail that differs by engine and by how the
+write is made. The cost of being wrong here is a dashboard that renders
+unstyled on a platform nobody re-tests, against a benefit that is theoretical —
+`'unsafe-inline'` in `style-src` cannot execute script, because the script rule
+is separate and stays `'self'`. The relaxation is therefore scoped to
+declarations and stated rather than assumed. The rationale lives here rather
+than beside the directive because `tauri.conf.json` is JSON, which has no
+comments.
+
+**Local persistence.** `spend.json` sits beside `config.json` and is written
+through the same `create_private` path, so on unix it is created `0o600` rather
+than tightened afterwards. Windows has no mode bit and `std` cannot read an ACL,
+so the assertion there is the property the inherited ACL depends on: the ledger
+is written inside the user's own profile (`%APPDATA%`) instead of a shared
+location whose ACL every local user already passes. `store.rs` states that
+asymmetry in the test that checks it.
 
 ### Optional ML libraries
 
@@ -144,6 +216,52 @@ production learning loop:
 8. **External evidence is scoped.** A narrower CI job is not equivalent to a
    local all-target, all-feature, packaging, Windows, or browser gate. The
    evidence registry labels each result.
+
+### Runtime compatibility fixes (2026-10-25)
+
+- **Payment failures:** upstream HTTP 402 and explicit insufficient-balance
+  markers use `BalanceExhausted`, distinct from local budget denial and a
+  scheduled upstream quota pool. One failure gates every model of that provider
+  for at least 300 seconds (a longer configured cooldown wins); the current
+  request may fail over. Saving config preserves the gate. Removing the provider
+  drops it, and the operator's model-health reset also clears its provider gate.
+  Gates are process-local; expiry admits traffic again, not a provider-wide
+  single-probe guarantee.
+- **Upstream 400:** repairable errors go through the existing rectifiers first.
+  Unrepaired provider rejections are not replayed unchanged on the same model,
+  but may fail over within the configured plan. Repeated rejections contribute
+  to the model circuit. Locally invalid input remains a local failure.
+- **Reasoning history:** Anthropic/Responses thinking text has a Chat
+  Completions representation (`reasoning_content`). It no longer hits the
+  unsupported-content rejection solely because its source dialect differs.
+  Foreign signatures are not asserted to validate on the target provider;
+  unrepresentable opaque-only blocks still follow the explicit content policy.
+- **Client verification:** the gateway notes recognised, authenticated chat
+  arrivals, separately from completed activity records. Desktop verification
+  requires an arrival after adoption plus matching managed fields and the
+  current token. Discovery/health probes, unknown callers and pre-adoption
+  traffic do not confirm ownership. Header-based attribution remains probable,
+  not cryptographic identity proof. Evidence is bounded and process-local;
+  clearing activity does not erase it, but a restart needs a new request.
+- **Panel probing:** the Core reconciler passes each account's `panel_url`
+  and `new_api_user` to its NewAPI adapter, alongside that account's credential.
+  The desktop's browser/check-in adapter and its balance/reconcile path must
+  address the same dashboard, not the inference host. A missing user-id header
+  can make a valid personal token look expired on AgentRouter's panel.
+- **Stream completion:** an explicit canonical `Stop` settles the lifecycle
+  before the terminal egress frame is handed out. A client that closes on
+  `response.completed` is not misreported as 499 while the relay keeps TCP open.
+  Actual mid-stream disconnection remains interrupted, charged only for
+  observed usage, and never poisons provider health.
+  Responses reasoning emits the official summary-part events and
+  `summary_index`, rather than treating reasoning as a message content part.
+  This keeps strict Responses consumers from rejecting the reasoning frames.
+
+For a self-contained desktop run, build through `pnpm build` or Tauri CLI.
+The production switch is Tauri's `custom-protocol` feature, **not** Cargo's
+release optimization profile: a plain `cargo build --release` can still load
+the Vite dev URL. Keep the running fallback binary outside Cargo's output path
+while rebuilding on Windows, where a running executable cannot be replaced.
 
 ## Orchestration record model
 
