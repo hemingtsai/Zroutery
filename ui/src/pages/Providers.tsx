@@ -549,7 +549,7 @@ const ProviderRow = memo(function ProviderRow({
   selected: boolean;
   showBalance: boolean;
   balance: BalanceStatus | undefined;
-  /** Rendered under the ordinary provider it shares an endpoint with. */
+  /** Rendered under the ordinary provider it shares a host with. */
   nested?: boolean;
   onOpen: (id: string) => void;
 }) {
