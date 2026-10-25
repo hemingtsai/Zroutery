@@ -152,9 +152,7 @@ pub async fn set_account_inference_key(
         .as_ref()
         .is_some_and(|value| value.len() > MAX_SECRET)
     {
-        return Err(format!(
-            "the inference key exceeds {MAX_SECRET} bytes"
-        ));
+        return Err(format!("the inference key exceeds {MAX_SECRET} bytes"));
     }
 
     let mut config = (*desktop.core.config()).clone();
@@ -242,9 +240,7 @@ pub async fn remove_account_inference_key(
             .inference_keys
             .iter()
             .position(|k| k.id == key_id)
-            .ok_or_else(|| {
-                format!("unknown inference key `{key_id}` on account `{account_id}`")
-            })?;
+            .ok_or_else(|| format!("unknown inference key `{key_id}` on account `{account_id}`"))?;
         account.inference_keys.remove(position).key_ref
     };
     desktop.apply_config(config.clone()).await?;
@@ -327,14 +323,21 @@ mod tests {
 
         let after = config_with_account("shared-panel", &[]);
         let live_after = referenced_secrets(&after);
-        let candidates = ["shared-panel".to_string(), "provider:p:account:a:inference:k1".to_string()];
+        let candidates = [
+            "shared-panel".to_string(),
+            "provider:p:account:a:inference:k1".to_string(),
+        ];
         assert!(live_after.contains("shared-panel"));
         assert!(!live_after.contains("provider:p:account:a:inference:k1"));
         let orphans: Vec<&String> = candidates
             .iter()
             .filter(|key_ref| !live_after.contains(*key_ref))
             .collect();
-        assert_eq!(orphans.len(), 1, "the shared panel reference is not an orphan");
+        assert_eq!(
+            orphans.len(),
+            1,
+            "the shared panel reference is not an orphan"
+        );
         assert_eq!(orphans[0], "provider:p:account:a:inference:k1");
     }
 }
