@@ -206,7 +206,7 @@ export const en = {
   "accounts.new_api_user_hint":
     "The New-Api-User header some panels demand (AgentRouter does). Filled automatically by the browser token capture; empty sends none.",
   "accounts.panel_url_hint":
-    "The dashboard's own root when it lives on a different host than the relay endpoint (e.g. relay on api.relay.com, panel on panel.relay.com). Empty means same host. Token capture and account probes are anchored here.",
+    "The dashboard's own root when it lives on a different host than the relay endpoint (e.g. relay on api.relay.com, panel on panel.relay.com). Empty means same host, which is the usual case and the right answer when the vendor's website is a separate marketing site that does not serve the panel API. Token capture and account probes are anchored here.",
   "token_capture.start": "Get token in browser",
   "token_capture.starting": "Opening…",
   "token_capture.captured": "Token stored",
@@ -1395,7 +1395,7 @@ export const zh: Dict = {
   "accounts.new_api_user_hint":
     "部分面板(AgentRouter)要求的 New-Api-User 头。浏览器获取令牌时自动填写;留空不发送。",
   "accounts.panel_url_hint":
-    "面板与中转端点不在同一域名时填写(例如中转在 api.relay.com、面板在 panel.relay.com)。留空表示同域。浏览器获取令牌与账户探测都以此为准。",
+    "面板与中转端点不在同一域名时填写(例如中转在 api.relay.com、面板在 panel.relay.com)。留空表示同域,这也是常见且正确的情况——厂商官网常常是另一台机器,不提供面板 API。浏览器获取令牌与账户探测都以此为准。",
   "token_capture.start": "用浏览器获取令牌",
   "token_capture.starting": "正在打开…",
   "token_capture.captured": "令牌已保存",
