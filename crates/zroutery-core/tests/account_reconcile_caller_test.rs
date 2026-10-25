@@ -32,7 +32,8 @@ use tokio::net::TcpListener;
 use zroutery_core::account::types::{AccountCapabilities, AccountRuntime, AccountStatus};
 use zroutery_core::account::{AccountId, AccountSyncOutcome, ReconcileReport};
 use zroutery_core::config::{
-    AccountConfig, AppConfig, MemorySecretStore, ProviderConfig, ProviderKind, SecretStore,
+    AccountConfig, AppConfig, MemorySecretStore, ModelEntry, ProviderConfig, ProviderKind,
+    RoutingConfig, SecretStore,
 };
 use zroutery_core::AppState;
 
@@ -547,5 +548,66 @@ async fn a_refused_connection_is_a_published_failure() {
         runtime.status,
         AccountStatus::Active,
         "a refused connection must not read as healthy"
+    );
+}
+
+/// GATE 7: an unreachable panel is a fact about the account, never about the
+/// model.
+///
+/// The balance probe and the chat path share a provider but not a verdict: a
+/// panel that is down for an hour says nothing about whether the relay serves
+/// completions, and a reconciler that gated the provider would take working
+/// capacity out of the pool because a dashboard was unreachable. The test plants
+/// a real health reading, fails the probe, and asserts the routing layer did not
+/// move while the account did.
+#[tokio::test]
+async fn an_unreachable_panel_leaves_routing_alone() {
+    let mut config = AppConfig::default();
+    config
+        .providers
+        .push(provider("relay", &closed_endpoint().await, 1));
+    config
+        .models
+        .push(ModelEntry::for_upstream("relay", "relay-model", None));
+
+    let state = state_with(config, MemorySecretStore::new());
+    // A served request, so the health number starts at the value a success
+    // leaves rather than at the default a key with no samples returns.
+    state
+        .router()
+        .report_success("relay-model", 42, &RoutingConfig::default());
+    let health_before = state.router().health_score("relay-model");
+    assert!(
+        !state.router().is_provider_gated("relay"),
+        "the fixture starts with the provider in the pool"
+    );
+
+    let report = state.reconcile_accounts().await;
+    assert_eq!(
+        report.failed(),
+        1,
+        "the fixture needs a failing probe, got {:?}",
+        report.outcomes
+    );
+
+    assert_eq!(
+        state.router().health_score("relay-model"),
+        health_before,
+        "a panel outage must not lower the model's health"
+    );
+    assert!(
+        !state.router().is_provider_gated("relay"),
+        "a panel outage must not gate the provider"
+    );
+
+    let runtime = stored(&state, "relay", "acct-0");
+    assert!(
+        runtime.last_failure.is_some(),
+        "the failure is still recorded where the panel reads it"
+    );
+    assert_ne!(
+        runtime.status,
+        AccountStatus::Active,
+        "the account itself must not read as healthy"
     );
 }
