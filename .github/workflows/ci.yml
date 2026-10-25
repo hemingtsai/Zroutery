@@ -267,6 +267,8 @@ jobs:
         with:
           node-version: '22'
       - run: pnpm install --frozen-lockfile
+      - name: Frontend unit tests
+        run: pnpm --dir ui test
       - run: pnpm ui:build
       - name: Frontend size budget
         run: python -B scripts/ui_budget_test.py

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { api, deepLinkCurrent, errorText, gatewayAction, onDeepLink, onGatewayStateChanged, pageForDeepLink, type AppConfig, type Snapshot } from "./api";
 import { Banner, MenuItem, Popover, StatusDot, ToastProvider, useToast } from "./components";
 import { describeBackendError, I18nProvider, useI18n } from "./i18n";
+import { createSaveQueue, type SaveQueue } from "./saveQueue";
 import Overview from "./pages/Overview";
 import Models from "./pages/Models";
 import Providers from "./pages/Providers";
@@ -145,89 +146,41 @@ function Shell() {
     return () => media.removeEventListener("change", apply);
   }, [themePref]);
 
-  // Tasks run one at a time: every save round trips through Rust and rewrites
-  // the config file, so two overlapping saves could interleave and land out of
-  // order. Tasks arriving mid-flight are queued in order and re-based onto the
-  // latest committed config when they run.
-  //
-  // A caller's promise resolves only when *its own* task has run: answering a
-  // queued save with "true" before it ran would report an edit as saved that
-  // the queue might still drop, and a failed in-flight save resolves every
-  // waiting caller with false instead of discarding them silently.
-  const runningRef = useRef(false);
-  const queuedRef = useRef<
-    Array<{ task: () => Promise<Snapshot>; answer: () => void; drop: () => void }>
-  >([]);
-  const queueTailRef = useRef<Promise<boolean>>(Promise.resolve(true));
-
   // The newest config known to have been committed (or loaded). Saves are
   // updaters against this, so an edit queued behind an in-flight save is
   // applied on top of it instead of overwriting it with a stale snapshot.
   const configRef = useRef<AppConfig | null>(null);
 
-  const run = useCallback((task: () => Promise<Snapshot>): Promise<boolean> => {
-    if (runningRef.current) {
-      // The task may still be queued when the in-flight save fails; carry that
-      // failure to this caller rather than answering before the attempt.
-      let finish: (ok: boolean) => void = () => {};
-      const settled = new Promise<boolean>((resolve) => {
-        finish = resolve;
-      });
-      queuedRef.current.push({
-        task,
-        answer: () => finish(true),
-        drop: () => finish(false),
-      });
-      return settled;
-    }
+  // The queue outlives renders, but the toast it fires on failure has to speak
+  // the language the window is in now rather than the one it started in. `t`
+  // changes identity with the language; the setState functions do not, so only
+  // the translation goes through a ref.
+  const translate = useRef(t);
+  useEffect(() => {
+    translate.current = t;
+  }, [t]);
 
-    const apply = (s: Snapshot) => {
-      configRef.current = s.config;
-      setSnapshot(s);
-      return s;
-    };
-    runningRef.current = true;
-    setBusy(true);
-    setError(null);
-    const previous = queueTailRef.current;
-    const outcome = (async () => {
-      // Wait for the save before this one so the queue stays a single chain
-      // and this caller's result is its own task's result.
-      await previous.catch(() => false);
-      try {
-        apply(await task());
-        // Drain every edit that arrived while this one was in flight. Each
-        // task reads configRef when it runs, so later edits rebase on earlier
-        // ones, and a queued caller is answered only once its own task ran.
-        while (queuedRef.current.length > 0) {
-          const queued = queuedRef.current.shift()!;
-          try {
-            apply(await queued.task());
-            queued.answer();
-          } catch (e) {
-            queued.drop();
-            throw e;
-          }
+  const queueRef = useRef<SaveQueue | null>(null);
+  if (!queueRef.current) {
+    queueRef.current = createSaveQueue({
+      begin: () => {
+        setBusy(true);
+        setError(null);
+      },
+      apply: (next) => {
+        configRef.current = next.config;
+        setSnapshot(next);
+      },
+      fail: (cause, dropped) => {
+        setError(errorText(cause));
+        if (dropped > 0) {
+          notify("error", translate.current("toast.queued_discarded"));
         }
-        return true;
-      } catch (e) {
-        // A failed save invalidates the edits that were waiting behind it: the
-        // queue is dropped and each waiting caller is told its save did not
-        // land.
-        const dropped = queuedRef.current;
-        queuedRef.current = [];
-        for (const entry of dropped) entry.drop();
-        setError(errorText(e));
-        if (dropped.length > 0) notify("error", t("toast.queued_discarded"));
-        return false;
-      } finally {
-        runningRef.current = false;
-        setBusy(false);
-      }
-    })();
-    queueTailRef.current = outcome;
-    return outcome;
-  }, [notify, t]);
+      },
+      finish: () => setBusy(false),
+    });
+  }
+  const run = queueRef.current.run;
 
   useEffect(() => {
     void run(api.snapshot);
