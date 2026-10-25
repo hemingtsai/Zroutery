@@ -2490,6 +2490,111 @@ input::placeholder {
   margin: 0;
 }
 
+/* The pool's own heading: a label line, then the sentence that explains what
+   these keys are. They used to be siblings in the account's identity line,
+   which laid the label and the long hint end to end as one paragraph. */
+.pool-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.pool-title {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+/*
+ * One chat key per block: identity and its two live controls (enable, priority)
+ * on the first line, the rarer actions (replace, delete) on the second. The
+ * block used to reuse the provider row shape, which packed an id, a badge, a
+ * priority caption and two buttons beside a labelled form field into 370px and
+ * wrapped into a jumble. Nothing here is clickable as a whole, so it is not a
+ * `.list-row`: no pointer, no hover.
+ */
+.key-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.key-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  padding: 10px 0;
+}
+
+.key-row + .key-row {
+  border-top: 1px solid var(--line);
+}
+
+.key-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.key-id {
+  font-size: 13px;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.key-controls {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-left: auto;
+}
+
+.key-priority {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.key-priority input {
+  width: 56px;
+  text-align: center;
+}
+
+.key-actions,
+.key-replace {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-basis: 100%;
+  min-width: 0;
+}
+
+/* Ghost buttons carry the design system's 16px side padding so their label
+   sits inside a box; in this block the label is the first thing on its line,
+   so the padding is trimmed and pulled back to align with the key id. */
+.key-actions {
+  margin-left: -8px;
+}
+
+.key-actions .btn-ghost {
+  padding: 0 8px;
+  font-size: 13px;
+  min-height: 28px;
+  height: 28px;
+}
+
+.key-replace .field {
+  flex: 1 1 220px;
+}
+
+.key-replace .field-actions {
+  margin-top: calc(var(--label-h) + var(--field-gap));
+}
+
 .account-decl .row-main {
   display: flex;
   align-items: center;

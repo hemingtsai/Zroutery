@@ -23,6 +23,7 @@ import { describeBackendError } from "../i18n";
 import {
   Badge,
   Button,
+  CompactNumber,
   ConfirmDialog,
   Drawer,
   Empty,
@@ -41,6 +42,7 @@ import {
 } from "../components";
 import { useI18n } from "../i18n";
 import { groupProviders } from "../providerGroups";
+import { hasChatCredential } from "../providerCredential";
 
 type KindLabelKey =
   | "providers.openai_dialect"
@@ -395,7 +397,7 @@ export default function Providers({
                 status={
                   !p.enabled
                     ? "off"
-                    : keys[p.id] || p.key_ref === "" || !needsKey(p.kind)
+                    : !needsKey(p.kind) || hasChatCredential(p, keys)
                       ? "ok"
                       : "warn"
                 }
@@ -415,7 +417,7 @@ export default function Providers({
                   status={
                     !d.enabled
                       ? "off"
-                      : keys[d.id] || d.key_ref === "" || !needsKey(d.kind)
+                      : !needsKey(d.kind) || hasChatCredential(d, keys)
                         ? "ok"
                         : "warn"
                   }
@@ -1090,69 +1092,28 @@ function AccountSection({
                 * a toggle here cannot race the declaration this drawer holds.
                 */}
               <div className="inference-pool">
-                <div className="row-main">
-                  <span className="row-sub">{t("accounts.inference_title")}</span>
+                <div className="pool-head">
+                  <span className="pool-title">{t("accounts.inference_title")}</span>
                   <span className="field-hint">{t("accounts.inference_hint")}</span>
                 </div>
                 {a.inference_keys.length === 0 ? (
                   <Empty>{t("accounts.inference_empty")}</Empty>
                 ) : (
-                  <div className="list">
+                  <div className="key-list">
                     {a.inference_keys.map((key) => {
                       const slot = `${a.account_id}:${key.id}`;
                       const stored = snapshot.keys[key.key_ref] ?? false;
                       return (
-                        <div className="list-row row-nested" key={key.id}>
-                          <div className="row-main">
-                            <span className="row-title mono">{key.id}</span>
+                        <div className="key-row" key={key.id}>
+                          <div className="key-head">
+                            <span className="key-id mono">{key.id}</span>
                             {stored ? (
                               <Badge tone="ok">{t("accounts.inference_stored")}</Badge>
                             ) : (
                               <Badge tone="warn">{t("accounts.inference_missing")}</Badge>
                             )}
-                            <span className="row-sub">
-                              {t("accounts.inference_priority", { n: key.priority })}
-                            </span>
-                            <div className="field-actions">
-                              <Button
-                                kind="ghost"
-                                disabled={busy}
-                                onClick={() => {
-                                  setInferenceKeyFor(
-                                    inferenceKeyFor === slot ? null : slot,
-                                  );
-                                  setInferenceDraft("");
-                                }}
-                              >
-                                {t("accounts.inference_replace")}
-                              </Button>
-                              <Button
-                                kind="ghost"
-                                disabled={busy}
-                                onClick={() =>
-                                  setConfirm({
-                                    title: t("accounts.inference_remove_title", {
-                                      id: key.id,
-                                    }),
-                                    body: t("accounts.inference_remove_body"),
-                                    confirmLabel: t("common.delete"),
-                                    danger: true,
-                                    onConfirm: () =>
-                                      void run(() =>
-                                        api.removeAccountInferenceKey(
-                                          provider.id,
-                                          a.account_id,
-                                          key.id,
-                                        ),
-                                      ),
-                                  })
-                                }
-                              >
-                                {t("common.delete")}
-                              </Button>
-                            </div>
                           </div>
-                          <div className="controls">
+                          <div className="key-controls">
                             <Toggle
                               label={t("common.enabled")}
                               checked={key.enabled}
@@ -1160,20 +1121,64 @@ function AccountSection({
                                 void writeInference(a.account_id, key.id, { enabled })
                               }
                             />
-                            <NumberField
-                              label={t("accounts.inference_priority_label")}
-                              hint={t("accounts.inference_priority_hint")}
-                              integer
-                              value={key.priority}
-                              onCommit={(v) =>
-                                void writeInference(a.account_id, key.id, {
-                                  priority: v ?? 0,
+                            <label
+                              className="key-priority"
+                              title={t("accounts.inference_priority_hint")}
+                            >
+                              <span>{t("accounts.inference_priority_label")}</span>
+                              <CompactNumber
+                                integer
+                                min={0}
+                                value={key.priority}
+                                ariaLabel={t("accounts.inference_priority_label")}
+                                onCommit={(v) =>
+                                  void writeInference(a.account_id, key.id, {
+                                    priority: v ?? 0,
+                                  })
+                                }
+                              />
+                            </label>
+                          </div>
+                          <div className="key-actions">
+                            <Button
+                              kind="ghost"
+                              disabled={busy}
+                              onClick={() => {
+                                setInferenceKeyFor(
+                                  inferenceKeyFor === slot ? null : slot,
+                                );
+                                setInferenceDraft("");
+                              }}
+                            >
+                              {t("accounts.inference_replace")}
+                            </Button>
+                            <Button
+                              kind="ghost"
+                              disabled={busy}
+                              onClick={() =>
+                                setConfirm({
+                                  title: t("accounts.inference_remove_title", {
+                                    id: key.id,
+                                  }),
+                                  body: t("accounts.inference_remove_body"),
+                                  confirmLabel: t("common.delete"),
+                                  danger: true,
+                                  onConfirm: () =>
+                                    void run(() =>
+                                      api.removeAccountInferenceKey(
+                                        provider.id,
+                                        a.account_id,
+                                        key.id,
+                                      ),
+                                    ),
                                 })
                               }
-                            />
+                            >
+                              {t("common.delete")}
+                            </Button>
                           </div>
                           {inferenceKeyFor === slot && (
-                            <div className="controls">
+                            <div className="key-replace">
                               <TextField
                                 label={t("accounts.inference_key_label")}
                                 hint={t("accounts.inference_key_hint")}
@@ -1432,6 +1437,16 @@ function ProviderDrawer({
 }) {
   const { t } = useI18n();
   const hasKey = snapshot.keys[provider.id] ?? false;
+  // Chat credentials an account declares: the auth row would otherwise say
+  // "no key" beside a green dot, because the provider's own reference is empty
+  // while the account's inference key is what requests are signed with.
+  const accountKeys = (provider.accounts ?? []).reduce(
+    (n, account) =>
+      n +
+      account.inference_keys.filter((key) => snapshot.keys[key.key_ref] ?? false)
+        .length,
+    0,
+  );
   const [checkingBalance, setCheckingBalance] = useState(false);
   // Hoisted so the type is narrowed once rather than at two separate index
   // reads, and so the translation has one string to work with.
@@ -1476,7 +1491,10 @@ function ProviderDrawer({
             <StatusDot
               tone={
                 provider.enabled
-                  ? hasKey || provider.key_ref === "" || !needsKey(provider.kind)
+                  ? hasKey ||
+                    accountKeys > 0 ||
+                    provider.key_ref === "" ||
+                    !needsKey(provider.kind)
                     ? "ok"
                     : "warn"
                   : "off"
@@ -1500,6 +1518,8 @@ function ProviderDrawer({
                   {t("common.remove")}
                 </Button>
               </span>
+            ) : accountKeys > 0 ? (
+              t("providers.auth_account_key")
             ) : provider.key_ref === "" || !needsKey(provider.kind) ? (
               t("providers.no_cred")
             ) : (
