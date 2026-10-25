@@ -17,13 +17,17 @@ pub struct TierClass {
     pub model: String,
     /// The name the client's model picker shows for it.
     pub display_name: String,
-    /// The reasoning-effort levels the class accepts, in picker order.
+    /// The reasoning-effort levels every member of the class accepts, in picker
+    /// order.
     ///
-    /// A class routes to several models that may disagree about effort levels,
-    /// so this is the union of what its members declare: a level a caller
-    /// selects is reachable through at least one member. Empty means no member
-    /// declares any, and the client is given no picker rather than one whose
-    /// levels nothing can honour.
+    /// A class routes to several models, and the one that serves a request is
+    /// chosen per request, so a level is only offered when **every** member
+    /// declares it. The union of the members' levels is not enough: it offers a
+    /// control the gateway can encode but the member that ends up serving
+    /// cannot honour, and the upstream refuses the request with a reason the
+    /// user cannot act on. Empty means no level is common to all members, and
+    /// the client is given no picker rather than one whose levels some members
+    /// reject.
     pub effort_levels: Vec<String>,
 }
 
@@ -267,7 +271,7 @@ pub fn takeover_fields(
             let mut out = vec![
                 ManagedField {
                     path: format!("{prefix}.package"),
-                    value: serde_json::json!("@ai-sdk/openai-compatible"),
+                    value: serde_json::json!("aisdk:@ai-sdk/openai"),
                 },
                 ManagedField {
                     path: format!("{prefix}.name"),

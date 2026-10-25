@@ -198,6 +198,20 @@ pub fn shape_body(body: &mut Value, client_declared_tools: bool) {
     }
 }
 
+/// V2 native capture (2026-10-25): title requests carry no tools, primary
+/// requests carry the caller's tools (shell, not fabricated bash). Both work
+/// with Bearer public. Streaming plus usage is sufficient body shaping.
+pub fn shape_v2_body(body: &mut Value) {
+    let Some(object) = body.as_object_mut() else {
+        return;
+    };
+    object.insert("stream".into(), Value::Bool(true));
+    let options = object.entry("stream_options").or_insert_with(|| json!({}));
+    if let Some(options) = options.as_object_mut() {
+        options.insert("include_usage".into(), Value::Bool(true));
+    }
+}
+
 /// Append a minimal definition for `bash`/`read` when the client did not declare
 /// one. A tool the client already named is left exactly as it arrived — the gate
 /// checks only the name, so its description and parameters are never rewritten.
@@ -534,17 +548,12 @@ mod tests {
         )
         .expect("encodes");
         assert_eq!(body["stream"].as_bool(), Some(true));
-        let names: Vec<&str> = body["tools"]
-            .as_array()
-            .expect("tools present")
-            .iter()
-            .filter_map(|tool| tool["function"]["name"].as_str())
-            .collect();
         assert!(
-            names.contains(&"bash") && names.contains(&"read"),
-            "tools={names:?}"
+            body.get("tools").is_none(),
+            "V2 does not require fabricated tools"
         );
-        assert_eq!(body["tool_choice"].as_str(), Some("none"));
+        assert!(body.get("tool_choice").is_none());
+        assert_eq!(body["stream_options"]["include_usage"], true);
     }
 
     #[test]
@@ -738,6 +747,12 @@ mod gateway_tests {
 
         let mut req = ChatRequest::new("space-bunny-free", provider.dialect());
         req.messages.push(Message::user_text("hi"));
+        req.tools.push(crate::ir::ToolDef {
+            name: "my_tool".into(),
+            description: None,
+            input_schema: json!({"type":"object"}),
+            cache_control: None,
+        });
 
         // The encoded, shaped body.
         let body = encode_for_mode(
@@ -755,8 +770,12 @@ mod gateway_tests {
             .iter()
             .filter_map(|tool| tool["function"]["name"].as_str())
             .collect();
-        assert!(names.contains(&"bash") && names.contains(&"read"));
-        assert_eq!(body["tool_choice"].as_str(), Some("none"));
+        assert_eq!(
+            names,
+            vec!["my_tool"],
+            "V2 preserves the caller's tool list"
+        );
+        assert!(body.get("tool_choice").is_none());
 
         let identity = ClientIdentity {
             profile: ProviderClientProfile::OpenCodeCli,

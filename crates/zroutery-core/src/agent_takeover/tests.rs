@@ -2011,6 +2011,49 @@ fn the_opencode_field_set_writes_the_native_block_and_updates_an_existing_legacy
     }
 }
 
+/// The OpenCode package the native block names.
+///
+/// OpenCode 2 moved its provider runtimes into its own package scope and
+/// renamed the OpenAI-compatible one: the block must carry
+/// `aisdk:@ai-sdk/openai`, not the bare `@ai-sdk/openai-compatible` the
+/// previous generation used. A takeover that wrote the old name produced a
+/// provider OpenCode could not resolve, so the client fell back to whatever
+/// it had before rather than to the gateway.
+#[test]
+fn the_opencode_native_block_names_the_current_package() {
+    let target = a_target();
+    let fields = takeover_fields(AgentType::OpenCode, &target, None).unwrap();
+    let package = fields
+        .iter()
+        .find(|f| f.path == format!("providers.{GATEWAY_PROVIDER_ID}.package"))
+        .expect("the native block names its package");
+    assert_eq!(
+        package.value,
+        serde_json::json!("aisdk:@ai-sdk/openai"),
+        "opencode 2 resolves the provider runtime under its own package scope"
+    );
+}
+
+/// The legacy `provider` block keeps the old npm name, because that is the
+/// shape a 1.x client reads and it resolves that name itself.
+#[test]
+fn the_opencode_legacy_block_keeps_the_old_npm_name() {
+    let target = a_target();
+    let legacy_doc = serde_json::json!({
+        "provider": { (GATEWAY_PROVIDER_ID): { "npm": "@ai-sdk/openai-compatible" } }
+    });
+    let fields = takeover_fields(AgentType::OpenCode, &target, Some(&legacy_doc)).unwrap();
+    let npm = fields
+        .iter()
+        .find(|f| f.path == format!("provider.{GATEWAY_PROVIDER_ID}.npm"))
+        .expect("the legacy block names its npm package");
+    assert_eq!(
+        npm.value,
+        serde_json::json!("@ai-sdk/openai-compatible"),
+        "a 1.x client resolves the bare npm name"
+    );
+}
+
 /// The OpenCode base is the OpenAI base: it carries `/v1`, and a target that
 /// already does is not given a second one.
 #[test]

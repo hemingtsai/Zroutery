@@ -173,7 +173,7 @@ impl ProviderKind {
         match self {
             ProviderKind::Anthropic => "https://api.anthropic.com",
             ProviderKind::OpenAICompatible => "https://api.openai.com/v1",
-            ProviderKind::OpenCodeZenFree => "https://opencode.ai/zen",
+            ProviderKind::OpenCodeZenFree => "https://opencode.ai/inference/openai/v1",
             ProviderKind::OpenCodeConsole => "https://opencode.ai/inference/openai/v1",
             ProviderKind::Decision => "https://api.typesafe.ai",
         }

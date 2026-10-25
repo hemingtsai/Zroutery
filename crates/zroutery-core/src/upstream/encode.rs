@@ -92,7 +92,7 @@ pub fn encode_for_mode(
     if provider.client_profile_for(req.client_identity.as_deref())
         == ProviderClientProfile::OpenCodeCli
     {
-        crate::opencode::shape_body(&mut body, !req.tools.is_empty());
+        crate::opencode::shape_v2_body(&mut body);
     }
 
     Ok(body)
