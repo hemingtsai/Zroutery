@@ -217,13 +217,20 @@ impl Upstream {
         ));
         // HTTP 200 is not sufficient proof of a successful SSE handshake:
         // relays can put an upstream 429/402 in response.failed before any
-        // answer. Hold only lifecycle events until real output or a normal
-        // terminal, so the request loop can still fail over safely.
+        // answer. Watch only the opening of the stream — a relay that rejects a
+        // request refuses it before doing any model work — so a slow first
+        // token is released rather than held or failed. Nothing buffered here
+        // has been published, so an error may still fail over safely; a silent
+        // or cut opening stays the client's terminal error, as it always was.
+        const ERROR_PREFACE: Duration = Duration::from_secs(3);
         let mut prefix = Vec::new();
-        let first_output =
-            tokio::time::timeout(Duration::from_secs(provider.timeout_secs.min(30)), async {
-                while let Some(event) = stream.next().await {
-                    let event = event?;
+        let mut tail_error = None;
+        let deadline = ERROR_PREFACE.min(Duration::from_secs(provider.timeout_secs));
+        loop {
+            match tokio::time::timeout(deadline, stream.next()).await {
+                // A slow model with no output yet is not a failed handshake.
+                Err(_) | Ok(None) => break,
+                Ok(Some(Ok(event))) => {
                     let output = matches!(
                         event,
                         StreamEvent::TextDelta { .. }
@@ -234,7 +241,7 @@ impl Upstream {
                     );
                     prefix.push(Ok(event));
                     if output {
-                        return Ok(());
+                        break;
                     }
                     if prefix.len() >= 256 {
                         return Err(Error::BadUpstreamPayload(
@@ -242,14 +249,22 @@ impl Upstream {
                         ));
                     }
                 }
-                Err(Error::InterruptedStream {
-                    usage: Default::default(),
-                })
-            })
-            .await
-            .map_err(|_| Error::Timeout(provider.timeout_secs.min(30)))?;
-        first_output?;
-        Ok(Box::pin(futures_util::stream::iter(prefix).chain(stream)))
+                Ok(Some(Err(err))) => {
+                    if matches!(err, Error::InterruptedStream { .. }) {
+                        // The body ended before the answer started. That is the
+                        // stream's own last word, delivered at the status line
+                        // the caller already holds, not a second 502.
+                        tail_error = Some(err);
+                        break;
+                    }
+                    return Err(err);
+                }
+            }
+        }
+        let tail = futures_util::stream::iter(tail_error.map(Err));
+        Ok(Box::pin(
+            futures_util::stream::iter(prefix).chain(stream).chain(tail),
+        ))
     }
 }
 
