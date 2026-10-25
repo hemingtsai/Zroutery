@@ -57,6 +57,9 @@ mod stream;
 #[allow(deprecated)]
 mod tests;
 
+#[cfg(test)]
+mod client_tests;
+
 pub use catalogue::DiscoveredModel;
 pub use decision::{
     build_body as build_decision_body, parse_answer as parse_decision_answer,
@@ -116,23 +119,57 @@ fn build_http_client(bypass_proxy: bool, connect_timeout_secs: u64) -> reqwest::
         connect_timeout_secs,
         "building upstream HTTP client"
     );
-    let mut builder = reqwest::Client::builder()
-        .connect_timeout(Duration::from_secs(connect_timeout_secs))
-        .pool_idle_timeout(Duration::from_secs(90))
-        .http1_only()
-        // Never follow a redirect. reqwest strips Authorization across hosts
-        // but not custom headers, and the Anthropic key rides in x-api-key, so
-        // a 3xx would hand the key to whatever host it names; a downgrade to
-        // plain http would also put it on the wire in the clear.
-        .redirect(reqwest::redirect::Policy::none())
-        .user_agent(USER_AGENT);
-    if bypass_proxy || std::env::var("ZROUTERY_NO_PROXY").is_ok() {
-        builder = builder.no_proxy();
-    }
-    builder.build().unwrap_or_else(|e| {
-        tracing::error!("falling back to a default HTTP client: {e}");
-        reqwest::Client::new()
-    })
+    // Read once: the variable is allowed to change, but one client must not be
+    // half-proxied. `rebuild_client` is how a runtime change reaches the pool.
+    let direct = bypass_proxy || std::env::var("ZROUTERY_NO_PROXY").is_ok();
+    // The properties below are the client's contract, not tuning: HTTP/1.1
+    // only, no redirect following, and the proxy decision. They are applied to
+    // the fallback too, so a client that failed to build its TLS pool is still
+    // not a client that follows a 3xx to another host with `x-api-key` on it.
+    let configure = |builder: reqwest::ClientBuilder, pooled: bool| {
+        let mut builder = builder
+            .connect_timeout(Duration::from_secs(connect_timeout_secs))
+            .http1_only()
+            // Never follow a redirect. reqwest strips Authorization across
+            // hosts but not custom headers, and the Anthropic key rides in
+            // x-api-key, so a 3xx would hand the key to whatever host it names;
+            // a downgrade to plain http would also put it on the wire in the
+            // clear.
+            .redirect(reqwest::redirect::Policy::none())
+            .user_agent(USER_AGENT);
+        if pooled {
+            builder = builder
+                .pool_idle_timeout(Duration::from_secs(90))
+                // A busy provider used to be served by an unbounded idle pool:
+                // every finished connection sat there until the idle timeout,
+                // and fifty concurrent streams to one host held fifty file
+                // descriptors for that long. Sixteen is comfortably above the
+                // concurrency a single desktop instance generates.
+                .pool_max_idle_per_host(16)
+                // Keepalive probes let a dead relay be noticed between
+                // requests rather than by the next request timing out.
+                .tcp_keepalive(Duration::from_secs(60));
+        }
+        if direct {
+            builder = builder.no_proxy();
+        }
+        builder
+    };
+
+    configure(reqwest::Client::builder(), true)
+        .build()
+        .unwrap_or_else(|e| {
+            // The A3 plan said `expect`. This keeps a usable process instead:
+            // a panic in `AppState::new` would take the desktop shell down at
+            // startup, while the degraded client still refuses redirects and
+            // still speaks HTTP/1.1 — the two properties whose loss would be a
+            // security incident rather than a performance regression. The log
+            // is an error, so the fallback is never quiet.
+            tracing::error!("falling back to an unpooled HTTP client: {e}");
+            configure(reqwest::Client::builder(), false)
+                .build()
+                .expect("the fallback client must build when TLS does")
+        })
 }
 
 impl Upstream {

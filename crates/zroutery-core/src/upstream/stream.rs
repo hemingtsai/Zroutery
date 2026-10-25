@@ -154,7 +154,7 @@ impl Upstream {
             terminal_error: None,
         };
 
-        Ok(Box::pin(futures_util::stream::unfold(
+        let mut stream: EventStream = Box::pin(futures_util::stream::unfold(
             state,
             |mut state| async move {
                 loop {
@@ -198,8 +198,15 @@ impl Upstream {
                                 match state.parser.push(&frame) {
                                     Ok(events) => state.pending.extend(events),
                                     Err(err) => {
+                                        tracing::warn!(provider = %state.provider, error = %err,
+                                            "upstream SSE parser rejected an event");
                                         state.done = true;
-                                        return Some((Err(err), state));
+                                        // Preserve deltas parsed earlier in this
+                                        // same network chunk before reporting a
+                                        // later error. Otherwise first-byte
+                                        // inspection could replay partial output.
+                                        state.terminal_error = Some(err);
+                                        break;
                                     }
                                 }
                             }
@@ -207,7 +214,42 @@ impl Upstream {
                     }
                 }
             },
-        )))
+        ));
+        // HTTP 200 is not sufficient proof of a successful SSE handshake:
+        // relays can put an upstream 429/402 in response.failed before any
+        // answer. Hold only lifecycle events until real output or a normal
+        // terminal, so the request loop can still fail over safely.
+        let mut prefix = Vec::new();
+        let first_output =
+            tokio::time::timeout(Duration::from_secs(provider.timeout_secs.min(30)), async {
+                while let Some(event) = stream.next().await {
+                    let event = event?;
+                    let output = matches!(
+                        event,
+                        StreamEvent::TextDelta { .. }
+                            | StreamEvent::ThinkingDelta { .. }
+                            | StreamEvent::ToolUseStart { .. }
+                            | StreamEvent::RedactedThinking { .. }
+                            | StreamEvent::Stop { .. }
+                    );
+                    prefix.push(Ok(event));
+                    if output {
+                        return Ok(());
+                    }
+                    if prefix.len() >= 256 {
+                        return Err(Error::BadUpstreamPayload(
+                            "upstream sent too many lifecycle events before any output".into(),
+                        ));
+                    }
+                }
+                Err(Error::InterruptedStream {
+                    usage: Default::default(),
+                })
+            })
+            .await
+            .map_err(|_| Error::Timeout(provider.timeout_secs.min(30)))?;
+        first_output?;
+        Ok(Box::pin(futures_util::stream::iter(prefix).chain(stream)))
     }
 }
 

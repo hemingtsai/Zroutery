@@ -256,10 +256,23 @@ mod tests {
             retry_after: None,
         }
         .is_retryable());
-        assert!(!Error::Upstream {
+        // A 400 is not retried against the same candidate, but another
+        // candidate may translate the request into a shape its provider
+        // accepts. The legacy helper means "the loop may continue", so it is
+        // true here; the canonical class records `retryable: false`.
+        assert!(Error::Upstream {
             provider: "p".into(),
             status: 400,
             body: String::new(),
+            retry_after: None,
+        }
+        .is_retryable());
+        // An empty wallet fails over for the same reason, and the provider gate
+        // stops the next request from reaching it at all.
+        assert!(Error::Upstream {
+            provider: "p".into(),
+            status: 402,
+            body: "insufficient balance".into(),
             retry_after: None,
         }
         .is_retryable());

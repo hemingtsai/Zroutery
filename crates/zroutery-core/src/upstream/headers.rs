@@ -17,8 +17,7 @@ const CODEX_USER_AGENT: &str = "codex_cli_rs/0.1.0";
 /// The OpenCode CLI User-Agent the gateway's free tier requires: it must contain
 /// `opencode/<ver>` with `<ver> >= 1.18.0`, and the rest is the CLI's own suffix.
 #[cfg(feature = "opencode")]
-const OPENCODE_USER_AGENT: &str =
-    "opencode/1.18.31 ai-sdk/provider-utils/4.0.23 runtime/bun/1.3.14";
+const OPENCODE_USER_AGENT: &str = "opencode/latest/2.0.32/cli";
 #[cfg(feature = "opencode")]
 const OPENCODE_CLIENT_ID: &str = "cli";
 #[cfg(feature = "opencode")]

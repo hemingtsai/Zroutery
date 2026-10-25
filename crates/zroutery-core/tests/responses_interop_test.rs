@@ -136,6 +136,44 @@ fn frame_payload(frame: &SseFrame) -> Value {
     frame.json().unwrap()
 }
 
+#[test]
+fn a_failed_response_has_one_standard_error_object_and_is_not_malformed() {
+    let mut encoder = ResponsesStreamEncoder::new("m");
+    let frames = encoder.error(&zroutery_core::Error::Timeout(5));
+    let payload = frame_payload(frames.last().unwrap());
+    assert_eq!(payload["type"], "response.failed");
+    assert!(payload["response"]["error"]["message"].is_string());
+    assert_eq!(payload["response"]["error"]["code"], "timeout_error");
+    assert!(payload["response"]["error"].get("error").is_none());
+
+    let mut parser = ResponsesStreamParser::new("m");
+    let error = parser.push(&SseFrame { event: Some("response.failed".into()), data: json!({
+        "type":"response.failed", "response": {"error": {"code":"insufficient_quota", "message":"insufficient balance"}}
+    }).to_string() }).unwrap_err();
+    assert_eq!(
+        error.classified().class,
+        zroutery_core::FailureClass::BalanceExhausted
+    );
+}
+
+#[test]
+fn an_sse_error_envelope_without_type_keeps_its_failure_class() {
+    let mut parser = ResponsesStreamParser::new("m");
+    let frame = SseFrame {
+        event: None,
+        data: json!({"error":{
+            "type":"rate_limit_error", "message":"too many requests"
+        }})
+        .to_string(),
+    };
+    let error = parser.push(&frame).unwrap_err();
+    assert_eq!(
+        error.classified().class,
+        zroutery_core::FailureClass::RateLimit
+    );
+    assert_eq!(error.status().as_u16(), 429);
+}
+
 fn frames_for(events: &[StreamEvent]) -> Vec<SseFrame> {
     let mut enc = ResponsesStreamEncoder::new("m");
     let mut frames = Vec::new();
@@ -230,6 +268,57 @@ fn text_content_part_starts_with_empty_text() {
 }
 
 // --------------------------------------------------------------- RSP-04
+
+#[test]
+fn reasoning_frames_use_the_official_summary_shape_not_message_content_parts() {
+    let frames = frames_for(&[
+        StreamEvent::Start {
+            id: "resp_reasoning".into(),
+            model: "m".into(),
+            usage: Usage::default(),
+        },
+        StreamEvent::ThinkingDelta {
+            index: 0,
+            text: "reason".into(),
+        },
+        StreamEvent::ThinkingDelta {
+            index: 0,
+            text: " carefully".into(),
+        },
+        StreamEvent::Stop {
+            stop_reason: StopReason::EndTurn,
+            stop_sequence: None,
+            usage: Usage::default(),
+        },
+    ]);
+    for frame in &frames {
+        let event = frame.event.as_deref().unwrap();
+        let data = frame_payload(frame);
+        assert!(
+            !event.starts_with("response.content_part."),
+            "reasoning is not message content"
+        );
+        if event.starts_with("response.reasoning_summary_") {
+            assert_eq!(data["summary_index"], 0, "{event}");
+            assert!(data.get("content_index").is_none());
+            assert!(data["item_id"].is_string());
+            assert_eq!(data["output_index"], 0);
+            if event.contains("_part.") {
+                assert_eq!(data["part"]["type"], "summary_text");
+            }
+        }
+    }
+    let done = frames
+        .iter()
+        .find(|frame| frame.event.as_deref() == Some("response.reasoning_summary_part.done"))
+        .unwrap();
+    assert_eq!(frame_payload(done)["part"]["text"], "reason carefully");
+    let terminal = frame_payload(frames.last().unwrap());
+    assert_eq!(
+        terminal["response"]["output"][0]["summary"][0]["text"],
+        "reason carefully"
+    );
+}
 
 #[test]
 fn max_tokens_stream_stop_reports_incomplete() {

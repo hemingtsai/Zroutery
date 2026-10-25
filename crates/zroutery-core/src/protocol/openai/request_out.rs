@@ -3,7 +3,7 @@
 use serde_json::{json, Map, Value};
 
 use super::request_in::arguments_json;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::ir::{
     ChatRequest, ContentBlock, Dialect, MediaSource, Message, Role, StructuredOutput, SystemPart,
     ToolChoice, ToolResultPart, UnsupportedContentPolicy, DEFAULT_STRUCTURED_OUTPUT_SCHEMA_NAME,
@@ -73,6 +73,9 @@ pub fn encode_request_with(
             req.source_dialect == Dialect::OpenAI,
             req.unsupported_content_policy,
         )?;
+    }
+    if req.source_dialect == Dialect::OpenAIResponses {
+        messages = coalesce_assistant_items(messages);
     }
     body.insert("messages".into(), Value::Array(messages));
 
@@ -195,22 +198,19 @@ fn encode_message_into(
                         "type": "function",
                         "function": {"name": name, "arguments": arguments_json(input)},
                     })),
-                    // Reasoning history is echoed only when the source dialect
-                    // supports it.  Otherwise it follows the same explicit
-                    // unsupported-content policy as every other block; it is
-                    // never silently discarded.
-                    ContentBlock::Thinking { text: t, signature } => {
+                    // Thinking text has a Chat Completions representation,
+                    // including when it arrived through Responses/Anthropic.
+                    // Only same-dialect opaque envelopes are echoed: a foreign
+                    // signature is not a credential the target can validate.
+                    ContentBlock::Thinking { text: t, .. } => {
                         if echo_reasoning {
                             if let Some(item) = reasoning_bridge::encode_thinking_block(b) {
                                 reasoning_items.push(item);
                             } else {
                                 reasoning.push_str(t);
                             }
-                            let _ = signature;
-                        } else if let Some(replacement) = apply_content_policy(policy, b)? {
-                            if let Some(replacement_text) = replacement.as_text() {
-                                text.push_str(replacement_text);
-                            }
+                        } else {
+                            reasoning.push_str(t);
                         }
                     }
                     ContentBlock::RedactedThinking { .. } => {
@@ -262,6 +262,7 @@ fn encode_message_into(
         }
         Role::User => {
             let mut parts: Vec<Value> = Vec::new();
+            let mut tool_images: Vec<Value> = Vec::new();
             for b in &m.content {
                 match b {
                     ContentBlock::ToolResult {
@@ -313,7 +314,7 @@ fn encode_message_into(
                                 ),
                             })];
                             content.extend(images);
-                            out.push(json!({"role": "user", "content": Value::Array(content)}));
+                            tool_images.extend(content);
                         }
                     }
                     ContentBlock::Text { text, .. } => {
@@ -390,6 +391,10 @@ fn encode_message_into(
                     }
                 }
             }
+            // Every parallel tool result must precede the next user message.
+            // Interleaving an image after result A but before result B breaks
+            // the tool round even though the ids were preserved.
+            parts.splice(0..0, tool_images);
             if !parts.is_empty() {
                 // Keep the simple string form when there is only text.
                 let all_text = parts.iter().all(|p| p["type"] == "text");
@@ -405,6 +410,73 @@ fn encode_message_into(
                 out.push(json!({"role": "user", "content": content}));
             }
         }
+    }
+    Ok(())
+}
+
+/// Responses has one item per function call/reasoning/message. Chat requires
+/// one assistant turn containing all parallel calls, followed by their results.
+fn coalesce_assistant_items(messages: Vec<Value>) -> Vec<Value> {
+    let mut out: Vec<Value> = Vec::new();
+    for message in messages {
+        if message["role"] == "assistant"
+            && out
+                .last()
+                .is_some_and(|previous| previous["role"] == "assistant")
+        {
+            let previous = out.last_mut().expect("checked above");
+            for field in ["content", "reasoning_content"] {
+                if let Some(text) = message[field].as_str() {
+                    let existing = previous[field].as_str().unwrap_or_default();
+                    previous[field] = json!(format!("{existing}{text}"));
+                }
+            }
+            for field in ["tool_calls", "reasoning"] {
+                if let Some(items) = message[field].as_array() {
+                    if !previous[field].is_array() {
+                        previous[field] = json!([]);
+                    }
+                    previous[field]
+                        .as_array_mut()
+                        .expect("array above")
+                        .extend(items.iter().cloned());
+                }
+            }
+        } else {
+            out.push(message);
+        }
+    }
+    out
+}
+
+/// Verify pairing at the send boundary, after continuation expansion and
+/// dialect translation. Never fabricate/drop a call or expose payloads in errors.
+pub fn validate_tool_history(body: &Value) -> Result<()> {
+    let mut pending = std::collections::HashSet::new();
+    for message in body["messages"].as_array().into_iter().flatten() {
+        if message["role"] == "tool" {
+            let id = message["tool_call_id"].as_str().unwrap_or_default();
+            if id.is_empty() || !pending.remove(id) {
+                return Err(Error::invalid("tool-call history has an orphan or duplicate result; provide the matching call/result round"));
+            }
+            continue;
+        }
+        if !pending.is_empty() {
+            return Err(Error::invalid("tool-call history is missing results before the next message; restore the complete tool round"));
+        }
+        for call in message["tool_calls"].as_array().into_iter().flatten() {
+            let id = call["id"].as_str().unwrap_or_default();
+            if id.is_empty() || !pending.insert(id.to_string()) {
+                return Err(Error::invalid(
+                    "tool-call history contains an empty or duplicate call id",
+                ));
+            }
+        }
+    }
+    if !pending.is_empty() {
+        return Err(Error::invalid(
+            "tool-call history is incomplete; include every pending tool result before continuing",
+        ));
     }
     Ok(())
 }

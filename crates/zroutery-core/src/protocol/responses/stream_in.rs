@@ -97,12 +97,51 @@ impl StreamParser for ResponsesStreamParser {
             return Ok(Vec::new());
         }
         let event = frame.json()?;
-        let event_type = event.get("type").and_then(Value::as_str).ok_or_else(|| {
-            Error::BadUpstreamPayload("Responses stream event is missing `type`".into())
-        })?;
+        let event_type = event
+            .get("type")
+            .and_then(Value::as_str)
+            .or(frame.event.as_deref())
+            .or_else(|| {
+                event
+                    .get("error")
+                    .filter(|error| !error.is_null())
+                    .map(|_| "error")
+            })
+            .ok_or_else(|| {
+                Error::BadUpstreamPayload("Responses stream event is missing `type`".into())
+            })?;
         let mut out = Vec::new();
 
         match event_type {
+            "response.failed" | "error" => {
+                let error = event
+                    .pointer("/response/error")
+                    .or_else(|| event.get("error"))
+                    .unwrap_or(&event);
+                let error = error.get("error").unwrap_or(error);
+                let code = error
+                    .get("code")
+                    .or_else(|| error.get("type"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("api_error");
+                let message = error
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .unwrap_or("upstream response failed");
+                let status = match code {
+                    "rate_limit_exceeded" | "rate_limit_error" => 429,
+                    "insufficient_quota" | "insufficient_balance" => 402,
+                    "invalid_request_error" | "tool_call_mismatch" => 400,
+                    "authentication_error" | "invalid_api_key" => 401,
+                    _ => 502,
+                };
+                return Err(Error::Upstream {
+                    provider: self.model.clone(),
+                    status,
+                    body: serde_json::json!({"error":{"code":code,"message":message}}).to_string(),
+                    retry_after: None,
+                });
+            }
             "response.created" => {
                 let response = event.get("response").cloned().unwrap_or_default();
                 self.id = response
@@ -185,6 +224,9 @@ impl StreamParser for ResponsesStreamParser {
                     Some("reasoning") | Some("summary_text") => {
                         self.open_index("thinking");
                     }
+                    Some("refusal") => {
+                        self.open_index("text");
+                    }
                     Some(_) => {
                         return Err(unsupported_upstream_content(
                             "Responses stream content part",
@@ -204,6 +246,7 @@ impl StreamParser for ResponsesStreamParser {
                 match part.get("type").and_then(Value::as_str) {
                     Some("output_text") => self.text_index = None,
                     Some("reasoning") | Some("summary_text") => self.thinking_index = None,
+                    Some("refusal") => self.text_index = None,
                     Some(_) => {
                         return Err(unsupported_upstream_content(
                             "Responses stream content part",
@@ -228,7 +271,7 @@ impl StreamParser for ResponsesStreamParser {
                     }
                 }
             }
-            "response.output_text.delta" => {
+            "response.output_text.delta" | "response.refusal.delta" => {
                 let index = self.open_index("text");
                 let delta = event.get("delta").and_then(Value::as_str).ok_or_else(|| {
                     Error::BadUpstreamPayload("output text delta is missing `delta`".into())
@@ -262,7 +305,7 @@ impl StreamParser for ResponsesStreamParser {
                     partial_json: delta.to_string(),
                 });
             }
-            "response.reasoning_summary_text.delta" => {
+            "response.reasoning_summary_text.delta" | "response.reasoning_text.delta" => {
                 let index = self.open_index("thinking");
                 let delta = event.get("delta").and_then(Value::as_str).ok_or_else(|| {
                     Error::BadUpstreamPayload("reasoning summary delta is missing `delta`".into())
@@ -343,8 +386,14 @@ impl StreamParser for ResponsesStreamParser {
             "response.in_progress"
             | "response.queued"
             | "response.output_text.done"
+            | "response.refusal.done"
+            | "response.reasoning_text.done"
             | "response.reasoning_summary_text.done" => {}
             _ => {
+                // Log only the sanitized event type, never prompt/response
+                // payload. A generic client error must still be diagnosable.
+                tracing::warn!(event_type = %event_type.chars().take(64).filter(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_')).collect::<String>(),
+                    "unsupported Responses stream event");
                 return Err(unsupported_upstream_content("Responses stream event"));
             }
         }

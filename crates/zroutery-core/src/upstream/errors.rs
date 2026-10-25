@@ -11,11 +11,10 @@ use crate::error::Error;
 ///
 /// The reference filter (alexcarterio/AgentRouter-Codex-Filter) allows up to 20
 /// retries and a 30-minute budget because it stages the whole SSE response, so a
-/// long wait is invisible to the client. Zroutery forwards a stream live and
-/// blocks the request while it waits, so the same policy would hold a client
-/// for half an hour. Six retries is enough to ride out a short batch grant or a
-/// gateway flap without turning a stall into a hang.
-const MAX_TOTAL_RETRIES: u32 = 6;
+/// long wait is invisible to the client. Zroutery forwards a stream live, so
+/// at most two brief handshake replays are permitted; long rate windows are
+/// surfaced with Retry-After rather than holding the client for minutes.
+const MAX_TOTAL_RETRIES: u32 = 2;
 /// Waits for a rate limit: a token/request window is minutes, not milliseconds.
 const RATE_DELAYS: [Duration; 4] = [
     Duration::from_secs(5),
@@ -38,7 +37,7 @@ const AVAILABILITY_DELAYS: [Duration; 3] = [
 /// Waits for a history item that belongs to another upstream resource.
 const HISTORY_DELAYS: [Duration; 2] = [Duration::from_secs(1), Duration::from_secs(2)];
 /// No single wait exceeds this, even when the upstream asks for longer.
-const MAX_WAIT: Duration = Duration::from_secs(120);
+const MAX_WAIT: Duration = Duration::from_secs(5);
 
 /// How long to wait before replaying the same candidate, or `None` when this
 /// failure is not one a replay can fix.
@@ -70,6 +69,16 @@ pub(crate) fn retry_advice(
     // account says nothing about the next. Waiting is the last resort, when
     // this candidate is the only one left.
     if can_fail_over {
+        return None;
+    }
+    // Billing/auth/history failures are never made transient just because a
+    // relay puts them on a 429. A long Retry-After is returned to the caller,
+    // not slept on (nor violated by retrying earlier than the requested floor).
+    let failure = err.classified();
+    if !failure.retryable()
+        && !matches!(err, Error::Upstream { status: 400, body, .. }
+        if is_history_resource_error(body) || is_rate_limit_body(body))
+    {
         return None;
     }
     let (delays, class_limit, floor, transport): (&[Duration], u32, Duration, bool) = match err {
@@ -129,7 +138,10 @@ pub(crate) fn retry_advice(
         return None;
     }
     let base = delays[(retries_done as usize).min(delays.len() - 1)];
-    Some(base.max(floor).min(MAX_WAIT))
+    if floor > MAX_WAIT || base > MAX_WAIT {
+        return None;
+    }
+    Some(base.max(floor))
 }
 
 /// A 400 that is really a rate limit (some relays use 400 for token windows).
@@ -222,30 +234,17 @@ mod tests {
             retry_advice(&limited, 0, false, 0),
             Some(Duration::from_secs(5))
         );
-        assert_eq!(
-            retry_advice(&limited, 1, false, 0),
-            Some(Duration::from_secs(15))
-        );
-        assert_eq!(
-            retry_advice(&limited, 2, false, 0),
-            Some(Duration::from_secs(30))
-        );
-        assert_eq!(
-            retry_advice(&limited, 3, false, 0),
-            Some(Duration::from_secs(60))
-        );
-        // Four retries is the class limit.
+        assert_eq!(retry_advice(&limited, 1, false, 0), None);
+        assert_eq!(retry_advice(&limited, 2, false, 0), None);
+        assert_eq!(retry_advice(&limited, 3, false, 0), None);
         assert_eq!(retry_advice(&limited, 4, false, 0), None);
 
         // The header is a floor, never a way to retry early.
         let asked = upstream(429, "", Some(Duration::from_secs(42)));
-        assert_eq!(
-            retry_advice(&asked, 0, false, 0),
-            Some(Duration::from_secs(42))
-        );
-        // And a preposterous wait is capped.
+        assert_eq!(retry_advice(&asked, 0, false, 0), None);
+        // A long floor is returned, not violated by retrying early.
         let huge = upstream(429, "", Some(Duration::from_secs(3600)));
-        assert_eq!(retry_advice(&huge, 0, false, 0), Some(MAX_WAIT));
+        assert_eq!(retry_advice(&huge, 0, false, 0), None);
     }
 
     #[test]

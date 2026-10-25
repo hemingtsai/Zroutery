@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 
 use super::response::encode_usage;
 use crate::error::Error;
-use crate::ir::{ContentBlock, Dialect, StopReason, StreamEvent};
+use crate::ir::{ContentBlock, StopReason, StreamEvent};
 use crate::protocol::reasoning_bridge;
 use crate::protocol::{SseFrame, StreamEncoder};
 
@@ -105,29 +105,35 @@ impl ResponsesStreamEncoder {
             return None;
         }
         self.content_part_open = false;
-        let part = match self.current_kind {
-            Some(OutputItemKind::Text) => json!({
-                "type": "output_text",
-                "text": self.current_text,
-                "annotations": [],
-                "logprobs": [],
-            }),
-            Some(OutputItemKind::Thinking) => json!({
-                "type": "reasoning",
-                "text": self.current_thinking,
-            }),
+        let (event_type, index_field, part) = match self.current_kind {
+            Some(OutputItemKind::Text) => (
+                "response.content_part.done",
+                "content_index",
+                json!({
+                    "type": "output_text",
+                    "text": self.current_text,
+                    "annotations": [],
+                    "logprobs": [],
+                }),
+            ),
+            Some(OutputItemKind::Thinking) => (
+                "response.reasoning_summary_part.done",
+                "summary_index",
+                json!({
+                    "type": "summary_text",
+                    "text": self.current_thinking,
+                }),
+            ),
             _ => return None,
         };
-        Some(self.frame(
-            "response.content_part.done",
-            json!({
-                "type": "response.content_part.done",
-                "item_id": self.current_item_id,
-                "output_index": self.current_output_index,
-                "content_index": self.content_index,
-                "part": part,
-            }),
-        ))
+        let mut data = json!({
+            "type": event_type,
+            "item_id": self.current_item_id,
+            "output_index": self.current_output_index,
+            "part": part,
+        });
+        data[index_field] = json!(self.content_index);
+        Some(self.frame(event_type, data))
     }
 
     /// Collect output_items into a sorted Vec by output_index.
@@ -227,7 +233,7 @@ impl ResponsesStreamEncoder {
                             "type": "response.reasoning_summary_text.done",
                             "item_id": self.current_item_id,
                             "output_index": self.current_output_index,
-                            "content_index": self.content_index,
+                            "summary_index": self.content_index,
                             "text": self.current_thinking,
                         }),
                     ));
@@ -398,13 +404,13 @@ impl StreamEncoder for ResponsesStreamEncoder {
                 if !self.content_part_open {
                     self.content_part_open = true;
                     out.push(self.frame(
-                        "response.content_part.added",
+                        "response.reasoning_summary_part.added",
                         json!({
-                            "type": "response.content_part.added",
+                            "type": "response.reasoning_summary_part.added",
                             "item_id": self.current_item_id,
                             "output_index": self.current_output_index,
-                            "content_index": self.content_index,
-                            "part": {"type": "reasoning", "text": ""},
+                            "summary_index": self.content_index,
+                            "part": {"type": "summary_text", "text": ""},
                         }),
                     ));
                 }
@@ -414,7 +420,7 @@ impl StreamEncoder for ResponsesStreamEncoder {
                         "type": "response.reasoning_summary_text.delta",
                         "item_id": self.current_item_id,
                         "output_index": self.current_output_index,
-                        "content_index": self.content_index,
+                        "summary_index": self.content_index,
                         "delta": text,
                     }),
                 ));
@@ -701,7 +707,10 @@ impl StreamEncoder for ResponsesStreamEncoder {
                     "object": "response",
                     "status": "failed",
                     "model": self.model,
-                    "error": err.to_wire(Dialect::OpenAIResponses),
+                    "error": {
+                        "code": err.kind(),
+                        "message": err.safe_message(),
+                    },
                     "output": output,
                 }
             }),

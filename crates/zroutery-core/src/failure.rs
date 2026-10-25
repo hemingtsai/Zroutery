@@ -25,7 +25,7 @@ pub enum FailureClass {
     /// Provider is unavailable (502, 503, 504, 529).
     ProviderUnavailable,
     /// Upstream returned a terminal rejection of a request the gateway built
-    /// (400, 402/412) without a deterministic local-configuration or budget
+    /// (400, 412) without a deterministic local-configuration or budget
     /// marker.
     ///
     /// The request that reached the upstream was decoded, validated and
@@ -36,6 +36,12 @@ pub enum FailureClass {
     /// rejections open the model's circuit, and a single rejection on a
     /// locally invalid request never reaches this class because the pipeline
     /// refuses it before an attempt.
+    ///
+    /// A rejection is also *fallbackable*: another candidate may translate the
+    /// same request into a shape its provider accepts, so one provider's 400
+    /// must not fail the client's request while candidates remain. It is not
+    /// retryable — replaying the identical body to the same provider has no
+    /// reason to end differently.
     ProviderRejected,
     /// Protocol-level error (malformed response, unexpected format).
     Protocol,
@@ -55,6 +61,16 @@ pub enum FailureClass {
     /// per-model-group, time-bounded exhaustion (e.g. AgentRouter's daily
     /// 10:00/19:00 batch grants), not a local account-level budget denial.
     QuotaExhausted,
+    /// The wallet behind a provider has no funds for this request.
+    ///
+    /// HTTP 402 Payment Required is the status shape of this failure, and a
+    /// billing marker on another status (`insufficient_quota`, `insufficient
+    /// balance`, `payment required`) selects it too. It is deliberately not
+    /// [`FailureClass::QuotaExhausted`]: a pool refills on a provider schedule
+    /// and is worth retrying, while an empty wallet stays empty until somebody
+    /// pays. The provider must therefore leave the routing set, not absorb one
+    /// failed request per model.
+    BalanceExhausted,
     /// A local budget/policy denied the request.
     OverBudget,
     /// Routing found no eligible candidate for the request.
@@ -69,7 +85,11 @@ pub enum FailureClass {
 
 impl FailureClass {
     /// Every canonical class, useful for exhaustive table tests and adapters.
-    pub const ALL: [Self; 17] = [
+    ///
+    /// New classes append here rather than slotting into their enum position:
+    /// `FailureClass::ALL`'s index is the persisted ML failure-class rank, so
+    /// reordering it would silently reinterpret recorded samples.
+    pub const ALL: [Self; 18] = [
         Self::Transport,
         Self::Timeout,
         Self::RateLimit,
@@ -87,6 +107,7 @@ impl FailureClass {
         Self::QuotaExhausted,
         Self::Interrupted,
         Self::Unknown,
+        Self::BalanceExhausted,
     ];
 
     /// Determine the complete impact of this failure class.
@@ -136,8 +157,8 @@ impl FailureClass {
             Self::ProviderRejected => FailureImpact {
                 affects_observation: true,
                 affects_circuit: true,
-                retryable: false, // no evidence that another candidate helps
-                fallbackable: false,
+                retryable: false,   // replaying the same body cannot help
+                fallbackable: true, // another candidate may accept the shape
                 provider_fault: true,
             },
             Self::Protocol => FailureImpact {
@@ -189,6 +210,13 @@ impl FailureClass {
                 fallbackable: true,        // another group or provider may be eligible
                 provider_fault: true,      // the pool belongs to the provider
             },
+            Self::BalanceExhausted => FailureImpact {
+                affects_observation: true, // an empty wallet is a provider fact
+                affects_circuit: true,     // this model cannot pay for itself
+                retryable: false,          // the same wallet is still empty
+                fallbackable: true,        // another provider can serve the request
+                provider_fault: true,      // the wallet belongs to the provider
+            },
             Self::NoCandidate => FailureImpact {
                 affects_observation: false,
                 affects_circuit: false,
@@ -227,8 +255,11 @@ impl FailureClass {
 
     /// Classify an HTTP status code without a body.
     ///
-    /// A bare 402/412 is a provider rejection; it is not evidence that the
-    /// caller is over budget or missing a provider key.
+    /// A 402 is the payment-required status and classifies as
+    /// [`FailureClass::BalanceExhausted`]: in this gateway's upstream context
+    /// it means the provider's wallet cannot pay, which is a provider fact, not
+    /// evidence that the caller is over budget or missing a key. A bare 412
+    /// stays a provider rejection.
     pub fn from_status(status: u16) -> Self {
         Self::from_upstream_status(status, None)
     }
@@ -244,6 +275,28 @@ impl FailureClass {
 
     fn from_upstream_status(status: u16, body: Option<&str>) -> Self {
         let lower = body.map(str::to_ascii_lowercase);
+        if status >= 400 && lower.as_deref().is_some_and(is_tool_history_mismatch) {
+            return Self::InvalidRequest;
+        }
+        if status == 403
+            && lower.as_deref().is_some_and(|body| {
+                body.contains("freetiererror")
+                    || body.contains("can only be used from within opencode")
+            })
+        {
+            return Self::Capability;
+        }
+        if status == 400
+            && lower
+                .as_deref()
+                .is_some_and(|body| body.contains("rate_limit_exceeded"))
+        {
+            return Self::RateLimit;
+        }
+        // A 5xx is normally transient, but one that names the request itself as
+        // invalid is a mislabelled client error: retrying it, or failing over to
+        // another provider with the same content, cannot help. The status is 5xx
+        // and the body is the disambiguator, exactly as below.
         if status == 500
             && lower.as_deref().is_some_and(|body| {
                 body.contains("invalid_request_error") || body.contains("invalid request")
@@ -251,9 +304,19 @@ impl FailureClass {
         {
             return Self::InvalidRequest;
         }
+        // An empty wallet is a provider fact, and the loudest one a body can
+        // carry. It is checked before the local-marker block so a 402 saying
+        // "insufficient balance" is not read as a missing key, and before the
+        // status table so a 429 carrying `insufficient_quota` is not read as a
+        // transient rate limit.
+        if let Some(body) = lower.as_deref() {
+            if is_balance_exhausted_message(body) {
+                return Self::BalanceExhausted;
+            }
+        }
         // A status alone is not evidence of a local budget/key decision.
         // Only explicit, deterministic body markers may select local classes;
-        // otherwise 402/412 remain provider rejections below.
+        // otherwise 402/412 become provider evidence below.
         if let Some(body) = lower.as_deref() {
             if matches!(status, 402 | 404 | 412 | 503) {
                 if is_missing_key_message(body) {
@@ -284,7 +347,8 @@ impl FailureClass {
         }
         match status {
             400 => Self::ProviderRejected,
-            402 | 412 => Self::ProviderRejected,
+            402 => Self::BalanceExhausted,
+            412 => Self::ProviderRejected,
             413 => Self::InvalidRequest,
             500 => Self::Unknown,
             _ if status >= 400 => Self::Protocol,
@@ -303,6 +367,11 @@ impl FailureClass {
             Self::ClientCancelled
         } else if is_interrupted_message(&lower) {
             Self::Interrupted
+        } else if is_balance_exhausted_message(&lower) {
+            // Checked before the timeout/rate-limit wording: a billing message
+            // routinely carries "429" or "quota", and reading it as a
+            // transient limit is what kept traffic on an unfunded provider.
+            Self::BalanceExhausted
         } else if lower.contains("timeout") || lower.contains("timed out") {
             Self::Timeout
         } else if lower.contains("connection")
@@ -372,6 +441,12 @@ fn is_missing_key_message(message: &str) -> bool {
         || message.contains("api key not configured")
 }
 
+fn is_tool_history_mismatch(message: &str) -> bool {
+    message.contains("tool_call_mismatch")
+        || message.contains("tool_mismatch")
+        || message.contains("tool calls and tool results do not match")
+}
+
 fn is_over_budget_message(message: &str) -> bool {
     message.contains("budget_exceeded")
         || message.contains("over budget")
@@ -380,6 +455,29 @@ fn is_over_budget_message(message: &str) -> bool {
 
 fn is_quota_exhausted_message(message: &str) -> bool {
     message.contains("budget pool quota has been exhausted")
+}
+
+/// Markers that say the wallet behind a provider cannot pay for this request.
+///
+/// Deliberately narrower than "quota": an exhausted per-minute limit or a
+/// pool that refills on a schedule is not an empty wallet, and treating one as
+/// the other would take a provider out of routing that recovers by itself.
+fn is_balance_exhausted_message(message: &str) -> bool {
+    message.contains("insufficient_quota")
+        || message.contains("insufficient quota")
+        || message.contains("insufficient balance")
+        || message.contains("insufficient credit")
+        || message.contains("insufficient funds")
+        || message.contains("credit balance is too low")
+        || message.contains("exceeded your current quota")
+        || message.contains("payment required")
+        || message.contains("no credits remaining")
+        || message.contains("credit balance exhausted")
+        || message.contains("account balance exhausted")
+        || message.contains("余额不足")
+        || message.contains("额度不足")
+        || message.contains("欠费")
+        || message.contains("请充值")
 }
 
 fn is_no_candidate_message(message: &str) -> bool {
@@ -723,6 +821,91 @@ mod tests {
             FailureClass::from_status(400),
             FailureClass::ProviderRejected
         );
+        // Another candidate may accept the shape this one refused, so a 400
+        // fails over instead of ending the client's request. That holds even
+        // when the body calls the request invalid: the body the provider saw was
+        // built here, so the refusal is about the provider/model contract. A
+        // request this pipeline itself refuses never reaches this path and keeps
+        // `InvalidRequest`.
+        assert!(FailureClass::ProviderRejected.impact().fallbackable);
+        assert!(!FailureClass::ProviderRejected.impact().retryable);
+        assert_eq!(
+            FailureClass::from_status_with_body(
+                400,
+                r#"{"error":{"type":"invalid_request_error","message":"bad request"}}"#
+            ),
+            FailureClass::ProviderRejected
+        );
+    }
+
+    #[test]
+    fn status_402_is_balance_exhausted() {
+        // 402 means the provider wants payment. In this gateway's upstream
+        // context that is the provider's wallet, so it is a provider fact that
+        // must remove the provider from routing, not a client budget denial.
+        assert_eq!(
+            FailureClass::from_status(402),
+            FailureClass::BalanceExhausted
+        );
+        let impact = FailureClass::BalanceExhausted.impact();
+        assert!(impact.affects_observation);
+        assert!(impact.affects_circuit);
+        assert!(!impact.retryable);
+        assert!(impact.fallbackable);
+        assert!(impact.provider_fault);
+
+        // 412 is a precondition failure, not a payment one.
+        assert_eq!(
+            FailureClass::from_status(412),
+            FailureClass::ProviderRejected
+        );
+    }
+
+    #[test]
+    fn billing_markers_win_over_the_status_table() {
+        assert_eq!(
+            FailureClass::from_status_with_body(
+                402,
+                r#"{"error":{"message":"Insufficient balance"}}"#
+            ),
+            FailureClass::BalanceExhausted
+        );
+        // OpenAI reports a wallet with no funds as 429 `insufficient_quota`.
+        // Reading that as a transient rate limit kept sending traffic to a
+        // provider that answers every request the same way.
+        assert_eq!(
+            FailureClass::from_status_with_body(
+                429,
+                r#"{"error":{"type":"insufficient_quota","message":"You exceeded your current quota"}}"#
+            ),
+            FailureClass::BalanceExhausted
+        );
+        assert_eq!(
+            FailureClass::from_status_with_body(402, "余额不足，请充值"),
+            FailureClass::BalanceExhausted
+        );
+        // A real rate limit stays a rate limit.
+        assert_eq!(
+            FailureClass::from_status_with_body(429, "rate limit exceeded"),
+            FailureClass::RateLimit
+        );
+        assert_eq!(
+            FailureClass::from_status_with_body(400, "invalid billing details"),
+            FailureClass::ProviderRejected,
+            "mentioning billing does not prove an empty wallet"
+        );
+    }
+
+    #[test]
+    fn tool_mismatch_is_terminal_but_a_zen_client_gate_can_fail_over() {
+        let failure = ClassifiedFailure::from_status(400, r#"{"error":{"code":"tool_call_mismatch","message":"tool calls and tool results do not match"}}"#.into());
+        assert_eq!(failure.class, FailureClass::InvalidRequest);
+        assert!(!failure.retryable() && !failure.fallbackable());
+        assert!(!failure.affects_circuit());
+        let zen = ClassifiedFailure::from_status(403, r#"{"error":{"type":"FreeTierError","message":"OpenCode's free tier can only be used from within OpenCode"}}"#.into());
+        assert_eq!(zen.class, FailureClass::Capability);
+        assert!(zen.fallbackable());
+        assert!(!zen.retryable());
     }
 
     #[test]
@@ -941,35 +1124,25 @@ mod tests {
 
     #[test]
     fn all_variants_produce_impact() {
-        let classes = [
-            FailureClass::Transport,
-            FailureClass::Timeout,
-            FailureClass::RateLimit,
-            FailureClass::Authentication,
-            FailureClass::ProviderUnavailable,
-            FailureClass::ProviderRejected,
-            FailureClass::Protocol,
-            FailureClass::Capability,
-            FailureClass::InvalidRequest,
-            FailureClass::ClientCancelled,
-            FailureClass::MissingApiKey,
-            FailureClass::OverBudget,
-            FailureClass::NoCandidate,
-            FailureClass::Configuration,
-            FailureClass::Interrupted,
-            FailureClass::Unknown,
-        ];
-        for class in &classes {
+        for class in FailureClass::ALL {
             let impact = class.impact();
-            // Most provider faults are actionable through retry/fallback;
-            // ProviderRejected is the explicit terminal exception.
-            if impact.provider_fault && !matches!(class, FailureClass::ProviderRejected) {
+            // Every provider fault has to be actionable somehow: either the
+            // same candidate may be retried or another one may be tried.
+            if impact.provider_fault {
                 assert!(
                     impact.retryable || impact.fallbackable,
-                    "{:?} is provider_fault but neither retryable nor fallbackable",
-                    class
+                    "{class:?} is provider_fault but neither retryable nor fallbackable"
                 );
             }
+            // A class that touches neither health view is a local decision and
+            // must never be attributed to the provider.
+            if !impact.affects_observation && !impact.affects_circuit {
+                assert!(
+                    !impact.provider_fault,
+                    "{class:?} is a local decision and cannot blame the provider"
+                );
+            }
+            assert!(impact.records_stats());
         }
     }
 }

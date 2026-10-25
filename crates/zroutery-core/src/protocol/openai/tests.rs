@@ -5,7 +5,7 @@ use serde_json::{json, Value};
 use crate::error::Error;
 use crate::ir::{
     ChatRequest, ContentBlock, Dialect, MediaSource, StopReason, StreamEvent, SystemPart,
-    ThinkingConfig, ToolChoice, UnsupportedContentPolicy, Usage,
+    ThinkingConfig, ToolChoice, Usage,
 };
 use crate::protocol::{ProviderQuirks, SseDecoder, SseFrame, StreamEncoder, StreamParser};
 
@@ -1057,7 +1057,7 @@ fn assistant_reasoning_content_survives_the_ir_round_trip() {
 }
 
 #[test]
-fn anthropic_sourced_thinking_is_not_echoed_as_reasoning_content() {
+fn anthropic_thinking_text_translates_without_a_foreign_signature() {
     let mut req = decode_request(json!({
         "model": "m",
         "messages": [{"role": "user", "content": "hi"}]
@@ -1074,13 +1074,79 @@ fn anthropic_sourced_thinking_is_not_echoed_as_reasoning_content() {
             ContentBlock::text("answer"),
         ],
     });
-    assert!(encode_request(&req, "m").is_err());
-    req.unsupported_content_policy = UnsupportedContentPolicy::Placeholder;
     let body = encode_request(&req, "m").unwrap();
     let msgs = body["messages"].as_array().unwrap();
-    assert!(msgs[1].get("reasoning_content").is_none());
-    assert!(msgs[1]["content"].as_str().unwrap().contains("Unsupported"));
-    assert!(msgs[1]["content"].as_str().unwrap().contains("answer"));
+    assert_eq!(msgs[1]["reasoning_content"], "chain of thought");
+    assert_eq!(msgs[1]["content"], "answer");
+    assert!(msgs[1].get("reasoning").is_none());
+    assert!(!body.to_string().contains("sig"));
+}
+
+#[test]
+fn responses_reasoning_history_translates_to_chat_with_tool_calls() {
+    let req = crate::protocol::responses::decode_request(json!({
+        "model": "standard-class",
+        "input": [
+            {"role": "user", "content": "list files"},
+            {"type": "reasoning", "summary": [
+                {"type": "summary_text", "text": "need to inspect files"}
+            ]},
+            {"type": "function_call", "call_id": "call_1", "name": "ls", "arguments": "{}"},
+            {"type": "function_call_output", "call_id": "call_1", "output": "a.txt"}
+        ]
+    }))
+    .unwrap();
+    let body = encode_request(&req, "m").unwrap();
+    let msgs = body["messages"].as_array().unwrap();
+    assert!(msgs
+        .iter()
+        .any(|msg| msg["reasoning_content"] == "need to inspect files"));
+    assert!(msgs
+        .iter()
+        .any(|msg| msg["tool_calls"][0]["id"] == "call_1"));
+    assert!(msgs
+        .iter()
+        .any(|msg| msg["role"] == "tool" && msg["tool_call_id"] == "call_1"));
+    assert!(!body.to_string().contains("Unsupported"));
+}
+
+#[test]
+fn parallel_responses_calls_are_one_assistant_round_before_their_results() {
+    let req = crate::protocol::responses::decode_request(json!({
+        "model": "m", "input": [
+            {"role": "user", "content": "inspect"},
+            {"type": "reasoning", "summary": [{"type": "summary_text", "text": "plan"}]},
+            {"type": "function_call", "call_id": "a", "name": "ls", "arguments": "{}"},
+            {"type": "function_call", "call_id": "b", "name": "read", "arguments": "{}"},
+            {"type": "function_call_output", "call_id": "b", "output": "file"},
+            {"type": "function_call_output", "call_id": "a", "output": "files"},
+            {"role": "user", "content": "continue"}
+        ]
+    }))
+    .unwrap();
+    let wire = encode_request(&req, "m").unwrap();
+    super::validate_tool_history(&wire).unwrap();
+    let messages = wire["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), 5);
+    assert_eq!(messages[1]["tool_calls"].as_array().unwrap().len(), 2);
+    assert_eq!(messages[1]["reasoning_content"], "plan");
+    assert_eq!(messages[2]["tool_call_id"], "b");
+    assert_eq!(messages[3]["tool_call_id"], "a");
+}
+
+#[test]
+fn tool_history_validator_refuses_unpaired_results_without_payload_details() {
+    for messages in [
+        json!([{"role":"tool","tool_call_id":"private-id","content":"private-result"}]),
+        json!([{"role":"assistant","tool_calls":[{"id":"a"}]},{"role":"user","content":"private-prompt"}]),
+        json!([{"role":"assistant","tool_calls":[{"id":"a"},{"id":"a"}]}]),
+    ] {
+        let error = super::validate_tool_history(&json!({"messages":messages}))
+            .unwrap_err()
+            .to_string();
+        assert!(!error.contains("private-"));
+        assert!(error.contains("tool-call history"));
+    }
 }
 
 #[test]

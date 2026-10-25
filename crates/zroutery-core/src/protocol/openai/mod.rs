@@ -38,7 +38,7 @@ mod stream_out;
 mod tests;
 
 pub use request_in::{decode_request, wants_stream_usage};
-pub use request_out::{encode_request, encode_request_with};
+pub use request_out::{encode_request, encode_request_with, validate_tool_history};
 pub use response::{decode_response, encode_response};
 pub use stream_in::OpenAiStreamParser;
 pub use stream_out::OpenAiStreamEncoder;
