@@ -52,6 +52,11 @@ corepack use pnpm@11.22.0
 前端用 pnpm 11 与 Node 22，CI 的 `reachability` job 用的就是这两个版本；根 `package.json` 的
 `packageManager` 字段把 pnpm 的大版本钉住，避免本机装出的 pnpm 与 `pnpm-lock.yaml` 的格式对不上。
 
+前端工具链（Vite 8 + TypeScript 7）比 Node 22 的默认组合靠前一步，这是选定的取舍而不是漂移：
+Vite 8 把打包器换成 Rolldown，冷启动与生产构建的耗时是唯一理由，而它要求 TypeScript 7 来跑
+`tsc --noEmit` 这道类型门。回退到 Vite 6 + TS 5.6 会把每次 UI 构建的耗时还给仓库，在改动频繁的
+`ui/` 上这笔钱每次都要付，所以结论是保持并写在这里，而不是留作悬而未决。
+
 ### 跑起来
 
 ```sh
