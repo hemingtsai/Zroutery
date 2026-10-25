@@ -493,10 +493,10 @@ export default function Providers({
             <table className="table">
               <thead>
                 <tr>
-                  <th>{t("cc.import")}</th>
-                  <th>{t("field.name")}</th>
-                  <th>{t("providers.endpoint")}</th>
-                  <th>{t("nav.models")}</th>
+                  <th scope="col">{t("cc.import")}</th>
+                  <th scope="col">{t("field.name")}</th>
+                  <th scope="col">{t("providers.endpoint")}</th>
+                  <th scope="col">{t("nav.models")}</th>
                 </tr>
               </thead>
               <tbody>

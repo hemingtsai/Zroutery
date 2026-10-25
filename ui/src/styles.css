@@ -23,7 +23,26 @@
 
   /* Lines */
   --line: #000000;
-  --line-strong: #d4d4d4;
+  /*
+   * The quiet line: hairlines that separate rather than frame.
+   *
+   * It used to be called `--line-strong`, which reads backwards — it is the
+   * *lighter* of the two inks. The alias stays because rules and saved themes
+   * still say `--line-strong`; new rules should say `--line-muted`.
+   */
+  --line-muted: #d4d4d4;
+  --line-strong: var(--line-muted);
+  /*
+   * The two structural line roles, declared instead of left to a
+   * `var(--border-primary, var(--line))` fallback that could never fire.
+   *
+   * Twelve rules wrote that fallback, so every one of them silently meant
+   * `--line` and a theme that wanted a lighter table rule could not say so
+   * without editing the frame's ink as well. These resolve to the same ink
+   * today, which is the point: this is a rename with no pixel of change.
+   */
+  --border-primary: var(--line);
+  --border-secondary: var(--line);
 
   /* Type */
   --text: #000000;
@@ -68,8 +87,15 @@
   --scrollbar-thumb-hover: #8f8f8f;
 
   /* Serif type: Noto Serif SC Variable for a literary/editorial feel. */
-  --font-sans: "Noto Serif SC Variable", "Noto Serif SC", "PingFang SC",
+  /*
+   * The token was always a serif stack — the family name says so — while it was
+   * called `--font-sans`. `--font-serif` is the honest name and `--font-sans`
+   * stays as the compatibility alias, because forty-odd rules and any saved
+   * theme still use it. New rules say `--font-serif`.
+   */
+  --font-serif: "Noto Serif SC Variable", "Noto Serif SC", "PingFang SC",
     "Microsoft YaHei", serif;
+  --font-sans: var(--font-serif);
   --font-mono: "IBM Plex Mono", "SF Mono", "Cascadia Mono", Consolas, monospace;
 
   /* Type scale — clear hierarchy by size and weight
@@ -108,7 +134,8 @@
   --hover: #1a1a1a;
   --selected: #242424;
   --line: #333333;
-  --line-strong: #2a2a2a;
+  --line-muted: #2a2a2a;
+  --line-strong: var(--line-muted);
   --text: #e0e0e0;
   --text-2: #888888;
   /* 5.47:1 on #111111, where #555555 managed 2.53:1 — the same quiet-colour
@@ -136,6 +163,15 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
+  /*
+   * A theme switch is one colour becoming another, and switching it in one
+   * frame reads as a flash. 120ms is long enough to read as a change and short
+   * enough that it never delays the first interaction; `prefers-reduced-motion`
+   * collapses it with every other transition in this file.
+   */
+  transition:
+    background-color var(--t-fast) linear,
+    color var(--t-fast) linear;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
@@ -351,6 +387,14 @@ code,
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  /*
+   * A grid item's automatic minimum size is its content's min-content width, so
+   * one wide table used to widen the `1fr` track past the window: the whole
+   * shell then had a horizontal scrollbar and the sidebar could be pushed off.
+   * `min-width: 0` lets the track stay the width it was given and moves the
+   * overflow into the scroller that owns it.
+   */
+  min-width: 0;
 }
 
 .mainbar {
@@ -388,6 +432,13 @@ code,
 .content {
   flex: 1;
   overflow-y: auto;
+  /*
+   * The page never scrolls sideways. A wide table scrolls inside its own
+   * `.section` (see the responsive block at the end of this file), so a
+   * horizontal scrollbar belongs to the table, not to the window: dragging it
+   * must not move the sidebar, the mainbar and the page title with it.
+   */
+  overflow-x: hidden;
   padding: 28px 32px 40px;
 }
 
@@ -397,6 +448,8 @@ code,
   display: flex;
   flex-direction: column;
   gap: 32px;
+  /* The page is a flex child, so the same automatic-minimum rule applies. */
+  min-width: 0;
   animation: page-in var(--t-page) var(--ease);
 }
 
@@ -464,7 +517,7 @@ code,
 }
 
 .text-actions-sep {
-  color: var(--line-strong);
+  color: var(--line-muted);
 }
 
 .page-head-actions {
@@ -478,7 +531,42 @@ code,
   display: flex;
   flex-direction: column;
   gap: 16px;
+  /*
+   * `min-width: 0` lets a section be narrower than its own content, which is
+   * what a flex item otherwise refuses to do. It is the only overflow rule a
+   * section needs.
+   *
+   * It used to also carry `overflow-x: auto`, on the theory that the section
+   * should own the sideways scroll of a wide table. It must not: setting one
+   * axis to a non-`visible` value makes the other axis compute from `visible`
+   * to `auto`, so every section became a scroll container in **both**
+   * directions. On a page of nested sections that clipped vertical content,
+   * truncated an expanded disclosure and drew scrollbars around prose. The
+   * table scrolls itself instead (see `.section > .table` below), so the
+   * scroller is the element whose content is too wide and nothing else.
+   */
+  min-width: 0;
 }
+
+/*
+ * A table that cannot fit the column scrolls inside its own box.
+ *
+ * `display: block` is what turns the table into a scroll container; its rows
+ * still lay out as a table inside it. Applied only to a table that is a direct
+ * child of a section, which is the shape every page uses, so the rule cannot
+ * reach a table nested in prose.
+ */
+.section > .table {
+  display: block;
+  overflow-x: auto;
+}
+
+.table-scroll {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
 
 .section-head {
   display: flex;
@@ -620,7 +708,7 @@ code,
   height: 6px;
   border-radius: 50%;
   flex: none;
-  background: var(--line-strong);
+  background: var(--line-muted);
   transition: opacity var(--t-fast) var(--ease);
 }
 
@@ -719,7 +807,13 @@ code,
   padding: 18px;
   display: flex;
   flex-direction: column;
-  gap: 26px;
+  /*
+   * 24px, not 26px: every other gap in this stylesheet is on the 8pt scale
+   * (8/16/24/32), and a drawer body was the one place a section spacing sat two
+   * pixels off it. The difference is invisible on its own and compounds when a
+   * drawer is compared with the page behind it.
+   */
+  gap: 24px;
 }
 
 /* Key/value facts inside a drawer. */
@@ -962,7 +1056,7 @@ code,
 .ml-replay {
   margin-top: 12px;
   padding: 12px;
-  border: 1px solid var(--line-strong);
+  border: 1px solid var(--line-muted);
   border-radius: var(--radius);
   background: var(--surface-muted);
 }
@@ -1380,18 +1474,27 @@ input::placeholder {
   background: transparent;
   font: inherit;
   font-size: 14px;
+  /*
+   * One weight for both states.
+   *
+   * The active item used to go 400 -> 500. In a `1fr` grid an item's width is
+   * the widest label's, so the weight change re-measured the track and the
+   * whole strip shifted by a pixel on every selection — a control that moves
+   * when you press it. The underline and the colour already say which item is
+   * selected, so the weight is constant at the heavier of the two.
+   */
+  font-weight: 500;
   color: var(--muted);
   cursor: pointer;
   /*
-   * The active state moves the two-pixel rule, the weight and the colour at
-   * once, and without this the selection teleports between segments. Stated as
-   * three properties rather than `all`: `all` would also transition the layout
-   * properties on the box and make the strip reflow while it animates.
+   * The active state moves the two-pixel rule and the colour, and without this
+   * the selection teleports between segments. Stated as two properties rather
+   * than `all`: `all` would also transition the layout properties on the box
+   * and make the strip reflow while it animates.
    */
   transition:
     color var(--t-fast) var(--ease),
-    box-shadow var(--t-fast) var(--ease),
-    font-weight var(--t-fast) var(--ease);
+    box-shadow var(--t-fast) var(--ease);
 }
 
 .segment-item:hover {
@@ -1401,7 +1504,6 @@ input::placeholder {
 .segment-item[data-active="true"] {
   color: var(--text);
   box-shadow: inset 0 -2px var(--text);
-  font-weight: 500;
 }
 
 /* The custom select. The trigger matches an input; the menu is a floating
@@ -1619,7 +1721,7 @@ input::placeholder {
   background: var(--surface-muted);
   color: var(--text-2);
   white-space: nowrap;
-  border: 1px solid var(--line-strong);
+  border: 1px solid var(--line-muted);
 }
 
 .badge-ok {
@@ -1670,12 +1772,47 @@ input::placeholder {
   border-color: color-mix(in srgb, var(--danger) 22%, var(--line));
 }
 
+/*
+ * The line that stands in for the banners the shell folded away.
+ *
+ * A paragraph rather than a banner: it is an affordance, not a notification, so
+ * it takes the quiet colour and no frame. Keeping it inside the page's flow
+ * means the ceiling costs one 20px line instead of another 40px alert.
+ */
+.banner-overflow {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
 /* ------------------------------------------------------------------ tables */
 
 .table {
   width: 100%;
   border-collapse: collapse;
   font-size: 14px;
+}
+
+/*
+ * A caption that names a table for the accessibility tree without taking a row
+ * of the page.
+ *
+ * The same technique as `.visually-hidden`, restated rather than reused: a
+ * `caption` is a `display: table-caption` box, and the absolute-position rule
+ * that works for a span is worth stating for the one element whose default
+ * display the layout depends on. Visually unchanged; announced as the table's
+ * name by a screen reader's table list.
+ */
+.table-caption {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .table th {
@@ -1933,7 +2070,7 @@ input::placeholder {
 }
 
 .flow-arrow {
-  color: var(--line-strong);
+  color: var(--line-muted);
   flex: none;
   user-select: none;
 }
@@ -1942,9 +2079,24 @@ input::placeholder {
   display: inline-flex;
   align-items: baseline;
   gap: 8px;
+  /*
+   * A model id is one long unbroken token (`provider:upstream-model`), and the
+   * row is a grid whose second track is `1fr`. Without `min-width: 0` the
+   * track refuses to shrink below the id's min-content width, and the row
+   * pushes the page wider than the window. Without `overflow-wrap` an id that
+   * does fit still cannot break, so a narrow window gets a clipped name
+   * instead of a legible one.
+   */
+  min-width: 0;
+  overflow-wrap: anywhere;
   font-family: var(--font-mono);
   font-size: 12px;
   color: var(--text);
+}
+
+/* The same treatment for the folded list of never-tried candidates. */
+.ml-blind code {
+  overflow-wrap: anywhere;
 }
 
 .flow-target .flow-provider {
@@ -2184,7 +2336,13 @@ input::placeholder {
   margin: 0;
   padding: 12px 14px;
   border-radius: 0;
-  background: var(--surface);
+  /*
+   * A step below the page, not the page itself. `--surface` is the page colour,
+   * so a snippet's 1px border was the only thing separating it from the
+   * background — at 820px wide, a code block read as body text. The muted
+   * surface is the same step `.banner code` takes.
+   */
+  background: var(--surface-muted);
   border: 1px solid var(--border-primary, var(--line));
   font-family: var(--font-mono);
   font-size: 12px;
@@ -2445,4 +2603,103 @@ input::placeholder {
 
 .field-hint-danger {
   color: var(--danger);
+}
+
+/* ========================================================== narrow windows */
+
+/*
+ * The desktop window is resizable down to 820x560, and until this block existed
+ * the stylesheet had no `@media` rule at all: the 200px sidebar, the 32px
+ * content padding and every table kept their wide-window geometry at the
+ * smallest size the window manager allows. The arithmetic at 820px was
+ * 820 - 200 - 64 = 556px of content, which is narrower than the four-column CC
+ * table, the seven-column budget table and the spend table need, so the page
+ * scrolled sideways as a whole and the sidebar went with it.
+ *
+ * Three rules make the narrow window work:
+ *
+ * 1. the sidebar gives up 40px, which is a label it can still read;
+ * 2. padding drops from 32px to 16px, because a margin is worth less than a
+ *    table column;
+ * 3. everything that can overflow (`.section`, `.grid-two`, the drawer) owns
+ *    its own overflow instead of exporting it to the document.
+ *
+ * The breakpoints are the window's own sizes, not device sizes: this is a
+ * desktop application, so there is no phone layout to design for and no
+ * hamburger to add. 900px is where the two-column forms stop fitting beside the
+ * sidebar; 720px is where the drawer stops being a panel beside the page and
+ * becomes the page.
+ */
+
+@media (max-width: 900px) {
+  .shell {
+    grid-template-columns: 160px 1fr;
+  }
+
+  .content {
+    padding: 20px 16px 32px;
+  }
+
+  .mainbar {
+    padding: 0 16px;
+  }
+
+  /* Two 240px fields plus the 24px gap do not fit at this width. */
+  .grid-two {
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  }
+
+  /*
+   * The drawer takes the whole window. At 820px a 420px panel leaves 400px of
+   * page visible but unusable, and every drawer in this application is a
+   * focused detail surface rather than a peek.
+   */
+  .drawer {
+    width: 100vw;
+    border-left: none;
+  }
+
+  .drawer-body {
+    padding: 16px;
+    /* The one scroll position a reader expects back is the drawer's own. */
+    overscroll-behavior: contain;
+  }
+
+  /*
+   * The numeric column pair in the models list is the first thing to give: an
+   * id is the row's subject and the two counters are its annotation. Both
+   * counters are `flex: none` with a min width, so the width is what is
+   * overridden, not a `width` the rule never had.
+   */
+  .list-row .col-num {
+    min-width: 60px;
+    width: 60px;
+  }
+}
+
+@media (max-width: 720px) {
+  .mainbar {
+    gap: 6px;
+  }
+
+  .content {
+    padding: 16px 12px 28px;
+  }
+
+  .page {
+    gap: 24px;
+  }
+
+  .table th,
+  .table td {
+    padding: 6px 6px;
+  }
+
+  /* A three-way strip with long labels wraps instead of scrolling sideways. */
+  .segment {
+    grid-auto-flow: row;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    width: 100%;
+    min-width: 0;
+  }
 }

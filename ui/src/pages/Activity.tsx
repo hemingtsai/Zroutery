@@ -203,13 +203,14 @@ export default function Activity({
             </div>
           </div>
           {summary.per_model.some((m) => Object.keys(m.cost).length > 0) && (
-            <table className="table">
+            <div className="table-scroll">
+              <table className="table">
               <thead>
                 <tr>
-                  <th>{t("field.model_name")}</th>
-                  <th>{t("models.requests")}</th>
-                  <th>{t("field.input")} / {t("field.output")}</th>
-                  <th>{t("activity.spend")}</th>
+                  <th scope="col">{t("field.model_name")}</th>
+                  <th scope="col">{t("models.requests")}</th>
+                  <th scope="col">{t("field.input")} / {t("field.output")}</th>
+                  <th scope="col">{t("activity.spend")}</th>
                 </tr>
               </thead>
               <tbody>
@@ -231,7 +232,8 @@ export default function Activity({
                     </tr>
                   ))}
               </tbody>
-            </table>
+              </table>
+            </div>
           )}
         </Section>
       )}

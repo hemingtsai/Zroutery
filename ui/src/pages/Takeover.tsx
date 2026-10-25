@@ -76,7 +76,7 @@ export default function Takeover() {
     Record<string, ResolutionReport["strategy"]>
   >({});
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (quiet = false) => {
     try {
       const next = await api.takeoverStatus();
       // Reorder to the page's fixed presentation order, whatever the backend
@@ -85,6 +85,7 @@ export default function Takeover() {
       setViews([...next].sort((a, b) => (order.get(a.agent) ?? 99) - (order.get(b.agent) ?? 99)));
       setLoadError(null);
     } catch (e) {
+      if (quiet) return;
       notify("error", describeBackendError(t, errorText(e)));
       // The empty list is kept, but the failure is remembered as one. A page
       // that could not read the takeover record must not render as though
@@ -93,11 +94,26 @@ export default function Takeover() {
       setViews([]);
       setLoadError(errorText(e));
     }
-  }, [notify]);
+  }, [notify, t]);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    if (acting) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const refresh = async () => {
+      await load(true);
+      if (!cancelled) timer = setTimeout(refresh, 3000);
+    };
+    timer = setTimeout(refresh, 3000);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [load, acting]);
 
   /** Adopt after confirmation. `fingerprint` guards the preview→click gap. */
   const adopt = async (agent: TakeoverAgent, fingerprint: string | null) => {
@@ -395,7 +411,7 @@ function KnownBlocker({ blocker }: { blocker: string }) {
 /** The two honest reasons a held takeover is not `active`, translated. */
 function KnownReason({ reason }: { reason: string }) {
   const { t } = useI18n();
-  if (/not been verified/i.test(reason)) return <>{t("takeover.reason.unverified")}</>;
+  if (/not been verified|no request from this client/i.test(reason)) return <>{t("takeover.reason.unverified")}</>;
   if (/token has changed/i.test(reason)) return <>{t("takeover.reason.token_changed")}</>;
   return <>{reason}</>;
 }
@@ -413,9 +429,9 @@ function ChangesTable({
     <table className="table">
       <thead>
         <tr>
-          <th>{t("takeover.table.field")}</th>
-          <th>{t("takeover.table.current")}</th>
-          <th>{kind === "proposal" ? t("takeover.table.next") : t("takeover.table.managed")}</th>
+          <th scope="col">{t("takeover.table.field")}</th>
+          <th scope="col">{t("takeover.table.current")}</th>
+          <th scope="col">{kind === "proposal" ? t("takeover.table.next") : t("takeover.table.managed")}</th>
         </tr>
       </thead>
       <tbody>
@@ -438,9 +454,9 @@ function ConflictTable({ conflicts }: { conflicts: FieldConflict[] }) {
     <table className="table">
       <thead>
         <tr>
-          <th>{t("takeover.table.field")}</th>
-          <th>{t("takeover.table.managed")}</th>
-          <th>{t("takeover.table.current")}</th>
+          <th scope="col">{t("takeover.table.field")}</th>
+          <th scope="col">{t("takeover.table.managed")}</th>
+          <th scope="col">{t("takeover.table.current")}</th>
         </tr>
       </thead>
       <tbody>

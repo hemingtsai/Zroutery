@@ -504,14 +504,17 @@ export default function Settings({
         <Section title={t("settings.budgets")} hint={t("settings.budgets_hint")}>
           {snapshot.budgets.length > 0 && (
             <table className="table">
+              {/* Named for the table list a screen reader offers; the visible
+                  heading above it is not part of that announcement. */}
+              <caption className="table-caption">{t("settings.budgets")}</caption>
               <thead>
                 <tr>
-                  <th>{t("budget.covers")}</th>
-                  <th>{t("budget.window")}</th>
-                  <th>{t("budget.limit")}</th>
-                  <th>{t("budget.spent")}</th>
-                  <th>{t("budget.when")}</th>
-                  <th>{t("budget.on")}</th>
+                  <th scope="col">{t("budget.covers")}</th>
+                  <th scope="col">{t("budget.window")}</th>
+                  <th scope="col">{t("budget.limit")}</th>
+                  <th scope="col">{t("budget.spent")}</th>
+                  <th scope="col">{t("budget.when")}</th>
+                  <th scope="col">{t("budget.on")}</th>
                   <th />
                 </tr>
               </thead>

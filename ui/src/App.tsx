@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { api, deepLinkCurrent, errorText, gatewayAction, onDeepLink, onGatewayStateChanged, pageForDeepLink, type AppConfig, type Snapshot } from "./api";
 import { Banner, MenuItem, Popover, StatusDot, ToastProvider, useToast } from "./components";
 import { describeBackendError, I18nProvider, useI18n } from "./i18n";
@@ -71,6 +71,36 @@ const NAV: { id: Page; labelKey: Parameters<ReturnType<typeof useI18n>["t"]>[0] 
 
 type ThemePref = "system" | "light" | "dark";
 
+/**
+ * How many notification banners the shell shows before collapsing the rest.
+ *
+ * Two is the width of the window's usable height at 820x560: a third banner
+ * pushes the first section below the fold, and a notification that costs the
+ * page its content is a notification that gets dismissed without being read.
+ */
+const MAX_BANNERS = 2;
+
+/**
+ * The label the busy line announces.
+ *
+ * Plain text, because the dictionary is owned by a change in flight and a key
+ * added here would be lost in the merge. The key to add is
+ * `common.working`; see the report.
+ */
+const WORKING_LABEL = "Working…";
+
+/**
+ * The text that reveals the banners the ceiling is hiding.
+ *
+ * Same reason as `WORKING_LABEL`: these need `app.more_notifications` and
+ * `app.fewer_notifications` in the dictionary.
+ */
+function moreNotificationsLabel(count: number): string {
+  return `Show ${count} more notification${count === 1 ? "" : "s"}`;
+}
+
+const FEWER_NOTIFICATIONS_LABEL = "Show fewer notifications";
+
 function loadThemePref(): ThemePref {
   const stored = localStorage.getItem("zroutery-theme");
   return stored === "light" || stored === "dark" ? stored : "system";
@@ -101,6 +131,7 @@ function Shell() {
   const [error, setError] = useState<string | null>(null);
   const [pollError, setPollError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [showAllBanners, setShowAllBanners] = useState(false);
 
   useEffect(() => {
     const apply = () => {
@@ -425,6 +456,79 @@ function Shell() {
 
   const { server } = snapshot;
 
+  /*
+   * Every notification the shell can show, worst first.
+   *
+   * There used to be six independent slots and no ceiling: two poll failures,
+   * a config warning, three configuration errors, an exposed listener and a
+   * missing token could stack into six banners, which at 560px tall pushes the
+   * page's own content off the screen. The ceiling is two visible, with the
+   * rest behind one text action, so nothing is dropped and the page still
+   * starts below the fold only once.
+   *
+   * `severity` orders them rather than JSX order: a missing auth token is a
+   * warning and an exposed listener is a danger, and at a two-banner ceiling
+   * the order decides which one an operator actually reads.
+   */
+  const banners: {
+    key: string;
+    tone: "danger" | "warn";
+    node: ReactNode;
+    severity: number;
+    /** Present when the notice is local state and dismissing it means anything. */
+    dismiss?: () => void;
+  }[] = [];
+  if (error) {
+    banners.push({
+      key: "error",
+      tone: "danger",
+      severity: 0,
+      node: describeBackendError(t, error),
+      dismiss: () => setError(null),
+    });
+  }
+  for (const issue of snapshot.issues.filter((i) => i.severity === "error")) {
+    banners.push({
+      key: `issue:${issue.code}:${issue.subject ?? ""}`,
+      tone: "danger",
+      severity: 1,
+      node: describeBackendError(t, issue.message),
+    });
+  }
+  if (server.exposed) {
+    banners.push({
+      key: "exposed",
+      tone: "danger",
+      severity: 2,
+      node: t("app.exposed", { host: server.host }),
+    });
+  }
+  if (pollError) {
+    banners.push({
+      key: "poll",
+      tone: "warn",
+      severity: 3,
+      node: t("app.live_stopped", { err: describeBackendError(t, pollError) }),
+      // The next successful poll clears this server-side condition, but a
+      // reader who has seen it can fold it away now instead of waiting.
+      dismiss: () => setPollError(null),
+    });
+  }
+  if (snapshot.warning) {
+    banners.push({
+      key: "warning",
+      tone: "warn",
+      severity: 4,
+      node: describeBackendError(t, snapshot.warning),
+    });
+  }
+  if (!server.require_auth) {
+    banners.push({ key: "no-auth", tone: "warn", severity: 5, node: t("app.no_auth") });
+  }
+  banners.sort((a, b) => a.severity - b.severity);
+  const visibleBanners = showAllBanners ? banners : banners.slice(0, MAX_BANNERS);
+  const hiddenBanners = banners.length - MAX_BANNERS;
+
   return (
     <div className="shell">
       <nav className="sidebar" aria-label={t("nav.main_aria")}>
@@ -466,7 +570,21 @@ function Shell() {
 
       <div className="main">
         <header className="mainbar">
-          {busy && <div className="busybar" aria-hidden />}
+          {busy && (
+            /*
+             * A progress bar that announces itself. `aria-hidden` was the old
+             * answer: the line is visible, but a screen-reader user had no way
+             * to know the application was waiting on a save. `role=progressbar`
+             * with an indeterminate value says "working" without claiming a
+             * percentage nobody can know.
+             */
+            <div
+              className="busybar"
+              role="progressbar"
+              aria-busy="true"
+              aria-label={WORKING_LABEL}
+            />
+          )}
           {/*
             * The page's name is a heading, so a screen-reader user can navigate
             * by it. Everything else about it — the size, the weight, the
@@ -595,37 +713,48 @@ function Shell() {
 
         <main className="content">
           <div className="page">
-            {error && (
+            {visibleBanners.map((banner) => (
               <Banner
-                tone="danger"
+                key={banner.key}
+                tone={banner.tone}
                 actions={
-                  <button type="button" className="linky" onClick={() => setError(null)}>
-                    {t("common.dismiss")}
-                  </button>
+                  banner.dismiss ? (
+                    <button type="button" className="linky" onClick={banner.dismiss}>
+                      {t("common.dismiss")}
+                    </button>
+                  ) : undefined
                 }
               >
-                {describeBackendError(t, error)}
+                {banner.node}
               </Banner>
+            ))}
+            {hiddenBanners > 0 && !showAllBanners && (
+              <p className="banner-overflow">
+                {/*
+                 * Plain text rather than `t()`: the dictionary is owned by
+                 * another change in flight, and a key added here would disappear
+                 * in the merge. See the report for the keys this needs.
+                 */}
+                <button
+                  type="button"
+                  className="linky"
+                  onClick={() => setShowAllBanners(true)}
+                >
+                  {moreNotificationsLabel(hiddenBanners)}
+                </button>
+              </p>
             )}
-            {pollError && (
-              <Banner tone="warn">
-                {t("app.live_stopped", { err: describeBackendError(t, pollError) })}
-              </Banner>
+            {showAllBanners && banners.length > MAX_BANNERS && (
+              <p className="banner-overflow">
+                <button
+                  type="button"
+                  className="linky"
+                  onClick={() => setShowAllBanners(false)}
+                >
+                  {FEWER_NOTIFICATIONS_LABEL}
+                </button>
+              </p>
             )}
-            {snapshot.warning && (
-              <Banner tone="warn">{describeBackendError(t, snapshot.warning)}</Banner>
-            )}
-            {snapshot.issues
-              .filter((i) => i.severity === "error")
-              .map((i) => (
-                <Banner key={`${i.code}:${i.subject ?? ""}`} tone="danger">
-                  {describeBackendError(t, i.message)}
-                </Banner>
-              ))}
-            {server.exposed && (
-              <Banner tone="danger">{t("app.exposed", { host: server.host })}</Banner>
-            )}
-            {!server.require_auth && <Banner tone="warn">{t("app.no_auth")}</Banner>}
 
             {page === "overview" && <Overview snapshot={snapshot} onNavigate={setPage} />}
             {page === "models" && <Models snapshot={snapshot} save={save} busy={busy} />}

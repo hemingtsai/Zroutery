@@ -653,9 +653,9 @@ export const en = {
   "takeover.confirm_inline":
     "Adopting edits {agent}'s config file. Release restores exactly these fields; the rest of the file is untouched.",
   "takeover.hint.active":
-    "This client points at the gateway and its managed fields match what Zroutery wrote.",
+    "A request from this client reached the gateway, and its managed fields match what Zroutery wrote.",
   "takeover.hint.degraded":
-    "The fields are written, but no request from this client has confirmed them yet.",
+    "The config is managed, but verification is incomplete. See the reason below.",
   "takeover.hint.conflict":
     "{n} managed field(s) changed outside Zroutery. Choose on release whether to keep those edits or restore the recorded values.",
   "takeover.hint.released":
@@ -1757,9 +1757,9 @@ export const zh: Dict = {
   "takeover.confirm_inline":
     "接管会修改 {agent} 的配置文件。释放时只恢复这些字段，其余内容不动。",
   "takeover.hint.active":
-    "该客户端已指向网关，托管字段与写入值一致。",
+    "已收到该客户端的网关请求，托管字段与写入值一致。",
   "takeover.hint.degraded":
-    "字段已写入，但尚未收到该客户端的请求确认。",
+    "配置已托管，但验证尚未完成。具体原因见下方。",
   "takeover.hint.conflict":
     "{n} 个托管字段被外部修改。释放时请选择保留这些修改，还是恢复记录值。",
   "takeover.hint.released":

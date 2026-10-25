@@ -349,8 +349,8 @@ function StepsTable({ steps }: { steps: MigrationPreview["steps"] }) {
     <table className="table">
       <thead>
         <tr>
-          <th>{t("cutover.table.undo")}</th>
-          <th>{t("cutover.table.step")}</th>
+          <th scope="col">{t("cutover.table.undo")}</th>
+          <th scope="col">{t("cutover.table.step")}</th>
         </tr>
       </thead>
       <tbody>

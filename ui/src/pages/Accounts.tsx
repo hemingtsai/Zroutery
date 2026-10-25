@@ -441,11 +441,18 @@ function EventsSection({ events }: { events: AccountEvent[] }) {
   return (
     <Section title={t("accounts.events_section")} hint={t("accounts.events_hint")}>
       <table className="table">
+        {/*
+          * The section has a visible title, but a table read out of context —
+          * by a screen reader's table list, where the heading above it is not
+          * part of the announcement — needs its own name. The caption is
+          * visually hidden because the design already shows the title.
+          */}
+        <caption className="table-caption">{t("accounts.events_section")}</caption>
         <thead>
           <tr>
-            <th>{t("accounts.events_when")}</th>
-            <th>{t("field.account")}</th>
-            <th>{t("accounts.events_what")}</th>
+            <th scope="col">{t("accounts.events_when")}</th>
+            <th scope="col">{t("field.account")}</th>
+            <th scope="col">{t("accounts.events_what")}</th>
           </tr>
         </thead>
         <tbody>
@@ -485,9 +492,9 @@ function ReconcileTable({ report }: { report: ReconcileReport }) {
     <table className="table" role="status">
       <thead>
         <tr>
-          <th>{t("field.provider")}</th>
-          <th>{t("field.account")}</th>
-          <th>{t("accounts.probe_outcome")}</th>
+          <th scope="col">{t("field.provider")}</th>
+          <th scope="col">{t("field.account")}</th>
+          <th scope="col">{t("accounts.probe_outcome")}</th>
         </tr>
       </thead>
       <tbody>
