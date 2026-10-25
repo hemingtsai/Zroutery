@@ -259,12 +259,33 @@ mod tests {
         assert!(store.get(&key).is_none());
     }
 
+    /// The desktop store is keychain-only, and "only" is the claim worth
+    /// asserting rather than the comment above the constructor.
+    ///
+    /// `ZROUTERY_KEY_*` exists for the headless binary, where there may be no
+    /// usable keychain. On the desktop it would be a second place a credential
+    /// can come from — readable by every process of the same user and copied
+    /// into crash reports — so the isolation is the point. The variable is set
+    /// here on purpose: a test that only reads `fallback.is_none()` proves the
+    /// field, while this proves the behaviour the field exists to produce.
     #[test]
     fn the_gui_store_ignores_the_environment() {
-        // No fallback installed, so even a set variable is invisible.
         let store = KeychainSecrets::new("app.zroutery.test.no-fallback");
         assert!(store.fallback.is_none());
-        assert!(store.get(&key_ref()).is_none());
+
+        let key = key_ref();
+        // The name is derived from a fresh uuid, so no other test and nothing
+        // else in this process reads it.
+        let variable = KeychainSecrets::env_name(&key);
+        std::env::set_var(&variable, "sk-from-the-environment");
+        let found = store.get(&key);
+        std::env::remove_var(&variable);
+
+        assert!(
+            found.is_none(),
+            "the keychain-only store answered from the environment; \
+             `{variable}` was set and the value must have come from it"
+        );
     }
 
     #[test]

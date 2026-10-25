@@ -401,6 +401,69 @@ mod tests {
         );
     }
 
+    /// The spend ledger is a record of what the operator paid, and it is written
+    /// beside the configuration rather than inside it — so it inherits the same
+    /// rule: only its owner may read it.
+    ///
+    /// `save_ledger` goes through `create_private`, which is where that rule
+    /// lives, and this asserts the file the caller gets rather than the helper
+    /// that made it. The two halves of the check are deliberately different on
+    /// each platform, because the same claim is made in two different ways and
+    /// pretending otherwise would be a test that only runs where its author was
+    /// sitting.
+    ///
+    /// On unix there is a mode to read, so the assertion is exact: `0o600`, set
+    /// at creation and never briefly wider. On Windows there is no mode and
+    /// `std` cannot read an ACL at all; the file inherits the ACL of the
+    /// directory, so the property that *can* be asserted is the one the
+    /// inherited ACL depends on — that the application writes it inside the
+    /// user's own profile (`%APPDATA%`) rather than into a shared location such
+    /// as `%PUBLIC%`, where every local user already passes the inherited ACL.
+    /// A `0o600` assertion here would not compile on Windows, and no assertion
+    /// would leave the shipped platform unchecked.
+    ///
+    /// An explicit `ZROUTERY_CONFIG_DIR` is skipped rather than second-guessed:
+    /// the escape hatch exists so an operator can choose where this lives, and
+    /// E-177 records what happens when a test reads ambient configuration as if
+    /// it were the default.
+    #[test]
+    fn the_spend_ledger_lands_where_only_its_owner_can_read_it() {
+        let dir = tmpdir();
+        save_ledger(&dir, &Ledger::default()).unwrap();
+        let path = dir.join(LEDGER_FILE);
+        assert!(path.is_file(), "save_ledger wrote no {}", path.display());
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(
+                mode, 0o600,
+                "the spend ledger must be owner-only like the configuration, not {mode:o}"
+            );
+        }
+
+        #[cfg(windows)]
+        {
+            if std::env::var_os("ZROUTERY_CONFIG_DIR").is_none() {
+                if let Some(profile) = std::env::var_os("USERPROFILE") {
+                    let config_dir = crate::platform::default_config_dir();
+                    assert!(
+                        config_dir.starts_with(std::path::Path::new(&profile)),
+                        "the spend ledger is written to {}, which is outside the user profile \
+                         {}; the directory's inherited ACL is what keeps it private on this \
+                         platform",
+                        config_dir.display(),
+                        profile.to_string_lossy(),
+                    );
+                }
+            }
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn an_earlier_backup_is_never_overwritten() {
         let dir = tmpdir();
