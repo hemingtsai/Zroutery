@@ -178,6 +178,7 @@ IMPERATIVE_VERBS = frozenset(
         "find",
         "fix",
         "format",
+        "gate",
         "generate",
         "give",
         "guard",
@@ -589,6 +590,10 @@ def _fixture_messages() -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
         (
             "raise imperative compatibility subject",
             "build(repo): raise the declared toolchain to the desktop floor",
+        ),
+        (
+            "gate imperative compatibility subject",
+            "refactor(tauri): gate the inference commands behind the account feature",
         ),
         (
             "accept imperative compatibility subject",
