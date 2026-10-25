@@ -271,7 +271,14 @@ jobs:
         run: pnpm --dir ui test
       - run: pnpm ui:build
       - name: Frontend size budget
-        run: python -B scripts/ui_budget_test.py
+        run: |
+          set -o pipefail
+          python -B scripts/ui_budget_test.py | tee dist-size.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dist-size
+          path: dist-size.txt
       - name: Narrow-window UI overflow gate
         run: python -B scripts/ui_overflow_test.py
       # Deliberately no build cache in this job, so the binary under test is the

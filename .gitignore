@@ -44,6 +44,10 @@ coverage/
 *.profraw
 *.log
 
+# The frontend size table. CI writes it and uploads it as an artifact; a local
+# run of the same step leaves one behind.
+dist-size.txt
+
 # Python bytecode. The gates are Python scripts, and one that imports another
 # leaves a __pycache__ behind; the tree should not be dirty for having run them.
 __pycache__/
