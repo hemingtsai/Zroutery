@@ -342,6 +342,79 @@ fn catalogues_without_usable_prices_are_left_alone() {
     }
 }
 
+/// A panel that states the unit and the currency is taken at its word.
+///
+/// This is the shape a NewAPI-style relay publishes: `unit: per_1m_tokens`,
+/// `currency: CNY`, and prices that a magnitude heuristic alone would have to
+/// guess at. Reading only `prompt`/`completion` used to leave every one of these
+/// models in the `?` currency bucket, so their real — and correctly scaled —
+/// prices could not be summed against a budget in any named currency.
+#[test]
+fn a_stated_per_million_unit_keeps_the_stated_currency() {
+    let entry = serde_json::json!({
+        "id": "deepseek-v4.1-flash-1017",
+        "currency": "CNY",
+        "pricing": {
+            "currency": "CNY",
+            "unit": "per_1m_tokens",
+            "prompt": "1.00000000",
+            "completion": "4.00000000",
+            "cache_read": "0.02000000"
+        }
+    });
+    let pricing = pricing_from_catalogue(&entry).expect("a stated per-million pair prices");
+    assert_eq!(pricing.currency, "CNY");
+    assert_eq!(pricing.input_per_mtok, 1.0);
+    assert_eq!(pricing.output_per_mtok, 4.0);
+    assert_eq!(
+        pricing.cache_read_per_mtok,
+        Some(0.02),
+        "the panel's shorter cache key carries the same meaning"
+    );
+}
+
+/// `effective_pricing` is what the panel charges by, so it wins over `pricing`.
+#[test]
+fn the_effective_price_pair_is_the_one_read_when_both_are_published() {
+    let entry = serde_json::json!({
+        "id": "m",
+        "pricing": {
+            "currency": "CNY", "unit": "per_1m_tokens",
+            "prompt": "8", "completion": "28"
+        },
+        "effective_pricing": {
+            "currency": "CNY", "unit": "per_1m_tokens",
+            "prompt": "4", "completion": "14"
+        }
+    });
+    let pricing = pricing_from_catalogue(&entry).expect("priced");
+    assert_eq!(
+        pricing.input_per_mtok, 4.0,
+        "the discounted pair is the charged one"
+    );
+    assert_eq!(pricing.output_per_mtok, 14.0);
+}
+
+/// A stated unit outranks the magnitude heuristic in both directions.
+///
+/// A per-million pair below the per-token ceiling must not be scaled by a
+/// million, and a pair the panel has labelled per-million must not be split
+/// apart as a mixed shape merely because one number crosses the line.
+#[test]
+fn a_stated_unit_beats_the_magnitude_heuristic() {
+    let cheap = serde_json::json!({
+        "id": "m",
+        "pricing": {
+            "currency": "CNY", "unit": "per_1m_tokens",
+            "prompt": "0.005", "completion": "0.02"
+        }
+    });
+    let pricing = pricing_from_catalogue(&cheap).expect("priced");
+    assert_eq!(pricing.currency, "CNY");
+    assert_eq!(pricing.input_per_mtok, 0.005);
+    assert_eq!(pricing.output_per_mtok, 0.02);
+}
+
 // -- model discovery normalization tests --
 
 #[test]

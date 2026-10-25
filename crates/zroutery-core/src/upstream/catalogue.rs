@@ -50,20 +50,39 @@ pub struct DiscoveredModel {
 /// plausible per-million price is treated as garbage and dropped — a number the
 /// operator would have to re-type anyway is better than one that silently
 /// feeds a wrong figure into the spend estimate and the election.
+///
+/// # When the catalogue says what it means
+///
+/// A panel that states its own unit and currency is taken at its word, because
+/// a stated unit is better evidence than any magnitude heuristic. A Chinese
+/// relay publishes `"unit": "per_1m_tokens"` beside `"currency": "CNY"` and
+/// prices of `1` / `4`: the shape heuristic reads `1` as per-million, but the
+/// *label* it lost was the currency, so the figure could not be summed against
+/// a budget in any named currency and every panel-priced model landed in the
+/// `?` bucket. The same relay publishes `effective_pricing` beside `pricing`,
+/// and the effective one is the one the panel charges by — a discounted model
+/// has two price pairs and only one of them is what the customer pays.
+///
+/// So: `effective_pricing` is preferred, a stated currency is kept, a stated
+/// `per_1m_tokens` unit settles the scale without a guess, and the cache price
+/// is read under either of its two names.
 pub(super) fn pricing_from_catalogue(entry: &Value) -> Option<Pricing> {
-    /// The two shapes do not overlap, so one line separates them. A per-token
-    /// dollar price above 0.01 would be $10,000 a million tokens — no model
-    /// costs that. A per-million price below 0.01 would be ¥0.01 a million —
-    /// no panel prices that. The cache fields ride the same scale as the pair
-    /// they belong to; a pair that straddles the line is not a shape the
-    /// catalogue can name, and is dropped for the operator to type instead.
+    // The two shapes do not overlap, so one line separates them. A per-token
+    // dollar price above 0.01 would be $10,000 a million tokens — no model
+    // costs that. A per-million price below 0.01 would be ¥0.01 a million —
+    // no panel prices that. The cache fields ride the same scale as the pair
+    // they belong to; a pair that straddles the line is not a shape the
+    // catalogue can name, and is dropped for the operator to type instead.
     const PER_TOKEN_CEILING: f64 = 0.01;
-    /// The largest per-million price any real model carries. The most expensive
-    /// frontier model is under $100 in, under $200 out; four digits of headroom
-    /// catch the ×1e6 slips and the ratio fields pasted where prices belong.
+    // The largest per-million price any real model carries. The most expensive
+    // frontier model is under $100 in, under $200 out; four digits of headroom
+    // catch the ×1e6 slips and the ratio fields pasted where prices belong.
     const PLAUSIBLE_PER_MTOK: f64 = 10_000.0;
 
-    let pricing = entry.get("pricing")?;
+    let pricing = entry
+        .get("effective_pricing")
+        .filter(|value| value.is_object())
+        .or_else(|| entry.get("pricing"))?;
     let raw_value = |key: &str| -> Option<f64> {
         let raw = pricing.get(key)?;
         let value = raw
@@ -71,6 +90,26 @@ pub(super) fn pricing_from_catalogue(entry: &Value) -> Option<Pricing> {
             .or_else(|| raw.as_str()?.trim().parse::<f64>().ok())?;
         value.is_finite().then_some(value)
     };
+    // A currency the catalogue states, when it states one.
+    //
+    // Some catalogues publish their own currency (`"CNY"`) beside prices that
+    // are already per million tokens. Ignoring it made a ¥1/¥4 panel look like
+    // an unpriced-by-currency one, which then could not be summed against a
+    // budget in any named currency — the figure was real, the label was lost.
+    let stated_currency = |value: &Value| -> Option<String> {
+        let text = value.as_str()?.trim();
+        (!text.is_empty() && text != "?").then(|| text.to_uppercase())
+    };
+    // Whether the catalogue says the numbers are already per million tokens.
+    //
+    // This is stronger evidence than any magnitude heuristic, so it is read
+    // before the shapes are guessed: a panel that says `per_1m_tokens` is
+    // taken at its word for values in either direction.
+    let stated_per_million = pricing
+        .get("unit")
+        .and_then(Value::as_str)
+        .map(|unit| unit.trim().eq_ignore_ascii_case("per_1m_tokens"))
+        .unwrap_or(false);
 
     let input = raw_value("prompt").or_else(|| raw_value("input"))?;
     let output = raw_value("completion").or_else(|| raw_value("output"))?;
@@ -84,13 +123,25 @@ pub(super) fn pricing_from_catalogue(entry: &Value) -> Option<Pricing> {
     if input.max(output) > PLAUSIBLE_PER_MTOK {
         return None;
     }
-    if (input < PER_TOKEN_CEILING) != (output < PER_TOKEN_CEILING) {
+    let mixed_shape =
+        !stated_per_million && (input < PER_TOKEN_CEILING) != (output < PER_TOKEN_CEILING);
+    if mixed_shape {
         // Half of one shape, half of the other: no unit names this pair.
         return None;
     }
 
-    let per_token = input < PER_TOKEN_CEILING;
-    let currency = if per_token { "USD" } else { "?" };
+    let per_token = !stated_per_million && input < PER_TOKEN_CEILING;
+    let currency = pricing
+        .get("currency")
+        .and_then(stated_currency)
+        .or_else(|| entry.get("currency").and_then(stated_currency))
+        .unwrap_or_else(|| {
+            if per_token {
+                "USD".to_string()
+            } else {
+                "?".to_string()
+            }
+        });
     let scale = |value: f64| {
         if per_token {
             value * 1_000_000.0
@@ -98,13 +149,15 @@ pub(super) fn pricing_from_catalogue(entry: &Value) -> Option<Pricing> {
             value
         }
     };
-    let cache_read = raw_value("input_cache_read");
-    let cache_write = raw_value("input_cache_write");
+    // Cache prices arrive under either the OpenRouter names or the shorter
+    // panel names (`cache_read`), and both mean the same thing.
+    let cache_read = raw_value("input_cache_read").or_else(|| raw_value("cache_read"));
+    let cache_write = raw_value("input_cache_write").or_else(|| raw_value("cache_write"));
     if cache_read.is_some_and(|v| v < 0.0) || cache_write.is_some_and(|v| v < 0.0) {
         return None;
     }
     Some(Pricing {
-        currency: currency.into(),
+        currency,
         input_per_mtok: scale(input),
         output_per_mtok: scale(output),
         cache_read_per_mtok: cache_read.map(scale),
