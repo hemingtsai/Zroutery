@@ -61,11 +61,6 @@ class Budget:
     def over(self) -> bool:
         return self.total > self.limit
 
-    def report(self, out) -> None:
-        print(f"  {self.name}: {self.total:,} B of {self.limit:,} B", file=out)
-        for relative, size in sorted(self.files, key=lambda item: -item[1])[:SHOWN]:
-            print(f"    {size:>9,} B  {relative}", file=out)
-
 
 def measure(dist: str) -> tuple[Budget, Budget, Budget]:
     """Walk ``dist`` and return the JavaScript, CSS and largest-chunk budgets."""
@@ -102,29 +97,39 @@ def measure(dist: str) -> tuple[Budget, Budget, Budget]:
     return javascript, stylesheet, largest
 
 
-def check(dist: str, out=sys.stdout) -> int:
-    """Print one table and return the number of budgets that were exceeded."""
+def report(dist: str) -> tuple[list[str], int]:
+    """The budget table, and how many budgets it went over."""
     javascript, stylesheet, largest = measure(dist)
-    print(f"frontend size budget ({os.path.basename(dist)}/)", file=out)
+    lines = [f"frontend size budget ({os.path.basename(dist)}/)"]
     over = 0
     for budget in (javascript, stylesheet, largest):
-        budget.report(out)
+        lines.append(
+            f"  {budget.name}: {budget.total:,} B of {budget.limit:,} B"
+        )
+        for relative, size in sorted(budget.files, key=lambda item: -item[1])[:SHOWN]:
+            lines.append(f"    {size:>9,} B  {relative}")
         if budget.over():
             over += 1
-            print(
+            lines.append(
                 f"::error::{budget.name} is {budget.total:,} B, "
-                f"over the {budget.limit:,} B budget",
-                file=out,
+                f"over the {budget.limit:,} B budget"
             )
     if over == 0:
-        print("PASS: the shipped bundle is inside its size budget", file=out)
-        return 0
-    print(
-        "Raise a budget only with the feature that needs it, and say so in the "
-        "commit that raises it.",
-        file=out,
-    )
-    return 1
+        lines.append("PASS: the shipped bundle is inside its size budget")
+    else:
+        lines.append(
+            "Raise a budget only with the feature that needs it, and say so in "
+            "the commit that raises it."
+        )
+    return lines, over
+
+
+def check(dist: str, out=sys.stdout) -> int:
+    """Print one table and return 1 when a budget was exceeded."""
+    lines, over = report(dist)
+    for line in lines:
+        print(line, file=out)
+    return 1 if over else 0
 
 
 def self_test() -> int:
@@ -160,11 +165,26 @@ def self_test() -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--dist", default=DEFAULT_DIST)
+    # One table, two readers: the job log and the artifact. Writing the file
+    # here rather than tee-ing the console keeps the CI step a single command
+    # that means the same thing in PowerShell and in bash.
+    parser.add_argument(
+        "--report",
+        metavar="PATH",
+        help="also write the table to PATH, pass or fail",
+    )
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args(argv)
     if args.self_test:
         return self_test()
-    return check(args.dist)
+    lines, over = report(args.dist)
+    for line in lines:
+        print(line)
+    if args.report:
+        with open(args.report, "w", encoding="utf-8") as handle:
+            for line in lines:
+                print(line, file=handle)
+    return 1 if over else 0
 
 
 if __name__ == "__main__":

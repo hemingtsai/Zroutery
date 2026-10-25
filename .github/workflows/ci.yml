@@ -271,9 +271,7 @@ jobs:
         run: pnpm --dir ui test
       - run: pnpm ui:build
       - name: Frontend size budget
-        run: |
-          set -o pipefail
-          python -B scripts/ui_budget_test.py | tee dist-size.txt
+        run: python -B scripts/ui_budget_test.py --report dist-size.txt
       - uses: actions/upload-artifact@v4
         if: always()
         with:
