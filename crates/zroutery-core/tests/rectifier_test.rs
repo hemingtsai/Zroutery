@@ -75,8 +75,10 @@ fn codex_metadata_repair_removes_only_direct_internal_fields_and_is_idempotent()
     }
     assert_eq!(body["metadata"], expected["metadata"]);
     assert!(!rectifier.rectify(&mut body).applied);
-    let mut config = zroutery_core::config::RectifierConfig::default();
-    config.codex_metadata = false;
+    let config = zroutery_core::config::RectifierConfig {
+        codex_metadata: false,
+        ..Default::default()
+    };
     assert!(!zroutery_core::rectifier::from_config(&config)
         .iter()
         .any(|rectifier| rectifier.name() == "codex_metadata"));

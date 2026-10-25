@@ -1,9 +1,13 @@
 //! Re-ordering the plan with the learned model, and the exploration path when no model can rank it.
 
+#[cfg(feature = "ml")]
 use std::sync::Arc;
 
+#[cfg(feature = "ml")]
 use super::AppState;
+#[cfg(feature = "ml")]
 use crate::policy::{self, RouteDecision};
+#[cfg(feature = "ml")]
 use crate::router::Candidate;
 
 /// ml-ranking-helper-begin

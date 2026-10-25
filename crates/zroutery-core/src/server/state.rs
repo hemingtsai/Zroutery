@@ -123,6 +123,11 @@ pub struct AppState {
     /// There is deliberately no setter that can *attach* — the candidate is a
     /// program constant — so this lock can only ever move from attached to
     /// withdrawn.
+    // The ml state is the only reader. A build without the feature keeps the
+    // field because `with_shadow_attachment` is shared by both builds on
+    // purpose: one constructor for both is what stops the two from drifting
+    // apart, and a field that exists in only one of them would be the drift.
+    #[cfg_attr(not(feature = "ml"), allow(dead_code))]
     pub(super) shadow_attachment: RwLock<ShadowAttachment>,
     /// One terminal outcome per request, paired with the routing decision that
     /// produced it, held so the observability projection is reachable from the
