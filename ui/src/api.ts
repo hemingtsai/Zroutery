@@ -701,7 +701,27 @@ export interface Account {
   account_id: string;
   key_ref: string;
   enabled: boolean;
+  /** Explicit inference credentials the routing path may send upstream. */
+  inference_keys: InferenceKey[];
   maintenance: Maintenance;
+}
+
+/**
+ * One inference credential attached to an account.
+ *
+ * The reference is a keychain address, never the secret: the dashboard learns
+ * whether it exists through `snapshot.keys`, exactly as it does for a provider
+ * key. `key_ref` stays separate from the account's panel token on purpose —
+ * the panel token probes balances and signs in, and is never sent as a chat
+ * credential.
+ */
+export interface InferenceKey {
+  /** Stable name within the account; shown in the list. */
+  id: string;
+  key_ref: string;
+  enabled: boolean;
+  /** Lower is tried first. Ties keep declaration order. */
+  priority: number;
 }
 
 /**
@@ -1543,6 +1563,35 @@ export const api = {
    */
   removeAccount: (provider_id: string, account_id: string) =>
     invoke<Snapshot>("remove_account", { providerId: provider_id, accountId: account_id }),
+  /**
+   * Create or update one inference key on an account.
+   *
+   * `api_key` is omitted when only `enabled`/`priority` changes, so reordering
+   * the pool never asks for a secret that is already stored. The command edits
+   * the saved configuration; call it only after the account declaration exists
+   * on disk, and only when `snapshot.account_available` is true.
+   */
+  setAccountInferenceKey: (
+    provider_id: string,
+    account_id: string,
+    key_id: string,
+    options: { api_key?: string; priority?: number; enabled?: boolean },
+  ) =>
+    invoke<Snapshot>("set_account_inference_key", {
+      providerId: provider_id,
+      accountId: account_id,
+      keyId: key_id,
+      apiKey: options.api_key ?? null,
+      priority: options.priority ?? null,
+      enabled: options.enabled ?? null,
+    }),
+  /** Remove one inference key; its secret goes only when nothing else names it. */
+  removeAccountInferenceKey: (provider_id: string, account_id: string, key_id: string) =>
+    invoke<Snapshot>("remove_account_inference_key", {
+      providerId: provider_id,
+      accountId: account_id,
+      keyId: key_id,
+    }),
   /**
    * Every external agent's takeover reading, in a fixed order.
    *

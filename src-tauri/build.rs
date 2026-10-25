@@ -51,6 +51,9 @@ const APP_COMMANDS: &[&str] = &[
     "set_account_key",
     "clear_account_key",
     "remove_account",
+    // Inference credentials on an account; `#[cfg(feature = "account")]`.
+    "set_account_inference_key",
+    "remove_account_inference_key",
     // Credentials and configuration.
     "reveal_token",
     "copy_token",

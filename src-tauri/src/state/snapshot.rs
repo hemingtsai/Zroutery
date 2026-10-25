@@ -22,7 +22,9 @@ impl Desktop {
         // its entry, so the drawer can show "has its own key" without the
         // secret itself ever crossing the bridge. A declaration that shares
         // the provider's reference adds no entry: the provider's row already
-        // answers whether that secret exists.
+        // answers whether that secret exists. Inference keys are listed under
+        // their own reference, because an account may hold several and each is
+        // an independently replaceable secret.
         let keys = stored
             .providers
             .iter()
@@ -31,6 +33,11 @@ impl Desktop {
                 for a in &p.accounts {
                     if !a.key_ref.is_empty() && a.key_ref != p.key_ref {
                         entries.push((a.key_ref.clone(), self.secrets.has(&a.key_ref)));
+                    }
+                    for key in &a.inference_keys {
+                        if !key.key_ref.is_empty() {
+                            entries.push((key.key_ref.clone(), self.secrets.has(&key.key_ref)));
+                        }
                     }
                 }
                 entries

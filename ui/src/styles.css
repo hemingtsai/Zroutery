@@ -2475,6 +2475,21 @@ input::placeholder {
   padding-top: 0;
 }
 
+/* Inference credentials inside one account. Indented under a rule so the panel
+   token and the chat keys read as different things rather than one list. */
+.inference-pool {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-left: 12px;
+  border-left: 2px solid var(--line);
+  min-width: 0;
+}
+
+.inference-pool .field-hint {
+  margin: 0;
+}
+
 .account-decl .row-main {
   display: flex;
   align-items: center;

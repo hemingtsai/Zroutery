@@ -248,6 +248,16 @@ production learning loop:
   The desktop's browser/check-in adapter and its balance/reconcile path must
   address the same dashboard, not the inference host. A missing user-id header
   can make a valid personal token look expired on AgentRouter's panel.
+- **Two credentials per account:** `account.key_ref` is the panel token — it
+  probes balances and signs in, and never travels upstream as chat traffic.
+  `account.inference_keys` is the explicit chat pool, each entry a keychain
+  reference with its own priority and enabled flag. The pool is expanded only
+  after model ranking, so policy and the learner still see one candidate per
+  model; `max_attempts` bounds the expanded credentials. A provider with any
+  pool configured serves only from declared keys and never falls back to the
+  panel token or the provider's default key. Wallet exhaustion gates the
+  account, an authentication failure gates the key, and a rate limit cools that
+  key while a model-level failure keeps using the model circuit.
 - **Stream completion:** an explicit canonical `Stop` settles the lifecycle
   before the terminal egress frame is handed out. A client that closes on
   `response.completed` is not misreported as 499 while the relay keeps TCP open.

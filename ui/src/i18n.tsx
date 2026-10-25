@@ -145,7 +145,7 @@ export const en = {
   // -------------------------------------------------------------- accounts
   "accounts.title": "Accounts",
   "accounts.title_hint":
-    "Accounts hosted by this provider. They feed probing, balances and check-in; requests still use the provider's key.",
+    "Accounts hosted by this provider. They feed probing, balances, check-in and, when inference keys are declared, chat traffic.",
   "accounts.empty": "No accounts declared. Every request uses the provider's own key.",
   "accounts.lede":
     "Balance, check-in and panel token for each declared account. Declarations are edited in the provider's account section.",
@@ -169,6 +169,31 @@ export const en = {
   "accounts.own_key": "Own credential",
   "accounts.no_key": "Credential not stored",
   "accounts.follows_provider": "Provider's credential",
+  "accounts.inference_title": "Inference keys",
+  "accounts.inference_hint":
+    "Chat credentials, tried in priority order. The panel token above only probes balances and signs in; it is never sent upstream.",
+  "accounts.inference_empty":
+    "No inference key is declared. This account is skipped once any account on the provider declares a pool; until then the provider's own key is used.",
+  "accounts.inference_stored": "secret stored",
+  "accounts.inference_missing": "secret missing",
+  "accounts.inference_priority": "priority {n}",
+  "accounts.inference_priority_label": "Priority",
+  "accounts.inference_priority_hint": "Lower is tried first.",
+  "accounts.inference_replace": "Replace secret",
+  "accounts.inference_key_label": "New secret",
+  "accounts.inference_key_hint":
+    "Stored in the system credential store; the dashboard only learns whether it exists.",
+  "accounts.inference_new_id": "Key ID",
+  "accounts.inference_new_id_hint":
+    "A name within this account, e.g. wallet-1. Letters, digits, `-` and `_`.",
+  "accounts.inference_new_secret": "Inference secret",
+  "accounts.inference_add": "Add inference key",
+  "accounts.inference_duplicate": "Inference key `{id}` already exists on this account.",
+  "accounts.inference_store_failed": "The inference key could not be saved.",
+  "accounts.inference_remove_title": "Remove inference key {id}",
+  "accounts.inference_remove_body":
+    "Requests stop using it immediately. Its secret is deleted unless another declaration references it.",
+  "common.save": "Save",
   "accounts.remove_title": "Remove account {id}",
   "accounts.remove_body":
     "Removes the declaration and its stored key. Observed data remains until the id is reused.",
@@ -1313,7 +1338,7 @@ export const zh: Dict = {
   "err.no_such_account": "提供商 {provider} 上不存在账户 {account}。",
   "err.bind_other": "代理无法启动：无法绑定 {addr}({err})。请在设置里换一个端口。",
   "accounts.title": "账户",
-  "accounts.title_hint": "该提供商下的账户。用于探测、余额与签到；请求仍使用提供商的密钥。",
+  "accounts.title_hint": "该提供商下的账户。用于探测、余额与签到;声明了推理 Key 时,聊天请求也按它路由。",
   "accounts.empty": "未声明账户。所有请求都使用提供商自身的密钥。",
   "accounts.lede": "每个已声明账户的余额、签到与面板令牌。声明在提供商的账户设置中编辑。",
   "accounts.add": "添加账户",
@@ -1335,6 +1360,29 @@ export const zh: Dict = {
   "accounts.own_key": "独立凭据",
   "accounts.no_key": "凭据未存",
   "accounts.follows_provider": "沿用提供商凭据",
+  "accounts.inference_title": "推理 Key",
+  "accounts.inference_hint":
+    "实际发往上游的聊天凭据,按优先级依次尝试。上面的面板令牌只用于余额探测与签到,绝不会作为聊天凭据发出。",
+  "accounts.inference_empty":
+    "尚未声明推理 Key。该提供商只要有任一账户声明了池,本账户就会被跳过;在那之前使用提供商自身的密钥。",
+  "accounts.inference_stored": "密钥已存",
+  "accounts.inference_missing": "密钥缺失",
+  "accounts.inference_priority": "优先级 {n}",
+  "accounts.inference_priority_label": "优先级",
+  "accounts.inference_priority_hint": "数字越小越先尝试。",
+  "accounts.inference_replace": "替换密钥",
+  "accounts.inference_key_label": "新密钥",
+  "accounts.inference_key_hint": "保存在系统凭据库中;面板只会知道它是否存在。",
+  "accounts.inference_new_id": "Key ID",
+  "accounts.inference_new_id_hint":
+    "在该账户内唯一的名字,例如 wallet-1。可用字母、数字、`-` 与 `_`。",
+  "accounts.inference_new_secret": "推理密钥",
+  "accounts.inference_add": "添加推理 Key",
+  "accounts.inference_duplicate": "该账户下已存在推理 Key `{id}`。",
+  "accounts.inference_store_failed": "推理 Key 保存失败。",
+  "accounts.inference_remove_title": "删除推理 Key {id}",
+  "accounts.inference_remove_body": "请求将立即停止使用它。若无其他声明引用,其密钥会被删除。",
+  "common.save": "保存",
   "accounts.remove_title": "删除账户 {id}",
   "accounts.remove_body":
     "删除该声明及其已存密钥。观测数据会保留到该 id 再次被使用。",

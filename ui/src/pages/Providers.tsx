@@ -864,9 +864,12 @@ function blankMaintenance(): Maintenance {
  * account exists, where its credential lives and what maintenance was asked
  * for. It never shows an observation — quota, balances and the last check-in
  * are runtime readings, and they render in the maintenance section below,
- * filled by the reconciler. Requests do not route by account (the serving path
- * resolves one credential per provider), which the hint says rather than hides:
- * what declaring an account buys is probing, per-account balances and check-in.
+ * filled by the reconciler.
+ *
+ * Two credentials are kept apart on purpose. The panel token (`key_ref`) probes
+ * balances and signs in; it is never sent as chat traffic. `inference_keys` is
+ * the pool the routing path may actually send upstream, and a declared account
+ * with an empty pool does not fall back to the panel token or the provider key.
  *
  * Keys are written through the backend command, never through the config save:
  * the dashboard only ever learns whether a secret exists, the same discipline
@@ -894,6 +897,11 @@ function AccountSection({
   const [newKey, setNewKey] = useState("");
   const [keyFor, setKeyFor] = useState<string | null>(null);
   const [keyDraft, setKeyDraft] = useState("");
+  const [newInference, setNewInference] = useState<
+    Record<string, { id: string; secret: string }>
+  >({});
+  const [inferenceKeyFor, setInferenceKeyFor] = useState<string | null>(null);
+  const [inferenceDraft, setInferenceDraft] = useState("");
   const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
 
   /** A reference of its own — the account does not resolve to the provider key. */
@@ -929,6 +937,7 @@ function AccountSection({
         account_id: id,
         key_ref: "",
         enabled: true,
+        inference_keys: [],
         maintenance: blankMaintenance(),
       });
       return next;
@@ -951,6 +960,61 @@ function AccountSection({
     if (ok) {
       setKeyDraft("");
       setKeyFor(null);
+    }
+  };
+
+  const inferenceDraftFor = (account_id: string) =>
+    newInference[account_id] ?? { id: "", secret: "" };
+
+  const editNewInference = (
+    account_id: string,
+    patch: Partial<{ id: string; secret: string }>,
+  ) =>
+    setNewInference((current) => ({
+      ...current,
+      [account_id]: {
+        ...(current[account_id] ?? { id: "", secret: "" }),
+        ...patch,
+      },
+    }));
+
+  /**
+   * The command edits saved configuration, so it runs without a config save:
+   * an enable/priority change must not rewrite the declaration the user is
+   * still editing.
+   */
+  const writeInference = async (
+    account_id: string,
+    key_id: string,
+    options: { api_key?: string; priority?: number; enabled?: boolean },
+  ) => {
+    const ok = await run(() =>
+      api.setAccountInferenceKey(provider.id, account_id, key_id, options),
+    );
+    if (!ok) notify("error", t("accounts.inference_store_failed"));
+    return ok;
+  };
+
+  const addInference = async (account_id: string) => {
+    const draft = inferenceDraftFor(account_id);
+    const id = draft.id.trim();
+    if (!id) return;
+    const account = accounts.find((a) => a.account_id === account_id);
+    if (account?.inference_keys.some((key) => key.id === id)) {
+      notify("error", t("accounts.inference_duplicate", { id }));
+      return;
+    }
+    const ok = await writeInference(account_id, id, { api_key: draft.secret.trim() });
+    if (ok) editNewInference(account_id, { id: "", secret: "" });
+  };
+
+  const replaceInference = async (account_id: string, key_id: string) => {
+    const secret = inferenceDraft.trim();
+    if (!secret) return;
+    const ok = await writeInference(account_id, key_id, { api_key: secret });
+    if (ok) {
+      setInferenceDraft("");
+      setInferenceKeyFor(null);
     }
   };
 
@@ -1045,6 +1109,150 @@ function AccountSection({
                   </div>
                 </div>
               )}
+              {/*
+                * Chat credentials, separate from the panel token above. The
+                * list is edited by command rather than by the config save, so
+                * a toggle here cannot race the declaration this drawer holds.
+                */}
+              <div className="inference-pool">
+                <div className="row-main">
+                  <span className="row-sub">{t("accounts.inference_title")}</span>
+                  <span className="field-hint">{t("accounts.inference_hint")}</span>
+                </div>
+                {a.inference_keys.length === 0 ? (
+                  <Empty>{t("accounts.inference_empty")}</Empty>
+                ) : (
+                  <div className="list">
+                    {a.inference_keys.map((key) => {
+                      const slot = `${a.account_id}:${key.id}`;
+                      const stored = snapshot.keys[key.key_ref] ?? false;
+                      return (
+                        <div className="list-row row-nested" key={key.id}>
+                          <div className="row-main">
+                            <span className="row-title mono">{key.id}</span>
+                            {stored ? (
+                              <Badge tone="ok">{t("accounts.inference_stored")}</Badge>
+                            ) : (
+                              <Badge tone="warn">{t("accounts.inference_missing")}</Badge>
+                            )}
+                            <span className="row-sub">
+                              {t("accounts.inference_priority", { n: key.priority })}
+                            </span>
+                            <div className="field-actions">
+                              <Button
+                                kind="ghost"
+                                disabled={busy}
+                                onClick={() => {
+                                  setInferenceKeyFor(
+                                    inferenceKeyFor === slot ? null : slot,
+                                  );
+                                  setInferenceDraft("");
+                                }}
+                              >
+                                {t("accounts.inference_replace")}
+                              </Button>
+                              <Button
+                                kind="ghost"
+                                disabled={busy}
+                                onClick={() =>
+                                  setConfirm({
+                                    title: t("accounts.inference_remove_title", {
+                                      id: key.id,
+                                    }),
+                                    body: t("accounts.inference_remove_body"),
+                                    confirmLabel: t("common.delete"),
+                                    danger: true,
+                                    onConfirm: () =>
+                                      void run(() =>
+                                        api.removeAccountInferenceKey(
+                                          provider.id,
+                                          a.account_id,
+                                          key.id,
+                                        ),
+                                      ),
+                                  })
+                                }
+                              >
+                                {t("common.delete")}
+                              </Button>
+                            </div>
+                          </div>
+                          <div className="controls">
+                            <Toggle
+                              label={t("common.enabled")}
+                              checked={key.enabled}
+                              onChange={(enabled) =>
+                                void writeInference(a.account_id, key.id, { enabled })
+                              }
+                            />
+                            <NumberField
+                              label={t("accounts.inference_priority_label")}
+                              hint={t("accounts.inference_priority_hint")}
+                              integer
+                              value={key.priority}
+                              onCommit={(v) =>
+                                void writeInference(a.account_id, key.id, {
+                                  priority: v ?? 0,
+                                })
+                              }
+                            />
+                          </div>
+                          {inferenceKeyFor === slot && (
+                            <div className="controls">
+                              <TextField
+                                label={t("accounts.inference_key_label")}
+                                hint={t("accounts.inference_key_hint")}
+                                value={inferenceDraft}
+                                password
+                                onCommit={(v) => setInferenceDraft(v)}
+                              />
+                              <div className="field-actions">
+                                <Button
+                                  kind="primary"
+                                  disabled={busy || !inferenceDraft.trim()}
+                                  onClick={() =>
+                                    void replaceInference(a.account_id, key.id)
+                                  }
+                                >
+                                  {t("common.save")}
+                                </Button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+                <div className="controls">
+                  <TextField
+                    label={t("accounts.inference_new_id")}
+                    hint={t("accounts.inference_new_id_hint")}
+                    value={inferenceDraftFor(a.account_id).id}
+                    onCommit={(v) => editNewInference(a.account_id, { id: v })}
+                  />
+                  <TextField
+                    label={t("accounts.inference_new_secret")}
+                    hint={t("accounts.inference_key_hint")}
+                    value={inferenceDraftFor(a.account_id).secret}
+                    password
+                    onCommit={(v) => editNewInference(a.account_id, { secret: v })}
+                  />
+                  <div className="field-actions">
+                    <Button
+                      kind="primary"
+                      disabled={
+                        busy ||
+                        !inferenceDraftFor(a.account_id).id.trim() ||
+                        !inferenceDraftFor(a.account_id).secret.trim()
+                      }
+                      onClick={() => void addInference(a.account_id)}
+                    >
+                      {t("accounts.inference_add")}
+                    </Button>
+                  </div>
+                </div>
+              </div>
               <div className="controls">
                 <Toggle
                   label={t("common.enabled")}

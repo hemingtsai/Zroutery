@@ -73,7 +73,19 @@ impl Desktop {
         let provider = previous
             .provider(provider_id)
             .ok_or_else(|| format!("unknown provider `{provider_id}`"))?;
-        let removed_key_ref = provider.key_ref.clone();
+        // Every credential the provider could own: its own key, each account's
+        // panel token, and every inference key on those accounts. Which of them
+        // is actually orphaned is decided against the post-removal document, so
+        // a reference another provider or account still names survives.
+        let mut removed_refs: Vec<String> = std::iter::once(provider.key_ref.clone())
+            .chain(provider.accounts.iter().flat_map(|account| {
+                std::iter::once(account.key_ref.clone())
+                    .chain(account.inference_keys.iter().map(|key| key.key_ref.clone()))
+            }))
+            .filter(|key_ref| !key_ref.trim().is_empty())
+            .collect();
+        removed_refs.sort();
+        removed_refs.dedup();
 
         let mut next = (*previous).clone();
         next.providers.retain(|p| p.id != provider_id);
@@ -97,31 +109,26 @@ impl Desktop {
             .candidates
             .retain(|c| !gone.contains(&c.model));
 
-        let orphaned = if removed_key_ref.trim().is_empty() {
-            // No credential to look after.
-            None
-        } else if next.providers.iter().any(|p| p.key_ref == removed_key_ref) {
-            // A reference another provider still holds is not ours to delete:
-            // it may be deliberate sharing, and removing it would break the
-            // provider that stays.
-            tracing::info!(
-                "provider `{provider_id}` removed; `{removed_key_ref}` is still used by another provider"
-            );
+        let live = crate::inference_commands::referenced_secrets(&next);
+        let mut failed = Vec::new();
+        for key_ref in removed_refs {
+            if live.contains(&key_ref) {
+                tracing::info!(
+                    "provider `{provider_id}` removed; `{key_ref}` is still used elsewhere"
+                );
+                continue;
+            }
+            if let Err(e) = self.secrets.delete(&key_ref) {
+                failed.push(format!("`{key_ref}` ({e})"));
+            }
+        }
+        let orphaned = if failed.is_empty() {
             None
         } else {
-            match self.secrets.delete(&removed_key_ref) {
-                Ok(()) => None,
-                // The provider is gone either way; the key that could not be
-                // removed is reported so the user can clear it by hand.
-                Err(e) => {
-                    tracing::warn!(
-                        "provider `{provider_id}` removed, but its stored key could not be removed: {e}"
-                    );
-                    Some(format!(
-                        "provider `{provider_id}` was removed, but its stored key `{removed_key_ref}` could not be removed ({e}); remove it in the credential manager"
-                    ))
-                }
-            }
+            Some(format!(
+                "provider `{provider_id}` was removed, but a stored secret could not be removed: {}; remove it in the credential manager",
+                failed.join(", ")
+            ))
         };
 
         store::save(&self.config_dir, &next)?;

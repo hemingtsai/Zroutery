@@ -18,9 +18,9 @@ use crate::state::{MlTraceClear, MlTraceInfo};
 use crate::store;
 use crate::tray;
 
-type Cmd<T> = Result<T, String>;
+pub(crate) type Cmd<T> = Result<T, String>;
 
-async fn refreshed(app: &AppHandle, desktop: &Desktop) -> Snapshot {
+pub(crate) async fn refreshed(app: &AppHandle, desktop: &Desktop) -> Snapshot {
     tray::refresh(app, desktop).await;
     desktop.snapshot().await
 }
@@ -492,7 +492,10 @@ pub async fn remove_account(
     provider_id: String,
     account_id: String,
 ) -> Cmd<Snapshot> {
-    let (removed_ref, provider_key_ref) = {
+    // Both credentials the account may hold: its panel token and every
+    // inference key. The deletion below is decided against the post-removal
+    // document, so a reference a sibling account still names survives.
+    let candidates = {
         let config = desktop.core.config();
         let provider = config
             .provider(&provider_id)
@@ -502,7 +505,13 @@ pub async fn remove_account(
             .iter()
             .find(|a| a.account_id == account_id)
             .ok_or_else(|| format!("unknown account `{account_id}` on provider `{provider_id}`"))?;
-        (declaration.key_ref.clone(), provider.key_ref.clone())
+        let mut candidates: Vec<String> = declaration
+            .inference_keys
+            .iter()
+            .map(|key| key.key_ref.clone())
+            .collect();
+        candidates.push(declaration.key_ref.clone());
+        candidates
     };
     let mut config = (*desktop.core.config()).clone();
     let provider = config
@@ -516,20 +525,15 @@ pub async fn remove_account(
         .position(|a| a.account_id == account_id)
         .ok_or_else(|| format!("unknown account `{account_id}` on provider `{provider_id}`"))?;
     provider.accounts.remove(index);
-    // The mutable borrow ends here; the shared-reference scan below reads the
-    // post-removal document.
-    let own = !removed_ref.is_empty() && removed_ref != provider_key_ref;
-    let shared = own
-        && config.providers.iter().any(|p| {
-            p.key_ref == removed_ref || p.accounts.iter().any(|a| a.key_ref == removed_ref)
-        });
-    if own && !shared {
-        let secrets = Arc::clone(&desktop.secrets);
-        tauri::async_runtime::spawn_blocking(move || secrets.delete(&removed_ref))
-            .await
-            .map_err(|e| e.to_string())??;
+    desktop.apply_config(config.clone()).await?;
+    let warnings =
+        crate::inference_commands::forget_unreferenced(&desktop, &candidates, &config).await;
+    if !warnings.is_empty() {
+        desktop.set_warning(Some(format!(
+            "account `{account_id}` was removed, but a stored secret could not be removed: {}",
+            warnings.join("; ")
+        )));
     }
-    desktop.apply_config(config).await?;
     Ok(refreshed(&app, &desktop).await)
 }
 

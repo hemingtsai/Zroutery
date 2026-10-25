@@ -17,6 +17,8 @@
     "allow-set-account-key",
     "allow-clear-account-key",
     "allow-remove-account",
+    "allow-set-account-inference-key",
+    "allow-remove-account-inference-key",
     "allow-reveal-token",
     "allow-copy-token",
     "allow-save-config",

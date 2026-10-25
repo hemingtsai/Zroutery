@@ -9,6 +9,7 @@ pub mod checkin;
 #[cfg(feature = "account-maint")]
 mod checkin_commands;
 mod commands;
+mod inference_commands;
 mod logs;
 pub mod migration;
 mod migration_commands;
@@ -93,6 +94,10 @@ pub fn run() {
             commands::clear_account_key,
             #[cfg(feature = "account")]
             commands::remove_account,
+            #[cfg(feature = "account")]
+            inference_commands::set_account_inference_key,
+            #[cfg(feature = "account")]
+            inference_commands::remove_account_inference_key,
             #[cfg(feature = "ml")]
             commands::get_ml_shadow,
             #[cfg(feature = "ml")]
