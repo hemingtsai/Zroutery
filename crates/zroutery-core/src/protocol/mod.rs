@@ -3,6 +3,22 @@
 //! Two decoders turn incoming payloads into the [`crate::ir`] types, two
 //! encoders turn the IR into upstream payloads, and each dialect knows how to
 //! serialise responses and streaming events back to a client.
+//!
+//! # Where this module is tested
+//!
+//! Most of it is exercised from `tests/` rather than from inline `#[cfg(test)]`
+//! blocks, and a file here with none is not an untested file:
+//!
+//! | Behaviour | Test |
+//! |---|---|
+//! | golden payloads in both dialects | `protocol_golden_test.rs` |
+//! | Gemini request and response shapes | `gemini_test.rs` |
+//! | media acceptance and rejection | `protocol_media_gate_test.rs` |
+//! | streaming events and terminal states | `pipeline_lifecycle_test.rs` |
+//!
+//! The names describe the behaviour rather than the module, which is why the
+//! mapping is written down: a coverage report that counts inline modules calls
+//! a well-tested decoder untested and invites a duplicate harness.
 
 pub mod anthropic;
 pub mod gemini;

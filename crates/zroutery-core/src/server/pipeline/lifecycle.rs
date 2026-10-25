@@ -326,6 +326,12 @@ impl RequestLifecycle {
 
     /// The request id the activity record, the outcome and the shadow
     /// evaluation all correlate on.
+    ///
+    /// Only the ML paths read it, so a build without the feature would call it
+    /// dead code. It stays in both builds because the type is shared by both,
+    /// and removing a method from one of them is how the two drift;
+    /// `activation_test.rs` makes the same argument at its top about code that
+    /// is compiled everywhere and reachable only through the ML gate.
     #[cfg_attr(not(feature = "ml"), allow(dead_code))]
     pub(super) fn id(&self) -> &str {
         self.record.id()

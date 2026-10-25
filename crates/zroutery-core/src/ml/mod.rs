@@ -3,6 +3,25 @@
 //! Provides the fixed-size feature vector that ML models consume for
 //! scoring and ranking routing candidates, and the training dataset
 //! that collects samples for model training.
+//!
+//! # Where this module is tested
+//!
+//! The modules below carry no inline tests; each is exercised by an integration
+//! test named after it. The mapping is here because a new test target that
+//! copies `#![cfg(feature = "ml")]` from a sibling would silently drop out of
+//! the default-feature run, and the failure would look like a missing test
+//! rather than a misplaced gate:
+//!
+//! | Module | Test |
+//! |---|---|
+//! | `activation` | `activation_test.rs` |
+//! | `calibration` | `calibration_test.rs` |
+//! | `decision_contract` | `decision_contract_test.rs` |
+//! | `eval_report` | `evaluation_report_test.rs` |
+//! | `journal` | `journal_test.rs` |
+//! | `offline_gate` | `offline_gate_test.rs`, `offline_gate_float_test.rs` |
+//! | `round` | `trace_log_bounds_test.rs` |
+//! | `warmup` | `warmup_test.rs` |
 
 // Bridges what the account subsystem observes into the planner's vocabulary.
 //
