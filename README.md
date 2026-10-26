@@ -73,7 +73,7 @@ pnpm build    # 打包：macOS 出 .app/.dmg，Windows 出 .msi 和 NSIS 安装�
 cargo run -p zroutery-headless
 ```
 
-无界面运行时 key 从环境变量读，例如 `ZROUTERY_KEY_PROVIDER_DEEPSEEK=sk-...`（`provider:deepseek` 对应 `ZROUTERY_KEY_PROVIDER_DEEPSEEK`）。配置目录可以用 `ZROUTERY_CONFIG_DIR` 指到别处。
+无界面运行时 key 从环境变量读，例如 `ZROUTERY_KEY_PROVIDER_DEEPSEEK=sk-...`（`provider:deepseek` 对应 `ZROUTERY_KEY_PROVIDER_DEEPSEEK`）。配置目录可以用 `ZROUTERY_CONFIG_DIR` 指到别处。多个实例（例如桌面版与 8788 备用端口）需要共用用量历史和钱包闩锁时，用 `ZROUTERY_RUNTIME_DB` 指向同一个 `runtime.sqlite3`；它只存账目元数据，不存提示词、回复或密钥。
 
 ### 第一次配置
 
