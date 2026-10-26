@@ -590,13 +590,58 @@ async fn shape_for_candidate(
 ) -> ChatRequest {
     let mut shaped = req.clone();
     let config = state.config();
+    let rectifier = &config.routing.rectifier;
+    let media_fallback = rectifier.enabled && rectifier.media_fallback;
+    // The client's output cap is a wish; the model's is a limit. Asking a
+    // model for more than it can emit fails the whole request, so the smaller
+    // of the two is what the upstream sees.
+    if let (Some(requested), Some(cap)) = (shaped.max_tokens, candidate.entry.max_output_tokens) {
+        if requested > cap {
+            tracing::debug!(
+                model = %candidate.model_id(),
+                requested,
+                cap,
+                "lowered max_tokens to the model's output limit"
+            );
+            shaped.max_tokens = Some(cap);
+        }
+    }
     if config.vision.enabled && !candidate.entry.capabilities.vision {
         let needs_vision = crate::media::collect::collect(&shaped);
         if !needs_vision.is_empty() {
             apply_vision_fallback(state, &mut shaped, "preflight").await;
         }
     }
-    let rectifier = &config.routing.rectifier;
+    if media_fallback {
+        // A source the surface cannot represent is not the model's failing.
+        // The same model sees the picture through another dialect; only the
+        // images whose *source* has no slot here are replaced, and each one
+        // says so in the transcript instead of failing the whole request.
+        let unsupported: Vec<_> = crate::media::collect::collect(&shaped)
+            .into_iter()
+            .filter(|(_, source)| {
+                !crate::protocol::carries_media_source(candidate.provider.dialect(), source)
+            })
+            .collect();
+        if !unsupported.is_empty() {
+            for (slot, _) in &unsupported {
+                crate::media::transform::replace(
+                    &mut shaped,
+                    slot,
+                    &crate::media::transform::Replacement::Placeholder(
+                        config.vision.placeholder.clone(),
+                    ),
+                );
+            }
+            tracing::warn!(
+                model = %candidate.model_id(),
+                provider = candidate.provider.name.as_str(),
+                dialect = ?candidate.provider.dialect(),
+                images = unsupported.len(),
+                "image source has no slot on this wire; replaced with the placeholder"
+            );
+        }
+    }
     if rectifier.enabled
         && rectifier.thinking_fallback
         && !candidate.entry.capabilities.thinking
@@ -608,6 +653,28 @@ async fn shape_for_candidate(
             "dropping reasoning controls for a target without declared thinking support"
         );
         shaped.drop_reasoning();
+    }
+    // A client may ask for a level the served model never advertised (its
+    // picker outlives the class membership it was written for). Lower the
+    // budget to the model's own highest declared level instead of sending a
+    // value the upstream will refuse.
+    if let Some(thinking) = shaped.thinking.as_mut() {
+        if thinking.enabled {
+            if let Some(budget) = thinking.budget_tokens {
+                if let Some(lowered) = crate::protocol::reasoning_bridge::clamp_budget_to_declared(
+                    budget,
+                    &candidate.entry.normalized_effort_levels(),
+                ) {
+                    thinking.budget_tokens = Some(lowered);
+                    tracing::debug!(
+                        model = %candidate.model_id(),
+                        from = budget,
+                        to = lowered,
+                        "lowered the reasoning budget to a level the model declares"
+                    );
+                }
+            }
+        }
     }
     shaped
 }

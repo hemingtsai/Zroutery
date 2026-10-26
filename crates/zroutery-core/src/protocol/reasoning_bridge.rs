@@ -50,6 +50,36 @@ pub fn decode_effort(effort: &str) -> Option<ThinkingConfig> {
     })
 }
 
+/// The IR budget that stands for one reasoning-effort level.
+///
+/// `None` for a value outside the effort vocabulary (`none`/`minimal` have no
+/// budget of their own).
+pub fn budget_for_effort(effort: &str) -> Option<u32> {
+    Some(match effort {
+        "low" => LOW_BUDGET,
+        "medium" => MEDIUM_BUDGET,
+        "high" => HIGH_BUDGET,
+        "xhigh" => XHIGH_BUDGET,
+        "max" => MAX_BUDGET,
+        _ => return None,
+    })
+}
+
+/// Lower `budget` to the highest level a model declares, when it asks for more.
+///
+/// A client's picker can be older than the model set behind it: a virtual
+/// class keeps offering `max` after a member that tops out at `high` joins.
+/// Sending the unadvertised value makes the upstream refuse the request, so the
+/// proxy lowers it here, to a level the model itself published. An empty list
+/// means the model declares no levels and is left untouched.
+pub fn clamp_budget_to_declared(budget: u32, levels: &[String]) -> Option<u32> {
+    let ceiling = levels
+        .iter()
+        .filter_map(|level| budget_for_effort(level))
+        .max()?;
+    (budget > ceiling).then_some(ceiling)
+}
+
 /// Encode an IR thinking config as the closest OpenAI effort level.
 ///
 /// The thresholds are the decode values above, so `high`, `xhigh` and `max`
@@ -221,5 +251,41 @@ mod tests {
             budget_tokens: Some(20_000),
         };
         assert_eq!(encode_effort(&thinking), "high");
+    }
+
+    #[test]
+    fn a_budget_is_lowered_to_the_levels_the_model_declares() {
+        let levels = |list: &[&str]| {
+            list.iter()
+                .map(|value| value.to_string())
+                .collect::<Vec<_>>()
+        };
+
+        // A class picker that still offers `max` while the served model tops
+        // out at `xhigh` must not forward `max`.
+        assert_eq!(
+            clamp_budget_to_declared(MAX_BUDGET, &levels(&["low", "medium", "high", "xhigh"])),
+            Some(XHIGH_BUDGET)
+        );
+        // The model's own ceiling is kept.
+        assert_eq!(
+            clamp_budget_to_declared(
+                MAX_BUDGET,
+                &levels(&["low", "medium", "high", "xhigh", "max"])
+            ),
+            None
+        );
+        // A request inside the declared range is untouched.
+        assert_eq!(
+            clamp_budget_to_declared(HIGH_BUDGET, &levels(&["low", "medium", "high"])),
+            None
+        );
+        // No declaration is not a declaration of no support.
+        assert_eq!(clamp_budget_to_declared(MAX_BUDGET, &levels(&[])), None);
+        // Values outside the vocabulary cannot set a ceiling.
+        assert_eq!(
+            clamp_budget_to_declared(MAX_BUDGET, &levels(&["turbo"])),
+            None
+        );
     }
 }

@@ -47,8 +47,14 @@ pub(super) async fn try_rectify_buffered(
     let key = key.as_deref();
 
     // The reactive vision path: only when the upstream said "no images" and
-    // the request still carries them.
-    if state.config().vision.enabled
+    // the request still carries them. `media_fallback` is a repair like the
+    // rest: it runs with the description when a vision model is configured
+    // and with the honest placeholder when one is not.
+    let media_fallback = {
+        let rectifier = &state.config().routing.rectifier;
+        rectifier.enabled && rectifier.media_fallback
+    };
+    if media_fallback
         && MediaFallbackRectifier.should_apply(error, &serde_json::Value::Null)
         && !crate::media::collect::collect(req).is_empty()
     {
@@ -176,8 +182,14 @@ pub(super) async fn try_rectify_stream(
     let key = key.as_deref();
 
     // The reactive vision path: only when the upstream said "no images" and
-    // the request still carries them.
-    if state.config().vision.enabled
+    // the request still carries them. `media_fallback` is a repair like the
+    // rest: it runs with the description when a vision model is configured
+    // and with the honest placeholder when one is not.
+    let media_fallback = {
+        let rectifier = &state.config().routing.rectifier;
+        rectifier.enabled && rectifier.media_fallback
+    };
+    if media_fallback
         && MediaFallbackRectifier.should_apply(error, &serde_json::Value::Null)
         && !crate::media::collect::collect(req).is_empty()
     {

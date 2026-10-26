@@ -82,6 +82,27 @@ fn sanitize_type(kind: &str) -> String {
     }
 }
 
+/// Whether a dialect can carry a media source on its wire.
+///
+/// This is a property of the surface, not of the model: a model that can see
+/// may still be served by a dialect whose body has no place for a server-side
+/// file id. Routing and the preflight use this to decide whether an image can
+/// travel natively or has to be replaced, so "the target cannot represent
+/// this" is never reported as a malformed client request.
+pub fn carries_media_source(dialect: Dialect, source: &MediaSource) -> bool {
+    match dialect {
+        // Chat Completions takes a data URL or a plain URL, and Anthropic
+        // takes inline/base64 or a URL source; neither has a field for a
+        // provider-side file id.
+        Dialect::OpenAI | Dialect::Anthropic => !matches!(source, MediaSource::Reference { .. }),
+        // Responses has `file_id` beside `image_url`.
+        Dialect::OpenAIResponses => true,
+        // Gemini's inlineData requires the bytes themselves; a URL or a file
+        // id would have to be fetched first, which is not this layer's job.
+        Dialect::Gemini => matches!(source, MediaSource::Base64 { .. }),
+    }
+}
+
 /// Evaluate an unsupported-content policy without collapsing distinct actions.
 ///
 /// A successful transform must carry an explicit replacement.  The current

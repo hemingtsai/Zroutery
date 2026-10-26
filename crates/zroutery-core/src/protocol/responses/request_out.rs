@@ -30,6 +30,23 @@ pub fn encode_request(req: &ChatRequest, upstream_model: &str) -> Result<Value> 
     encode_request_with(req, upstream_model, false)
 }
 
+/// Encode one media source as a Responses `input_image`.
+///
+/// The three source kinds are all native here: a data URL, a plain URL, and a
+/// server-side file id. A tool result image therefore does not have to be
+/// rejected just because it arrived inside a `function_call_output` — the
+/// Responses API carries it as an `input_image` item in its own user message.
+fn encode_input_image(source: &MediaSource) -> Value {
+    match source {
+        MediaSource::Base64 { media_type, data } => json!({
+            "type": "input_image",
+            "image_url": format!("data:{media_type};base64,{data}"),
+        }),
+        MediaSource::Url { url } => json!({"type": "input_image", "image_url": url}),
+        MediaSource::Reference { id } => json!({"type": "input_image", "file_id": id}),
+    }
+}
+
 /// Encode a Responses request, optionally making its history portable.
 ///
 /// `portable_history` is the provider's [`ProviderQuirks::portable_history`]:
@@ -58,20 +75,7 @@ pub fn encode_request_with(
                     "type": text_part_type,
                     "text": text,
                 })),
-                ContentBlock::Image { source } => match source {
-                    MediaSource::Base64 { media_type, data } => {
-                        parts.push(json!({
-                            "type": "input_image",
-                            "image_url": format!("data:{media_type};base64,{data}"),
-                        }));
-                    }
-                    MediaSource::Url { url } => {
-                        parts.push(json!({"type": "input_image", "image_url": url}));
-                    }
-                    MediaSource::Reference { id } => {
-                        parts.push(json!({"type": "input_image", "file_id": id}));
-                    }
-                },
+                ContentBlock::Image { source } => parts.push(encode_input_image(source)),
                 ContentBlock::ToolUse {
                     id,
                     name,
@@ -88,20 +92,18 @@ pub fn encode_request_with(
                     ..
                 } => {
                     let mut text_parts = Vec::new();
+                    let mut images: Vec<Value> = Vec::new();
                     for part in content {
                         match part {
                             ToolResultPart::Text { text } => text_parts.push(text.clone()),
+                            // The model may be able to see even though the
+                            // bytes arrived inside a function_call_output.
+                            // Responses carries media as its own input item,
+                            // so the image is forwarded in a user message that
+                            // names the call it came from instead of being
+                            // rejected as an unsupported content type.
                             ToolResultPart::Image { source } => {
-                                let image = ContentBlock::Image {
-                                    source: source.clone(),
-                                };
-                                if let Some(replacement) =
-                                    apply_content_policy(req.unsupported_content_policy, &image)?
-                                {
-                                    if let Some(text) = replacement.as_text() {
-                                        text_parts.push(text.to_string());
-                                    }
-                                }
+                                images.push(encode_input_image(source));
                             }
                         }
                     }
@@ -110,6 +112,18 @@ pub fn encode_request_with(
                         "call_id": tool_use_id,
                         "output": text_parts.join("\n"),
                     }));
+                    if !images.is_empty() {
+                        let mut content = vec![json!({
+                            "type": "input_text",
+                            "text": format!("Images returned by tool call `{tool_use_id}`:"),
+                        })];
+                        content.extend(images);
+                        separate_items.push(json!({
+                            "type": "message",
+                            "role": "user",
+                            "content": content,
+                        }));
+                    }
                 }
                 ContentBlock::Thinking { text, signature } => {
                     if let Some(item) = reasoning_bridge::encode_thinking_block(b) {

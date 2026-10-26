@@ -201,6 +201,91 @@ fn every_decoder_records_the_same_canonical_requirements() {
 }
 
 #[test]
+fn each_dialect_states_which_media_sources_it_can_carry() {
+    let inline = base64("image/png");
+    let url = MediaSource::Url {
+        url: "https://example.com/a.png".into(),
+    };
+    let reference = MediaSource::Reference {
+        id: "file-1".into(),
+    };
+    for dialect in [Dialect::OpenAI, Dialect::Anthropic] {
+        assert!(zroutery_core::protocol::carries_media_source(
+            dialect, &inline
+        ));
+        assert!(zroutery_core::protocol::carries_media_source(dialect, &url));
+        assert!(!zroutery_core::protocol::carries_media_source(
+            dialect, &reference
+        ));
+    }
+    assert!(zroutery_core::protocol::carries_media_source(
+        Dialect::OpenAIResponses,
+        &reference
+    ));
+    assert!(zroutery_core::protocol::carries_media_source(
+        Dialect::Gemini,
+        &inline
+    ));
+    assert!(!zroutery_core::protocol::carries_media_source(
+        Dialect::Gemini,
+        &url
+    ));
+    assert!(!zroutery_core::protocol::carries_media_source(
+        Dialect::Gemini,
+        &reference
+    ));
+}
+
+#[test]
+fn responses_forwards_tool_result_images_instead_of_rejecting_them() {
+    // A browser or screenshot tool returns the picture inside a
+    // `function_call_output`. The model can see it, so the encoder must carry
+    // it as an `input_image` item instead of judging the target incapable of
+    // images just because the bytes arrived in a tool result.
+    let mut request = ChatRequest::new("m", Dialect::OpenAIResponses);
+    request.messages.push(Message {
+        role: Role::User,
+        content: vec![ContentBlock::ToolResult {
+            tool_use_id: "call-1".into(),
+            name: "screenshot".into(),
+            content: vec![
+                ToolResultPart::Text {
+                    text: "captured".into(),
+                },
+                ToolResultPart::Image {
+                    source: base64("image/png"),
+                },
+                ToolResultPart::Image {
+                    source: MediaSource::Reference {
+                        id: "file-1".into(),
+                    },
+                },
+            ],
+            is_error: false,
+        }],
+    });
+
+    let body = responses::encode_request(&request, "gpt-6-astra")
+        .expect("a tool-result image is encodable on the Responses surface");
+    let input = body["input"].as_array().unwrap();
+    let output = input
+        .iter()
+        .find(|item| item["type"] == "function_call_output")
+        .expect("the tool output is still sent");
+    assert_eq!(output["output"], "captured");
+
+    let images: Vec<&serde_json::Value> = input
+        .iter()
+        .filter(|item| item["type"] == "message")
+        .flat_map(|item| item["content"].as_array().unwrap().iter())
+        .filter(|part| part["type"] == "input_image")
+        .collect();
+    assert_eq!(images.len(), 2);
+    assert_eq!(images[0]["image_url"], "data:image/png;base64,AAAA");
+    assert_eq!(images[1]["file_id"], "file-1");
+}
+
+#[test]
 fn structured_output_requirement_filters_candidates_without_the_capability() {
     let request = openai::decode_request(json!({
         "model": "m",
