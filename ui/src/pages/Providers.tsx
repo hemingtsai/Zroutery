@@ -13,6 +13,8 @@ import {
   type CcProviderDraft,
   type CcSwitchPreview,
   type Maintenance,
+  type NewApiAnnouncement,
+  type NewApiPrice,
   type Provider,
   type ProviderClientProfile,
   type ProviderKind,
@@ -141,6 +143,22 @@ function defaultBaseUrl(kind: ProviderKind): string {
       return "https://api.typesafe.ai";
     default:
       return "https://api.openai.com/v1";
+  }
+}
+
+/**
+ * A readable provider name derived from a pasted endpoint.
+ *
+ * The add form accepts a URL alone because the endpoint is the thing an
+ * operator has; making them invent a display name first is a step that adds
+ * nothing. `https://ps.air-outer.com/v1` becomes `ps.air-outer`.
+ */
+function nameFromBaseUrl(url: string): string {
+  try {
+    const host = new URL(url.trim()).hostname.toLowerCase();
+    return host.replace(/^www\./, "") || "";
+  } catch {
+    return "";
   }
 }
 
@@ -378,6 +396,48 @@ export default function Providers({
           </>
         }
       />
+
+      {snapshot.wallet_holds.length > 0 && (
+        <Section title={t("providers.wallet_holds")} hint={t("providers.wallet_holds_hint")}>
+          <div className="list">
+            {snapshot.wallet_holds.map((hold) => {
+              const provider = config.providers.find((p) => p.id === hold.provider_id);
+              const scope = [hold.account_id, hold.key_id].filter(Boolean).join(" / ");
+              return (
+                <div
+                  className="list-row"
+                  key={`${hold.provider_id}:${hold.account_id ?? ""}:${hold.key_id ?? ""}`}
+                  style={{ cursor: "default" }}
+                >
+                  <StatusDot tone="danger" state={t("providers.wallet_empty")} />
+                  <div className="row-main">
+                    <span className="row-title">
+                      {provider?.name ?? hold.provider_id}
+                      {scope && <span className="muted mono"> · {scope}</span>}
+                    </span>
+                    <span className="row-sub">
+                      {t("providers.wallet_held_since", {
+                        time: new Date(hold.held_at * 1000).toLocaleString(),
+                      })}
+                    </span>
+                  </div>
+                  <Button
+                    kind="ghost"
+                    disabled={busy}
+                    onClick={() =>
+                      void run(() =>
+                        api.releaseWalletHold(hold.provider_id, hold.account_id, hold.key_id),
+                      )
+                    }
+                  >
+                    {t("providers.wallet_release")}
+                  </Button>
+                </div>
+              );
+            })}
+          </div>
+        </Section>
+      )}
 
       {config.providers.length === 0 ? (
         <div className="empty-state">
@@ -635,8 +695,11 @@ function AddProviderForm({
   const [nameError, setNameError] = useState<string | null>(null);
 
   const addProvider = () => {
-    const name = newName.trim();
-    if (!name) return;
+    const name = newName.trim() || nameFromBaseUrl(newBaseUrl);
+    if (!name) {
+      setNameError(t("providers.name_required"));
+      return;
+    }
     const id = slugify(name);
     if (providers.some((p) => p.id === id)) {
       setNameError(t("providers.duplicate", { id }));
@@ -651,7 +714,7 @@ function AddProviderForm({
       next.providers.push(
         emptyProvider(
           id,
-          name.trim(),
+          name,
           newKind,
           newBaseUrl.trim() || defaultBaseUrl(newKind),
         ),
@@ -667,10 +730,10 @@ function AddProviderForm({
   return (
     <Section title={t("providers.add_section")} hint={t("providers.add_hint")}>
       <div className="controls">
-        <Field label={t("field.name")} danger={Boolean(nameError)} hint={nameError ?? undefined}>
+        <Field label={t("field.name")} danger={Boolean(nameError)} hint={nameError ?? t("providers.name_optional")}>
           <input
             value={newName}
-            placeholder="DeepSeek"
+            placeholder={t("providers.name_placeholder")}
             className={nameError ? "input-error" : undefined}
             onChange={(e) => {
               setNewName(e.currentTarget.value);
@@ -696,7 +759,11 @@ function AddProviderForm({
           />
         </Field>
         <div className="field-actions">
-          <Button kind="primary" onClick={addProvider} disabled={busy || !newName.trim()}>
+          <Button
+            kind="primary"
+            onClick={addProvider}
+            disabled={busy || (!newName.trim() && !newBaseUrl.trim())}
+          >
             {t("providers.add")}
           </Button>
         </div>
@@ -875,7 +942,7 @@ function AccountSection({
   const [keyFor, setKeyFor] = useState<string | null>(null);
   const [keyDraft, setKeyDraft] = useState("");
   const [newInference, setNewInference] = useState<
-    Record<string, { id: string; secret: string }>
+    Record<string, { id: string; secret: string; note: string }>
   >({});
   const [inferenceKeyFor, setInferenceKeyFor] = useState<string | null>(null);
   const [inferenceDraft, setInferenceDraft] = useState("");
@@ -941,16 +1008,16 @@ function AccountSection({
   };
 
   const inferenceDraftFor = (account_id: string) =>
-    newInference[account_id] ?? { id: "", secret: "" };
+    newInference[account_id] ?? { id: "", secret: "", note: "" };
 
   const editNewInference = (
     account_id: string,
-    patch: Partial<{ id: string; secret: string }>,
+    patch: Partial<{ id: string; secret: string; note: string }>,
   ) =>
     setNewInference((current) => ({
       ...current,
       [account_id]: {
-        ...(current[account_id] ?? { id: "", secret: "" }),
+        ...(current[account_id] ?? { id: "", secret: "", note: "" }),
         ...patch,
       },
     }));
@@ -963,7 +1030,7 @@ function AccountSection({
   const writeInference = async (
     account_id: string,
     key_id: string,
-    options: { api_key?: string; priority?: number; enabled?: boolean },
+    options: { api_key?: string; priority?: number; enabled?: boolean; note?: string },
   ) => {
     const ok = await run(() =>
       api.setAccountInferenceKey(provider.id, account_id, key_id, options),
@@ -981,8 +1048,11 @@ function AccountSection({
       notify("error", t("accounts.inference_duplicate", { id }));
       return;
     }
-    const ok = await writeInference(account_id, id, { api_key: draft.secret.trim() });
-    if (ok) editNewInference(account_id, { id: "", secret: "" });
+    const ok = await writeInference(account_id, id, {
+      api_key: draft.secret.trim(),
+      note: draft.note.trim(),
+    });
+    if (ok) editNewInference(account_id, { id: "", secret: "", note: "" });
   };
 
   const replaceInference = async (account_id: string, key_id: string) => {
@@ -1107,6 +1177,19 @@ function AccountSection({
                         <div className="key-row" key={key.id}>
                           <div className="key-head">
                             <span className="key-id mono">{key.id}</span>
+                            <input
+                              className="text-input key-note"
+                              style={{ maxWidth: 220 }}
+                              defaultValue={key.note}
+                              placeholder={t("accounts.inference_note_placeholder")}
+                              aria-label={t("accounts.inference_note")}
+                              onBlur={(event) => {
+                                const note = event.currentTarget.value.trim();
+                                if (note !== key.note) {
+                                  void writeInference(a.account_id, key.id, { note });
+                                }
+                              }}
+                            />
                             {stored ? (
                               <Badge tone="ok">{t("accounts.inference_stored")}</Badge>
                             ) : (
@@ -1218,6 +1301,11 @@ function AccountSection({
                     password
                     onCommit={(v) => editNewInference(a.account_id, { secret: v })}
                   />
+                  <TextField
+                    label={t("accounts.inference_note")}
+                    value={inferenceDraftFor(a.account_id).note}
+                    onCommit={(v) => editNewInference(a.account_id, { note: v })}
+                  />
                   <div className="field-actions">
                     <Button
                       kind="primary"
@@ -1245,6 +1333,14 @@ function AccountSection({
                   onChange={(v) =>
                     edit(a.account_id, (d) => {
                       d.maintenance.checkin_enabled = v;
+                      if (v) {
+                        // NewAPI's dominant layout. Filled only when the field
+                        // is empty so an operator's correction is never
+                        // overwritten by turning the toggle off and on again.
+                        d.maintenance.checkin_path ??= "/console/personal";
+                        d.maintenance.checkin_trigger_selector ??= "button.checkin";
+                        d.maintenance.login_path ??= "/sign-in";
+                      }
                     })
                   }
                 />
@@ -1301,7 +1397,7 @@ function AccountSection({
                       label={t("accounts.checkin_path")}
                       hint={t("accounts.checkin_path_hint")}
                       value={a.maintenance.checkin_path ?? ""}
-                      placeholder="/checkin"
+                      placeholder="/console/personal"
                       wide
                       onCommit={(v) =>
                         edit(a.account_id, (d) => {
@@ -1436,6 +1532,7 @@ function ProviderDrawer({
   onRemove: () => void;
 }) {
   const { t } = useI18n();
+  const notify = useToast();
   const hasKey = snapshot.keys[provider.id] ?? false;
   // Chat credentials an account declares: the auth row would otherwise say
   // "no key" beside a green dot, because the provider's own reference is empty
@@ -1448,6 +1545,26 @@ function ProviderDrawer({
     0,
   );
   const [checkingBalance, setCheckingBalance] = useState(false);
+  const [panelInfo, setPanelInfo] = useState<{
+    announcements: NewApiAnnouncement[];
+    prices: NewApiPrice[];
+  } | null>(null);
+  const [panelInfoBusy, setPanelInfoBusy] = useState(false);
+
+  const loadPanelInfo = async () => {
+    setPanelInfoBusy(true);
+    try {
+      const [announcements, prices] = await Promise.all([
+        api.fetchNewapiAnnouncements(provider.id),
+        api.previewNewapiPricing(provider.id),
+      ]);
+      setPanelInfo({ announcements, prices });
+    } catch (error) {
+      notify("error", errorText(error));
+    } finally {
+      setPanelInfoBusy(false);
+    }
+  };
   // Hoisted so the type is narrowed once rather than at two separate index
   // reads, and so the translation has one string to work with.
   const balanceError = snapshot.balances[provider.id]?.error ?? null;
@@ -1541,6 +1658,108 @@ function ProviderDrawer({
         <ApiKeyField providerId={providerId} busy={busy} run={run} />
       )}
 
+      {snapshot.newapi_available && (
+        <Section
+          title={t("providers.panel_info")}
+          hint={t("providers.panel_info_hint")}
+          actions={
+            <Button kind="ghost" disabled={panelInfoBusy || busy} onClick={() => void loadPanelInfo()}>
+              {panelInfoBusy ? t("common.loading") : t("providers.panel_read")}
+            </Button>
+          }
+        >
+        {!panelInfo ? (
+          <p className="field-hint">{t("providers.panel_read_hint")}</p>
+        ) : (
+          <>
+            {panelInfo.announcements.length > 0 && (
+              <div className="list">
+                {panelInfo.announcements.map((announcement, index) => (
+                  <div className="list-row" key={announcement.id ?? index} style={{ cursor: "default" }}>
+                    <div className="row-main">
+                      <span className="row-title">
+                        {announcement.title || t("providers.panel_announcement")}
+                      </span>
+                      {announcement.content && (
+                        <span className="row-sub" style={{ whiteSpace: "pre-wrap" }}>
+                          {announcement.content}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            {(() => {
+              const matched = panelInfo.prices.filter(
+                (price) =>
+                  models.some(
+                    (model) =>
+                      price.model.toLowerCase() === model.upstream_model.toLowerCase() ||
+                      (model.display_name ?? "").toLowerCase() === price.model.toLowerCase() ||
+                      model.aliases.some(
+                        (alias) => alias.toLowerCase() === price.model.toLowerCase(),
+                      ),
+                  ),
+              );
+              return (
+                <>
+                  <p className="field-hint">
+                    {t("providers.panel_prices", {
+                      matched: matched.length,
+                      total: panelInfo.prices.length,
+                      group: panelInfo.prices[0]?.group ?? "default",
+                    })}
+                  </p>
+                  {matched.length > 0 && (
+                    <div className="table-scroll">
+                      <table className="table">
+                        <thead>
+                          <tr>
+                            <th scope="col">{t("field.model_name")}</th>
+                            <th scope="col">{t("field.input")} / 1M</th>
+                            <th scope="col">{t("field.output")} / 1M</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {matched.slice(0, 12).map((price) => (
+                            <tr key={price.model}>
+                              <td className="mono">{price.model}</td>
+                              <td className="mono">
+                                {price.input_per_mtok == null
+                                  ? t("common.dash")
+                                  : money("USD", price.input_per_mtok)}
+                              </td>
+                              <td className="mono">
+                                {price.output_per_mtok == null
+                                  ? t("common.dash")
+                                  : money("USD", price.output_per_mtok)}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                  <div className="controls">
+                    <Button
+                      kind="primary"
+                      disabled={busy || matched.length === 0}
+                      onClick={async () => {
+                        const ok = await run(() => api.importNewapiPricing(provider.id));
+                        if (ok) notify("ok", t("providers.panel_prices_imported"));
+                      }}
+                    >
+                      {t("providers.panel_apply_prices")}
+                    </Button>
+                  </div>
+                </>
+              );
+            })()}
+          </>
+        )}
+      </Section>
+      )}
 
       <Section title={t("providers.configuration")}>
         <div className="controls">

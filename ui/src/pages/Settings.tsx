@@ -76,6 +76,14 @@ export default function Settings({
     });
   };
 
+  const patchBalances = (patch: Partial<AppConfig["balances"]>) => {
+    void save((cfg) => {
+      const next = structuredClone(cfg);
+      Object.assign(next.balances, patch);
+      return next;
+    });
+  };
+
   const parseScope = (value: string): BudgetScope => {
     const [kind, rest] = value.split(":");
     if (kind === "tier" && TIERS.includes(rest as ModelTier)) return { kind: "tier", tier: rest as ModelTier };
@@ -255,6 +263,39 @@ export default function Settings({
               <Button kind="danger" onClick={() => void api.quit()}>
                 {t("win.quit")}
               </Button>
+            </div>
+          </div>
+        </Section>
+
+        <Section title={t("settings.balances")} hint={t("settings.balances_hint")}>
+          <div className="setting-row">
+            <div className="setting-left">
+              <span className="setting-title">{t("settings.balance_auto")}</span>
+              <span className="setting-desc">{t("settings.balance_auto_hint")}</span>
+            </div>
+            <div className="setting-right">
+              <input
+                type="checkbox"
+                aria-label={t("settings.balance_auto")}
+                checked={config.balances.enabled}
+                onChange={(e) => patchBalances({ enabled: e.currentTarget.checked })}
+              />
+            </div>
+          </div>
+          <div className="setting-row">
+            <div className="setting-left">
+              <span className="setting-title">{t("settings.balance_interval")}</span>
+              <span className="setting-desc">{t("settings.balance_interval_hint")}</span>
+            </div>
+            <div className="setting-right">
+              <CommitNumber
+                min={60}
+                max={86400}
+                integer
+                value={config.balances.interval_secs}
+                ariaLabel={t("settings.balance_interval")}
+                onCommit={(v) => patchBalances({ interval_secs: v ?? 900 })}
+              />
             </div>
           </div>
         </Section>

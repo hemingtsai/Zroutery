@@ -25,6 +25,7 @@ const inference = (key_ref: string) => ({
   key_ref,
   enabled: true,
   priority: 0,
+  note: "",
 });
 
 describe("hasChatCredential", () => {

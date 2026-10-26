@@ -136,8 +136,41 @@ export interface Balance {
 /** The last answer from a provider's balance endpoint. */
 export interface BalanceStatus {
   checked_at: string;
+  /** The last figure the provider reported. A failed check keeps it. */
   balance: Balance | null;
   error: string | null;
+}
+
+/** A latched empty wallet. Only an operator releases it. */
+export interface WalletHold {
+  provider_id: string;
+  account_id: string | null;
+  key_id: string | null;
+  held_at: number;
+  reason: string;
+}
+
+export interface BalanceRefreshConfig {
+  enabled: boolean;
+  interval_secs: number;
+}
+
+/** One announcement from a NewAPI panel's public `/api/status`. */
+export interface NewApiAnnouncement {
+  id: number | null;
+  title: string | null;
+  content: string | null;
+  publish_date: unknown;
+  kind: unknown;
+}
+
+/** One model price read from a NewAPI panel, already in USD per million. */
+export interface NewApiPrice {
+  model: string;
+  group: string;
+  input_per_mtok: number | null;
+  output_per_mtok: number | null;
+  per_request: number | null;
 }
 
 export interface ProviderQuirks {
@@ -503,6 +536,8 @@ export interface AppConfig {
   window: WindowBehavior;
   /** Vision fallback for models that cannot see. */
   vision: VisionConfig;
+  /** Automatic wallet checks for providers that publish a balance. */
+  balances: BalanceRefreshConfig;
   /** Shadow evaluation — the hard prerequisite for any sample. Absent in builds without `ml`. */
   shadow?: ShadowConfig;
   /** Learned routing — re-orders plan when enabled and durable state is configured. */
@@ -592,6 +627,26 @@ export interface KindTotals {
   avg_latency_ms: number;
 }
 
+/** Counters for one client, including the durable-history view. */
+export interface ClientTotals {
+  client_id: string;
+  client_name: string;
+  family: string;
+  source: string;
+  confidence: string;
+  requests: number;
+  failures: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  reasoning_tokens: number;
+  cost: CostTotals;
+  avg_latency_ms: number;
+  avg_ttft_ms: number | null;
+  streamed: number;
+}
+
 export interface StatsSummary {
   since: string;
   requests: number;
@@ -601,6 +656,7 @@ export interface StatsSummary {
   cost: CostTotals;
   per_model: ModelTotals[];
   per_kind: KindTotals[];
+  per_client: ClientTotals[];
 }
 
 export interface Snapshot {
@@ -619,6 +675,8 @@ export interface Snapshot {
   version: string;
   /** provider id -> last balance check. */
   balances: Record<string, BalanceStatus>;
+  /** Empty wallets latched by the router; only a manual release clears one. */
+  wallet_holds: WalletHold[];
   /** The last election, when one has been held this run. */
   election: Election | null;
   /** Every budget with what has been spent against it. */
@@ -661,6 +719,8 @@ export interface Snapshot {
    * build.
    */
   api_checkin_available: boolean;
+  /** Whether this build contains the NewAPI panel adapter. */
+  newapi_available: boolean;
   /**
    * Whether this build can capture a NewAPI panel token in a browser.
    *
@@ -742,6 +802,8 @@ export interface InferenceKey {
   enabled: boolean;
   /** Lower is tried first. Ties keep declaration order. */
   priority: number;
+  /** Free-form operator note; never used for routing. */
+  note: string;
 }
 
 /**
@@ -1595,7 +1657,7 @@ export const api = {
     provider_id: string,
     account_id: string,
     key_id: string,
-    options: { api_key?: string; priority?: number; enabled?: boolean },
+    options: { api_key?: string; priority?: number; enabled?: boolean; note?: string },
   ) =>
     invoke<Snapshot>("set_account_inference_key", {
       providerId: provider_id,
@@ -1604,6 +1666,7 @@ export const api = {
       apiKey: options.api_key ?? null,
       priority: options.priority ?? null,
       enabled: options.enabled ?? null,
+      note: options.note ?? null,
     }),
   /** Remove one inference key; its secret goes only when nothing else names it. */
   removeAccountInferenceKey: (provider_id: string, account_id: string, key_id: string) =>
@@ -1702,6 +1765,18 @@ export const api = {
   refreshBalance: (provider_id: string) =>
     invoke<Snapshot>("refresh_balance", { providerId: provider_id }),
   refreshBalances: () => invoke<Snapshot>("refresh_balances"),
+  /** NewAPI panel announcements; public and credential-free. Call only when
+   * `snapshot.newapi_available` is true. */
+  fetchNewapiAnnouncements: (provider_id: string) =>
+    invoke<NewApiAnnouncement[]>("fetch_newapi_announcements", { providerId: provider_id }),
+  /** Read the panel's published prices without changing anything. Call only when
+   * `snapshot.newapi_available` is true. */
+  previewNewapiPricing: (provider_id: string) =>
+    invoke<NewApiPrice[]>("preview_newapi_pricing", { providerId: provider_id }),
+  /** Apply the panel's per-token prices to matching models. Call only when
+   * `snapshot.newapi_available` is true. */
+  importNewapiPricing: (provider_id: string) =>
+    invoke<Snapshot>("import_newapi_pricing", { providerId: provider_id }),
   /** Probes every tier member, so it costs one tiny request each. */
   runElection: () => invoke<Snapshot>("run_election"),
   start: () => invoke<Snapshot>("start_proxy"),
@@ -1712,6 +1787,25 @@ export const api = {
   /** Copies in Rust so the token never enters this side. */
   copyToken: () => invoke<void>("copy_token"),
   clearStats: () => invoke<Snapshot>("clear_stats"),
+  /** One client's durable usage history, leaving every other client alone. */
+  clearClientUsage: (client_id: string) =>
+    invoke<Snapshot>("clear_client_usage", { clientId: client_id }),
+  /**
+   * The durable history as a portable JSON archive.
+   *
+   * The archive carries accounting metadata only; prompts, completions,
+   * routing traces and failure bodies are deliberately absent.
+   */
+  exportUsageHistory: () => invoke<string>("export_usage_history"),
+  importUsageHistory: (archive: string) =>
+    invoke<Snapshot>("import_usage_history", { archive }),
+  /** Clear a latched empty wallet after topping it up or fixing the account. */
+  releaseWalletHold: (provider_id: string, account_id?: string | null, key_id?: string | null) =>
+    invoke<Snapshot>("release_wallet_hold", {
+      providerId: provider_id,
+      accountId: account_id ?? null,
+      keyId: key_id ?? null,
+    }),
   resetHealth: (model_id: string) =>
     invoke<Snapshot>("reset_model_health", { modelId: model_id }),
   copy: (text: string) => invoke<void>("copy_text", { text }),

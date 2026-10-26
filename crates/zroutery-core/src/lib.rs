@@ -49,6 +49,7 @@ pub mod query;
 pub mod rectifier;
 pub mod registry;
 pub mod router;
+pub mod runtime_store;
 pub mod server;
 pub mod session;
 pub mod stats;

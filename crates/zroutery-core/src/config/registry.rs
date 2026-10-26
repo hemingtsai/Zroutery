@@ -147,6 +147,9 @@ pub struct InferenceKeyConfig {
     pub enabled: bool,
     #[serde(default)]
     pub priority: i32,
+    /// Free-form operator note shown beside the key. Never used for routing.
+    #[serde(default)]
+    pub note: String,
 }
 
 impl Default for InferenceKeyConfig {
@@ -156,6 +159,7 @@ impl Default for InferenceKeyConfig {
             key_ref: String::new(),
             enabled: true,
             priority: 0,
+            note: String::new(),
         }
     }
 }

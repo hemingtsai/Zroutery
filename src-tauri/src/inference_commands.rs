@@ -126,6 +126,7 @@ pub async fn set_account_inference_key(
     api_key: Option<String>,
     priority: Option<i32>,
     enabled: Option<bool>,
+    note: Option<String>,
 ) -> Cmd<crate::state::Snapshot> {
     let key_id = validated_key_id(&key_id)?;
     let secret = api_key
@@ -161,6 +162,9 @@ pub async fn set_account_inference_key(
                 if let Some(enabled) = enabled {
                     existing.enabled = enabled;
                 }
+                if let Some(note) = &note {
+                    existing.note = note.chars().take(200).collect();
+                }
                 // A hand-edited reference is kept so the repair does not move a
                 // secret the operator put somewhere on purpose.
                 if existing.key_ref.trim().is_empty() {
@@ -182,6 +186,7 @@ pub async fn set_account_inference_key(
                     key_ref: key_ref.clone(),
                     enabled: enabled.unwrap_or(true),
                     priority: priority.unwrap_or(0),
+                    note: note.unwrap_or_default().chars().take(200).collect(),
                 });
                 key_ref
             }

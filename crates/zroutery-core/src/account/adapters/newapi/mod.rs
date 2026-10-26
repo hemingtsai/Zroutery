@@ -16,6 +16,7 @@
 //! | Endpoint | Auth | Used for |
 //! |---|---|---|
 //! | `GET  /api/status` | none | reachability, `quota_per_unit`, check-in and Turnstile flags |
+//! | `GET  /api/pricing` | none | published model prices, converted to USD per million tokens |
 //! | `GET  /api/user/self` | bearer | quota, used quota, request count, account status |
 //! | `GET  /api/log/self/stat` | bearer | consumed quota for a window, plus `rpm`/`tpm` |
 //! | `GET  /api/log/self` | bearer | paged consume logs, summed for token counts |
@@ -96,6 +97,7 @@ use wire::InstalledSession;
 ///   that dropped it would make an unauthenticated probe look correct.
 pub const UPSTREAM_ROUTES: &[(&str, &str, &str)] = &[
     ("GET", "/api/status", "none"),
+    ("GET", "/api/pricing", "none"),
     ("GET", "/api/user/self", "UserAuth"),
     (
         "POST",
@@ -178,4 +180,7 @@ mod wire;
 #[cfg(test)]
 mod tests;
 
-pub use types::{AuthenticatedSession, NewApiAuth, NewApiConfig, NewApiStatus, NewApiUsageReport};
+pub use types::{
+    AuthenticatedSession, NewApiAnnouncement, NewApiAuth, NewApiConfig, NewApiPrice, NewApiStatus,
+    NewApiUsageReport,
+};

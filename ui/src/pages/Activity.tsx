@@ -55,6 +55,43 @@ export default function Activity({
    * so "stopped following" and "there is nothing logged" never render the same.
    */
   const [logs, setLogs] = useState<string[] | null>(null);
+  const [history, setHistory] = useState<"export" | "import" | null>(null);
+  const [archive, setArchive] = useState("");
+  const [historyError, setHistoryError] = useState<string | null>(null);
+
+  const openExport = async () => {
+    setHistoryError(null);
+    try {
+      setArchive(await api.exportUsageHistory());
+      setHistory("export");
+    } catch (error) {
+      setHistoryError(String(error));
+    }
+  };
+
+  const openImport = () => {
+    setArchive("");
+    setHistoryError(null);
+    setHistory("import");
+  };
+
+  const importArchive = async () => {
+    if (!archive.trim()) return;
+    const ok = await run(() => api.importUsageHistory(archive));
+    if (ok) {
+      setHistory(null);
+      setArchive("");
+    }
+  };
+
+  const clearClient = (client_id: string, client_name: string) =>
+    setConfirm({
+      title: t("activity.clear_client"),
+      body: t("activity.clear_client_body", { name: client_name || client_id }),
+      confirmLabel: t("activity.clear_client"),
+      danger: true,
+      onConfirm: () => void run(() => api.clearClientUsage(client_id)),
+    });
 
   const loadLogs = useCallback(async () => {
     try {
@@ -143,6 +180,66 @@ export default function Activity({
           )}
         </div>
       </div>
+
+      {!idle && (
+        <Section title={t("activity.history")} hint={t("activity.history_hint")}>
+          <div className="controls">
+            <Button kind="ghost" onClick={() => void openExport()}>
+              {t("activity.export_history")}
+            </Button>
+            <Button kind="ghost" onClick={openImport}>
+              {t("activity.import_history")}
+            </Button>
+          </div>
+          {historyError && <p className="field-error">{historyError}</p>}
+          {summary.per_client.length > 0 && (
+            <div className="table-scroll">
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th scope="col">{t("activity.client")}</th>
+                    <th scope="col">{t("models.requests")}</th>
+                    <th scope="col">{t("field.input")} / {t("field.output")}</th>
+                    <th scope="col">{t("activity.spend")}</th>
+                    <th scope="col">{t("common.actions")}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {summary.per_client.map((client) => (
+                    <tr key={client.client_id}>
+                      <td>
+                        <span className="mono">{client.client_name || client.client_id}</span>
+                        <span className="muted"> · {client.client_id}</span>
+                      </td>
+                      <td className="mono">
+                        {num(client.requests)}
+                        {client.failures > 0 && (
+                          <Badge tone="danger">{t("activity.n_failed", { n: client.failures })}</Badge>
+                        )}
+                      </td>
+                      <td className="muted mono">
+                        {num(client.input_tokens)} / {num(client.output_tokens)}
+                      </td>
+                      <td className="mono">{totalsText(client.cost)}</td>
+                      <td>
+                        <Button
+                          kind="ghost"
+                          ariaLabel={t("activity.clear_client_named", {
+                            name: client.client_name || client.client_id,
+                          })}
+                          onClick={() => clearClient(client.client_id, client.client_name)}
+                        >
+                          {t("activity.clear_client")}
+                        </Button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Section>
+      )}
 
       {!idle && (
         <Section title={t("activity.health")} hint={t("activity.health_hint")}>
@@ -292,6 +389,34 @@ export default function Activity({
           { value: "log", label: t("activity.tab_log"), content: logPane },
         ]}
       />
+
+      {history && (
+        <Drawer
+          title={history === "export" ? t("activity.export_history") : t("activity.import_history")}
+          onClose={() => setHistory(null)}
+        >
+          <p className="field-hint">
+            {history === "export" ? t("activity.export_hint") : t("activity.import_hint")}
+          </p>
+          <textarea
+            className="text-input"
+            style={{ width: "100%", minHeight: 280, fontFamily: "var(--font-mono)" }}
+            value={archive}
+            readOnly={history === "export"}
+            placeholder={history === "import" ? t("activity.import_placeholder") : undefined}
+            onChange={(event) => setArchive(event.target.value)}
+          />
+          <div className="controls" style={{ marginTop: 12 }}>
+            {history === "export" ? (
+              <Button onClick={() => void api.copy(archive)}>{t("common.copy")}</Button>
+            ) : (
+              <Button onClick={() => void importArchive()} disabled={!archive.trim()}>
+                {t("activity.import_history")}
+              </Button>
+            )}
+          </div>
+        </Drawer>
+      )}
 
       {open && <RequestDrawer record={open} onClose={() => setOpenId(null)} />}
     </>

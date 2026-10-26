@@ -656,12 +656,14 @@ fn account_keys_cfg(addr: SocketAddr) -> (AppConfig, Arc<MemorySecretStore>) {
                     key_ref: "key-a1".into(),
                     priority: 0,
                     enabled: true,
+                    note: String::new(),
                 },
                 InferenceKeyConfig {
                     id: "sibling".into(),
                     key_ref: "key-a2".into(),
                     priority: 1,
                     enabled: true,
+                    note: String::new(),
                 },
             ],
             ..Default::default()
@@ -675,6 +677,7 @@ fn account_keys_cfg(addr: SocketAddr) -> (AppConfig, Arc<MemorySecretStore>) {
                 key_ref: "key-b".into(),
                 priority: 2,
                 enabled: true,
+                note: String::new(),
             }],
             ..Default::default()
         },
@@ -702,6 +705,7 @@ async fn account_wallet_failure_skips_sibling_keys_but_not_other_accounts() {
                     key_ref: format!("empty-{index}"),
                     priority: 1,
                     enabled: true,
+                    note: String::new(),
                 }),
             );
         let h = Harness::from_state(Arc::new(AppState::new(cfg, keys)), mock).await;

@@ -726,7 +726,9 @@ fn an_empty_wallet_gates_every_model_of_the_provider() {
         .plan(&r, &Resolution::Tier(ModelTier::Standard), &[])
         .unwrap();
     assert_eq!(ids(&plan), vec!["p2-elsewhere"]);
-    router.reset_provider_gate("p1");
+    router
+        .release_wallet("p1", None, None)
+        .expect("operator releases the empty-wallet latch after topping up");
     assert!(
         !router.is_provider_gated("p1"),
         "an operator can retry after topping up"

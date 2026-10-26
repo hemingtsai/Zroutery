@@ -119,11 +119,21 @@ pub fn run() {
             commands::fetch_provider_models,
             commands::refresh_balance,
             commands::refresh_balances,
+            #[cfg(feature = "newapi")]
+            commands::fetch_newapi_announcements,
+            #[cfg(feature = "newapi")]
+            commands::preview_newapi_pricing,
+            #[cfg(feature = "newapi")]
+            commands::import_newapi_pricing,
             commands::run_election,
             commands::start_proxy,
             commands::stop_proxy,
             commands::regenerate_token,
             commands::clear_stats,
+            commands::export_usage_history,
+            commands::import_usage_history,
+            commands::clear_client_usage,
+            commands::release_wallet_hold,
             commands::reset_model_health,
             commands::copy_text,
             commands::hide_window,
@@ -298,6 +308,38 @@ pub fn run() {
                                 ledger_keeper.flush_ledger();
                                 break;
                             }
+                        }
+                    }
+                });
+
+                // Wallet checks are a network call per provider/account. They run
+                // on the configured interval, and the last figure stays visible
+                // (and on disk) when an attempt fails.
+                let wallet_keeper = Arc::clone(&desktop);
+                let mut wallet_shutdown = shutdown_rx.clone();
+                tauri::async_runtime::spawn(async move {
+                    let mut last: Option<std::time::Instant> = None;
+                    loop {
+                        tokio::select! {
+                            _ = tokio::time::sleep(std::time::Duration::from_secs(30)) => {
+                                let config = wallet_keeper.core.config();
+                                let settings = config.balances.clone();
+                                drop(config);
+                                if !settings.enabled {
+                                    last = Some(std::time::Instant::now());
+                                    continue;
+                                }
+                                let interval = std::time::Duration::from_secs(settings.interval_secs.clamp(60, 86_400));
+                                if last.is_some_and(|at| at.elapsed() < interval) {
+                                    continue;
+                                }
+                                last = Some(std::time::Instant::now());
+                                let problems = wallet_keeper.refresh_all_balances().await;
+                                if !problems.is_empty() {
+                                    tracing::warn!(problems = ?problems, "automatic balance check finished with failures");
+                                }
+                            }
+                            _ = wallet_shutdown.changed() => break,
                         }
                     }
                 });

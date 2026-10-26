@@ -36,7 +36,7 @@ mod validate;
 #[cfg(test)]
 mod tests;
 
-pub use app::{AppConfig, NotificationConfig, WindowBehavior};
+pub use app::{AppConfig, BalanceRefreshConfig, NotificationConfig, WindowBehavior};
 #[cfg(feature = "ml")]
 pub use ml::MlRoutingConfig;
 pub use model::{

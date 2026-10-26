@@ -70,6 +70,7 @@ impl Desktop {
             version: env!("CARGO_PKG_VERSION").to_string(),
             exposed_ids: config.exposed_ids(),
             balances: self.balances(),
+            wallet_holds: self.core.router().wallet_holds(),
             election: self.core.router().election(),
             budgets: self.budget_status(),
             ml_available: cfg!(feature = "ml"),
@@ -80,6 +81,7 @@ impl Desktop {
             // same reason the other two are — a command that was never registered
             // and a command that failed are the same event to the webview.
             api_checkin_available: cfg!(all(feature = "account-maint", feature = "newapi")),
+            newapi_available: cfg!(feature = "newapi"),
             // The capture needs the browser registry *and* the account
             // credential path; `account-maint` does not imply the desktop
             // `account` feature.

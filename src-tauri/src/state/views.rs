@@ -63,6 +63,7 @@ pub struct Snapshot {
     pub version: String,
     /// provider id -> last balance check, for the providers that were asked.
     pub balances: BTreeMap<String, BalanceStatus>,
+    pub wallet_holds: Vec<zroutery_core::router::WalletHold>,
     /// The last election, when one has been held this run.
     pub election: Option<Election>,
     /// Every budget with what has been spent against it, for the dashboard.
@@ -100,6 +101,13 @@ pub struct Snapshot {
     /// can hold a browser but no adapter, and reading one flag for the other
     /// would offer the HTTP check-in to a build whose command does not exist.
     pub api_checkin_available: bool,
+    /// Whether this build contains the NewAPI panel adapter.
+    ///
+    /// The panel announcements and pricing commands are registered only under
+    /// `newapi`; the provider drawer asks this flag before offering them, so a
+    /// build without the adapter does not call a command that was never
+    /// registered.
+    pub newapi_available: bool,
     /// Whether this build can capture a NewAPI panel token in a browser.
     ///
     /// Needs `account-maint` (the browser registry and the views) *and*

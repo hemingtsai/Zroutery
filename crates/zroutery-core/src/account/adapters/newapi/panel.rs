@@ -24,6 +24,82 @@ impl NewApiAdapter {
         decode(attempt.data, "/api/status")
     }
 
+    /// Model prices as the panel publishes them, converted to USD per million
+    /// tokens for the panel's default group.
+    ///
+    /// `GET /api/pricing` is public; it needs no credential. The formula is the
+    /// panel's own: `ratio * group_ratio * 1_000_000 / quota_per_unit`, with the
+    /// completion side multiplied by `completion_ratio`.
+    pub async fn probe_pricing(&self) -> Result<Vec<NewApiPrice>> {
+        let status = self.fetch_status().await?;
+        let unit = self.effective_quota_per_unit(&status);
+        let attempt = self
+            .attempt(reqwest::Method::GET, "/api/pricing", &[], None, None)
+            .await
+            .map_err(NewApiError::into_core)?;
+        let data = attempt.data;
+        let number = |value: Option<&Value>| -> Option<f64> {
+            let value = value?;
+            value
+                .as_f64()
+                .or_else(|| value.as_str().and_then(|s| s.parse::<f64>().ok()))
+                .filter(|n| n.is_finite())
+        };
+        let groups = data.get("group_ratio").and_then(Value::as_object);
+        let (group, group_ratio) = groups
+            .and_then(|map| {
+                map.get("default")
+                    .or_else(|| map.values().next())
+                    .and_then(|value| value.as_f64())
+                    .map(|ratio| ("default".to_string(), ratio))
+            })
+            .unwrap_or_else(|| ("default".into(), 1.0));
+        let rows = data
+            .as_array()
+            .or_else(|| data.get("data").and_then(Value::as_array))
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        let mut prices = Vec::new();
+        for row in rows {
+            let Some(model) = row
+                .get("model_name")
+                .and_then(Value::as_str)
+                .filter(|name| !name.trim().is_empty())
+            else {
+                continue;
+            };
+            let quota_type = number(row.get("quota_type")).unwrap_or(0.0);
+            let (input, output, per_request) = if quota_type == 1.0 {
+                (
+                    None,
+                    None,
+                    number(row.get("model_price")).map(|price| price * group_ratio),
+                )
+            } else {
+                let input = number(row.get("model_ratio"))
+                    .map(|ratio| ratio * group_ratio * 1_000_000.0 / unit)
+                    .filter(|value| value.is_finite() && *value >= 0.0);
+                let output = input.and_then(|input| {
+                    number(row.get("completion_ratio"))
+                        .map(|ratio| input * ratio)
+                        .filter(|value| value.is_finite() && *value >= 0.0)
+                });
+                (input, output, None)
+            };
+            if input.is_none() && per_request.is_none() {
+                continue;
+            }
+            prices.push(NewApiPrice {
+                model: model.to_string(),
+                group: group.clone(),
+                input_per_mtok: input,
+                output_per_mtok: output,
+                per_request,
+            });
+        }
+        Ok(prices)
+    }
+
     /// `GET /api/status`, memoised for [`STATUS_CACHE_TTL`].
     pub(super) async fn status_cached(&self) -> Result<NewApiStatus> {
         if let Some((at, status)) = self

@@ -196,14 +196,10 @@ pub(crate) async fn launch_attempt(
         .map(str::trim)
         .filter(|p| !p.is_empty())
         .expect("is_browser_checkin_configured requires a non-empty path");
-    let base = desktop
-        .core
-        .config()
-        .providers
-        .iter()
-        .find(|p| p.id == provider_id)
-        .map(|p| p.base_url.clone())
-        .ok_or_else(|| format!("no provider {provider_id}"))?;
+    // Resolved before the browser opens, so a malformed panel address is a
+    // configuration error returned to the caller rather than a window that
+    // appears and cannot be used.
+    let url = checkin_url(desktop, provider_id, account_id, path)?;
 
     desktop
         .checkin
@@ -214,16 +210,6 @@ pub(crate) async fn launch_attempt(
     let executable = cdp::find_browser(&maintenance.browser_executable)
         .ok_or_else(|| cdp::BrowserError::NotFound.to_string())?;
     let profile_dir = desktop.checkin.profile_dir(&key);
-    let url = format!(
-        "{}{}",
-        base.trim_end_matches('/'),
-        path.trim_start_matches('/')
-    );
-    let url = if url.starts_with("http") {
-        url
-    } else {
-        format!("http://{url}")
-    };
 
     let mut browser = cdp::launch(&executable, &profile_dir, &url)
         .await
@@ -334,6 +320,44 @@ pub async fn resume_checkin(
             release(desktop.checkin.clone(), &key);
             return Err("the page this check-in was using is gone".to_string());
         }
+    };
+    let browser = {
+        let mut browser = browser;
+        let target_path =
+            desktop
+                .maintenance_for(&provider_id, &account_id)
+                .and_then(|maintenance| {
+                    maintenance
+                        .checkin_path
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|path| !path.is_empty())
+                        .map(str::to_string)
+                });
+        if let Some(path) = target_path {
+            if let Ok(target) = checkin_url(&desktop, &provider_id, &account_id, &path) {
+                let current = browser
+                    .page_evidence(&binding)
+                    .await
+                    .ok()
+                    .map(|evidence| evidence.url);
+                if resume_needs_navigation(current.as_deref(), &target) {
+                    if let Err(error) = browser.navigate(&binding, &target).await {
+                        tracing::warn!(
+                            %error,
+                            provider = %provider_id,
+                            account = %account_id,
+                            "the check-in page could not be reloaded after sign-in"
+                        );
+                    } else {
+                        // Let the SPA route and its session check settle before
+                        // the driver starts reading and clicking.
+                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                    }
+                }
+            }
+        }
+        browser
     };
     desktop
         .checkin
@@ -466,6 +490,90 @@ async fn rebind(mut browser: BrowserSession) -> Option<(BrowserSession, cdp::Pag
     Some((browser, binding))
 }
 
+/// The absolute page a browser check-in opens.
+///
+/// The relay endpoint usually ends in `/v1`; a panel path such as
+/// `/console/personal` belongs to the panel origin, not under `/v1`. The panel
+/// override is preferred when the dashboard lives on another host (AgentRouter
+/// signs in on its own site while relaying elsewhere).
+fn checkin_url(
+    desktop: &Desktop,
+    provider_id: &str,
+    account_id: &str,
+    path: &str,
+) -> Result<String, String> {
+    let config = desktop.core.config();
+    let provider = config
+        .provider(provider_id)
+        .ok_or_else(|| format!("no provider {provider_id}"))?;
+    let account = provider
+        .accounts
+        .iter()
+        .find(|account| account.account_id == account_id)
+        .ok_or_else(|| format!("no account {account_id} on provider {provider_id}"))?;
+    let panel_base = account
+        .maintenance
+        .panel_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(&provider.base_url);
+    let origin = url::Url::parse(panel_base)
+        .ok()
+        .map(|value| value.origin().ascii_serialization())
+        .filter(|value| value != "null")
+        .unwrap_or_else(|| panel_base.trim_end_matches('/').to_string());
+    Ok(format!("{}/{}", origin, path.trim_start_matches('/')))
+}
+
+/// Whether a page is the panel's sign-in screen rather than a check-in page.
+///
+/// Deliberately narrow: it looks at the path, not the body, because a signed-in
+/// dashboard may contain the word "login" in a help link. The cost of a false
+/// negative is a control that is not found (which the driver reports); the cost
+/// of a false positive is a pause that asks the user to sign in again.
+fn is_login_page(url: &str) -> bool {
+    let Ok(url) = url::Url::parse(url) else {
+        return false;
+    };
+    let path = url.path().trim_end_matches('/').to_ascii_lowercase();
+    let fragment = url
+        .fragment()
+        .unwrap_or_default()
+        .trim_matches('/')
+        .to_ascii_lowercase();
+    let login = |value: &str| {
+        matches!(
+            value,
+            "login" | "sign-in" | "signin" | "auth/login" | "auth/sign-in" | "auth/signin"
+        )
+    };
+    login(path.trim_start_matches('/')) || login(&fragment)
+}
+
+/// Whether resuming should reload the configured check-in page.
+///
+/// A WAF challenge is solved on the check-in page itself, so navigating away
+/// would throw away the clearance the user just earned. A sign-in page is the
+/// one case where the document must be replaced: the panel's own post-login
+/// route is not the check-in page, and the browser session survives navigation.
+fn resume_needs_navigation(current: Option<&str>, target: &str) -> bool {
+    let Some(current) = current else {
+        return false;
+    };
+    if is_login_page(current) {
+        return true;
+    }
+    match (url::Url::parse(current), url::Url::parse(target)) {
+        (Ok(current), Ok(target)) => {
+            current.origin() != target.origin()
+                || current.path() != target.path()
+                || current.fragment() != target.fragment()
+        }
+        _ => false,
+    }
+}
+
 /// Release a session key whose attempt could not start.
 fn release(runtime: crate::checkin::CheckinRuntime, key: &SessionKey) {
     let key = key.clone();
@@ -526,7 +634,23 @@ async fn drive(
         match browser.page_evidence(&binding).await {
             Ok(probe) => match waf::classify(&probe) {
                 waf::Verdict::Challenge => paused = true,
-                waf::Verdict::Clear => clear = true,
+                waf::Verdict::Clear => {
+                    // A sign-in page is not a settled check-in page even though
+                    // its application shell loaded cleanly. Keep the browser and
+                    // wait for the person to authenticate; resuming reloads the
+                    // configured check-in path.
+                    if is_login_page(&probe.url) {
+                        tracing::debug!(
+                            provider = %key.provider_id,
+                            account = %key.account_id,
+                            url = %probe.url,
+                            "check-in needs a panel sign-in; waiting for the user"
+                        );
+                        paused = true;
+                    } else {
+                        clear = true;
+                    }
+                }
                 waf::Verdict::Indeterminate => {
                     tracing::debug!(
                         provider = %key.provider_id,
@@ -1159,6 +1283,43 @@ mod tests {
             browser_disposition(false),
             BrowserDisposition::Close,
             "a finished attempt has nobody looking at its window"
+        );
+    }
+
+    #[test]
+    fn a_sign_in_route_is_recognised_and_a_dashboard_help_link_is_not() {
+        for url in [
+            "https://relay.example/login",
+            "https://relay.example/login?expired=1",
+            "https://relay.example/sign-in/",
+            "https://relay.example/#/signin",
+        ] {
+            assert!(is_login_page(url), "{url} is a sign-in page");
+        }
+        for url in [
+            "https://relay.example/console/personal",
+            "https://relay.example/help/login",
+            "https://relay.example/console?tab=login",
+        ] {
+            assert!(!is_login_page(url), "{url} is not a sign-in page");
+        }
+    }
+
+    #[test]
+    fn resuming_a_waf_challenge_does_not_reload_away_the_clearance() {
+        let checkin = "https://relay.example/console/personal";
+        assert!(!resume_needs_navigation(Some(checkin), checkin));
+        assert!(resume_needs_navigation(
+            Some("https://relay.example/login"),
+            checkin
+        ));
+        assert!(resume_needs_navigation(
+            Some("https://relay.example/console"),
+            checkin
+        ));
+        assert!(
+            !resume_needs_navigation(None, checkin),
+            "an unreadable page is left alone rather than reloaded blindly"
         );
     }
 }

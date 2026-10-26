@@ -751,12 +751,14 @@ fn explicit_credentials_order_is_stable_and_does_not_change_models() {
                 key_ref: "inference-z".into(),
                 enabled: true,
                 priority: 0,
+                note: String::new(),
             },
             InferenceKeyConfig {
                 id: "a".into(),
                 key_ref: "inference-a".into(),
                 enabled: true,
                 priority: 0,
+                note: String::new(),
             },
         ],
         ..Default::default()

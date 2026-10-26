@@ -105,6 +105,7 @@ impl Router {
     /// Drop provider gates only when the provider itself is removed.
     pub fn retain_providers(&self, known: impl Fn(&str) -> bool) {
         crate::sync::lock(&self.provider_gates).retain(|id, _| known(id));
+        self.retain_wallet_providers(&known);
     }
 
     /// Operator-requested retry after replenishing funds or resolving a limit.
@@ -135,13 +136,7 @@ impl Router {
         let cooldown = routing.circuit_breaker.timeout_secs.max(1);
         match failure.class {
             FailureClass::BalanceExhausted => {
-                let key = (candidate.provider.id.clone(), credential.account_id.clone());
-                let until = Instant::now()
-                    + Duration::from_secs(cooldown.max(BALANCE_GATE_FLOOR.as_secs()));
-                crate::sync::lock(&self.account_gates)
-                    .entry(key)
-                    .and_modify(|old| *old = (*old).max(until))
-                    .or_insert(until);
+                self.hold_empty_wallet(&candidate.provider.id, Some(&credential.account_id), None);
             }
             FailureClass::Authentication | FailureClass::RateLimit => {
                 let key = (
@@ -179,12 +174,18 @@ impl Router {
     }
 
     pub fn is_account_gated(&self, provider: &str, account: &str) -> bool {
+        if self.wallet_held(provider, Some(account), None) {
+            return true;
+        }
         let mut gates = crate::sync::lock(&self.account_gates);
         gates.retain(|_, until| *until > Instant::now());
         gates.contains_key(&(provider.to_string(), account.to_string()))
     }
 
     pub fn is_key_gated(&self, provider: &str, account: &str, key: &str) -> bool {
+        if self.wallet_held(provider, Some(account), Some(key)) {
+            return true;
+        }
         let mut gates = crate::sync::lock(&self.key_gates);
         gates.retain(|_, until| *until > Instant::now());
         gates.contains_key(&(provider.to_string(), account.to_string(), key.to_string()))
@@ -240,6 +241,9 @@ impl Router {
     /// half-open probe — so eligibility filtering can ask it freely. An
     /// elapsed window is dropped as it is read.
     pub fn is_provider_gated(&self, provider_id: &str) -> bool {
+        if self.wallet_held(provider_id, None, None) {
+            return true;
+        }
         let now = Instant::now();
         let mut gates = crate::sync::lock(&self.provider_gates);
         match gates.get(provider_id) {
@@ -284,10 +288,10 @@ impl Router {
                 }
                 routing.circuit_breaker.timeout_secs.max(1)
             }
-            FailureClass::BalanceExhausted => routing
-                .circuit_breaker
-                .timeout_secs
-                .max(BALANCE_GATE_FLOOR.as_secs()),
+            FailureClass::BalanceExhausted => {
+                self.hold_empty_wallet(provider_id, None, None);
+                return;
+            }
             FailureClass::Capability
                 if failure.status == Some(403)
                     && crate::sync::lock(&self.group_limited).contains(provider_id) =>

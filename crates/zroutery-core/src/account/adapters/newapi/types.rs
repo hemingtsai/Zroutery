@@ -1,6 +1,6 @@
 //! What a caller configures and what it gets back: the credential shape, the panel status, and the usage report.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use super::helpers::*;
 use super::DEFAULT_QUOTA_PER_UNIT;
@@ -150,6 +150,36 @@ pub struct NewApiStatus {
     pub self_use_mode_enabled: Option<bool>,
     pub display_in_currency: Option<bool>,
     pub usd_exchange_rate: Option<f64>,
+    /// Operator announcements shown on the panel's landing page.
+    pub announcements_enabled: Option<bool>,
+    pub announcements: Vec<NewApiAnnouncement>,
+}
+
+/// One operator announcement from `/api/status`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct NewApiAnnouncement {
+    pub id: Option<i64>,
+    pub title: Option<String>,
+    pub content: Option<String>,
+    #[serde(alias = "publishDate")]
+    pub publish_date: Option<serde_json::Value>,
+    /// NewAPI uses this field for both numeric kinds and the strings
+    /// `default`/`ongoing`, so it is kept opaque rather than guessed at.
+    #[serde(rename = "type")]
+    pub kind: Option<serde_json::Value>,
+}
+
+/// One model price as the panel publishes it, already converted to USD per
+/// million tokens. `None` means the panel did not give enough information.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NewApiPrice {
+    pub model: String,
+    pub group: String,
+    pub input_per_mtok: Option<f64>,
+    pub output_per_mtok: Option<f64>,
+    /// Fixed price per request when the panel prices the model per call.
+    pub per_request: Option<f64>,
 }
 
 impl NewApiStatus {

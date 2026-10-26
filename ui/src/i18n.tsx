@@ -29,6 +29,8 @@ export const en = {
   "common.remove": "Remove",
   "common.delete": "Delete",
   "common.clear": "Clear",
+  "common.actions": "Actions",
+  "common.copy": "Copy",
   "common.enabled": "Enabled",
   "common.yes": "yes",
   "common.no": "no",
@@ -179,6 +181,8 @@ export const en = {
   "accounts.inference_priority": "priority {n}",
   "accounts.inference_priority_label": "Priority",
   "accounts.inference_priority_hint": "Lower is tried first.",
+  "accounts.inference_note": "Note",
+  "accounts.inference_note_placeholder": "e.g. main account",
   "accounts.inference_replace": "Replace secret",
   "accounts.inference_key_label": "New secret",
   "accounts.inference_key_hint":
@@ -374,6 +378,9 @@ export const en = {
   "field.base_url_hint": "Without the endpoint path",
   "providers.add": "Add provider",
   "providers.duplicate": "A provider called “{id}” already exists.",
+  "providers.name_optional": "Optional when a base URL is given; otherwise taken from its host.",
+  "providers.name_placeholder": "Leave empty to use the host",
+  "providers.name_required": "Enter a name or a base URL to derive one from.",
   "cc.source_hint":
     "Read from {path}. Keys are stored in the OS credential store, never the config file.",
   "cc.reload": "Reload",
@@ -577,6 +584,22 @@ export const en = {
    * the per-account outcome.
    */
   "providers.refresh_all": "Refresh every balance",
+  "providers.wallet_holds": "Empty wallets blocked",
+  "providers.wallet_holds_hint":
+    "A provider answered that its wallet is empty, so the router stopped sending to it. Refilling does not release the block; press Release after the account is usable again.",
+  "providers.wallet_empty": "wallet empty",
+  "providers.wallet_held_since": "held since {time}",
+  "providers.wallet_release": "Release",
+  "providers.panel_info": "Panel information",
+  "providers.panel_info_hint":
+    "Announcements and model prices from the NewAPI panel at this provider's base URL. Both endpoints are public and read only when you ask.",
+  "providers.panel_read": "Read panel",
+  "providers.panel_read_hint":
+    "Read the panel's announcements and published prices. Nothing is changed until you apply the prices.",
+  "providers.panel_announcement": "Announcement",
+  "providers.panel_prices": "{matched} of {total} published prices match this provider's models (group {group}).",
+  "providers.panel_apply_prices": "Apply prices to models",
+  "providers.panel_prices_imported": "Model prices were imported from the panel.",
   /*
    * The Accounts page: the runtime face of every declared account. The split
    * from the provider drawer is declaration (there) versus observation (here),
@@ -948,6 +971,21 @@ export const en = {
   "activity.cache_write": "Cache write",
   "activity.cost": "Cost",
   "activity.unpriced": "unpriced",
+  "activity.history": "Durable usage history",
+  "activity.history_hint":
+    "Every completed request is stored per client, survives restarts, and can be exported or cleared one client at a time. Prompts, completions and error bodies are never stored.",
+  "activity.export_history": "Export history",
+  "activity.import_history": "Import history",
+  "activity.export_hint":
+    "A portable JSON archive of accounting metadata. Copies are ignored on import, and imported rows never change budgets or routing health.",
+  "activity.import_hint":
+    "Paste an archive produced by Export history. Duplicate ids are skipped; the file is rejected as a whole when any row is invalid.",
+  "activity.import_placeholder": "Paste the JSON archive here",
+  "activity.client": "Client",
+  "activity.clear_client": "Clear client",
+  "activity.clear_client_body":
+    "Delete every stored usage record for {name}? Other clients and the live counters stay untouched.",
+  "activity.clear_client_named": "Clear usage history for {name}",
 
   // ------------------------------------------------------------ settings
   "settings.lede": "Application behaviour, the gateway it serves, and what it is allowed to spend.",
@@ -987,6 +1025,13 @@ export const en = {
   "settings.budgets": "Budgets",
   "settings.budgets_hint":
     "A limit stops spending once reached. The request that crosses it completes; the next is rejected.",
+  "settings.balances": "Balances",
+  "settings.balances_hint":
+    "Wallet checks cost one request per provider or account. The last successful figure is kept when a check fails.",
+  "settings.balance_auto": "Check balances automatically",
+  "settings.balance_auto_hint": "Runs in the background while the app is open.",
+  "settings.balance_interval": "Interval (seconds)",
+  "settings.balance_interval_hint": "Between 60 and 86400 seconds.",
   "budget.covers": "Covers",
   "budget.window": "Window",
   "budget.limit": "Limit",
@@ -1264,6 +1309,8 @@ export const zh: Dict = {
   "common.remove": "移除",
   "common.delete": "删除",
   "common.clear": "清除",
+  "common.actions": "操作",
+  "common.copy": "复制",
   "common.enabled": "启用",
   "common.yes": "是",
   "common.no": "否",
@@ -1395,6 +1442,8 @@ export const zh: Dict = {
   "accounts.inference_priority": "优先级 {n}",
   "accounts.inference_priority_label": "优先级",
   "accounts.inference_priority_hint": "数字越小越先尝试。",
+  "accounts.inference_note": "备注",
+  "accounts.inference_note_placeholder": "例如：主账户",
   "accounts.inference_replace": "替换密钥",
   "accounts.inference_key_label": "新密钥",
   "accounts.inference_key_hint": "保存在系统凭据库中;面板只会知道它是否存在。",
@@ -1586,6 +1635,9 @@ export const zh: Dict = {
   "field.base_url_hint": "不含端点路径",
   "providers.add": "添加提供商",
   "providers.duplicate": "名为“{id}”的提供商已存在。",
+  "providers.name_optional": "填写了地址时可留空，将使用域名作为名称。",
+  "providers.name_placeholder": "留空则使用域名",
+  "providers.name_required": "请填写名称，或填写地址以自动取名。",
   "cc.source_hint": "读取自 {path}。密钥存入系统凭据管理器，绝不写入配置文件。",
   "cc.reload": "重新读取",
   "cc.import": "导入",
@@ -1760,6 +1812,21 @@ export const zh: Dict = {
   // 探测不是签到。它只询问平台账户处于什么状态并报告结果，不会打开浏览器，
   // 也不会领取任何东西。
   "providers.refresh_all": "刷新全部余额",
+  "providers.wallet_holds": "已拦截空余额",
+  "providers.wallet_holds_hint":
+    "上游明确表示余额为空，路由器已停止向它发请求。充值不会自动解除拦截；账户恢复可用后请按“解除”。",
+  "providers.wallet_empty": "余额为空",
+  "providers.wallet_held_since": "自 {time} 起拦截",
+  "providers.wallet_release": "解除",
+  "providers.panel_info": "面板信息",
+  "providers.panel_info_hint":
+    "读取该提供商地址对应的 NewAPI 面板公告与模型价格。两个接口都是公开的，只有按下按钮时才会请求。",
+  "providers.panel_read": "读取面板",
+  "providers.panel_read_hint": "读取面板公告与公开价格。在你按下应用价格之前不会修改任何配置。",
+  "providers.panel_announcement": "公告",
+  "providers.panel_prices": "面板共发布 {total} 条价格，其中 {matched} 条匹配本提供商的模型（分组 {group}）。",
+  "providers.panel_apply_prices": "将价格应用到模型",
+  "providers.panel_prices_imported": "已从面板导入模型价格。",
   "nav.accounts": "账户",
   "nav.takeover": "接管",
   "accounts.empty_build": "此构建未包含账户子系统，声明的账户无法探测或签到。",
@@ -2073,6 +2140,20 @@ export const zh: Dict = {
   "activity.cache_write": "缓存写",
   "activity.cost": "成本",
   "activity.unpriced": "未定价",
+  "activity.history": "持久用量历史",
+  "activity.history_hint":
+    "每次完成的请求都会按客户端写入磁盘，重启后仍在，并可导出或单独清除某个客户端。提示词、回复正文和错误正文都不会保存。",
+  "activity.export_history": "导出历史",
+  "activity.import_history": "导入历史",
+  "activity.export_hint":
+    "可移植的 JSON 账目归档。导入时重复项会被跳过，导入的记录不会改变预算或路由健康状态。",
+  "activity.import_hint":
+    "粘贴由“导出历史”生成的归档。重复 id 会跳过；只要有一行无效，整份文件都会被拒绝。",
+  "activity.import_placeholder": "在此粘贴 JSON 归档",
+  "activity.client": "客户端",
+  "activity.clear_client": "清除此客户端",
+  "activity.clear_client_body": "删除 {name} 的全部已保存用量记录？其他客户端和实时计数不受影响。",
+  "activity.clear_client_named": "清除 {name} 的用量历史",
 
   // ------------------------------------------------------------ settings
   "settings.lede": "应用行为、对外的网关，以及它被允许花多少。",
@@ -2111,6 +2192,12 @@ export const zh: Dict = {
   "settings.origin_notice": "来源格式形如 https://example.com，不含路径。",
   "settings.budgets": "预算",
   "settings.budgets_hint": "限额达到后停止消费。越线的那次请求会完成，下一次被拒绝。",
+  "settings.balances": "余额",
+  "settings.balances_hint": "每次余额检查会为每个提供商或账户发出一次请求；检查失败时保留上一次成功读取的数字。",
+  "settings.balance_auto": "自动检查余额",
+  "settings.balance_auto_hint": "应用运行时在后台执行。",
+  "settings.balance_interval": "间隔（秒）",
+  "settings.balance_interval_hint": "范围 60 到 86400 秒。",
   "budget.covers": "覆盖",
   "budget.window": "周期",
   "budget.limit": "限额",

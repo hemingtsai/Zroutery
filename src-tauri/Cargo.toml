@@ -97,6 +97,9 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
 uuid = { workspace = true }
+# Parsing panel addresses for browser check-in: the relay endpoint carries a
+# `/v1` path, while the panel's own paths are relative to its origin.
+url = "2"
 
 # Driving the user's own Chromium browser over the DevTools protocol. TLS is
 # deliberately off: the debugging endpoint is on loopback, so the features that

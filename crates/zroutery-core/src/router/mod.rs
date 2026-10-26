@@ -66,6 +66,10 @@ pub struct Router {
     provider_gates: Mutex<HashMap<String, std::time::Instant>>,
     account_gates: Mutex<HashMap<(String, String), std::time::Instant>>,
     key_gates: Mutex<HashMap<(String, String, String), std::time::Instant>>,
+    wallet_holds: Mutex<std::collections::BTreeMap<String, WalletHold>>,
+    /// When the hold map was last reconciled with the shared database.
+    wallet_synced: Mutex<Option<std::time::Instant>>,
+    runtime_store: Mutex<Option<std::sync::Arc<crate::runtime_store::RuntimeStore>>>,
 }
 
 impl Default for Router {
@@ -83,6 +87,7 @@ mod plan;
 mod reporting;
 mod selection;
 mod tiers;
+mod wallets;
 
 #[cfg(test)]
 mod tests;
@@ -91,3 +96,4 @@ pub use candidate::{Candidate, FailureDisposition, InferenceCredential, ModelHea
 pub use tiers::{
     tier_escalation_change, tiers_fully_cooling, TierAnnouncement, TierEscalationChange,
 };
+pub use wallets::WalletHold;

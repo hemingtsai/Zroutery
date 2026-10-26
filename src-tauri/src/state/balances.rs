@@ -131,6 +131,7 @@ impl Desktop {
             None => self.panel_balance(provider).await,
         };
 
+        let previous = lock(&self.balances).get(provider_id).cloned();
         let status = match outcome {
             Ok(balance) => BalanceStatus {
                 checked_at: Utc::now(),
@@ -139,10 +140,20 @@ impl Desktop {
             },
             Err(e) => BalanceStatus {
                 checked_at: Utc::now(),
-                balance: None,
+                // A failed check does not erase the last figure the provider
+                // actually reported. The timestamp says when it was asked, and
+                // `error` says this attempt failed.
+                balance: previous.and_then(|status| status.balance),
                 error: Some(e.to_string()),
             },
         };
+        if let Some(runtime) = &self.runtime {
+            if let Ok(json) = serde_json::to_string(&status) {
+                if let Err(e) = runtime.save_balance(provider_id, &json) {
+                    tracing::warn!(%e, provider_id, "balance result could not be persisted");
+                }
+            }
+        }
         let failed = status.error.clone();
         lock(&self.balances).insert(provider_id.to_string(), status);
         match failed {
@@ -160,9 +171,9 @@ impl Desktop {
     /// credential an account carries, not the relay key the provider carries.
     ///
     /// So the figure is the sum of what the provider's accounts report, and
-    /// getting it means asking the panel once per account. That is a request
-    /// the user asked for by pressing the button, not a poll: nothing here
-    /// runs on a timer.
+    /// getting it means asking the panel once per account. That happens when
+    /// the user asks for it, or when the configured balance interval falls due;
+    /// a failed check keeps the last figure rather than erasing it.
     ///
     /// Gated on `any(account, newapi)` because the reconciler lives in core
     /// behind core's `account` feature, which `newapi` implies — so a build

@@ -22,6 +22,38 @@ impl Desktop {
         // Spend is carried over from previous runs, because a budget that starts from
         // zero on every launch protects nothing.
         core.set_ledger(store::load_ledger(&config_dir));
+        // The 8788 standby keeps its own configuration copy so it can bind a
+        // different port, but it must share this process's latches or a wallet
+        // emptied on one port would reopen on the other. The supervisor points
+        // every headless instance at this one database.
+        let runtime_path = std::env::var_os("ZROUTERY_RUNTIME_DB")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| config_dir.join("runtime.sqlite3"));
+        let runtime = zroutery_core::runtime_store::RuntimeStore::open(&runtime_path).map(Arc::new);
+        let mut startup_warning = None;
+        let mut balances = BTreeMap::new();
+        let runtime = match runtime {
+            Ok(runtime) => {
+                if let Err(error) = core.stats().attach_store(Arc::clone(&runtime)) {
+                    startup_warning = Some(format!("usage history could not be restored: {error}"));
+                }
+                if let Err(error) = core.router().attach_runtime_store(Arc::clone(&runtime)) {
+                    startup_warning = Some(format!("wallet holds could not be restored: {error}"));
+                }
+                if let Ok(rows) = runtime.balances() {
+                    for (scope, json) in rows {
+                        if let Ok(status) = serde_json::from_str::<BalanceStatus>(&json) {
+                            balances.insert(scope, status);
+                        }
+                    }
+                }
+                Some(runtime)
+            }
+            Err(error) => {
+                startup_warning = Some(format!("runtime storage could not be opened: {error}"));
+                None
+            }
+        };
         let window_rules = WindowRules {
             keep_in_tray: core.config().window.keep_in_tray,
         };
@@ -39,8 +71,9 @@ impl Desktop {
             server: AsyncMutex::new(None),
             migration: AsyncMutex::new(()),
             prober: Box::new(TcpListenerProber),
-            warning: Mutex::new(None),
-            balances: Mutex::new(BTreeMap::new()),
+            warning: Mutex::new(startup_warning),
+            balances: Mutex::new(balances),
+            runtime,
             window_rules: Mutex::new(window_rules),
             #[cfg(feature = "account-maint")]
             checkin,

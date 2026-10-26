@@ -30,6 +30,9 @@ impl Router {
             provider_gates: Mutex::new(HashMap::new()),
             account_gates: Mutex::new(HashMap::new()),
             key_gates: Mutex::new(HashMap::new()),
+            wallet_holds: Mutex::new(std::collections::BTreeMap::new()),
+            wallet_synced: Mutex::new(None),
+            runtime_store: Mutex::new(None),
         }
     }
 

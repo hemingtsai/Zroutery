@@ -70,6 +70,33 @@ pub struct NotificationConfig {
     pub notify_on_tier_escalation: bool,
 }
 
+/// Automatic balance checks. The panel path costs one request per account, so
+/// the interval is deliberately coarse and can be switched off.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BalanceRefreshConfig {
+    /// Check every provider that publishes a balance, on a timer.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Seconds between sweeps. Clamped by the desktop loop.
+    #[serde(default = "BalanceRefreshConfig::default_interval")]
+    pub interval_secs: u64,
+}
+
+impl BalanceRefreshConfig {
+    fn default_interval() -> u64 {
+        900
+    }
+}
+
+impl Default for BalanceRefreshConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            interval_secs: Self::default_interval(),
+        }
+    }
+}
+
 /// Root persisted document.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct AppConfig {
@@ -92,6 +119,9 @@ pub struct AppConfig {
     /// Vision fallback for non-vision models.
     #[serde(default)]
     pub vision: VisionConfig,
+    /// Automatic wallet checks for providers that publish a balance.
+    #[serde(default)]
+    pub balances: BalanceRefreshConfig,
     /// Shadow decision evaluation. Only present in `ml` builds; the default
     /// (off) keeps request handling byte-identical to a build without it.
     #[cfg(feature = "ml")]

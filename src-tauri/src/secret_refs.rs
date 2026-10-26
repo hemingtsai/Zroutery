@@ -52,6 +52,7 @@ mod tests {
                 key_ref: (*key_ref).into(),
                 enabled: true,
                 priority: 0,
+                note: String::new(),
             })
             .collect();
         provider.accounts.push(account);

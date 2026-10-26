@@ -45,9 +45,12 @@ pub struct Desktop {
     pub(super) prober: Box<dyn ListenerProber + Send + Sync>,
     /// Startup problem worth surfacing once in the UI.
     pub(super) warning: Mutex<Option<String>>,
-    /// Last answer from each provider's balance endpoint. Never fetched on a
-    /// timer: it costs a request and some vendors rate limit it.
+    /// Last answer from each provider's balance endpoint. Checks run on the
+    /// configured interval and are persisted beside usage history.
     pub(super) balances: Mutex<BTreeMap<String, BalanceStatus>>,
+    /// Durable runtime data shared with the headless instance: usage history,
+    /// wallet latches and the last balance seen for each provider.
+    pub(super) runtime: Option<Arc<zroutery_core::runtime_store::RuntimeStore>>,
     /// The window layer's live view of the lifecycle settings: the close
     /// handler reads this synchronously, `apply_config` keeps it current.
     pub(crate) window_rules: Mutex<WindowRules>,

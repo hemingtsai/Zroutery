@@ -1,7 +1,5 @@
-//! In-memory request log and token accounting for the GUI.
-//!
-//! Nothing is written to disk: the log is a bounded ring buffer, so prompts and
-//! completions never outlive the process.
+//! Request accounting with a bounded recent view and optional durable history.
+//! Only accounting metadata is persisted; no prompt or completion is recorded.
 //!
 //! All mutable state lives behind a single `Mutex`.  For the current
 //! desktop-proxy use case (one user, moderate request rate) this is
@@ -10,7 +8,7 @@
 //! moved to a lock-free structure.
 
 use std::collections::{BTreeMap, VecDeque};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -351,6 +349,8 @@ struct Inner {
     input_tokens: u64,
     output_tokens: u64,
     cost: CostTotals,
+    store: Option<Arc<crate::runtime_store::RuntimeStore>>,
+    pending: Vec<RequestRecord>,
 }
 
 impl Stats {
@@ -369,6 +369,8 @@ impl Stats {
                 input_tokens: 0,
                 output_tokens: 0,
                 cost: CostTotals::default(),
+                store: None,
+                pending: Vec::new(),
             }),
             observed_clients: Mutex::new(BTreeMap::new()),
         }
@@ -414,6 +416,14 @@ impl Stats {
 
     pub fn record(&self, record: RequestRecord) {
         let mut inner = crate::sync::lock(&self.inner);
+        if inner.store.is_some() {
+            inner.pending.push(record.clone());
+        }
+        Self::accumulate(&mut inner, record);
+    }
+
+    fn accumulate(inner: &mut Inner, record: RequestRecord) {
+        inner.since = inner.since.min(record.at);
         inner.requests += 1;
         if !record.ok {
             inner.failures += 1;
@@ -517,8 +527,103 @@ impl Stats {
         }
     }
 
-    pub fn clear(&self) {
+    /// Attach before serving and restore totals beyond the bounded recent view.
+    pub fn attach_store(
+        &self,
+        store: Arc<crate::runtime_store::RuntimeStore>,
+    ) -> Result<(), String> {
+        let records = store.usage()?;
         let mut inner = crate::sync::lock(&self.inner);
+        if inner.requests != 0 {
+            return Err("usage storage must be attached before serving".into());
+        }
+        for record in records {
+            Self::accumulate(&mut inner, record);
+        }
+        inner.store = Some(store);
+        Ok(())
+    }
+
+    fn flush_inner(inner: &mut Inner) -> Result<(), String> {
+        if let Some(store) = &inner.store {
+            store.append_usage(&inner.pending)?;
+            inner.pending.clear();
+        }
+        Ok(())
+    }
+
+    /// A failed write keeps the queue intact for the next tick or shutdown.
+    pub fn flush(&self) -> Result<(), String> {
+        Self::flush_inner(&mut crate::sync::lock(&self.inner))
+    }
+
+    pub fn export_history(&self) -> Result<Vec<RequestRecord>, String> {
+        let mut inner = crate::sync::lock(&self.inner);
+        Self::flush_inner(&mut inner)?;
+        match &inner.store {
+            Some(store) => store.usage(),
+            None => Ok(inner.records.iter().cloned().collect()),
+        }
+    }
+
+    /// Imported accounting does not change budgets, router health or ML training.
+    pub fn import_history(&self, records: Vec<RequestRecord>) -> Result<usize, String> {
+        if records.len() > 100_000 {
+            return Err("import at most 100000 usage records at a time".into());
+        }
+        for record in &records {
+            if record.id.is_empty()
+                || record.id.len() > 256
+                || record.client.client_id.as_str().len() > 256
+                || record.requested_model.len() > 512
+                || record
+                    .cost
+                    .as_ref()
+                    .is_some_and(|cost| !cost.amount.is_finite() || cost.amount < 0.0)
+            {
+                return Err("the usage archive contains an invalid record".into());
+            }
+        }
+        let mut inner = crate::sync::lock(&self.inner);
+        Self::flush_inner(&mut inner)?;
+        let store = inner
+            .store
+            .clone()
+            .ok_or("durable usage storage is unavailable")?;
+        let mut known: std::collections::HashSet<String> =
+            store.usage()?.into_iter().map(|r| r.id).collect();
+        let new: Vec<_> = records
+            .into_iter()
+            .filter(|r| known.insert(r.id.clone()))
+            .map(|mut record| {
+                record.error = None;
+                record.routing_decision = None;
+                record
+            })
+            .collect();
+        store.append_usage(&new)?;
+        let count = new.len();
+        for record in new {
+            Self::accumulate(&mut inner, record);
+        }
+        Ok(count)
+    }
+
+    pub fn clear_history(&self, client: Option<&str>) -> Result<(), String> {
+        let mut inner = crate::sync::lock(&self.inner);
+        Self::flush_inner(&mut inner)?;
+        let retained = match &inner.store {
+            Some(store) => {
+                store.clear_usage(client)?;
+                store.usage()?
+            }
+            None => inner
+                .records
+                .iter()
+                .filter(|r| client.is_some_and(|id| r.client.client_id.as_str() != id))
+                .cloned()
+                .collect(),
+        };
         inner.records.clear();
         inner.per_model.clear();
         inner.per_kind.clear();
@@ -530,6 +635,16 @@ impl Stats {
         inner.output_tokens = 0;
         inner.cost = CostTotals::default();
         inner.since = Utc::now();
+        for record in retained {
+            Self::accumulate(&mut inner, record);
+        }
+        Ok(())
+    }
+
+    pub fn clear(&self) {
+        if let Err(error) = self.clear_history(None) {
+            tracing::warn!(%error, "usage history could not be cleared");
+        }
     }
 }
 

@@ -537,6 +537,126 @@ pub async fn remove_account(
     Ok(refreshed(&app, &desktop).await)
 }
 
+/// Announcements the relay's panel publishes on `/api/status`.
+///
+/// Public and credential-free. This is an explicit action rather than part of
+/// the snapshot: it is a network call, and an announcement that is days old
+/// does not need to be re-fetched every poll.
+#[cfg(feature = "newapi")]
+#[tauri::command]
+pub async fn fetch_newapi_announcements(
+    desktop: State<'_, Arc<Desktop>>,
+    provider_id: String,
+) -> Cmd<Vec<zroutery_core::account::adapters::newapi::NewApiAnnouncement>> {
+    let provider = desktop
+        .core
+        .config()
+        .provider(&provider_id)
+        .cloned()
+        .ok_or_else(|| format!("unknown provider `{provider_id}`"))?;
+    let adapter = newapi_adapter(&provider)?;
+    let status = adapter.probe_status().await.map_err(|e| e.to_string())?;
+    Ok(status.announcements)
+}
+
+/// Read the panel's model prices, converted to USD per million tokens.
+#[cfg(feature = "newapi")]
+#[tauri::command]
+pub async fn preview_newapi_pricing(
+    desktop: State<'_, Arc<Desktop>>,
+    provider_id: String,
+) -> Cmd<Vec<zroutery_core::account::adapters::newapi::NewApiPrice>> {
+    let provider = desktop
+        .core
+        .config()
+        .provider(&provider_id)
+        .cloned()
+        .ok_or_else(|| format!("unknown provider `{provider_id}`"))?;
+    let adapter = newapi_adapter(&provider)?;
+    adapter.probe_pricing().await.map_err(|e| e.to_string())
+}
+
+/// Apply the panel's published prices to this provider's models.
+///
+/// Matching is by the upstream model name, display name or alias. A model the
+/// panel prices per request is left unpriced: [`Pricing`] is a per-token shape,
+/// and inventing a token price for it would be worse than saying nothing.
+#[cfg(feature = "newapi")]
+#[tauri::command]
+pub async fn import_newapi_pricing(
+    app: AppHandle,
+    desktop: State<'_, Arc<Desktop>>,
+    provider_id: String,
+) -> Cmd<crate::state::Snapshot> {
+    let provider = desktop
+        .core
+        .config()
+        .provider(&provider_id)
+        .cloned()
+        .ok_or_else(|| format!("unknown provider `{provider_id}`"))?;
+    let adapter = newapi_adapter(&provider)?;
+    let prices = adapter.probe_pricing().await.map_err(|e| e.to_string())?;
+    let mut config = (*desktop.core.config()).clone();
+    let mut matched = 0usize;
+    for model in config
+        .models
+        .iter_mut()
+        .filter(|m| m.provider_id == provider_id)
+    {
+        let Some(price) = prices.iter().find(|price| {
+            price.model.eq_ignore_ascii_case(&model.upstream_model)
+                || model
+                    .display_name
+                    .as_deref()
+                    .is_some_and(|name| price.model.eq_ignore_ascii_case(name))
+                || model
+                    .aliases
+                    .iter()
+                    .any(|alias| price.model.eq_ignore_ascii_case(alias))
+        }) else {
+            continue;
+        };
+        let (Some(input), Some(output)) = (price.input_per_mtok, price.output_per_mtok) else {
+            continue;
+        };
+        model.pricing = Some(zroutery_core::billing::Pricing {
+            currency: "USD".into(),
+            input_per_mtok: input,
+            output_per_mtok: output,
+            cache_read_per_mtok: None,
+            cache_write_per_mtok: None,
+        });
+        matched += 1;
+    }
+    if matched == 0 {
+        return Err(format!(
+            "the panel published {} prices, but none matched this provider's models",
+            prices.len()
+        ));
+    }
+    desktop.apply_config(config).await?;
+    desktop.set_warning(Some(format!(
+        "imported prices for {matched} models from the panel (group {})",
+        prices
+            .first()
+            .map(|p| p.group.as_str())
+            .unwrap_or("default")
+    )));
+    Ok(refreshed(&app, &desktop).await)
+}
+
+#[cfg(feature = "newapi")]
+fn newapi_adapter(
+    provider: &zroutery_core::config::ProviderConfig,
+) -> Result<zroutery_core::account::adapters::newapi::NewApiAdapter, String> {
+    use zroutery_core::account::adapters::newapi::NewApiConfig;
+    let config = NewApiConfig {
+        base_url: provider.base_url.clone(),
+        ..NewApiConfig::default()
+    };
+    zroutery_core::account::adapters::newapi::NewApiAdapter::new(config).map_err(|e| e.to_string())
+}
+
 /// Remove a provider, its models and the credential only it referenced.
 ///
 /// The backend reads the provider's real `key_ref` before changing the
@@ -648,7 +768,7 @@ pub async fn regenerate_token(app: AppHandle, desktop: State<'_, Arc<Desktop>>) 
 
 #[tauri::command]
 pub async fn clear_stats(app: AppHandle, desktop: State<'_, Arc<Desktop>>) -> Cmd<Snapshot> {
-    desktop.core.stats().clear();
+    desktop.core.stats().clear_history(None)?;
     Ok(refreshed(&app, &desktop).await)
 }
 
@@ -659,12 +779,65 @@ pub async fn reset_model_health(
     model_id: String,
 ) -> Cmd<Snapshot> {
     desktop.core.router().reset(&model_id);
-    if let Ok(model) = desktop.core.registry().entry(&model_id) {
-        desktop
-            .core
-            .router()
-            .reset_provider_gate(&model.provider_id);
+    Ok(refreshed(&app, &desktop).await)
+}
+
+#[tauri::command]
+pub async fn release_wallet_hold(
+    app: AppHandle,
+    desktop: State<'_, Arc<Desktop>>,
+    provider_id: String,
+    account_id: Option<String>,
+    key_id: Option<String>,
+) -> Cmd<Snapshot> {
+    if desktop.core.config().provider(&provider_id).is_none() {
+        return Err(format!("unknown provider `{provider_id}`"));
     }
+    desktop
+        .core
+        .router()
+        .release_wallet(&provider_id, account_id.as_deref(), key_id.as_deref())?;
+    Ok(refreshed(&app, &desktop).await)
+}
+
+#[tauri::command]
+pub fn export_usage_history(desktop: State<'_, Arc<Desktop>>) -> Cmd<String> {
+    serde_json::to_string_pretty(&serde_json::json!({
+        "schema_version": 1,
+        "records": desktop.core.stats().export_history()?,
+    }))
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn import_usage_history(
+    app: AppHandle,
+    desktop: State<'_, Arc<Desktop>>,
+    archive: String,
+) -> Cmd<Snapshot> {
+    if archive.len() > 32 * 1024 * 1024 {
+        return Err("usage archive exceeds 32 MiB".into());
+    }
+    #[derive(serde::Deserialize)]
+    struct Archive {
+        schema_version: u32,
+        records: Vec<zroutery_core::stats::RequestRecord>,
+    }
+    let archive: Archive = serde_json::from_str(&archive).map_err(|e| e.to_string())?;
+    if archive.schema_version != 1 {
+        return Err("unsupported usage archive version".into());
+    }
+    desktop.core.stats().import_history(archive.records)?;
+    Ok(refreshed(&app, &desktop).await)
+}
+
+#[tauri::command]
+pub async fn clear_client_usage(
+    app: AppHandle,
+    desktop: State<'_, Arc<Desktop>>,
+    client_id: String,
+) -> Cmd<Snapshot> {
+    desktop.core.stats().clear_history(Some(&client_id))?;
     Ok(refreshed(&app, &desktop).await)
 }
 

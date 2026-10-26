@@ -89,6 +89,9 @@ impl Desktop {
     /// shutdown flush) retries it once the disk is writable again, instead of the
     /// old ledger surviving until the process restarts.
     pub fn flush_ledger(&self) {
+        if let Err(error) = self.core.stats().flush() {
+            tracing::warn!(%error, "usage history flush failed; it will be retried");
+        }
         let result = self
             .core
             .flush_ledger(|ledger| store::save_ledger(&self.config_dir, ledger));

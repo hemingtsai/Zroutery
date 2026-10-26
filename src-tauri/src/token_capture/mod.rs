@@ -489,6 +489,27 @@ async fn drive(
             .with_message("no token was found before the ten-minute limit; the browser was closed")
     });
     view.browser_held = false;
+    // The token was minted by a signed-in session; the profile keeps that
+    // session's cookies, so closing the window alone leaves the panel logged in
+    // on disk. Sign the panel session out before closing. This is deliberately
+    // best effort: the NewAPI log-out route is a session convenience, and a
+    // panel that does not answer it must not turn a successful capture into a
+    // failure. The captured access token stays valid — logging out revokes the
+    // browser session, not the token the account now stores.
+    let logout_url = format!("{}/api/user/logout", origin.trim_end_matches('/'));
+    let logout = format!(
+        "fetch({url}, {{ credentials: 'include' }}).then(r => r.ok).catch(() => false)",
+        url = serde_json::to_string(&logout_url).unwrap_or_else(|_| "\"\"".into())
+    );
+    match browser.evaluate(&page, &logout).await {
+        Ok(value) if value.as_bool() == Some(true) => {
+            tracing::info!(panel = %origin, "the panel session was signed out after capture");
+        }
+        Ok(_) => tracing::debug!(panel = %origin, "the panel refused the sign-out after capture"),
+        Err(error) => {
+            tracing::debug!(panel = %origin, %error, "the panel could not be signed out after capture")
+        }
+    }
     let _ = browser.shutdown().await;
     desktop.checkin.end_driving(&key).await;
     desktop.checkin.finish(&key).await;
