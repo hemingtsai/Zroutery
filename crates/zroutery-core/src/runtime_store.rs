@@ -159,3 +159,66 @@ impl RuntimeStore {
         Ok(balances)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::client::ClientId;
+    use crate::ir::{Dialect, Usage};
+    use crate::stats::RecordBuilder;
+
+    const WALLET: &str = r#"{"provider_id":"provider","account_id":"account","key_id":null,"held_at":1,"reason":"balance_exhausted"}"#;
+
+    fn record(id: &str, client: &str) -> RequestRecord {
+        let mut builder = RecordBuilder::new(Dialect::Anthropic, "sonnet-class", false);
+        builder
+            .resolved("model", "provider")
+            .usage(Usage::default())
+            .attempt();
+        let mut record = builder.finish(12);
+        record.id = id.to_string();
+        record.client.client_id = ClientId::trusted(client);
+        record
+    }
+
+    fn wallet_scope() -> String {
+        serde_json::to_string(&("provider", Some("account"), None::<&str>)).unwrap()
+    }
+
+    #[test]
+    fn accounting_and_latches_are_shared_and_survive_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("runtime.sqlite3");
+        let scope = wallet_scope();
+        {
+            let first = RuntimeStore::open(&path).unwrap();
+            let second = RuntimeStore::open(&path).unwrap();
+
+            first
+                .append_usage(&[record("one", "client-a"), record("two", "client-b")])
+                .unwrap();
+            assert_eq!(second.usage().unwrap().len(), 2);
+
+            first.hold_wallet(&scope, WALLET).unwrap();
+            assert!(second.wallet_held(&scope).unwrap());
+            second.release_wallet(&scope).unwrap();
+            assert!(!first.wallet_held(&scope).unwrap());
+            first.hold_wallet(&scope, WALLET).unwrap();
+
+            first
+                .save_balance("provider", r#"{"balance":null,"error":null}"#)
+                .unwrap();
+            assert_eq!(second.balances().unwrap().len(), 1);
+
+            assert_eq!(second.clear_usage(Some("client-a")).unwrap(), 1);
+            assert_eq!(second.usage().unwrap().len(), 1);
+            assert_eq!(second.clear_usage(None).unwrap(), 1);
+            assert!(second.usage().unwrap().is_empty());
+        }
+
+        let reopened = RuntimeStore::open(&path).unwrap();
+        assert!(reopened.usage().unwrap().is_empty());
+        assert!(reopened.wallet_held(&scope).unwrap());
+        assert_eq!(reopened.balances().unwrap().len(), 1);
+    }
+}
