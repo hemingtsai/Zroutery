@@ -214,12 +214,14 @@ HARNESS = """
         cost: {},
         per_model: [],
         per_kind: [],
+        per_client: [],
       },
       recent: [],
       warning: null,
       config_path: "/tmp/ui_interaction/config.json",
       version: "0.8.0",
       balances: clone(state.balances || {}),
+      wallet_holds: [],
       election: null,
       budgets: [],
       ml_available: Boolean(state.ml),
@@ -237,6 +239,7 @@ HARNESS = """
       checkin: state.account ? clone(state.account.checkin || []) : undefined,
       account_events: state.account ? clone(state.account.events || []) : undefined,
       account_balances: state.account ? clone(state.account.balances || []) : undefined,
+      newapi_available: false,
     };
   }
 
@@ -651,6 +654,7 @@ BASE_CONFIG = {
     },
     "window": {"launch_on_login": False, "silent_start": False, "keep_in_tray": True},
     "vision": {"enabled": False, "model": None, "placeholder": "[Unsupported Image]"},
+    "balances": {"enabled": True, "interval_secs": 300},
     "providers": [
         {
             "id": "deepseek",
@@ -1854,6 +1858,7 @@ ACCOUNT_QUERY = {
                     "account_id": "main",
                     "enabled": True,
                     "key_ref": "provider:deepseek:account:main",
+                    "inference_keys": [],
                     "maintenance": {
                         "checkin_enabled": True,
                         "checkin_interval_secs": 86400,
@@ -1867,6 +1872,7 @@ ACCOUNT_QUERY = {
                     "account_id": "spare",
                     "enabled": False,
                     "key_ref": "",
+                    "inference_keys": [],
                     "maintenance": {
                         "checkin_enabled": False,
                         "checkin_interval_secs": None,
