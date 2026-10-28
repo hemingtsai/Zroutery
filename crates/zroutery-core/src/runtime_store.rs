@@ -27,6 +27,14 @@ impl RuntimeStore {
                  id TEXT PRIMARY KEY, client TEXT NOT NULL, at TEXT NOT NULL, record TEXT NOT NULL
              );
              CREATE INDEX IF NOT EXISTS usage_client ON usage(client);
+             CREATE TABLE IF NOT EXISTS usage_revision (
+                 id INTEGER PRIMARY KEY CHECK(id = 1), revision INTEGER NOT NULL
+             );
+             INSERT OR IGNORE INTO usage_revision VALUES (1, 0);
+             CREATE TRIGGER IF NOT EXISTS usage_insert_revision AFTER INSERT ON usage
+                 BEGIN UPDATE usage_revision SET revision = revision + 1 WHERE id = 1; END;
+             CREATE TRIGGER IF NOT EXISTS usage_delete_revision AFTER DELETE ON usage
+                 BEGIN UPDATE usage_revision SET revision = revision + 1 WHERE id = 1; END;
              CREATE TABLE IF NOT EXISTS wallet_holds (
                  scope TEXT PRIMARY KEY, record TEXT NOT NULL
              );
@@ -39,8 +47,27 @@ impl RuntimeStore {
     }
 
     pub fn append_usage(&self, records: &[RequestRecord]) -> Result<usize, String> {
+        self.append_usage_versioned(records)
+            .map(|(_, _, inserted)| inserted)
+    }
+
+    /// Revision and insert count from the same write transaction. Another
+    /// instance importing the same ids cannot make in-memory totals count twice.
+    pub(crate) fn append_usage_versioned(
+        &self,
+        records: &[RequestRecord],
+    ) -> Result<(i64, i64, usize), String> {
         let mut db = crate::sync::lock(&self.db);
-        let tx = db.transaction().map_err(|e| e.to_string())?;
+        let tx = db
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(|e| e.to_string())?;
+        let before: i64 = tx
+            .query_row(
+                "SELECT revision FROM usage_revision WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|e| e.to_string())?;
         let mut inserted = 0;
         for record in records {
             // Errors can quote a remote body, and decision traces contain more
@@ -61,23 +88,53 @@ impl RuntimeStore {
                 )
                 .map_err(|e| e.to_string())?;
         }
+        let after: i64 = tx
+            .query_row(
+                "SELECT revision FROM usage_revision WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|e| e.to_string())?;
         tx.commit().map_err(|e| e.to_string())?;
-        Ok(inserted)
+        Ok((before, after, inserted))
     }
 
     pub fn usage(&self) -> Result<Vec<RequestRecord>, String> {
-        let db = crate::sync::lock(&self.db);
-        let mut stmt = db
+        self.usage_since(None)
+            .map(|snapshot| snapshot.expect("a full snapshot was requested").1)
+    }
+
+    /// Read the revision and rows in one snapshot so a concurrent clear/import
+    /// can never pair old totals with a newer revision. Unchanged reads are O(1).
+    pub(crate) fn usage_since(
+        &self,
+        revision: Option<i64>,
+    ) -> Result<Option<(i64, Vec<RequestRecord>)>, String> {
+        let mut db = crate::sync::lock(&self.db);
+        let tx = db.transaction().map_err(|e| e.to_string())?;
+        let current = tx
+            .query_row(
+                "SELECT revision FROM usage_revision WHERE id = 1",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(|e| e.to_string())?;
+        if revision == Some(current) {
+            return Ok(None);
+        }
+        let mut stmt = tx
             .prepare("SELECT record FROM usage ORDER BY at, id")
             .map_err(|e| e.to_string())?;
         let rows = stmt
             .query_map([], |row| row.get::<_, String>(0))
             .map_err(|e| e.to_string())?;
-        rows.map(|row| {
-            let json = row.map_err(|e| e.to_string())?;
-            serde_json::from_str(&json).map_err(|e| e.to_string())
-        })
-        .collect()
+        let records = rows
+            .map(|row| {
+                let json = row.map_err(|e| e.to_string())?;
+                serde_json::from_str(&json).map_err(|e| e.to_string())
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        Ok(Some((current, records)))
     }
 
     pub fn clear_usage(&self, client: Option<&str>) -> Result<usize, String> {

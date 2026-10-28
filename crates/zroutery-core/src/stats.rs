@@ -9,6 +9,7 @@
 
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -351,6 +352,8 @@ struct Inner {
     cost: CostTotals,
     store: Option<Arc<crate::runtime_store::RuntimeStore>>,
     pending: Vec<RequestRecord>,
+    revision: Option<i64>,
+    synced: Option<Instant>,
 }
 
 impl Stats {
@@ -371,6 +374,8 @@ impl Stats {
                 cost: CostTotals::default(),
                 store: None,
                 pending: Vec::new(),
+                revision: None,
+                synced: None,
             }),
             observed_clients: Mutex::new(BTreeMap::new()),
         }
@@ -507,12 +512,14 @@ impl Stats {
 
     /// Most recent requests first.
     pub fn recent(&self, limit: usize) -> Vec<RequestRecord> {
-        let inner = crate::sync::lock(&self.inner);
+        let mut inner = crate::sync::lock(&self.inner);
+        Self::refresh_if_due(&mut inner);
         inner.records.iter().rev().take(limit).cloned().collect()
     }
 
     pub fn summary(&self) -> StatsSummary {
-        let inner = crate::sync::lock(&self.inner);
+        let mut inner = crate::sync::lock(&self.inner);
+        Self::refresh_if_due(&mut inner);
         StatsSummary {
             since: inner.since,
             requests: inner.requests,
@@ -532,7 +539,9 @@ impl Stats {
         &self,
         store: Arc<crate::runtime_store::RuntimeStore>,
     ) -> Result<(), String> {
-        let records = store.usage()?;
+        let (revision, records) = store
+            .usage_since(None)?
+            .expect("a full snapshot was requested");
         let mut inner = crate::sync::lock(&self.inner);
         if inner.requests != 0 {
             return Err("usage storage must be attached before serving".into());
@@ -541,14 +550,70 @@ impl Stats {
             Self::accumulate(&mut inner, record);
         }
         inner.store = Some(store);
+        inner.revision = Some(revision);
+        inner.synced = Some(Instant::now());
         Ok(())
     }
 
     fn flush_inner(inner: &mut Inner) -> Result<(), String> {
         if let Some(store) = &inner.store {
-            store.append_usage(&inner.pending)?;
+            if !inner.pending.is_empty() {
+                let (before, after, inserted) = store.append_usage_versioned(&inner.pending)?;
+                if inner.revision == Some(before) && inserted == inner.pending.len() {
+                    inner.revision = Some(after);
+                } else {
+                    // Duplicate ids or another process changed history. Rebuild
+                    // from the committed rows instead of counting the attempted insert.
+                    inner.revision = None;
+                }
+            }
             inner.pending.clear();
         }
+        Self::refresh_inner(inner)
+    }
+
+    fn refresh_if_due(inner: &mut Inner) {
+        if inner.store.is_none()
+            || inner
+                .synced
+                .is_some_and(|at| at.elapsed() < Duration::from_secs(2))
+        {
+            return;
+        }
+        if let Err(error) = Self::refresh_inner(inner) {
+            tracing::warn!(%error, "shared usage history could not be refreshed");
+            inner.synced = Some(Instant::now());
+        }
+    }
+
+    fn refresh_inner(inner: &mut Inner) -> Result<(), String> {
+        let Some(store) = &inner.store else {
+            return Ok(());
+        };
+        if let Some((revision, records)) = store.usage_since(inner.revision)? {
+            // Keep live diagnostics in memory while durable accounting remains
+            // redacted. Pending requests are not on disk yet and must survive.
+            let mut live: std::collections::HashMap<_, _> = inner
+                .records
+                .iter()
+                .cloned()
+                .map(|record| (record.id.clone(), record))
+                .collect();
+            let ids: std::collections::HashSet<_> =
+                records.iter().map(|record| record.id.clone()).collect();
+            let pending = inner.pending.clone();
+            Self::reset_totals(inner);
+            for record in records {
+                Self::accumulate(inner, live.remove(&record.id).unwrap_or(record));
+            }
+            for record in pending {
+                if !ids.contains(&record.id) {
+                    Self::accumulate(inner, record);
+                }
+            }
+            inner.revision = Some(revision);
+        }
+        inner.synced = Some(Instant::now());
         Ok(())
     }
 
@@ -590,32 +655,19 @@ impl Stats {
             .store
             .clone()
             .ok_or("durable usage storage is unavailable")?;
-        let mut known: std::collections::HashSet<String> =
-            store.usage()?.into_iter().map(|r| r.id).collect();
-        let new: Vec<_> = records
-            .into_iter()
-            .filter(|r| known.insert(r.id.clone()))
-            .map(|mut record| {
-                record.error = None;
-                record.routing_decision = None;
-                record
-            })
-            .collect();
-        store.append_usage(&new)?;
-        let count = new.len();
-        for record in new {
-            Self::accumulate(&mut inner, record);
-        }
+        let count = store.append_usage(&records)?;
+        Self::refresh_inner(&mut inner)?;
         Ok(count)
     }
 
     pub fn clear_history(&self, client: Option<&str>) -> Result<(), String> {
         let mut inner = crate::sync::lock(&self.inner);
         Self::flush_inner(&mut inner)?;
-        let retained = match &inner.store {
+        let retained: Vec<RequestRecord> = match &inner.store {
             Some(store) => {
                 store.clear_usage(client)?;
-                store.usage()?
+                Self::refresh_inner(&mut inner)?;
+                return Ok(());
             }
             None => inner
                 .records
@@ -624,6 +676,14 @@ impl Stats {
                 .cloned()
                 .collect(),
         };
+        Self::reset_totals(&mut inner);
+        for record in retained {
+            Self::accumulate(&mut inner, record);
+        }
+        Ok(())
+    }
+
+    fn reset_totals(inner: &mut Inner) {
         inner.records.clear();
         inner.per_model.clear();
         inner.per_kind.clear();
@@ -635,10 +695,6 @@ impl Stats {
         inner.output_tokens = 0;
         inner.cost = CostTotals::default();
         inner.since = Utc::now();
-        for record in retained {
-            Self::accumulate(&mut inner, record);
-        }
-        Ok(())
     }
 
     pub fn clear(&self) {
@@ -989,6 +1045,30 @@ mod tests {
         assert!(!stats.summary().cost.is_empty());
         stats.clear();
         assert!(stats.summary().cost.is_empty());
+    }
+
+    #[test]
+    fn shared_history_reaches_every_instance_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("runtime.sqlite3");
+        let first = Stats::new(10);
+        let second = Stats::new(10);
+        let open = || std::sync::Arc::new(crate::runtime_store::RuntimeStore::open(&path).unwrap());
+        first.attach_store(open()).unwrap();
+        second.attach_store(open()).unwrap();
+
+        first.record(rec("shared", true, 10, Usage::default()));
+        first.flush().unwrap();
+        {
+            let mut inner = crate::sync::lock(&second.inner);
+            Stats::refresh_inner(&mut inner).unwrap();
+        }
+        assert_eq!(second.summary().requests, 1);
+
+        // The same durable id is a no-op, not a second request.
+        let duplicate = first.recent(1);
+        assert_eq!(second.import_history(duplicate).unwrap(), 0);
+        assert_eq!(second.summary().requests, 1);
     }
 
     #[test]
