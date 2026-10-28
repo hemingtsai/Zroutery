@@ -181,8 +181,7 @@ export default function Activity({
         </div>
       </div>
 
-      {!idle && (
-        <Section title={t("activity.history")} hint={t("activity.history_hint")}>
+      <Section title={t("activity.history")} hint={t("activity.history_hint")}>
           <div className="controls">
             <Button kind="ghost" onClick={() => void openExport()}>
               {t("activity.export_history")}
@@ -238,8 +237,7 @@ export default function Activity({
               </table>
             </div>
           )}
-        </Section>
-      )}
+      </Section>
 
       {!idle && (
         <Section title={t("activity.health")} hint={t("activity.health_hint")}>
