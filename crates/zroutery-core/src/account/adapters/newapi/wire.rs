@@ -22,6 +22,8 @@ pub(super) struct Session {
 #[derive(Debug)]
 pub(super) struct Attempt {
     pub(super) data: Value,
+    /// Pricing puts group multipliers beside `data`, not inside its model list.
+    pub(super) group_ratio: Option<Value>,
     /// A rotated `new_api_refresh` cookie, when the response set one.
     pub(super) refresh_cookie: Option<String>,
 }
@@ -114,6 +116,8 @@ pub(super) struct Envelope {
     pub(super) code: Option<String>,
     #[serde(default)]
     pub(super) data: Option<Value>,
+    #[serde(default)]
+    pub(super) group_ratio: Option<Value>,
 }
 
 /// `data` of `GET /api/user/self`.

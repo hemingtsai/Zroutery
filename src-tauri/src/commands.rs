@@ -547,6 +547,7 @@ pub async fn remove_account(
 pub async fn fetch_newapi_announcements(
     desktop: State<'_, Arc<Desktop>>,
     provider_id: String,
+    account_id: Option<String>,
 ) -> Cmd<Vec<zroutery_core::account::adapters::newapi::NewApiAnnouncement>> {
     let provider = desktop
         .core
@@ -554,9 +555,13 @@ pub async fn fetch_newapi_announcements(
         .provider(&provider_id)
         .cloned()
         .ok_or_else(|| format!("unknown provider `{provider_id}`"))?;
-    let adapter = newapi_adapter(&provider)?;
+    let adapter = newapi_adapter(&provider, account_id.as_deref())?;
     let status = adapter.probe_status().await.map_err(|e| e.to_string())?;
-    Ok(status.announcements)
+    Ok(if status.announcements_enabled == Some(false) {
+        Vec::new()
+    } else {
+        status.announcements
+    })
 }
 
 /// Read the panel's model prices, converted to USD per million tokens.
@@ -565,6 +570,7 @@ pub async fn fetch_newapi_announcements(
 pub async fn preview_newapi_pricing(
     desktop: State<'_, Arc<Desktop>>,
     provider_id: String,
+    account_id: Option<String>,
 ) -> Cmd<Vec<zroutery_core::account::adapters::newapi::NewApiPrice>> {
     let provider = desktop
         .core
@@ -572,21 +578,23 @@ pub async fn preview_newapi_pricing(
         .provider(&provider_id)
         .cloned()
         .ok_or_else(|| format!("unknown provider `{provider_id}`"))?;
-    let adapter = newapi_adapter(&provider)?;
+    let adapter = newapi_adapter(&provider, account_id.as_deref())?;
     adapter.probe_pricing().await.map_err(|e| e.to_string())
 }
 
 /// Apply the panel's published prices to this provider's models.
 ///
-/// Matching is by the upstream model name, display name or alias. A model the
-/// panel prices per request is left unpriced: [`Pricing`] is a per-token shape,
-/// and inventing a token price for it would be worse than saying nothing.
+/// Matching uses the upstream model name. Display labels and routing aliases
+/// may name a different model, so they are not evidence of its billing rate.
+/// Per-request models are skipped because `Pricing` only represents token rates.
 #[cfg(feature = "newapi")]
 #[tauri::command]
 pub async fn import_newapi_pricing(
     app: AppHandle,
     desktop: State<'_, Arc<Desktop>>,
     provider_id: String,
+    account_id: Option<String>,
+    group: Option<String>,
 ) -> Cmd<crate::state::Snapshot> {
     let provider = desktop
         .core
@@ -594,26 +602,35 @@ pub async fn import_newapi_pricing(
         .provider(&provider_id)
         .cloned()
         .ok_or_else(|| format!("unknown provider `{provider_id}`"))?;
-    let adapter = newapi_adapter(&provider)?;
+    let adapter = newapi_adapter(&provider, account_id.as_deref())?;
     let prices = adapter.probe_pricing().await.map_err(|e| e.to_string())?;
     let mut config = (*desktop.core.config()).clone();
+    if config.provider(&provider_id) != Some(&provider) {
+        return Err("the provider changed while reading its panel; read the panel again".into());
+    }
+    let group = group.as_deref().unwrap_or("default");
+    apply_newapi_prices(&mut config, &provider_id, group, &prices)?;
+    desktop.apply_config(config).await?;
+    Ok(refreshed(&app, &desktop).await)
+}
+
+#[cfg(feature = "newapi")]
+fn apply_newapi_prices(
+    config: &mut AppConfig,
+    provider_id: &str,
+    group: &str,
+    prices: &[zroutery_core::account::adapters::newapi::NewApiPrice],
+) -> Cmd<usize> {
     let mut matched = 0usize;
     for model in config
         .models
         .iter_mut()
         .filter(|m| m.provider_id == provider_id)
     {
-        let Some(price) = prices.iter().find(|price| {
-            price.model.eq_ignore_ascii_case(&model.upstream_model)
-                || model
-                    .display_name
-                    .as_deref()
-                    .is_some_and(|name| price.model.eq_ignore_ascii_case(name))
-                || model
-                    .aliases
-                    .iter()
-                    .any(|alias| price.model.eq_ignore_ascii_case(alias))
-        }) else {
+        let Some(price) = prices
+            .iter()
+            .find(|price| price.group == group && price.model == model.upstream_model)
+        else {
             continue;
         };
         let (Some(input), Some(output)) = (price.input_per_mtok, price.output_per_mtok) else {
@@ -623,35 +640,42 @@ pub async fn import_newapi_pricing(
             currency: "USD".into(),
             input_per_mtok: input,
             output_per_mtok: output,
-            cache_read_per_mtok: None,
-            cache_write_per_mtok: None,
+            cache_read_per_mtok: price.cache_read_per_mtok,
+            cache_write_per_mtok: price.cache_write_per_mtok,
         });
         matched += 1;
     }
     if matched == 0 {
         return Err(format!(
-            "the panel published {} prices, but none matched this provider's models",
-            prices.len()
+            "the panel published no usable token prices for this provider's models in group `{group}`"
         ));
     }
-    desktop.apply_config(config).await?;
-    desktop.set_warning(Some(format!(
-        "imported prices for {matched} models from the panel (group {})",
-        prices
-            .first()
-            .map(|p| p.group.as_str())
-            .unwrap_or("default")
-    )));
-    Ok(refreshed(&app, &desktop).await)
+    Ok(matched)
 }
 
 #[cfg(feature = "newapi")]
 fn newapi_adapter(
     provider: &zroutery_core::config::ProviderConfig,
+    account_id: Option<&str>,
 ) -> Result<zroutery_core::account::adapters::newapi::NewApiAdapter, String> {
     use zroutery_core::account::adapters::newapi::NewApiConfig;
+    let account = match account_id {
+        Some(id) => Some(
+            provider
+                .accounts
+                .iter()
+                .find(|account| account.account_id == id)
+                .ok_or_else(|| format!("unknown account `{id}` on provider `{}`", provider.id))?,
+        ),
+        None => provider.accounts.iter().find(|account| account.enabled),
+    };
     let config = NewApiConfig {
-        base_url: provider.base_url.clone(),
+        base_url: account
+            .and_then(|account| account.maintenance.panel_override())
+            .unwrap_or(&provider.base_url)
+            .to_string(),
+        connect_timeout_secs: provider.connect_timeout_secs,
+        request_timeout_secs: provider.timeout_secs.min(30),
         ..NewApiConfig::default()
     };
     zroutery_core::account::adapters::newapi::NewApiAdapter::new(config).map_err(|e| e.to_string())

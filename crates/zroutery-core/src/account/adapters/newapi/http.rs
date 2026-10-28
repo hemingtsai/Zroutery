@@ -218,6 +218,7 @@ impl NewApiAdapter {
                 message: None,
                 code: None,
                 data: None,
+                group_ratio: None,
             });
             // The panel's own words for the refusal: a dead token, a missing
             // New-Api-User header and a WAF interstitial each name themselves,
@@ -269,6 +270,7 @@ impl NewApiAdapter {
 
         Ok(Attempt {
             data: envelope.data.unwrap_or(Value::Null),
+            group_ratio: envelope.group_ratio,
             refresh_cookie,
         })
     }

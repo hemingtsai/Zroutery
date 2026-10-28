@@ -161,7 +161,7 @@ export interface NewApiAnnouncement {
   title: string | null;
   content: string | null;
   publish_date: unknown;
-  kind: unknown;
+  type: unknown;
 }
 
 /** One model price read from a NewAPI panel, already in USD per million. */
@@ -170,6 +170,8 @@ export interface NewApiPrice {
   group: string;
   input_per_mtok: number | null;
   output_per_mtok: number | null;
+  cache_read_per_mtok: number | null;
+  cache_write_per_mtok: number | null;
   per_request: number | null;
 }
 
@@ -1767,16 +1769,16 @@ export const api = {
   refreshBalances: () => invoke<Snapshot>("refresh_balances"),
   /** NewAPI panel announcements; public and credential-free. Call only when
    * `snapshot.newapi_available` is true. */
-  fetchNewapiAnnouncements: (provider_id: string) =>
-    invoke<NewApiAnnouncement[]>("fetch_newapi_announcements", { providerId: provider_id }),
+  fetchNewapiAnnouncements: (provider_id: string, account_id: string | null = null) =>
+    invoke<NewApiAnnouncement[]>("fetch_newapi_announcements", { providerId: provider_id, accountId: account_id }),
   /** Read the panel's published prices without changing anything. Call only when
    * `snapshot.newapi_available` is true. */
-  previewNewapiPricing: (provider_id: string) =>
-    invoke<NewApiPrice[]>("preview_newapi_pricing", { providerId: provider_id }),
+  previewNewapiPricing: (provider_id: string, account_id: string | null = null) =>
+    invoke<NewApiPrice[]>("preview_newapi_pricing", { providerId: provider_id, accountId: account_id }),
   /** Apply the panel's per-token prices to matching models. Call only when
    * `snapshot.newapi_available` is true. */
-  importNewapiPricing: (provider_id: string) =>
-    invoke<Snapshot>("import_newapi_pricing", { providerId: provider_id }),
+  importNewapiPricing: (provider_id: string, account_id: string | null = null, group = "default") =>
+    invoke<Snapshot>("import_newapi_pricing", { providerId: provider_id, accountId: account_id, group }),
   /** Probes every tier member, so it costs one tiny request each. */
   runElection: () => invoke<Snapshot>("run_election"),
   start: () => invoke<Snapshot>("start_proxy"),

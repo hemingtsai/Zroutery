@@ -152,7 +152,17 @@ pub struct NewApiStatus {
     pub usd_exchange_rate: Option<f64>,
     /// Operator announcements shown on the panel's landing page.
     pub announcements_enabled: Option<bool>,
+    #[serde(deserialize_with = "nullable_announcements")]
     pub announcements: Vec<NewApiAnnouncement>,
+}
+
+fn nullable_announcements<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Vec<NewApiAnnouncement>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<Vec<NewApiAnnouncement>>::deserialize(deserializer)?.unwrap_or_default())
 }
 
 /// One operator announcement from `/api/status`.
@@ -178,6 +188,10 @@ pub struct NewApiPrice {
     pub group: String,
     pub input_per_mtok: Option<f64>,
     pub output_per_mtok: Option<f64>,
+    #[serde(default)]
+    pub cache_read_per_mtok: Option<f64>,
+    #[serde(default)]
+    pub cache_write_per_mtok: Option<f64>,
     /// Fixed price per request when the panel prices the model per call.
     pub per_request: Option<f64>,
 }

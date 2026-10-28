@@ -13,8 +13,6 @@ import {
   type CcProviderDraft,
   type CcSwitchPreview,
   type Maintenance,
-  type NewApiAnnouncement,
-  type NewApiPrice,
   type Provider,
   type ProviderClientProfile,
   type ProviderKind,
@@ -45,6 +43,7 @@ import {
 import { useI18n } from "../i18n";
 import { groupProviders } from "../providerGroups";
 import { hasChatCredential } from "../providerCredential";
+import NewApiPanel from "./NewApiPanel";
 
 type KindLabelKey =
   | "providers.openai_dialect"
@@ -1532,7 +1531,6 @@ function ProviderDrawer({
   onRemove: () => void;
 }) {
   const { t } = useI18n();
-  const notify = useToast();
   const hasKey = snapshot.keys[provider.id] ?? false;
   // Chat credentials an account declares: the auth row would otherwise say
   // "no key" beside a green dot, because the provider's own reference is empty
@@ -1545,26 +1543,6 @@ function ProviderDrawer({
     0,
   );
   const [checkingBalance, setCheckingBalance] = useState(false);
-  const [panelInfo, setPanelInfo] = useState<{
-    announcements: NewApiAnnouncement[];
-    prices: NewApiPrice[];
-  } | null>(null);
-  const [panelInfoBusy, setPanelInfoBusy] = useState(false);
-
-  const loadPanelInfo = async () => {
-    setPanelInfoBusy(true);
-    try {
-      const [announcements, prices] = await Promise.all([
-        api.fetchNewapiAnnouncements(provider.id),
-        api.previewNewapiPricing(provider.id),
-      ]);
-      setPanelInfo({ announcements, prices });
-    } catch (error) {
-      notify("error", errorText(error));
-    } finally {
-      setPanelInfoBusy(false);
-    }
-  };
   // Hoisted so the type is narrowed once rather than at two separate index
   // reads, and so the translation has one string to work with.
   const balanceError = snapshot.balances[provider.id]?.error ?? null;
@@ -1659,106 +1637,7 @@ function ProviderDrawer({
       )}
 
       {snapshot.newapi_available && (
-        <Section
-          title={t("providers.panel_info")}
-          hint={t("providers.panel_info_hint")}
-          actions={
-            <Button kind="ghost" disabled={panelInfoBusy || busy} onClick={() => void loadPanelInfo()}>
-              {panelInfoBusy ? t("common.loading") : t("providers.panel_read")}
-            </Button>
-          }
-        >
-        {!panelInfo ? (
-          <p className="field-hint">{t("providers.panel_read_hint")}</p>
-        ) : (
-          <>
-            {panelInfo.announcements.length > 0 && (
-              <div className="list">
-                {panelInfo.announcements.map((announcement, index) => (
-                  <div className="list-row" key={announcement.id ?? index} style={{ cursor: "default" }}>
-                    <div className="row-main">
-                      <span className="row-title">
-                        {announcement.title || t("providers.panel_announcement")}
-                      </span>
-                      {announcement.content && (
-                        <span className="row-sub" style={{ whiteSpace: "pre-wrap" }}>
-                          {announcement.content}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-            {(() => {
-              const matched = panelInfo.prices.filter(
-                (price) =>
-                  models.some(
-                    (model) =>
-                      price.model.toLowerCase() === model.upstream_model.toLowerCase() ||
-                      (model.display_name ?? "").toLowerCase() === price.model.toLowerCase() ||
-                      model.aliases.some(
-                        (alias) => alias.toLowerCase() === price.model.toLowerCase(),
-                      ),
-                  ),
-              );
-              return (
-                <>
-                  <p className="field-hint">
-                    {t("providers.panel_prices", {
-                      matched: matched.length,
-                      total: panelInfo.prices.length,
-                      group: panelInfo.prices[0]?.group ?? "default",
-                    })}
-                  </p>
-                  {matched.length > 0 && (
-                    <div className="table-scroll">
-                      <table className="table">
-                        <thead>
-                          <tr>
-                            <th scope="col">{t("field.model_name")}</th>
-                            <th scope="col">{t("field.input")} / 1M</th>
-                            <th scope="col">{t("field.output")} / 1M</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {matched.slice(0, 12).map((price) => (
-                            <tr key={price.model}>
-                              <td className="mono">{price.model}</td>
-                              <td className="mono">
-                                {price.input_per_mtok == null
-                                  ? t("common.dash")
-                                  : money("USD", price.input_per_mtok)}
-                              </td>
-                              <td className="mono">
-                                {price.output_per_mtok == null
-                                  ? t("common.dash")
-                                  : money("USD", price.output_per_mtok)}
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-                  <div className="controls">
-                    <Button
-                      kind="primary"
-                      disabled={busy || matched.length === 0}
-                      onClick={async () => {
-                        const ok = await run(() => api.importNewapiPricing(provider.id));
-                        if (ok) notify("ok", t("providers.panel_prices_imported"));
-                      }}
-                    >
-                      {t("providers.panel_apply_prices")}
-                    </Button>
-                  </div>
-                </>
-              );
-            })()}
-          </>
-        )}
-      </Section>
+        <NewApiPanel provider={provider} models={models} busy={busy} run={run} />
       )}
 
       <Section title={t("providers.configuration")}>

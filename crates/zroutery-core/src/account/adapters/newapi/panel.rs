@@ -25,7 +25,7 @@ impl NewApiAdapter {
     }
 
     /// Model prices as the panel publishes them, converted to USD per million
-    /// tokens for the panel's default group.
+    /// tokens for each group the model is available to.
     ///
     /// `GET /api/pricing` is public; it needs no credential. The formula is the
     /// panel's own: `ratio * group_ratio * 1_000_000 / quota_per_unit`, with the
@@ -38,27 +38,31 @@ impl NewApiAdapter {
             .await
             .map_err(NewApiError::into_core)?;
         let data = attempt.data;
-        let number = |value: Option<&Value>| -> Option<f64> {
-            let value = value?;
-            value
-                .as_f64()
-                .or_else(|| value.as_str().and_then(|s| s.parse::<f64>().ok()))
-                .filter(|n| n.is_finite())
+        let published_groups = attempt
+            .group_ratio
+            .as_ref()
+            .or_else(|| data.get("group_ratio"));
+        let groups: Vec<(String, f64)> = match published_groups {
+            Some(Value::Object(map)) => map
+                .iter()
+                .filter_map(|(group, ratio)| {
+                    number(Some(ratio)).map(|ratio| (group.clone(), ratio))
+                })
+                .collect(),
+            None | Some(Value::Null) => vec![("default".into(), 1.0)],
+            Some(_) => {
+                return Err(NewApiError::Payload(
+                    "newapi /api/pricing group_ratio is not an object".into(),
+                )
+                .into_core())
+            }
         };
-        let groups = data.get("group_ratio").and_then(Value::as_object);
-        let (group, group_ratio) = groups
-            .and_then(|map| {
-                map.get("default")
-                    .or_else(|| map.values().next())
-                    .and_then(|value| value.as_f64())
-                    .map(|ratio| ("default".to_string(), ratio))
-            })
-            .unwrap_or_else(|| ("default".into(), 1.0));
         let rows = data
             .as_array()
             .or_else(|| data.get("data").and_then(Value::as_array))
-            .map(Vec::as_slice)
-            .unwrap_or_default();
+            .ok_or_else(|| {
+                NewApiError::Payload("newapi /api/pricing model list is missing".into()).into_core()
+            })?;
         let mut prices = Vec::new();
         for row in rows {
             let Some(model) = row
@@ -68,34 +72,54 @@ impl NewApiAdapter {
             else {
                 continue;
             };
-            let quota_type = number(row.get("quota_type")).unwrap_or(0.0);
-            let (input, output, per_request) = if quota_type == 1.0 {
-                (
-                    None,
-                    None,
-                    number(row.get("model_price")).map(|price| price * group_ratio),
-                )
-            } else {
-                let input = number(row.get("model_ratio"))
-                    .map(|ratio| ratio * group_ratio * 1_000_000.0 / unit)
-                    .filter(|value| value.is_finite() && *value >= 0.0);
-                let output = input.and_then(|input| {
-                    number(row.get("completion_ratio"))
-                        .map(|ratio| input * ratio)
-                        .filter(|value| value.is_finite() && *value >= 0.0)
+            let quota_type = row
+                .get("quota_type")
+                .map_or(Some(0.0), |value| number(Some(value)));
+            for (group, group_ratio) in &groups {
+                if row
+                    .get("enable_groups")
+                    .and_then(Value::as_array)
+                    .is_some_and(|enabled| {
+                        !enabled.is_empty()
+                            && !enabled
+                                .iter()
+                                .any(|value| value.as_str() == Some(group.as_str()))
+                    })
+                {
+                    continue;
+                }
+                let (input, per_request) = match quota_type {
+                    Some(0.0) => (
+                        number(row.get("model_ratio")).and_then(|ratio| {
+                            finite_price(ratio * group_ratio * 1_000_000.0 / unit)
+                        }),
+                        None,
+                    ),
+                    Some(1.0) => (
+                        None,
+                        number(row.get("model_price"))
+                            .and_then(|price| finite_price(price * group_ratio)),
+                    ),
+                    _ => continue,
+                };
+                if input.is_none() && per_request.is_none() {
+                    continue;
+                }
+                let token_price = |field: &str| {
+                    input.and_then(|input| {
+                        number(row.get(field)).and_then(|ratio| finite_price(input * ratio))
+                    })
+                };
+                prices.push(NewApiPrice {
+                    model: model.to_string(),
+                    group: group.clone(),
+                    input_per_mtok: input,
+                    output_per_mtok: token_price("completion_ratio"),
+                    cache_read_per_mtok: token_price("cache_ratio"),
+                    cache_write_per_mtok: token_price("cache_creation_ratio"),
+                    per_request,
                 });
-                (input, output, None)
-            };
-            if input.is_none() && per_request.is_none() {
-                continue;
             }
-            prices.push(NewApiPrice {
-                model: model.to_string(),
-                group: group.clone(),
-                input_per_mtok: input,
-                output_per_mtok: output,
-                per_request,
-            });
         }
         Ok(prices)
     }
@@ -245,4 +269,16 @@ impl NewApiAdapter {
         }
         metadata
     }
+}
+
+fn finite_price(value: f64) -> Option<f64> {
+    (value.is_finite() && value >= 0.0).then_some(value)
+}
+
+fn number(value: Option<&Value>) -> Option<f64> {
+    let value = value?;
+    value
+        .as_f64()
+        .or_else(|| value.as_str().and_then(|s| s.parse::<f64>().ok()))
+        .and_then(finite_price)
 }
