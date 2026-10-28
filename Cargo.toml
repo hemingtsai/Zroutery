@@ -3,7 +3,7 @@ members = ["crates/zroutery-core", "crates/zroutery-headless", "src-tauri"]
 resolver = "2"
 
 [workspace.package]
-version = "1.0.0"
+version = "1.0.0-rc.1"
 edition = "2021"
 license = "MIT"
 # The minimum is the union of two floors established from the tree itself, not a

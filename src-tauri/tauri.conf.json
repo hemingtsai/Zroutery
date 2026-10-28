@@ -1,7 +1,7 @@
 {
   "$schema": "../ui/node_modules/@tauri-apps/cli/schema.json",
   "productName": "Zroutery",
-  "version": "1.0.0",
+  "version": "1.0.0-rc.1",
   "identifier": "app.zroutery.desktop",
   "build": {
     "frontendDist": "../ui/dist",
@@ -57,6 +57,11 @@
     "category": "DeveloperTool",
     "shortDescription": "One endpoint for every LLM provider",
     "longDescription": "Zroutery aggregates several LLM providers behind a single local endpoint that speaks both the Anthropic Messages API and the OpenAI Chat Completions API, with user assigned opus/sonnet/haiku classes.",
+    "windows": {
+      "wix": {
+        "version": "1.0.0.1"
+      }
+    },
     "macOS": {
       "signingIdentity": "-",
       "minimumSystemVersion": "11.0",

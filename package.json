@@ -1,7 +1,7 @@
 {
   "name": "zroutery",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.0.0-rc.1",
   "packageManager": "pnpm@11.22.0",
   "scripts": {
     "dev": "tauri dev",
