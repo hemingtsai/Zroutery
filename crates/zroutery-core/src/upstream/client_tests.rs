@@ -407,6 +407,90 @@ async fn a_proxied_decision_refusal_is_not_retried_directly() {
     );
 }
 
+#[tokio::test]
+async fn proxy_overrides_apply_to_metadata_staging_compact_and_live_streams() {
+    use futures_util::StreamExt;
+    for operation in ["metadata", "stage", "compact", "stream"] {
+        let stream_body = concat!(
+            "data: {\"id\":\"c\",\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\n",
+            "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1}}\n\n",
+            "data: [DONE]\n\n"
+        );
+        let (content_type, body) = if operation == "stream" {
+            ("text/event-stream", stream_body)
+        } else {
+            ("application/json", COMPLETION_BODY)
+        };
+        let (proxy, captured) = one_shot(response(
+            "HTTP/1.1 200 OK",
+            &format!("content-type: {content_type}\r\n"),
+            body,
+        ))
+        .await;
+        let upstream = with_proxy(true, proxy);
+        let mut provider =
+            ProviderConfig::new("p", "Proxy fixture", ProviderKind::OpenAICompatible);
+        provider.base_url = "http://proxy-only.invalid".into();
+        provider.bypass_proxy = Some(false);
+        let identity = crate::config::resolve_client_identity(
+            crate::config::ProviderClientProfile::Native,
+            &axum::http::HeaderMap::new(),
+        );
+        let body = serde_json::json!({"model":"m"});
+        match operation {
+            "metadata" => {
+                let probe = crate::billing::BalanceProbe {
+                    path: "http://proxy-only.invalid/v1/metadata".into(),
+                    remaining_pointer: Some("/usage/prompt_tokens".into()),
+                    total_pointer: None,
+                    used_pointer: None,
+                    currency_pointer: None,
+                    currency: Some("USD".into()),
+                };
+                upstream
+                    .fetch_balance(&provider, None, &probe)
+                    .await
+                    .unwrap();
+            }
+            "stage" => {
+                assert!(matches!(
+                    upstream
+                        .stage_codex(&provider, None, &body, "m", &identity)
+                        .await
+                        .unwrap(),
+                    super::StagedResponse::Json(_)
+                ));
+            }
+            "compact" => {
+                upstream
+                    .compact_codex(&provider, None, &body, &identity)
+                    .await
+                    .unwrap();
+            }
+            "stream" => {
+                let events: Vec<_> = upstream
+                    .stream_with_identity_policy(&provider, None, &body, "m", &identity, true)
+                    .await
+                    .unwrap()
+                    .collect()
+                    .await;
+                assert!(events.iter().all(Result::is_ok), "{operation}: {events:?}");
+            }
+            _ => unreachable!(),
+        }
+        let request = captured.await.unwrap();
+        assert!(
+            request
+                .lines()
+                .next()
+                .unwrap()
+                .contains("http://proxy-only.invalid/v1/"),
+            "{operation}: {request}"
+        );
+        assert!(!request.to_ascii_lowercase().contains("authorization:"));
+    }
+}
+
 /// The environment variable is a second way to ask for the same direct path,
 /// because a packaged desktop build cannot pass `bypass_proxy` before the first
 /// client exists.

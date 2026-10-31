@@ -161,6 +161,7 @@ impl AppState {
             shadow_attachment: RwLock::new(attachment),
             projections: ProjectionLog::new(log_limit),
             response_store: ResponseStore::default(),
+            codex_filter: Default::default(),
             upstream_sessions: Default::default(),
             // `ml` and `account` are independent features, so this constructor is
             // reached with accounts on or off and the field must satisfy both.
@@ -293,6 +294,7 @@ impl AppState {
             shadow_attachment: RwLock::new(attachment),
             projections: ProjectionLog::new(log_limit),
             response_store: ResponseStore::default(),
+            codex_filter: Default::default(),
             upstream_sessions: Default::default(),
         }
     }

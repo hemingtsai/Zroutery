@@ -59,6 +59,9 @@ pub struct RectifierConfig {
     /// internal_chat_message_metadata_passthrough member on Responses items.
     #[serde(default = "default_true")]
     pub codex_metadata: bool,
+    /// Magpie Auto V10: stage Responses SSE and conditionally repair history.
+    #[serde(default = "default_true")]
+    pub codex_auto: bool,
 }
 
 impl Default for RectifierConfig {
@@ -70,6 +73,7 @@ impl Default for RectifierConfig {
             thinking_budget: true,
             thinking_fallback: true,
             codex_metadata: true,
+            codex_auto: true,
         }
     }
 }

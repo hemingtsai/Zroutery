@@ -32,6 +32,7 @@ const ENDPOINTS: &[&str] = &[
     "/v1/messages/count_tokens",
     "/v1/chat/completions",
     "/v1/responses",
+    "/v1/responses/compact",
     "/v1/responses/{response_id}",
     "/v1/responses/{response_id}/cancel",
     "/v1/generateContent",
@@ -59,6 +60,10 @@ pub fn build_app(state: Arc<AppState>) -> AxumRouter {
             )
             .route(&format!("{prefix}/chat/completions"), post(openai_chat))
             .route(&format!("{prefix}/responses"), post(responses_chat))
+            .route(
+                &format!("{prefix}/responses/compact"),
+                post(responses_compact),
+            )
             .route(
                 &format!("{prefix}/responses/{{response_id}}"),
                 get(get_response).delete(delete_response),
@@ -191,6 +196,14 @@ async fn status(State(state): State<Arc<AppState>>) -> Json<Value> {
         "models": registry.list().len(),
         "providers": cfg.providers.iter().filter(|p| p.enabled).count(),
         "auth_required": cfg.server.require_auth,
+        "codex_filter": {
+            "enabled": cfg.routing.rectifier.enabled && cfg.routing.rectifier.codex_auto,
+            "source_version": 10,
+            "retry_kinds": ["resource", "rate_limit", "transport", "availability"],
+            "max_retries": crate::rectifier::codex_auto::MAX_RETRIES,
+            "deadline_secs": crate::rectifier::codex_auto::DEADLINE.as_secs(),
+            "stats": state.codex_filter.snapshot(),
+        },
     }))
 }
 
@@ -550,6 +563,19 @@ async fn responses_chat(
         Err(e) => return error_response(Dialect::OpenAIResponses, &e),
     };
     handle_chat(state, Dialect::OpenAIResponses, headers, body).await
+}
+
+/// Compaction is a native operation, forwarded once and never replayed.
+async fn responses_compact(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    body: JsonBody,
+) -> Response {
+    let body = match unwrap_body(&state, body) {
+        Ok(body) => body,
+        Err(error) => return error_response(Dialect::OpenAIResponses, &error),
+    };
+    super::pipeline::codex_auto::compact(state, headers, body).await
 }
 
 async fn gemini_generate(

@@ -50,10 +50,12 @@ mod encode;
 mod errors;
 
 pub(crate) use errors::{retry_advice, MAX_TOTAL_RETRIES};
+mod codex_auto;
 mod headers;
 mod http;
 mod json;
 mod stream;
+pub use codex_auto::StagedResponse;
 
 #[cfg(test)]
 #[allow(deprecated)]

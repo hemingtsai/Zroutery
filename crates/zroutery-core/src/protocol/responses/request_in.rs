@@ -430,6 +430,36 @@ fn decode_input_item(item: &Value, req: &mut ChatRequest) -> Result<()> {
         | "image_generation_call" => {
             req.responses_native_only = true;
         }
+        "additional_tools" => {
+            if item.get("role").and_then(Value::as_str) != Some("developer") {
+                return Err(Error::invalid(
+                    "additional_tools `role` must be `developer`",
+                ));
+            }
+            let tools = item
+                .get("tools")
+                .and_then(Value::as_array)
+                .ok_or_else(|| Error::invalid("additional_tools `tools` must be an array"))?;
+            super::tools::decode_tools(tools, req)?;
+        }
+        "custom_tool_call" => {
+            let id = item
+                .get("call_id")
+                .and_then(Value::as_str)
+                .ok_or_else(|| Error::invalid("custom_tool_call is missing `call_id`"))?;
+            let input = item
+                .get("input")
+                .and_then(Value::as_str)
+                .ok_or_else(|| Error::invalid("custom_tool_call is missing `input`"))?;
+            req.messages.push(Message {
+                role: Role::Assistant,
+                content: vec![ContentBlock::ToolUse {
+                    id: id.to_string(),
+                    name: super::tools::call_name(item)?,
+                    input: json!({"input": input}),
+                }],
+            });
+        }
         "function_call" => {
             let arguments = item
                 .get("arguments")
@@ -450,7 +480,7 @@ fn decode_input_item(item: &Value, req: &mut ChatRequest) -> Result<()> {
                 }],
             });
         }
-        "function_call_output" => {
+        "function_call_output" | "custom_tool_call_output" => {
             let call_id = item
                 .get("call_id")
                 .and_then(Value::as_str)

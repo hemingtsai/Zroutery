@@ -53,6 +53,7 @@ mod sse;
 
 mod budget;
 mod client;
+pub(super) mod codex_auto;
 mod credentials;
 mod effort;
 mod lifecycle;
@@ -547,6 +548,34 @@ pub(super) async fn handle_chat(
         }
     };
 
+    let tool_bridge = req.stream
+        && req.responses_tools.as_ref().is_some_and(|tools| {
+            tools
+                .names
+                .values()
+                .any(|name| name.custom || name.namespace.is_some())
+        });
+    if dialect == Dialect::OpenAIResponses
+        && kind.is_main()
+        && ((config.routing.rectifier.enabled && config.routing.rectifier.codex_auto)
+            || tool_bridge)
+    {
+        // Freeform/namespace tools need complete arguments to reverse the
+        // bridge even when automatic history cleanup and retries are disabled.
+        return codex_auto::handle(
+            state,
+            req,
+            plan,
+            input_items,
+            previous_response_id,
+            storage,
+            routing_decision,
+            admission,
+            #[cfg(feature = "ml")]
+            shadow_input,
+        )
+        .await;
+    }
     let reply_headers = req.reply_headers.clone();
     let mut response = if req.stream {
         stream_chat(
@@ -787,6 +816,7 @@ async fn shape_for_candidate(
     if rectifier.enabled
         && rectifier.thinking_fallback
         && shaped.reasoning.is_none()
+        && !(rectifier.codex_auto && candidate.provider.dialect() == Dialect::OpenAIResponses)
         && !candidate.entry.capabilities.thinking
         && shaped.required_capabilities.contains(&Capability::Thinking)
     {

@@ -9,6 +9,7 @@ use serde_json::{json, Value};
 
 use crate::config::ClientIdentity;
 use crate::ir::{ChatRequest, ReplyHeaders};
+use crate::protocol::SseFrame;
 use crate::router::Candidate;
 
 const MAX_ALIASES: usize = 4096;
@@ -404,5 +405,19 @@ pub(super) fn annotate_response(body: &mut Value, reply: &ReplyHeaders) {
     }
     if let Some(metadata) = metadata.as_object_mut() {
         metadata.insert("zroutery_session_id".into(), json!(id));
+    }
+}
+
+pub(super) fn annotate_frames(frames: &mut [SseFrame], reply: &ReplyHeaders) {
+    if reply.session_id().is_none() {
+        return;
+    }
+    for frame in frames {
+        if let Ok(mut body) = frame.json() {
+            if let Some(response) = body.get_mut("response") {
+                annotate_response(response, reply);
+                frame.data = body.to_string();
+            }
+        }
     }
 }

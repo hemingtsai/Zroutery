@@ -5,6 +5,7 @@
 //! they are the same provider and the same model, and the failure was caused by
 //! a fixable request shape, not by provider health.
 
+pub mod codex_auto;
 pub mod codex_metadata;
 pub mod media_fallback;
 pub mod thinking_budget;

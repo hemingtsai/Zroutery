@@ -14,6 +14,16 @@ pub(super) fn decode_tools(tools: &[Value], req: &mut ChatRequest) -> Result<()>
             .and_then(Value::as_str)
             .unwrap_or("function")
         {
+            "namespace" => {
+                let namespace = required_name(tool)?;
+                let children = tool
+                    .get("tools")
+                    .and_then(Value::as_array)
+                    .ok_or_else(|| Error::invalid("namespace `tools` must be an array"))?;
+                for child in children {
+                    decode_callable(child, Some(namespace), req)?;
+                }
+            }
             "tool_search"
             | "web_search"
             | "web_search_preview"
@@ -44,6 +54,7 @@ fn decode_callable(tool: &Value, namespace: Option<&str>, req: &mut ChatRequest)
         .unwrap_or("function");
     let custom = match kind {
         "function" => false,
+        "custom" => true,
         other => return Err(unsupported_content("tool definition", Some(other))),
     };
     let name = required_name(tool)?;

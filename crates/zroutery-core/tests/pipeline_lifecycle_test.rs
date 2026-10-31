@@ -561,6 +561,9 @@ fn model(provider: &str, upstream: &str, priority: i32, tier: ModelTier) -> Mode
 /// fails. Those live in the fast tier so they never join a standard-tier plan.
 fn config_for(mock: SocketAddr) -> AppConfig {
     let mut cfg = AppConfig::default();
+    // These tests exercise live-stream lifecycle semantics. The staged Codex
+    // mode has separate offline gates in codex_auto_e2e_test.rs.
+    cfg.routing.rectifier.codex_auto = false;
     cfg.server.host = "127.0.0.1".into();
     cfg.server.port = 0;
     cfg.server.auth_token = TOKEN.into();
@@ -1340,6 +1343,10 @@ fn the_pipeline_has_no_second_failure_classifier() {
     // which is indistinguishable from the write not existing.
     const PIPELINE_SOURCES: &[(&str, &str)] = &[
         ("mod.rs", include_str!("../src/server/pipeline/mod.rs")),
+        (
+            "codex_auto.rs",
+            include_str!("../src/server/pipeline/codex_auto.rs"),
+        ),
         ("sse.rs", include_str!("../src/server/pipeline/sse.rs")),
         (
             "budget.rs",

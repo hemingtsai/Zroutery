@@ -135,6 +135,7 @@ pub struct AppState {
     /// serving path rather than only from tests.
     pub(super) projections: ProjectionLog,
     pub response_store: ResponseStore,
+    pub codex_filter: crate::rectifier::codex_auto::FilterCounters,
     pub(super) upstream_sessions: super::pipeline::session_binding::UpstreamSessions,
 }
 
