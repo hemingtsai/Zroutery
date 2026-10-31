@@ -9,6 +9,9 @@ use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 
+mod transaction;
+pub use transaction::{PreparedOwnership, PreparedRelease};
+
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
@@ -287,7 +290,7 @@ pub fn resolve_conflicts(
 // ---------------------------------------------------------------------------
 
 /// Snapshot of ownership at a point in time.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OwnershipManifest {
     /// The ownership state at the time this manifest was created.
     pub state: OwnershipState,
@@ -558,8 +561,6 @@ impl TakeoverStore {
             last_applied: last_applied_snapshot,
         };
 
-        inner.state = OwnershipState::Adopted;
-        inner.manifest = Some(manifest.clone());
         // Persist *before* returning, while `inner` is still borrowed. An adopt
         // that cannot record what it is about to overwrite must not report
         // success: the whole point of the manifest is that a later process can
@@ -572,11 +573,10 @@ impl TakeoverStore {
         // already `Adopted` in memory at this point, so a persistence failure
         // leaves the store claiming ownership it has no record of — which is why
         // the borrow is released and the error returned rather than swallowed.
-        let persisted = self.persist(&manifest);
-
+        self.persist(&manifest)?;
+        inner.state = OwnershipState::Adopted;
+        inner.manifest = Some(manifest.clone());
         drop(inner);
-
-        persisted?;
 
         Ok(manifest)
     }
@@ -637,6 +637,14 @@ impl TakeoverStore {
         let mut mods = Vec::new();
 
         for (field, last_val) in &inner.last_applied {
+            if field.starts_with("env.")
+                && last_val.is_null()
+                && !current_values.contains_key(field)
+            {
+                // A managed removal is the intended absence, not an external
+                // edit. Its adoption-time value still remains restorable.
+                continue;
+            }
             match current_values.get(field) {
                 Some(current_val) if current_val != last_val => {
                     mods.push(ExternalModification {
@@ -704,6 +712,38 @@ impl TakeoverStore {
         persisted
     }
 
+    /// Update an already-held client after a confirmed preview. Original values
+    /// stay the first-adoption snapshots; new managed fields gain snapshots.
+    /// Persist ownership expansion before writing a client configuration.
+    pub fn prepare_refresh(
+        &self,
+        fields: &[String],
+        current: &HashMap<String, serde_json::Value>,
+    ) -> Result<OwnershipManifest, String> {
+        let mut inner = crate::sync::lock(&self.inner);
+        if inner.state != OwnershipState::Adopted {
+            return Err("client is not currently adopted".into());
+        }
+        let mut manifest = inner.manifest.clone().ok_or("missing ownership manifest")?;
+        for field in fields {
+            if manifest.managed_fields.contains(field) {
+                continue;
+            }
+            manifest.managed_fields.push(field.clone());
+            match current.get(field) {
+                Some(value) => {
+                    manifest
+                        .field_snapshots
+                        .insert(field.clone(), value.clone());
+                }
+                None => manifest.absent_fields.push(field.clone()),
+            }
+        }
+        self.persist(&manifest)?;
+        inner.manifest = Some(manifest.clone());
+        Ok(manifest)
+    }
+
     // -- conflict detection and application -----------------------------------
 
     /// Build the conflicts a release would have to decide about.
@@ -748,7 +788,9 @@ impl TakeoverStore {
                 Some(value) => baseline.get(field).is_none_or(|last| *last != value),
                 // Absent on disk when Zroutery wrote it: a conflict, because
                 // restoring means recreating a field somebody deleted.
-                None => baseline.contains_key(field),
+                None => baseline
+                    .get(field)
+                    .is_some_and(|last| !(field.starts_with("env.") && last.is_null())),
             };
             if differs {
                 conflicts.push(FieldConflict {
@@ -1344,8 +1386,12 @@ impl TakeoverStore {
             }
         }
 
-        // (2) No file at all.
-        if !config_path.exists() {
+        // (2) No config and no declared client executable.
+        let detected = match adapter.is_detected() {
+            Ok(detected) => detected,
+            Err(reason) => return TakeoverStatus::Error { reason },
+        };
+        if !detected {
             return TakeoverStatus::NotDetected {
                 searched: vec![path_text],
                 reason: format!(

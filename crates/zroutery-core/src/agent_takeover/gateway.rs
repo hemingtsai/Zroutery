@@ -1,6 +1,7 @@
 //! What Zroutery offers a taken-over client: the gateway address, a local credential, and the field set each client needs.
 
 use super::clients::{AgentType, ManagedField};
+use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
 
@@ -8,7 +9,7 @@ use super::clients::{AgentType, ManagedField};
 // ---------------------------------------------------------------------------
 
 /// One model class an agent is allowed to ask Zroutery for.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct TierClass {
     /// The model id the agent puts in its request.
     ///
@@ -17,18 +18,18 @@ pub struct TierClass {
     pub model: String,
     /// The name the client's model picker shows for it.
     pub display_name: String,
-    /// The reasoning-effort levels every member of the class accepts, in picker
-    /// order.
+    /// The reasoning-effort levels at least one usable member of the class
+    /// accepts, in picker order.
     ///
-    /// A class routes to several models, and the one that serves a request is
-    /// chosen per request, so a level is only offered when **every** member
-    /// declares it. The union of the members' levels is not enough: it offers a
-    /// control the gateway can encode but the member that ends up serving
-    /// cannot honour, and the upstream refuses the request with a reason the
-    /// user cannot act on. Empty means no level is common to all members, and
-    /// the client is given no picker rather than one whose levels some members
-    /// reject.
+    /// The request pipeline filters the candidate plan by the requested effort
+    /// before routing, so members that cannot honour the selected level are not
+    /// eligible to serve it. Empty means no usable member declares an accepted
+    /// native effort, and the client is given no picker.
     pub effort_levels: Vec<String>,
+    pub capabilities: crate::config::ModelCapabilities,
+    pub context_window: Option<u32>,
+    pub max_output_tokens: Option<u32>,
+    pub capability_source: String,
 }
 
 /// What Zroutery offers an agent when it takes it over.
@@ -38,7 +39,7 @@ pub struct TierClass {
 /// key from its own credential store. That distinction is what makes writing the
 /// token into the agent's config defensible — the token's blast radius is this
 /// machine — and it is why nothing here ever holds a provider key.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct GatewayTarget {
     /// The local endpoint the agent should send to.
     pub base_url: String,
@@ -53,6 +54,8 @@ pub struct GatewayTarget {
     /// client or through Zroutery's per-client policy. Zroutery does not choose
     /// a tier on the user's behalf.
     pub default_class: Option<String>,
+    /// Absolute owned catalogue file. None for callers not configuring Codex.
+    pub codex_catalogue_path: Option<String>,
 }
 
 /// The provider table key every adapter registers Zroutery under.
@@ -163,13 +166,9 @@ pub fn takeover_fields(
             // the tools it spawns — and a value here replaces the same variable
             // exported in the user's shell.
             //
-            // No per-class field here on purpose. Claude Code picks a model by
-            // name (`claude-sonnet-4-5`), and Zroutery already maps those names
-            // onto classes with its own `match_claude_names` config. Writing
-            // `ANTHROPIC_DEFAULT_*_MODEL` here would move a routing decision
-            // out of Zroutery's configuration and into a file this manifest
-            // then owns — the boundary takeover is not supposed to cross.
-            Ok(vec![
+            // Native family aliases point at stable candidate pools. They do
+            // not name an upstream model or imply a Claude family's capability.
+            let mut out = vec![
                 ManagedField {
                     path: "env.ANTHROPIC_BASE_URL".into(),
                     value: serde_json::json!(target.base_url),
@@ -178,7 +177,64 @@ pub fn takeover_fields(
                     path: "env.ANTHROPIC_AUTH_TOKEN".into(),
                     value: serde_json::json!(target.token),
                 },
-            ])
+                ManagedField {
+                    path: "modelPicker".into(),
+                    // Do not use behavesAs: that would assert a native Claude
+                    // model's capabilities/prices for a heterogeneous class.
+                    value: serde_json::json!({"replaceBuiltInOptions": true, "options": target.classes.iter().map(|class| serde_json::json!({
+                        "model": class.model, "label": class.display_name,
+                        "description": "Zroutery candidate pool; actual capability and billing in Zroutery"
+                    })).collect::<Vec<_>>() }),
+                },
+            ];
+            for (tier, alias) in [
+                (crate::config::ModelTier::Fast, "HAIKU"),
+                (crate::config::ModelTier::Standard, "SONNET"),
+                (crate::config::ModelTier::Reasoning, "OPUS"),
+                (crate::config::ModelTier::Frontier, "FABLE"),
+            ] {
+                if target
+                    .classes
+                    .iter()
+                    .any(|class| class.model == tier.virtual_id())
+                {
+                    out.push(ManagedField {
+                        path: format!("env.ANTHROPIC_DEFAULT_{alias}_MODEL"),
+                        value: serde_json::json!(tier.virtual_id()),
+                    });
+                    if let Some(class) = target
+                        .classes
+                        .iter()
+                        .find(|class| class.model == tier.virtual_id())
+                    {
+                        out.push(ManagedField {
+                            path: format!("env.ANTHROPIC_DEFAULT_{alias}_MODEL_NAME"),
+                            value: serde_json::json!(class.display_name),
+                        });
+                    }
+                }
+            }
+            if let Some(default) = &target.default_class {
+                out.push(ManagedField {
+                    path: "model".into(),
+                    value: serde_json::json!(default),
+                });
+                // Remove the higher-precedence override, rather than pinning it
+                // to the chosen class again: later native /model selections
+                // must be able to save the next-session default normally.
+                out.push(ManagedField {
+                    path: "env.ANTHROPIC_MODEL".into(),
+                    value: serde_json::Value::Null,
+                });
+                // An explicitly synchronized default also clears the old
+                // subagent model pin; native subagents may then inherit the
+                // current session instead of leaking to the previous relay.
+                out.push(ManagedField {
+                    path: "env.CLAUDE_CODE_SUBAGENT_MODEL".into(),
+                    value: serde_json::Value::Null,
+                });
+            }
+            Ok(out)
         }
 
         AgentType::Codex => {
@@ -252,6 +308,12 @@ pub fn takeover_fields(
                     value: serde_json::json!(default),
                 });
             }
+            if let Some(path) = &target.codex_catalogue_path {
+                out.push(ManagedField {
+                    path: "model_catalog_json".into(),
+                    value: serde_json::json!(path),
+                });
+            }
             Ok(out)
         }
 
@@ -291,6 +353,24 @@ pub fn takeover_fields(
                     path: format!("{prefix}.models.{}.name", class.model),
                     value: serde_json::json!(class.display_name),
                 });
+                out.push(ManagedField { path: format!("{prefix}.models.{}.capabilities", class.model), value: serde_json::json!({
+                    "tools": class.capabilities.tools,
+                    "input": if class.capabilities.vision { vec!["text","image"] } else { vec!["text"] },
+                    "output": ["text"],
+                    "reasoning": {"supported": class.capabilities.thinking, "effort": class.effort_levels}
+                }) });
+                if let Some(context) = class.context_window {
+                    out.push(ManagedField {
+                        path: format!("{prefix}.models.{}.limit.context", class.model),
+                        value: serde_json::json!(context),
+                    });
+                }
+                if let Some(output) = class.max_output_tokens {
+                    out.push(ManagedField {
+                        path: format!("{prefix}.models.{}.limit.output", class.model),
+                        value: serde_json::json!(output),
+                    });
+                }
                 // The picker's effort levels are the class's declared ones, so
                 // a client variant maps onto a control the gateway can encode
                 // and the models behind the class can honour. A class that
@@ -311,12 +391,10 @@ pub fn takeover_fields(
                         })
                     })
                     .collect();
-                if !variants.is_empty() {
-                    out.push(ManagedField {
-                        path: format!("{prefix}.models.{}.variants", class.model),
-                        value: serde_json::Value::Array(variants),
-                    });
-                }
+                out.push(ManagedField {
+                    path: format!("{prefix}.models.{}.variants", class.model),
+                    value: serde_json::Value::Array(variants),
+                });
             }
             // A file that already carries a legacy gateway entry gets that
             // entry updated too. OpenCode 1.x reads only `provider`, and a file
@@ -364,13 +442,55 @@ pub fn takeover_fields(
             Ok(out)
         }
 
-        AgentType::Gemini => Err(
-            "Gemini CLI is not supported for takeover. Its endpoint is only settable through the \
-             GOOGLE_GEMINI_BASE_URL environment variable, which is not a file this manifest can \
-             restore, so taking over the settings file would redirect the key but leave the client \
-             talking to Google."
-                .into(),
-        ),
+        AgentType::Gemini => {
+            let default = target.default_class.as_ref().ok_or_else(|| {
+                "cannot take over Gemini CLI: choose an explicit default model first; Gemini's \
+                 settings require `model.name` and Zroutery will not choose a class for you"
+                    .to_string()
+            })?;
+            let base_url = target.base_url.trim().trim_end_matches('/');
+            let lower = base_url.to_ascii_lowercase();
+            let authority = lower
+                .strip_prefix("http://")
+                .or_else(|| lower.strip_prefix("https://"));
+            if authority.is_none_or(|authority| {
+                authority.is_empty()
+                    || authority.contains(['/', '?', '#', '@', '\\'])
+                    || authority.chars().any(char::is_whitespace)
+            }) {
+                return Err(
+                    "cannot take over Gemini CLI: GOOGLE_GEMINI_BASE_URL must be the bare gateway \
+                     root, without /v1 or /v1beta"
+                        .into(),
+                );
+            }
+            Ok(vec![
+                ManagedField {
+                    // v0.66.0 has a gateway-auth selection bug. API-key auth
+                    // correctly sends GEMINI_API_KEY to the custom base URL.
+                    path: "settings.security.auth.selectedType".into(),
+                    value: serde_json::json!("gemini-api-key"),
+                },
+                ManagedField {
+                    path: "settings.model.name".into(),
+                    value: serde_json::json!(default),
+                },
+                ManagedField {
+                    path: "env.GOOGLE_GEMINI_BASE_URL".into(),
+                    value: serde_json::json!(base_url),
+                },
+                ManagedField {
+                    path: "env.GEMINI_API_KEY".into(),
+                    value: serde_json::json!(target.token),
+                },
+                ManagedField {
+                    // Environment selection outranks settings.model.name, so
+                    // every definition must be removed by the composite editor.
+                    path: "env.GEMINI_MODEL".into(),
+                    value: serde_json::Value::Null,
+                },
+            ])
+        }
     }
 }
 

@@ -175,7 +175,16 @@ pub(super) fn write_restricted(path: &std::path::Path, bytes: &[u8]) -> Result<(
 /// Create `path` and write `bytes` into it.
 #[cfg(not(unix))]
 pub(super) fn write_restricted(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
-    std::fs::write(path, bytes).map_err(|e| format!("failed to write {}: {e}", path.display()))
+    use std::io::Write;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|error| format!("failed to create {}: {error}", path.display()))?;
+    file.write_all(bytes)
+        .map_err(|error| format!("failed to write {}: {error}", path.display()))?;
+    file.sync_all()
+        .map_err(|error| format!("failed to flush {}: {error}", path.display()))
 }
 
 /// A unique temporary file name next to `path`, in the same directory so the
@@ -285,7 +294,11 @@ pub(super) fn apply_fields(
     fields: &[ManagedField],
 ) -> Result<(), String> {
     for field in fields {
-        set_nested(raw, &field.path, field.value.clone())?;
+        if field.removes_env() {
+            remove_nested(raw, &field.path);
+        } else {
+            set_nested(raw, &field.path, field.value.clone())?;
+        }
     }
     Ok(())
 }
@@ -332,19 +345,31 @@ pub(super) fn apply_patch_to_disk(
     fields: &[ManagedField],
     format: ConfigFormat,
 ) -> Result<AgentConfigSnapshot, String> {
+    let (next, change) = prepare_patch(snapshot, fields, format)?;
+    write_config_atomic(&change.path, change.after.as_deref().unwrap())?;
+    Ok(next)
+}
+
+pub(super) fn prepare_patch(
+    snapshot: &AgentConfigSnapshot,
+    fields: &[ManagedField],
+    format: ConfigFormat,
+) -> Result<(AgentConfigSnapshot, crate::file_transaction::FileChange), String> {
     let mut raw = reread_raw(snapshot, format)?;
     apply_fields(&mut raw, fields)?;
 
     let text = serialize_config(format, &raw)?;
     let hash = compute_hash(text.as_bytes());
-    write_config_atomic(&snapshot.config_path, text.as_bytes())?;
-
-    Ok(AgentConfigSnapshot {
-        agent_type: snapshot.agent_type,
-        config_path: snapshot.config_path.clone(),
-        raw,
-        config_hash: hash,
-    })
+    let change = file_change(snapshot, text.into_bytes())?;
+    Ok((
+        AgentConfigSnapshot {
+            agent_type: snapshot.agent_type,
+            config_path: snapshot.config_path.clone(),
+            raw,
+            config_hash: hash,
+        },
+        change,
+    ))
 }
 
 /// Restore a manifest's original values into the current config and write it.
@@ -353,11 +378,49 @@ pub(super) fn release_to_disk(
     manifest: &OwnershipManifest,
     format: ConfigFormat,
 ) -> Result<(), String> {
-    let mut raw = snapshot.raw.clone();
+    let change = prepare_release(snapshot, manifest, format)?;
+    write_config_atomic(&change.path, change.after.as_deref().unwrap())
+}
+
+pub(super) fn prepare_release(
+    snapshot: &AgentConfigSnapshot,
+    manifest: &OwnershipManifest,
+    format: ConfigFormat,
+) -> Result<crate::file_transaction::FileChange, String> {
+    let mut raw = reread_raw(snapshot, format)?;
     restore_fields(&mut raw, manifest)?;
 
     let text = serialize_config(format, &raw)?;
-    write_config_atomic(&snapshot.config_path, text.as_bytes())
+    file_change(snapshot, text.into_bytes())
+}
+
+/// Keep exact bytes for the transaction CAS; parsed equality alone would lose
+/// comments/formatting or an unrelated edit made after the preview was read.
+fn file_change(
+    snapshot: &AgentConfigSnapshot,
+    after: Vec<u8>,
+) -> Result<crate::file_transaction::FileChange, String> {
+    let before = match std::fs::read(&snapshot.config_path) {
+        Ok(bytes) => {
+            if compute_hash(&bytes) != snapshot.config_hash {
+                return Err(
+                    "client config changed while preparing its write; refresh the preview".into(),
+                );
+            }
+            Some(bytes)
+        }
+        Err(error)
+            if error.kind() == std::io::ErrorKind::NotFound && snapshot.config_hash.is_empty() =>
+        {
+            None
+        }
+        Err(error) => return Err(format!("cannot stage client configuration: {error}")),
+    };
+    Ok(crate::file_transaction::FileChange {
+        path: snapshot.config_path.clone(),
+        before,
+        after: Some(after),
+    })
 }
 
 /// Remove a nested JSON value by dotted path, pruning the tables the removal

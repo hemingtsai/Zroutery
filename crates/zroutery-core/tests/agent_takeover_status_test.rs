@@ -234,8 +234,10 @@ fn a_target() -> GatewayTarget {
             model: "sonnet-class".into(),
             display_name: "Sonnet".into(),
             effort_levels: Vec::new(),
+            ..Default::default()
         }],
         default_class: None,
+        codex_catalogue_path: None,
     }
 }
 
@@ -300,25 +302,15 @@ fn extract(root: &serde_json::Value, paths: &[String]) -> HashMap<String, serde_
 // ---------------------------------------------------------------------------
 
 #[test]
-fn a_client_with_no_adapter_is_unsupported() {
+fn gemini_has_a_takeover_adapter() {
     let sandbox = Sandbox::new("unsupported");
     let store = store_for(&sandbox, "unsupported");
 
-    let status = store.inspect(None, Some(&a_target()), None);
-
-    assert_eq!(status.name(), "unsupported", "{status:?}");
-    match &status {
-        TakeoverStatus::Unsupported { reason } => {
-            assert!(
-                reason.contains("gemini"),
-                "the reason has to name the client: {reason}"
-            );
-        }
-        other => panic!("expected unsupported, got {other:?}"),
-    }
+    let unsupported = store.inspect(None, Some(&a_target()), None);
+    assert_eq!(unsupported.name(), "unsupported", "{unsupported:?}");
     assert!(
-        adapter_for(AgentType::Gemini).is_none(),
-        "and there must genuinely be no adapter behind that claim"
+        adapter_for(AgentType::Gemini).is_some(),
+        "Gemini's two-file adapter must be available"
     );
 }
 
@@ -393,10 +385,14 @@ fn a_detected_client_with_a_usable_target_is_ready_with_a_preview() {
             assert!(config_path.ends_with("agent-config.json"), "{config_path}");
             assert_eq!(
                 proposal.managed_fields,
-                vec!["env.ANTHROPIC_BASE_URL", "env.ANTHROPIC_AUTH_TOKEN"],
+                vec![
+                    "env.ANTHROPIC_BASE_URL",
+                    "env.ANTHROPIC_AUTH_TOKEN",
+                    "modelPicker"
+                ],
                 "the preview must name the exact fields that will change"
             );
-            // Both are new, so both are reported as creations.
+            // Connection fields and the native picker are all new creations.
             assert!(
                 proposal.changes.iter().all(|c| c.current.is_none()),
                 "a preview that hides which fields are new is not a preview"

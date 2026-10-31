@@ -39,9 +39,12 @@
 //! being reimplemented, because two atomic writers would be two chances to get
 //! the temp-sibling-then-rename sequence wrong and only one of them tested.
 
+mod catalogue;
 mod clients;
+mod declarations;
 mod fs;
 mod gateway;
+mod gemini;
 mod ownership;
 mod status;
 mod toml;
@@ -49,6 +52,7 @@ mod toml;
 #[cfg(test)]
 mod tests;
 
+pub use catalogue::{catalogue_fingerprint, codex_catalogue, CLIENT_CATALOGUE_VERSION};
 pub use clients::{
     adapter_for, AgentAdapter, AgentConfigSnapshot, AgentType, ClaudeAdapter, CodexAdapter,
     ManagedField, OpenCodeAdapter,
@@ -56,10 +60,11 @@ pub use clients::{
 pub use gateway::{
     takeover_fields, GatewayTarget, TierClass, GATEWAY_PROVIDER_ID, OPENCODE_CONFIG_ENV,
 };
+pub use gemini::GeminiAdapter;
 pub use ownership::{
     extract_field_values, resolve_conflicts, ConflictResolution, ExternalModification,
-    FieldConflict, OwnershipManifest, OwnershipState, ProposedChange, ReleaseOutcome,
-    ResolutionReport, TakeoverProposal, TakeoverStore,
+    FieldConflict, OwnershipManifest, OwnershipState, PreparedOwnership, PreparedRelease,
+    ProposedChange, ReleaseOutcome, ResolutionReport, TakeoverProposal, TakeoverStore,
 };
 pub use status::{TakeoverStatus, VerificationReport};
 
@@ -68,5 +73,7 @@ pub(crate) use fs::write_config_atomic;
 // The per-test config roots live in `fs` next to the real `home_dir` they
 // shadow, and the fixtures reach them through the barrel the way they reached
 // them when everything was one file.
+#[cfg(test)]
+pub(crate) use declarations::isolate_binary_search;
 #[cfg(test)]
 pub(crate) use fs::{isolate_agent_home, isolate_config_dir, isolated_agent_home};

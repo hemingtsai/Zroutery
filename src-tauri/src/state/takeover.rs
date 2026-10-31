@@ -108,6 +108,35 @@ impl Desktop {
                     model: tier.virtual_id_styled(style).to_string(),
                     display_name: capitalize(tier.as_str()),
                     effort_levels,
+                    capabilities: {
+                        let mut common = members[0].capabilities.clone();
+                        for member in &members[1..] {
+                            common.tools &= member.capabilities.tools;
+                            common.vision &= member.capabilities.vision;
+                            common.thinking &= member.capabilities.thinking;
+                            common.structured_output &= member.capabilities.structured_output;
+                            common.audio &= member.capabilities.audio;
+                            common.video &= member.capabilities.video;
+                            common.files &= member.capabilities.files;
+                        }
+                        common
+                    },
+                    context_window: members
+                        .iter()
+                        .all(|model| model.context_window.is_some())
+                        .then(|| members.iter().filter_map(|model| model.context_window).min())
+                        .flatten(),
+                    max_output_tokens: members
+                        .iter()
+                        .all(|model| model.max_output_tokens.is_some())
+                        .then(|| {
+                            members
+                                .iter()
+                                .filter_map(|model| model.max_output_tokens)
+                                .min()
+                        })
+                        .flatten(),
+                    capability_source: "configured enabled members; shared capabilities and limits use conservative intersection and minimum evidence".into(),
                 })
             })
             .collect();
@@ -120,6 +149,10 @@ impl Desktop {
             token: token.to_string(),
             classes,
             default_class: None,
+            // The later desktop setup transaction owns and publishes this
+            // auxiliary file. Do not point Codex at a file this slice does not
+            // create and recover.
+            codex_catalogue_path: None,
         })
     }
 
@@ -296,7 +329,7 @@ fn verification_from_config(
     let live = extract_field_values(raw, &paths);
     report.config_matches = fields
         .iter()
-        .all(|field| live.get(&field.path) == Some(&field.value));
+        .all(|field| field.matches_value(live.get(&field.path)));
     if !report.config_matches {
         report.notes.push(
             "the client config does not match what this build manages — release and take \
@@ -369,8 +402,13 @@ mod verification_tests {
                 model: "standard-class".into(),
                 display_name: "Standard".into(),
                 effort_levels: Vec::new(),
+                capabilities: Default::default(),
+                context_window: None,
+                max_output_tokens: None,
+                capability_source: "test fixture with no capability evidence".into(),
             }],
             default_class: None,
+            codex_catalogue_path: None,
         };
         let mut raw = serde_json::json!({});
         for field in takeover_fields(AgentType::OpenCode, &target, Some(&raw)).unwrap() {

@@ -1,13 +1,8 @@
 //! The takeover fixtures: config discovery, field sets, restore, conflicts and the release path.
 
-// The Gemini adapter is deprecated on purpose: it is retained so an older manifest
-// can still be released, and these are the fixtures that prove that path works.
-// The allow is module-wide because six of them construct it.
-#![allow(deprecated)]
-
 use std::collections::HashMap;
 
-use super::clients::{first_comment_line, project_shadow, GeminiAdapter};
+use super::clients::{first_comment_line, project_shadow};
 use super::fs::{
     apply_fields, apply_patch_to_disk, compute_hash, release_to_disk, restore_fields, set_nested,
     ConfigFormat,
@@ -408,8 +403,22 @@ fn codex_adapter_agent_type() {
 #[test]
 fn gemini_adapter_agent_type() {
     super::isolate_agent_home();
+    let binary_dir = tempfile::tempdir().unwrap();
+    let suffix = if cfg!(windows) { ".cmd" } else { "" };
+    let _binary = super::isolate_binary_search(
+        vec![binary_dir.path().to_path_buf()],
+        vec![suffix.to_string()],
+    );
+    let binary = binary_dir.path().join(format!("gemini{suffix}"));
+    std::fs::write(&binary, "fixture").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
     let adapter = GeminiAdapter;
     assert_eq!(adapter.agent_type(), AgentType::Gemini);
+    assert!(adapter.is_detected().unwrap());
 }
 
 #[test]
@@ -642,7 +651,7 @@ fn gemini_adapter_read_config() {
     let adapter = GeminiAdapter;
     let snapshot = adapter.read_config().unwrap();
     assert_eq!(snapshot.agent_type, AgentType::Gemini);
-    assert!(snapshot.raw.is_object());
+    assert_eq!(snapshot.raw, serde_json::json!({"settings": {}, "env": {}}));
 }
 
 #[test]
@@ -1699,14 +1708,17 @@ fn a_target() -> GatewayTarget {
                 model: "sonnet-class".into(),
                 display_name: "Sonnet".into(),
                 effort_levels: vec!["low".into(), "medium".into(), "high".into()],
+                ..Default::default()
             },
             TierClass {
                 model: "haiku-class".into(),
                 display_name: "Haiku".into(),
                 effort_levels: Vec::new(),
+                ..Default::default()
             },
         ],
         default_class: None,
+        codex_catalogue_path: None,
     }
 }
 
@@ -1729,11 +1741,15 @@ fn paths(
 /// would move a routing decision out of Zroutery's config into a file the
 /// manifest then owns — the boundary takeover is not supposed to cross.
 #[test]
-fn the_claude_field_set_is_exactly_two_env_entries() {
+fn the_claude_field_set_includes_a_native_picker_without_an_implicit_default() {
     let target = a_target();
     assert_eq!(
         paths(AgentType::Claude, &target, None),
-        vec!["env.ANTHROPIC_BASE_URL", "env.ANTHROPIC_AUTH_TOKEN"]
+        vec![
+            "env.ANTHROPIC_BASE_URL",
+            "env.ANTHROPIC_AUTH_TOKEN",
+            "modelPicker"
+        ]
     );
 }
 
@@ -1744,10 +1760,58 @@ fn the_claude_field_set_does_not_touch_the_model_unless_asked() {
     target.default_class = Some("sonnet-class".into());
     let with_default = paths(AgentType::Claude, &target, None);
 
+    assert!(!plain.iter().any(|path| path == "model"));
+    assert!(
+        with_default.iter().any(|path| path == "model"),
+        "explicit default is a managed/restorable model selection"
+    );
+}
+
+#[test]
+fn claude_sync_removes_stale_model_env_and_restores_it_without_touching_other_settings() {
+    super::isolate_agent_home();
+    let home = super::isolated_agent_home().unwrap();
+    let path = home.join(".claude").join("settings.json");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let original = serde_json::json!({"model":"sonnet", "env":{"ANTHROPIC_MODEL":"tierflow_pro[1M]",
+        "CLAUDE_CODE_SUBAGENT_MODEL":"tierflow_pro[1M]", "UNRELATED":"keep"}, "permissions":{"defaultMode":"manual"}});
+    std::fs::write(&path, original.to_string()).unwrap();
+    let mut target = a_target();
+    target.default_class = Some("sonnet-class".into());
+    let snapshot = ClaudeAdapter.read_config().unwrap();
+    let fields = takeover_fields(AgentType::Claude, &target, Some(&snapshot.raw)).unwrap();
+    let paths: Vec<_> = fields.iter().map(|field| field.path.clone()).collect();
+    let current = extract_field_values(&snapshot.raw, &paths);
+    let store = TakeoverStore::new();
+    store.adopt(paths.clone(), &current).unwrap();
+    let patched = ClaudeAdapter.apply_patch(&snapshot, &fields).unwrap();
+    let applied = fields
+        .iter()
+        .map(|field| (field.path.clone(), field.value.clone()))
+        .collect();
+    store.record_applied(&applied).unwrap();
+    assert!(patched.raw.pointer("/env/ANTHROPIC_MODEL").is_none());
+    assert!(patched
+        .raw
+        .pointer("/env/CLAUDE_CODE_SUBAGENT_MODEL")
+        .is_none());
+    assert_eq!(patched.raw["env"]["UNRELATED"], "keep");
+    let values = extract_field_values(&patched.raw, &paths);
+    assert!(
+        store.conflicts(&values).is_empty(),
+        "an intended removal is not an external conflict"
+    );
+    assert!(store.detect_external_modification(&values).is_empty());
+    let mut modified = patched.raw.clone();
+    modified["env"]["ANTHROPIC_MODEL"] = serde_json::json!("external-model");
+    assert!(!store
+        .conflicts(&extract_field_values(&modified, &paths))
+        .is_empty());
+    store.release_with_restore(&ClaudeAdapter).unwrap();
+    let restored = ClaudeAdapter.read_config().unwrap().raw;
     assert_eq!(
-        plain, with_default,
-        "a default class must not add a Claude field: the model is chosen by \
-         name and mapped inside Zroutery, not written into the client config"
+        restored, original,
+        "including removal snapshots and unrelated configuration"
     );
 }
 
@@ -2115,11 +2179,17 @@ fn the_opencode_model_table_carries_the_declared_effort_levels() {
         ])
     );
 
-    // A class that declares no levels gets no picker: the client's own default
-    // is better than a list nothing behind the class promised.
-    assert!(fields
-        .iter()
-        .all(|f| f.path != format!("providers.{GATEWAY_PROVIDER_ID}.models.haiku-class.variants")));
+    // An explicit empty list also removes stale client variants instead of
+    // letting a client's inferred defaults advertise unsupported effort.
+    assert_eq!(
+        fields
+            .iter()
+            .find(|f| f.path
+                == format!("providers.{GATEWAY_PROVIDER_ID}.models.haiku-class.variants"))
+            .expect("empty effort is explicitly managed")
+            .value,
+        serde_json::json!([])
+    );
 
     // A hand-edited level the gateway cannot encode never reaches the client.
     let mut target = a_target();
@@ -2136,26 +2206,446 @@ fn the_opencode_model_table_carries_the_declared_effort_levels() {
 }
 
 #[test]
-fn gemini_is_refused_a_new_takeover() {
-    let target = a_target();
+fn gemini_field_set_is_exact_and_requires_an_explicit_default() {
+    let mut target = a_target();
     let err = takeover_fields(AgentType::Gemini, &target, None)
-        .expect_err("gemini takeover is withdrawn");
-    assert!(err.contains("not supported"), "{err}");
-    assert!(
-        !AgentType::Gemini.is_takeover_supported(),
-        "and it must not be advertised as a target"
+        .expect_err("Gemini must not invent a default model");
+    assert!(err.contains("explicit default"), "{err}");
+
+    target.default_class = Some("sonnet-class".into());
+    let fields = takeover_fields(AgentType::Gemini, &target, None).unwrap();
+    assert_eq!(
+        fields
+            .iter()
+            .map(|field| (field.path.as_str(), field.value.clone()))
+            .collect::<Vec<_>>(),
+        vec![
+            (
+                "settings.security.auth.selectedType",
+                serde_json::json!("gemini-api-key")
+            ),
+            ("settings.model.name", serde_json::json!("sonnet-class")),
+            (
+                "env.GOOGLE_GEMINI_BASE_URL",
+                serde_json::json!("http://127.0.0.1:8787")
+            ),
+            ("env.GEMINI_API_KEY", serde_json::json!("gw-local-token")),
+            ("env.GEMINI_MODEL", serde_json::Value::Null),
+        ]
     );
-    assert!(
-        adapter_for(AgentType::Gemini).is_none(),
-        "and there must be no adapter to hand a caller"
+    assert!(AgentType::Gemini.is_takeover_supported());
+    assert!(adapter_for(AgentType::Gemini).is_some());
+}
+
+#[test]
+fn gemini_field_set_refuses_versioned_gateway_bases() {
+    for suffix in [
+        "/v1",
+        "/v1/",
+        "/v1beta",
+        "/v1beta/",
+        "/proxy/v1",
+        "/proxy/v1beta/",
+    ] {
+        let mut target = a_target();
+        target.default_class = Some("sonnet-class".into());
+        target.base_url = format!("http://127.0.0.1:8787{suffix}");
+        let err = takeover_fields(AgentType::Gemini, &target, None).unwrap_err();
+        assert!(err.contains("bare gateway root"), "{suffix}: {err}");
+    }
+}
+
+fn gemini_fixture(
+    settings: Option<&[u8]>,
+    env: Option<&[u8]>,
+) -> (std::path::PathBuf, std::path::PathBuf) {
+    super::isolate_agent_home();
+    let settings_path = GeminiAdapter.config_path().unwrap();
+    let env_path = settings_path.parent().unwrap().join(".env");
+    std::fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
+    if let Some(bytes) = settings {
+        std::fs::write(&settings_path, bytes).unwrap();
+    }
+    if let Some(bytes) = env {
+        std::fs::write(&env_path, bytes).unwrap();
+    }
+    (settings_path, env_path)
+}
+
+fn gemini_fields() -> Vec<ManagedField> {
+    let mut target = a_target();
+    target.default_class = Some("sonnet-class".into());
+    takeover_fields(AgentType::Gemini, &target, None).unwrap()
+}
+
+#[test]
+fn gemini_composite_snapshot_binds_both_files_and_paths() {
+    let (settings_path, env_path) = gemini_fixture(
+        Some(br#"{"ui":{"theme":"dark"}}"#),
+        Some(b"GEMINI_API_KEY=old\n"),
     );
+    let snapshot = GeminiAdapter.read_config().unwrap();
+    assert_eq!(snapshot.config_path, settings_path);
+    assert_eq!(snapshot.raw["settings"]["ui"]["theme"], "dark");
+    assert_eq!(snapshot.raw["env"]["GEMINI_API_KEY"], "old");
+    let original_hash = snapshot.config_hash.clone();
+    let original_path = snapshot.config_path.clone();
+
+    std::fs::write(&env_path, b"GEMINI_API_KEY=changed\n").unwrap();
+    let changed = GeminiAdapter.read_config().unwrap();
+    assert_ne!(changed.config_hash, original_hash);
+    let err = GeminiAdapter
+        .prepare_patch(&snapshot, &gemini_fields())
+        .unwrap_err();
+    assert!(err.contains("changed on disk"), "{err}");
+
+    let relocated = tempfile::tempdir().unwrap();
+    super::isolate_config_dir("GEMINI_CLI_HOME", relocated.path());
+    let err = GeminiAdapter
+        .prepare_patch(&snapshot, &gemini_fields())
+        .unwrap_err();
+    assert!(err.contains("settings path changed"), "{err}");
+    assert_eq!(snapshot.config_path, original_path);
+}
+
+#[test]
+fn gemini_prepare_patch_stages_two_files_and_stale_env_blocks_all_publication() {
+    let (settings_path, env_path) = gemini_fixture(
+        Some(br#"{"ui":{"theme":"dark"}}"#),
+        Some(b"# mine\nGEMINI_API_KEY=old\nDEBUG=1\n"),
+    );
+    let before = GeminiAdapter.read_config().unwrap();
+    let (next, changes) = GeminiAdapter
+        .prepare_patch(&before, &gemini_fields())
+        .unwrap();
+    assert_eq!(changes.len(), 3, "settings, .env, and origin metadata");
+    assert_eq!(next.raw["settings"]["model"]["name"], "sonnet-class");
+    assert_eq!(next.raw["env"]["GEMINI_API_KEY"], "gw-local-token");
+    assert_eq!(
+        std::fs::read(&settings_path).unwrap(),
+        changes
+            .iter()
+            .find(|change| change.path == settings_path)
+            .unwrap()
+            .before
+            .clone()
+            .unwrap()
+    );
+
+    std::fs::write(&env_path, b"external=edit\n").unwrap();
+    let journal = settings_path.parent().unwrap().join("test-journal");
+    assert!(crate::file_transaction::commit(&journal, &changes).is_err());
+    assert_eq!(
+        std::fs::read_to_string(&settings_path).unwrap(),
+        r#"{"ui":{"theme":"dark"}}"#
+    );
+    assert_eq!(
+        std::fs::read_to_string(&env_path).unwrap(),
+        "external=edit\n"
+    );
+}
+
+#[test]
+fn gemini_apply_and_release_preserve_hand_edits_and_restore_absence() {
+    let (settings_path, env_path) = gemini_fixture(
+        Some(br#"{"ui":{"theme":"dark"},"security":{"auth":{"remember":true}}}"#),
+        Some(b"# mine\nDEBUG=1\nGEMINI_MODEL=first\nGEMINI_MODEL=last\n"),
+    );
+    let before = GeminiAdapter.read_config().unwrap();
+    let fields = gemini_fields();
+    let paths: Vec<String> = fields.iter().map(|field| field.path.clone()).collect();
+    let originals = extract_field_values(&before.raw, &paths);
+    let store = TakeoverStore::new();
+    store.adopt(paths, &originals).unwrap();
+    GeminiAdapter.apply_patch(&before, &fields).unwrap();
+
+    let settings: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&settings_path).unwrap()).unwrap();
+    assert_eq!(
+        settings["security"]["auth"]["selectedType"],
+        "gemini-api-key"
+    );
+    assert_eq!(settings["security"]["auth"]["remember"], true);
+    assert_eq!(settings["ui"]["theme"], "dark");
+    let env = std::fs::read_to_string(&env_path).unwrap();
+    assert!(env.starts_with("# mine\nDEBUG=1\n"), "{env:?}");
+    assert!(
+        !env.contains("GEMINI_MODEL="),
+        "all duplicates must be removed: {env:?}"
+    );
+
+    let mut live_settings = settings;
+    live_settings["ui"]["theme"] = serde_json::json!("light");
+    std::fs::write(&settings_path, serde_json::to_vec(&live_settings).unwrap()).unwrap();
+    std::fs::write(&env_path, format!("{env}USER_HAND_EDIT=yes\n")).unwrap();
+    let live = GeminiAdapter.read_config().unwrap();
+    GeminiAdapter
+        .release(&live, &store.manifest().unwrap())
+        .unwrap();
+
+    let restored = GeminiAdapter.read_config().unwrap();
+    assert_eq!(restored.raw["settings"]["ui"]["theme"], "light");
+    assert_eq!(
+        restored.raw["settings"]["security"]["auth"]["remember"],
+        true
+    );
+    assert!(restored.raw["settings"]
+        .pointer("/security/auth/selectedType")
+        .is_none());
+    assert!(restored.raw["settings"].pointer("/model/name").is_none());
+    assert_eq!(restored.raw["env"]["GEMINI_MODEL"], "last");
+    assert!(restored.raw["env"].get("GEMINI_API_KEY").is_none());
+    assert!(restored.raw["env"].get("GOOGLE_GEMINI_BASE_URL").is_none());
+    assert_eq!(restored.raw["env"]["USER_HAND_EDIT"], "yes");
+}
+
+#[test]
+fn gemini_dotenv_preserves_bom_crlf_comments_duplicates_and_quotes() {
+    let env = concat!(
+        "\u{feff}# keep\r\n",
+        "export GEMINI_API_KEY='first#key' # first comment\r\n",
+        "OTHER=C:\\new folder\\tmp\r\n",
+        "GEMINI_API_KEY=last # keep this comment\r\n",
+        "GEMINI_MODEL=one\r\n",
+        "GEMINI_MODEL=two\r\n"
+    );
+    let (_settings_path, env_path) = gemini_fixture(Some(b"{}"), Some(env.as_bytes()));
+    let snapshot = GeminiAdapter.read_config().unwrap();
+    assert_eq!(snapshot.raw["env"]["GEMINI_API_KEY"], "last");
+    assert_eq!(snapshot.raw["env"]["GEMINI_MODEL"], "two");
+    GeminiAdapter
+        .apply_patch(&snapshot, &gemini_fields())
+        .unwrap();
+    let bytes = std::fs::read(&env_path).unwrap();
+    assert!(bytes.starts_with(&[0xef, 0xbb, 0xbf]));
+    let text = std::str::from_utf8(&bytes[3..]).unwrap();
+    assert!(text.contains("export GEMINI_API_KEY='first#key' # first comment\r\n"));
+    assert!(text.contains("GEMINI_API_KEY=gw-local-token # keep this comment\r\n"));
+    assert!(text.contains("OTHER=C:\\new folder\\tmp\r\n"));
+    assert!(!text.contains("GEMINI_MODEL="));
+    assert!(text
+        .lines()
+        .all(|line| !line.ends_with('\r') || text.contains("\r\n")));
+    assert_eq!(text.matches('\n').count(), text.matches("\r\n").count());
+}
+
+#[test]
+fn gemini_dotenv_quotes_special_values_without_interpreting_backslashes() {
+    let (_settings_path, env_path) = gemini_fixture(Some(b"{}"), Some(b"UNRELATED=keep"));
+    let snapshot = GeminiAdapter.read_config().unwrap();
+    let mut fields = gemini_fields();
+    fields
+        .iter_mut()
+        .find(|field| field.path == "env.GEMINI_API_KEY")
+        .unwrap()
+        .value = serde_json::json!(r#"C:\new folder\tmp#"quoted""#);
+    let patched = GeminiAdapter.apply_patch(&snapshot, &fields).unwrap();
+    assert_eq!(
+        patched.raw["env"]["GEMINI_API_KEY"],
+        serde_json::json!(r#"C:\new folder\tmp#"quoted""#)
+    );
+    let text = std::fs::read_to_string(env_path).unwrap();
+    assert!(
+        text.contains(r#"GEMINI_API_KEY='C:\new folder\tmp#"quoted"'"#),
+        "{text}"
+    );
+}
+
+#[test]
+fn gemini_refuses_commented_json_and_managed_env_expansion() {
+    let (_settings_path, _env_path) = gemini_fixture(
+        Some(b"{\n // mine\n \"model\": {}\n}"),
+        Some(b"GEMINI_API_KEY=${SECRET}\n"),
+    );
+    let err = GeminiAdapter.read_config().unwrap_err();
+    assert!(err.contains("comment"), "{err}");
+    assert!(err.contains("line 2"), "{err}");
+
+    let (_settings_path, _env_path) =
+        gemini_fixture(Some(b"{}"), Some(b"GEMINI_API_KEY=${SECRET}\n"));
+    let err = GeminiAdapter.read_config().unwrap_err();
+    assert!(err.contains("unsupported expansion"), "{err}");
+}
+
+#[test]
+fn gemini_legacy_release_restores_unprefixed_settings_without_creating_env() {
+    let (settings_path, env_path) = gemini_fixture(
+        Some(br#"{"model":{"name":"managed"},"ui":{"theme":"dark"}}"#),
+        None,
+    );
+    let snapshot = GeminiAdapter.read_config().unwrap();
+    let manifest = OwnershipManifest {
+        state: OwnershipState::Adopted,
+        managed_fields: vec!["model.name".into()],
+        field_snapshots: [("model.name".into(), serde_json::json!("original"))]
+            .into_iter()
+            .collect(),
+        absent_fields: Vec::new(),
+        adopted_at: Some(1),
+        released_at: None,
+        generation: 0,
+        last_applied: HashMap::new(),
+    };
+    let changes = GeminiAdapter.prepare_release(&snapshot, &manifest).unwrap();
+    assert_eq!(
+        changes.len(),
+        1,
+        "legacy settings-only restore must not touch .env"
+    );
+    GeminiAdapter.release(&snapshot, &manifest).unwrap();
+    let settings: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(settings_path).unwrap()).unwrap();
+    assert_eq!(settings["model"]["name"], "original");
+    assert!(!env_path.exists());
+}
+
+#[test]
+fn gemini_dotenv_never_rewrites_apparent_keys_inside_unrelated_multiline_values() {
+    let multiline = b"BANNER=\"begin\nGEMINI_API_KEY=inside-value\nGEMINI_MODEL=inside-model\nend\"\nGEMINI_API_KEY=actual\n";
+    let (_, env_path) = gemini_fixture(Some(b"{}"), Some(multiline));
+    let before = GeminiAdapter.read_config().unwrap();
+    assert_eq!(before.raw["env"]["GEMINI_API_KEY"], "actual");
+    GeminiAdapter
+        .apply_patch(&before, &gemini_fields())
+        .unwrap();
+    let written = std::fs::read_to_string(env_path).unwrap();
+    assert!(written.starts_with(
+        "BANNER=\"begin\nGEMINI_API_KEY=inside-value\nGEMINI_MODEL=inside-model\nend\"\n"
+    ));
+    assert!(written.contains("gw-local-token"));
+    let _ = gemini_fixture(Some(b"{}"), Some(b"BANNER=\"unterminated\n"));
+    assert!(GeminiAdapter.read_config().is_err());
+}
+
+#[test]
+fn gemini_legacy_release_restores_a_missing_settings_file_as_missing() {
+    let (settings_path, env_path) = gemini_fixture(None, None);
+    let snapshot = GeminiAdapter.read_config().unwrap();
+    let manifest = OwnershipManifest {
+        state: OwnershipState::Adopted,
+        managed_fields: vec!["model.name".into()],
+        field_snapshots: HashMap::new(),
+        absent_fields: vec!["model.name".into()],
+        adopted_at: Some(1),
+        released_at: None,
+        generation: 0,
+        last_applied: HashMap::new(),
+    };
+    GeminiAdapter.release(&snapshot, &manifest).unwrap();
+    assert!(!settings_path.exists());
+    assert!(!env_path.exists());
+}
+
+#[test]
+fn gemini_release_deletes_env_when_all_managed_entries_were_absent() {
+    let (_settings_path, env_path) = gemini_fixture(Some(b"{}"), None);
+    let before = GeminiAdapter.read_config().unwrap();
+    let fields = gemini_fields();
+    let paths: Vec<String> = fields.iter().map(|field| field.path.clone()).collect();
+    let originals = extract_field_values(&before.raw, &paths);
+    let store = TakeoverStore::new();
+    store.adopt(paths, &originals).unwrap();
+    let patched = GeminiAdapter.apply_patch(&before, &fields).unwrap();
+    assert!(env_path.exists());
+    GeminiAdapter
+        .release(&patched, &store.manifest().unwrap())
+        .unwrap();
+    assert!(
+        !env_path.exists(),
+        "release must restore a missing .env as missing"
+    );
+}
+
+#[test]
+fn gemini_release_preserves_an_existing_empty_env_file() {
+    let (settings_path, env_path) = gemini_fixture(Some(b"{}"), Some(b""));
+    let before = GeminiAdapter.read_config().unwrap();
+    let fields = gemini_fields();
+    let paths: Vec<String> = fields.iter().map(|field| field.path.clone()).collect();
+    let originals = extract_field_values(&before.raw, &paths);
+    let store = TakeoverStore::new();
+    store.adopt(paths, &originals).unwrap();
+    let patched = GeminiAdapter.apply_patch(&before, &fields).unwrap();
+    let origin = settings_path
+        .parent()
+        .unwrap()
+        .join(".zroutery")
+        .join("gemini-origin.json");
+    assert!(origin.exists());
+    GeminiAdapter
+        .release(&patched, &store.manifest().unwrap())
+        .unwrap();
+    assert!(env_path.exists(), "present-empty must not become absent");
+    assert!(std::fs::read(env_path).unwrap().is_empty());
+    assert!(!origin.exists(), "origin metadata is released atomically");
+}
+
+#[test]
+fn gemini_snapshot_binds_origin_metadata() {
+    let (settings_path, _env_path) = gemini_fixture(Some(b"{}"), Some(b""));
+    let before = GeminiAdapter.read_config().unwrap();
+    let fields = gemini_fields();
+    let patched = GeminiAdapter.apply_patch(&before, &fields).unwrap();
+    let origin = settings_path
+        .parent()
+        .unwrap()
+        .join(".zroutery")
+        .join("gemini-origin.json");
+    std::fs::write(
+        &origin,
+        br#"{"version":1,"settings_present":true,"env_present":false}"#,
+    )
+    .unwrap();
+    let err = GeminiAdapter.prepare_patch(&patched, &fields).unwrap_err();
+    assert!(err.contains("changed on disk"), "{err}");
+}
+
+#[test]
+fn gemini_release_keep_external_allows_a_removed_managed_env_value() {
+    let (_settings_path, env_path) = gemini_fixture(
+        Some(br#"{"model":{"name":"old"}}"#),
+        Some(b"GEMINI_API_KEY=old\nUNRELATED=keep\n"),
+    );
+    let before = GeminiAdapter.read_config().unwrap();
+    let fields = gemini_fields();
+    let paths: Vec<String> = fields.iter().map(|field| field.path.clone()).collect();
+    let current = extract_field_values(&before.raw, &paths);
+    let managed = fields
+        .iter()
+        .map(|field| (field.path.clone(), field.value.clone()))
+        .collect();
+    let store = TakeoverStore::new();
+    store.adopt(paths.clone(), &current).unwrap();
+    store.record_applied(&managed).unwrap();
+    GeminiAdapter.apply_patch(&before, &fields).unwrap();
+    let live_text = std::fs::read_to_string(&env_path).unwrap();
+    std::fs::write(
+        &env_path,
+        live_text
+            .lines()
+            .filter(|line| !line.starts_with("GEMINI_API_KEY="))
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n",
+    )
+    .unwrap();
+    let live = GeminiAdapter.read_config().unwrap();
+    let live_values = extract_field_values(&live.raw, &paths);
+    let conflicts = store.conflicts(&live_values);
+    let (effective, _) =
+        store.apply_resolution(&conflicts, ConflictResolution::KeepExternal, &live_values);
+    GeminiAdapter.release(&live, &effective).unwrap();
+    let released = std::fs::read_to_string(env_path).unwrap();
+    assert!(!released.contains("GEMINI_API_KEY="), "{released}");
+    assert!(released.contains("UNRELATED=keep"));
 }
 
 /// Every takeover target the product offers, so a new agent cannot be added
 /// to [`adapter_for`] without a field set behind it.
 #[test]
 fn every_advertised_agent_can_produce_a_field_set() {
-    let target = a_target();
+    let mut target = a_target();
+    target.default_class = Some("sonnet-class".into());
     for agent in AgentType::ALL {
         let supported = agent.is_takeover_supported();
         let adapter = adapter_for(agent);

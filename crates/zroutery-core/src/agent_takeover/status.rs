@@ -51,8 +51,8 @@ use serde::{Deserialize, Serialize};
 pub enum TakeoverStatus {
     /// This build has no adapter for the client.
     ///
-    /// The only current case is Gemini CLI. The reason is carried so a UI can
-    /// explain *why* rather than showing an inert control.
+    /// Retained for older manifests and callers without an adapter. The reason
+    /// lets a UI explain why rather than showing an inert control.
     Unsupported {
         /// Human-readable reason, safe to show.
         reason: String,

@@ -6,6 +6,7 @@ use super::fs::{
 };
 use super::gateway::OPENCODE_CONFIG_ENV;
 use super::ownership::OwnershipManifest;
+use crate::file_transaction::FileChange;
 
 use serde::{Deserialize, Serialize};
 
@@ -63,27 +64,18 @@ impl AgentType {
     }
 
     /// Whether this build can take the client over.
-    ///
-    /// `Gemini` is [`AgentType`]'s one variant with no adapter. It stays in the
-    /// enum because persisted manifests may still carry it, and dropping the
-    /// variant would make those manifests fail to parse — taking away the only
-    /// path that could release a Gemini config a previous build had adopted.
-    /// What is withdrawn is *new* takeover: see [`takeover_fields`], which
-    /// refuses Gemini outright, and [`adapter_for`], which returns `None`.
     pub fn is_takeover_supported(&self) -> bool {
-        !matches!(self, AgentType::Gemini)
+        true
     }
 }
 
 /// The adapter that can take `agent` over, or `None` if this build has none.
-///
-/// Gemini is the deliberate `None`; see [`AgentType::is_takeover_supported`].
 pub fn adapter_for(agent: AgentType) -> Option<Box<dyn AgentAdapter>> {
     match agent {
         AgentType::Claude => Some(Box::new(ClaudeAdapter)),
         AgentType::Codex => Some(Box::new(CodexAdapter)),
+        AgentType::Gemini => Some(Box::new(super::gemini::GeminiAdapter)),
         AgentType::OpenCode => Some(Box::new(OpenCodeAdapter)),
-        AgentType::Gemini => None,
     }
 }
 
@@ -117,6 +109,23 @@ pub struct ManagedField {
     pub value: serde_json::Value,
 }
 
+impl ManagedField {
+    /// Null is a removal operation only for string-valued environment entries.
+    /// Other JSON fields retain literal null semantics and restore snapshots
+    /// always retain the exact original representation.
+    pub fn removes_env(&self) -> bool {
+        self.value.is_null() && self.path.starts_with("env.")
+    }
+
+    pub fn matches_value(&self, current: Option<&serde_json::Value>) -> bool {
+        if self.removes_env() {
+            current.is_none()
+        } else {
+            current == Some(&self.value)
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // AgentAdapter
 // ---------------------------------------------------------------------------
@@ -135,6 +144,12 @@ pub trait AgentAdapter: Send + Sync {
     /// Read and parse the current config.
     fn read_config(&self) -> Result<AgentConfigSnapshot, String>;
 
+    /// Known built-in clients can also be discovered before their first config
+    /// write. Custom adapters default to their own file, not the process PATH.
+    fn is_detected(&self) -> Result<bool, String> {
+        Ok(self.config_path()?.is_file())
+    }
+
     /// Apply managed field patches to the config.
     fn apply_patch(
         &self,
@@ -148,6 +163,29 @@ pub trait AgentAdapter: Send + Sync {
         snapshot: &AgentConfigSnapshot,
         manifest: &OwnershipManifest,
     ) -> Result<(), String>;
+
+    /// Prepare every file this adapter would change, without publishing any of
+    /// them. The caller commits these together with ownership and metadata.
+    fn prepare_patch(
+        &self,
+        snapshot: &AgentConfigSnapshot,
+        fields: &[ManagedField],
+    ) -> Result<(AgentConfigSnapshot, Vec<FileChange>), String> {
+        let (snapshot, change) = super::fs::prepare_patch(snapshot, fields, ConfigFormat::Json)?;
+        Ok((snapshot, vec![change]))
+    }
+
+    fn prepare_release(
+        &self,
+        snapshot: &AgentConfigSnapshot,
+        manifest: &OwnershipManifest,
+    ) -> Result<Vec<FileChange>, String> {
+        Ok(vec![super::fs::prepare_release(
+            snapshot,
+            manifest,
+            ConfigFormat::Json,
+        )?])
+    }
 
     /// Write a config snapshot back to disk.
     fn write_config(&self, snapshot: &AgentConfigSnapshot) -> Result<(), String> {
@@ -186,11 +224,11 @@ impl AgentAdapter for ClaudeAdapter {
     }
 
     fn config_path(&self) -> Result<std::path::PathBuf, String> {
-        if let Some(dir) = config_dir_override("CLAUDE_CONFIG_DIR") {
-            return Ok(dir.join("settings.json"));
-        }
-        let home = home_dir()?;
-        Ok(home.join(".claude").join("settings.json"))
+        AgentType::Claude.declaration().config_path()
+    }
+
+    fn is_detected(&self) -> Result<bool, String> {
+        AgentType::Claude.declaration().detected()
     }
 
     fn read_config(&self) -> Result<AgentConfigSnapshot, String> {
@@ -230,11 +268,11 @@ impl AgentAdapter for CodexAdapter {
     }
 
     fn config_path(&self) -> Result<std::path::PathBuf, String> {
-        if let Some(dir) = config_dir_override("CODEX_HOME") {
-            return Ok(dir.join("config.toml"));
-        }
-        let home = home_dir()?;
-        Ok(home.join(".codex").join("config.toml"))
+        AgentType::Codex.declaration().config_path()
+    }
+
+    fn is_detected(&self) -> Result<bool, String> {
+        AgentType::Codex.declaration().detected()
     }
 
     fn read_config(&self) -> Result<AgentConfigSnapshot, String> {
@@ -261,74 +299,26 @@ impl AgentAdapter for CodexAdapter {
         let toml = serialize_config(ConfigFormat::Toml, &snapshot.raw)?;
         write_config_atomic(&snapshot.config_path, toml.as_bytes())
     }
-}
 
-// ---------------------------------------------------------------------------
-// GeminiAdapter
-// ---------------------------------------------------------------------------
-
-/// Agent adapter for Gemini CLI.
-///
-/// Config location: `$GEMINI_CLI_HOME/.gemini/settings.json`
-/// (default `~/.gemini/settings.json`), the user settings file Gemini CLI
-/// documents.
-///
-/// # Retained for release only
-///
-/// New Gemini takeovers are withdrawn (B6): its endpoint is only settable
-/// through `GOOGLE_GEMINI_BASE_URL`, an environment variable rather than a
-/// file field, so taking over the settings file redirects the key and leaves
-/// the client still talking to Google — a takeover that reports success and
-/// does nothing.
-///
-/// This adapter is **not** in [`adapter_for`]. It stays because a manifest
-/// written by an older build may still name `AgentType::Gemini` and may still
-/// hold the only record of what was overwritten. Removing the variant or the
-/// adapter would leave that record unreadable and the user's config
-/// unrecoverable. The release path is the part worth keeping; see
-/// [`takeover_fields`] for the refusal.
-///
-/// Nothing about the Gemini *protocol* is affected: `protocol::gemini`, its
-/// `generateContent` ingress, its usage decoder and its routing are separate
-/// code and are untouched by removing CLI takeover.
-#[deprecated(
-    since = "0.8.0",
-    note = "new Gemini CLI takeovers are withdrawn; retained so an older manifest can still be released"
-)]
-#[allow(dead_code)] // constructed only by the release-path fixtures
-pub struct GeminiAdapter;
-#[allow(deprecated)] // the release path is the reason this is kept
-impl AgentAdapter for GeminiAdapter {
-    fn agent_type(&self) -> AgentType {
-        AgentType::Gemini
-    }
-
-    fn config_path(&self) -> Result<std::path::PathBuf, String> {
-        if let Some(home) = config_dir_override("GEMINI_CLI_HOME") {
-            return Ok(home.join(".gemini").join("settings.json"));
-        }
-        let home = home_dir()?;
-        Ok(home.join(".gemini").join("settings.json"))
-    }
-
-    fn read_config(&self) -> Result<AgentConfigSnapshot, String> {
-        read_snapshot(AgentType::Gemini, self.config_path()?, ConfigFormat::Json)
-    }
-
-    fn apply_patch(
+    fn prepare_patch(
         &self,
         snapshot: &AgentConfigSnapshot,
         fields: &[ManagedField],
-    ) -> Result<AgentConfigSnapshot, String> {
-        apply_patch_to_disk(snapshot, fields, ConfigFormat::Json)
+    ) -> Result<(AgentConfigSnapshot, Vec<FileChange>), String> {
+        let (snapshot, change) = super::fs::prepare_patch(snapshot, fields, ConfigFormat::Toml)?;
+        Ok((snapshot, vec![change]))
     }
 
-    fn release(
+    fn prepare_release(
         &self,
         snapshot: &AgentConfigSnapshot,
         manifest: &OwnershipManifest,
-    ) -> Result<(), String> {
-        release_to_disk(snapshot, manifest, ConfigFormat::Json)
+    ) -> Result<Vec<FileChange>, String> {
+        Ok(vec![super::fs::prepare_release(
+            snapshot,
+            manifest,
+            ConfigFormat::Toml,
+        )?])
     }
 }
 
@@ -533,11 +523,12 @@ impl AgentAdapter for OpenCodeAdapter {
     }
 
     fn config_path(&self) -> Result<std::path::PathBuf, String> {
-        if let Some(dir) = config_dir_override("XDG_CONFIG_HOME") {
-            return Ok(dir.join("opencode").join("opencode.json"));
-        }
-        let home = home_dir()?;
-        Ok(home.join(".config").join("opencode").join("opencode.json"))
+        AgentType::OpenCode.declaration().config_path()
+    }
+
+    fn is_detected(&self) -> Result<bool, String> {
+        let path = self.config_path()?;
+        Ok(Self::jsonc_sibling(&path).is_file() || AgentType::OpenCode.declaration().detected()?)
     }
 
     fn read_config(&self) -> Result<AgentConfigSnapshot, String> {
