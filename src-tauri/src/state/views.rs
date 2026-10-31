@@ -25,6 +25,21 @@ pub struct BalanceStatus {
     pub checked_at: DateTime<Utc>,
     pub balance: Option<Balance>,
     pub error: Option<String>,
+    #[serde(default)]
+    pub observed_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub aggregate: Option<BalanceAggregate>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct BalanceAggregate {
+    pub participating: usize,
+    pub succeeded: usize,
+    pub failed: usize,
+    pub unverified: usize,
+    pub partial: bool,
+    pub by_currency: BTreeMap<String, Balance>,
+    pub failures: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -45,6 +60,8 @@ pub struct ServerStatus {
 #[derive(Debug, Clone, Serialize)]
 pub struct Snapshot {
     pub config: AppConfig,
+    /// Opaque compare-and-swap token for full-document saves across windows.
+    pub config_revision: String,
     /// The exposed id of every entry in `config.models`, in the same order.
     ///
     /// The dashboard renders these instead of deriving ids itself, so the
@@ -68,6 +85,7 @@ pub struct Snapshot {
     pub election: Option<Election>,
     /// Every budget with what has been spent against it, for the dashboard.
     pub budgets: Vec<BudgetStatus>,
+    pub accounting: zroutery_core::accounting::AccountingStatus,
     /// Whether this build contains a learning stack at all.
     ///
     /// Declared here so the dashboard can ask before it calls, rather than
@@ -190,6 +208,7 @@ pub struct Activity {
     pub health: Vec<ModelHealth>,
     pub summary: StatsSummary,
     pub recent: Vec<RequestRecord>,
+    pub accounting: zroutery_core::accounting::AccountingStatus,
 }
 
 /// What a panel needs to know about one account's check-in.
@@ -352,29 +371,6 @@ impl CheckinView {
             schedule: CheckinScheduleView::unknown(),
         }
     }
-}
-
-/// The panel root of a relay's base URL, with any `/api` or `/v1` suffix removed.
-///
-/// Providers are configured with the *relay* base, and a panel is the same host
-/// with a different suffix. Repeated from the adapter's own normalisation rather
-/// than reusing it, because that function is private to the adapter and this
-/// only needs an origin — and because a value the adapter later refuses is
-/// caught by its validation, so a wrong guess here fails at the call rather than
-/// silently.
-// Gated on `newapi` for the same reason as `panel_adapter`: this normalises a
-// base URL and nothing else, and gating it on the browser maintenance surface
-// made `--features newapi` alone uncompilable — a build that ships the NewAPI
-// adapter without the browser surface could not use the adapter at all.
-#[cfg(feature = "newapi")]
-pub(super) fn panel_root(base_url: &str) -> String {
-    let trimmed = base_url.trim().trim_end_matches('/');
-    for suffix in ["/api", "/v1"] {
-        if let Some(stripped) = trimmed.strip_suffix(suffix) {
-            return stripped.to_string();
-        }
-    }
-    trimmed.to_string()
 }
 
 /// `zr-1234abcd…` -> `zr-…abcd`: enough to tell two tokens apart, useless on its

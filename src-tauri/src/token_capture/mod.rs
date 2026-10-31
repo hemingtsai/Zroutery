@@ -33,13 +33,11 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 use tauri::State;
 
+#[cfg(test)]
 use zroutery_core::account::adapters::newapi::{NewApiAdapter, NewApiAuth, NewApiConfig};
 
 use crate::checkin::cdp;
 use crate::checkin::{SessionKey, SessionPurpose};
-use crate::commands::{
-    account_secret_target, delete_account_secret, repoint_account_key, write_account_secret,
-};
 use crate::state::Desktop;
 
 /// How often the page is asked whether it has a credential yet.
@@ -91,6 +89,8 @@ pub struct TokenCaptureView {
     pub username: Option<String>,
     /// Whether a browser is open for this account right now.
     pub browser_held: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub binding_preview: Option<crate::account_binding::BindingPreview>,
 }
 
 impl TokenCaptureView {
@@ -102,6 +102,7 @@ impl TokenCaptureView {
             message: None,
             username: None,
             browser_held: false,
+            binding_preview: None,
         }
     }
 
@@ -182,17 +183,17 @@ pub async fn start_token_capture(
             .find(|account| account.account_id == account_id)
             .ok_or_else(|| format!("unknown account `{account_id}` on provider `{provider_id}`"))?;
         let base_url = provider.base_url.clone();
-        let panel_root = account
-            .maintenance
-            .panel_override()
-            .map(str::to_string)
-            .unwrap_or_else(|| script::panel_root(&base_url));
+        let panel_root = zroutery_core::config::account_panel_root(
+            &base_url,
+            account.maintenance.panel_override(),
+        );
         (
             panel_root,
             account.maintenance.login_path.clone(),
             account.maintenance.browser_executable.clone(),
         )
     };
+    let expected_binding = desktop.binding_version(&provider_id, &account_id)?;
 
     let url = script::login_url_at(&panel_root, login_path.as_deref())?;
     let origin = script::origin_of(&url)
@@ -255,7 +256,16 @@ pub async fn start_token_capture(
     let runtime_task = runtime.inner().clone();
     let desktop_task = Arc::clone(desktop.inner());
     tauri::async_runtime::spawn(async move {
-        drive(desktop_task, runtime_task, key, page, origin, panel_root).await;
+        drive(
+            desktop_task,
+            runtime_task,
+            key,
+            page,
+            origin,
+            panel_root,
+            expected_binding,
+        )
+        .await;
     });
 
     Ok(status_view(&desktop, &runtime, &provider_id, &account_id).await)
@@ -306,6 +316,7 @@ pub async fn complete_token_capture(
     runtime: State<'_, TokenCaptureRuntime>,
     provider_id: String,
     account_id: String,
+    confirm_identity_change: Option<bool>,
 ) -> Result<TokenCaptureView, String> {
     let report = runtime
         .report(&provider_id, &account_id)
@@ -316,25 +327,16 @@ pub async fn complete_token_capture(
             report.phase
         ));
     }
-    let (key_ref, repoint) =
-        account_secret_target(&desktop.core.config(), &provider_id, &account_id)?;
-    if repoint {
-        if let Err(error) = repoint_account_key(&desktop, &provider_id, &account_id, &key_ref).await
-        {
-            // The secret was written by the driver; a configuration that refused
-            // it must not leave a credential nobody points at. The derived
-            // reference is the one this path writes, and the account shared the
-            // provider's key before, so there is no earlier value to restore.
-            let _ = delete_account_secret(&desktop, &key_ref).await;
-            runtime.record(
-                TokenCaptureView::new(&provider_id, &account_id, CapturePhase::Failed)
-                    .with_message(format!(
-                        "the account could not be pointed at the token: {error}"
-                    )),
-            );
-            return Err(error);
-        }
-    }
+    let preview = report
+        .binding_preview
+        .as_ref()
+        .ok_or("capture has no staged binding preview")?;
+    desktop
+        .publish_account_binding(
+            &preview.publication_id,
+            confirm_identity_change.unwrap_or(false),
+        )
+        .await?;
     runtime.record(TokenCaptureView {
         provider_id: provider_id.clone(),
         account_id: account_id.clone(),
@@ -342,6 +344,7 @@ pub async fn complete_token_capture(
         message: Some("the panel token is stored as this account's credential".into()),
         username: report.username,
         browser_held: false,
+        binding_preview: None,
     });
     Ok(status_view(&desktop, &runtime, &provider_id, &account_id).await)
 }
@@ -371,8 +374,9 @@ async fn drive(
     runtime: TokenCaptureRuntime,
     key: SessionKey,
     page: cdp::PageBinding,
-    origin: String,
-    panel_root: String,
+    mut origin: String,
+    mut panel_root: String,
+    expected_binding: String,
 ) {
     let provider_id = key.provider_id.clone();
     let account_id = key.account_id.clone();
@@ -397,6 +401,21 @@ async fn drive(
                     .with_message("the capture was cancelled"),
             );
             break;
+        }
+        // Read the URL before touching any storage/token. Authentication
+        // redirects are only accepted for the exact approved relay→panel pair.
+        if let Ok(location) = browser.evaluate(&page, "location.origin").await {
+            if let Some(observed) = location.as_str().filter(|origin| *origin != "null") {
+                if script::capture_origin_allowed(&origin, observed) {
+                    origin = observed.to_string();
+                    panel_root = observed.to_string();
+                } else {
+                    runtime.record(TokenCaptureView::new(&provider_id, &account_id, CapturePhase::NeedsVerification)
+                        .with_message(format!("capture paused on unapproved origin `{observed}`; configure the account's panel root before reading credentials")));
+                    tokio::time::sleep(POLL_INTERVAL).await;
+                    continue;
+                }
+            }
         }
         let expression = script::capture_expression(&origin);
         match browser.evaluate(&page, &expression).await {
@@ -423,12 +442,14 @@ async fn drive(
                         }),
                         username: None,
                         browser_held: true,
+                        binding_preview: None,
                     });
                 }
                 script::CaptureResult::Ready {
                     token,
                     username,
                     user_id,
+                    identity,
                     source,
                 } => {
                     final_view = Some(
@@ -442,6 +463,8 @@ async fn drive(
                                 user_id,
                                 source,
                                 panel_root: &panel_root,
+                                expected_binding: &expected_binding,
+                                identity,
                             },
                         )
                         .await,
@@ -538,6 +561,8 @@ struct CapturedToken<'a> {
     /// The panel root the page was opened against; verification asks the same
     /// host, never the relay endpoint.
     panel_root: &'a str,
+    expected_binding: &'a str,
+    identity: Option<zroutery_core::config::RemoteIdentity>,
 }
 
 async fn store_token(
@@ -552,6 +577,8 @@ async fn store_token(
         user_id,
         source,
         panel_root,
+        expected_binding,
+        identity,
     } = captured;
     let view = |phase, message: Option<String>, username| TokenCaptureView {
         provider_id: provider_id.to_string(),
@@ -560,95 +587,48 @@ async fn store_token(
         message,
         username,
         browser_held: true,
+        binding_preview: None,
     };
-
-    let (key_ref, _repoint) =
-        match account_secret_target(&desktop.core.config(), provider_id, account_id) {
-            Ok(target) => target,
-            Err(error) => return view(CapturePhase::Failed, Some(error), None),
-        };
-    // The provider still has to exist — the capture holds no other reason to
-    // touch the relay endpoint, so the check is about the config having moved
-    // under the session rather than about a url nobody reads.
-    if desktop.core.config().provider(provider_id).is_none() {
-        return view(
-            CapturePhase::Failed,
-            Some(format!("unknown provider `{provider_id}`")),
-            None,
-        );
-    }
-    let verified = match verify_token(panel_root, &token, user_id.as_deref()).await {
-        Ok(username) => username,
-        Err(error) => {
-            /*
-             * A *network* failure to re-verify is not a rejection. The probe
-             * verified this token inside the browser minutes ago — same panel,
-             * same header, a 200 the panel itself issued — and the browser
-             * reaches the panel through the operator's proxy, which the
-             * desktop process may not share (AgentRouter is only reachable
-             * through one here). Refusing to store a token the panel just
-             * confirmed, because this process cannot dial the panel, would
-             * make the capture unusable behind every proxy setup that splits
-             * browser and app traffic. An *authorization* failure is still a
-             * refusal: that is the panel speaking, not the network.
-             */
-            let unreachable = error.contains("cannot reach upstream");
-            if !unreachable {
-                return view(
-                    CapturePhase::Failed,
-                    Some(format!("the panel rejected the captured token: {error}")),
-                    None,
-                );
-            }
-            tracing::warn!(
-                provider = provider_id,
-                "the panel is unreachable from this process; storing the token the browser verified"
-            );
-            None
-        }
+    // Only the accepted self response proves a browser identity. A localStorage
+    // hint or an unverified token payload cannot substitute for this evidence.
+    let identity = identity.filter(|identity| {
+        identity.panel_root == panel_root
+            && user_id.as_deref() == Some(identity.user_id.as_str())
+            && identity.source == "GET /api/user/self (browser HTTP, accepted personal token)"
+            && (chrono::Utc::now().timestamp() - identity.verified_at).abs() <= 60
+    });
+    let preview = match desktop
+        .stage_account_binding(
+            provider_id,
+            account_id,
+            &token,
+            user_id.as_deref(),
+            Some(expected_binding),
+            identity,
+        )
+        .await
+    {
+        Ok(preview) => preview,
+        Err(error) => return view(CapturePhase::Failed, Some(error), None),
     };
-    if let Err(error) = write_account_secret(desktop, &key_ref, &token).await {
-        return view(CapturePhase::Failed, Some(error), None);
-    }
-    /*
-     * Remember the panel user id beside the credential it names. Every later
-     * probe, check-in and usage read goes through the same middleware that
-     * just demanded the header; without this the capture succeeds once and
-     * the very next probe reports the credential it stored as rejected. A
-     * failure to persist is logged and survived — the token itself is stored,
-     * and the id can be typed into the maintenance settings by hand.
-     */
-    if let Some(id) = user_id.as_deref().filter(|id| !id.trim().is_empty()) {
-        let mut config = (*desktop.core.config()).clone();
-        let declaration = config
-            .providers
-            .iter_mut()
-            .find(|p| p.id == provider_id)
-            .and_then(|p| p.accounts.iter_mut().find(|a| a.account_id == account_id));
-        if let Some(account) = declaration {
-            if account.maintenance.new_api_user.as_deref() != Some(id) {
-                account.maintenance.new_api_user = Some(id.to_string());
-                if let Err(error) = desktop.apply_config(config).await {
-                    tracing::warn!(
-                        provider = provider_id,
-                        account = account_id,
-                        error = %error,
-                        "the panel user id could not be persisted; set it in the maintenance settings"
-                    );
-                }
-            }
-        }
-    }
-    view(
+    let mut result = view(
         CapturePhase::Stored,
         Some(format!(
-            "the token from `{source}` is verified and stored; finish to use it"
+            "token from `{source}` is staged; review and publish the account binding"
         )),
-        verified.or(username),
-    )
+        preview
+            .identity
+            .as_ref()
+            .and_then(|identity| identity.username.clone())
+            .or(username),
+    );
+    let _ = panel_root;
+    result.binding_preview = Some(preview);
+    result
 }
 
 /// Ask the panel who the token belongs to.
+#[cfg(test)]
 async fn verify_token(
     base_url: &str,
     token: &str,

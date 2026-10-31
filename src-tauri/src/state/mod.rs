@@ -39,7 +39,7 @@ pub struct Desktop {
     pub(super) server: AsyncMutex<Option<ServerHandle>>,
     /// Serialises configuration changes and listener migration, so a save that
     /// has to rebind cannot interleave with a concurrent stop or save.
-    pub(super) migration: AsyncMutex<()>,
+    pub(crate) migration: AsyncMutex<()>,
     /// Decides whether the listener can claim an address. Real in production,
     /// injectable so tests can simulate a port that cannot be bound.
     pub(super) prober: Box<dyn ListenerProber + Send + Sync>,
@@ -50,7 +50,7 @@ pub struct Desktop {
     pub(super) balances: Mutex<BTreeMap<String, BalanceStatus>>,
     /// Durable runtime data shared with the headless instance: usage history,
     /// wallet latches and the last balance seen for each provider.
-    pub(super) runtime: Option<Arc<zroutery_core::runtime_store::RuntimeStore>>,
+    pub(crate) runtime: Option<Arc<zroutery_core::runtime_store::RuntimeStore>>,
     /// The window layer's live view of the lifecycle settings: the close
     /// handler reads this synchronously, `apply_config` keeps it current.
     pub(crate) window_rules: Mutex<WindowRules>,

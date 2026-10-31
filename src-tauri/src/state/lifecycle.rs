@@ -19,6 +19,7 @@ impl Desktop {
     pub fn new(config_dir: PathBuf, config: AppConfig, secrets: Arc<KeychainSecrets>) -> Self {
         let config = Self::with_ml_state_dir(config_dir.clone(), config);
         let core = Arc::new(AppState::new(config, secrets.clone() as Arc<_>));
+        core.require_accounting();
         // Spend is carried over from previous runs, because a budget that starts from
         // zero on every launch protects nothing.
         core.set_ledger(store::load_ledger(&config_dir));
@@ -34,8 +35,20 @@ impl Desktop {
         let mut balances = BTreeMap::new();
         let runtime = match runtime {
             Ok(runtime) => {
-                if let Err(error) = core.stats().attach_store(Arc::clone(&runtime)) {
-                    startup_warning = Some(format!("usage history could not be restored: {error}"));
+                let accounting = match runtime.accounting_ledger() {
+                    Ok(Some(ledger)) => {
+                        Ok((ledger, "already activated SQLite accounting".to_string()))
+                    }
+                    Ok(None) => store::legacy_accounting(&config_dir),
+                    Err(error) => Err(error),
+                }
+                .and_then(|(opening, source)| {
+                    core.attach_accounting(Arc::clone(&runtime), &opening, &source)
+                });
+                if let Err(error) = accounting {
+                    core.accounting_failed(error.clone());
+                    startup_warning =
+                        Some(format!("durable accounting could not be restored: {error}"));
                 }
                 if let Err(error) = core.router().attach_runtime_store(Arc::clone(&runtime)) {
                     startup_warning = Some(format!("wallet holds could not be restored: {error}"));
@@ -50,6 +63,7 @@ impl Desktop {
                 Some(runtime)
             }
             Err(error) => {
+                core.accounting_failed(error.clone());
                 startup_warning = Some(format!("runtime storage could not be opened: {error}"));
                 None
             }
@@ -89,6 +103,12 @@ impl Desktop {
             client_files: Mutex::new(()),
             cutover: Mutex::new(None),
         };
+        #[cfg(feature = "account")]
+        if let Err(error) = desktop.recover_bindings() {
+            desktop.set_warning(Some(format!(
+                "account binding recovery needs attention: {error}"
+            )));
+        }
         if let Err(error) = desktop.recover_client_files() {
             desktop.set_warning(Some(format!(
                 "client configuration recovery needs attention: {error}"

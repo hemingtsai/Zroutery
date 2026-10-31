@@ -5,8 +5,6 @@ use super::helpers::lock;
 #[cfg(any(feature = "account-maint", feature = "newapi"))]
 use super::views::*;
 
-#[cfg(feature = "newapi")]
-use super::views::panel_root;
 use super::Desktop;
 
 impl Desktop {
@@ -325,11 +323,10 @@ impl Desktop {
         // adapter would repeat anyway, repeated here to pick the default
         // conversion rate. A base the adapter later refuses is caught by its
         // own validation.
-        let base = account
-            .maintenance
-            .panel_override()
-            .map(|root| root.trim_end_matches('/').to_string())
-            .unwrap_or_else(|| panel_root(&provider.base_url));
+        let base = zroutery_core::config::account_panel_root(
+            &provider.base_url,
+            account.maintenance.panel_override(),
+        );
         let adapter = NewApiAdapter::new(NewApiConfig {
             base_url: base,
             api_key,

@@ -207,8 +207,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("token:   authentication disabled");
     }
 
-    // Spend is flushed periodically as well as at shutdown, so a kill costs seconds
-    // of history rather than the whole run.
+    // Settlement is durable before completion. The timer retries local pending
+    // writes and maintains the legacy ledger projection; it never replays calls.
     let keeper = Arc::clone(&desktop);
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(std::time::Duration::from_secs(10));

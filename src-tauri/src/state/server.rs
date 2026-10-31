@@ -109,6 +109,10 @@ impl Desktop {
             .candidates
             .retain(|c| !gone.contains(&c.model));
 
+        // Publish removal before deleting any credential. A failed config save
+        // must leave the previous provider and its secrets usable.
+        store::save(&self.config_dir, &next)?;
+        self.core.set_config(next.clone());
         let live = crate::secret_refs::referenced_secrets(&next);
         let mut failed = Vec::new();
         for key_ref in removed_refs {
@@ -131,11 +135,9 @@ impl Desktop {
             ))
         };
 
-        store::save(&self.config_dir, &next)?;
         *lock(&self.window_rules) = WindowRules {
             keep_in_tray: next.window.keep_in_tray,
         };
-        self.core.set_config(next);
         if orphaned.is_some() {
             self.set_warning(orphaned.clone());
         }
@@ -158,9 +160,77 @@ impl Desktop {
         // Serialise with other saves and with any listener stop.
         let _migration = self.migration.lock().await;
 
+        self.apply_config_locked(&mut next).await
+    }
+
+    pub async fn apply_config_versioned(
+        &self,
+        mut next: AppConfig,
+        expected: Option<&str>,
+    ) -> Result<bool, String> {
+        let _migration = self.migration.lock().await;
+        if expected.is_some_and(|expected| {
+            expected != super::snapshot::config_revision(&self.core.config())
+        }) {
+            return Err("configuration changed in another window; refresh before saving".into());
+        }
+        self.apply_config_locked(&mut next).await
+    }
+
+    pub async fn set_provider_enabled(
+        &self,
+        provider_id: &str,
+        enabled: bool,
+    ) -> Result<(), String> {
+        let _migration = self.migration.lock().await;
+        let mut next = (*self.core.config()).clone();
+        let provider = next
+            .providers
+            .iter_mut()
+            .find(|provider| provider.id == provider_id)
+            .ok_or_else(|| format!("unknown provider `{provider_id}`"))?;
+        if provider.enabled == enabled {
+            return Ok(());
+        }
+        provider.enabled = enabled;
+        self.apply_config_locked(&mut next).await.map(|_| ())
+    }
+
+    async fn apply_config_locked(&self, next: &mut AppConfig) -> Result<bool, String> {
         // Tidy the alias lists and fold any legacy id the dashboard echoed back.
         next.normalize();
         let previous = self.core.config();
+        // Identity/credential versions are backend-owned publication facts.
+        // A stale dashboard save cannot roll them back or rename them.
+        for provider in &mut next.providers {
+            for account in &mut provider.accounts {
+                if let Some(old) = previous.provider(&provider.id).and_then(|provider| {
+                    provider
+                        .accounts
+                        .iter()
+                        .find(|old| old.account_id == account.account_id)
+                }) {
+                    if account.binding != old.binding
+                        || (old.binding.is_some() && account.key_ref != old.key_ref)
+                    {
+                        return Err("the account binding changed since this configuration was read; refresh before saving".into());
+                    }
+                } else {
+                    account.binding = Some(zroutery_core::config::AccountBinding::fresh());
+                    account
+                        .probe_kind
+                        .get_or_insert(zroutery_core::config::AccountProbeKind::None);
+                    if account.key_ref.trim().is_empty() {
+                        account.key_ref = format!(
+                            "provider:{}:account:{}:unbound:{}",
+                            provider.id,
+                            account.account_id,
+                            uuid::Uuid::new_v4().simple()
+                        );
+                    }
+                }
+            }
+        }
         // The dashboard never receives the token, so an empty one means "keep
         // what you have" rather than "clear it".
         if next.server.auth_token.trim().is_empty() {
@@ -193,7 +263,7 @@ impl Desktop {
                 .map_err(|e| self.refused_rebind_error(&previous.server, running, &e))?;
         }
 
-        store::save(&self.config_dir, &next)?;
+        store::save(&self.config_dir, next)?;
         // Rebuild the upstream HTTP client if proxy bypass setting changed.
         if previous.server.bypass_proxy != next.server.bypass_proxy {
             self.core.rebuild_upstream(next.server.bypass_proxy);
@@ -205,7 +275,7 @@ impl Desktop {
         };
         self.core.set_config(next.clone());
 
-        if let Err(e) = self.migrate_listener(&previous, &next, needs_rebind).await {
+        if let Err(e) = self.migrate_listener(&previous, next, needs_rebind).await {
             // The change did not take: put the document back the way it was, so
             // a dashboard that re-reads the state sees the truth.
             if let Err(restore) = store::save(&self.config_dir, &previous) {

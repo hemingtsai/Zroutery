@@ -15,6 +15,7 @@ impl Desktop {
             health: self.core.router().health_snapshot(),
             summary: self.core.stats().summary(),
             recent: self.core.stats().recent(200),
+            accounting: self.core.accounting_status(),
         }
     }
 
@@ -80,15 +81,14 @@ impl Desktop {
 
     /// Write the ledger out if it has moved since the last time.
     ///
-    /// Called on a timer and at shutdown rather than per request: six numbers change
-    /// on every call, and rewriting the file each time buys nothing. The cost of that
-    /// choice is losing the last few seconds of spend to a hard kill, which is a fair
-    /// trade against constant disk writes.
-    ///
-    /// A write that fails leaves the spend pending, so the next timer tick (or the
-    /// shutdown flush) retries it once the disk is writable again, instead of the
-    /// old ledger surviving until the process restarts.
+    /// Request settlement commits to SQLite before completion. This timer only
+    /// retries local pending facts and writes legacy spend.json as a compatibility
+    /// projection; it is not the authoritative accounting acknowledgement.
     pub fn flush_ledger(&self) {
+        if let Err(error) = self.core.retry_accounting() {
+            tracing::error!(%error, "durable accounting retry failed; no upstream replay");
+            return;
+        }
         if let Err(error) = self.core.stats().flush() {
             tracing::warn!(%error, "usage history flush failed; it will be retried");
         }

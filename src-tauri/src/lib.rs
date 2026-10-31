@@ -3,6 +3,10 @@
 //! Runs the aggregating proxy in-process and exposes it through a menu bar
 //! item plus a dashboard window.
 
+#[cfg(feature = "account")]
+mod account_binding;
+#[cfg(all(test, feature = "account", feature = "newapi"))]
+mod account_binding_tests;
 pub mod ccswitch;
 #[cfg(feature = "account-maint")]
 pub mod checkin;
@@ -86,6 +90,7 @@ pub fn run() {
             commands::get_snapshot,
             commands::get_activity,
             commands::get_usage_days,
+            commands::query_usage_history,
             commands::get_logs,
             #[cfg(feature = "ml")]
             commands::get_ml_status,
@@ -93,6 +98,12 @@ pub fn run() {
             commands::reconcile_accounts,
             #[cfg(feature = "account")]
             commands::set_account_key,
+            #[cfg(feature = "account")]
+            commands::stage_account_key,
+            #[cfg(feature = "account")]
+            commands::publish_account_key,
+            #[cfg(feature = "account")]
+            commands::discard_account_key,
             #[cfg(feature = "account")]
             commands::clear_account_key,
             #[cfg(feature = "account")]
@@ -114,6 +125,7 @@ pub fn run() {
             commands::reveal_token,
             commands::copy_token,
             commands::save_config,
+            commands::set_provider_enabled,
             commands::set_provider_key,
             commands::clear_provider_key,
             commands::remove_provider,

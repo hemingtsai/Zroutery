@@ -51,11 +51,25 @@ pub fn get_activity(desktop: State<'_, Arc<Desktop>>) -> Cmd<Activity> {
 /// exactly that many rows: the chart draws a quiet day as a zero rather than
 /// closing the gap.
 #[tauri::command]
-pub fn get_usage_days(
+pub async fn get_usage_days(
     desktop: State<'_, Arc<Desktop>>,
     days: u32,
 ) -> Cmd<Vec<zroutery_core::stats::UsageDay>> {
-    desktop.core.stats().usage_days(days)
+    let desktop = Arc::clone(desktop.inner());
+    tauri::async_runtime::spawn_blocking(move || desktop.core.stats().usage_days(days))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn query_usage_history(
+    desktop: State<'_, Arc<Desktop>>,
+    query: zroutery_core::stats::UsageHistoryQuery,
+) -> Cmd<zroutery_core::stats::UsageHistoryPage> {
+    let desktop = Arc::clone(desktop.inner());
+    tauri::async_runtime::spawn_blocking(move || desktop.core.stats().query_history(&query))
+        .await
+        .map_err(|error| error.to_string())?
 }
 
 /// Recent tracing output for the Logs tab. The buffer is capped in memory, so
@@ -222,14 +236,32 @@ pub async fn save_config(
     app: AppHandle,
     desktop: State<'_, Arc<Desktop>>,
     config: AppConfig,
+    expected_revision: Option<String>,
 ) -> Cmd<Snapshot> {
     let launch_on_login = config.window.launch_on_login;
-    desktop.apply_config(config).await?;
+    desktop
+        .apply_config_versioned(config, expected_revision.as_deref())
+        .await?;
+    announce_config(&app);
     desktop.set_warning(None);
     // Login launch is an OS registration, not a document field: converge the
     // registry towards the setting now that the document carrying it is saved.
     #[cfg(desktop)]
     sync_autostart(&app, launch_on_login);
+    Ok(refreshed(&app, &desktop).await)
+}
+
+/// A narrow read-modify-write under the configuration mutex, so a tray toggle
+/// cannot overwrite edits from the dashboard's older full snapshot.
+#[tauri::command]
+pub async fn set_provider_enabled(
+    app: AppHandle,
+    desktop: State<'_, Arc<Desktop>>,
+    provider_id: String,
+    enabled: bool,
+) -> Cmd<Snapshot> {
+    desktop.set_provider_enabled(&provider_id, enabled).await?;
+    announce_config(&app);
     Ok(refreshed(&app, &desktop).await)
 }
 
@@ -319,7 +351,7 @@ pub async fn clear_provider_key(
 /// Where an account's own credential lives, when it does not share the
 /// provider's. Derived rather than chosen, so two accounts on one provider can
 /// never collide and the reference is reproducible from the pair alone.
-#[cfg(feature = "account")]
+#[cfg(all(test, feature = "account"))]
 fn account_key_ref(provider_id: &str, account_id: &str) -> String {
     format!("provider:{provider_id}:account:{account_id}")
 }
@@ -330,7 +362,7 @@ fn account_key_ref(provider_id: &str, account_id: &str) -> String {
 /// provider's is sharing the provider key: storing an account secret has to
 /// point it at the derived reference. A reference the operator set by hand is
 /// kept and its stored value replaced.
-#[cfg(feature = "account")]
+#[cfg(all(test, feature = "account"))]
 pub(crate) fn account_secret_target(
     config: &AppConfig,
     provider_id: &str,
@@ -369,42 +401,6 @@ pub(crate) async fn write_account_secret(
     Ok(())
 }
 
-/// Delete a secret from the system credential store.
-#[cfg(all(feature = "account", feature = "account-maint"))]
-pub(crate) async fn delete_account_secret(desktop: &Desktop, key_ref: &str) -> Result<(), String> {
-    let secrets = Arc::clone(&desktop.secrets);
-    let key_ref = key_ref.to_string();
-    tauri::async_runtime::spawn_blocking(move || secrets.delete(&key_ref))
-        .await
-        .map_err(|e| e.to_string())??;
-    Ok(())
-}
-
-/// Point one declaration at the reference its stored secret lives under.
-#[cfg(feature = "account")]
-pub(crate) async fn repoint_account_key(
-    desktop: &Desktop,
-    provider_id: &str,
-    account_id: &str,
-    key_ref: &str,
-) -> Result<(), String> {
-    let mut config = (*desktop.core.config()).clone();
-    let Some(declaration) = config
-        .providers
-        .iter_mut()
-        .find(|p| p.id == provider_id)
-        .and_then(|p| p.accounts.iter_mut().find(|a| a.account_id == account_id))
-    else {
-        return Err(format!(
-            "unknown account `{account_id}` on provider `{provider_id}`"
-        ));
-    };
-    declaration.key_ref = key_ref.to_string();
-    // `apply_config` reports whether the gateway had to rebind as well; a
-    // repoint changes no listener setting, so the flag is not interesting here.
-    desktop.apply_config(config).await.map(|_| ())
-}
-
 /// Store one account's own credential and point its declaration at it.
 ///
 /// An account whose `key_ref` is empty (or equal to the provider's own
@@ -429,13 +425,65 @@ pub async fn set_account_key(
     if key.len() > 4096 {
         return Err("the API key exceeds 4096 bytes".into());
     }
-    let (key_ref, repoint) =
-        account_secret_target(&desktop.core.config(), &provider_id, &account_id)?;
-    write_account_secret(&desktop, &key_ref, key).await?;
-    if repoint {
-        repoint_account_key(&desktop, &provider_id, &account_id, &key_ref).await?;
+    let preview = desktop
+        .stage_account_binding(&provider_id, &account_id, key, None, None, None)
+        .await?;
+    if preview.identity_changed {
+        desktop
+            .discard_account_binding(&preview.publication_id)
+            .await?;
+        return Err("the token belongs to a different remote identity; use the binding preview and explicitly confirm the identity change".into());
     }
+    desktop
+        .publish_account_binding(&preview.publication_id, false)
+        .await?;
+    announce_config(&app);
     Ok(refreshed(&app, &desktop).await)
+}
+
+#[cfg(feature = "account")]
+#[tauri::command]
+pub async fn stage_account_key(
+    desktop: State<'_, Arc<Desktop>>,
+    provider_id: String,
+    account_id: String,
+    api_key: String,
+    user_id: Option<String>,
+) -> Cmd<crate::account_binding::BindingPreview> {
+    desktop
+        .stage_account_binding(
+            &provider_id,
+            &account_id,
+            &api_key,
+            user_id.as_deref(),
+            None,
+            None,
+        )
+        .await
+}
+
+#[cfg(feature = "account")]
+#[tauri::command]
+pub async fn publish_account_key(
+    app: AppHandle,
+    desktop: State<'_, Arc<Desktop>>,
+    publication_id: String,
+    confirm_identity_change: bool,
+) -> Cmd<Snapshot> {
+    desktop
+        .publish_account_binding(&publication_id, confirm_identity_change)
+        .await?;
+    announce_config(&app);
+    Ok(refreshed(&app, &desktop).await)
+}
+
+#[cfg(feature = "account")]
+#[tauri::command]
+pub async fn discard_account_key(
+    desktop: State<'_, Arc<Desktop>>,
+    publication_id: String,
+) -> Cmd<()> {
+    desktop.discard_account_binding(&publication_id).await
 }
 
 /// Drop one account's own credential and let it resolve to the provider's key
@@ -455,7 +503,9 @@ pub async fn clear_account_key(
     provider_id: String,
     account_id: String,
 ) -> Cmd<Snapshot> {
-    let (key_ref, shared) = {
+    let _migration = desktop.migration.lock().await;
+    let mut config = (*desktop.core.config()).clone();
+    let key_ref = {
         let config = desktop.core.config();
         let provider = config
             .provider(&provider_id)
@@ -470,30 +520,36 @@ pub async fn clear_account_key(
             // key already, and clearing is a no-op rather than an error.
             return Ok(refreshed(&app, &desktop).await);
         }
-        let shared_elsewhere = config.providers.iter().any(|p| {
-            p.key_ref == declaration.key_ref
-                || p.accounts
-                    .iter()
-                    .any(|a| a.account_id != account_id && a.key_ref == declaration.key_ref)
-        });
-        (declaration.key_ref.clone(), shared_elsewhere)
+        declaration.key_ref.clone()
     };
-    if !shared {
-        let secrets = Arc::clone(&desktop.secrets);
-        tauri::async_runtime::spawn_blocking(move || secrets.delete(&key_ref))
-            .await
-            .map_err(|e| e.to_string())??;
-    }
-    let mut config = (*desktop.core.config()).clone();
     if let Some(declaration) = config
         .providers
         .iter_mut()
         .find(|p| p.id == provider_id)
         .and_then(|p| p.accounts.iter_mut().find(|a| a.account_id == account_id))
     {
-        declaration.key_ref = String::new();
+        // Empty is a missing panel token, not consent to borrow a provider key.
+        declaration.key_ref = format!(
+            "provider:{provider_id}:account:{account_id}:missing:{}",
+            uuid::Uuid::new_v4().simple()
+        );
+        let mut binding = declaration
+            .binding
+            .clone()
+            .unwrap_or_else(zroutery_core::config::AccountBinding::fresh);
+        binding.credential_revision += 1;
+        binding.verification = zroutery_core::config::BindingVerification::Pending;
+        binding.reason = Some("panel token removed".into());
+        declaration.binding = Some(binding);
     }
-    desktop.apply_config(config).await?;
+    store::save(&desktop.config_dir, &config)?;
+    desktop.core.set_config(config.clone());
+    if !crate::secret_refs::referenced_secrets(&config).contains(&key_ref) {
+        let secrets = Arc::clone(&desktop.secrets);
+        tauri::async_runtime::spawn_blocking(move || secrets.delete(&key_ref))
+            .await
+            .map_err(|error| error.to_string())??;
+    }
     Ok(refreshed(&app, &desktop).await)
 }
 
@@ -547,6 +603,7 @@ pub async fn remove_account(
         .ok_or_else(|| format!("unknown account `{account_id}` on provider `{provider_id}`"))?;
     provider.accounts.remove(index);
     desktop.apply_config(config.clone()).await?;
+    announce_config(&app);
     let warnings =
         crate::inference_commands::forget_unreferenced(&desktop, &candidates, &config).await;
     if !warnings.is_empty() {
@@ -632,6 +689,7 @@ pub async fn import_newapi_pricing(
     let group = group.as_deref().unwrap_or("default");
     apply_newapi_prices(&mut config, &provider_id, group, &prices)?;
     desktop.apply_config(config).await?;
+    announce_config(&app);
     Ok(refreshed(&app, &desktop).await)
 }
 
@@ -658,7 +716,7 @@ fn apply_newapi_prices(
             continue;
         };
         model.pricing = Some(zroutery_core::billing::Pricing {
-            per_request: None,
+            per_request: price.per_request,
             currency: "USD".into(),
             input_per_mtok: input,
             output_per_mtok: output,
@@ -692,10 +750,10 @@ fn newapi_adapter(
         None => provider.accounts.iter().find(|account| account.enabled),
     };
     let config = NewApiConfig {
-        base_url: account
-            .and_then(|account| account.maintenance.panel_override())
-            .unwrap_or(&provider.base_url)
-            .to_string(),
+        base_url: zroutery_core::config::account_panel_root(
+            &provider.base_url,
+            account.and_then(|account| account.maintenance.panel_override()),
+        ),
         connect_timeout_secs: provider.connect_timeout_secs,
         request_timeout_secs: provider.timeout_secs.min(30),
         ..NewApiConfig::default()
@@ -717,6 +775,7 @@ pub async fn remove_provider(
     provider_id: String,
 ) -> Cmd<Snapshot> {
     desktop.remove_provider(&provider_id).await?;
+    announce_config(&app);
     Ok(refreshed(&app, &desktop).await)
 }
 
@@ -795,12 +854,14 @@ pub async fn run_election(app: AppHandle, desktop: State<'_, Arc<Desktop>>) -> C
 #[tauri::command]
 pub async fn start_proxy(app: AppHandle, desktop: State<'_, Arc<Desktop>>) -> Cmd<Snapshot> {
     desktop.start().await?;
+    let _ = app.emit(tray::GATEWAY_STATE_EVENT, ());
     Ok(refreshed(&app, &desktop).await)
 }
 
 #[tauri::command]
 pub async fn stop_proxy(app: AppHandle, desktop: State<'_, Arc<Desktop>>) -> Cmd<Snapshot> {
     desktop.stop().await;
+    let _ = app.emit(tray::GATEWAY_STATE_EVENT, ());
     Ok(refreshed(&app, &desktop).await)
 }
 
@@ -809,12 +870,16 @@ pub async fn regenerate_token(app: AppHandle, desktop: State<'_, Arc<Desktop>>) 
     let mut config = (*desktop.core.config()).clone();
     config.server.auth_token = store::generate_token();
     desktop.apply_config(config).await?;
+    announce_config(&app);
     Ok(refreshed(&app, &desktop).await)
 }
 
 #[tauri::command]
 pub async fn clear_stats(app: AppHandle, desktop: State<'_, Arc<Desktop>>) -> Cmd<Snapshot> {
-    desktop.core.stats().clear_history(None)?;
+    let worker = Arc::clone(desktop.inner());
+    tauri::async_runtime::spawn_blocking(move || worker.core.stats().clear_history(None))
+        .await
+        .map_err(|error| error.to_string())??;
     Ok(refreshed(&app, &desktop).await)
 }
 
@@ -869,11 +934,16 @@ pub async fn import_usage_history(
         schema_version: u32,
         records: Vec<zroutery_core::stats::RequestRecord>,
     }
-    let archive: Archive = serde_json::from_str(&archive).map_err(|e| e.to_string())?;
-    if archive.schema_version != 1 {
-        return Err("unsupported usage archive version".into());
-    }
-    desktop.core.stats().import_history(archive.records)?;
+    let worker = Arc::clone(desktop.inner());
+    tauri::async_runtime::spawn_blocking(move || {
+        let archive: Archive = serde_json::from_str(&archive).map_err(|e| e.to_string())?;
+        if archive.schema_version != 1 {
+            return Err("unsupported usage archive version".into());
+        }
+        worker.core.stats().import_history(archive.records)
+    })
+    .await
+    .map_err(|error| error.to_string())??;
     Ok(refreshed(&app, &desktop).await)
 }
 
@@ -883,7 +953,12 @@ pub async fn clear_client_usage(
     desktop: State<'_, Arc<Desktop>>,
     client_id: String,
 ) -> Cmd<Snapshot> {
-    desktop.core.stats().clear_history(Some(&client_id))?;
+    let worker = Arc::clone(desktop.inner());
+    tauri::async_runtime::spawn_blocking(move || {
+        worker.core.stats().clear_history(Some(&client_id))
+    })
+    .await
+    .map_err(|error| error.to_string())??;
     Ok(refreshed(&app, &desktop).await)
 }
 
@@ -1123,6 +1198,7 @@ pub async fn ccswitch_import(
     .map_err(|e| e.to_string())??;
 
     desktop.apply_config(next).await?;
+    announce_config(&app);
 
     // Build and log the import report.
     let report = ccswitch::build_report(&source, &batch, warnings, vec![]);

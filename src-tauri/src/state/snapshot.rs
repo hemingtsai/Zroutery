@@ -6,6 +6,17 @@ use super::views::*;
 use super::Desktop;
 use crate::store;
 
+pub(super) fn config_revision(config: &zroutery_core::config::AppConfig) -> String {
+    use std::hash::{Hash, Hasher};
+    // An immutable configuration's canonical serialization makes no counter
+    // bookkeeping necessary at its many backend-owned mutation sites.
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    serde_json::to_vec(config)
+        .expect("configuration serializes")
+        .hash(&mut hash);
+    format!("{:016x}", hash.finish())
+}
+
 impl Desktop {
     pub async fn snapshot(&self) -> Snapshot {
         let stored = self.core.config();
@@ -49,6 +60,7 @@ impl Desktop {
         config.server.auth_token = String::new();
 
         Snapshot {
+            config_revision: config_revision(&stored),
             server: ServerStatus {
                 running: running_addr.is_some(),
                 base_url: running_addr.as_ref().map(|a| format!("http://{a}")),
@@ -73,6 +85,7 @@ impl Desktop {
             wallet_holds: self.core.router().wallet_holds(),
             election: self.core.router().election(),
             budgets: self.budget_status(),
+            accounting: self.core.accounting_status(),
             ml_available: cfg!(feature = "ml"),
             account_maintenance_available: cfg!(feature = "account-maint"),
             account_available: cfg!(feature = "account"),

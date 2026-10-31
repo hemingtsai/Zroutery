@@ -42,6 +42,7 @@ pub const MAX_TOKEN_BYTES: usize = 4096;
 /// Repeated because bases arrive pasted from several places: `…/api/v1` is a
 /// combination operators do type, and stripping only one suffix would leave
 /// `…/api` as the root.
+#[cfg(test)]
 pub fn panel_root(base_url: &str) -> String {
     let mut root = base_url.trim().trim_end_matches('/').to_string();
     loop {
@@ -99,6 +100,11 @@ pub fn origin_of(url: &str) -> Option<String> {
     Some(format!("{scheme}://{authority}"))
 }
 
+pub fn capture_origin_allowed(initial: &str, observed: &str) -> bool {
+    initial == observed
+        || (initial == "https://ps.air-outer.com" && observed == "https://agentrouter.org")
+}
+
 /// What the page reported.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CaptureResult {
@@ -113,6 +119,7 @@ pub enum CaptureResult {
         /// the very verification this capture is about to run, so it rides
         /// back with the token and is persisted beside it.
         user_id: Option<String>,
+        identity: Option<zroutery_core::config::RemoteIdentity>,
         source: String,
     },
     /// The panel wants the operator to complete a verification step.
@@ -133,8 +140,8 @@ pub fn parse(value: &Value) -> CaptureResult {
     let Ok(json) = serde_json::from_str::<Value>(text) else {
         return CaptureResult::Error {
             message: format!(
-                "the capture probe returned unreadable JSON: {}",
-                truncate(text)
+                "the capture probe returned unreadable JSON ({} bytes)",
+                text.len()
             ),
         };
     };
@@ -157,6 +164,10 @@ pub fn parse(value: &Value) -> CaptureResult {
                         .get("user_id")
                         .and_then(Value::as_str)
                         .map(str::to_string),
+                    identity: json
+                        .get("verified_identity")
+                        .filter(|value| !value.is_null())
+                        .and_then(|value| serde_json::from_value(value.clone()).ok()),
                     source: json
                         .get("source")
                         .and_then(Value::as_str)
@@ -185,7 +196,7 @@ pub fn parse(value: &Value) -> CaptureResult {
             message: format!("the capture probe reported an unknown state `{other}`"),
         },
         None => CaptureResult::Error {
-            message: format!("the capture probe reported no state: {}", truncate(text)),
+            message: "the capture probe reported no state".into(),
         },
     }
 }
@@ -213,15 +224,6 @@ pub fn storable_token(raw: &str) -> Result<String, String> {
         );
     }
     Ok(token.to_string())
-}
-
-fn truncate(text: &str) -> String {
-    const LIMIT: usize = 200;
-    if text.chars().count() <= LIMIT {
-        return text.to_string();
-    }
-    let head: String = text.chars().take(LIMIT).collect();
-    format!("{head}…")
 }
 
 /// The expression the capture polls.
@@ -291,10 +293,24 @@ const PROBE: &str = r#"(async () => {
       }), 5000);
       if (!response.ok) return null;
       const body = await response.json();
-      return body && body.success ? body : null;
+      if (!body || body.success !== true || !body.data || body.data.id == null) return null;
+      if (userId && String(body.data.id) !== userId) return null;
+      return body.data;
     } catch (error) {
       return null;
     }
+  };
+  const ready = async (token, source) => {
+    const user = await verify(token);
+    if (!user) return null;
+    return { state: 'ready', token, username: typeof user.username === 'string' ? user.username : null,
+      user_id: String(user.id), source, verified_identity: {
+        panel_root: location.origin, user_id: String(user.id),
+        username: typeof user.username === 'string' ? user.username : null,
+        group: typeof user.group === 'string' ? user.group : null,
+        verified_at: Math.floor(Date.now() / 1000),
+        source: 'GET /api/user/self (browser HTTP, accepted personal token)'
+      } };
   };
   const mint = async (token) => {
     if (C.minted) return { token: C.minted };
@@ -354,8 +370,9 @@ const PROBE: &str = r#"(async () => {
       };
     }
   }
-  if (C.minted && (await verify(C.minted))) {
-    return out({ state: 'ready', token: C.minted, username: null, user_id: userId, source: 'minted' });
+  if (C.minted) {
+    const result = await ready(C.minted, 'minted');
+    if (result) return out(result);
   }
   const candidates = [];
   if (C.bearer) candidates.push(C.bearer);
@@ -389,14 +406,17 @@ const PROBE: &str = r#"(async () => {
       return out({ state: 'needs_verification', message: 'the panel asked for a verification step' });
     }
     if (minted && minted.token) {
-      return out({ state: 'ready', token: minted.token, username: null, source: 'minted' });
+      const result = await ready(minted.token, 'minted');
+      if (result) return out(result);
+      continue;
     }
     // A login JWT is short-lived and has no refresh cookie the app can keep,
     // so it is not a durable account credential.
     if (/^ey[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\./.test(candidate)) {
       return out({ state: 'unsupported', message: 'the panel did not return a durable access token' });
     }
-    return out({ state: 'ready', token: candidate, username: null, user_id: userId, source: 'stored' });
+    const result = await ready(candidate, 'stored');
+    if (result) return out(result);
   }
   /*
    * The cookie-session mint: some panels (AgentRouter's, measured) hold the
@@ -437,9 +457,10 @@ const PROBE: &str = r#"(async () => {
             ? body.data
             : (body.data && (body.data.token || body.data.access_token));
           if (body.success && typeof minted === 'string' && minted.length > 0) {
-            if (await verify(minted)) {
+            const result = await ready(minted, 'minted');
+            if (result) {
               C.minted = minted;
-              return out({ state: 'ready', token: minted, username: null, user_id: userId, source: 'minted' });
+              return out(result);
             }
           }
         }
@@ -463,7 +484,9 @@ const PROBE: &str = r#"(async () => {
             return out({ state: 'needs_verification', message: 'the panel asked for a verification step' });
           }
           if (minted && minted.token) {
-            return out({ state: 'ready', token: minted.token, username: null, source: 'minted' });
+            const result = await ready(minted.token, 'minted');
+            if (result) return out(result);
+            return out({ state: 'waiting' });
           }
           return out({ state: 'unsupported', message: 'the panel did not return a durable access token' });
         }
@@ -532,6 +555,25 @@ mod tests {
     }
 
     #[test]
+    fn a_confirmed_panel_redirect_is_allowed_but_not_a_lookalike_or_downgrade() {
+        assert!(capture_origin_allowed(
+            "https://ps.air-outer.com",
+            "https://agentrouter.org"
+        ));
+        assert!(capture_origin_allowed(
+            "https://agentrouter.org",
+            "https://agentrouter.org"
+        ));
+        for origin in [
+            "https://agentrouter.org.evil.test",
+            "http://agentrouter.org",
+            "https://unknown.example",
+        ] {
+            assert!(!capture_origin_allowed("https://ps.air-outer.com", origin));
+        }
+    }
+
+    #[test]
     fn a_minted_token_is_read_from_the_probe() {
         let answer = json!(
             r#"{"state":"ready","token":"abc123","username":"alice","user_id":"7","source":"minted"}"#
@@ -542,6 +584,7 @@ mod tests {
                 token: "abc123".into(),
                 username: Some("alice".into()),
                 user_id: Some("7".into()),
+                identity: None,
                 source: "minted".into(),
             }
         );

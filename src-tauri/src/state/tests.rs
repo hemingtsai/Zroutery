@@ -230,6 +230,51 @@ fn rebind_only_on_transport_changes() {
     assert!(needs_rebind(&a, &f));
 }
 
+#[tokio::test]
+async fn independent_provider_toggles_merge_and_failed_saves_leave_runtime_intact() {
+    use zroutery_core::config::{ProviderConfig, ProviderKind};
+    let mut config = config_with_token("zr-test-toggle");
+    config.providers = ["a", "b"]
+        .into_iter()
+        .map(|id| {
+            let mut provider = ProviderConfig::new(id, id, ProviderKind::OpenAICompatible);
+            provider.base_url = "http://127.0.0.1:9999".into();
+            provider
+        })
+        .collect();
+    config.routing.max_attempts = 7;
+    let (desktop, dir) = desktop_with(config);
+    let stale = desktop.snapshot().await;
+    let (a, b) = tokio::join!(
+        desktop.set_provider_enabled("a", false),
+        desktop.set_provider_enabled("b", false)
+    );
+    a.unwrap();
+    b.unwrap();
+    assert!(desktop
+        .core
+        .config()
+        .providers
+        .iter()
+        .all(|provider| !provider.enabled));
+    assert_eq!(desktop.core.config().routing.max_attempts, 7);
+    assert!(desktop
+        .apply_config_versioned(stale.config, Some(&stale.config_revision))
+        .await
+        .is_err());
+    assert!(!desktop.core.config().provider("a").unwrap().enabled);
+    assert!(desktop.set_provider_enabled("missing", true).await.is_err());
+    let disk = crate::store::load(&dir).0;
+    assert!(disk.providers.iter().all(|provider| !provider.enabled));
+    // A directory at the destination forces atomic publication to fail.
+    std::fs::remove_file(dir.join(crate::store::FILE_NAME)).unwrap();
+    std::fs::create_dir(dir.join(crate::store::FILE_NAME)).unwrap();
+    assert!(desktop.set_provider_enabled("a", true).await.is_err());
+    assert!(!desktop.core.config().provider("a").unwrap().enabled);
+    drop(desktop);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 pub(super) fn desktop_with(config: AppConfig) -> (Arc<Desktop>, PathBuf) {
     let dir = std::env::temp_dir().join(format!("zroutery-state-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -1057,14 +1102,14 @@ fn a_failed_ledger_write_is_retried_after_the_disk_recovers() {
         },
     );
 
-    // A directory where the temporary file goes makes the write fail the way
-    // a full or read-only destination does, without needing root.
-    let blocked = dir.join(format!("{}.tmp", store::LEDGER_FILE));
+    // A directory at the destination refuses atomic publication, independently
+    // of how the writer chooses its unique temporary file name.
+    let blocked = dir.join(store::LEDGER_FILE);
     std::fs::create_dir(&blocked).unwrap();
 
     desktop.flush_ledger();
     assert!(
-        !dir.join(store::LEDGER_FILE).exists(),
+        !dir.join(store::LEDGER_FILE).is_file(),
         "the blocked destination cannot have produced a ledger"
     );
     assert_eq!(

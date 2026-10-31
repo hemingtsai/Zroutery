@@ -199,6 +199,33 @@ pub fn load_ledger(dir: &Path) -> Ledger {
     ledger
 }
 
+/// One-time SQLite activation must not interpret corrupt legacy spend as zero.
+/// The source text is retained verbatim in SQLite as migration provenance and
+/// the original file is left untouched. It carries accounting, not secrets.
+pub fn legacy_accounting(dir: &Path) -> Result<(Ledger, String), String> {
+    let path = dir.join(LEDGER_FILE);
+    match std::fs::read_to_string(&path) {
+        Ok(text) => {
+            let ledger: Ledger = serde_json::from_str(&text).map_err(|error| {
+                format!(
+                    "cannot migrate {}: {error}; original retained",
+                    path.display()
+                )
+            })?;
+            ledger.validate()?;
+            Ok((ledger, format!("spend.json v1 opening baseline: {text}")))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok((
+            Ledger::new(),
+            "no legacy spend.json; empty opening baseline".into(),
+        )),
+        Err(error) => Err(format!(
+            "cannot read {} for accounting migration: {error}",
+            path.display()
+        )),
+    }
+}
+
 pub fn save_ledger(dir: &Path, ledger: &Ledger) -> Result<(), String> {
     let text = serde_json::to_string(ledger).map_err(|e| e.to_string())?;
     write_atomically(dir, LEDGER_FILE, &text).map(|_| ())
@@ -206,7 +233,9 @@ pub fn save_ledger(dir: &Path, ledger: &Ledger) -> Result<(), String> {
 
 /// Write atomically: a crash mid-save must not truncate the config.
 pub fn save(dir: &Path, cfg: &AppConfig) -> Result<PathBuf, String> {
-    let text = serde_json::to_string_pretty(cfg).map_err(|e| e.to_string())?;
+    // One file has an atomic replacement boundary already. Multi-file client
+    // switches use file_transaction together with their ownership manifests.
+    let text = serde_json::to_string_pretty(cfg).map_err(|error| error.to_string())?;
     write_atomically(dir, FILE_NAME, &text)
 }
 
@@ -231,15 +260,21 @@ fn write_atomically(dir: &Path, name: &str, text: &str) -> Result<PathBuf, Strin
         let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
     }
     let path = dir.join(name);
-    let tmp = dir.join(format!("{name}.tmp"));
-    let mut file =
-        create_private(&tmp).map_err(|e| format!("cannot write {}: {e}", tmp.display()))?;
-    file.write_all(text.as_bytes())
-        .map_err(|e| format!("cannot write {}: {e}", tmp.display()))?;
-    file.sync_all()
-        .map_err(|e| format!("cannot flush {}: {e}", tmp.display()))?;
-    drop(file);
-    std::fs::rename(&tmp, &path).map_err(|e| format!("cannot replace {}: {e}", path.display()))?;
+    let tmp = dir.join(format!(".{name}.{}.tmp", uuid::Uuid::new_v4().simple()));
+    let result = (|| {
+        let mut file =
+            create_private(&tmp).map_err(|e| format!("cannot write {}: {e}", tmp.display()))?;
+        file.write_all(text.as_bytes())
+            .map_err(|e| format!("cannot write {}: {e}", tmp.display()))?;
+        file.sync_all()
+            .map_err(|e| format!("cannot flush {}: {e}", tmp.display()))?;
+        drop(file);
+        std::fs::rename(&tmp, &path).map_err(|e| format!("cannot replace {}: {e}", path.display()))
+    })();
+    if let Err(error) = result {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(error);
+    }
     #[cfg(unix)]
     if let Ok(d) = std::fs::File::open(dir) {
         let _ = d.sync_all();
@@ -255,7 +290,7 @@ fn write_atomically(dir: &Path, name: &str, text: &str) -> Result<PathBuf, Strin
 /// briefly world-readable; other platforms rely on their own default ACLs.
 fn create_private(path: &Path) -> std::io::Result<std::fs::File> {
     let mut options = std::fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
+    options.write(true).create_new(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;

@@ -117,6 +117,10 @@ impl Desktop {
             return Err(format!("{} does not publish a balance", provider.name));
         }
 
+        #[cfg(any(feature = "account", feature = "newapi"))]
+        let mut aggregate = None;
+        #[cfg(not(any(feature = "account", feature = "newapi")))]
+        let aggregate = None;
         let outcome = match provider.balance.probe(provider.base_depth()) {
             Some(probe) => {
                 // The relay publishes a balance of its own. Ask it, with the
@@ -128,8 +132,20 @@ impl Desktop {
                     .await
                     .map_err(|e| e.to_string())
             }
-            None => self.panel_balance(provider).await,
+            None => {
+                let result = self.panel_balance(provider).await;
+                #[cfg(any(feature = "account", feature = "newapi"))]
+                {
+                    aggregate = Some(self.panel_balance_aggregate(provider));
+                }
+                result
+            }
         };
+        // A save or identity switch overtook this probe. Do not publish a
+        // provider total assembled from a different declaration's credentials.
+        if self.core.config().provider(provider_id) != Some(provider) {
+            return Err("the provider changed during its balance refresh; refresh again".into());
+        }
 
         let previous = lock(&self.balances).get(provider_id).cloned();
         let status = match outcome {
@@ -137,14 +153,18 @@ impl Desktop {
                 checked_at: Utc::now(),
                 balance: Some(balance),
                 error: None,
+                observed_at: Some(Utc::now()),
+                aggregate,
             },
             Err(e) => BalanceStatus {
                 checked_at: Utc::now(),
                 // A failed check does not erase the last figure the provider
                 // actually reported. The timestamp says when it was asked, and
                 // `error` says this attempt failed.
-                balance: previous.and_then(|status| status.balance),
+                balance: previous.as_ref().and_then(|status| status.balance.clone()),
                 error: Some(e.to_string()),
+                observed_at: previous.and_then(|status| status.observed_at),
+                aggregate,
             },
         };
         if let Some(runtime) = &self.runtime {
@@ -160,6 +180,61 @@ impl Desktop {
             Some(e) => Err(e),
             None => Ok(()),
         }
+    }
+
+    #[cfg(any(feature = "account", feature = "newapi"))]
+    fn panel_balance_aggregate(
+        &self,
+        provider: &zroutery_core::config::ProviderConfig,
+    ) -> BalanceAggregate {
+        use zroutery_core::account::AccountId;
+        let mut aggregate = BalanceAggregate::default();
+        for account in provider.accounts.iter().filter(|account| account.enabled) {
+            aggregate.participating += 1;
+            let runtime = self
+                .core
+                .accounts()
+                .get(&provider.id, &AccountId(account.account_id.clone()));
+            let failed = runtime.as_ref().is_none_or(|runtime| {
+                runtime.last_failure.is_some_and(|failed| {
+                    runtime.last_success.is_none_or(|success| failed >= success)
+                })
+            });
+            if failed {
+                aggregate.failed += 1;
+                let reason = runtime
+                    .as_ref()
+                    .and_then(|runtime| runtime.metadata.get("last_attempt_error"))
+                    .map(String::as_str)
+                    .unwrap_or("unverified/no current observation");
+                aggregate
+                    .failures
+                    .push(format!("{}: {reason}", account.account_id));
+            }
+            let quota = runtime
+                .as_ref()
+                .filter(|_| !failed)
+                .and_then(|runtime| runtime.quota.as_ref());
+            let Some(quota) = quota else {
+                aggregate.unverified += 1;
+                continue;
+            };
+            aggregate.succeeded += 1;
+            let balance = aggregate
+                .by_currency
+                .entry(quota.unit.clone())
+                .or_insert_with(|| Balance {
+                    currency: quota.unit.clone(),
+                    remaining: Some(0.0),
+                    total: Some(0.0),
+                    used: Some(0.0),
+                });
+            *balance.remaining.as_mut().unwrap() += quota.remaining;
+            *balance.total.as_mut().unwrap() += quota.total;
+            *balance.used.as_mut().unwrap() += quota.used;
+        }
+        aggregate.partial = aggregate.succeeded != aggregate.participating;
+        aggregate
     }
 
     /// The balance a provider's panel reports for the accounts it declares.
@@ -211,8 +286,21 @@ impl Desktop {
             .collect();
 
         let store = self.core.accounts();
+        let succeeded: std::collections::HashSet<_> = report
+            .outcomes
+            .iter()
+            .filter(|(_, _, outcome)| {
+                matches!(
+                    outcome,
+                    zroutery_core::account::AccountSyncOutcome::Refreshed
+                        | zroutery_core::account::AccountSyncOutcome::PartiallyReported { .. }
+                )
+            })
+            .map(|(_, account, _)| account.0.as_str())
+            .collect();
         let quotas: Vec<zroutery_core::account::types::AccountQuota> = declared
             .iter()
+            .filter(|account| succeeded.contains(account.as_str()))
             .filter_map(|account_id| {
                 store
                     .get(&provider.id, &AccountId(account_id.clone()))

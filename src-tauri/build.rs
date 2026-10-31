@@ -39,6 +39,7 @@ const APP_COMMANDS: &[&str] = &[
     "get_snapshot",
     "get_activity",
     "get_usage_days",
+    "query_usage_history",
     "get_logs",
     // Learning stack; `#[cfg(feature = "ml")]` in `lib.rs`.
     "get_ml_status",
@@ -50,6 +51,9 @@ const APP_COMMANDS: &[&str] = &[
     // Account subsystem; `#[cfg(feature = "account")]`.
     "reconcile_accounts",
     "set_account_key",
+    "stage_account_key",
+    "publish_account_key",
+    "discard_account_key",
     "clear_account_key",
     "remove_account",
     // Inference credentials on an account; `#[cfg(feature = "account")]`.
@@ -59,6 +63,7 @@ const APP_COMMANDS: &[&str] = &[
     "reveal_token",
     "copy_token",
     "save_config",
+    "set_provider_enabled",
     "set_provider_key",
     "clear_provider_key",
     "remove_provider",
