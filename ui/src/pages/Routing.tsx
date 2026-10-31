@@ -1,12 +1,15 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import {
+  applyTierOrder,
   TIERS,
   ZEN_JEV_MODEL,
   applyZenJevPreset,
   isZenJevProvider,
   tierMembers,
   modelRows,
+  modelName,
   moveCandidatePriority,
+  ms,
   nextCandidatePriority,
   orderCandidatesByPriority,
   previewId,
@@ -41,7 +44,6 @@ import {
   Select,
   StatusDot,
   Toggle,
-  ms,
   useToast,
 } from "../components";
 import { useI18n, type TKey } from "../i18n";
@@ -117,6 +119,26 @@ export default function Routing({
     [health],
   );
 
+  /**
+   * A drag or an arrow press in a pool lands here as the full desired order.
+   *
+   * The write is a priority renumber (applyTierOrder), not an array move — the
+   * pool order *is* the priority order everywhere else, so this is the one
+   * place that decides it. A null from the helper means the config moved
+   * under the gesture; "nothing to change" is the honest answer to a drop
+   * that no longer names the models it was made on.
+   */
+  const reorderTier = (
+    tier: ModelTier,
+    order: { provider_id: string; upstream_model: string }[],
+  ) => {
+    void save((cfg) => {
+      const models = applyTierOrder(cfg.models, tier, order);
+      if (!models) return null;
+      return { ...cfg, models };
+    });
+  };
+
   const tierRoutes = useMemo(
     () => TIERS.map((tier) => ({ tier, members: tierMembers(rows, config.providers, tier) })),
     [rows, config.providers],
@@ -186,7 +208,7 @@ export default function Routing({
     );
   }, [config.classifier.enabled, config.classifier.candidates, rows]);
 
-  const [tab, setTab] = useState<"ml" | "main" | "auto">(snapshot.ml_available ? "ml" : "main");
+  const [tab, setTab] = useState<"ml" | "main" | "auto">("main");
 
   // The two route bodies, hoisted so the tab strip below can place them
   // without the two subjects and the tab shell duplicating any markup.
@@ -215,16 +237,33 @@ export default function Routing({
                   </span>
                 ) : (
                   <RoutePool
+                    tier={tier}
                     members={members}
                     firstLabel={t("routing.request")}
                     cooling={cooling}
                     providerName={(id: string) => providerById.get(id)?.name}
+                    busy={busy}
+                    onReorder={reorderTier}
                   />
                 )}
               </div>
             </div>
           ))}
         </div>
+        {/*
+         * The honest footnote for the pools above. Under Priority the order
+         * shown is the order attempted. Under every other strategy the live
+         * order belongs to the election or the cursor, and the numbers here
+         * are the baseline those start from — a hand that reorders must know
+         * which one it is moving.
+         */}
+        {config.routing.strategy !== "priority" && (
+          <p className="field-hint">
+            {t("routing.strategy_order_note", {
+              strategy: t(STRATEGY_LABEL[config.routing.strategy]),
+            })}
+          </p>
+        )}
       </div>
     </Section>
   );
@@ -478,6 +517,7 @@ const DEFAULT_RECTIFIER: RectifierConfig = {
   thinking_budget: true,
   thinking_fallback: true,
   codex_metadata: true,
+  codex_auto: true,
 };
 
 /**
@@ -508,6 +548,11 @@ const RECTIFIERS = [
     hint: "rectifier.codex_metadata_hint",
   },
   {
+    field: "codex_auto",
+    label: "rectifier.codex_auto",
+    hint: "rectifier.codex_auto_hint",
+  },
+  {
     field: "thinking_fallback",
     label: "rectifier.thinking_fallback",
     hint: "rectifier.thinking_fallback_hint",
@@ -525,6 +570,15 @@ const TIER_HINT_KEY: Record<ModelTier, "tier.hint.fast" | "tier.hint.standard" |
   frontier: "tier.hint.frontier",
 };
 
+/** The strategy select's own labels, reused when a hint must name a strategy. */
+const STRATEGY_LABEL: Record<RoutingStrategy, "strategy.priority" | "strategy.weighted_random" | "strategy.round_robin" | "strategy.lowest_latency" | "strategy.balanced"> = {
+  priority: "strategy.priority",
+  weighted_random: "strategy.weighted_random",
+  round_robin: "strategy.round_robin",
+  lowest_latency: "strategy.lowest_latency",
+  balanced: "strategy.balanced",
+};
+
 /**
  * One pool of route lines: the head shown flat, the long tail folded.
  *
@@ -532,23 +586,155 @@ const TIER_HINT_KEY: Record<ModelTier, "tier.hint.fast" | "tier.hint.standard" |
  * "判定" for the review pool — and the folded tail keeps its absolute
  * fallback numbers, so a row inside the disclosure still says which place
  * in the pool it holds rather than counting from where the fold began.
+ *
+ * Exported because the overview's simple mode reuses the pool verbatim: the
+ * same drag, the same arrows, the same save path — the home page must not
+ * grow a second idea of what a route pool is.
  */
-function RoutePool({
+export function RoutePool({
+  tier,
   members,
   firstLabel,
   cooling,
   providerName,
+  busy,
+  onReorder,
 }: {
+  /** Names the pool in reorder writes; absent together with `onReorder` only. */
+  tier?: ModelTier;
   members: ModelRow[];
   firstLabel: ReactNode;
   cooling: Set<string>;
   providerName: (providerId: string) => string | undefined;
+  busy?: boolean;
+  /**
+   * Turns the pool editable. The auto-review preview leaves it off — its
+   * editing home is the drawer, which carries the priority numbers and the
+   * enable checkboxes this row cannot show.
+   */
+  onReorder?: (
+    tier: ModelTier,
+    order: { provider_id: string; upstream_model: string }[],
+  ) => void;
 }) {
   const { t } = useI18n();
   const head = members.slice(0, SHOWN_ROUTES);
   const tail = members.slice(SHOWN_ROUTES);
+
+  /*
+   * The pool was read-only text until the tier order became editable in place.
+   * Two input paths share one writer, because they must not be able to
+   * disagree: a pointer drag, and the arrow buttons a keyboard or screen
+   * reader actually drives. Both hand `onReorder` the full desired order; the
+   * page turns that into a priority rewrite (applyTierOrder), so the numbers
+   * on the Models page and the order here can never drift apart.
+   *
+   * During a drag the DOM keeps the original order and only paints the intent
+   * (a dimmed row, a rule where the drop would land). Reordering the array
+   * live would redraw mid-gesture from a snapshot that the next save could
+   * invalidate; on drop the array moves once, through a save, and a cancelled
+   * drag is exactly a no-op.
+   */
+  const [dragFrom, setDragFrom] = useState<number | null>(null);
+  const [dropAt, setDropAt] = useState<number | null>(null);
+  const rowRefs = useRef<(HTMLElement | null)[]>([]);
+  const reorder = onReorder;
+  const interactive = members.length > 1 && !busy && reorder !== undefined;
+
+  // `to` is an insertion index over the original array. Dropping before the
+  // dragged row itself, or right after it, is the order it already has.
+  const orderAfter = (from: number, to: number) => {
+    const sequence = members.map((_, i) => i).filter((i) => i !== from);
+    sequence.splice(to > from ? to - 1 : to, 0, from);
+    return sequence.map((i) => ({
+      provider_id: members[i].model.provider_id,
+      upstream_model: members[i].model.upstream_model,
+    }));
+  };
+
+  const swap = (from: number, delta: -1 | 1) => {
+    const to = from + delta;
+    if (to < 0 || to >= members.length) return;
+    const sequence = members.map((_, i) => i);
+    [sequence[from], sequence[to]] = [sequence[to], sequence[from]];
+    if (!reorder || tier === undefined) return;
+    reorder(
+      tier,
+      sequence.map((i) => ({
+        provider_id: members[i].model.provider_id,
+        upstream_model: members[i].model.upstream_model,
+      })),
+    );
+  };
+
+  // Which row's top edge the pointer is above. Rows render in index order for
+  // the whole gesture, so rect order is index order and the midpoint scan is
+  // the whole answer.
+  const hitIndex = (y: number) => {
+    for (let i = 0; i < members.length; i++) {
+      const el = rowRefs.current[i];
+      if (!el) continue;
+      const rect = el.getBoundingClientRect();
+      if (y < rect.top + rect.height / 2) return i;
+    }
+    return members.length;
+  };
+
+  const startDrag = (from: number) => (e: ReactPointerEvent) => {
+    if (!interactive || e.button !== 0) return;
+    const startY = e.clientY;
+    // A drag begins only after the pointer commits to moving; a click (or the
+    // press that starts a button click on the arrows) never becomes one.
+    let started = false;
+    const move = (ev: PointerEvent) => {
+      if (!started) {
+        if (Math.abs(ev.clientY - startY) < 4) return;
+        started = true;
+        setDragFrom(from);
+      }
+      ev.preventDefault();
+      setDropAt(hitIndex(ev.clientY));
+    };
+    const up = (ev: PointerEvent) => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      if (!started) return;
+      const to = hitIndex(ev.clientY);
+      setDragFrom(null);
+      setDropAt(null);
+      if ((to !== from && to !== from + 1) && reorder && tier !== undefined) {
+        reorder(tier, orderAfter(from, to));
+      }
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+
+  // A line that would leave the order unchanged is not shown: the absence of
+  // the rule is the honest "this drop does nothing".
+  const dropLine =
+    dragFrom !== null && dropAt !== null && dropAt !== dragFrom && dropAt !== dragFrom + 1
+      ? dropAt
+      : null;
+
   const line = (r: ModelRow, index: number) => (
-    <span className="flow-route" key={r.id}>
+    <div
+      className={[
+        "flow-route",
+        interactive ? "reorderable" : "",
+        dragFrom === index ? "dragging" : "",
+        dropLine === index ? "drop-before" : "",
+        dropLine === members.length && index === members.length - 1 ? "drop-after" : "",
+      ]
+        .filter(Boolean)
+        .join(" ")}
+      key={r.id}
+      onPointerDown={startDrag(index)}
+      ref={(el) => {
+        rowRefs.current[index] = el;
+      }}
+      title={interactive ? t("routing.drag_hint") : undefined}
+    >
       <span className={index === 0 ? "flow-src" : "flow-src muted"}>
         {index === 0 ? firstLabel : t("routing.fallback_n", { n: index })}
       </span>
@@ -558,17 +744,37 @@ function RoutePool({
           tone={cooling.has(r.id) ? "warn" : "ok"}
           state={cooling.has(r.id) ? t("status.cooling") : undefined}
         />
-        {r.id}
+        {modelName(r.model)}
         <span className="flow-provider">{providerName(r.model.provider_id)}</span>
       </span>
-    </span>
+      {interactive && (
+        <span className="row-move">
+          <Button
+            kind="ghost"
+            ariaLabel={t("routing.move_up", { model: modelName(r.model) })}
+            disabled={index === 0}
+            onClick={() => swap(index, -1)}
+          >
+            ↑
+          </Button>
+          <Button
+            kind="ghost"
+            ariaLabel={t("routing.move_down", { model: modelName(r.model) })}
+            disabled={index === members.length - 1}
+            onClick={() => swap(index, 1)}
+          >
+            ↓
+          </Button>
+        </span>
+      )}
+    </div>
   );
   return (
     <>
       {head.map(line)}
       {tail.length > 0 && (
         <Disclosure title={t("routing.more_fallbacks", { n: tail.length })}>
-          {tail.map(line)}
+          {tail.map((r, i) => line(r, i + SHOWN_ROUTES))}
         </Disclosure>
       )}
     </>

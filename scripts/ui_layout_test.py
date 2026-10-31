@@ -96,6 +96,7 @@ def chromium_candidates() -> list[str]:
 # A snapshot shaped like the Rust one, with enough variety to exercise the rows:
 # fields with and without hints, selects, number inputs, buttons.
 SNAPSHOT = {
+    "config_revision": "layout-fixture-revision",
     "config": {
         "server": {
             "host": "127.0.0.1",
@@ -402,8 +403,11 @@ SNAPSHOT = {
         "since": "2026-01-01T00:00:00Z",
         "requests": 4,
         "failures": 1,
+        "cache_read_tokens": 24,
+        "cache_write_tokens": 8,
         "input_tokens": 120,
         "output_tokens": 64,
+        "unpriced_requests": 1,
         "cost": {"CNY": 0.75},
         "per_model": [
             {
@@ -506,8 +510,26 @@ SNAPSHOT = {
 # staying silent -- the caller sees exactly the four counts it asked for.
 HARNESS = """
 <script>
+  // Measure every surface in geek mode: the simple mode hides advanced
+  // surfaces that have no declared layout yet (the simple surfaces are
+  // declared in M2). The inline script runs before the deferred bundle, so
+  // the preference is in place before the app reads it.
+  localStorage.setItem("zroutery-mode", "geek");
   // Stub the Tauri bridge so the real dashboard renders in a plain browser.
   const SNAPSHOT = __SNAPSHOT__;
+  const USAGE_DAYS = [
+    {
+      day: "2026-01-01",
+      requests: 4,
+      failures: 1,
+      cache_read_tokens: 24,
+      cache_write_tokens: 8,
+      input_tokens: 120,
+      output_tokens: 64,
+      unpriced_requests: 1,
+      cost: { CNY: 0.75 },
+    },
+  ];
   // One takeover reading per agent, covering the states the page renders from
   // (ready carries the proposal table, active the release path), plus the two
   // inert ones (not_detected, unsupported) that must not render controls.
@@ -629,6 +651,8 @@ HARNESS = """
       Promise.resolve(
         cmd === "fetch_provider_models"
           ? ["mock-a", "mock-b"]
+          : cmd === "get_usage_days"
+            ? USAGE_DAYS
           : cmd === "takeover_status"
             ? TAKEOVER
             : cmd === "migration_status"
@@ -730,11 +754,10 @@ class Surface:
     three subjects are tabs, and a section on a tab that is not selected is not
     in the document at all.
 
-    ``nav`` is the page's ``data-page`` value, not an ordinal. An index is a
-    claim about the current sidebar that a new page falsifies silently: insert
-    one and every later surface is driven to the wrong page, which measures a
-    healthy surface and reports a pass. The cutover page was added and took two
-    hours to notice that way.
+    ``nav`` is the addressable page/sub-area name. The walker maps a sub-area
+    onto its current task door and then uses the matching stable tab id. Neither
+    step uses an ordinal: inserting a door or tab must not silently repoint a
+    declared surface at healthy but unrelated controls.
     """
 
     id: str
@@ -744,6 +767,13 @@ class Surface:
     anchor: str
     scope: str = ".page"
     drawer: int | None = None
+    # Click the Nth page-head action before measuring, for surfaces whose
+    # controls live behind a folded form ("添加提供商" in the page head).
+    # Unlike ``drawer`` there is nothing to close and no .drawer to wait for:
+    # the form unfolds in place, inside the page scope.
+    unfold: int | None = None
+    unfold_selector: str = ".page-head-actions button.linky"
+    unfold_anchor: str | None = None
     tab: str | tuple[str, ...] | None = None
 
 
@@ -762,6 +792,10 @@ SURFACES = (
         {"combobox": 1, "native": 1, "action": 1},
         nav="models",
         anchor=".list-row",
+        # The add form is folded under the page head's 添加模型 link; the
+        # harness unfolds it the way a reader does before measuring.
+        unfold=0,
+        unfold_anchor="#panel-models input[placeholder='deepseek-chat']",
     ),
     Surface(
         "providers",
@@ -769,6 +803,9 @@ SURFACES = (
         {"segment": 2, "native": 2, "action": 1},
         nav="providers",
         anchor=".list-row",
+        # Same fold: 添加提供商 is the page head's first action.
+        unfold=0,
+        unfold_anchor="#panel-providers .field-actions",
     ),
     Surface(
         "accounts",
@@ -805,10 +842,24 @@ SURFACES = (
     Surface(
         "settings",
         "Settings page",
-        {"combobox": 2, "segment": 3, "native": 4, "action": 1},
+        {"combobox": 2, "segment": 3, "native": 5, "action": 3},
         nav="settings",
         anchor=".setting-row",
-        tab=("general", "gateway", "budgets"),
+        tab=("general", "gateway"),
+    ),
+    Surface(
+        "budgets",
+        "Usage budgets editor",
+        # Budgets moved from Settings to the Usage task. Keep its editor in
+        # declared coverage, including the folded add row, rather than dropping
+        # the old Settings-tab counts when synchronising the six-door shell.
+        {"combobox": 2, "native": 2, "action": 1},
+        nav="activity",
+        anchor=".table",
+        tab="budgets",
+        unfold=0,
+        unfold_selector=".section-head button.linky",
+        unfold_anchor="#panel-budgets .section > .controls",
     ),
     Surface(
         "routing-default",
@@ -1308,10 +1359,44 @@ def measure_surfaces(devtools: DevTools) -> dict[str, dict]:
     )
     measured: dict[str, dict] = {}
     for surface in SURFACES:
-        # Selected by page name rather than by position in the sidebar. An index
-        # silently repoints at the wrong page the moment one is inserted, which
-        # measures a healthy surface and reports a pass.
-        devtools.click(devtools.element('[data-page="%s"]' % surface.nav))
+        # Six task doors own the old sub-pages. Select the stable door first,
+        # then the stable tab id when the declared surface is one of its
+        # sub-areas. Waiting for aria-current prevents an anchor left on the
+        # previous page (many pages contain `.list-row`) from satisfying the
+        # surface wait before the lazy page has mounted.
+        door = {
+            "accounts": "providers",
+            "routing": "models",
+            "cutover": "takeover",
+        }.get(surface.nav, surface.nav)
+        door_selector = '[data-page="%s"]' % door
+        devtools.click(devtools.element(door_selector))
+        devtools.wait_for(
+            "document.querySelector(%s)?.getAttribute('aria-current') === 'page'"
+            % json.dumps(door_selector),
+            "the %s task door" % door,
+        )
+        if surface.nav != door:
+            area_selector = "#tab-%s" % surface.nav
+            devtools.wait_for(
+                "document.querySelector(%s) !== null" % json.dumps(area_selector),
+                "the %s task tab" % surface.nav,
+            )
+            devtools.click(devtools.element(area_selector))
+            devtools.wait_for(
+                "document.querySelector(%s)?.getAttribute('aria-selected') === 'true'"
+                % json.dumps(area_selector),
+                "the selected %s task tab" % surface.nav,
+            )
+        elif surface.nav in {"models", "providers", "takeover"}:
+            # The door itself is also the first tab. Lazy loading may leave the
+            # previous page visible briefly after aria-current moves, so wait
+            # for this task's actual panel before accepting a generic anchor.
+            panel_selector = "#panel-%s" % surface.nav
+            devtools.wait_for(
+                "document.querySelector(%s) !== null" % json.dumps(panel_selector),
+                "the %s task panel" % surface.nav,
+            )
         tabs: tuple[str, ...]
         if surface.tab is None:
             tabs = (None,)  # type: ignore[assignment]
@@ -1338,6 +1423,15 @@ def measure_surfaces(devtools: DevTools) -> dict[str, dict]:
                 devtools.wait_for(
                     "document.querySelector('.drawer') !== null",
                     "drawer %d" % surface.drawer,
+                )
+            elif surface.unfold is not None:
+                devtools.click(
+                    devtools.element(surface.unfold_selector, surface.unfold)
+                )
+                devtools.wait_for(
+                    "document.querySelector(%s) !== null"
+                    % json.dumps(surface.unfold_anchor or ".controls"),
+                    "the unfolded form",
                 )
             scanned = devtools.evaluate(
                 "window.__zrScan(%s, %s)" % (json.dumps(surface.scope), json.dumps(surface.id))

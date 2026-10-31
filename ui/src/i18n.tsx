@@ -19,13 +19,15 @@ import {
   type ReactNode,
 } from "react";
 
-export type Lang = "en" | "zh";
+export type Lang = "en" | "zh" | "zh-TW";
 
 export const en = {
   // ------------------------------------------------------------ shared
   "common.dismiss": "Dismiss",
   "common.cancel": "Cancel",
   "common.loading": "Loading…",
+  "common.working": "Working…",
+  "common.collapse": "Collapse",
   "common.remove": "Remove",
   "common.delete": "Delete",
   "common.clear": "Clear",
@@ -44,7 +46,64 @@ export const en = {
   "app.exposed":
     "Listening on {host} exposes the gateway and your API keys to your network. Keep authentication on, or bind to 127.0.0.1.",
   "app.no_auth": "Authentication is off: any local process can spend your API credit.",
+  "app.more_notifications": "Show {n} more notification | Show {n} more notifications",
+  "app.fewer_notifications": "Show fewer notifications",
   "nav.overview": "Overview",
+  "task.providers": "Providers",
+  "task.models": "Models and routing",
+  "task.clients": "Client setup",
+  "task.usage": "Usage and records",
+  "task.catalogue": "Models by provider",
+  "task.rules": "Routing rules",
+  "task.connections": "Connections and credentials",
+  "task.accounts": "Account observations",
+  "task.connect": "Four-class setup",
+  "client_setup.title": "Native four-class model menu",
+  "client_setup.hint": "Preview the real files and limitations, choose a default, synchronize, then verify the client's actual request.",
+  "client_setup.client": "Client",
+  "client_setup.default": "Default usage tier",
+  "client_setup.keep": "Keep existing session/default",
+  "client_setup.standby": "Development standby (8788)",
+  "client_setup.preview": "Preview synchronization",
+  "client_setup.pool": "Candidate pool",
+  "client_setup.evidence": "Capability source",
+  "client_setup.unavailable": "Not configured: {ids}",
+  "client_setup.apply": "Synchronize native menu",
+  "client_setup.confirm":
+    "Applies the managed fields and the selected default; an existing session may keep its choice until Codex reopens.",
+  "task.migrate": "Migrate and restore",
+  "accounting.title": "Ledger",
+  "binding.review": "Review account binding",
+  "binding.verified": "Verified identity",
+  "binding.pending": "Pending verification",
+  "binding.remote_user": "Remote user",
+  "binding.group": "User group",
+  "binding.source": "Verification source",
+  "binding.panel": "Panel",
+  "binding.changed": "This token belongs to a different remote identity.",
+  "binding.confirm_change": "Confirm replacing this account's remote identity",
+  "binding.history_kept":
+    "Earlier requests and prices keep their original identity; the account's other credentials are untouched.",
+  "binding.publish": "Publish binding",
+  "binding.user_hint": "New token's panel user ID (if required)",
+  "binding.probe_kind": "Account observation",
+  "binding.partial": "Partial data ({ok}/{n} accounts)",
+  "binding.probe_none": "No panel observation",
+  "binding.probe_newapi": "NewAPI panel",
+  "accounting.blocked": "Accounting storage needs attention. No executed call will be replayed.",
+  "accounting.inspect": "Inspect usage and records",
+  "accounting.durable":
+    "Every request is written to disk before its result arrives — a restart never loses the ledger or double-charges it.",
+  "accounting.unavailable": "Durable accounting unavailable",
+  "accounting.pending": "{n} entries await a local retry.",
+  "accounting.unreconciled": "{n} requests were cut off by a restart; their final cost is unknown.",
+  "accounting.state": "Persistence",
+  "accounting.volatile": "Memory-only Core mode",
+  "accounting.known_cost": "Known cost, by currency",
+  "accounting.unknown_cost": "Attempts with unknown cost",
+  "accounting.unknown_usage": "Attempts with unknown usage",
+  "accounting.identity": "Account / inference key",
+  "accounting.no_replay": "Unknown cost is not zero. A local disk failure must not replay an upstream call or tool action.",
   "nav.models": "Models",
   "nav.providers": "Providers",
   "nav.routing": "Routing",
@@ -63,13 +122,26 @@ export const en = {
   "theme.system": "Follow system",
   "theme.light": "Light",
   "theme.dark": "Dark",
+  // ------------------------------------------------------------------ mode
+  "mode.simple": "Simple",
+  "mode.geek": "Advanced",
+  "mode.toggle_aria": "Interface mode",
+  "mode.geek_only_page": "That page is available in Advanced mode.",
+  "mode.advanced_active_toast":
+    "Advanced configuration is in effect: {n} item. Simple mode hides it, but it keeps running. | Advanced configuration is in effect: {n} items. Simple mode hides them, but they keep running.",
+  "mode.settings_hint": "Advanced configuration keeps running; it is only hidden.",
   "gw.address": "Address",
   "gw.copy_address": "Copy address",
   "gw.stop": "Stop gateway",
   "gw.start": "Start gateway",
   "settings.language": "Language",
   "settings.theme": "Theme",
+  "settings.skin": "Skin",
+  "skin.industrial": "Default",
+  "skin.md3": "Material 3",
+  "skin.fluent": "Fluent",
   "lang.zh": "简体中文",
+  "lang.zh_tw": "繁體中文",
   "lang.en": "English",
   "action.hide": "Hide",
   "toast.copied": "Copied.",
@@ -146,36 +218,32 @@ export const en = {
     "The proxy could not start: {addr} could not be bound ({err}). Pick a different port in Settings.",
   // -------------------------------------------------------------- accounts
   "accounts.title": "Accounts",
-  "accounts.title_hint":
-    "Accounts of this provider. They feed probing, balances and check-in; once an account declares inference keys, chat requests go through it too.",
-  "accounts.empty": "No accounts declared. Every request uses the provider's own key.",
+  "accounts.title_hint": "Once an account has an inference key, chat requests go through it.",
+  "accounts.empty": "No accounts yet; every request uses the provider's own key.",
   "accounts.lede":
-    "Balance, check-in and panel token for each declared account. Declarations are edited in the provider's account section.",
+    "Balance, check-in and panel token for each account. Add or edit accounts in the provider's account section.",
   "accounts.add": "Add account",
   "accounts.id_label": "Account ID",
-  "accounts.id_hint":
-    "Stable name within this provider. The (provider, account) pair identifies its runtime state.",
+  "accounts.id_hint": "A stable name within this provider.",
   "accounts.key_label_add": "Panel access token (optional)",
   "accounts.key_hint_add":
-    "Optional. Empty uses the provider's key. For a NewAPI panel, paste the personal access token; an sk- relay key will not be accepted there.",
+    "Empty uses the provider key. For a NewAPI panel paste the personal access token — sk- relay keys do not work.",
   "accounts.duplicate": "Account `{id}` already exists on this provider.",
   "accounts.key_store_failed": "The account was saved, but storing its key failed.",
   "accounts.set_key": "Set credential",
   "accounts.key_label": "Panel access token",
-  "accounts.key_hint":
-    "Personal access token from the panel (Settings → Access tokens). Kept in the system credential vault and never shown again.",
+  "accounts.key_hint": "From the panel: personal settings → access tokens.",
   "accounts.clear_key": "Clear credential",
   "accounts.clear_key_title": "Clear account {id}'s credential",
-  "accounts.clear_key_body":
-    "The account uses the provider's key again. Its stored secret is deleted unless another account shares it.",
+  "accounts.clear_key_body": "This account goes back to the provider's key.",
   "accounts.own_key": "Own credential",
   "accounts.no_key": "Credential not stored",
   "accounts.follows_provider": "Provider's credential",
   "accounts.inference_title": "Inference keys",
   "accounts.inference_hint":
-    "The credentials chat requests are sent with, tried from the lowest priority up. The panel token above is only for balances and check-in; it is never sent as a chat credential.",
+    "What chat requests are sent with; the panel token above is only for balances and check-in.",
   "accounts.inference_empty":
-    "No inference key declared yet. Once any account on this provider declares one, this account is skipped; until then the provider's own key is used.",
+    "Once any account on this provider has an inference key, accounts without one are skipped.",
   "accounts.inference_stored": "secret stored",
   "accounts.inference_missing": "secret missing",
   "accounts.inference_priority": "priority {n}",
@@ -185,32 +253,26 @@ export const en = {
   "accounts.inference_note_placeholder": "e.g. main account",
   "accounts.inference_replace": "Replace secret",
   "accounts.inference_key_label": "New secret",
-  "accounts.inference_key_hint":
-    "Stored in the system credential store; the dashboard only learns whether it exists.",
+  "accounts.inference_key_hint": "",
   "accounts.inference_new_id": "Key ID",
-  "accounts.inference_new_id_hint":
-    "A name within this account, e.g. wallet-1. Letters, digits, `-` and `_`.",
+  "accounts.inference_new_id_hint": "e.g. wallet-1. Letters, digits, `-` and `_`.",
   "accounts.inference_new_secret": "Inference secret",
   "accounts.inference_add": "Add inference key",
   "accounts.inference_duplicate": "Inference key `{id}` already exists on this account.",
   "accounts.inference_store_failed": "The inference key could not be saved.",
   "accounts.inference_remove_title": "Remove inference key {id}",
-  "accounts.inference_remove_body":
-    "Requests stop using it immediately. Its secret is deleted unless another declaration references it.",
+  "accounts.inference_remove_body": "Requests stop using it immediately.",
   "common.save": "Save",
   "accounts.remove_title": "Remove account {id}",
-  "accounts.remove_body":
-    "Removes the declaration and its stored key. Observed data remains until the id is reused.",
+  "accounts.remove_body": "The account and its stored key are removed.",
   "accounts.checkin": "Browser check-in",
   "accounts.login_path": "Panel sign-in path",
-  "accounts.login_path_hint":
-    "The sign-in page the browser capture opens. Current NewAPI signs in at /sign-in; older forks use /login.",
+  "accounts.login_path_hint": "NewAPI signs in at /sign-in; older forks use /login.",
   "accounts.panel_url": "Panel address",
   "accounts.new_api_user": "Panel user ID",
   "accounts.new_api_user_hint":
-    "A header some panels require (AgentRouter does). The browser token capture fills it in; empty sends no header.",
-  "accounts.panel_url_hint":
-    "Fill this in only when the dashboard lives on a different host than the relay (e.g. relay api.relay.com, panel panel.relay.com). Empty means they share a host — the usual answer, since a vendor's website is often another machine that serves no panel API. Token capture and account probes use this address.",
+    "Required by some panels (AgentRouter). Filled in automatically by token capture.",
+  "accounts.panel_url_hint": "Only needed when the panel lives on a different host than the relay.",
   "token_capture.start": "Get token in browser",
   "token_capture.starting": "Opening…",
   "token_capture.captured": "Token stored",
@@ -224,9 +286,10 @@ export const en = {
   "accounts.interval": "Interval (seconds)",
   "accounts.interval_hint": "Empty disables automatic runs.",
   "accounts.checkin_path": "Check-in page path",
-  "accounts.checkin_path_hint": "Panel-relative path, e.g. /checkin. No default is set.",
+  "accounts.checkin_path_hint": "Panel-relative path, e.g. /checkin.",
   "accounts.checkin_selector": "Check-in button selector",
-  "accounts.checkin_selector_hint": "CSS selector the browser clicks. No default on purpose.",
+  "accounts.checkin_selector_hint":
+    "CSS selector of the button to click, e.g. button.checkin.",
   "error.title": "The dashboard hit a bug",
   "error.unaffected": "The proxy is unaffected and keeps running in the menu bar.",
   "common.try_again": "Try again",
@@ -265,12 +328,13 @@ export const en = {
   "kind.review": "Review",
   "overview.no_providers": "No providers.",
   "overview.add_provider": "Add a provider",
+  "overview.add_models": "Add models →",
 
   // -------------------------------------------------------------- models
   "models.pick_provider_name": "Pick a provider and fill in the model name.",
   "models.duplicate": "That provider already offers “{model}”.",
   "models.unclassified":
-    "{n} models have no tier: {ids}. They stay callable by exact id but do not participate in *-class routing.",
+    "{n} models have no tier: {ids}; they stay callable by exact id but do not join *-class routing.",
   "models.lede_none": "Models you add to a provider appear here.",
   "models.exposed": "{n} models · open one to edit, or add from a catalogue.",
   "models.empty": "No models.",
@@ -297,7 +361,7 @@ export const en = {
   "models.configuration": "Configuration",
   "models.f_model_name_hint": "Sent upstream; renaming changes the exposed id",
   "models.f_display": "Display name",
-  "models.f_display_hint": "Shown in /v1/models",
+  "models.f_display_hint": "",
   "models.f_priority": "Priority",
   "models.f_priority_hint": "Lower wins inside a tier",
   "models.f_weight": "Weight",
@@ -305,8 +369,7 @@ export const en = {
   "models.f_max_tokens": "Max output tokens",
   "models.f_max_tokens_hint": "Caps what clients may ask for",
   "models.f_context_window": "Context window",
-  "models.f_context_window_hint":
-    "Context the model accepts, when known. Advertised in /v1/models; the upstream remains authoritative.",
+  "models.f_context_window_hint": "What the model accepts, when known.",
   "models.context_set_1m": "Set 1M",
   "models.context_unknown": "unknown",
   "models.f_aliases_hint": "Comma separated short names",
@@ -330,13 +393,14 @@ export const en = {
   "models.thinking": "Extended thinking",
   "models.effort_levels": "Reasoning effort levels",
   "models.effort_levels_hint":
-    "Variant levels offered to the client during takeover. Filled from models.dev on import; correct them here when a model differs.",
+    "Variants offered to the client during takeover, one per level; adjust any that look wrong.",
   "models.sync": "Sync metadata",
   "models.syncing": "Syncing…",
   "models.synced": "Filled missing metadata for {n} models",
   "models.sync_none": "Every configured model already has its metadata",
   "models.sync_failed": "Could not read the catalogue for {names}",
   "models.price": "Price per million tokens",
+  "models.price_cell": "in {input} / out {output} · {currency}/1M",
   "models.price_hint":
     "Leave empty and requests are logged without a cost rather than a guessed one.",
   "field.currency": "Currency",
@@ -349,8 +413,14 @@ export const en = {
   "models.price_same_as_input": "same as input",
   "models.price_not_billed": "not billed",
   "common.close": "Close",
+  "drawer.saving": "Saving…",
+  "drawer.saved": "Saved · {time}",
+  "drawer.save_failed": "Save failed: {err}",
   "routing.priority_for": "Priority for {model}",
   "routing.move_up": "Move {model} up",
+  "routing.drag_hint": "Drag to reorder, or use the arrows. The order saves as you drop.",
+  "routing.strategy_order_note":
+    "The {strategy} strategy decides the live order; this list is only the starting priority.",
   "routing.move_down": "Move {model} down",
   "field.output": "Output",
   "field.output_hint": "per 1M completion tokens",
@@ -382,14 +452,13 @@ export const en = {
   "providers.name_placeholder": "Leave empty to use the host",
   "providers.name_required": "Enter a name or a base URL to derive one from.",
   "cc.source_hint":
-    "Read from {path}. Keys are stored in the OS credential store, never the config file.",
+    "Read from {path}; keys go into the OS credential store, never the config file.",
   "cc.reload": "Reload",
   "cc.import": "Import",
   "cc.empty": "No Claude Code providers found in CC Switch.",
   "cc.active": "active",
   "cc.already": "already here",
-  "cc.imported_notice":
-    "Imported {n} providers. Keys went straight into the credential store.",
+  "cc.imported_notice": "Imported {n} providers; keys went into the credential store.",
   "providers.endpoint": "Endpoint",
   "providers.dialect": "Dialect",
   "providers.auth": "Authentication",
@@ -399,7 +468,7 @@ export const en = {
   "providers.models_count": "{n} on this provider",
   "providers.models_none": "none yet",
   "providers.api_key": "API key",
-  "providers.api_key_hint": "Stored in the OS credential store, never the config file.",
+  "providers.api_key_hint": "Kept in the system credential store, not the config file.",
   "providers.save_key": "Save key",
   "providers.models_section": "Models",
   "providers.empty_catalogue": "{name} returned an empty model list.",
@@ -407,15 +476,21 @@ export const en = {
   "field.timeout": "Timeout (s)",
   "field.timeout_hint": "Whole request, including streaming idle gaps",
   "field.connect_timeout": "Connect timeout (s)",
+  "providers.proxy_policy": "Upstream proxy",
+  "providers.proxy_policy_hint":
+    "Applies to requests to this upstream only; browser proxy settings are untouched.",
+  "providers.proxy_inherit": "Inherit gateway setting",
+  "providers.proxy_direct": "Direct · bypass proxy",
+  "providers.proxy_system": "Follow system proxy",
   "providers.f_version": "anthropic-version",
   "providers.f_version_hint":
-    "The dated Anthropic API version; one applies at a time. 2023-06-01 is the three-year baseline. 2026-10-21 drops temperature/top_p/top_k and confines documents to user messages. Requests are shaped to the version you pick.",
+    "Leave 2023-06-01 unless you know otherwise; 2026-10-21 drops temperature, top_p and top_k.",
   "providers.f_beta": "anthropic-beta",
   "providers.f_beta_hint":
-    "Capabilities to request as beta, separated by commas or semicolons (e.g. context-management-2025-06-27). Empty sends none. Anthropic ships a new capability as a beta header before it reaches a dated version.",
+    "Comma separated beta capabilities, e.g. context-management-2025-06-27. Empty sends none.",
   "providers.api_surface": "API surface",
   "providers.api_surface_hint":
-    "Which OpenAI API this endpoint speaks. Responses is the newer one, and some Codex gateways accept nothing else. Requests, responses and stream events are shaped differently.",
+    "Which OpenAI API this endpoint speaks; some Codex gateways only accept Responses.",
   "providers.surface_chat": "Chat Completions",
   "providers.surface_responses": "Responses",
   "providers.client_profile": "Client identity",
@@ -427,24 +502,23 @@ export const en = {
   "providers.profile_codex": "Codex · with its headers",
   "providers.profile_opencode_cli": "OpenCode CLI · locked for OpenCode providers",
   "providers.client_profile_locked_hint":
-    "Locked. OpenCode's gateway checks this fingerprint and the config refuses any other profile.",
+    "Locked: OpenCode's gateway verifies this identity and rejects any other.",
   "providers.opencode_zen_dialect": "OpenCode Zen (free)",
   "providers.opencode_console_dialect": "OpenCode Console",
   "providers.decision_dialect": "Decision model",
   "providers.decision": "Decisions",
   "providers.decision_hint":
-    "A model of this kind answers fixed questions with a probability instead of text. It serves Auto review only, and you add it to the pool yourself. Jev (including OpenCode Zen's free model) is the reference implementation.",
+    "Answers fixed questions with a probability instead of text; serves Auto review only.",
   "providers.decision_path": "Decision path",
-  "providers.decision_path_hint":
-    "Appended to the Base URL. The reference service answers at /v1/systemone.",
+  "providers.decision_path_hint": "Appended to the Base URL, e.g. /v1/systemone.",
   "providers.decision_threshold": "Required confidence",
   "providers.decision_threshold_hint":
-    "How sure Auto review must be before it blocks. At or above this value, blocked; at or below one minus it, allowed; anything in between is blocked. At 0.5 the model's majority vote decides.",
+    "How sure the model must be before Auto review blocks. Higher blocks more.",
   "providers.decision_no_catalogue":
     "A decision endpoint has no model catalogue. Add its model on the Models page.",
   "models.tier_decision": "Why no tier",
   "models.tier_decision_hint":
-    "Decision models serve Auto review only and cannot answer chat, so they have no tier. Add it to the Auto review pool.",
+    "Decision models serve Auto review only and cannot answer chat; add it to the Auto review pool.",
   "providers.free_badge": "free",
   "providers.free_only": "Free models only",
   "providers.free_only_hint":
@@ -455,12 +529,12 @@ export const en = {
     "The catalogue has {total} models and none is marked free. Turn the filter off to see them.",
   "providers.bearer_auth": "Also send Bearer auth",
   "providers.bearer_auth_hint":
-    "For relays that read Authorization: Bearer instead of x-api-key; both headers are sent, so either check passes",
+    "For relays that read Authorization: Bearer instead of x-api-key",
   "providers.balance": "Balance",
   "providers.balance_hint":
     "Some providers publish remaining credit at their own endpoint. Pick the one this provider uses; Zroutery asks with the provider key.",
   "providers.balance_hint_panel":
-    "A NewAPI relay shows the wallet in its panel. The figure is read from the panel behind this provider's accounts, using an account's personal access token.",
+    "Read from this provider's NewAPI panel with an account's personal access token.",
   "providers.balance_hint_none":
     "This provider publishes no balance and has no panel account to ask. Pick a probe above, or declare an account and store its personal access token.",
   "providers.balance_no_source":
@@ -495,7 +569,7 @@ export const en = {
   "quirk.reasoning_effort": "Translate thinking to reasoning_effort",
   "quirk.portable_history": "Reuse Responses history across upstreams",
   "quirk.portable_history_hint":
-    "For relays another account or upstream may answer (AgentRouter, CC Switch). Before forwarding, reasoning items, history item ids and previous_response_id are removed, so earlier reasoning no longer reaches the model. Responses requests only.",
+    "For relays where another upstream may answer next (AgentRouter, CC Switch). Responses requests only.",
   "providers.remove": "Remove provider",
   "providers.removed_models_notice": "Removed {n} models that belonged to that provider.",
   "providers.balance_failed": "check failed",
@@ -620,8 +694,7 @@ export const en = {
    */
   "nav.accounts": "Accounts",
   "nav.takeover": "Takeover",
-  "accounts.empty_build":
-    "This build does not contain the account subsystem, so declared accounts cannot be probed or checked in.",
+  "accounts.empty_build": "This build cannot probe or check in accounts.",
   "accounts.none":
     "No accounts declared. Add one in a provider's Accounts section on the Providers page.",
   "accounts.probe_section": "Account probe",
@@ -631,12 +704,11 @@ export const en = {
   "accounts.probing": "Probing…",
   "accounts.probe_idle":
     "No probe has run yet.",
-  "accounts.probe_none":
-    "The probe found no enabled declared account.",
+  "accounts.probe_none": "No enabled account to probe.",
   "accounts.probe_outcome": "Outcome",
   "accounts.provider_disabled": "provider disabled",
   "accounts.own_key_stored": "its own access token is stored",
-  "accounts.own_key_missing": "declared its own credential, but none is stored",
+  "accounts.own_key_missing": "configured its own credential, but none is stored",
   "accounts.shared_key": "uses the provider's credential",
   /*
    * The credential-type hint. The panel API authenticates with the site's
@@ -650,7 +722,7 @@ export const en = {
   "accounts.last_failure": "last probe failed",
   "accounts.checkin_api": "Check in (direct)",
   "accounts.checkin_api_hint":
-    "Checks in over the panel API with the stored token; no browser. Fails if the panel requires a challenge.",
+    "Signs in with the stored token, no browser. Fails if the panel asks for a challenge.",
   "accounts.checking": "Checking in…",
   "accounts.checkin_api_failed": "Direct check-in failed",
   "accounts.events_section": "Account events",
@@ -674,8 +746,7 @@ export const en = {
    */
   "account.sync.refreshed": "Probed",
   "account.sync.partially_reported": "Reported without",
-  "account.sync.unsupported":
-    "No backend in this build can ask this provider; not probed.",
+  "account.sync.unsupported": "This build cannot ask this provider; not probed.",
   "account.sync.failed": "Probe failed",
 
   // ------------------------------------------------------------ takeover
@@ -688,10 +759,10 @@ export const en = {
    */
   "takeover.section": "Agent takeover",
   "takeover.section_hint":
-    "Write the gateway address and token into a client's own config, and restore the original values on release. Requests still choose a tier by the model name the client sends.",
+    "Writes the gateway address and token into a client's own config and restores the original values on release; the client still picks a tier by the model name it sends.",
   "takeover.none": "No external agent is known to this build.",
   "takeover.load_failed":
-    "The takeover record could not be read: {err}. Nothing on this page has changed a client's configuration.",
+    "The takeover record could not be read: {err}; nothing on this page has changed a client's configuration.",
   "takeover.agent.claude": "Claude Code",
   "takeover.agent.codex": "Codex CLI",
   "takeover.agent.opencode": "OpenCode",
@@ -712,7 +783,7 @@ export const en = {
   "takeover.hint.ready":
     "Ready: adopting writes the {n} field(s) below and records their current values.",
   "takeover.confirm_inline":
-    "Adopting edits {agent}'s config file. Release restores exactly these fields; the rest of the file is untouched.",
+    "Adopting edits {agent}'s config file; release restores exactly these fields and leaves the rest untouched.",
   "takeover.hint.active":
     "A request from this client reached the gateway, and its managed fields match what Zroutery wrote.",
   "takeover.hint.degraded":
@@ -728,7 +799,7 @@ export const en = {
   "takeover.reason.unverified":
     "The takeover has not been confirmed by a real request from this client yet.",
   "takeover.reason.token_changed":
-    "The gateway token changed after this client was taken over. Release and take over again to hand it the new token.",
+    "The gateway token changed after this client was taken over; release and take over again to hand it the new token.",
   "takeover.table.field": "Field",
   "takeover.table.current": "Current value",
   "takeover.table.next": "After adoption",
@@ -771,7 +842,7 @@ export const en = {
   "nav.cutover": "Cutover",
   "cutover.section": "Configuration cutover",
   "cutover.section_hint":
-    "Move a client's configuration onto this gateway as a verified plan, with the original file captured first so a failed run can be undone. Use Takeover to switch a client on or off; this page is the undo.",
+    "Moves a client's configuration onto this gateway, capturing the original file first so a failed run can be undone; to switch a client on or off, use Takeover.",
   "cutover.state.section": "Migration record",
   "cutover.state.detected": "nothing run yet",
   "cutover.state.prepared": "interrupted while preparing",
@@ -781,19 +852,18 @@ export const en = {
   "cutover.state.rolled_back": "rolled back",
   "cutover.state.failed": "failed",
   "cutover.state.hint.detected":
-    "No cutover has been run from this record. Nothing on this page has changed a client's configuration.",
+    "No cutover has been run from this record; nothing on this page has changed a client's configuration.",
   "cutover.state.hint.completed":
     "A cutover completed. There is no rollback from this state; the snapshot stays on disk.",
   "cutover.state.hint.rolled_back":
-    "Rolled back; captured files were restored. Starting again uses the original file.",
+    "Rolled back and the captured files were restored; starting again uses the original file.",
   "cutover.state.hint.prepared":
-    "The document was staged; the client file was not written. The snapshot is the only copy of the original.",
+    "The new configuration is staged and the client file not yet written; the snapshot is the only copy of the original.",
   "cutover.state.hint.verified":
-    "Staged and verified; the client file was not changed. The snapshot is the only copy of the original.",
+    "Staged and verified, the client file not changed; the snapshot is the only copy of the original.",
   "cutover.state.hint.switched":
-    "Switched; the client file was replaced. Restoring the snapshot is the only way back.",
-  "cutover.state.hint.failed":
-    "Failed partway. Roll back from the snapshot below.",
+    "Switched and the client file was replaced; restoring the snapshot is the only way back.",
+  "cutover.state.hint.failed": "Failed partway; roll back from the snapshot below.",
   "cutover.snapshot.none": "No rollback snapshot has been captured.",
   "cutover.snapshot.files": "{n} file(s) captured, restorable byte for byte.",
   "cutover.not_durable":
@@ -801,11 +871,11 @@ export const en = {
   "cutover.persist_error": "The record is not reaching disk: {err}",
   "cutover.plans.section": "Cutover plans",
   "cutover.plans.hint":
-    "Each plan uses the client's real config path and this gateway's address. Nothing changes until you confirm.",
+    "Each plan is built from the client's real configuration; nothing changes until you confirm.",
   "cutover.none":
-    "This build knows no external client to cut over. Install and run one so its configuration file exists, then refresh this page.",
+    "No external client is known to this build; install and run one, then refresh this page.",
   "cutover.load_failed":
-    "The migration record could not be read: {err}. Nothing on this page has changed a client's configuration.",
+    "The migration record could not be read: {err}; nothing on this page has changed a client's configuration.",
   "cutover.step.not_reversible": "cannot be undone",
   "cutover.step.reversible": "restored by a rollback",
   // The plan's own sentences, in the reader's language. The backend sends the
@@ -829,15 +899,15 @@ export const en = {
   "cutover.rollback": "Roll back",
   "cutover.rolling_back": "Rolling back…",
   "cutover.already_run":
-    "This record allows one cutover and has already run. Remove the record from the config directory to start over.",
+    "This record allows one cutover and has already run; to start over, delete it from the config directory.",
   "cutover.rollback_unavailable":
     "Rollback is offered only after a failed run.",
   "cutover.confirm_run_title": "Replace {agent}'s configuration?",
   "cutover.confirm_run_body":
-    "{n} step(s). The file is captured before writing, so a failed run can be undone. A running external process is reported, not stopped.",
+    "{n} step(s); the file is backed up before writing so a failed run can be undone, and a running external process is reported, not stopped.",
   "cutover.confirm_rollback_title": "Put the configuration file back?",
   "cutover.confirm_rollback_body":
-    "{n} file(s) will be overwritten with the bytes captured before the cutover. Later edits and the cutover's changes are lost.",
+    "{n} file(s) will be overwritten with the bytes captured before the cutover; later edits and the cutover's changes are lost.",
   "cutover.result.title": "Last run",
   "cutover.result.steps": "{done} of {total} step(s)",
   "cutover.result.duration": "{ms} ms",
@@ -845,13 +915,13 @@ export const en = {
   "cutover.result.warnings": "Warnings",
   "cutover.result.restored": "Restored {n} file(s)",
   "cutover.result.restore_failed":
-    "{n} file(s) could not be restored; the configuration on disk is not what it was. Fix them by hand.",
+    "{n} file(s) could not be restored and the configuration on disk differs; fix them by hand.",
   "cutover.result.rolled_back_nothing":
-    "Nothing was restored. The state advanced but the files on disk are unchanged.",
+    "Nothing was restored; the state advanced but the files on disk are unchanged.",
   "cutover.result.ok": "The cutover finished and the endpoint answered as Zroutery.",
   "cutover.toast_applied": "Cutover finished for {agent}.",
   "cutover.toast_failed":
-    "The cutover failed with {n} error(s). The report below names the step that stopped it; roll back to restore.",
+    "The cutover failed with {n} error(s); the report names the step that stopped it, and rolling back restores the files.",
   "cutover.toast_rolled_back": "Restored {n} file(s).",
   "cutover.toast_nothing_restored": "Nothing was restored.",
   "cutover.agent.claude": "Claude Code",
@@ -860,8 +930,7 @@ export const en = {
   "cutover.agent.gemini": "Gemini CLI",
 
   // ------------------------------------------------------------- routing
-  "routing.lede":
-    "How requests are routed, by purpose. Works with any Anthropic or OpenAI client.",
+  "routing.lede": "How requests are routed, by purpose; works with any Anthropic or OpenAI client.",
   "routing.default_hint": "Every ordinary request, by the tier the client asks for.",
   "routing.edit": "Edit",
   "tier.hint.fast": "cheap and fast",
@@ -872,17 +941,17 @@ export const en = {
   "tier.name.standard": "Standard",
   "tier.name.reasoning": "Reasoning",
   "tier.name.frontier": "Frontier",
-  "routing.tier_empty": "Empty. Requests for {id} fail until a model joins this tier.",
+  "routing.tier_empty": "Empty; requests for {id} fail until a model joins this tier.",
   "routing.fallback_n": "fallback {n}",
   "routing.more_fallbacks": "{n} more fallbacks",
   "routing.request": "request",
-  "routing.side_query": "Side query",
+  "routing.side_query": "Auto review",
   "routing.review_hint_on": "Permission checks go to their own pool of models.",
-  "routing.review_hint_off": "Off. Permission checks follow Default routing.",
+  "routing.review_hint_off": "Off; permission checks follow Default routing.",
   "routing.verdict": "verdict",
   "routing.next": "next",
-  "routing.review_no_candidate": "Enabled, but no candidate is live. Permission checks will fail.",
-  "routing.review_off": "Off. Turn on to review permission checks with the pool below.",
+  "routing.review_no_candidate": "Enabled, but no candidate is live; permission checks will fail.",
+  "routing.review_off": "Off; turning it on sends permission checks to the pool below.",
   "routing.default_drawer": "Default routing",
   "field.strategy": "Strategy",
   "strategy.priority": "Priority",
@@ -907,11 +976,11 @@ export const en = {
   "routing.rerun": "Re-run now",
   "routing.elect_on_start": "Hold one at startup",
   "routing.no_election": "No election has been held this run.",
-  "routing.no_election_tiers": "No tier had an enabled model to measure.",
+  "routing.no_election_tiers": "No enabled model was available to measure.",
   "routing.primary": "primary",
   "routing.route_review": "Route permission checks",
   "routing.route_review_hint":
-    "Permission checks go to the pool below instead of the conversation's model. Covers Claude Code Auto Mode and Codex Guardian.",
+    "Permission checks go to the pool below instead of the conversation's model; covers Claude Code Auto Mode and Codex Guardian.",
   "routing.review_failover": "Fail over inside the pool",
   "routing.review_failover_hint": "Try the next candidate when one errors",
   "routing.pool": "Pool",
@@ -922,7 +991,7 @@ export const en = {
   "routing.decision_candidate": "Decision model",
   "routing.add_jev": "Add OpenCode Zen's free Jev",
   "routing.add_jev_hint":
-    "Adds the keyless OpenCode Zen Jev decision model to the top of the pool with a threshold of 0.6. The free offer can end or be blocked by region, and the text being checked is sent to Zen.",
+    "Adds the keyless Jev decision model to the top of the pool with a threshold of 0.6; the free offer can end, and the text being checked is sent to Zen.",
   "routing.jev_added": "Jev was added first in the pool, and Auto review is on.",
   "routing.enable_for": "Enable {model}",
   "routing.add_model": "Add a model…",
@@ -932,20 +1001,59 @@ export const en = {
   "routing.verdict_parsing": "Verdict parsing",
   "routing.verdict_only": "<block>yes|no</block> only",
   "routing.verdict_only_hint":
-    "Claude Code wants <block>yes|no</block>; Codex Guardian wants an `outcome` field in JSON. A decision model only gives a probability, and the provider's threshold turns it into a verdict.",
+    "Claude Code wants <block>yes|no</block> and Codex Guardian wants an `outcome` field in JSON; a decision model only gives a probability, and the provider's threshold turns it into a verdict.",
   "routing.no_verdict": "When no verdict",
   "routing.fails_closed": "fails closed; the client asks the user",
   "routing.fail_closed_note":
-    "An error, a timeout or a wrong-protocol answer moves to the next candidate. If none answers, the request fails instead of being allowed. An unsure decision blocks. Prose in a reply is never read as permission.",
+    "Errors, timeouts and unsure verdicts all count as blocked, never allowed; prose in a reply is never read as permission.",
 
   // ------------------------------------------------------------ activity
   "activity.lede_none": "Nothing yet. Point a client at the gateway to see traffic here.",
-  "activity.lede": "{requests} requests · {rate}% succeeded · {in} in / {out} out tokens",
+  "activity.lede_since": "Totals since {since}.",
+  // The headline figures. Two of the five drive the traffic chart's measure;
+  // their labels are the chart's own metric words ("Requests", "Tokens").
+  "activity.kpi_row": "Usage totals",
+  "activity.kpi_success": "Success rate",
+  "activity.kpi_cache": "Cache hit",
+  "activity.kpi_cache_help":
+    "cache-read tokens ÷ input tokens, summed across models. Input is cache-inclusive, so the share never passes 100%.",
+  // ---------------------------------------------------------- activity charts
+  "activity.traffic": "Traffic",
+  "activity.traffic_hint": "Completed requests per local day; a quiet day is a zero, not a gap.",
+  "activity.chart_style": "Chart",
+  "activity.chart_heatmap": "Heatmap",
+  "activity.chart_bars": "Bars",
+  "activity.chart_line": "Line",
+  "activity.chart_metric": "Measure",
+  "activity.metric_requests": "Requests",
+  "activity.metric_tokens": "Tokens",
+  "activity.chart_range": "Range",
+  "activity.range_7": "7 days",
+  "activity.range_30": "30 days",
+  "activity.range_90": "90 days",
+  "activity.range_365": "1 year",
+  "activity.chart_none": "No requests in this window yet.",
+  "activity.chart_aria": "{metric} per day over the last {days} days, {total} in total.",
+  "activity.heat_less": "Less",
+  "activity.heat_more": "More",
   "activity.reset": "Reset counters",
   "activity.review_line":
     "Auto review: {n} checks · {failed} failed · avg {latency} (separate from main traffic).",
   "activity.nothing": "Nothing yet.",
-  "activity.health": "Model health",
+  "activity.filter": "Filter requests",
+  "activity.filter_all": "All",
+  "activity.filter_failed": "Failed only",
+  "activity.no_failures": "No failed requests in this window.",
+  /*
+   * The pager's status line is shared by both pagers — the Activity log's and
+   * the Models list's — so the sentence stays generic. The zh dictionaries
+   * never named the rows ("第 {from}–{to} 条 · 共 {total} 条"); the English
+   * one drops "Requests" too, where it would have been false on the Models
+   * page, whose rows are models.
+   */
+  "activity.page_status": "{from}–{to} of {total}",
+  "activity.prev_page": "Previous",
+  "activity.next_page": "Next",
   "activity.tab_group": "Activity subjects",
   "activity.tab_usage": "Requests and usage",
   "activity.tab_log": "Internal log",
@@ -953,15 +1061,14 @@ export const en = {
   "activity.log_hint": "The process's own output, followed while this pane is open",
   "activity.show_log": "Show the internal log",
   "activity.stop_follow": "Stop following",
-  "activity.health_hint": "Circuit-breaker state per model, shared by every routing pool.",
   "activity.ok_failed": "{ok} ok / {failed} failed",
   "activity.cooling": "cooling {n}s",
-  "activity.clear_health": "Clear the health of {id}",
+  "activity.rate_cooling": "rate-limit cooldown {n}s",
   "activity.spend": "Spend",
-  "activity.spend_hint":
-    "Estimated from configured prices and reported usage; not a bill.",
   "activity.estimated": "estimated spend",
   "activity.n_failed": "{n} failed",
+  "activity.client_unknown": "Unknown client",
+  "activity.minor_clients": "Other stray clients ({n})",
   "activity.request": "Request",
   "activity.review": "Review",
   "activity.asked_for": "Asked for",
@@ -980,23 +1087,61 @@ export const en = {
   "activity.output_tokens": "Output tokens",
   "activity.cache_read": "Cache read",
   "activity.cache_write": "Cache write",
+  /*
+   * The stream row's micro labels: label and value are one string because the
+   * row has no table header to carry the meaning — "ttft 412 ms" has to read
+   * on its own. "tok/s" needs no key: a unit symbol, like `ms`, not a word.
+   */
+  "activity.ttft": "ttft {v}",
+  "activity.cache_hit_rate": "Cache hit rate",
+  "activity.cache_hit_hint":
+    "Cache reads are a subset of the cache-inclusive input total; the rate is cache read over input, not over fresh tokens.",
   "activity.cost": "Cost",
   "activity.unpriced": "unpriced",
-  "activity.history": "Durable usage history",
-  "activity.history_hint":
-    "Every completed request is stored per client, survives restarts, and can be exported or cleared one client at a time. Prompts, completions and error bodies are never stored.",
+  /*
+   * The ledger: one table, two cuts. "Cut" is the section's own word — the
+   * same recorded requests summed by client or by model — and the hint
+   * carries the three facts a reader needs before they trust the table:
+   * clicking a row filters the stream, spend is an estimate, and nothing
+   * said or answered is ever stored.
+   */
+  "activity.ledger": "Ledger",
+  "activity.ledger_hint":
+    "Every recorded request, cut by client and by model; click a row to show only its requests in the stream below. Spend is estimated from configured prices; prompts and completions are never stored.",
+  "activity.ledger_cut": "Ledger dimension",
+  "activity.by_client": "By client",
+  "activity.by_model": "By model",
+  "activity.health_col": "Health",
+  /*
+   * The stream's active ledger cut, and its way back. The strip names the
+   * one subject the list is now filtered to; "the kept window" because the
+   * ledger reaches further back than the request list does.
+   */
+  "activity.stream_only": "Showing only {subject}",
+  "activity.stream_clear": "Show all requests",
+  "activity.no_match_window": "No request in the kept window matches this filter.",
   "activity.export_history": "Export history",
   "activity.import_history": "Import history",
   "activity.export_hint":
-    "A portable JSON archive of accounting metadata. Copies are ignored on import, and imported rows never change budgets or routing health.",
+    "A portable JSON archive of the recorded usage, ready to import elsewhere.",
   "activity.import_hint":
-    "Paste an archive produced by Export history. Duplicate ids are skipped; the file is rejected as a whole when any row is invalid.",
+    "Paste the archive produced by Export history; one invalid row rejects the whole file.",
   "activity.import_placeholder": "Paste the JSON archive here",
   "activity.client": "Client",
   "activity.clear_client": "Clear client",
   "activity.clear_client_body":
     "Delete every stored usage record for {name}? Other clients and the live counters stay untouched.",
   "activity.clear_client_named": "Clear usage history for {name}",
+  /*
+   * The stream's facet selects: provider first, model cascaded inside it.
+   * "Filter by …" names the control, not the choice — the selected option
+   * itself is the trigger's description, so the labels below are only the
+   * opt-out and never read as the current state.
+   */
+  "activity.facet_provider": "Filter by provider",
+  "activity.facet_model": "Filter by model",
+  "activity.facet_all_providers": "All providers",
+  "activity.facet_all_models": "All models",
 
   // ------------------------------------------------------------ settings
   "settings.lede": "Application behaviour, the gateway it serves, and what it is allowed to spend.",
@@ -1028,14 +1173,15 @@ export const en = {
   "settings.cors": "Browser access (CORS)",
   "settings.cors_hint": "Only needed for clients that run inside a web page.",
   "settings.allow_origins": "Allow browser origins",
-  "settings.no_origins": "No origins listed, so any origin is accepted. Add the ones you actually use.",
+  "settings.no_origins":
+    "No origins listed, so any origin is accepted; add the ones you actually use.",
   "field.allowed_origin": "Allowed origin",
   "field.allowed_origin_hint": "Scheme, host and port, no path",
   "settings.add_origin": "Add origin",
   "settings.origin_notice": "An origin looks like https://example.com, with no path.",
   "settings.budgets": "Budgets",
   "settings.budgets_hint":
-    "A limit stops spending once reached. The request that crosses it completes; the next is rejected.",
+    "A limit stops spending once reached; the request that crosses it completes and the next is rejected.",
   "settings.balances": "Balances",
   "settings.balances_hint":
     "Wallet checks cost one request per provider or account. The last successful figure is kept when a check fails.",
@@ -1056,6 +1202,7 @@ export const en = {
   "budget.reject": "refuse the request",
   "budget.degrade": "serve from {id}",
   "budget.used_up": "used up",
+  "budget.readonly": "Budget {scope}: {spent} / {limit} ({used}%)",
   "budget.add": "Add budget",
   "budget.currency_hint": "In the currency your models bill in",
   /*
@@ -1076,9 +1223,14 @@ export const en = {
   "settings.tab_general": "General",
   "settings.tab_gateway": "Gateway",
   "settings.tab_budgets": "Budgets",
+  "settings.about": "About",
+  "settings.about_note":
+    "Zroutery stores everything it runs on in this file; changes made in the app are written back to it.",
+  "settings.version": "Version",
+  "settings.config_path": "Configuration file",
   "settings.aliases": "Client model aliases",
   "settings.aliases_hint":
-    "Map an exact model id a client sends onto a tier. Wins over the Claude name heuristic.",
+    "Maps an exact model id a client sends onto a tier; wins over the Claude name heuristic.",
   "settings.f_model_id": "Model id",
   "settings.f_class": "Tier",
   "settings.add_alias": "Add alias",
@@ -1086,7 +1238,8 @@ export const en = {
   "settings.price_weight_hint": "Relative, so 3 and 1 means the same as 0.75 and 0.25",
   "settings.latency_weight": "Latency weight",
   "settings.ref_input": "Reference input tokens",
-  "settings.ref_input_hint": "Prices are per Mtok, so they need a request to be compared on",
+  "settings.ref_input_hint":
+    "Prices are per million tokens, so they need a request size to be compared on.",
   "settings.ref_output": "Reference output tokens",
   "settings.naming_style": "Tier naming",
   "settings.naming_internal": "Internal",
@@ -1107,7 +1260,7 @@ export const en = {
   "win.quit": "Quit",
   "vision.title": "Vision fallback",
   "vision.hint":
-    "A model without vision receives a description of the image, or a placeholder when none can be produced. Images are never dropped silently.",
+    "A model without vision receives a description of the image, or a placeholder when none can be produced; images are never dropped silently.",
   "vision.enable": "Describe images for non-vision models",
   "vision.model": "Vision model",
   "vision.model_hint":
@@ -1118,32 +1271,35 @@ export const en = {
   // --------------------------------------------------------- request repair
   "rectifier.title": "Request repair",
   "rectifier.hint":
-    "When an upstream rejects a request, try the same provider and model again with a shape it accepts. These repairs do not count against the circuit breaker and do not switch providers.",
+    "When an upstream rejects a request, send it again to the same provider and model in a form it accepts; repairs do not count against the circuit breaker and never switch providers.",
   "rectifier.enable": "Repair rejected requests",
   "rectifier.enable_hint": "Master switch: turning it off leaves every request to fail over at once.",
   "rectifier.thinking_signature": "Repair a stale thinking signature",
   "rectifier.thinking_signature_hint":
-    "Anthropic rejects a request whose thinking block carries an old or misplaced signature. The offending blocks are dropped and the request is sent again.",
+    "Anthropic rejects a request whose thinking block carries an old or misplaced signature; those blocks are dropped and the request is sent again.",
   "rectifier.media_fallback": "Replace an image with a description",
   "rectifier.media_fallback_hint":
-    "A provider that refuses images gets the picture replaced by a text placeholder, so the conversation still reaches the model.",
+    "Providers that refuse images receive a text description instead; the image itself is kept.",
   "rectifier.thinking_budget": "Halve an oversized thinking budget",
   "rectifier.thinking_budget_hint":
     "A provider that caps the reasoning budget gets the request with the budget halved (at least 1024 tokens) so it fits.",
+  "rectifier.codex_auto": "Codex conditional history repair",
+  "rectifier.codex_auto_hint":
+    "History is kept and only errors the upstream names explicitly get cleaned; the reply is delivered complete, so visible output may be delayed.",
   "rectifier.codex_metadata": "Strip Codex's private metadata field",
   "rectifier.codex_metadata_hint":
-    "Some Responses endpoints reject the field internal_chat_message_metadata_passthrough. Only when they name it explicitly is it removed and the request sent again.",
+    "Only removed and the request retried when an upstream rejects the field by name.",
   "rectifier.thinking_fallback": "Allow a model without thinking support",
   "rectifier.thinking_fallback_hint":
     "A reasoning request may go to a model that does not declare thinking support, with the reasoning controls removed. The attempt is marked degraded.",
   // ------------------------------------------------------------ learned routing
   "ml.title": "Learned routing",
   "ml.hint":
-    "Whether a trained model may re-order the provider plan. Off means routing stays deterministic.",
-  "ml.unavailable": "This build has no learning stack; routing is deterministic.",
+    "When on, the trained model may re-order the provider plan; off keeps routing deterministic.",
+  "ml.unavailable": "This build cannot learn; routing stays deterministic.",
   "ml.serving": "A promoted model is re-ordering the provider plan.",
   "ml.inert": "A model is promoted but learned routing is off, so it is not consulted.",
-  "ml.off": "No model is installed. Routing is deterministic.",
+  "ml.off": "No model is installed; routing stays deterministic.",
   "ml.exploring": "exploring {pct}%",
   "ml.no_state_dir":
     "No durable state directory is configured, so nothing survives a restart and no model can be promoted.",
@@ -1159,7 +1315,7 @@ export const en = {
   "ml.with_no_model": "with no model, to gather evidence",
   "ml.never_tried": "Never tried",
   "ml.blind_spot_warning":
-    "With exploration off, newly configured models get no traffic. Give them top priority, or turn exploration on (which then blocks learned-model promotion).",
+    "With exploration off, newly configured models get no traffic; give them top priority, or turn exploration on (which then blocks learned-model promotion).",
   "ml.blind_spot_count": "{n} unreachable",
   "ml.collected": "Collected",
   "ml.samples": "samples",
@@ -1201,7 +1357,7 @@ export const en = {
   "ml.replay_none": "The replay produced no measurement.",
   "ml.replay_records": "Records replayed",
   "ml.replay_bound":
-    "Over the most recent {n} records. More history is available than this window covers.",
+    "Over the most recent {n} records; more history is available beyond this window.",
   "ml.agreement": "Agreed with production",
   "ml.disagreements": "Disagreements / measured",
   "ml.measured": "measured",
@@ -1215,22 +1371,24 @@ export const en = {
   "ml.rolling_back": "Rolling back…",
 
   "ml.config_title": "Collection settings",
-  "ml.config_hint": "Shadow writes the evidence; the trace log keeps it. No evidence, no learning.",
-  "ml.config_unavailable": "This build has no learning stack, so there is nothing to configure.",
+  "ml.config_hint": "Shadow produces the samples; no samples, no learning.",
+  "ml.config_unavailable": "This build cannot learn, so there is nothing to configure.",
   "ml.shadow_enable": "Shadow evaluation",
-  "ml.shadow_enable_hint":
-    "When off, no request keeps the input it was routed on: every sample is dropped at ingestion as NoDecisionTimeInput, so the count stays at zero.",
+  "ml.shadow_enable_hint": "When off, no training samples are collected.",
   "ml.shadow_max_decisions": "Max decisions (in memory)",
-  "ml.shadow_max_decisions_hint": "Ring size before the oldest is evicted. 10k is the default.",
+  "ml.shadow_max_decisions_hint":
+    "The oldest decisions are dropped beyond this; 10000 is the default.",
   "ml.shadow_max_age": "Max age (seconds)",
-  "ml.shadow_max_age_hint": "Retention window. 604800 = 7 days.",
+  "ml.shadow_max_age_hint": "Retention window; 604800 = 7 days.",
   "ml.routing_enable": "Learned routing",
-  "ml.routing_enable_hint": "When on, the promoted model may re-order the plan. Needs a state directory to promote at all.",
+  "ml.routing_enable_hint":
+    "When on, the promoted model may re-order the plan; promotion needs a state directory first.",
   "ml.state_dir": "State directory",
-  "ml.state_dir_hint": "Where traces and the active model pointer live. Empty = in-memory only, lost on restart. e.g. ml",
+  "ml.state_dir_hint":
+    "Where traces and the active model are stored; empty keeps them in memory only, lost on restart, e.g. ml",
   "ml.exploration": "Exploration probability",
   "ml.exploration_hint": "0 = deterministic; >0 explores alternative candidates but blocks promotion.",
-  "ml.config_shadow_off_hint": "Shadow is off — every request is discarded at the ingestion boundary. Turn it on to collect real samples.",
+  "ml.config_shadow_off_hint": "Shadow is off; no training samples are collected.",
   "ml.config_effect": "Collecting",
   "ml.effect_collecting": "yes — samples grow with traffic",
   "ml.effect_idle": "no — shadow is off",
@@ -1246,7 +1404,7 @@ export const en = {
   // configuration, the status document or the promotion endpoint declares the
   // prerequisite, so the panel that shows the counters has to say it.
   "ml.learning_blocked":
-    "Learned routing is on but shadow evaluation is off, so no samples are collected ({n} dropped). Turn shadow evaluation on.",
+    "Learned routing is on but Shadow evaluation is off, so no samples are collected ({n} requests dropped); turn Shadow evaluation on.",
   "ml.learning_blocked_short": "Learning is blocked",
   "ml.ingested": "Requests stored",
   "ml.dropped_no_decision": "Discarded for want of a decision",
@@ -1259,14 +1417,14 @@ export const en = {
   // request that follows.
   "ml.round": "Promotion round",
   "ml.round_hint":
-    "Train a candidate from recorded history and ask the gate whether it beats the baseline. Nothing is installed or scheduled automatically.",
+    "Train a candidate from the recorded history and let the gate judge it against the baseline; nothing is installed or scheduled automatically.",
   "ml.round_judge": "Judge a candidate",
   "ml.round_judging": "Judging…",
   "ml.round_judged": "Candidate judged, not installed.",
   "ml.round_install": "Install the authorised candidate",
   "ml.round_installing": "Installing…",
   "ml.round_install_hint":
-    "Available after the gate authorizes a candidate. Changes which model serves later requests.",
+    "Available once the gate authorizes a candidate; changes which model serves later requests.",
   "ml.round_none": "No round could be run.",
   "ml.round_records": "Records read",
   "ml.round_candidate": "Candidate",
@@ -1290,7 +1448,7 @@ export const en = {
   // change what the next model learns. The dialog states that consequence.
   "ml.log": "Recorded history",
   "ml.log_hint":
-    "The evidence rounds train from. Retention is manual; nothing changes the next model on its own.",
+    "The evidence rounds train from; retention is manual and nothing changes the next model on its own.",
   "ml.log_records": "Records",
   "ml.log_size": "On disk",
   "ml.log_path": "File",
@@ -1310,13 +1468,15 @@ export const en = {
 } as const;
 
 export type TKey = keyof typeof en;
-type Dict = Record<TKey, string>;
+export type Dict = Record<TKey, string>;
 
 export const zh: Dict = {
   // ------------------------------------------------------------ shared
   "common.dismiss": "知道了",
   "common.cancel": "取消",
   "common.loading": "加载中…",
+  "common.working": "处理中…",
+  "common.collapse": "收起",
   "common.remove": "移除",
   "common.delete": "删除",
   "common.clear": "清除",
@@ -1328,16 +1488,71 @@ export const zh: Dict = {
   "common.dash": "—",
   "common.unknown": "未知",
   "count.models": "{n} 个模型",
-  "count.providers": "{n} 个提供商",
+  "count.providers": "{n} 个服务商",
 
   // ------------------------------------------------------------------ app
   "app.live_stopped": "实时更新已停止：{err}",
   "app.exposed":
     "监听 {host} 时，同一网络的其他设备可以使用网关和你的 API 密钥。请保持认证开启，或改回 127.0.0.1。",
   "app.no_auth": "认证已关闭：本机任何进程都能消耗你的 API 额度。",
+  "app.more_notifications": "显示其余 {n} 条通知",
+  "app.fewer_notifications": "收起其余通知",
   "nav.overview": "概览",
+  "task.providers": "服务商",
+  "task.models": "模型与路由",
+  "task.clients": "客户端接入",
+  "task.usage": "用量与记录",
+  "task.catalogue": "按服务商查看模型",
+  "task.rules": "路由规则",
+  "task.connections": "连接与凭据",
+  "task.accounts": "账户观测",
+  "task.connect": "四档接入",
+  "client_setup.title": "原生四档模型菜单",
+  "client_setup.hint": "预览实际文件与限制，选择默认档，同步后核对客户端真实请求。",
+  "client_setup.client": "客户端",
+  "client_setup.default": "默认用途档位",
+  "client_setup.keep": "保留当前会话 / 默认选择",
+  "client_setup.standby": "开发备用端（8788）",
+  "client_setup.preview": "预览同步",
+  "client_setup.pool": "候选池",
+  "client_setup.evidence": "能力来源",
+  "client_setup.unavailable": "尚未配置：{ids}",
+  "client_setup.apply": "同步原生菜单",
+  "client_setup.confirm":
+    "应用所示受管字段与默认档；已有会话可能仍沿用原选择，需重新打开 Codex 生效。",
+  "task.migrate": "迁移与恢复",
+  "accounting.title": "账本",
+  "binding.review": "核对账户绑定",
+  "binding.verified": "身份已验证",
+  "binding.pending": "待验证",
+  "binding.remote_user": "远端用户",
+  "binding.group": "用户分组",
+  "binding.source": "验证来源",
+  "binding.panel": "面板",
+  "binding.changed": "此 Token 属于另一个远端身份。",
+  "binding.confirm_change": "确认更换此账户绑定的远端身份",
+  "binding.history_kept": "此前的请求和费率保留原身份；同账户的其他凭据不受影响。",
+  "binding.publish": "发布绑定",
+  "binding.user_hint": "新 Token 的面板用户 ID（需要时）",
+  "binding.probe_kind": "账户观测",
+  "binding.partial": "部分数据（{ok}/{n} 账户）",
+  "binding.probe_none": "不探测面板",
+  "binding.probe_newapi": "NewAPI 面板",
+  "accounting.blocked": "账目存储需要处理，已经执行的调用不会被重放。",
+  "accounting.inspect": "查看用量与记录",
+  "accounting.durable": "每一笔请求都在结果返回前落盘，重启不丢账、不重计。",
+  "accounting.unavailable": "持久结算不可用",
+  "accounting.pending": "{n} 笔账目等待本地重试。",
+  "accounting.unreconciled": "{n} 笔请求被重启打断，最终花费未知。",
+  "accounting.state": "持久化状态",
+  "accounting.volatile": "仅内存 Core 模式",
+  "accounting.known_cost": "已知费用（按币种）",
+  "accounting.unknown_cost": "费用未知的尝试",
+  "accounting.unknown_usage": "用量未知的尝试",
+  "accounting.identity": "账户 / 推理 Key",
+  "accounting.no_replay": "未知费用不是零。本地落盘失败不能重放上游调用或工具操作。",
   "nav.models": "模型",
-  "nav.providers": "提供商",
+  "nav.providers": "服务商",
   "nav.routing": "路由",
   "nav.activity": "活动",
   "nav.settings": "设置",
@@ -1354,22 +1569,35 @@ export const zh: Dict = {
   "theme.system": "跟随系统",
   "theme.light": "浅色",
   "theme.dark": "深色",
+  // ------------------------------------------------------------------ mode
+  "mode.simple": "简易",
+  "mode.geek": "极客",
+  "mode.toggle_aria": "界面模式",
+  "mode.geek_only_page": "该页面在极客模式中可用。",
+  "mode.advanced_active_toast":
+    "高级配置正在生效：{n} 项。简易模式不显示它们，但它们仍在运行。 | 高级配置正在生效：{n} 项。简易模式不显示它们，但它们仍在运行。",
+  "mode.settings_hint": "高级配置仍会运行，只是不再显示。",
   "gw.address": "地址",
   "gw.copy_address": "复制地址",
   "gw.stop": "停止网关",
   "gw.start": "启动网关",
   "settings.language": "语言",
   "settings.theme": "主题",
+  "settings.skin": "皮肤",
+  "skin.industrial": "默认",
+  "skin.md3": "Material 3",
+  "skin.fluent": "Fluent",
   "lang.zh": "简体中文",
+  "lang.zh_tw": "繁體中文",
   "lang.en": "English",
   "action.hide": "隐藏",
   "toast.copied": "已复制。",
   "toast.queued_discarded": "保存失败，排队中的修改已丢弃。",
 
   // ---------------------------------------------------------------- confirm
-  "confirm.remove_provider": "移除提供商",
+  "confirm.remove_provider": "移除服务商",
   "confirm.remove_provider_body":
-    "该提供商下的 {n} 个模型与已存密钥会一并删除。 | 该提供商下的 {n} 个模型与已存密钥会一并删除。",
+    "该服务商下的 {n} 个模型与已存密钥会一并删除。 | 该服务商下的 {n} 个模型与已存密钥会一并删除。",
   "confirm.remove_model": "移除模型",
   "confirm.remove_model_body": "客户端按 id 调用它时会报错。",
   "confirm.remove_budget": "删除预算",
@@ -1417,37 +1645,31 @@ export const zh: Dict = {
     "网关无法在 {addr} 上监听：{err}。之前的网关也未能恢复：{restore}",
   "err.no_rollback_snapshot":
     "无法为 {path} 创建快照：文件不可读，切换将无法回滚。请修复权限后重试。",
-  "err.no_such_account": "提供商 {provider} 上不存在账户 {account}。",
+  "err.no_such_account": "服务商 {provider} 上不存在账户 {account}。",
   "err.bind_other": "代理无法启动：无法绑定 {addr}({err})。请在设置里换一个端口。",
   "accounts.title": "账户",
-  "accounts.title_hint":
-    "这个提供商下的账户。账户用于探测状态、查余额和签到；声明了推理 Key 后，聊天请求也会按它路由。",
-  "accounts.empty": "未声明账户。所有请求都使用提供商自身的密钥。",
-  "accounts.lede": "每个已声明账户的余额、签到与面板令牌。声明在提供商的账户设置中编辑。",
+  "accounts.title_hint": "账户配置推理 Key 后，聊天请求会改走它。",
+  "accounts.empty": "还没有账户，所有请求都用服务商自己的密钥。",
+  "accounts.lede": "每个账户的余额、签到与面板令牌。账户在服务商的账户设置中添加或编辑。",
   "accounts.add": "添加账户",
   "accounts.id_label": "账户 ID",
-  "accounts.id_hint": "在该提供商内保持稳定。用 (提供商, 账户) 组合标识其运行状态。",
+  "accounts.id_hint": "在该服务商内保持稳定即可。",
   "accounts.key_label_add": "面板访问令牌(可选)",
-  "accounts.key_hint_add":
-    "可选。留空则沿用提供商的密钥。NewAPI 面板请粘贴个人访问令牌，sk- 开头的中转密钥在面板上无效。",
-  "accounts.duplicate": "该提供商下已存在账户 `{id}`。",
+  "accounts.key_hint_add": "留空用服务商密钥。NewAPI 面板填个人访问令牌，sk- 中转密钥无效。",
+  "accounts.duplicate": "该服务商下已存在账户 `{id}`。",
   "accounts.key_store_failed": "账户已保存，但写入凭据失败。",
   "accounts.set_key": "设置凭据",
   "accounts.key_label": "面板访问令牌",
-  "accounts.key_hint":
-    "面板里 个人设置 → 访问令牌 生成的个人访问令牌。它保存在系统凭据库中，保存后不再显示。",
+  "accounts.key_hint": "在面板 个人设置 → 访问令牌 中生成。",
   "accounts.clear_key": "清除凭据",
   "accounts.clear_key_title": "清除账户 {id} 的凭据",
-  "accounts.clear_key_body":
-    "该账户将重新使用提供商的密钥。若没有其他账户共享，其已存密钥会被删除。",
+  "accounts.clear_key_body": "该账户将重新使用服务商的密钥。",
   "accounts.own_key": "独立凭据",
   "accounts.no_key": "凭据未存",
-  "accounts.follows_provider": "沿用提供商凭据",
+  "accounts.follows_provider": "沿用服务商凭据",
   "accounts.inference_title": "推理 Key",
-  "accounts.inference_hint":
-    "真正发往上游的聊天凭据，按优先级从小到大依次尝试。上面的面板令牌只用来查余额和签到，不会作为聊天凭据发出去。",
-  "accounts.inference_empty":
-    "还没有声明推理 Key。只要该提供商有任何一个账户声明了推理 Key，本账户就会被跳过；在那之前，请求使用提供商自己的密钥。",
+  "accounts.inference_hint": "聊天请求真正使用的凭据；上面的面板令牌只用于查余额和签到。",
+  "accounts.inference_empty": "该服务商只要有一个账户配置了推理 Key，没配置的账户就会被跳过。",
   "accounts.inference_stored": "密钥已存",
   "accounts.inference_missing": "密钥缺失",
   "accounts.inference_priority": "优先级 {n}",
@@ -1457,30 +1679,25 @@ export const zh: Dict = {
   "accounts.inference_note_placeholder": "例如：主账户",
   "accounts.inference_replace": "替换密钥",
   "accounts.inference_key_label": "新密钥",
-  "accounts.inference_key_hint": "保存在系统凭据库中;面板只会知道它是否存在。",
+  "accounts.inference_key_hint": "",
   "accounts.inference_new_id": "Key ID",
-  "accounts.inference_new_id_hint":
-    "在该账户内唯一的名字,例如 wallet-1。可用字母、数字、`-` 与 `_`。",
+  "accounts.inference_new_id_hint": "例如 wallet-1。可用字母、数字、`-` 与 `_`。",
   "accounts.inference_new_secret": "推理密钥",
   "accounts.inference_add": "添加推理 Key",
   "accounts.inference_duplicate": "该账户下已存在推理 Key `{id}`。",
   "accounts.inference_store_failed": "推理 Key 保存失败。",
   "accounts.inference_remove_title": "删除推理 Key {id}",
-  "accounts.inference_remove_body": "请求将立即停止使用它。若无其他声明引用,其密钥会被删除。",
+  "accounts.inference_remove_body": "请求会立即停止使用它。",
   "common.save": "保存",
   "accounts.remove_title": "删除账户 {id}",
-  "accounts.remove_body":
-    "删除该声明及其已存密钥。观测数据会保留到该 id 再次被使用。",
+  "accounts.remove_body": "会删除该账户及其已存密钥。",
   "accounts.checkin": "浏览器签到",
   "accounts.login_path": "面板登录路径",
-  "accounts.login_path_hint":
-    "用浏览器获取令牌时打开的登录页。现在的 NewAPI 是 /sign-in，旧分支仍是 /login。",
+  "accounts.login_path_hint": "新版 NewAPI 是 /sign-in，旧分支是 /login。",
   "accounts.panel_url": "面板地址",
   "accounts.new_api_user": "面板用户 ID",
-  "accounts.new_api_user_hint":
-    "有些面板（如 AgentRouter）要求这个 New-Api-User 请求头。用浏览器获取令牌时会自动填好；留空则不发送。",
-  "accounts.panel_url_hint":
-    "面板和中转地址不在同一个域名时才填（例如中转在 api.relay.com、面板在 panel.relay.com）。留空表示两者同域，多数情况都该留空：厂商官网往往是另一台机器，不提供面板接口。获取令牌和探测余额都用这个地址。",
+  "accounts.new_api_user_hint": "AgentRouter 等面板需要；获取令牌时自动填。",
+  "accounts.panel_url_hint": "仅当面板与中转不在同一个域名时才填。",
   "token_capture.start": "用浏览器获取令牌",
   "token_capture.starting": "正在打开…",
   "token_capture.captured": "令牌已保存",
@@ -1494,9 +1711,9 @@ export const zh: Dict = {
   "accounts.interval": "间隔(秒)",
   "accounts.interval_hint": "留空则不自动执行。",
   "accounts.checkin_path": "签到页路径",
-  "accounts.checkin_path_hint": "面板相对路径，例如 /checkin。默认留空。",
+  "accounts.checkin_path_hint": "面板相对路径，例如 /checkin。",
   "accounts.checkin_selector": "签到按钮选择器",
-  "accounts.checkin_selector_hint": "浏览器点击的 CSS 选择器。刻意不设默认值。",
+  "accounts.checkin_selector_hint": "要点击的按钮的 CSS 选择器，例如 button.checkin。",
   "error.title": "界面出现了问题",
   "error.unaffected": "网关不受影响，仍在菜单栏正常运行。",
   "common.try_again": "重试",
@@ -1511,7 +1728,7 @@ export const zh: Dict = {
   // ------------------------------------------------------------ overview
   "overview.gateway": "网关",
   "overview.gateway_stopped": "网关已停止",
-  "overview.counts": "{models} 个模型 · {providers} 个提供商",
+  "overview.counts": "{models} 个模型 · {providers} 个服务商",
   "action.copy_base_url": "复制 Base URL",
   "action.copy_token": "复制令牌",
   "overview.configure": "配置",
@@ -1533,26 +1750,27 @@ export const zh: Dict = {
   "overview.no_requests": "暂无请求。",
   "kind.main": "主请求",
   "kind.review": "审查",
-  "overview.no_providers": "暂无提供商。",
-  "overview.add_provider": "添加提供商",
+  "overview.no_providers": "暂无服务商。",
+  "overview.add_provider": "添加服务商",
+  "overview.add_models": "添加模型 →",
 
   // -------------------------------------------------------------- models
-  "models.pick_provider_name": "请选择提供商并填写模型名。",
-  "models.duplicate": "该提供商已提供“{model}”。",
-  "models.unclassified": "{n} 个模型尚未分层：{ids}。仍可按完整 id 调用，但不参与分层路由。",
-  "models.lede_none": "添加到提供商的模型会显示在这里。",
+  "models.pick_provider_name": "请选择服务商并填写模型名。",
+  "models.duplicate": "该服务商已提供“{model}”。",
+  "models.unclassified": "{n} 个模型尚未分层：{ids}；仍可按完整 id 调用，但不参与分层路由。",
+  "models.lede_none": "添加到服务商的模型会显示在这里。",
   "models.exposed": "{n} 个模型 · 点击编辑，或从目录添加。",
   "models.empty": "暂无模型。",
-  "models.empty_hint": "在下方添加，或在提供商页从 CC Switch 导入。",
+  "models.empty_hint": "在下方添加，或在服务商页从 CC Switch 导入。",
   "models.no_tier": "未分层",
   "models.add_section": "添加模型",
   "models.add_hint": "添加后再指定层级；Zroutery 不会自动推断。",
-  "field.provider": "提供商",
+  "field.provider": "服务商",
   "field.model_name": "模型名",
   "models.add": "添加模型",
-  "models.add_provider_first": "请先添加提供商。",
-  "models.missing_provider": "缺失提供商",
-  "models.provider": "提供商",
+  "models.add_provider_first": "请先添加服务商。",
+  "models.missing_provider": "缺失服务商",
+  "models.provider": "服务商",
   "models.upstream": "上游模型",
   "models.tier": "层级",
   "models.tier_for": "{model} 的层级",
@@ -1566,7 +1784,7 @@ export const zh: Dict = {
   "models.configuration": "配置",
   "models.f_model_name_hint": "发送到上游；重命名会改变暴露 id",
   "models.f_display": "显示名",
-  "models.f_display_hint": "显示在 /v1/models",
+  "models.f_display_hint": "",
   "models.f_priority": "优先级",
   "models.f_priority_hint": "层内数值小者优先",
   "models.f_weight": "权重",
@@ -1574,8 +1792,7 @@ export const zh: Dict = {
   "models.f_max_tokens": "最大输出 token",
   "models.f_max_tokens_hint": "限制客户端可请求的上限",
   "models.f_context_window": "上下文长度",
-  "models.f_context_window_hint":
-    "模型可接受的上下文长度(已知时)。会在 /v1/models 公布；上游仍是权威。",
+  "models.f_context_window_hint": "模型可接受的上下文长度；已知才填。",
   "models.context_set_1m": "设为 1M",
   "models.context_unknown": "未知",
   "models.f_aliases_hint": "逗号分隔的短名称",
@@ -1586,7 +1803,7 @@ export const zh: Dict = {
   "models.exposed_as": "暴露为 {id}",
   "models.rename_required": "模型名称不能为空。",
   "models.rename_failed": "重命名未能保存；没有引用被改动。",
-  "models.import_browse": "浏览提供商目录",
+  "models.import_browse": "浏览服务商目录",
   "models.import_hide": "收起目录",
   "models.import_search": "筛选目录",
   "models.import_tier": "批量添加为",
@@ -1598,14 +1815,14 @@ export const zh: Dict = {
   "models.vision": "视觉",
   "models.thinking": "扩展思考",
   "models.effort_levels": "思考强度挡位",
-  "models.effort_levels_hint":
-    "接管时按这些挡位向客户端提供模型变体。导入时从 models.dev 自动填写，遇到偏差可以手动改。",
+  "models.effort_levels_hint": "接管时按这些挡位向客户端提供模型变体；有偏差可手动修改。",
   "models.sync": "同步模型信息",
   "models.syncing": "同步中…",
   "models.synced": "已为 {n} 个模型补齐信息",
   "models.sync_none": "已配置模型的信息都已齐全",
-  "models.sync_failed": "无法读取以下提供商的目录：{names}",
+  "models.sync_failed": "无法读取以下服务商的目录：{names}",
   "models.price": "每百万 token 价格",
+  "models.price_cell": "输入 {input} / 输出 {output} · {currency}/百万",
   "models.price_hint": "留空则请求不记录成本，而不是猜测一个。",
   "field.currency": "币种",
   "field.currency_hint": "USD、CNY 等",
@@ -1617,8 +1834,13 @@ export const zh: Dict = {
   "models.price_same_as_input": "同输入",
   "models.price_not_billed": "不计费",
   "common.close": "关闭",
+  "drawer.saving": "保存中…",
+  "drawer.saved": "已保存 · {time}",
+  "drawer.save_failed": "保存失败：{err}",
   "routing.priority_for": "{model} 的优先级",
   "routing.move_up": "上移 {model}",
+  "routing.drag_hint": "拖动或用箭头调整顺序，松手即保存。",
+  "routing.strategy_order_note": "{strategy} 策略下顺序由系统排定，这里改的只是初始顺序。",
   "routing.move_down": "下移 {model}",
   "field.output": "输出",
   "field.output_hint": "每 1M 输出 token",
@@ -1630,42 +1852,42 @@ export const zh: Dict = {
   "models.remove": "移除模型",
 
   // ----------------------------------------------------------- providers
-  "providers.lede_none": "每个上游账号或端点一个提供商。",
+  "providers.lede_none": "每个上游账号或端点一个服务商。",
   "providers.import_cc": "从 CC Switch 导入",
   "providers.reading_cc": "正在读取 CC Switch…",
-  "providers.empty": "暂无提供商。",
+  "providers.empty": "暂无服务商。",
   "providers.empty_hint": "在下方添加，或从 CC Switch 导入。",
   "providers.openai_dialect": "OpenAI 兼容",
   "providers.anthropic_dialect": "Anthropic",
   "providers.provider_off": "(已停用)",
-  "providers.add_section": "添加提供商",
+  "providers.add_section": "添加服务商",
   "providers.add_hint": "端点、凭证与协议；模型在各自的页面配置。",
   "field.name": "名称",
   "field.api_dialect": "API 协议",
   "field.base_url": "Base URL",
   "field.base_url_hint": "不含端点路径",
-  "providers.add": "添加提供商",
-  "providers.duplicate": "名为“{id}”的提供商已存在。",
+  "providers.add": "添加服务商",
+  "providers.duplicate": "名为“{id}”的服务商已存在。",
   "providers.name_optional": "填写了地址时可留空，将使用域名作为名称。",
   "providers.name_placeholder": "留空则使用域名",
   "providers.name_required": "请填写名称，或填写地址以自动取名。",
-  "cc.source_hint": "读取自 {path}。密钥存入系统凭据管理器，绝不写入配置文件。",
+  "cc.source_hint": "读取自 {path}；密钥只存入系统凭据管理器，绝不写入配置文件。",
   "cc.reload": "重新读取",
   "cc.import": "导入",
-  "cc.empty": "CC Switch 中未找到 Claude Code 提供商。",
+  "cc.empty": "CC Switch 中未找到 Claude Code 服务商。",
   "cc.active": "使用中",
   "cc.already": "已存在",
-  "cc.imported_notice": "已导入 {n} 个提供商。密钥已直接存入凭据管理器。",
+  "cc.imported_notice": "已导入 {n} 个服务商，密钥已存入凭据管理器。",
   "providers.endpoint": "端点",
   "providers.dialect": "协议",
   "providers.auth": "认证",
   "providers.no_key": "未存储密钥",
   "providers.no_cred": "无需凭证",
   "providers.auth_account_key": "由账户推理 Key 提供",
-  "providers.models_count": "该提供商 {n} 个",
+  "providers.models_count": "该服务商 {n} 个",
   "providers.models_none": "暂无",
   "providers.api_key": "API 密钥",
-  "providers.api_key_hint": "存储在系统凭据管理器，绝不写入配置文件。",
+  "providers.api_key_hint": "存入系统凭据管理器，不写入配置文件。",
   "providers.save_key": "保存密钥",
   "providers.models_section": "模型",
   "providers.empty_catalogue": "{name} 返回了空模型列表。",
@@ -1673,15 +1895,17 @@ export const zh: Dict = {
   "field.timeout": "超时 (秒)",
   "field.timeout_hint": "整个请求，含流式空闲间隔",
   "field.connect_timeout": "连接超时 (秒)",
+  "providers.proxy_policy": "上游代理",
+  "providers.proxy_policy_hint": "只影响发往该上游的请求，不改变浏览器代理设置。",
+  "providers.proxy_inherit": "继承网关设置",
+  "providers.proxy_direct": "直连 · 绕过代理",
+  "providers.proxy_system": "跟随系统代理",
   "providers.f_version": "anthropic-version",
-  "providers.f_version_hint":
-    "Anthropic 的带日期 API 版本，同一时间只有一个生效。2023-06-01 是沿用了三年的基线；2026-10-21 去掉了 temperature/top_p/top_k，并把 document 限制在 user 消息里。请求会按所选版本调整。",
+  "providers.f_version_hint": "拿不准就用 2023-06-01；2026-10-21 不支持 temperature/top_p/top_k。",
   "providers.f_beta": "anthropic-beta",
-  "providers.f_beta_hint":
-    "要以 beta 形式请求的能力，多个用逗号或分号分隔（例如 context-management-2025-06-27）。留空则不发送。Anthropic 的新能力通常先以 beta 头发布，之后才进入正式版本。",
+  "providers.f_beta_hint": "以逗号分隔的 beta 功能名，例如 context-management-2025-06-27。留空则不发送。",
   "providers.api_surface": "API 端面",
-  "providers.api_surface_hint":
-    "这个端点使用哪种 OpenAI 接口。Responses 是较新的接口，部分 Codex 网关只接受它。两者的请求、响应和流式事件格式都不同。",
+  "providers.api_surface_hint": "该端点使用哪种 OpenAI 接口；部分 Codex 网关只接受 Responses。",
   "providers.surface_chat": "Chat Completions",
   "providers.surface_responses": "Responses",
   "providers.client_profile": "客户端身份",
@@ -1691,26 +1915,21 @@ export const zh: Dict = {
   "providers.profile_native": "原生 · 不伪装客户端",
   "providers.profile_claude_code": "Claude Code · 带其请求头",
   "providers.profile_codex": "Codex · 带其请求头",
-  "providers.profile_opencode_cli": "OpenCode CLI · OpenCode 提供商固定使用",
-  "providers.client_profile_locked_hint":
-    "已锁定。OpenCode 网关会校验该指纹，配置校验也不接受其他取值。",
+  "providers.profile_opencode_cli": "OpenCode CLI · OpenCode 服务商固定使用",
+  "providers.client_profile_locked_hint": "已锁定：OpenCode 网关会校验该身份，其他选项无效。",
   "providers.opencode_zen_dialect": "OpenCode Zen(免费)",
   "providers.opencode_console_dialect": "OpenCode Console",
   "providers.decision_dialect": "决策模型",
   "providers.decision": "决策",
-  "providers.decision_hint":
-    "这类模型不写文字，只对固定的判断题给出概率。它只服务自动审查，需要你自己加进模型池。Jev（含 OpenCode Zen 免费模型）是参考实现。",
+  "providers.decision_hint": "不写文字，只对固定的判断题给出概率；只服务自动审查。",
   "providers.decision_path": "决策接口路径",
-  "providers.decision_path_hint":
-    "接在 Base URL 后面的路径。参考服务使用 /v1/systemone。",
+  "providers.decision_path_hint": "接在 Base URL 后，例如 /v1/systemone。",
   "providers.decision_threshold": "所需置信度",
-  "providers.decision_threshold_hint":
-    "自动审查要有多大把握才拦截。不低于此值就拦截，不高于 1 减此值就放行，介于两者之间按拦截处理。设为 0.5 时完全由模型的多数票决定。",
+  "providers.decision_threshold_hint": "模型要多有把握才拦截；调高会拦得更多。",
   "providers.decision_no_catalogue":
     "决策接口没有模型目录。请在模型页手动添加模型。",
   "models.tier_decision": "为何没有层级",
-  "models.tier_decision_hint":
-    "决策模型只服务自动审查，不能应答聊天，因此不归入层级。请加入自动审查池。",
+  "models.tier_decision_hint": "只服务自动审查，不能回答聊天；把它加进自动审查的模型池。",
   "providers.free_badge": "免费",
   "providers.free_only": "仅显示免费模型",
   "providers.free_only_hint":
@@ -1723,12 +1942,11 @@ export const zh: Dict = {
   "providers.bearer_auth_hint": "用于读 Authorization: Bearer 而非 x-api-key 的中转。",
   "providers.balance": "余额",
   "providers.balance_hint":
-    "有些提供商在自己的接口公布剩余额度。选出该提供商使用的接口，Zroutery 会用提供商的密钥去查。",
-  "providers.balance_hint_panel":
-    "NewAPI 中转的余额显示在面板里。数字来自该提供商账户所在的面板，用账户的个人访问令牌读取。",
+    "有些服务商在自己的接口公布剩余额度。选出该服务商使用的接口，Zroutery 会用服务商的密钥去查。",
+  "providers.balance_hint_panel": "用账户的个人访问令牌，从该服务商的 NewAPI 面板读取。",
   "providers.balance_hint_none":
-    "该提供商不公布余额，也没有可查询的面板账户。请在上方选一个探针，或声明账户并保存个人访问令牌。",
-  "providers.balance_no_source": "该提供商没有可查询的余额来源：自身不公布，也未声明面板账户。",
+    "该服务商不公布余额，也没有可查询的面板账户。请在上方选一个探针，或声明账户并保存个人访问令牌。",
+  "providers.balance_no_source": "该服务商没有可查询的余额来源：自身不公布，也未声明面板账户。",
   "balance_preset.none": "不支持",
   "balance_preset.deep_seek": "DeepSeek",
   "balance_preset.moonshot": "Moonshot",
@@ -1737,10 +1955,10 @@ export const zh: Dict = {
   "balance_preset.sub2api": "Sub2API 中转",
   "balance_preset.custom": "自定义接口",
   "balance_hint.none": "OpenAI 与 Anthropic 自身都不公布余额。",
-  "balance_hint.deep_seek": "在提供商自己的接口上查询 /user/balance。",
-  "balance_hint.moonshot": "在提供商自己的接口上查询 /users/me/balance。",
-  "balance_hint.silicon_flow": "在提供商自己的接口上查询 /user/info。",
-  "balance_hint.open_router": "在提供商自己的接口上查询 /credits。",
+  "balance_hint.deep_seek": "在服务商自己的接口上查询 /user/balance。",
+  "balance_hint.moonshot": "在服务商自己的接口上查询 /users/me/balance。",
+  "balance_hint.silicon_flow": "在服务商自己的接口上查询 /user/info。",
+  "balance_hint.open_router": "在服务商自己的接口上查询 /credits。",
   "balance_hint.sub2api":
     "查询 /v1/usage。答案可能是钱包余额、密钥额度或订阅配额，取决于该密钥的签发方式。",
   "balance_hint.custom": "自定义路径，并自行指定剩余、已用与总额对应的 JSON 指针。",
@@ -1749,7 +1967,7 @@ export const zh: Dict = {
   "providers.checking": "查询中…",
   "providers.compatibility": "兼容性",
   "providers.compatibility_hint":
-    "这些开关用于不完全遵循标准协议的提供商。除非请求失败，否则保持全部关闭。",
+    "这些开关用于不完全遵循标准协议的服务商。除非请求失败，否则保持全部关闭。",
   "quirk.max_completion_tokens": "使用 max_completion_tokens",
   "quirk.drop_temperature": "丢弃 temperature",
   "quirk.drop_top_p": "丢弃 top_p",
@@ -1758,10 +1976,9 @@ export const zh: Dict = {
   "quirk.system_as_developer": "system 消息用 developer 角色",
   "quirk.reasoning_effort": "将 thinking 转为 reasoning_effort",
   "quirk.portable_history": "跨上游复用 Responses 历史",
-  "quirk.portable_history_hint":
-    "用于可能由别的账户或上游来接话的中转（如 AgentRouter、CC Switch）。转发前会删掉 reasoning 项、历史 item id 和 previous_response_id，所以先前的推理不会再传给模型。只影响 Responses 请求。",
-  "providers.remove": "移除提供商",
-  "providers.removed_models_notice": "已移除属于该提供商的 {n} 个模型。",
+  "quirk.portable_history_hint": "用于可能换上游接话的中转（AgentRouter、CC Switch）。只影响 Responses 请求。",
+  "providers.remove": "移除服务商",
+  "providers.removed_models_notice": "已移除属于该服务商的 {n} 个模型。",
   "providers.balance_failed": "查询失败",
 
   // ------------------------------------------------------- account maintenance
@@ -1808,9 +2025,9 @@ export const zh: Dict = {
   "account.resume": "在已打开的窗口中继续",
   "account.cancel": "取消",
   "account.close_browser": "关闭窗口",
-  "account.not_enabled": "该账户未启用签到。请在提供商的账户设置中开启。",
-  "account.need_path": "未设置签到页面。请在提供商的账户设置中填写。",
-  "account.need_selector": "未设置签到按钮。请在提供商的账户设置中填写 CSS 选择器，例如 button.checkin。",
+  "account.not_enabled": "该账户未启用签到。请在服务商的账户设置中开启。",
+  "account.need_path": "未设置签到页面。请在服务商的账户设置中填写。",
+  "account.need_selector": "未设置签到按钮。请在服务商的账户设置中填写 CSS 选择器，例如 button.checkin。",
   "account.start_failed": "无法开始签到",
   "account.started": "签到已开始。若需要人工验证，浏览器会提示。",
   "account.resumed": "签到已继续。",
@@ -1831,11 +2048,11 @@ export const zh: Dict = {
   "providers.wallet_release": "解除",
   "providers.panel_info": "面板信息",
   "providers.panel_info_hint":
-    "读取该提供商的 NewAPI 面板公告与美元价格。账户设置了独立面板地址时，使用该地址。",
+    "读取该服务商的 NewAPI 面板公告与美元价格。账户设置了独立面板地址时，使用该地址。",
   "providers.panel_account": "面板账户",
   "providers.panel_account_hint": "选择要读取的账户面板地址。这些公开请求不携带凭据。",
   "providers.panel_group": "计价分组",
-  "providers.panel_group_hint": "请选择推理密钥使用的分组。应用后，该提供商的模型将使用这组统一价格。",
+  "providers.panel_group_hint": "请选择推理密钥使用的分组。应用后，该服务商的模型将使用这组统一价格。",
   "providers.panel_no_announcements": "面板当前没有公告。",
   "providers.panel_announcements_failed": "公告读取失败：{error}",
   "providers.panel_prices_failed": "价格读取失败：{error}",
@@ -1846,30 +2063,30 @@ export const zh: Dict = {
   "providers.panel_read": "读取面板",
   "providers.panel_read_hint": "读取面板公告与公开价格。在你按下应用价格之前不会修改任何配置。",
   "providers.panel_announcement": "公告",
-  "providers.panel_prices": "面板共发布 {total} 条价格，其中 {matched} 条匹配本提供商的模型（分组 {group}）。",
+  "providers.panel_prices": "面板共发布 {total} 条价格，其中 {matched} 条匹配本服务商的模型（分组 {group}）。",
   "providers.panel_apply_prices": "将价格应用到模型",
   "providers.panel_prices_imported": "已从面板导入模型价格。",
   "nav.accounts": "账户",
   "nav.takeover": "接管",
-  "accounts.empty_build": "此构建未包含账户子系统，声明的账户无法探测或签到。",
-  "accounts.none": "尚未声明账户。请在提供商页的账户设置中添加。",
+  "accounts.empty_build": "当前构建不支持账户探测与签到。",
+  "accounts.none": "尚未声明账户。请在服务商页的账户设置中添加。",
   "accounts.probe_section": "账户探测",
   "accounts.probe_hint": "向每个已启用账户的面板查询当前状态。每个账户一次请求，仅在点击时执行。",
   "accounts.probe_now": "探测所有账户",
   "accounts.probing": "探测中…",
   "accounts.probe_idle": "尚未进行探测。",
-  "accounts.probe_none": "探测未发现已启用且已声明的账户。",
+  "accounts.probe_none": "没有可探测的已启用账户。",
   "accounts.probe_outcome": "结果",
-  "accounts.provider_disabled": "提供商已停用",
+  "accounts.provider_disabled": "服务商已停用",
   "accounts.own_key_stored": "已存面板访问令牌",
-  "accounts.own_key_missing": "声明了独立凭据，但尚未存储",
-  "accounts.shared_key": "共用提供商凭据",
+  "accounts.own_key_missing": "配置了独立凭据，但尚未存储",
+  "accounts.shared_key": "共用服务商凭据",
   // 凭据类型提示。面板 API 认的是站点「访问令牌」(面板个人设置页里的那一串),
   // 中转的 sk- 密钥在那里只会被当成密码错误。说清楚两者的区别,声明才能被修好。
   "accounts.auth_hint": "面板拒绝了此凭据。账户需要面板的个人访问令牌，而不是中转 sk- 密钥。",
   "accounts.last_failure": "上次探测失败",
   "accounts.checkin_api": "直接签到",
-  "accounts.checkin_api_hint": "使用已存令牌通过面板 API 签到，不打开浏览器。面板要求验证时会失败。",
+  "accounts.checkin_api_hint": "用已存的令牌直接签到，不开浏览器。面板要求验证时会失败。",
   "accounts.checking": "签到中…",
   "accounts.checkin_api_failed": "直接签到失败",
   "accounts.events_section": "账户事件",
@@ -1889,7 +2106,7 @@ export const zh: Dict = {
   // 若归为「正常 / 异常」两类，无人能够询问的账户就会被显示成有问题的账户。
   "account.sync.refreshed": "已探测",
   "account.sync.partially_reported": "未上报",
-  "account.sync.unsupported": "此构建没有能询问该平台的后端；未探测。",
+  "account.sync.unsupported": "此构建无法询问该平台；未探测。",
   "account.sync.failed": "探测失败",
 
   // ------------------------------------------------------------- 接管
@@ -1898,9 +2115,9 @@ export const zh: Dict = {
   // 做决定;归并成「在管/不在管」两类,恰好会藏住这些时刻。
   "takeover.section": "Agent 接管",
   "takeover.section_hint":
-    "把网关地址与令牌写入客户端自己的配置，释放时恢复原值。客户端仍按它发送的模型名选择层级。",
+    "把网关地址与令牌写入客户端自己的配置，释放时恢复原值；客户端仍按发送的模型名选择层级。",
   "takeover.none": "此构建没有已知的外部 Agent。",
-  "takeover.load_failed": "接管记录读取失败：{err}。本页没有改动过任何客户端的配置。",
+  "takeover.load_failed": "接管记录读取失败：{err}；本页没有改动过任何客户端的配置。",
   "takeover.agent.claude": "Claude Code",
   "takeover.agent.codex": "Codex CLI",
   "takeover.agent.opencode": "OpenCode",
@@ -1920,8 +2137,7 @@ export const zh: Dict = {
     "未找到 {agent} 的配置。请安装并运行一次后刷新。",
   "takeover.hint.ready":
     "已就绪：接管会写入下方 {n} 个字段，并记录当前值。",
-  "takeover.confirm_inline":
-    "接管会修改 {agent} 的配置文件。释放时只恢复这些字段，其余内容不动。",
+  "takeover.confirm_inline": "接管会修改 {agent} 的配置文件；释放时只恢复这些字段，其余内容不动。",
   "takeover.hint.active":
     "已收到该客户端的网关请求，托管字段与写入值一致。",
   "takeover.hint.degraded":
@@ -1935,8 +2151,7 @@ export const zh: Dict = {
   "takeover.blocker.no_classes":
     "没有已启用的分层模型，客户端无可请求的模型。请先分配层级。",
   "takeover.reason.unverified": "接管尚未被该客户端的真实请求确认过。",
-  "takeover.reason.token_changed":
-    "接管后网关令牌已变更。请释放并重新接管，把新令牌写入客户端。",
+  "takeover.reason.token_changed": "接管后网关令牌已变更；请释放并重新接管，把新令牌写入客户端。",
   "takeover.table.field": "字段",
   "takeover.table.current": "当前值",
   "takeover.table.next": "接管后",
@@ -1976,7 +2191,7 @@ export const zh: Dict = {
   "nav.cutover": "切换",
   "cutover.section": "配置切换",
   "cutover.section_hint":
-    "把客户端配置切换到本网关：先完整备份原文件，失败时可精确还原。启停客户端请用接管页，此页负责回滚。",
+    "把客户端配置切换到本网关，先完整备份原文件，失败时可精确还原；启停客户端请用接管页。",
   "cutover.state.section": "迁移记录",
   "cutover.state.detected": "尚未运行",
   "cutover.state.prepared": "在准备阶段中断",
@@ -1985,27 +2200,22 @@ export const zh: Dict = {
   "cutover.state.completed": "已完成",
   "cutover.state.rolled_back": "已回滚",
   "cutover.state.failed": "已失败",
-  "cutover.state.hint.detected": "该记录未运行过任何切换。本页没有改动过任何客户端的配置。",
+  "cutover.state.hint.detected": "该记录未运行过任何切换；本页没有改动过任何客户端的配置。",
   "cutover.state.hint.completed":
     "切换已完成，此状态不可回滚；快照仍保留在磁盘上。",
-  "cutover.state.hint.rolled_back":
-    "已回滚并恢复文件。再次运行会从原文件开始。",
-  "cutover.state.hint.prepared":
-    "文档已暂存，客户端文件尚未写入。快照是原文件的唯一副本。",
-  "cutover.state.hint.verified":
-    "已暂存并验证，客户端文件未改动。快照是原文件的唯一副本。",
-  "cutover.state.hint.switched":
-    "已切换，客户端文件已被替换。恢复快照是唯一的退路。",
-  "cutover.state.hint.failed":
-    "中途失败。请用下方快照回滚。",
+  "cutover.state.hint.rolled_back": "已回滚并恢复文件；再次运行会从原文件开始。",
+  "cutover.state.hint.prepared": "已暂存新配置，客户端文件尚未写入；快照是原文件的唯一副本。",
+  "cutover.state.hint.verified": "已暂存并验证，客户端文件未改动；快照是原文件的唯一副本。",
+  "cutover.state.hint.switched": "已切换，客户端文件已被替换；恢复快照是唯一的退路。",
+  "cutover.state.hint.failed": "中途失败；请用下方快照回滚。",
   "cutover.snapshot.none": "尚未捕获任何回滚快照。",
   "cutover.snapshot.files": "已捕获 {n} 个文件，可逐字节还原。",
   "cutover.not_durable": "此构建的迁移记录不持久，重启后无法恢复中断的切换。",
   "cutover.persist_error": "记录未能写入磁盘：{err}",
   "cutover.plans.section": "切换计划",
-  "cutover.plans.hint": "每个计划使用客户端的真实配置路径和本网关地址。确认前不会修改任何文件。",
-  "cutover.none": "此构建没有已知的外部客户端可供切换。安装并运行一个，使其配置文件存在，然后刷新本页。",
-  "cutover.load_failed": "迁移记录读取失败：{err}。本页没有改动过任何客户端的配置。",
+  "cutover.plans.hint": "每个计划按客户端的真实配置生成；确认前不会修改任何文件。",
+  "cutover.none": "此构建没有已知的外部客户端；安装并运行一次，再刷新本页。",
+  "cutover.load_failed": "迁移记录读取失败：{err}；本页没有改动过任何客户端的配置。",
   "cutover.step.not_reversible": "无法撤销",
   "cutover.step.reversible": "回滚时还原",
   "cutover.step.stop_external": "检查 {name} 是否仍在运行",
@@ -2018,27 +2228,25 @@ export const zh: Dict = {
   "cutover.running": "执行中…",
   "cutover.rollback": "回滚",
   "cutover.rolling_back": "回滚中…",
-  "cutover.already_run": "该记录只允许一次切换且已运行。如要重新开始，请从配置目录删除该记录。",
+  "cutover.already_run": "该记录只允许一次切换且已运行；要重新开始，请从配置目录删除它。",
   "cutover.rollback_unavailable": "只有失败后才会提供回滚。",
   "cutover.confirm_run_title": "替换 {agent} 的配置？",
   "cutover.confirm_run_body":
-    "共 {n} 步。写入前会完整备份，失败可回滚。检测到运行中的外部进程时只报告，不停止。",
+    "共 {n} 步；写入前会完整备份，失败可回滚，运行中的外部进程只报告、不停止。",
   "cutover.confirm_rollback_title": "把配置文件还原回去？",
   "cutover.confirm_rollback_body":
-    "将用切换前的备份覆盖 {n} 个文件。之后的修改和切换本身的改动都会丢失。",
+    "将用切换前的备份覆盖 {n} 个文件；之后的修改和切换本身的改动都会丢失。",
   "cutover.result.title": "最近一次运行",
   "cutover.result.steps": "{total} 步中的 {done} 步",
   "cutover.result.duration": "{ms} 毫秒",
   "cutover.result.errors": "错误",
   "cutover.result.warnings": "警告",
   "cutover.result.restored": "已还原 {n} 个文件",
-  "cutover.result.restore_failed":
-    "{n} 个文件未能恢复，磁盘配置与原来不同。请手动修复。",
-  "cutover.result.rolled_back_nothing":
-    "没有文件被恢复。状态已推进，磁盘文件未变。",
+  "cutover.result.restore_failed": "{n} 个文件未能恢复，磁盘配置与原来不同，请手动修复。",
+  "cutover.result.rolled_back_nothing": "没有文件被恢复；状态已推进，磁盘文件未变。",
   "cutover.result.ok": "切换已完成，端点以 Zroutery 的身份作答。",
   "cutover.toast_applied": "{agent} 的切换已完成。",
-  "cutover.toast_failed": "切换失败，共 {n} 个错误。下方报告会指出停在哪一步；回滚即可恢复。",
+  "cutover.toast_failed": "切换失败，共 {n} 个错误；报告指出停在哪一步，回滚即可恢复。",
   "cutover.toast_rolled_back": "已还原 {n} 个文件。",
   "cutover.toast_nothing_restored": "未还原任何内容。",
   "cutover.agent.claude": "Claude Code",
@@ -2047,7 +2255,7 @@ export const zh: Dict = {
   "cutover.agent.gemini": "Gemini CLI",
 
   // ------------------------------------------------------------- routing
-  "routing.lede": "按用途展示请求的路由方式。兼容任何 Anthropic 或 OpenAI 客户端。",
+  "routing.lede": "按用途展示请求的路由方式，兼容任何 Anthropic 或 OpenAI 客户端。",
   "routing.default_hint": "所有普通请求，按客户端请求的层级。",
   "routing.edit": "编辑",
   "tier.hint.fast": "便宜且快",
@@ -2058,17 +2266,17 @@ export const zh: Dict = {
   "tier.name.standard": "标准",
   "tier.name.reasoning": "推理",
   "tier.name.frontier": "前沿",
-  "routing.tier_empty": "为空。在有模型加入该层级前，对 {id} 的请求会失败。",
+  "routing.tier_empty": "为空；在有模型加入该层级前，对 {id} 的请求会失败。",
   "routing.fallback_n": "备选 {n}",
   "routing.more_fallbacks": "还有 {n} 个备选",
   "routing.request": "请求",
-  "routing.side_query": "侧查询",
+  "routing.side_query": "自动审查",
   "routing.review_hint_on": "权限检查走独立的模型池。",
-  "routing.review_hint_off": "已关闭。权限检查跟随默认路由。",
+  "routing.review_hint_off": "已关闭；权限检查跟随默认路由。",
   "routing.verdict": "判定",
   "routing.next": "下一个",
-  "routing.review_no_candidate": "已启用，但没有可用候选。权限检查将失败。",
-  "routing.review_off": "已关闭。开启后权限检查走下方模型池。",
+  "routing.review_no_candidate": "已启用但没有可用候选；权限检查会失败。",
+  "routing.review_off": "已关闭；开启后权限检查走下方模型池。",
   "routing.default_drawer": "默认路由",
   "field.strategy": "策略",
   "strategy.priority": "优先级",
@@ -2091,20 +2299,21 @@ export const zh: Dict = {
   "routing.rerun": "立即重跑",
   "routing.elect_on_start": "启动时进行一次",
   "routing.no_election": "本次运行尚未进行选举。",
-  "routing.no_election_tiers": "没有层级有可测量的启用模型。",
+  "routing.no_election_tiers": "没有已启用的模型可供测量。",
   "routing.primary": "主选",
   "routing.route_review": "路由权限检查",
-  "routing.route_review_hint": "权限检查走下方模型池，而非会话模型。包括 Claude Code 自动审查与 Codex Guardian。",
+  "routing.route_review_hint":
+    "权限检查走下方模型池而非会话模型；涵盖 Claude Code 自动审查与 Codex Guardian。",
   "routing.review_failover": "池内失败转移",
   "routing.review_failover_hint": "出错时尝试下一个候选",
   "routing.pool": "模型池",
-  "routing.pool_hint": "模型来自模型页，提供商、密钥与价格设置直接复用。",
+  "routing.pool_hint": "模型来自模型页，服务商、密钥与价格设置直接复用。",
   "routing.no_candidates": "暂无候选。在下方选择模型。",
   "routing.not_configured": "不是已配置的模型",
   "routing.decision_candidate": "决策模型",
   "routing.add_jev": "添加 OpenCode Zen 免费 Jev",
   "routing.add_jev_hint":
-    "把无需凭据的 OpenCode Zen Jev 决策模型加到池首，阈值 0.6。免费额度可能结束，也可能按地区屏蔽；被检查的文本会发送给 Zen。",
+    "把无需凭据的 Jev 决策模型加到池首，阈值 0.6；免费额度可能结束，被检查的文本会发送给 Zen。",
   "routing.jev_added": "已把 Jev 放在池首，并开启自动审查。",
   "routing.enable_for": "启用 {model}",
   "routing.add_model": "添加模型…",
@@ -2114,19 +2323,49 @@ export const zh: Dict = {
   "routing.verdict_parsing": "判定解析",
   "routing.verdict_only": "仅 <block>yes|no</block>",
   "routing.verdict_only_hint":
-    "Claude Code 要的是 <block>yes|no</block>，Codex Guardian 要的是 JSON 里的 outcome。决策模型只给概率，最终判定由该提供商的阈值决定。",
+    "Claude Code 要的是 <block>yes|no</block>，Codex Guardian 要的是 JSON 里的 outcome；决策模型只给概率，最终判定由该服务商的阈值决定。",
   "routing.no_verdict": "无判定时",
   "routing.fails_closed": "失败关闭；由客户端询问用户",
   "routing.fail_closed_note":
-    "出错、超时或协议不符时就换下一个；全都失败时请求失败，不会被放行。决策模型没有把握时按拦截处理。回复里的说明文字不会当作放行。",
+    "出错、超时或没有把握都按拦截处理，不会放行；回复里的说明文字也不会当作放行。",
 
   // ------------------------------------------------------------ activity
   "activity.lede_none": "暂无数据。将客户端指向网关即可在此看到流量。",
-  "activity.lede": "{requests} 个请求 · {rate}% 成功 · 输入 {in} / 输出 {out} token",
+  "activity.lede_since": "自 {since} 起的累计。",
+  "activity.kpi_row": "用量合计",
+  "activity.kpi_success": "成功率",
+  "activity.kpi_cache": "缓存命中",
+  "activity.kpi_cache_help":
+    "缓存读 token ÷ 输入 token，按模型求和。输入已包含缓存部分，占比不会超过 100%。",
+  // ---------------------------------------------------------- activity charts
+  "activity.traffic": "流量",
+  "activity.traffic_hint": "按本地日期统计的已完成请求；没有请求的日子是零，而不是缺口。",
+  "activity.chart_style": "图表",
+  "activity.chart_heatmap": "热力图",
+  "activity.chart_bars": "柱状图",
+  "activity.chart_line": "折线图",
+  "activity.chart_metric": "度量",
+  "activity.metric_requests": "请求数",
+  "activity.metric_tokens": "Token",
+  "activity.chart_range": "范围",
+  "activity.range_7": "7 天",
+  "activity.range_30": "30 天",
+  "activity.range_90": "90 天",
+  "activity.range_365": "1 年",
+  "activity.chart_none": "该时间范围内还没有请求。",
+  "activity.chart_aria": "最近 {days} 天每日{metric}，合计 {total}。",
+  "activity.heat_less": "少",
+  "activity.heat_more": "多",
   "activity.reset": "重置计数",
   "activity.review_line": "自动审查：{n} 次检查 · 失败 {failed} · 平均 {latency}(与主流量分开统计)。",
   "activity.nothing": "暂无数据。",
-  "activity.health": "模型健康",
+  "activity.filter": "筛选请求",
+  "activity.filter_all": "全部",
+  "activity.filter_failed": "仅失败",
+  "activity.no_failures": "这个窗口里没有失败的请求。",
+  "activity.page_status": "第 {from}–{to} 条 · 共 {total} 条",
+  "activity.prev_page": "上一页",
+  "activity.next_page": "下一页",
   "activity.tab_group": "活动的两个主题",
   "activity.tab_usage": "请求与用量",
   "activity.tab_log": "内部日志",
@@ -2134,14 +2373,14 @@ export const zh: Dict = {
   "activity.log_hint": "进程自身的输出，在此页签打开时持续跟踪。",
   "activity.show_log": "显示内部日志",
   "activity.stop_follow": "停止跟踪",
-  "activity.health_hint": "每模型的熔断状态，所有路由池共享。",
   "activity.ok_failed": "{ok} 成功 / {failed} 失败",
   "activity.cooling": "冷却 {n}s",
-  "activity.clear_health": "清除 {id} 的健康状态",
+  "activity.rate_cooling": "限流冷却 {n}s",
   "activity.spend": "花费",
-  "activity.spend_hint": "根据填写的价格与上报用量估算，不是账单。",
   "activity.estimated": "预估花费",
   "activity.n_failed": "{n} 失败",
+  "activity.client_unknown": "未知客户端",
+  "activity.minor_clients": "其他零星来源（{n}）",
   "activity.request": "请求",
   "activity.review": "审查",
   "activity.asked_for": "请求模型",
@@ -2160,22 +2399,51 @@ export const zh: Dict = {
   "activity.output_tokens": "输出 token",
   "activity.cache_read": "缓存读",
   "activity.cache_write": "缓存写",
+  /*
+   * 流水行的微标签：标签与值一体成串——行没有表头替它说明语义，
+   * “首字 412 ms”必须自己读得懂。"tok/s" 不需要键：与 ms 一样是单位符号，
+   * 不是要翻译的词。
+   */
+  "activity.ttft": "首字 {v}",
+  "activity.cache_hit_rate": "缓存命中率",
+  "activity.cache_hit_hint": "缓存读是输入 token 的子集（输入已包含缓存读写）；命中率按缓存读 ÷ 输入 token 计算。",
   "activity.cost": "成本",
   "activity.unpriced": "未定价",
-  "activity.history": "持久用量历史",
-  "activity.history_hint":
-    "每次完成的请求都会按客户端写入磁盘，重启后仍在，并可导出或单独清除某个客户端。提示词、回复正文和错误正文都不会保存。",
+  /*
+   * 账本：一张表，两种切法。提示语带上三件读者信任这张表之前需要的事：
+   * 点一行可筛选流水、花费是估算、对话内容从不保存。
+   */
+  "activity.ledger": "账本",
+  "activity.ledger_hint":
+    "已记录的请求按客户端、按模型分别合计；点击一行，下方流水只看它的请求。花费按所填价格估算；提示词与回复正文不会保存。",
+  "activity.ledger_cut": "账本维度",
+  "activity.by_client": "按客户端",
+  "activity.by_model": "按模型",
+  "activity.health_col": "健康",
+  /*
+   * 流水上方的筛选提示条：说明列表现在只看哪一个主体，并给出退路。
+   * “保留的窗口”是因为账本比请求流水保存得更久。
+   */
+  "activity.stream_only": "只看 {subject}",
+  "activity.stream_clear": "显示全部请求",
+  "activity.no_match_window": "保留的请求窗口中没有符合此筛选的请求。",
   "activity.export_history": "导出历史",
   "activity.import_history": "导入历史",
-  "activity.export_hint":
-    "可移植的 JSON 账目归档。导入时重复项会被跳过，导入的记录不会改变预算或路由健康状态。",
-  "activity.import_hint":
-    "粘贴由“导出历史”生成的归档。重复 id 会跳过；只要有一行无效，整份文件都会被拒绝。",
+  "activity.export_hint": "可移植的 JSON 账目归档，可在别处再次导入。",
+  "activity.import_hint": "粘贴由“导出历史”生成的归档；有一行无效，整份文件都会被拒绝。",
   "activity.import_placeholder": "在此粘贴 JSON 归档",
   "activity.client": "客户端",
   "activity.clear_client": "清除此客户端",
   "activity.clear_client_body": "删除 {name} 的全部已保存用量记录？其他客户端和实时计数不受影响。",
   "activity.clear_client_named": "清除 {name} 的用量历史",
+  /*
+   * 流水的 facet 筛选：先选服务商，模型级联在其内。“按……筛选”说的是控件本身，
+   * 当前选中的选项由触发器自己描述；下面两个“全部”只是退路，不是状态。
+   */
+  "activity.facet_provider": "按服务商筛选",
+  "activity.facet_model": "按模型筛选",
+  "activity.facet_all_providers": "全部服务商",
+  "activity.facet_all_models": "全部模型",
 
   // ------------------------------------------------------------ settings
   "settings.lede": "应用行为、对外的网关，以及它被允许花多少。",
@@ -2207,15 +2475,15 @@ export const zh: Dict = {
   "settings.cors": "浏览器访问 (CORS)",
   "settings.cors_hint": "仅页面内运行的客户端需要。",
   "settings.allow_origins": "允许浏览器来源",
-  "settings.no_origins": "未列出来源，即接受任意来源。请添加实际使用的。",
+  "settings.no_origins": "未列出来源即接受任意来源；请添加实际使用的。",
   "field.allowed_origin": "允许的来源",
   "field.allowed_origin_hint": "协议、主机与端口，不含路径",
   "settings.add_origin": "添加来源",
   "settings.origin_notice": "来源格式形如 https://example.com，不含路径。",
   "settings.budgets": "预算",
-  "settings.budgets_hint": "限额达到后停止消费。越线的那次请求会完成，下一次被拒绝。",
+  "settings.budgets_hint": "限额达到后停止消费；越线的那次请求会完成，下一次被拒绝。",
   "settings.balances": "余额",
-  "settings.balances_hint": "每次余额检查会为每个提供商或账户发出一次请求；检查失败时保留上一次成功读取的数字。",
+  "settings.balances_hint": "每次余额检查会为每个服务商或账户发出一次请求；检查失败时保留上一次成功读取的数字。",
   "settings.balance_auto": "自动检查余额",
   "settings.balance_auto_hint": "应用运行时在后台执行。",
   "settings.balance_interval": "间隔（秒）",
@@ -2227,12 +2495,13 @@ export const zh: Dict = {
   "budget.when": "到达时",
   "budget.on": "启用",
   "scope.global": "全部",
-  "scope.provider": "提供商 {id}",
+  "scope.provider": "服务商 {id}",
   "period.day": "按天",
   "period.month": "按月",
   "budget.reject": "拒绝请求",
   "budget.degrade": "由 {id} 提供",
   "budget.used_up": "已用尽",
+  "budget.readonly": "预算 {scope}：{spent} / {limit}（{used}%）",
   "budget.add": "添加预算",
   "budget.currency_hint": "以模型计费的币种",
   "settings.election_weights": "如何权衡",
@@ -2242,8 +2511,12 @@ export const zh: Dict = {
   "settings.tab_general": "常规",
   "settings.tab_gateway": "网关",
   "settings.tab_budgets": "限额",
+  "settings.about": "关于",
+  "settings.about_note": "Zroutery 的全部配置都保存在这个文件里，应用内的修改会写回其中。",
+  "settings.version": "版本",
+  "settings.config_path": "配置文件",
   "settings.aliases": "客户端模型别名",
-  "settings.aliases_hint": "将客户端发送的完整模型 id 映射到层级。优先于 Claude 名称启发式。",
+  "settings.aliases_hint": "将客户端发送的完整模型 id 映射到层级；优先于 Claude 名称启发式。",
   "settings.f_model_id": "模型 id",
   "settings.f_class": "层级",
   "settings.add_alias": "添加别名",
@@ -2251,7 +2524,7 @@ export const zh: Dict = {
   "settings.price_weight_hint": "相对值，3:1 等价于 0.75:0.25",
   "settings.latency_weight": "延迟权重",
   "settings.ref_input": "参考输入 token",
-  "settings.ref_input_hint": "价格按 Mtok 计，需要一个请求作比较基准",
+  "settings.ref_input_hint": "价格按每百万 token 计，需要一个请求规模作比较基准。",
   "settings.ref_output": "参考输出 token",
   "settings.naming_style": "层级命名",
   "settings.naming_internal": "内部",
@@ -2270,51 +2543,50 @@ export const zh: Dict = {
   "win.hide_to_tray": "隐藏到托盘",
   "win.quit": "退出",
   "vision.title": "视觉降级",
-  "vision.hint":
-    "不支持视觉的模型收到的是图片描述；生成不了描述时用占位符代替。图片不会悄悄丢掉。",
+  "vision.hint": "不支持视觉的模型收到图片描述，生成不了时用占位符代替；图片不会被悄悄丢掉。",
   "vision.enable": "为不支持视觉的模型描述图片",
   "vision.model": "视觉模型",
-  "vision.model_hint": "模型页中一个支持视觉的现有模型；复用其提供商与价格",
+  "vision.model_hint": "模型页中一个支持视觉的现有模型；复用其服务商与价格",
   "vision.model_required": "请先在模型页选择一个支持视觉的模型。",
   "vision.placeholder": "占位符",
   "vision.placeholder_hint": "无法生成描述时，替代图片的文本",
   "rectifier.title": "请求修复",
   "rectifier.hint":
-    "上游拒绝请求时，用同一个提供商、同一个模型再发一次，只是把请求改成它能接受的形状。这类修复不计入熔断，也不换提供商。",
+    "上游拒绝时，用同一服务商、同一模型把请求改成它能接受的形式再发一次；不计入熔断，也不换服务商。",
   "rectifier.enable": "修复被拒绝的请求",
   "rectifier.enable_hint": "总开关：关闭后请求不再重试修复，直接走故障转移。",
   "rectifier.thinking_signature": "修复失效的 thinking 签名",
   "rectifier.thinking_signature_hint":
-    "Anthropic 会拒绝携带旧签名或位置不对的 thinking 块。删掉这些块后重发。",
+    "Anthropic 拒绝携带旧签名或位置不对的 thinking 块；这些块会被删掉后重发。",
   "rectifier.media_fallback": "用文字描述替代图片",
-  "rectifier.media_fallback_hint":
-    "不接受图片的提供商，会收到一段文字占位描述，图片本身仍然留在请求结构里。",
+  "rectifier.media_fallback_hint": "不接受图片的服务商会收到文字描述，原图仍保留。",
   "rectifier.thinking_budget": "把过大的思考预算减半",
   "rectifier.thinking_budget_hint":
-    "限制了推理预算的提供商，会收到预算减半（不低于 1024 token）的请求。",
+    "限制了推理预算的服务商，会收到预算减半（不低于 1024 token）的请求。",
+  "rectifier.codex_auto": "Codex 条件历史整流",
+  "rectifier.codex_auto_hint":
+    "先保留历史，仅清理上游明确点名的错误；回复完整生成后交付，正文可能延后显示。",
   "rectifier.codex_metadata": "去掉 Codex 的私有元数据字段",
-  "rectifier.codex_metadata_hint":
-    "有些 Responses 端点不接受 internal_chat_message_metadata_passthrough。只有对方明确点名这个字段时才会删掉并重发。",
+  "rectifier.codex_metadata_hint": "仅当上游明确拒绝该字段时才删除并重试。",
   "rectifier.thinking_fallback": "允许使用不支持思考的模型",
   "rectifier.thinking_fallback_hint":
     "思考类请求可以发给未声明支持思考的模型，同时去掉思考相关参数；该次尝试会标记为降级。",
   "ml.config_title": "采集设置",
-  "ml.config_hint": "Shadow 产出证据，轨迹日志保存证据。没有证据就没有学习。",
-  "ml.config_unavailable": "此构建未包含学习能力，无需配置。",
+  "ml.config_hint": "Shadow 产出样本；没有样本就没有学习。",
+  "ml.config_unavailable": "此构建不含学习能力，无需配置。",
   "ml.shadow_enable": "Shadow 评估",
-  "ml.shadow_enable_hint":
-    "关闭后，没有请求会保留决策时的输入：样本在入库前就全部丢弃（记为 NoDecisionTimeInput），样本数因此一直是 0。",
+  "ml.shadow_enable_hint": "关闭后不再收集训练样本。",
   "ml.shadow_max_decisions": "最大决策数(内存)",
-  "ml.shadow_max_decisions_hint": "环形缓冲区大小，超限逐出最旧。默认 10000。",
+  "ml.shadow_max_decisions_hint": "超出后丢弃最旧的决策；默认 10000。",
   "ml.shadow_max_age": "最长保留(秒)",
-  "ml.shadow_max_age_hint": "保留窗口。604800 = 7 天。",
+  "ml.shadow_max_age_hint": "保留窗口；604800 = 7 天。",
   "ml.routing_enable": "学习型路由",
-  "ml.routing_enable_hint": "开启后，已晋升模型可重排候选顺序。晋升需要先配置持久化目录。",
+  "ml.routing_enable_hint": "开启后，已晋升模型可重排候选顺序；晋升需先配置持久化目录。",
   "ml.state_dir": "持久化目录",
-  "ml.state_dir_hint": "轨迹与当前模型指针的落盘位置。留空=仅内存，重启丢失。例：ml",
+  "ml.state_dir_hint": "轨迹与当前模型的保存位置；留空则仅存内存，重启后丢失。例：ml",
   "ml.exploration": "探索概率",
   "ml.exploration_hint": "0 = 确定性；>0 会探索其他候选，但会阻止晋升。",
-  "ml.config_shadow_off_hint": "Shadow 未开启 — 每个请求都在入库边界被丢弃。请打开以采集真实样本。",
+  "ml.config_shadow_off_hint": "Shadow 未开启，不会收集训练样本。",
   "ml.config_effect": "采集中",
   "ml.effect_collecting": "是 — 样本随流量增长",
   "ml.effect_idle": "否 — Shadow 未开启",
@@ -2325,13 +2597,13 @@ export const zh: Dict = {
 
   // ------------------------------------------------------------ learned routing
   "ml.title": "学习型路由",
-  "ml.hint": "训练出的模型是否可以重排 provider 顺序。关闭时路由保持确定性。",
-  "ml.unavailable": "此版本不含学习栈，路由保持确定性。",
-  "ml.serving": "已提升的模型正在重排 provider 顺序。",
+  "ml.hint": "开启后，训练出的模型可重排服务商顺序；关闭时路由保持确定性。",
+  "ml.unavailable": "此构建不含学习能力，路由保持确定性。",
+  "ml.serving": "已提升的模型正在重排服务商顺序。",
   "ml.inert": "模型已提升但学习型路由为关闭，不会被调用。",
-  "ml.off": "未安装模型。路由为确定性路由。",
+  "ml.off": "未安装模型，路由保持确定性。",
   "ml.exploring": "探索 {pct}%",
-  "ml.no_state_dir": "未配置持久状态目录，重启后数据不会保留，也无法晋级模型。",
+  "ml.no_state_dir": "未配置持久化目录，重启后数据不会保留，也无法晋升模型。",
   "ml.installed": "已安装",
   "ml.none": "无",
   "ml.gate": "授权依据",
@@ -2344,7 +2616,7 @@ export const zh: Dict = {
   "ml.with_no_model": "无模型时为采集证据而尝试",
   "ml.never_tried": "从未尝试",
   "ml.blind_spot_warning":
-    "探索关闭时，新配置的模型分不到流量。请把它们设为最高优先级，或打开探索（打开后学习模型将无法晋级）。",
+    "探索关闭时，新配置的模型分不到流量；请把它们设为最高优先级，或打开探索（但学习模型将无法提升）。",
   "ml.blind_spot_count": "{n} 个无法触达",
   "ml.collected": "已采集",
   "ml.samples": "样本",
@@ -2367,7 +2639,7 @@ export const zh: Dict = {
   "ml.replaying": "回放中…",
   "ml.replay_none": "回放没有产生任何测量结果。",
   "ml.replay_records": "已回放记录数",
-  "ml.replay_bound": "基于最近 {n} 条记录。历史中的数据多于这个窗口所覆盖的。",
+  "ml.replay_bound": "基于最近 {n} 条记录；可用的历史不止这些。",
   "ml.agreement": "与生产一致率",
   "ml.disagreements": "不一致 / 已测量",
   "ml.measured": "已测量",
@@ -2382,21 +2654,20 @@ export const zh: Dict = {
 
   // ----------------------------------------------- learned routing: collection
   "ml.learning_blocked":
-    "学习路由已开启，但影子评估是关的，所以没有收集到样本（已丢弃 {n} 次）。请打开影子评估。",
+    "学习型路由已开启，但 Shadow 评估关闭，因此没有样本（已丢弃 {n} 个请求）；请打开 Shadow 评估。",
   "ml.learning_blocked_short": "学习已被阻断",
   "ml.ingested": "已入库请求",
   "ml.dropped_no_decision": "因缺少决策而丢弃",
 
   // -------------------------------------------- learned routing: promotion round
   "ml.round": "提升轮次",
-  "ml.round_hint": "用已记录历史训练候选，并由门禁判断是否优于基线。不会自动安装或定时执行。",
+  "ml.round_hint": "用已记录历史训练候选，由门禁判断是否优于基线；不会自动安装或定时执行。",
   "ml.round_judge": "判断候选模型",
   "ml.round_judging": "判断中…",
   "ml.round_judged": "候选模型已评判，未安装。",
   "ml.round_install": "安装已获授权的候选模型",
   "ml.round_installing": "安装中…",
-  "ml.round_install_hint":
-    "门禁通过候选后才可用。会改变之后请求使用的模型。",
+  "ml.round_install_hint": "门禁通过候选后可用；会改变之后请求使用的模型。",
   "ml.round_none": "无法运行轮次。",
   "ml.round_records": "已读记录数",
   "ml.round_candidate": "候选模型",
@@ -2406,7 +2677,7 @@ export const zh: Dict = {
   "ml.round_installed": "已安装并正在服务",
   "ml.round_not_installed": "已评判，未安装",
   "ml.round_serving_now": "当前正在服务",
-  "ml.round_deterministic": "路由为确定性路由",
+  "ml.round_deterministic": "路由保持确定性",
   "ml.verdict": "结论",
   "ml.verdict_promoted": "已提升",
   "ml.verdict_rejected": "已拒绝",
@@ -2415,7 +2686,7 @@ export const zh: Dict = {
 
   // ------------------------------------------------ learned routing: the log
   "ml.log": "已记录的历史",
-  "ml.log_hint": "训练所用的记录。清理需手动执行，不会自动影响下一个模型。",
+  "ml.log_hint": "训练所用的记录；清理需手动执行，不会自动影响下一个模型。",
   "ml.log_records": "记录数",
   "ml.log_size": "占用空间",
   "ml.log_path": "文件",
@@ -2434,7 +2705,45 @@ export const zh: Dict = {
   "bytes.value": "{n} 字节",
 };
 
-export const dicts: Record<Lang, Dict> = { en: en as Dict, zh };
+const english = en as Dict;
+
+/**
+ * The loaded dictionaries.
+ *
+ * English and Simplified Chinese ship in the entry chunk because every reader
+ * has one of them as the fallback. Traditional Chinese is a second full copy
+ * of the same 980 strings, so it loads on demand: a reader who never selects
+ * it should not pay for it on every start.
+ */
+export const dicts: Partial<Record<Lang, Dict>> = { en: english, zh };
+
+/** The dictionary for a language, falling back to English before a chunk lands. */
+export function dictFor(lang: Lang): Dict {
+  return dicts[lang] ?? english;
+}
+
+async function loadDict(lang: Lang): Promise<void> {
+  if (dicts[lang]) return;
+  if (lang === "zh-TW") {
+    const { zhTW } = await import("./i18n.zhTW");
+    dicts["zh-TW"] = zhTW;
+  }
+}
+
+/**
+ * Resolve a dictionary before the first paint.
+ *
+ * Without this a Traditional Chinese reader would see one frame of English
+ * while the chunk arrives. The catch leaves the fallback in place: a language
+ * that cannot load is a reason to keep working, not a reason to stay blank.
+ */
+export async function prepareLang(lang: Lang): Promise<void> {
+  try {
+    await loadDict(lang);
+  } catch {
+    // The entry dictionaries are the fallback.
+  }
+}
 
 function interpolate(template: string, params?: Record<string, string | number>): string {
   if (!params) return template;
@@ -2445,8 +2754,12 @@ function interpolate(template: string, params?: Record<string, string | number>)
 
 export function detectLang(): Lang {
   const stored = localStorage.getItem("zroutery-lang");
-  if (stored === "en" || stored === "zh") return stored;
-  return navigator.language.toLowerCase().startsWith("zh") ? "zh" : "en";
+  if (stored === "en" || stored === "zh" || stored === "zh-TW") return stored;
+  const system = navigator.language.toLowerCase();
+  if (!system.startsWith("zh")) return "en";
+  // Taiwan, Hong Kong and Macau write Traditional Chinese, and a `Hant` script
+  // subtag says so outright whatever the region is.
+  return /hant|-(tw|hk|mo)\b/.test(system) ? "zh-TW" : "zh";
 }
 
 /**
@@ -2614,7 +2927,20 @@ type I18n = {
 const I18nContext = createContext<I18n | null>(null);
 
 export function I18nProvider({ children }: { children: ReactNode }) {
-  const [lang, setLang] = useState<Lang>(detectLang);
+  const [lang, selectLang] = useState<Lang>(detectLang);
+
+  /*
+   * A language whose dictionary lives in its own chunk is selected only after
+   * that chunk has arrived, so the interface never renders a half-switched
+   * mix of two languages. The await is invisible: `Segment` calls this on a
+   * click, and the change lands a few milliseconds later.
+   */
+  const setLang = useCallback((next: Lang) => {
+    void loadDict(next).then(
+      () => selectLang(next),
+      () => selectLang(next),
+    );
+  }, []);
 
   useEffect(() => {
     localStorage.setItem("zroutery-lang", lang);
@@ -2623,13 +2949,13 @@ export function I18nProvider({ children }: { children: ReactNode }) {
 
   const t = useCallback(
     (key: TKey, params?: Record<string, string | number>) =>
-      interpolate(dicts[lang][key] ?? dicts.en[key], params),
+      interpolate(dictFor(lang)[key] ?? english[key], params),
     [lang],
   );
 
   const plural = useCallback(
     (n: number, key: TKey, params?: Record<string, string | number>) => {
-      const value = dicts[lang][key] ?? dicts.en[key];
+      const value = dictFor(lang)[key] ?? english[key];
       const [one, many] = value.split("|").map((side) => side.trim());
       return interpolate((n === 1 ? one : many ?? one) ?? value, { n, ...params });
     },

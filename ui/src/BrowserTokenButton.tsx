@@ -12,6 +12,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api, errorText, type Snapshot, type TokenCaptureView } from "./api";
 import { Badge, Button, useToast } from "./components";
 import { describeBackendError, useI18n } from "./i18n";
+import { AccountBindingReview } from "./AccountBindingReview";
 
 /** Phases that are still waiting on the browser. */
 const LIVE = new Set(["opening", "waiting", "needs_verification", "stored"]);
@@ -45,18 +46,9 @@ export function BrowserTokenButton({
   const apply = useCallback(
     async (next: TokenCaptureView) => {
       if (next.phase === "stored") {
-        try {
-          const done = await api.completeTokenCapture(providerId, accountId);
-          setView(done);
-          if (done.phase === "captured") {
-            notify("ok", t("token_capture.done"));
-            await run(api.snapshot);
-          } else if (done.phase === "failed") {
-            notify("error", done.message ?? t("token_capture.failed"));
-          }
-        } catch (e) {
-          notify("error", describeBackendError(t, errorText(e)));
-        }
+        setView(next);
+        // The identity review is explicit for both capture and manual tokens.
+        // Never automatically confirm a changed remote user on a poll tick.
         return;
       }
       setView(next);
@@ -150,6 +142,12 @@ export function BrowserTokenButton({
           </Button>
         </>
       )}
+      {phase === "stored" && view?.binding_preview && <AccountBindingReview preview={view.binding_preview} busy={busy}
+        publish={(confirmed) => void api.completeTokenCapture(providerId, accountId, confirmed).then(async (done) => {
+          setView(done);
+          await run(api.snapshot);
+        }).catch((error) => notify("error", describeBackendError(t, errorText(error))))}
+        discard={() => void api.discardAccountKey(view.binding_preview!.publication_id).then(() => cancel()).catch((error) => notify("error", errorText(error)))} />}
       {phase === "captured" && <Badge tone="ok">{t("token_capture.captured")}</Badge>}
       {phase === "failed" && <Badge tone="danger">{t("token_capture.failed")}</Badge>}
       {/*

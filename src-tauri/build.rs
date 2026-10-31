@@ -38,6 +38,7 @@ const APP_COMMANDS: &[&str] = &[
     // Snapshot and dashboard reads.
     "get_snapshot",
     "get_activity",
+    "get_usage_days",
     "get_logs",
     // Learning stack; `#[cfg(feature = "ml")]` in `lib.rs`.
     "get_ml_status",

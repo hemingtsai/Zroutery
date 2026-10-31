@@ -7,8 +7,9 @@ import {
   emptyPricing,
   errorText,
   modelRows,
+  modelName,
+  ms,
   previewId,
-  priceText,
   virtualId,
   tierName,
   type AppConfig,
@@ -30,6 +31,7 @@ import {
   Drawer,
   KeyValue,
   NumberField,
+  num,
   PageHead,
   Section,
   Select,
@@ -38,7 +40,6 @@ import {
   Toggle,
   useToast,
   type ConfirmRequest,
-  ms,
 } from "../components";
 
 /**
@@ -48,7 +49,10 @@ import {
  * as client variants, and a value outside this list is not encodable to any
  * dialect.
  */
-const EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
+const EFFORT_LEVELS = ["none", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+
+/** Rows per page. The same page size the Activity log's pager (U8) cuts at. */
+const MODEL_PAGE_SIZE = 50;
 
 /**
  * Whether a capability set is still the shape an entry is created with.
@@ -109,15 +113,39 @@ export default function Models({
       (a, b) =>
         (providerName.get(a.model.provider_id) ?? "").localeCompare(
           providerName.get(b.model.provider_id) ?? "",
-        ) || a.id.localeCompare(b.id, undefined, { numeric: true }),
+        ) || modelName(a.model).localeCompare(modelName(b.model), undefined, { numeric: true }),
     );
   }, [snapshot.config.models, snapshot.config.providers, snapshot.exposed_ids]);
   const [openId, setOpenId] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
   const [nameError, setNameError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
+  /*
+   * The list is a page at a time, cut on the client — cc-switch's table shape
+   * (its TablePagination: the data arrives whole, the pages are sliced in the
+   * browser) and the Activity log's pager (U8) converted for the catalogue:
+   * the same page size, the same three copy keys, the same hide-on-single-page.
+   * The P2 baseline measured this page mounting 600 rows at once — a 235-308ms
+   * hot switch, fifteen times the 16ms budget — and fifty rows land the same
+   * interaction back inside a frame.
+   *
+   * Why pages rather than virtualization: virtualization buys an unbounded DOM
+   * by unmounting everything off-screen, and the price is threefold here —
+   * a windowing dependency (this repo adds none for a bounded table; the
+   * charts are hand-drawn SVG for the same reason), measured row heights (rows
+   * are content-driven: the sub-line wraps where it likes, and a virtualizer
+   * needs fixed or measured heights to place its window), and a wounded
+   * document (find-in-page, the accessibility tree and the search semantics
+   * below all address the whole set, while a virtual list only ever presents
+   * its window). A configured catalogue is bounded — hundreds of rows, not a
+   * ledger that grows forever — so fifty real rows per page is the whole job,
+   * and virtualization stays reserved for the genuinely infinite list.
+   */
+  const [page, setPage] = useState(0);
   const [draft, setDraft] = useState({ provider_id: config.providers[0]?.id ?? "", upstream_model: "" });
   const [syncing, setSyncing] = useState(false);
+  // The add form unfolds from the page head; the list stays the subject.
+  const [adding, setAdding] = useState(false);
 
   /**
    * Fill configured models' missing metadata from models.dev.
@@ -253,6 +281,7 @@ export default function Models({
               : "ok";
         return {
           id: r.id,
+          name: modelName(r.model),
           status,
           selected: openId === r.id,
           providerLine:
@@ -265,7 +294,17 @@ export default function Models({
           // dashes of pure noise — the column belongs to the rows that have
           // something to put in it, and the drawer holds the full story either
           // way.
-          price: r.model.pricing ? priceText(r.model.pricing) : "",
+          // The per-million unit lives in the string because a bare "4 / 20
+          // USD" made every reader do arithmetic the row could have done.
+          // Labels come from the dictionary, so the cell is localised without
+          // a locale-aware formatter.
+          price: r.model.pricing
+            ? t("models.price_cell", {
+                input: String(r.model.pricing.input_per_mtok),
+                output: String(r.model.pricing.output_per_mtok),
+                currency: r.model.pricing.currency,
+              })
+            : "",
           latency: healthRow ? ms(healthRow.avg_latency_ms) : "",
           // One lower-cased haystack per row, built in the same pass as the
           // other strings: the search box then costs a `includes` per row
@@ -291,6 +330,19 @@ export default function Models({
       ? listView.filter((row) => row.search.includes(needle))
       : listView;
   }, [listView, query]);
+
+  /*
+   * The window: search filters the full set, and the page cuts the filtered
+   * result — never the other way round, or a match on page 3 would be
+   * invisible to a reader sitting on page 1. The page number is clamped
+   * rather than reset when the set shrinks under it (a save removed models
+   * while the reader sat near the end): the same snap-back the Activity pager
+   * uses, so a page that runs past the end shows its last real page instead
+   * of an empty table.
+   */
+  const pageCount = Math.max(1, Math.ceil(view.length / MODEL_PAGE_SIZE));
+  const safePage = Math.min(page, pageCount - 1);
+  const pageRows = view.slice(safePage * MODEL_PAGE_SIZE, (safePage + 1) * MODEL_PAGE_SIZE);
 
   const openRow = useCallback((id: string) => setOpenId(id), []);
 
@@ -442,7 +494,7 @@ export default function Models({
         <Banner tone="warn">
           {t("models.unclassified", {
             n: unclassified.length,
-            ids: unclassified.map((r) => r.id).join(", "),
+            ids: unclassified.map((r) => modelName(r.model)).join(", "),
           })}
         </Banner>
       )}
@@ -450,6 +502,11 @@ export default function Models({
       <PageHead
         lede={
           rows.length === 0 ? t("models.lede_none") : t("models.exposed", { n: rows.length })
+        }
+        actions={
+          <button type="button" className="linky" onClick={() => setAdding((open) => !open)}>
+            {adding ? t("common.collapse") : t("models.add")}
+          </button>
         }
       />
 
@@ -459,9 +516,26 @@ export default function Models({
             aria-label={t("models.search")}
             placeholder={t("models.search")}
             value={query}
-            onChange={(e) => setQuery(e.currentTarget.value)}
+            onChange={(e) => {
+              setQuery(e.currentTarget.value);
+              // A page number is meaningless across a change of denominator:
+              // the query just changed the set being paged, so start over.
+              // (The rule the Activity pager applies to its filters.)
+              setPage(0);
+            }}
           />
-          {query.trim() && (
+          {/*
+           * The showing hint and the pager both count, so they take turns:
+           * the hint speaks only while a search is on AND the result fits on
+           * one page. The moment a second page exists, the pager's own status
+           * line ("1–50 of N") already announces the filtered total — two
+           * different totals on one screen is arithmetic the reader should
+           * not have to check. (The other split on the table — pager only
+           * while not searching — was rejected: it would have forced search
+           * results to render unpaginated, putting the 600-row cost this page
+           * just shed behind the first keystroke of a broad query.)
+           */}
+          {query.trim() && pageCount === 1 && (
             <span className="muted">
               {t("models.showing", { shown: view.length, total: rows.length })}
             </span>
@@ -485,12 +559,59 @@ export default function Models({
         <p className="empty">{t("models.no_match", { query: query.trim() })}</p>
       ) : (
         <div className="list">
-          {view.map((row) => (
+          {pageRows.map((row) => (
             <ModelListRow key={row.id} {...row} onOpen={openRow} />
           ))}
         </div>
       )}
 
+      {/*
+       * The pager, the Activity log's (U8) verbatim structure: one quiet line
+       * under the rows — where you are, how many there are, one step each
+       * way. It hides itself on a single page (a control for a choice nobody
+       * has) and stays visible while a search is on, because a broad query can
+       * match more than a page and a reader must be able to reach page two.
+       * The copy keys are the log's three, reused so both pagers say the same
+       * words in every language — hence the "activity." prefix on this page.
+       */}
+      {pageCount > 1 && (
+        <div className="pager">
+          <span className="muted">
+            {t("activity.page_status", {
+              from: safePage * MODEL_PAGE_SIZE + 1,
+              to: Math.min((safePage + 1) * MODEL_PAGE_SIZE, view.length),
+              total: num(view.length),
+            })}
+          </span>
+          <div className="row gap">
+            <button
+              type="button"
+              className="linky"
+              disabled={safePage === 0}
+              onClick={() => setPage(safePage - 1)}
+            >
+              {t("activity.prev_page")}
+            </button>
+            <button
+              type="button"
+              className="linky"
+              disabled={safePage >= pageCount - 1}
+              onClick={() => setPage(safePage + 1)}
+            >
+              {t("activity.next_page")}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/*
+       * The add form unfolds from the page head's action, the way cc-switch
+       * opens its wizard from the header button: the list is the page's
+       * subject, and a permanently expanded form under forty-four rows was
+       * furniture before it was a tool. The layout harness unfolds it the
+       * same way a reader does, by clicking the head link.
+       */}
+      {adding && (
       <Section title={t("models.add_section")} hint={t("models.add_hint")}>
         <div className="controls">
           <Select
@@ -558,6 +679,7 @@ export default function Models({
           />
         )}
       </Section>
+      )}
 
       {open && (
         <ModelDrawer
@@ -603,6 +725,7 @@ type ListTone = "ok" | "warn" | "danger" | "off";
  */
 const ModelListRow = memo(function ModelListRow({
   id,
+  name,
   status,
   providerLine,
   price,
@@ -611,6 +734,7 @@ const ModelListRow = memo(function ModelListRow({
   onOpen,
 }: {
   id: string;
+  name: string;
   status: ListTone;
   providerLine: string;
   price: string;
@@ -630,7 +754,7 @@ const ModelListRow = memo(function ModelListRow({
        * the row announced only "Open <id>", and whether the model was enabled
        * was nowhere in the sentence.
        */
-      aria-label={`${t("models.open_row", { id })} — ${
+      aria-label={`${t("models.open_row", { id: name })} — ${providerLine} — ${
         status === "off" ? t("status.disabled") : t("status.enabled")
       }`}
     >
@@ -646,8 +770,8 @@ const ModelListRow = memo(function ModelListRow({
          * accessible name carries it in full, so nothing is lost but the
          * pixels.
          */}
-        <span className="row-title mono truncate" title={id}>
-          {id}
+        <span className="row-title truncate" title={name}>
+          {name}
         </span>
         <span className="row-sub">{providerLine}</span>
       </div>
@@ -753,7 +877,7 @@ function ModelDrawer({
   );
 
   return (
-    <Drawer title={<><StatusDot tone={status} /> <span className="mono">{row.id}</span></>} onClose={onClose}>
+    <Drawer title={<><StatusDot tone={status} /> <span>{modelName(m)}</span></>} onClose={onClose}>
       <KeyValue rows={rows} />
 
       <Section title={t("models.performance")}>
@@ -781,8 +905,8 @@ function ModelDrawer({
       <Section title={t("models.configuration")}>
         <div className="controls">
           <TextField
-            label={t("field.model_name")}
-            ariaLabel={t("field.model_name")}
+            label={t("models.upstream")}
+            ariaLabel={t("models.upstream")}
             hint={t("models.f_model_name_hint")}
             value={m.upstream_model}
             onCommit={(v) => {

@@ -2,7 +2,7 @@
  * Typed bridge to the Rust side. The shapes mirror the serde output of
  * `zroutery-core` and `src-tauri`, so field names stay snake_case.
  */
-import { invoke } from "@tauri-apps/api/core";
+import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { TKey } from "./i18n";
 
@@ -40,13 +40,14 @@ export const TIERS: ModelTier[] = ["fast", "standard", "reasoning", "frontier"];
 /** @deprecated Use TIERS. */
 export const CLASSES = TIERS;
 
-/** What a provider charges for one model, per million tokens. */
+/** Token rates, or a distinct per-execution tariff when per_request is set. */
 export interface Pricing {
   currency: string;
   input_per_mtok: number;
   output_per_mtok: number;
   cache_read_per_mtok: number | null;
   cache_write_per_mtok: number | null;
+  per_request?: number | null;
 }
 
 export interface Cost {
@@ -139,6 +140,16 @@ export interface BalanceStatus {
   /** The last figure the provider reported. A failed check keeps it. */
   balance: Balance | null;
   error: string | null;
+  observed_at?: string | null;
+  aggregate?: {
+    participating: number;
+    succeeded: number;
+    failed: number;
+    unverified: number;
+    partial: boolean;
+    by_currency: Record<string, Balance>;
+    failures: string[];
+  } | null;
 }
 
 /** A latched empty wallet. Only an operator releases it. */
@@ -210,6 +221,9 @@ export interface Provider {
   enabled: boolean;
   timeout_secs: number;
   connect_timeout_secs: number;
+  /** Missing/null inherits the gateway; false follows the system proxy only
+   * for this upstream, true is direct. ZROUTERY_NO_PROXY remains authoritative. */
+  bypass_proxy?: boolean | null;
   anthropic_version: string | null;
   /**
    * Which OpenAI surface this provider answers, when it speaks the OpenAI
@@ -444,6 +458,7 @@ export interface RectifierConfig {
   thinking_budget: boolean;
   thinking_fallback: boolean;
   codex_metadata: boolean;
+  codex_auto: boolean;
 }
 
 /** One model's place in its tier, with the numbers that put it there. */
@@ -530,6 +545,14 @@ export interface MlRoutingConfig {
 }
 
 export interface AppConfig {
+  /**
+   * Bridge-only revision bound to this exact configuration document.
+   *
+   * The invoke wrapper adds it to snapshot configs as an enumerable property so
+   * `structuredClone` and object spread preserve the guard. `saveConfig` strips
+   * it before IPC: it is never a Rust config field and is never persisted.
+   */
+  __config_revision?: string;
   server: ServerConfig;
   routing: RoutingConfig;
   /** Auto Mode classifier routing; orthogonal to `routing`. */
@@ -568,6 +591,19 @@ export interface ServerStatus {
   exposed: boolean;
 }
 
+/**
+ * Native operating-system accent colours for the desktop theme.
+ *
+ * `accent` and `accent_fg` are CSS `#rrggbb` colours; `accent_soft` is either
+ * `#rrggbb` or `rgba(...)`. The command returns `null` when the OS cannot
+ * provide an accent, in which case pages retain their CSS fallback colours.
+ */
+export interface SystemAccent {
+  accent: string;
+  accent_soft: string;
+  accent_fg: string;
+}
+
 export interface Usage {
   input_tokens: number;
   output_tokens: number;
@@ -583,6 +619,13 @@ export interface RequestRecord {
   /** `main` or `auto_mode`. */
   kind: RequestKind;
   requested_model: string;
+  /**
+   * Who sent it, attributed at request time. Optional in the type because
+   * records written before client attribution existed deserialize without
+   * it (the backend defaults to its explicit unknown bucket); the ledger's
+   * client dimension and the stream filter match on `client_id`.
+   */
+  client?: { client_id: string; client_name: string };
   resolved_model: string | null;
   provider_name: string | null;
   stream: boolean;
@@ -591,10 +634,91 @@ export interface RequestRecord {
   error: string | null;
   latency_ms: number;
   ttft_ms: number | null;
+  /**
+   * Legacy/final-attempt usage. Aggregates use `accounting.observed_usage`
+   * instead when accounting is present; the two are alternatives, never added.
+   */
   usage: Usage;
-  /** `null` means unpriced, not free. */
+  /**
+   * Legacy/final-attempt cost. Without accounting, `null` means unpriced, not
+   * free. With accounting, aggregates replace this with `known_cost` and use
+   * `unknown_cost_attempts` to decide whether the request is partly unpriced.
+   */
   cost: Cost | null;
   attempts: number;
+  provider_id?: string;
+  model_name?: string;
+  account_id?: string;
+  inference_key_id?: string;
+  accounting?: RequestAccounting;
+}
+
+/**
+ * A bounded query over durable usage history.
+ *
+ * Pages are 1-based and clamp to the last available page; an empty result is
+ * page 1. `page_size` defaults to 50 and clamps to 1..=200. Records are newest
+ * first, ordered by `at DESC, id DESC`.
+ *
+ * Time bounds are UTC ISO timestamps: `from` is inclusive, `until` is
+ * exclusive, and a query with `from >= until` is rejected. Each identity
+ * filter is limited to 512 UTF-8 bytes. `expected_revision` must be
+ * non-negative and binds a follow-up page to the same history snapshot.
+ */
+export interface UsageHistoryQuery {
+  page?: number;
+  page_size?: number;
+  client_id?: string | null;
+  provider_id?: string | null;
+  model_id?: string | null;
+  from?: string | null;
+  until?: string | null;
+  failures_only?: boolean;
+  expected_revision?: number | null;
+}
+
+export interface UsageHistoryPage {
+  /** Newest first: `at DESC`, with `id DESC` as the stable tie-breaker. */
+  records: RequestRecord[];
+  page: number;
+  page_size: number;
+  total: number;
+  revision: number;
+}
+
+export interface RequestAccounting {
+  schema_version: number;
+  persistence: "durable" | "pending" | "volatile";
+  attempt_ids: string[];
+  /** Known spend across all attempts; replaces `RequestRecord.cost` in aggregates. */
+  known_cost: CostTotals;
+  /** A positive value makes this request unpriced even when some known cost remains. */
+  unknown_cost_attempts: number;
+  /** Usage observed across all attempts; replaces `RequestRecord.usage` in aggregates. */
+  observed_usage: Usage;
+  unknown_usage_attempts: number;
+}
+
+export interface AccountingStatus {
+  required: boolean;
+  durable: boolean;
+  available: boolean;
+  pending_settlements: number;
+  pending_attempts: number;
+  unreconciled_attempts: number;
+  error: string | null;
+  observed_at?: string | null;
+  aggregate?: {
+    participating: number;
+    succeeded: number;
+    failed: number;
+    unverified: number;
+    partial: boolean;
+    by_currency: Record<string, Balance>;
+    failures: string[];
+  } | null;
+  commits: number;
+  last_commit_wait_ms: number | null;
 }
 
 export interface ModelHealth {
@@ -604,6 +728,7 @@ export interface ModelHealth {
   total_failure: number;
   avg_latency_ms: number;
   cooldown_remaining_secs: number;
+  rate_limit_remaining_secs?: number;
   last_error: string | null;
 }
 
@@ -649,12 +774,31 @@ export interface ClientTotals {
   streamed: number;
 }
 
+/**
+ * Aggregates one request window. For a record with accounting, every token
+ * column comes from `accounting.observed_usage` and known spend comes from
+ * `accounting.known_cost`; the legacy `usage`/`cost` pair is used only when
+ * accounting is absent. Replacement rather than addition preserves failed
+ * attempts without double-counting the final attempt.
+ */
 export interface StatsSummary {
   since: string;
   requests: number;
   failures: number;
+  /** Cache reads and writes are subsets of `input_tokens`, not additions. */
+  cache_read_tokens: number;
+  cache_write_tokens: number;
   input_tokens: number;
   output_tokens: number;
+  /**
+   * Requests with `accounting.unknown_cost_attempts > 0`, or legacy requests
+   * with no accounting whose `cost` is null. Known subtotals remain in `cost`.
+   */
+  unpriced_requests: number;
+  /**
+   * Known spend per currency. Accounting `known_cost` replaces legacy `cost`
+   * for that request; both values are never added together.
+   */
   cost: CostTotals;
   per_model: ModelTotals[];
   per_kind: KindTotals[];
@@ -663,6 +807,12 @@ export interface StatsSummary {
 
 export interface Snapshot {
   config: AppConfig;
+  /**
+   * Opaque digest of the current saved configuration. Full saves compare the
+   * revision this window most recently observed so an older window cannot
+   * overwrite a targeted mutation made by another one.
+   */
+  config_revision: string;
   /** Exposed id per entry of `config.models`, same order. */
   exposed_ids: string[];
   issues: ConfigIssue[];
@@ -683,6 +833,7 @@ export interface Snapshot {
   election: Election | null;
   /** Every budget with what has been spent against it. */
   budgets: BudgetStatus[];
+  accounting?: AccountingStatus;
   /**
    * Whether this build contains a learning stack.
    *
@@ -786,6 +937,35 @@ export interface Account {
   /** Explicit inference credentials the routing path may send upstream. */
   inference_keys: InferenceKey[];
   maintenance: Maintenance;
+  binding?: AccountBinding | null;
+  probe_kind?: "none" | "new_api" | null;
+}
+
+export interface RemoteIdentity {
+  panel_root: string;
+  user_id: string;
+  username: string | null;
+  group: string | null;
+  verified_at: number;
+  source: string;
+}
+
+export interface AccountBinding {
+  generation: string;
+  credential_revision: number;
+  identity_revision: number;
+  verification: "verified" | "pending" | "rejected";
+  identity: RemoteIdentity | null;
+  reason: string | null;
+}
+
+export interface BindingPreview {
+  publication_id: string;
+  identity: RemoteIdentity | null;
+  verification: "verified" | "pending" | "rejected";
+  identity_changed: boolean;
+  previous_identity: RemoteIdentity | null;
+  reason: string | null;
 }
 
 /**
@@ -917,6 +1097,7 @@ export interface TokenCaptureView {
   username: string | null;
   /** Whether a browser window is open for this account right now. */
   browser_held: boolean;
+  binding_preview?: BindingPreview;
 }
 /**
  * One observed thing that happened to an account's resources.
@@ -1223,6 +1404,105 @@ export interface Activity {
   health: ModelHealth[];
   summary: StatsSummary;
   recent: RequestRecord[];
+  accounting?: AccountingStatus;
+}
+
+/**
+ * Least-privilege state exposed to the independent tray-panel webview.
+ *
+ * Deliberately not a `Snapshot`: it contains no configuration document,
+ * provider endpoints, headers, key references, raw failures or routing traces.
+ * The tray panel must use this DTO and its targeted mutation commands rather
+ * than the main window's snapshot/activity/config APIs.
+ */
+export interface TraySnapshot {
+  server: {
+    running: boolean;
+    base_url: string | null;
+    host: string;
+    port: number;
+  };
+  strategy: RoutingStrategy;
+  tiers: {
+    tier: ModelTier;
+    models: {
+      id: string;
+      name: string;
+      provider_id: string;
+      enabled: boolean;
+      priority: number;
+    }[];
+    /** Most recently observed model in this tier, or null when none is known. */
+    recent_model_id: string | null;
+  }[];
+  providers: {
+    id: string;
+    name: string;
+    enabled: boolean;
+  }[];
+  /** Safe request summaries only; the backend caps this list at eight. */
+  recent: {
+    id: string;
+    at: string;
+    client_name: string;
+    model_name: string | null;
+    ok: boolean;
+    latency_ms: number;
+  }[];
+}
+
+export interface ClientSetupOptions {
+  default_class: string | null;
+  standby: boolean;
+}
+
+export interface ClientSetupPreview {
+  agent: TakeoverAgent;
+  classes: {
+    model: string;
+    display_name: string;
+    effort_levels: string[];
+    capabilities: ModelCapabilities;
+    context_window: number | null;
+    max_output_tokens: number | null;
+    capability_source: string;
+  }[];
+  unavailable_classes: string[];
+  catalogue_fingerprint: string;
+  proposal: TakeoverProposal;
+  config_path: string;
+  gateway_url: string;
+  notes: string[];
+}
+
+/**
+ * One local calendar day of usage, for the Activity page's charts.
+ *
+ * The backend buckets by the operator's local day, so a request at 00:30
+ * belongs to the day it was made rather than to the UTC day before it.
+ * Token and cost values use the same accounting-replaces-legacy rule as
+ * `StatsSummary`; all columns therefore describe the same daily window.
+ */
+export interface UsageDay {
+  /** Local day, `YYYY-MM-DD`. */
+  day: string;
+  requests: number;
+  failures: number;
+  /** Cache reads and writes are subsets of `input_tokens`, not additions. */
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  input_tokens: number;
+  output_tokens: number;
+  /**
+   * Requests with `accounting.unknown_cost_attempts > 0`, or legacy requests
+   * with no accounting whose `cost` is null. Known subtotals remain in `cost`.
+   */
+  unpriced_requests: number;
+  /**
+   * Known spend per currency, preserving accounting `known_cost` even when
+   * `unpriced_requests` is non-zero and never adding legacy cost beside it.
+   */
+  cost: CostTotals;
 }
 
 /**
@@ -1481,9 +1761,53 @@ export interface ReloadOutcome {
   error: string | null;
 }
 
+/** Attach each snapshot revision to the exact config document it describes. */
+function invoke<T>(
+  command: string,
+  args?: Record<string, unknown> | number[] | ArrayBuffer | Uint8Array,
+): Promise<T> {
+  return tauriInvoke<T>(command, args).then((reply) => {
+    if (reply !== null && typeof reply === "object") {
+      const candidate = reply as { config?: unknown; config_revision?: unknown };
+      if (
+        candidate.config !== null &&
+        typeof candidate.config === "object" &&
+        typeof candidate.config_revision === "string"
+      ) {
+        // Assignment creates an enumerable property, intentionally: config
+        // clones and top-level spreads must carry their own concurrency token.
+        (candidate.config as AppConfig).__config_revision = candidate.config_revision;
+      }
+    }
+    return reply;
+  });
+}
+
 export const api = {
   snapshot: () => invoke<Snapshot>("get_snapshot"),
   activity: () => invoke<Activity>("get_activity"),
+  /** Least-privilege state for the tray-panel webview. */
+  traySnapshot: () => invoke<TraySnapshot>("get_tray_snapshot"),
+  /** Tray-only targeted mutation; never grants the panel a full config. */
+  traySetProviderEnabled: (provider_id: string, enabled: boolean) =>
+    invoke<TraySnapshot>("tray_set_provider_enabled", {
+      providerId: provider_id,
+      enabled,
+    }),
+  /** Tray-only gateway toggle returning a fresh narrow projection. */
+  traySetGatewayRunning: (running: boolean) =>
+    invoke<TraySnapshot>("tray_set_gateway_running", { running }),
+  /** Native OS accent, or `null` when unavailable; pages keep CSS fallbacks. */
+  systemAccent: () => invoke<SystemAccent | null>("get_system_accent"),
+  /**
+   * `days` local days ending today, oldest first, with quiet days as zeros.
+   *
+   * The chart is a trend, so the page loads a year once and slices it rather
+   * than asking again whenever the reader changes the range.
+   */
+  usageDays: (days: number) => invoke<UsageDay[]>("get_usage_days", { days }),
+  usageHistory: (query: UsageHistoryQuery = {}) =>
+    invoke<UsageHistoryPage>("query_usage_history", { query }),
   logs: () => invoke<string[]>("get_logs"),
   /**
    * Live counters and the stored pointer. Read-only.
@@ -1604,10 +1928,11 @@ export const api = {
    * secret, and this reads the configuration as it is now rather than one the
    * UI captured while the browser was open.
    */
-  completeTokenCapture: (provider_id: string, account_id: string) =>
+  completeTokenCapture: (provider_id: string, account_id: string, confirm_identity_change = false) =>
     invoke<TokenCaptureView>("complete_token_capture", {
       providerId: provider_id,
       accountId: account_id,
+      confirmIdentityChange: confirm_identity_change,
     }),
   /**
    * Probe every declared, enabled account and return what the reconciler did.
@@ -1638,6 +1963,14 @@ export const api = {
       accountId: account_id,
       apiKey: api_key,
     }),
+  /** Stage and verify only when snapshot.account_available is true. */
+  stageAccountKey: (provider_id: string, account_id: string, api_key: string, user_id?: string) =>
+    invoke<BindingPreview>("stage_account_key", { providerId: provider_id, accountId: account_id, apiKey: api_key, userId: user_id ?? null }),
+  /** Publish only when snapshot.account_available is true. */
+  publishAccountKey: (publication_id: string, confirm_identity_change: boolean) =>
+    invoke<Snapshot>("publish_account_key", { publicationId: publication_id, confirmIdentityChange: confirm_identity_change }),
+  /** Discard only when snapshot.account_available is true. */
+  discardAccountKey: (publication_id: string) => invoke<void>("discard_account_key", { publicationId: publication_id }),
   /** Drop one account's own credential; it resolves to the provider's key again. */
   clearAccountKey: (provider_id: string, account_id: string) =>
     invoke<Snapshot>("clear_account_key", { providerId: provider_id, accountId: account_id }),
@@ -1685,6 +2018,9 @@ export const api = {
    * after adopt/release.
    */
   takeoverStatus: () => invoke<TakeoverView[]>("takeover_status"),
+  clientSetupPreview: (agent: TakeoverAgent, options: ClientSetupOptions) => invoke<ClientSetupPreview>("client_setup_preview", { agent, options }),
+  clientSetupApply: (agent: TakeoverAgent, options: ClientSetupOptions, expected_fingerprint: string) =>
+    invoke<TakeoverView>("client_setup_apply", { agent, options, expectedFingerprint: expected_fingerprint }),
   /**
    * Take one agent over.
    *
@@ -1748,7 +2084,22 @@ export const api = {
    */
   migrationRollback: () => invoke<MigrationResult>("migration_rollback"),
 
-  saveConfig: (config: AppConfig) => invoke<Snapshot>("save_config", { config }),
+  /**
+   * Full replacement guarded by the revision attached to this config document.
+   * The bridge marker is removed before IPC and therefore never reaches Rust or
+   * disk. A legacy config without a marker remains an unguarded legacy save;
+   * no unrelated later snapshot is allowed to lend it a revision.
+   */
+  saveConfig: (config: AppConfig) => {
+    const { __config_revision: expectedRevision, ...persisted } = config;
+    return invoke<Snapshot>("save_config", {
+      config: persisted,
+      expectedRevision,
+    });
+  },
+  /** Main-window targeted mutation; the tray panel uses `traySetProviderEnabled`. */
+  setProviderEnabled: (provider_id: string, enabled: boolean) =>
+    invoke<Snapshot>("set_provider_enabled", { providerId: provider_id, enabled }),
   setKey: (provider_id: string, api_key: string) =>
     invoke<Snapshot>("set_provider_key", { providerId: provider_id, apiKey: api_key }),
   clearKey: (provider_id: string) =>
@@ -1799,6 +2150,8 @@ export const api = {
    * routing traces and failure bodies are deliberately absent.
    */
   exportUsageHistory: () => invoke<string>("export_usage_history"),
+  /** Opens the native save dialog; `null` means the user cancelled. */
+  exportUsageHistoryFile: () => invoke<string | null>("export_usage_history_file"),
   importUsageHistory: (archive: string) =>
     invoke<Snapshot>("import_usage_history", { archive }),
   /** Clear a latched empty wallet after topping it up or fixing the account. */
@@ -1811,6 +2164,9 @@ export const api = {
   resetHealth: (model_id: string) =>
     invoke<Snapshot>("reset_model_health", { modelId: model_id }),
   copy: (text: string) => invoke<void>("copy_text", { text }),
+  trayPanelReady: () => invoke<void>("tray_panel_ready"),
+  hideTrayPanel: () => invoke<void>("hide_tray_panel"),
+  showDashboard: () => invoke<void>("show_dashboard"),
   hide: () => invoke<void>("hide_window"),
   quit: () => invoke<void>("quit_app"),
   /** What CC Switch has on this machine, without importing anything. */
@@ -1819,6 +2175,10 @@ export const api = {
   ccswitchImport: (ids: string[]) =>
     invoke<Snapshot>("ccswitch_import", { ids }),
 };
+
+/** Desktop-shell identity for the independent tray panel webview. */
+export const TRAY_PANEL_WINDOW_LABEL = "tray-panel";
+export const TRAY_PANEL_ROUTE = "index.html?mode=tray-panel";
 
 /**
  * Tray actions that change the gateway state. The tray has no snapshot to
@@ -1831,6 +2191,19 @@ export const GATEWAY_STATE_EVENT = "zroutery://gateway-state-changed";
 
 export function onGatewayStateChanged(handler: () => void): Promise<UnlistenFn> {
   return listen(GATEWAY_STATE_EVENT, () => handler());
+}
+
+/**
+ * Configuration changed in another window. The event is only an invalidation
+ * signal: no configuration (and therefore no secret-bearing payload) crosses
+ * it. Pages should re-read a snapshot when handling it so this window receives
+ * the latest config and `config_revision`; that listener handoff remains page
+ * work rather than bridge behavior.
+ */
+export const CONFIG_STATE_EVENT = "zroutery://config-state-changed";
+
+export function onConfigStateChanged(handler: () => void): Promise<UnlistenFn> {
+  return listen<void>(CONFIG_STATE_EVENT, () => handler());
 }
 
 /**
@@ -1938,10 +2311,83 @@ export function totalsText(totals: CostTotals): string {
   return entries.map(([currency, amount]) => money(currency, amount)).join(" + ");
 }
 
-/** `2.75 in / 11.00 out` per million tokens. */
-export function priceText(pricing: Pricing | null): string {
-  if (!pricing) return "—";
-  return `${pricing.input_per_mtok} / ${pricing.output_per_mtok} ${pricing.currency}`;
+/**
+ * The one duration formatter, in three tiers.
+ *
+ * Under a second the reader is a developer comparing cold starts: raw ms.
+ * Under a minute, seconds with two decimals, as the classifier stat line has
+ * always read. At a minute and beyond the figure stops being a number to
+ * compare and becomes a length of time to sit through — the overview once
+ * printed a real request as "267522 ms", and even "267.52 s" is arithmetic
+ * before it is information. Minutes (then hours, defensively — a stalled
+ * upstream can outlive its timeout) read as waiting reads.
+ *
+ * Unit symbols stay symbols rather than translated words: `ms`/`s`/`m` are
+ * data labels like `USD`, and every locale this app ships already reads them.
+ */
+export function ms(value: number | null | undefined): string {
+  if (value === null || value === undefined) return "—";
+  if (value < 1000) return `${Math.round(value)} ms`;
+  if (value < 60_000) return `${(value / 1000).toFixed(2)} s`;
+  const total = Math.round(value / 1000);
+  if (total < 3600) {
+    return `${Math.floor(total / 60)}m ${String(total % 60).padStart(2, "0")}s`;
+  }
+  return `${Math.floor(total / 3600)}h ${String(Math.floor((total % 3600) / 60)).padStart(2, "0")}m`;
+}
+
+/**
+ * Generation speed in tokens per second, or `null` when the record cannot say
+ * it honestly. Mirrors cc-switch's routing-side formula (output ÷ the window
+ * between first token and completion) including both of its honesty gates;
+ * a record that fails any gate has no speed rather than a wrong one, so the
+ * caller renders nothing instead of a misleading figure.
+ *
+ * The four gates, each against a specific lie:
+ *
+ * 1. `stream` — a non-streaming response never reports a first-token time, so
+ *    there is no generation window to measure. No speed, not 0.
+ * 2. `ttft_ms != null` — without the first-token timestamp the window has no
+ *    start; this is the import-source case (session logs that never timed the
+ *    first token) and the same answer as gate 1: null, not an estimate.
+ * 3. generation window ≥ 100 ms — defends against the transport-burst fake
+ *    speed: a relay that buffers and then emits the whole answer at once (or a
+ *    short reply that lands in one network packet) divides real output by a
+ *    window that measured transfer, not generation.
+ * 4. output ≥ 100 tokens — the same burst artifact from the reply side: on a
+ *    short reply the first-token wait dominates and the figure reads as
+ *    transmission speed, not generation speed.
+ *
+ * Reads the final-attempt `usage`, like every other row-level figure; the
+ * aggregates that prefer `accounting.observed_usage` live elsewhere.
+ */
+export function tps(record: RequestRecord): number | null {
+  if (!record.stream) return null;
+  if (record.ttft_ms === null) return null;
+  if (record.latency_ms - record.ttft_ms < 100) return null;
+  if (record.usage.output_tokens < 100) return null;
+  return record.usage.output_tokens / ((record.latency_ms - record.ttft_ms) / 1000);
+}
+
+/**
+ * A count as the short figure a KPI row or a chart axis carries: 950, 12.3k,
+ * 4.5M, 1.4B.
+ *
+ * Moved here from the usage charts, which had the only copy: the KPI row above
+ * the charts abbreviates the very totals the charts draw, and two spellings of
+ * one figure on one screen is how a reader ends up doing arithmetic between
+ * them. The underlying number is kept exactly — only the label rounds, and
+ * only to one decimal — and the full figure belongs in the element's `title`
+ * next to it. (`contextText` is the token-budget spelling of the same idea,
+ * with capital units; these lowercase forms stay with the axes they came
+ * from.)
+ */
+export function compactCount(value: number): string {
+  const trim = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(1));
+  if (value < 1_000) return String(Math.round(value));
+  if (value < 1_000_000) return `${trim(value / 1_000)}k`;
+  if (value < 1_000_000_000) return `${trim(value / 1_000_000)}M`;
+  return `${trim(value / 1_000_000_000)}B`;
 }
 
 export function emptyPricing(currency = "USD"): Pricing {
@@ -2038,6 +2484,7 @@ export function emptyProvider(
     enabled: true,
     timeout_secs: 600,
     connect_timeout_secs: 15,
+    bypass_proxy: null,
     anthropic_version: null,
     api_surface: "chat",
     quirks: {
@@ -2058,7 +2505,8 @@ export function emptyProvider(
 }
 
 /** The free Jev decision model OpenCode Zen serves without a credential. */
-export const ZEN_JEV_BASE_URL = "https://opencode.ai/zen";
+export const ZEN_JEV_BASE_URL = "https://opencode.ai/inference/systemone";
+const ZEN_JEV_LEGACY_BASE_URL = "https://opencode.ai/zen";
 export const ZEN_JEV_PATH = "/v1/systemone";
 export const ZEN_JEV_MODEL = "jev-1.13-free";
 export const ZEN_JEV_PROVIDER_ID = "opencode-zen-jev";
@@ -2076,7 +2524,7 @@ export const ZEN_JEV_THRESHOLD = 0.6;
 export function isZenJevProvider(provider: Provider): boolean {
   return (
     provider.kind === "decision" &&
-    provider.base_url.trim().replace(/\/+$/, "") === ZEN_JEV_BASE_URL &&
+    [ZEN_JEV_BASE_URL, ZEN_JEV_LEGACY_BASE_URL].includes(provider.base_url.trim().replace(/\/+$/, "")) &&
     provider.decision.path.trim() === ZEN_JEV_PATH
   );
 }
@@ -2098,6 +2546,11 @@ export function isZenJevProvider(provider: Provider): boolean {
 export function applyZenJevPreset(cfg: AppConfig): AppConfig | null {
   const next = structuredClone(cfg);
   let provider = next.providers.find(isZenJevProvider);
+  let migrated = false;
+  if (provider && provider.base_url.trim().replace(/\/+$/, "") === ZEN_JEV_LEGACY_BASE_URL) {
+    provider.base_url = ZEN_JEV_BASE_URL;
+    migrated = true;
+  }
   if (!provider) {
     let id = ZEN_JEV_PROVIDER_ID;
     for (let n = 2; next.providers.some((p) => p.id === id); n += 1) {
@@ -2106,8 +2559,8 @@ export function applyZenJevPreset(cfg: AppConfig): AppConfig | null {
     provider = emptyProvider(id, "OpenCode Zen · Jev (free)", "decision", ZEN_JEV_BASE_URL, {
       key_ref: "",
       extra_headers: { "x-opencode-client": "zroutery" },
-      timeout_secs: 4,
-      connect_timeout_secs: 4,
+      timeout_secs: 15,
+      connect_timeout_secs: 10,
       decision: { path: ZEN_JEV_PATH, threshold: ZEN_JEV_THRESHOLD },
     });
     next.providers.push(provider);
@@ -2123,7 +2576,7 @@ export function applyZenJevPreset(cfg: AppConfig): AppConfig | null {
   }
   const modelId = previewId(providerId, ZEN_JEV_MODEL);
   const names = new Set([modelId, ...model.aliases]);
-  if (next.classifier.candidates.some((c) => names.has(c.model))) return null;
+  if (next.classifier.candidates.some((c) => names.has(c.model))) return migrated ? next : null;
 
   next.classifier.candidates = next.classifier.candidates.map((c) => ({
     ...c,
@@ -2187,6 +2640,11 @@ export interface ModelRow {
   index: number;
 }
 
+/** Display only. Identity, search, edit and upstream values keep stable keys. */
+export function modelName(model: Pick<ModelEntry, "display_name" | "upstream_model">): string {
+  return model.display_name?.trim() || model.upstream_model;
+}
+
 export function modelRows(snapshot: Snapshot): ModelRow[] {
   return snapshot.config.models.map((model, index) => ({
     model,
@@ -2208,6 +2666,44 @@ export function tierMembers(
 }
 /** @deprecated Use tierMembers. */
 export const classMembers = tierMembers;
+
+/**
+ * Rewrite a tier's priorities from a drag order.
+ *
+ * The pool order IS the priority order — `tierMembers` sorts by it, and the
+ * router's Priority strategy reads the same numbers back (selection falls back
+ * to by_priority wherever an election has not spoken) — so a drag is a
+ * renumber, not an array move. The order is renumbered 10, 20, 30…: the gaps
+ * leave room for a hand-set priority later, and only entries the pool named
+ * are touched, so a disabled model keeps its number and re-enters wherever it
+ * left.
+ *
+ * Returns null instead of guessing when the order no longer matches the
+ * config: a model removed or re-tiered between the drag and the save must not
+ * silently reorder its neighbours around a ghost.
+ */
+export function applyTierOrder(
+  models: ModelEntry[],
+  tier: ModelTier,
+  order: readonly { provider_id: string; upstream_model: string }[],
+): ModelEntry[] | null {
+  const tierKeys = new Set(
+    models
+      .filter((m) => m.tier === tier)
+      .map((m) => `${m.provider_id}\n${m.upstream_model}`),
+  );
+  const priorities = new Map<string, number>();
+  for (const [index, entry] of order.entries()) {
+    const key = `${entry.provider_id}\n${entry.upstream_model}`;
+    if (!tierKeys.has(key) || priorities.has(key)) return null;
+    priorities.set(key, (index + 1) * 10);
+  }
+  return models.map((m) => {
+    const priority =
+      m.tier === tier ? priorities.get(`${m.provider_id}\n${m.upstream_model}`) : undefined;
+    return priority === undefined ? m : { ...m, priority };
+  });
+}
 
 /**
  * Preview of the id a model will get. Display only: the backend derives the real

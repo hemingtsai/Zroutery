@@ -6,6 +6,7 @@
   "permissions": [
     "allow-get-snapshot",
     "allow-get-activity",
+    "allow-get-usage-days",
     "allow-get-logs",
     "allow-get-ml-status",
     "allow-get-ml-shadow",

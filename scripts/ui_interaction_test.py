@@ -114,6 +114,11 @@ HARNESS = """
   const SAVE_DELAY = __SAVE_DELAY__;
   const GATEWAY_EVENT = __GATEWAY_EVENT__;
 
+  // The interaction cases cover the advanced task doors. Simple is the real
+  // first-launch default, so pin this isolated browser profile before the
+  // deferred application bundle reads the preference.
+  localStorage.setItem("zroutery-mode", "geek");
+
   // The case labels below are English; the app follows the system language, so
   // pin the preference before the bundle reads it. A case that wants to check
   // the Chinese page asks for it — `?lang=zh` — because the claim it is
@@ -169,6 +174,20 @@ HARNESS = """
     delays: {},
   };
 
+  const USAGE_DAYS = [
+    {
+      day: "2026-01-01",
+      requests: 0,
+      failures: 0,
+      cache_read_tokens: 0,
+      cache_write_tokens: 0,
+      input_tokens: 0,
+      output_tokens: 0,
+      unpriced_requests: 0,
+      cost: {},
+    },
+  ];
+
   function clone(value) {
     return JSON.parse(JSON.stringify(value));
   }
@@ -199,6 +218,7 @@ HARNESS = """
     }
     return {
       config,
+      config_revision: "interaction-fixture-revision",
       exposed_ids: config.models.map((m) => m.provider_id + "-" + m.upstream_model),
       issues: [],
       blocking: false,
@@ -209,8 +229,11 @@ HARNESS = """
         since: "2026-01-01T00:00:00Z",
         requests: 0,
         failures: 0,
+        cache_read_tokens: 0,
+        cache_write_tokens: 0,
         input_tokens: 0,
         output_tokens: 0,
+        unpriced_requests: 0,
         cost: {},
         per_model: [],
         per_kind: [],
@@ -256,6 +279,8 @@ HARNESS = """
           recent: full.recent,
         };
       }
+      case "get_usage_days":
+        return clone(USAGE_DAYS);
       case "save_config":
         state.config = clone(args.config);
         state.commandLog.push({ cmd, args: clone(args) });
@@ -1191,6 +1216,60 @@ class DevTools:
         self.click_selector(selector, index)
 
 
+TASK_DOORS = {
+    "accounts": "providers",
+    "routing": "models",
+    "cutover": "takeover",
+}
+
+
+def open_page(devtools: DevTools, page: str) -> None:
+    """Open an addressable area through its current six-door task shell."""
+    door = TASK_DOORS.get(page, page)
+    door_selector = '[data-page="%s"]' % door
+    devtools.click_selector(door_selector)
+    devtools.wait_for(
+        "document.querySelector(%s)?.getAttribute('aria-current') === 'page'"
+        % json.dumps(door_selector),
+        "the %s task door" % door,
+    )
+    if page == door:
+        if page in {"models", "providers", "takeover"}:
+            panel_selector = "#panel-%s" % page
+            devtools.wait_for(
+                "document.querySelector(%s) !== null" % json.dumps(panel_selector),
+                "the %s task panel" % page,
+            )
+        return
+    tab_selector = "#tab-%s" % page
+    devtools.wait_for(
+        "document.querySelector(%s) !== null" % json.dumps(tab_selector),
+        "the %s task tab" % page,
+    )
+    devtools.click_selector(tab_selector)
+    devtools.wait_for(
+        "document.querySelector(%s)?.getAttribute('aria-selected') === 'true'"
+        % json.dumps(tab_selector),
+        "the selected %s task tab" % page,
+    )
+
+
+def unfold_page_form(devtools: DevTools, form_selector: str) -> None:
+    """Open the selected task tab's folded page-head form with real input."""
+    if devtools.evaluate("document.querySelector(%s) !== null" % json.dumps(form_selector)):
+        return
+    selector = '.tab-panel .page-head-actions button.linky'
+    devtools.wait_for(
+        "document.querySelector(%s) !== null" % json.dumps(selector),
+        "the folded page form action",
+    )
+    devtools.click_selector(selector)
+    devtools.wait_for(
+        "document.querySelector(%s) !== null" % json.dumps(form_selector),
+        "the unfolded page form",
+    )
+
+
 def launch(profile: str, debugging_port: int, url: str) -> subprocess.Popen:
     """Start the browser on a URL, which is how a case picks the state the app
     reads at load time (see the harness's `query`)."""
@@ -1266,7 +1345,7 @@ def case_ui1_nested_rebase(devtools: DevTools) -> list[str]:
     seed(devtools, delays={"save_config": 500})
     failures: list[str] = []
 
-    devtools.click_selector('[data-page="models"]')
+    open_page(devtools, "models")
     devtools.wait_for("document.querySelector('.list-row') !== null", "models list")
     # The model is found by its id, not by its position. The list is sorted by
     # provider name, so an ordinal row is whichever provider happens to sort
@@ -1275,7 +1354,7 @@ def case_ui1_nested_rebase(devtools: DevTools) -> list[str]:
         """
         (() => {
           const row = [...document.querySelectorAll('.list-row')]
-            .find((r) => r.textContent.includes('deepseek-deepseek-chat'));
+            .find((r) => r.getAttribute('aria-label')?.startsWith('Open deepseek-chat —'));
           if (row) row.click();
         })()
         """
@@ -1439,7 +1518,7 @@ def case_ui2_candidate_priority(devtools: DevTools) -> list[str]:
     seed(devtools)
     failures: list[str] = []
 
-    devtools.click_selector('[data-page="routing"]')
+    open_page(devtools, "routing")
     # The routing page splits its three subjects into tabs, so the auto-review
     # section is only mounted once its own tab is selected — and once it is, its
     # Edit button is the only `linky` on the page rather than the second.
@@ -1512,7 +1591,7 @@ def case_ui3_drawer_isolation(devtools: DevTools) -> list[str]:
     )
     key_selector = ".drawer input[type='password']"
 
-    devtools.click_selector('[data-page="providers"]')
+    open_page(devtools, "providers")
     devtools.wait_for("document.querySelector('.list-row') !== null", "providers list")
 
     # Open provider A and type a key that only A should ever see.
@@ -1591,8 +1670,9 @@ def case_ui3_drawer_isolation(devtools: DevTools) -> list[str]:
     # drawer is still open, and the veil is the way back out.
     devtools.click_selector(".drawer-veil")
     devtools.wait_for("document.querySelector('.drawer') === null", "the provider drawer to close")
-    devtools.click_selector('[data-page="models"]')
+    open_page(devtools, "models")
     devtools.wait_for("Boolean(document.querySelector('.list-row'))", "the models page")
+    unfold_page_form(devtools, "#panel-models input[placeholder='deepseek-chat']")
     devtools.evaluate("window.__zrStub.setDelay('fetch_provider_models', 1500)")
     browse = devtools.evaluate(
         """
@@ -1741,7 +1821,7 @@ def case_ui5_refused_round_shows_its_criteria(devtools: DevTools) -> list[str]:
     # The learned panel is the first of the three routing subjects, so the path
     # to it is a page and then a tab. Clicking the page alone leaves the panel
     # unmounted and the judge button nowhere.
-    devtools.click_selector('[data-page="routing"]')
+    open_page(devtools, "routing")
     devtools.wait_for(
         "Boolean(document.querySelector('#tab-ml'))", "the learned-routing tab"
     )
@@ -1938,7 +2018,7 @@ def case_ui6_accounts_direct_checkin(devtools: DevTools) -> list[str]:
     """
     failures: list[str] = []
     seed(devtools, **ACCOUNT_QUERY)
-    devtools.click_selector('[data-page="accounts"]')
+    open_page(devtools, "accounts")
     devtools.wait_for(
         "Boolean(document.querySelector('.account-maint'))", "the accounts page rows"
     )
@@ -2168,7 +2248,7 @@ def case_ui7_cutover_confirmation_and_honest_rollback(devtools) -> list[str]:
     """
     failures: list[str] = []
     seed(devtools, **CUTOVER_QUERY)
-    devtools.click_selector('[data-page="cutover"]')
+    open_page(devtools, "cutover")
     devtools.wait_for("Boolean(document.querySelector('.page .list-row'))", "the cutover rows")
 
     # (1) Every agent is a row; the unmigratable one explains itself and offers
@@ -2328,7 +2408,7 @@ def case_ui8_cutover_reports_a_bare_rollback_honestly(devtools) -> list[str]:
     """
     failures: list[str] = []
     seed(devtools, **CUTOVER_FAILED_QUERY)
-    devtools.click_selector('[data-page="cutover"]')
+    open_page(devtools, "cutover")
     devtools.wait_for(
         "document.querySelector('.page').innerText.includes('failed')", "the failed record"
     )
@@ -2415,7 +2495,7 @@ def case_ui9_confirm_dialog_takes_focus_and_gives_it_back(devtools) -> list[str]
     """
     failures: list[str] = []
     seed(devtools, **CUTOVER_QUERY)
-    devtools.click_selector('[data-page="cutover"]')
+    open_page(devtools, "cutover")
     devtools.wait_for(
         "Boolean(document.querySelector('.page .list-row'))", "the cutover rows"
     )
@@ -2542,7 +2622,7 @@ def case_ui11_a_confirmation_inside_a_drawer_does_not_fight_it(devtools) -> list
     """
     failures: list[str] = []
     seed(devtools, **CUTOVER_QUERY)
-    devtools.click_selector('[data-page="providers"]')
+    open_page(devtools, "providers")
     devtools.wait_for("Boolean(document.querySelector('.page .list-row'))", "the provider rows")
 
     # Open the drawer with a real click, so it holds the focus the way it does
@@ -2617,9 +2697,8 @@ def case_ui12_a_deep_link_opens_the_page_it_names(devtools) -> list[str]:
             "nothing was listening for the deep-link event, so a link could not open anything"
         )
     devtools.wait_for(
-        "document.querySelector('.page').innerText.includes('端点') "
-        "|| document.querySelector('.page').innerText.includes('Base URL')",
-        "the providers page",
+        "Boolean(document.querySelector('#panel-providers'))",
+        "the providers task panel",
     )
     if not devtools.evaluate(
         "Boolean(document.querySelector('[data-page=\"providers\"]')?.getAttribute('aria-current'))"
@@ -2668,8 +2747,9 @@ def case_ui13_a_catalogue_row_says_no_tier_rather_than_a_dash(devtools) -> list[
     """
     failures: list[str] = []
     seed(devtools, **PROVIDER_CATALOGUE_QUERY)
-    devtools.click_selector('[data-page="models"]')
+    open_page(devtools, "models")
     devtools.wait_for("Boolean(document.querySelector('.list-row'))", "the model rows")
+    unfold_page_form(devtools, "#panel-models input[placeholder='deepseek-chat']")
 
     devtools.evaluate(
         """
@@ -2714,7 +2794,7 @@ def case_ui14_a_select_inside_a_drawer_keeps_its_focus(devtools) -> list[str]:
     """
     failures: list[str] = []
     seed(devtools, **CUTOVER_QUERY)
-    devtools.click_selector('[data-page="providers"]')
+    open_page(devtools, "providers")
     devtools.wait_for("Boolean(document.querySelector('.page .list-row'))", "the provider rows")
     devtools.click_selector(".page .list-row")
     devtools.wait_for("Boolean(document.querySelector('.drawer'))", "the provider drawer")
@@ -2827,8 +2907,9 @@ def case_ui16_a_build_without_the_opencode_stack_offers_its_kinds(devtools) -> l
 
     # The build with the stack offers the kinds.
     seed(devtools, **{**CUTOVER_QUERY})
-    devtools.click_selector('[data-page="providers"]')
+    open_page(devtools, "providers")
     devtools.wait_for("Boolean(document.querySelector('.page .list-row'))", "the provider rows")
+    unfold_page_form(devtools, "#panel-providers .field-actions button")
     with_stack = kinds_on_screen()
     if "OpenCode" not in with_stack:
         failures.append(
@@ -2837,8 +2918,9 @@ def case_ui16_a_build_without_the_opencode_stack_offers_its_kinds(devtools) -> l
 
     # The build without it does not.
     seed(devtools, **{**CUTOVER_QUERY, "opencode": False})
-    devtools.click_selector('[data-page="providers"]')
+    open_page(devtools, "providers")
     devtools.wait_for("Boolean(document.querySelector('.page .list-row'))", "the provider rows")
+    unfold_page_form(devtools, "#panel-providers .field-actions button")
     without_stack = kinds_on_screen()
     if "OpenCode" in without_stack:
         failures.append(
@@ -2887,7 +2969,7 @@ def case_ui17_a_panel_backed_balance_is_shown_and_askable(devtools: DevTools) ->
             }
         },
     )
-    devtools.click_selector('[data-page="providers"]')
+    open_page(devtools, "providers")
     devtools.wait_for("Boolean(document.querySelector('.page .list-row'))", "the provider rows")
 
     body = devtools.evaluate("document.querySelector('.page').innerText")
@@ -3027,7 +3109,7 @@ def case_ui18_a_backend_failure_is_restated_in_chinese(devtools) -> list[str]:
     # a case that ran on the English page would pass on a translation that
     # never happened.
     seed(devtools, **CUTOVER_QUERY)
-    devtools.click_selector('[data-page="providers"]')
+    open_page(devtools, "providers")
     devtools.wait_for("Boolean(document.querySelector('.page .list-row'))", "the provider rows")
     devtools.evaluate(
         """
@@ -3133,7 +3215,7 @@ def case_ui19_a_decision_provider_offers_its_own_settings(devtools) -> list[str]
     failures: list[str] = []
 
     seed(devtools, decisionProvider=DECISION_PROVIDER)
-    devtools.click_selector('[data-page="providers"]')
+    open_page(devtools, "providers")
     devtools.wait_for("Boolean(document.querySelector('.page .list-row'))", "the provider rows")
     devtools.evaluate(
         """
@@ -3174,7 +3256,7 @@ def case_ui19_a_decision_provider_offers_its_own_settings(devtools) -> list[str]
         """
     )
     seed(devtools, decisionProvider=DECISION_PROVIDER, decisionModel=DECISION_MODEL)
-    devtools.click_selector('[data-page="models"]')
+    open_page(devtools, "models")
     devtools.wait_for("Boolean(document.querySelector('.page .list-row'))", "the model rows")
     devtools.evaluate(
         """
@@ -3210,8 +3292,10 @@ def case_ui19_a_decision_provider_offers_its_own_settings(devtools) -> list[str]
         )
 
     # And a relay carries neither, because neither means anything for it.
+    devtools.click_selector(".drawer-head button")
+    devtools.wait_for("document.querySelector('.drawer') === null", "the model drawer to close")
     seed(devtools, **CUTOVER_QUERY)
-    devtools.click_selector('[data-page="providers"]')
+    open_page(devtools, "providers")
     devtools.wait_for("Boolean(document.querySelector('.page .list-row'))", "the provider rows")
     devtools.evaluate(
         """
@@ -3245,7 +3329,7 @@ def case_ui20_the_auto_mode_editor_names_the_decision_answer(devtools) -> list[s
     failures: list[str] = []
 
     seed(devtools, **CUTOVER_QUERY)
-    devtools.click_selector('[data-page="routing"]')
+    open_page(devtools, "routing")
     devtools.wait_for("Boolean(document.querySelector('#tab-auto'))", "the auto mode tab")
     devtools.click_selector("#tab-auto")
     devtools.wait_for("Boolean(document.querySelector('.page .linky'))", "the edit control")
@@ -3290,7 +3374,7 @@ def case_ui21_the_auto_mode_pool_marks_a_decision_candidate(devtools) -> list[st
     failures: list[str] = []
 
     seed(devtools, decisionProvider=DECISION_PROVIDER, decisionModel=DECISION_MODEL)
-    devtools.click_selector('[data-page="routing"]')
+    open_page(devtools, "routing")
     devtools.wait_for("Boolean(document.querySelector('#tab-auto'))", "the auto mode tab")
     devtools.click_selector("#tab-auto")
     devtools.wait_for("Boolean(document.querySelector('.page .linky'))", "the edit control")
@@ -3378,7 +3462,7 @@ def case_ui22_one_click_adds_the_zen_jev_preset(devtools) -> list[str]:
     """
     failures: list[str] = []
 
-    devtools.click_selector('[data-page="routing"]')
+    open_page(devtools, "routing")
     devtools.wait_for("Boolean(document.querySelector('#tab-auto'))", "the auto review tab")
     devtools.click_selector("#tab-auto")
     devtools.wait_for("Boolean(document.querySelector('.page .linky'))", "the edit control")
@@ -3426,7 +3510,7 @@ def case_ui22_one_click_adds_the_zen_jev_preset(devtools) -> list[str]:
         failures.append("the preset did not create a decision provider")
         return failures
     expected = {
-        "base_url": "https://opencode.ai/zen",
+        "base_url": "https://opencode.ai/inference/systemone",
         "key_ref": "",
         "client_profile": "native",
     }
@@ -3496,7 +3580,7 @@ def case_ui23_rename_moves_the_references_it_changed(devtools) -> list[str]:
             model["aliases"] = ["deepseek-chat-v2"]
     seed(devtools, config=config)
 
-    devtools.click_selector('[data-page="models"]')
+    open_page(devtools, "models")
     devtools.wait_for("Boolean(document.querySelector('.list-row'))", "the models list")
     # By id, not by position: the list sorts by provider name, and the case
     # renames and then asserts on the deepseek model.
@@ -3504,16 +3588,16 @@ def case_ui23_rename_moves_the_references_it_changed(devtools) -> list[str]:
         """
         (() => {
           const row = [...document.querySelectorAll('.list-row')]
-            .find((r) => r.textContent.includes('deepseek-deepseek-chat'));
+            .find((r) => r.getAttribute('aria-label')?.startsWith('Open deepseek-chat —'));
           if (row) row.click();
         })()
         """
     )
     devtools.wait_for("Boolean(document.querySelector('.drawer'))", "the model drawer")
 
-    # The add-a-model field on the same page carries the same accessible name,
-    # so the rename is driven inside the drawer.
-    devtools.replace_text(".drawer [aria-label='Model name']", "deepseek-chat-v3")
+    # Drive the upstream-name field inside the drawer. The add form uses
+    # "Model name"; the editable identity is now labelled "Upstream model".
+    devtools.replace_text(".drawer [aria-label='Upstream model']", "deepseek-chat-v3")
     devtools.press_key("Enter")
     devtools.wait_for(
         "Boolean(window.__zrStub.last('save_config'))", "the rename save", timeout=20.0
@@ -3547,12 +3631,12 @@ def case_ui23_rename_moves_the_references_it_changed(devtools) -> list[str]:
     title = devtools.evaluate(
         "(document.querySelector('.drawer .drawer-head')||{}).innerText || ''"
     )
-    if "deepseek-deepseek-chat-v3" not in title:
+    if "deepseek-chat-v3" not in title:
         failures.append("the drawer did not follow the rename: %r" % title)
 
     # A name another model already answers to is refused before the save.
     before = devtools.evaluate("window.__zrStub.log('save_config').length")
-    devtools.replace_text(".drawer [aria-label='Model name']", "chat-v2")
+    devtools.replace_text(".drawer [aria-label='Upstream model']", "chat-v2")
     devtools.press_key("Enter")
     devtools.wait_for(
         "Boolean(document.querySelector('.drawer .field-hint-danger'))",
@@ -3590,8 +3674,9 @@ def case_ui24_catalogue_import_adds_several_models(devtools) -> list[str]:
             ]
         },
     )
-    devtools.click_selector('[data-page="models"]')
+    open_page(devtools, "models")
     devtools.wait_for("Boolean(document.querySelector('.list-row'))", "the models list")
+    unfold_page_form(devtools, "#panel-models input[placeholder='deepseek-chat']")
 
     # The add section defaults to the first provider; open its catalogue.
     devtools.wait_for(
@@ -3673,7 +3758,7 @@ def case_ui25_the_browser_token_capture_runs_and_cancels(devtools) -> list[str]:
     failures: list[str] = []
 
     seed(devtools, **ACCOUNT_QUERY)
-    devtools.click_selector('[data-page="accounts"]')
+    open_page(devtools, "accounts")
     devtools.wait_for(
         "Boolean([...document.querySelectorAll('button')]"
         ".find((b) => b.textContent.includes('Get token in browser')))",

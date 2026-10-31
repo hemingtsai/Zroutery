@@ -21,7 +21,7 @@
  */
 import { useCallback, useEffect, useState } from "react";
 import { useI18n, describeBackendError, type TKey } from "../i18n";
-import { Badge, Button, ConfirmDialog, Empty, Section, Select, useToast } from "../components";
+import { Badge, Button, ConfirmDialog, Empty, Field, Section, Select, Toggle, useToast } from "../components";
 import type { ConfirmRequest } from "../components";
 import {
   api,
@@ -33,6 +33,8 @@ import {
   type TakeoverProposal,
   type TakeoverStatus,
   type TakeoverView,
+  type ClientSetupOptions,
+  type ClientSetupPreview,
 } from "../api";
 
 const AGENTS: TakeoverAgent[] = ["claude", "codex", "opencode", "gemini"];
@@ -70,6 +72,25 @@ export default function Takeover() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [acting, setActing] = useState<TakeoverAgent | null>(null);
   const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
+  const [selectedAgent, setSelectedAgent] = useState<TakeoverAgent>("claude");
+  const [setup, setSetup] = useState<ClientSetupOptions>({ default_class: null, standby: false });
+  const [preview, setPreview] = useState<ClientSetupPreview | null>(null);
+  const previewSetup = async () => {
+    setActing(selectedAgent);
+    try { setPreview(await api.clientSetupPreview(selectedAgent, setup)); }
+    catch (error) { setLoadError(errorText(error)); }
+    finally { setActing(null); }
+  };
+  const applySetup = async () => {
+    if (!preview) return;
+    setActing(selectedAgent);
+    try {
+      await api.clientSetupApply(selectedAgent, setup, preview.proposal.fingerprint);
+      setPreview(null);
+      await load();
+    } catch (error) { setLoadError(errorText(error)); }
+    finally { setActing(null); }
+  };
   // Per-agent release strategy, preselected to the safe default: a release
   // that hits a conflict keeps what the user changed unless they say otherwise.
   const [strategies, setStrategies] = useState<
@@ -156,6 +177,28 @@ export default function Takeover() {
 
   return (
     <>
+      <Section title={t("client_setup.title")} hint={t("client_setup.hint")}>
+        <div className="controls">
+          <Field label={t("client_setup.client")}><Select value={selectedAgent} ariaLabel={t("client_setup.client")}
+            options={["claude", "codex", "opencode"].map((agent) => ({ value: agent as TakeoverAgent, label: t(`takeover.agent.${agent}` as TKey) }))}
+            onChange={(agent) => { setSelectedAgent(agent); setPreview(null); }} /></Field>
+          <Field label={t("client_setup.default")}><Select value={setup.default_class ?? "keep"} ariaLabel={t("client_setup.default")}
+            options={[{ value: "keep", label: t("client_setup.keep") }, ...["fast", "standard", "reasoning", "frontier"].map((tier) => ({ value: `${tier}-class`, label: t(`tier.${tier}` as TKey) }))]}
+            onChange={(value) => { setSetup({ ...setup, default_class: value === "keep" ? null : value }); setPreview(null); }} /></Field>
+          <Toggle label={t("client_setup.standby")} checked={setup.standby} onChange={(standby) => { setSetup({ ...setup, standby }); setPreview(null); }} />
+          <Button disabled={acting !== null} onClick={() => void previewSetup()}>{t("client_setup.preview")}</Button>
+        </div>
+        {preview && <>
+          <p className="field-hint">{preview.gateway_url} · {preview.config_path}</p>
+          <div className="table-scroll"><table className="table"><thead><tr><th scope="col">{t("client_setup.pool")}</th><th scope="col">{t("models.effort_levels")}</th><th scope="col">{t("client_setup.evidence")}</th></tr></thead>
+            <tbody>{preview.classes.map((entry) => <tr key={entry.model}><td>{entry.display_name}</td><td>{entry.effort_levels.join(" / ") || t("common.unknown")}</td><td>{entry.capability_source}</td></tr>)}</tbody>
+          </table></div>
+          {preview.unavailable_classes.length > 0 && <p className="field-hint">{t("client_setup.unavailable", { ids: preview.unavailable_classes.join(", ") })}</p>}
+          {preview.notes.map((note) => <p className="field-hint" key={note}>{note}</p>)}
+          <ChangesTable rows={preview.proposal.changes} kind="proposal" />
+          <Button disabled={acting !== null} kind="primary" onClick={() => setConfirm({ title: t("client_setup.apply"), body: t("client_setup.confirm"), confirmLabel: t("client_setup.apply"), onConfirm: () => void applySetup() })}>{t("client_setup.apply")}</Button>
+        </>}
+      </Section>
       <Section title={t("takeover.section")} hint={t("takeover.section_hint")}>
         {loadError ? (
           <Empty>{t("takeover.load_failed", { err: loadError })}</Empty>

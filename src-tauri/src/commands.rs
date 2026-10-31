@@ -37,6 +37,19 @@ pub fn get_activity(desktop: State<'_, Arc<Desktop>>) -> Cmd<Activity> {
     Ok(desktop.activity())
 }
 
+/// Daily totals for the Activity page's charts.
+///
+/// `days` is the size of the window ending today, and the reply always holds
+/// exactly that many rows: the chart draws a quiet day as a zero rather than
+/// closing the gap.
+#[tauri::command]
+pub fn get_usage_days(
+    desktop: State<'_, Arc<Desktop>>,
+    days: u32,
+) -> Cmd<Vec<zroutery_core::stats::UsageDay>> {
+    desktop.core.stats().usage_days(days)
+}
+
 /// Recent tracing output for the Logs tab. The buffer is capped in memory, so
 /// this is a rolling window rather than the full process log.
 #[tauri::command]

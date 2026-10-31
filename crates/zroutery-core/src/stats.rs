@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::billing::{Cost, CostTotals};
@@ -274,6 +274,21 @@ pub struct StatsSummary {
     pub attribution: AttributionSummary,
 }
 
+/// One local calendar day of usage, for the Activity page's charts.
+///
+/// The calendar is the operator's, not UTC: a request at 00:30 local time
+/// belongs to the day they remember making it. History stays in UTC, so only
+/// the bucket boundary moves here.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct UsageDay {
+    /// Local day, `YYYY-MM-DD`.
+    pub day: String,
+    pub requests: u64,
+    pub failures: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+}
+
 /// How much of the traffic could be attributed to a client.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct AttributionSummary {
@@ -532,6 +547,56 @@ impl Stats {
             per_client: inner.per_client.values().cloned().collect(),
             attribution: inner.attribution.clone(),
         }
+    }
+
+    /// The last `days` local calendar days, oldest first.
+    ///
+    /// Every day in the window is present, including days with no traffic: the
+    /// chart reads a zero as a quiet day and a missing day as a broken series.
+    /// The window always ends today, so "the last 30 days" does not depend on
+    /// when the page happened to load.
+    ///
+    /// The cap keeps a bad request from turning into an unbounded scan; the
+    /// heatmap asks for 371, one year of weeks and a day.
+    pub fn usage_days(&self, days: u32) -> Result<Vec<UsageDay>, String> {
+        const MAX_DAYS: u32 = 400;
+        let days = days.clamp(1, MAX_DAYS);
+        let mut inner = crate::sync::lock(&self.inner);
+        Self::flush_inner(&mut inner)?;
+        let records: Vec<RequestRecord> = match &inner.store {
+            Some(store) => store.usage()?,
+            None => inner.records.iter().cloned().collect(),
+        };
+
+        let today = chrono::Local::now().date_naive();
+        let first = today - chrono::Duration::days(i64::from(days) - 1);
+        let mut buckets: BTreeMap<NaiveDate, UsageDay> = BTreeMap::new();
+        let mut day = first;
+        while day <= today {
+            buckets.insert(
+                day,
+                UsageDay {
+                    day: day.format("%Y-%m-%d").to_string(),
+                    ..UsageDay::default()
+                },
+            );
+            day += chrono::Duration::days(1);
+        }
+
+        for record in records {
+            let local = record.at.with_timezone(&chrono::Local).date_naive();
+            let Some(bucket) = buckets.get_mut(&local) else {
+                continue;
+            };
+            bucket.requests += 1;
+            if !record.ok {
+                bucket.failures += 1;
+            }
+            bucket.input_tokens += u64::from(record.usage.input_tokens);
+            bucket.output_tokens += u64::from(record.usage.output_tokens);
+        }
+
+        Ok(buckets.into_values().collect())
     }
 
     /// Attach before serving and restore totals beyond the bounded recent view.
@@ -1256,5 +1321,89 @@ mod tests {
         assert_eq!(r.status, 429);
         assert_eq!(r.latency_ms, 1234);
         assert!(r.id.starts_with("req_"));
+    }
+
+    #[test]
+    fn usage_days_bucket_by_local_day_and_keep_quiet_days() {
+        use chrono::TimeZone;
+
+        let stats = Stats::new(100);
+        let today = chrono::Local::now().date_naive();
+        let at = |day: NaiveDate| {
+            chrono::Local
+                .from_local_datetime(&day.and_hms_opt(12, 0, 0).unwrap())
+                .single()
+                .expect("noon exists on every local day")
+                .with_timezone(&Utc)
+        };
+
+        let mut ok = rec(
+            "m",
+            true,
+            10,
+            Usage {
+                input_tokens: 100,
+                output_tokens: 10,
+                ..Usage::default()
+            },
+        );
+        ok.at = at(today);
+        stats.record(ok);
+
+        let mut failed = rec(
+            "m",
+            false,
+            10,
+            Usage {
+                input_tokens: 5,
+                output_tokens: 1,
+                ..Usage::default()
+            },
+        );
+        failed.at = at(today);
+        stats.record(failed);
+
+        let mut yesterday = rec(
+            "m",
+            true,
+            10,
+            Usage {
+                input_tokens: 7,
+                output_tokens: 3,
+                ..Usage::default()
+            },
+        );
+        yesterday.at = at(today - chrono::Duration::days(1));
+        stats.record(yesterday);
+
+        // Outer than the window, so no bucket may count it.
+        let mut old = rec("m", true, 10, Usage::default());
+        old.at = at(today - chrono::Duration::days(10));
+        stats.record(old);
+
+        let days = stats.usage_days(3).unwrap();
+        assert_eq!(days.len(), 3);
+        assert_eq!(
+            days[0].day,
+            (today - chrono::Duration::days(2))
+                .format("%Y-%m-%d")
+                .to_string()
+        );
+        assert_eq!(days[0].requests, 0, "a quiet day is a zero, not a gap");
+        assert_eq!(days[1].requests, 1);
+        assert_eq!(days[1].input_tokens, 7);
+        assert_eq!(days[2].day, today.format("%Y-%m-%d").to_string());
+        assert_eq!(days[2].requests, 2);
+        assert_eq!(days[2].failures, 1);
+        assert_eq!(days[2].input_tokens, 105);
+        assert_eq!(days[2].output_tokens, 11);
+    }
+
+    #[test]
+    fn usage_days_answers_one_row_per_day_whatever_is_asked() {
+        let stats = Stats::new(10);
+        assert_eq!(stats.usage_days(0).unwrap().len(), 1);
+        assert_eq!(stats.usage_days(5).unwrap().len(), 5);
+        assert_eq!(stats.usage_days(u32::MAX).unwrap().len(), 400);
     }
 }

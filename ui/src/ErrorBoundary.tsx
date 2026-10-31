@@ -1,6 +1,6 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
 import { errorText } from "./api";
-import { detectLang, dicts } from "./i18n";
+import { detectLang, dictFor } from "./i18n";
 
 interface State {
   error: Error | null;
@@ -33,7 +33,7 @@ export default class ErrorBoundary extends Component<{ children: ReactNode }, St
   render() {
     const { error } = this.state;
     if (!error) return this.props.children;
-    const s = dicts[detectLang()];
+    const s = dictFor(detectLang());
     return (
       <main className="crash" role="alert">
         <h1>{s["error.title"]}</h1>

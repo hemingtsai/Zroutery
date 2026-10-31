@@ -8,6 +8,7 @@ import {
   money,
   slugify,
   type Account,
+  type BindingPreview,
   type AppConfig,
   type BalanceStatus,
   type CcProviderDraft,
@@ -41,9 +42,11 @@ import {
   type ConfirmRequest,
 } from "../components";
 import { useI18n } from "../i18n";
+import { useMode } from "../mode";
 import { groupProviders } from "../providerGroups";
 import { hasChatCredential } from "../providerCredential";
 import NewApiPanel from "./NewApiPanel";
+import { AccountBindingReview } from "../AccountBindingReview";
 
 type KindLabelKey =
   | "providers.openai_dialect"
@@ -236,6 +239,10 @@ export default function Providers({
 
   const [ccPreview, setCcPreview] = useState<CcSwitchPreview | null>(null);
   const [ccLoading, setCcLoading] = useState(false);
+  // The add form's folded state. Opened from the page head; closes itself
+  // when a provider is added, because the drawer that opens over it is the
+  // continuation of that task.
+  const [adding, setAdding] = useState(false);
   const [ccSelected, setCcSelected] = useState<Record<string, boolean>>({});
   const isMounted = useRef(true);
   useEffect(() => () => { isMounted.current = false; }, []);
@@ -373,6 +380,22 @@ export default function Providers({
         actions={
           <>
             {/*
+             * Adding is the page's primary verb, so its entry is the page's
+             * first action and the form it opens is collapsed until asked
+             * for — a permanently expanded three-field form under the list
+             * was furniture nobody had asked to sit on. cc-switch puts its
+             * add entry in the header and opens a wizard; here the form
+             * unfolds in place at the bottom, which keeps it one click from
+             * the list it edits. The layout harness expands it the same way
+             * a reader would: by clicking this link.
+             */}
+            <button type="button"
+              className="linky"
+              onClick={() => setAdding((open) => !open)}
+            >
+              {adding ? t("common.collapse") : t("providers.add")}
+            </button>
+            {/*
               `refresh_balances` asks every provider for its balance and probes
               every account, then answers with one snapshot — so the chips on this
               page and the figures in each drawer go current without opening any of
@@ -496,13 +519,18 @@ export default function Providers({
           over every provider's accounts, not a property of this page's list, and
           the drawer never had a good place to put a cross-provider report. */}
 
-      <AddProviderForm
-        providers={config.providers}
-        save={save}
-        busy={busy}
-        opencodeAvailable={snapshot.opencode_available}
-        onAdded={openProvider}
-      />
+      {adding && (
+        <AddProviderForm
+          providers={config.providers}
+          save={save}
+          busy={busy}
+          opencodeAvailable={snapshot.opencode_available}
+          onAdded={(id) => {
+            setAdding(false);
+            openProvider(id);
+          }}
+        />
+      )}
 
       {ccPreview && (
         <Section
@@ -874,6 +902,12 @@ function hasPanelBalance(p: Provider, snapshot: Snapshot): boolean {
 function BalanceChip({ status }: { status: BalanceStatus | undefined }) {
   const { t } = useI18n();
   if (!status) return <span className="muted">—</span>;
+  if (status.aggregate) {
+    return <span className="muted">
+      {Object.values(status.aggregate.by_currency).map((balance) => money(balance.currency, balance.remaining ?? 0)).join(" · ") || t("common.unknown")}
+      {status.aggregate.partial && <Badge tone="warn">{t("binding.partial", { ok: status.aggregate.succeeded, n: status.aggregate.participating })}</Badge>}
+    </span>;
+  }
   if (status.error) return <span className="muted">{t("providers.balance_failed")}</span>;
   if (status.balance) {
     const amount = status.balance.remaining ?? status.balance.total;
@@ -940,6 +974,8 @@ function AccountSection({
   const [newKey, setNewKey] = useState("");
   const [keyFor, setKeyFor] = useState<string | null>(null);
   const [keyDraft, setKeyDraft] = useState("");
+  const [userHint, setUserHint] = useState("");
+  const [bindingPreview, setBindingPreview] = useState<BindingPreview | null>(null);
   const [newInference, setNewInference] = useState<
     Record<string, { id: string; secret: string; note: string }>
   >({});
@@ -979,6 +1015,7 @@ function AccountSection({
       target.accounts.push({
         account_id: id,
         key_ref: "",
+        probe_kind: "none",
         enabled: true,
         inference_keys: [],
         maintenance: blankMaintenance(),
@@ -999,11 +1036,10 @@ function AccountSection({
   const storeKey = async (account_id: string) => {
     const key = keyDraft.trim();
     if (!key) return;
-    const ok = await run(() => api.setAccountKey(provider.id, account_id, key));
-    if (ok) {
+    try {
+      setBindingPreview(await api.stageAccountKey(provider.id, account_id, key, userHint.trim() || undefined));
       setKeyDraft("");
-      setKeyFor(null);
-    }
+    } catch (error) { notify("error", describeBackendError(t, errorText(error))); }
   };
 
   const inferenceDraftFor = (account_id: string) =>
@@ -1066,6 +1102,11 @@ function AccountSection({
 
   return (
     <Section title={t("accounts.title")} hint={t("accounts.title_hint")}>
+      {bindingPreview && <AccountBindingReview preview={bindingPreview} busy={busy}
+        publish={(confirmed) => void run(() => api.publishAccountKey(bindingPreview.publication_id, confirmed)).then((ok) => {
+          if (ok) { setBindingPreview(null); setKeyFor(null); }
+        })}
+        discard={() => void api.discardAccountKey(bindingPreview.publication_id).then(() => setBindingPreview(null)).catch((error) => notify("error", errorText(error)))} />}
       {accounts.length === 0 ? (
         <Empty>{t("accounts.empty")}</Empty>
       ) : (
@@ -1074,6 +1115,10 @@ function AccountSection({
             <div className="account-decl" key={a.account_id}>
               <div className="row-main">
                 <span className="row-title mono">{a.account_id}</span>
+                {a.binding && <Badge tone={a.binding.verification === "verified" ? "ok" : "warn"}>
+                  {t(a.binding.verification === "verified" ? "binding.verified" : "binding.pending")}
+                  {a.binding.identity && ` · ${a.binding.identity.username ?? a.binding.identity.user_id} · ${a.binding.identity.group ?? t("common.unknown")}`}
+                </Badge>}
                 {hasOwnRef(a) ? (
                   keyStored(a) ? (
                     <Badge tone="ok">{t("accounts.own_key")}</Badge>
@@ -1141,9 +1186,9 @@ function AccountSection({
                     password
                     onCommit={(v) => {
                       setKeyDraft(v);
-                      void storeKey(a.account_id);
                     }}
                   />
+                  <TextField label={t("binding.user_hint")} value={userHint} onCommit={setUserHint} />
                   <div className="field-actions">
                     <Button
                       kind="primary"
@@ -1155,6 +1200,9 @@ function AccountSection({
                   </div>
                 </div>
               )}
+              <Field label={t("binding.probe_kind")}><Select ariaLabel={t("binding.probe_kind")} value={a.probe_kind ?? "new_api"}
+                options={[{ value: "none", label: t("binding.probe_none") }, { value: "new_api", label: t("binding.probe_newapi") }]}
+                onChange={(kind) => edit(a.account_id, (account) => { account.probe_kind = kind as "none" | "new_api"; })} /></Field>
               {/*
                 * Chat credentials, separate from the panel token above. The
                 * list is edited by command rather than by the config save, so
@@ -1531,6 +1579,11 @@ function ProviderDrawer({
   onRemove: () => void;
 }) {
   const { t } = useI18n();
+  // Simple mode collapses the drawer to its facts: what this provider is, how
+  // it authenticates, whether it is on. The panels, the probe, the quirks and
+  // the account declarations keep existing and keep running — the mode only
+  // stops drawing them, and geek mode draws every one again.
+  const geek = useMode() === "geek";
   const hasKey = snapshot.keys[provider.id] ?? false;
   // Chat credentials an account declares: the auth row would otherwise say
   // "no key" beside a green dot, because the provider's own reference is empty
@@ -1636,10 +1689,11 @@ function ProviderDrawer({
         <ApiKeyField providerId={providerId} busy={busy} run={run} />
       )}
 
-      {snapshot.newapi_available && (
+      {geek && snapshot.newapi_available && (
         <NewApiPanel provider={provider} models={models} busy={busy} run={run} />
       )}
 
+      {geek ? (
       <Section title={t("providers.configuration")}>
         <div className="controls">
           <TextField
@@ -1729,6 +1783,20 @@ function ProviderDrawer({
               })
             }
           />
+          <Field label={t("providers.proxy_policy")} hint={t("providers.proxy_policy_hint")}>
+            <Select
+              ariaLabel={t("providers.proxy_policy")}
+              value={provider.bypass_proxy == null ? "inherit" : provider.bypass_proxy ? "direct" : "system"}
+              onChange={(value) => onUpdate((p) => {
+                p.bypass_proxy = value === "inherit" ? null : value === "direct";
+              })}
+              options={[
+                { value: "inherit", label: t("providers.proxy_inherit") },
+                { value: "direct", label: t("providers.proxy_direct") },
+                { value: "system", label: t("providers.proxy_system") },
+              ]}
+            />
+          </Field>
           {provider.kind === "anthropic" && (
             <>
               {/*
@@ -1825,7 +1893,23 @@ function ProviderDrawer({
           )}
         </div>
       </Section>
+      ) : (
+        /* Simple mode keeps the one switch that decides whether this provider
+           serves traffic, and nothing else from the configuration block. */
+        <div className="grid-two">
+          <Toggle
+            label={t("common.enabled")}
+            checked={provider.enabled}
+            onChange={(enabled) =>
+              onUpdate((p) => {
+                p.enabled = enabled;
+              })
+            }
+          />
+        </div>
+      )}
 
+      {geek && (
       <Section
         title={t("providers.balance")}
         hint={
@@ -1886,11 +1970,12 @@ function ProviderDrawer({
           <p className="field-hint">{describeBackendError(t, balanceError)}</p>
         )}
       </Section>
+      )}
 
       {/* A decision endpoint is asked a question, not a chat, so it has settings
           of its own: where the decision endpoint lives, and how sure the answer
           has to be before the Auto Mode acts on it. */}
-      {provider.kind === "decision" && (
+      {geek && provider.kind === "decision" && (
         <Section
           title={t("providers.decision")}
           hint={t("providers.decision_hint")}
@@ -1928,6 +2013,7 @@ function ProviderDrawer({
         </Section>
       )}
 
+      {geek && (
       <Section title={t("providers.compatibility")} hint={t("providers.compatibility_hint")}>
         <div className="grid-two">
           <Toggle
@@ -1997,6 +2083,7 @@ function ProviderDrawer({
           />
         </div>
       </Section>
+      )}
 
       {/*
         Account declarations are offered only when the build actually contains
@@ -2004,7 +2091,7 @@ function ProviderDrawer({
         below asks first: a command that was never registered looks exactly
         like one that failed.
       */}
-      {snapshot.account_available && (
+      {geek && snapshot.account_available && (
         <AccountSection
           provider={provider}
           snapshot={snapshot}

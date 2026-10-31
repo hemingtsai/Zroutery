@@ -85,6 +85,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::get_snapshot,
             commands::get_activity,
+            commands::get_usage_days,
             commands::get_logs,
             #[cfg(feature = "ml")]
             commands::get_ml_status,

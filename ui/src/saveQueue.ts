@@ -1,3 +1,4 @@
+import { createContext, useContext } from "react";
 import type { Snapshot } from "./api";
 
 /**
@@ -105,4 +106,25 @@ export function createSaveQueue(hooks: SaveQueueHooks): SaveQueue {
   };
 
   return { run };
+}
+
+/**
+ * What the last save looked like, phrased for a status line.
+ *
+ * The top busybar answers "is the window working?" for the whole surface and
+ * for screen readers. It cannot answer "did *the edit I just made* land?",
+ * because it sits a window away from where the edit happened. This is the
+ * same queue's truth, carried to where the eyes are: a drawer's foot.
+ */
+export type SaveStatus =
+  | { phase: "idle" }
+  | { phase: "saving" }
+  | { phase: "saved"; at: number }
+  | { phase: "error"; message: string };
+
+export const SaveStatusContext = createContext<SaveStatus>({ phase: "idle" });
+
+/** Read the save truth. Consumers re-render on every phase change, which is the point. */
+export function useSaveStatus(): SaveStatus {
+  return useContext(SaveStatusContext);
 }

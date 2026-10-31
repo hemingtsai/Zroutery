@@ -1,17 +1,20 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { api, deepLinkCurrent, errorText, gatewayAction, onDeepLink, onGatewayStateChanged, pageForDeepLink, type AppConfig, type Snapshot } from "./api";
-import { Banner, MenuItem, Popover, StatusDot, ToastProvider, useToast } from "./components";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { api, deepLinkCurrent, errorText, gatewayAction, onDeepLink, onGatewayStateChanged, type AppConfig, type Snapshot } from "./api";
+import { Banner, MenuItem, Popover, Segment, StatusDot, Tabs, ToastProvider, useToast } from "./components";
 import { describeBackendError, I18nProvider, useI18n } from "./i18n";
-import { createSaveQueue, type SaveQueue } from "./saveQueue";
-import Overview from "./pages/Overview";
-import Models from "./pages/Models";
-import Providers from "./pages/Providers";
-import Accounts from "./pages/Accounts";
-import Takeover from "./pages/Takeover";
-import Cutover from "./pages/Cutover";
-import Routing from "./pages/Routing";
-import Activity from "./pages/Activity";
-import Settings from "./pages/Settings";
+import { ModeContext, loadMode, storeMode, type UiMode } from "./mode";
+import { createSaveQueue, SaveStatusContext, type SaveQueue, type SaveStatus } from "./saveQueue";
+import { applySkin, loadSkin, SkinContext, storeSkin, type Skin } from "./skin";
+import { routeForDeepLink, taskFor, type Page } from "./navigation";
+const Overview = lazy(() => import("./pages/Overview"));
+const Models = lazy(() => import("./pages/Models"));
+const Providers = lazy(() => import("./pages/Providers"));
+const Accounts = lazy(() => import("./pages/Accounts"));
+const Takeover = lazy(() => import("./pages/Takeover"));
+const Cutover = lazy(() => import("./pages/Cutover"));
+const Routing = lazy(() => import("./pages/Routing"));
+const Activity = lazy(() => import("./pages/Activity"));
+const Settings = lazy(() => import("./pages/Settings"));
 
 /**
  * The doors into Zroutery. No icons, no section headers — a desktop utility's
@@ -19,29 +22,6 @@ import Settings from "./pages/Settings";
  * that reads darkest. Everything else lives inside a page: Auto review inside
  * Routing, the gateway inside Settings, diagnostics inside Settings.
  */
-type Page =
-  | "overview"
-  | "models"
-  | "providers"
-  | "accounts"
-  | "takeover"
-  | "cutover"
-  | "routing"
-  | "activity"
-  | "settings";
-
-/** Every page, in the order the navigation lists them. */
-const PAGES: Page[] = [
-  "overview",
-  "providers",
-  "models",
-  "routing",
-  "accounts",
-  "activity",
-  "takeover",
-  "cutover",
-  "settings",
-];
 
 /**
  * The page a `zroutery://` link names, or `null` when it names none.
@@ -53,22 +33,77 @@ const PAGES: Page[] = [
  * forward by the time this runs.
  */
 function pageForLink(url: string): Page | null {
-  const named = pageForDeepLink(url);
-  if (!named) return null;
-  return PAGES.includes(named as Page) ? (named as Page) : null;
+  return routeForDeepLink(url);
 }
 
 const NAV: { id: Page; labelKey: Parameters<ReturnType<typeof useI18n>["t"]>[0] }[] = [
   { id: "overview", labelKey: "nav.overview" },
-  { id: "providers", labelKey: "nav.providers" },
-  { id: "models", labelKey: "nav.models" },
-  { id: "routing", labelKey: "nav.routing" },
-  { id: "accounts", labelKey: "nav.accounts" },
-  { id: "activity", labelKey: "nav.activity" },
-  { id: "takeover", labelKey: "nav.takeover" },
-  { id: "cutover", labelKey: "nav.cutover" },
+  { id: "providers", labelKey: "task.providers" },
+  { id: "models", labelKey: "task.models" },
+  { id: "takeover", labelKey: "task.clients" },
+  { id: "activity", labelKey: "task.usage" },
   { id: "settings", labelKey: "nav.settings" },
 ];
+
+/**
+ * The nav entries simple mode keeps: the dashboard, the usage ledger, and the
+ * settings. Everything else keeps working — a deep link or a bookmark still
+ * opens its page — the short list just stops advertising doors a first user
+ * has no reason to look for.
+ */
+const SIMPLE_NAV_IDS: readonly Page[] = ["overview", "activity", "settings"];
+
+/**
+ * The pages a `zroutery://` link may not open while simple mode is on.
+ *
+ * Models, client setup and their sub-areas are the geek-only surfaces. A link
+ * naming one of them is answered with a notice rather than a navigation: the
+ * window is already forward, so saying where the page lives is the honest
+ * answer, and "stay" is the only response that does not throw away the page
+ * the reader was on.
+ */
+const GEEK_ONLY_PAGES: readonly Page[] = ["models", "takeover", "routing", "cutover", "accounts"];
+
+/**
+ * The quirks the provider drawer offers as toggles.
+ *
+ * `stream_usage` ships enabled, is not a drawer control, and counting it would
+ * report every provider as an advanced configuration; it is left out.
+ */
+const QUIRK_KEYS = [
+  "use_max_completion_tokens",
+  "drop_temperature",
+  "drop_top_p",
+  "drop_stop",
+  "system_as_developer",
+  "send_reasoning_effort",
+  "portable_history",
+] as const;
+
+/** Session flag for the one-time "advanced configuration is running" notice. */
+const ADVANCED_TOAST_FLAG = "zroutery-mode-advanced-toast";
+
+/**
+ * Count the advanced configuration items that are in effect right now.
+ *
+ * Switching to simple mode hides these rather than turning them off, and the
+ * one-time notice says how many are running so hiding is never mistaken for
+ * disabling: learned routing is one item, each budget is one, the Auto Mode
+ * classifier (when it has candidates to route between) is one, and every
+ * enabled provider quirk is one.
+ */
+function countAdvanced(config: AppConfig): number {
+  let n = 0;
+  if (config.ml_routing?.enabled) n += 1;
+  n += config.budgets.length;
+  if (config.classifier.enabled && config.classifier.candidates.length > 0) n += 1;
+  for (const provider of config.providers) {
+    for (const key of QUIRK_KEYS) {
+      if (provider.quirks[key]) n += 1;
+    }
+  }
+  return n;
+}
 
 type ThemePref = "system" | "light" | "dark";
 
@@ -80,27 +115,6 @@ type ThemePref = "system" | "light" | "dark";
  * page its content is a notification that gets dismissed without being read.
  */
 const MAX_BANNERS = 2;
-
-/**
- * The label the busy line announces.
- *
- * Plain text, because the dictionary is owned by a change in flight and a key
- * added here would be lost in the merge. The key to add is
- * `common.working`; see the report.
- */
-const WORKING_LABEL = "Working…";
-
-/**
- * The text that reveals the banners the ceiling is hiding.
- *
- * Same reason as `WORKING_LABEL`: these need `app.more_notifications` and
- * `app.fewer_notifications` in the dictionary.
- */
-function moreNotificationsLabel(count: number): string {
-  return `Show ${count} more notification${count === 1 ? "" : "s"}`;
-}
-
-const FEWER_NOTIFICATIONS_LABEL = "Show fewer notifications";
 
 function loadThemePref(): ThemePref {
   const stored = localStorage.getItem("zroutery-theme");
@@ -124,15 +138,37 @@ export default function App() {
 }
 
 function Shell() {
-  const { t } = useI18n();
+  const { t, plural } = useI18n();
   const notify = useToast();
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [page, setPage] = useState<Page>("overview");
+  const taskPage = taskFor(page);
   const [themePref, setThemePref] = useState<ThemePref>(loadThemePref);
+  // The mode is a presentation preference like the theme: read once from local
+  // storage, written back on every change, never part of the configuration.
+  const [mode, setMode] = useState<UiMode>(loadMode);
+  // So is the skin, and by the same mechanism — one attribute on the document,
+  // applied here so a stored md3/fluent choice lands before the first paint of
+  // anything that reads the tokens.
+  const [skin, setSkin] = useState<Skin>(loadSkin);
+  useEffect(() => {
+    applySkin(skin);
+    storeSkin(skin);
+  }, [skin]);
+  // The deep-link listener registers once, so it reads the mode it was current
+  // when it fired through a ref rather than re-registering on every switch.
+  const modeRef = useRef(mode);
   const [error, setError] = useState<string | null>(null);
   const [pollError, setPollError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // The save truth at drawer distance. begin/finish/fail below keep it in step
+  // with the queue; Drawer reads it through context and speaks it at its foot.
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>({ phase: "idle" });
   const [showAllBanners, setShowAllBanners] = useState(false);
+  const configEpoch = useRef(0);
+  const saving = useRef(false);
+  const heading = useRef<HTMLHeadingElement>(null);
+  useEffect(() => { heading.current?.focus({ preventScroll: true }); }, [page]);
 
   useEffect(() => {
     const apply = () => {
@@ -145,6 +181,31 @@ function Shell() {
     media.addEventListener("change", apply);
     return () => media.removeEventListener("change", apply);
   }, [themePref]);
+
+  useEffect(() => {
+    modeRef.current = mode;
+  }, [mode]);
+
+  /**
+   * Switch the interface mode — the one handler behind both entrances.
+   *
+   * Persisting comes first so even an interrupted render has recorded the
+   * choice. Narrowing to simple may hide configuration that is in effect, and
+   * that is worth saying exactly once per session: the notice counts what is
+   * running behind the curtain so a hidden setting is never read as an off
+   * one. A session that has already seen the notice (or an installation with
+   * nothing advanced in play) switches silently.
+   */
+  const applyMode = (next: UiMode) => {
+    if (next === mode) return;
+    storeMode(next);
+    setMode(next);
+    if (next !== "simple" || !snapshot) return;
+    const advanced = countAdvanced(snapshot.config);
+    if (advanced === 0 || sessionStorage.getItem(ADVANCED_TOAST_FLAG)) return;
+    sessionStorage.setItem(ADVANCED_TOAST_FLAG, "1");
+    notify("ok", plural(advanced, "mode.advanced_active_toast"));
+  };
 
   // The newest config known to have been committed (or loaded). Saves are
   // updaters against this, so an edit queued behind an in-flight save is
@@ -164,20 +225,33 @@ function Shell() {
   if (!queueRef.current) {
     queueRef.current = createSaveQueue({
       begin: () => {
+        saving.current = true;
+        configEpoch.current += 1;
         setBusy(true);
         setError(null);
+        setSaveStatus({ phase: "saving" });
       },
       apply: (next) => {
+        configEpoch.current += 1;
         configRef.current = next.config;
         setSnapshot(next);
       },
       fail: (cause, dropped) => {
         setError(errorText(cause));
+        setSaveStatus({ phase: "error", message: errorText(cause) });
         if (dropped > 0) {
           notify("error", translate.current("toast.queued_discarded"));
         }
       },
-      finish: () => setBusy(false),
+      finish: () => {
+        saving.current = false;
+        setBusy(false);
+        // A failed save just wrote the error phase; a success (or the tail of a
+        // failure chain) stamps the moment. Keeping the error wins here.
+        setSaveStatus((s) =>
+          s.phase === "error" ? s : { phase: "saved", at: Date.now() },
+        );
+      },
     });
   }
   const run = queueRef.current.run;
@@ -200,7 +274,10 @@ function Shell() {
     if (refreshRef.current) return refreshRef.current;
     const pending = (async () => {
       try {
+        const epoch = configEpoch.current;
         const next = await api.snapshot();
+        // A refresh that began before a save/identity publication cannot undo it.
+        if (epoch !== configEpoch.current || saving.current) return;
         configRef.current = next.config;
         setSnapshot(next);
         setPollError(null);
@@ -264,7 +341,20 @@ function Shell() {
 
     const open = (url: string) => {
       const target = pageForLink(url);
-      if (target) setPage(target);
+      if (!target) return;
+      // Simple mode filters visibility, not behaviour, and a link is outside
+      // the window: refusing it would break a bookmark that works in geek
+      // mode, and opening it would land a first user on a surface the short
+      // nav never mentioned. So the page stays where it is and the notice says
+      // where the surface lives — through the ref, because the listener was
+      // registered once and the mode may have changed since.
+      if (modeRef.current === "simple" && GEEK_ONLY_PAGES.includes(target)) {
+        // info, not ok: the link worked and the app is describing where the
+        // surface lives — a notice, not an accomplishment.
+        notify("info", translate.current("mode.geek_only_page"));
+        return;
+      }
+      setPage(target);
     };
 
     void onDeepLink(open)
@@ -293,13 +383,26 @@ function Shell() {
   }, []);
 
   /*
+   * The nav the current mode presents. Geek mode lists everything; simple
+   * mode keeps the three doors a first user needs. The page title is still
+   * looked up in the full NAV, so a page a link opened stays named even when
+   * the short list does not mention it.
+   */
+  const visibleNav = useMemo(
+    () => (mode === "simple" ? NAV.filter((item) => SIMPLE_NAV_IDS.includes(item.id)) : NAV),
+    [mode],
+  );
+
+  /*
    * Alt+1..9 jumps straight to the page at that position in the nav.
    *
    * A desktop utility is navigated from the keyboard as much as from the
    * pointer, and the nav is a fixed list, so the position *is* the address.
-   * Matched by `code` rather than `key`, because Alt is a dead key on some
-   * layouts — Option+1 on a Mac keyboard types "¡", and a shortcut that only
-   * worked on US layouts would be a shortcut that mostly did not work.
+   * The position that counts is the one the sidebar is showing: the shortcut
+   * names the visible entry at that index, the same promise the tooltips
+   * make. Matched by `code` rather than `key`, because Alt is a dead key on
+   * some layouts — Option+1 on a Mac keyboard types "¡", and a shortcut that
+   * only worked on US layouts would be a shortcut that mostly did not work.
    * Plain digits are left alone — they are typing — and so are every other
    * modifier combination, which belongs to the OS and the webview.
    */
@@ -308,22 +411,25 @@ function Shell() {
       if (!e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
       const digit = /^Digit([1-9])$/.exec(e.code);
       if (!digit) return;
-      const target = PAGES[Number(digit[1]) - 1];
+      const target = visibleNav[Number(digit[1]) - 1];
       if (!target) return;
       e.preventDefault();
-      setPage(target);
+      setPage(target.id);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [visibleNav]);
 
   // Overview and Activity show live state; their pages poll the counters
   // only. A failure is reported rather than swallowed: silence would look
   // like an idle proxy.
   useEffect(() => {
-    if (page !== "activity" && page !== "overview") return;
+    if (taskPage !== "activity" && taskPage !== "overview") return;
     let cancelled = false;
+    let pending = false;
     const poll = async () => {
+      if (pending || document.visibilityState === "hidden") return;
+      pending = true;
       try {
         const activity = await api.activity();
         if (cancelled) return;
@@ -331,15 +437,20 @@ function Shell() {
         setSnapshot((current) => (current ? { ...current, ...activity } : current));
       } catch (e) {
         if (!cancelled) setPollError(errorText(e));
+      } finally {
+        pending = false;
       }
     };
     const timer = setInterval(poll, 2000);
+    const onVisibility = () => { if (document.visibilityState === "visible") void poll(); };
+    document.addEventListener("visibilitychange", onVisibility);
     void poll();
     return () => {
       cancelled = true;
       clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisibility);
     };
-  }, [page]);
+  }, [taskPage]);
 
   /**
    * Start or stop the gateway from the state Rust reports right now.
@@ -456,6 +567,19 @@ function Shell() {
       node: t("app.exposed", { host: server.host }),
     });
   }
+  if (snapshot.accounting && (!snapshot.accounting.available || snapshot.accounting.error)) {
+    banners.push({
+      key: "accounting",
+      tone: "danger",
+      severity: 1,
+      node: <>
+        {t("accounting.blocked")}{" "}
+        <button type="button" className="linky" onClick={() => setPage("activity")}>
+          {t("accounting.inspect")}
+        </button>
+      </>,
+    });
+  }
   if (pollError) {
     banners.push({
       key: "poll",
@@ -483,16 +607,19 @@ function Shell() {
   const hiddenBanners = banners.length - MAX_BANNERS;
 
   return (
+    <ModeContext.Provider value={mode}>
+    <SkinContext.Provider value={skin}>
+    <SaveStatusContext.Provider value={saveStatus}>
     <div className="shell">
       <nav className="sidebar" aria-label={t("nav.main_aria")}>
         <div className="sidebar-brand">
           Zroutery<span className="mono">v{snapshot.version}</span>
         </div>
 
-        {NAV.map((item, index) => (
+        {visibleNav.map((item, index) => (
           <button type="button"
             key={item.id}
-            className={`nav-item ${page === item.id ? "active" : ""}`}
+            className={`nav-item ${taskPage === item.id ? "active" : ""}`}
             // Named as well as classed. The two layout harnesses drive the
             // shell with real clicks, and an ordinal is a promise that breaks
             // the moment a page is inserted: adding one silently repoints every
@@ -502,7 +629,7 @@ function Shell() {
             // Which page is open is carried by the `active` class alone, and a
             // class is invisible to a screen reader: the nav read as eight
             // identical buttons with no indication of where you were.
-            aria-current={page === item.id ? "page" : undefined}
+            aria-current={taskPage === item.id ? "page" : undefined}
             // The shortcut is the nav's position, and the tooltip is the only
             // place a keyboard user can discover it without reading source.
             aria-keyshortcuts={`Alt+${index + 1}`}
@@ -519,6 +646,24 @@ function Shell() {
         ))}
 
         <div className="sidebar-spacer" />
+
+        {/*
+          * The mode switch lives at the foot of the nav because the mode is a
+          * property of the nav itself — it decides how long the list above is.
+          * One Segment, the same control the settings row renders: two doors
+          * into one state, and a switch that is one click either way.
+          */}
+        <div className="sidebar-mode">
+          <Segment<UiMode>
+            ariaLabel={t("mode.toggle_aria")}
+            value={mode}
+            onChange={applyMode}
+            options={[
+              { value: "simple", label: t("mode.simple") },
+              { value: "geek", label: t("mode.geek") },
+            ]}
+          />
+        </div>
       </nav>
 
       <div className="main">
@@ -535,7 +680,7 @@ function Shell() {
               className="busybar"
               role="progressbar"
               aria-busy="true"
-              aria-label={WORKING_LABEL}
+              aria-label={t("common.working")}
             />
           )}
           {/*
@@ -544,7 +689,7 @@ function Shell() {
             * uppercase — is in the stylesheet, and a heading's only other
             * difference is a margin the user agent would add.
             */}
-          <h1 className="page-title">{t(NAV.find((n) => n.id === page)!.labelKey)}</h1>
+          <h1 ref={heading} tabIndex={-1} className="page-title">{t(NAV.find((n) => n.id === taskPage)!.labelKey)}</h1>
           <div className="mainbar-right">
             {/* The gateway lives here, not in a bottom strip: top of the
                 window is where a desktop app keeps global state. */}
@@ -683,17 +828,12 @@ function Shell() {
             ))}
             {hiddenBanners > 0 && !showAllBanners && (
               <p className="banner-overflow">
-                {/*
-                 * Plain text rather than `t()`: the dictionary is owned by
-                 * another change in flight, and a key added here would disappear
-                 * in the merge. See the report for the keys this needs.
-                 */}
                 <button
                   type="button"
                   className="linky"
                   onClick={() => setShowAllBanners(true)}
                 >
-                  {moreNotificationsLabel(hiddenBanners)}
+                  {t("app.more_notifications", { n: hiddenBanners })}
                 </button>
               </p>
             )}
@@ -704,23 +844,50 @@ function Shell() {
                   className="linky"
                   onClick={() => setShowAllBanners(false)}
                 >
-                  {FEWER_NOTIFICATIONS_LABEL}
+                  {t("app.fewer_notifications")}
                 </button>
               </p>
             )}
 
-            {page === "overview" && <Overview snapshot={snapshot} onNavigate={setPage} />}
-            {page === "models" && <Models snapshot={snapshot} save={save} busy={busy} />}
-            {page === "providers" && (
-              <Providers snapshot={snapshot} save={save} run={run} busy={busy} />
+            <Suspense fallback={<p className="empty" role="status">{t("common.loading")}</p>}>
+            {page === "overview" && (
+              <Overview
+                snapshot={snapshot}
+                onNavigate={setPage}
+                // The pool drags on the simple home save through the same
+                // queue as every page, and the add-models hand-off switches
+                // the mode the same way the settings row does.
+                save={save}
+                run={run}
+                busy={busy}
+                onModeChange={applyMode}
+              />
             )}
-            {page === "accounts" && (
-              <Accounts snapshot={snapshot} run={run} busy={busy} />
-            )}
-            {page === "takeover" && <Takeover />}
-            {page === "cutover" && <Cutover />}
-            {page === "routing" && <Routing snapshot={snapshot} save={save} run={run} busy={busy} />}
-            {page === "activity" && <Activity snapshot={snapshot} run={run} />}
+            {taskPage === "models" && <Tabs value={page} onChange={(next) => setPage(next as Page)} ariaLabel={t("task.models")}
+              tabs={[
+                { value: "models", label: t("task.catalogue"), content: <Models snapshot={snapshot} save={save} busy={busy} /> },
+                { value: "routing", label: t("task.rules"), content: <Routing snapshot={snapshot} save={save} run={run} busy={busy} /> },
+              ]} />}
+            {taskPage === "providers" && <Tabs
+              // Simple mode keeps only the connections tab. A reader standing
+              // on the observations tab when the mode narrows is clamped to the
+              // tab that remains rather than shown a tab the strip does not
+              // list; switching back restores where they were.
+              value={mode === "simple" && page === "accounts" ? "providers" : page}
+              onChange={(next) => setPage(next as Page)}
+              ariaLabel={t("task.providers")}
+              tabs={[
+                { value: "providers", label: t("task.connections"), content: <Providers snapshot={snapshot} save={save} run={run} busy={busy} /> },
+                ...(mode === "geek"
+                  ? [{ value: "accounts", label: t("task.accounts"), content: <Accounts snapshot={snapshot} run={run} busy={busy} /> }]
+                  : []),
+              ]} />}
+            {taskPage === "takeover" && <Tabs value={page} onChange={(next) => setPage(next as Page)} ariaLabel={t("task.clients")}
+              tabs={[
+                { value: "takeover", label: t("task.connect"), content: <Takeover /> },
+                { value: "cutover", label: t("task.migrate"), content: <Cutover /> },
+              ]} />}
+            {page === "activity" && <Activity snapshot={snapshot} run={run} save={save} busy={busy} />}
             {page === "settings" && (
               <Settings
                 snapshot={snapshot}
@@ -729,11 +896,19 @@ function Shell() {
                 busy={busy}
                 themePref={themePref}
                 onThemePref={setThemePref}
+                skin={skin}
+                onSkinChange={setSkin}
+                mode={mode}
+                onModeChange={applyMode}
               />
             )}
+            </Suspense>
           </div>
         </main>
       </div>
     </div>
+    </SaveStatusContext.Provider>
+    </SkinContext.Provider>
+    </ModeContext.Provider>
   );
 }

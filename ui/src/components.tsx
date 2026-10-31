@@ -8,12 +8,15 @@ import {
   useContext,
   useEffect,
   useId,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
 } from "react";
 import * as RadixSelect from "@radix-ui/react-select";
 import { useI18n } from "./i18n";
+import { useSaveStatus } from "./saveQueue";
+import { createToastDedup } from "./toastDedup";
 
 /**
  * Transient operation feedback, bottom-right, auto-dismissed. Banners stay
@@ -21,25 +24,86 @@ import { useI18n } from "./i18n";
  * for confirmations the user would otherwise have to take on faith — a
  * copy that worked, an import that landed.
  */
-type Toast = { id: number; kind: "ok" | "error"; text: string; timer: number };
+/** The tones a toast can take. `info` is the neutral one: a notice that is
+ *  neither praise nor failure — a deep link pointing somewhere, a state the
+ *  app is describing — which used to have to borrow `ok`'s green and be read
+ *  as a success. Tone is presentation, not copy: the dictionaries grow no
+ *  new keys for it. */
+type ToastKind = "ok" | "error" | "info";
 
-const ToastContext = createContext<(kind: "ok" | "error", text: string) => void>(() => {});
+type Toast = { id: number; kind: ToastKind; text: string; timer: number };
+
+/**
+ * How long each kind stays up. The dedup window is deliberately the same
+ * number: "this exact message is already on screen" is true exactly while its
+ * toast is displayed, and not a moment longer. An `info` toast lives as long
+ * as an `ok` — both are transient confirmations, differing only in colour.
+ */
+const TOAST_LIFETIME_MS: Record<ToastKind, number> = { ok: 3200, error: 6000, info: 3200 };
+
+const ToastContext = createContext<(kind: ToastKind, text: string) => void>(() => {});
 
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
   const nextId = useRef(0);
+  const timers = useRef(new Map<number, number>());
+  // The dedup ledger lives as long as the provider does: a remount starts with
+  // an empty screen, so it must start with an empty ledger too.
+  const dedup = useMemo(() => createToastDedup(() => Date.now()), []);
+  useEffect(() => () => {
+    for (const timer of timers.current.values()) window.clearTimeout(timer);
+    timers.current.clear();
+  }, []);
   const { t } = useI18n();
 
-  const notify = useCallback((kind: "ok" | "error", text: string) => {
-    const id = nextId.current++;
+  const notify = useCallback((kind: ToastKind, text: string) => {
+    const lifetime = TOAST_LIFETIME_MS[kind];
+    // Dedup: restating a toast that is still inside its lifetime (same kind,
+    // same text) refreshes that toast instead of stacking an identical one —
+    // the same guard cc-switch ships over sonner, where mashing "check for
+    // updates" piled up identical popups. Callers keep calling
+    // notify(kind, text) exactly as before.
+    const { id, reused } = dedup.claim(kind, text, () => nextId.current++, lifetime);
+    if (reused) {
+      // Retire the previous dismissal timer so exactly one timer owns the
+      // toast's lifetime. Deleting before re-inserting below also moves the id
+      // to the back of the timers Map — deliberately, because the refresh
+      // moves the toast to the back of the display list too (see the state
+      // update), and the eviction plus display cap only pair up safely while
+      // both orders agree on who is oldest.
+      const previous = timers.current.get(id);
+      if (previous !== undefined) window.clearTimeout(previous);
+      timers.current.delete(id);
+    }
     const timer = window.setTimeout(() => {
+      timers.current.delete(id);
       setToasts((current) => current.filter((t) => t.id !== id));
-    }, kind === "ok" ? 3200 : 6000);
-    setToasts((current) => [...current.slice(-3), { id, kind, text, timer }]);
+    }, lifetime);
+    timers.current.set(id, timer);
+    // Eviction owns cleanup too; otherwise an invisible toast still fires its
+    // timer after the page/provider unmounts. No side effects in state updaters.
+    if (timers.current.size > 4) {
+      const oldest = timers.current.keys().next().value;
+      if (oldest !== undefined) {
+        window.clearTimeout(timers.current.get(oldest));
+        timers.current.delete(oldest);
+      }
+    }
+    setToasts((current) => [
+      // A reused id may or may not still be rendered: a manual dismiss or an
+      // earlier display cap can have dropped the toast while its dedup window
+      // was still open. Either way it ends up last — the same React key, so
+      // the same DOM node is kept and refreshed rather than remounted, and it
+      // is never stacked next to itself. For a fresh id the filter is a no-op
+      // and this is exactly the append it replaces.
+      ...current.filter((t) => t.id !== id).slice(-3),
+      { id, kind, text, timer },
+    ]);
   }, []);
 
   const dismiss = (toast: Toast) => {
     window.clearTimeout(toast.timer);
+    timers.current.delete(toast.id);
     setToasts((current) => current.filter((t) => t.id !== toast.id));
   };
 
@@ -882,6 +946,14 @@ export function Drawer({
   if (overlayId.current === null) overlayId.current = Symbol("drawer");
   const titleId = useId();
   const { t } = useI18n();
+  /*
+   * Every drawer edits the one configuration, so every drawer carries the
+   * same save truth at its foot — the surface the edits just happened on,
+   * where "did it land?" is asked. The top busybar keeps answering for the
+   * window at large and for screen readers; this line answers locally, and
+   * says nothing at all until a first save gives it something to say.
+   */
+  const saveStatus = useSaveStatus();
 
   useEffect(() => {
     const id = overlayId.current!;
@@ -967,6 +1039,22 @@ export function Drawer({
           </button>
         </header>
         <div className="drawer-body">{children}</div>
+        {saveStatus.phase !== "idle" && (
+          <footer
+            className={`drawer-foot${
+              saveStatus.phase === "error" ? " drawer-foot-error" : ""
+            }`}
+            role="status"
+          >
+            {saveStatus.phase === "saving" && t("drawer.saving")}
+            {saveStatus.phase === "saved" &&
+              t("drawer.saved", {
+                time: new Date(saveStatus.at).toLocaleTimeString([], { hour12: false }),
+              })}
+            {saveStatus.phase === "error" &&
+              t("drawer.save_failed", { err: saveStatus.message })}
+          </footer>
+        )}
       </aside>
     </>
   );
@@ -1504,12 +1592,6 @@ export function Banner({
 
 export function Empty({ children }: { children: ReactNode }) {
   return <p className="empty">{children}</p>;
-}
-
-export function ms(value: number | null | undefined): string {
-  if (value === null || value === undefined) return "—";
-  if (value < 1000) return `${Math.round(value)} ms`;
-  return `${(value / 1000).toFixed(2)} s`;
 }
 
 export function num(value: number): string {

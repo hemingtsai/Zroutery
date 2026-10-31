@@ -1,17 +1,10 @@
-import { useState } from "react";
-import { api, costText, errorText, money, virtualId } from "../api";
+import { useEffect, useState } from "react";
+import { api, errorText } from "../api";
 import {
-  TIERS,
   type AppConfig,
-  type Budget,
-  type BudgetPeriod,
-  type BudgetScope,
-  type ModelTier,
-  type NamingStyle,
   type Snapshot,
 } from "../api";
 import {
-  Badge,
   Button,
   CommitInput,
   CommitNumber,
@@ -25,7 +18,8 @@ import {
   type ConfirmRequest,
 } from "../components";
 import { useI18n, describeBackendError } from "../i18n";
-
+import type { UiMode } from "../mode";
+import type { Skin } from "../skin";
 /**
  * Settings is deliberately the most conventional page: gateway transport,
  * spending limits, and the deep knobs. Nothing here is needed to understand
@@ -38,6 +32,10 @@ export default function Settings({
   busy,
   themePref,
   onThemePref,
+  skin,
+  onSkinChange,
+  mode,
+  onModeChange,
 }: {
   snapshot: Snapshot;
   save: (mutate: (config: AppConfig) => AppConfig | null) => Promise<boolean>;
@@ -45,6 +43,10 @@ export default function Settings({
   busy: boolean;
   themePref: "system" | "light" | "dark";
   onThemePref: (pref: "system" | "light" | "dark") => void;
+  skin: Skin;
+  onSkinChange: (skin: Skin) => void;
+  mode: UiMode;
+  onModeChange: (mode: UiMode) => void;
 }) {
   const { config, server } = snapshot;
   const { t, lang, setLang } = useI18n();
@@ -52,13 +54,11 @@ export default function Settings({
   const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
   const [originError, setOriginError] = useState<string | null>(null);
   const [originDraft, setOriginDraft] = useState("");
-  const [budgetDraft, setBudgetDraft] = useState({
-    scope: "global",
-    period: "day" as BudgetPeriod,
-    amount: 0,
-    currency: "USD",
-  });
   const [revealed, setRevealed] = useState<string | null>(null);
+  // Simple mode keeps the general tab alone — the gateway pane is an advanced
+  // surface. A reader standing on it when the mode narrows falls back to the
+  // tab that remains.
+  const simpleOnly = mode === "simple";
 
   const patchServer = (patch: Partial<AppConfig["server"]>) => {
     void save((cfg) => {
@@ -80,52 +80,6 @@ export default function Settings({
     void save((cfg) => {
       const next = structuredClone(cfg);
       Object.assign(next.balances, patch);
-      return next;
-    });
-  };
-
-  const parseScope = (value: string): BudgetScope => {
-    const [kind, rest] = value.split(":");
-    if (kind === "tier" && TIERS.includes(rest as ModelTier)) return { kind: "tier", tier: rest as ModelTier };
-    if (kind === "provider") return { kind: "provider", id: rest };
-    return { kind: "global" };
-  };
-
-  const addBudget = () => {
-    void save((cfg) => {
-      const next = structuredClone(cfg);
-      next.budgets.push({
-        id: "",
-        scope: parseScope(budgetDraft.scope),
-        period: budgetDraft.period,
-        limit: {
-          currency: budgetDraft.currency.trim().toUpperCase() || "USD",
-          amount: budgetDraft.amount,
-        },
-        on_exceeded: { action: "reject" },
-        enabled: true,
-      });
-      return next;
-    });
-    setBudgetDraft({ ...budgetDraft, amount: 0 });
-  };
-
-  const patchBudget = (id: string, patch: Partial<Budget>) => {
-    void save((cfg) => {
-      const next = structuredClone(cfg);
-      const budget = next.budgets.find((b) => b.id === id);
-      if (!budget) return null;
-      Object.assign(budget, patch);
-      return next;
-    });
-  };
-
-  const removeBudget = (id: string) => {
-    void save((cfg) => {
-      const next = structuredClone(cfg);
-      const index = next.budgets.findIndex((b) => b.id === id);
-      if (index < 0) return null;
-      next.budgets.splice(index, 1);
       return next;
     });
   };
@@ -162,6 +116,31 @@ export default function Settings({
   const generalPane = (
     <>
         <Section title={t("appearance.title")}>
+          {simpleOnly && (
+            /*
+              * The mode row, in simple mode only: the reader it serves is the
+              * one who wants out of simple mode or reassurance about what it
+              * does. It is the same Segment the sidebar foot carries — two
+              * entrances, one state.
+              */
+            <div className="setting-row">
+              <div className="setting-left">
+                <span className="setting-title">{t("mode.toggle_aria")}</span>
+                <span className="setting-desc">{t("mode.settings_hint")}</span>
+              </div>
+              <div className="setting-right">
+                <Segment<UiMode>
+                  ariaLabel={t("mode.toggle_aria")}
+                  value={mode}
+                  onChange={onModeChange}
+                  options={[
+                    { value: "simple", label: t("mode.simple") },
+                    { value: "geek", label: t("mode.geek") },
+                  ]}
+                />
+              </div>
+            </div>
+          )}
           <div className="setting-row">
             <div className="setting-left">
               <span className="setting-title">{t("settings.language")}</span>
@@ -173,6 +152,7 @@ export default function Settings({
                 onChange={setLang}
                 options={[
                   { value: "zh", label: t("lang.zh") },
+                  { value: "zh-TW", label: t("lang.zh_tw") },
                   { value: "en", label: t("lang.en") },
                 ]}
               />
@@ -191,6 +171,29 @@ export default function Settings({
                   { value: "system", label: t("theme.system") },
                   { value: "light", label: t("theme.light") },
                   { value: "dark", label: t("theme.dark") },
+                ]}
+              />
+            </div>
+          </div>
+          {/*
+            * The skin axis sits beside the theme axis: a skin re-inks the same
+            * information structure, and a theme flips it light or dark, so the
+            * two dropdowns read as one pair at the foot of the appearance
+            * section.
+            */}
+          <div className="setting-row">
+            <div className="setting-left">
+              <span className="setting-title">{t("settings.skin")}</span>
+            </div>
+            <div className="setting-right">
+              <Select<Skin>
+                ariaLabel={t("settings.skin")}
+                value={skin}
+                onChange={onSkinChange}
+                options={[
+                  { value: "industrial", label: t("skin.industrial") },
+                  { value: "md3", label: t("skin.md3") },
+                  { value: "fluent", label: t("skin.fluent") },
                 ]}
               />
             </div>
@@ -299,6 +302,25 @@ export default function Settings({
             </div>
           </div>
         </Section>
+
+        {simpleOnly && (
+          /*
+            * The about section, in simple mode only: the gateway pane it
+            * complements is hidden there, and with it the one place that named
+            * the configuration file. Version and path are facts, not knobs, so
+            * the section reads and changes nothing.
+            */
+          <Section title={t("settings.about")} hint={t("settings.about_note")}>
+            <div className="kv-row">
+              <span className="kv-key">{t("settings.version")}</span>
+              <span className="kv-val mono">v{snapshot.version}</span>
+            </div>
+            <div className="kv-row">
+              <span className="kv-key">{t("settings.config_path")}</span>
+              <span className="kv-val mono">{snapshot.config_path}</span>
+            </div>
+          </Section>
+        )}
     </>
   );
 
@@ -540,169 +562,10 @@ export default function Settings({
     </>
   );
 
-  const budgetsPane = (
-    <>
-        <Section title={t("settings.budgets")} hint={t("settings.budgets_hint")}>
-          {snapshot.budgets.length > 0 && (
-            <table className="table">
-              {/* Named for the table list a screen reader offers; the visible
-                  heading above it is not part of that announcement. */}
-              <caption className="table-caption">{t("settings.budgets")}</caption>
-              <thead>
-                <tr>
-                  <th scope="col">{t("budget.covers")}</th>
-                  <th scope="col">{t("budget.window")}</th>
-                  <th scope="col">{t("budget.limit")}</th>
-                  <th scope="col">{t("budget.spent")}</th>
-                  <th scope="col">{t("budget.when")}</th>
-                  <th scope="col">{t("budget.on")}</th>
-                  <th />
-                </tr>
-              </thead>
-              <tbody>
-                {snapshot.budgets.map((status) => {
-                  const b = status.budget;
-                  const over = status.used >= 1;
-                  const scope = budgetScopeText(t, b.scope, config.routing.naming_style);
-                  return (
-                    <tr key={b.id} className={over ? "row-warn" : ""}>
-                      <td>{scope}</td>
-                      <td>{t(b.period === "day" ? "period.day" : "period.month")}</td>
-                      <td className="mono">{money(b.limit.currency, b.limit.amount)}</td>
-                      <td>
-                        <span className="mono">{costText(status.spent)}</span>{" "}
-                        {over ? (
-                          <Badge tone="danger">{t("budget.used_up")}</Badge>
-                        ) : (
-                          <span className="muted">{Math.round(status.used * 100)}%</span>
-                        )}
-                      </td>
-                      <td>
-                        <Select<ModelTier | "reject">
-                          ariaLabel={t("budget.when")}
-                          value={b.on_exceeded.action === "degrade" ? b.on_exceeded.to : "reject"}
-                          onChange={(next) =>
-                            patchBudget(b.id, {
-                              on_exceeded:
-                                next === "reject"
-                                  ? { action: "reject" }
-                                  : { action: "degrade", to: next },
-                            })
-                          }
-                          options={[
-                            { value: "reject", label: t("budget.reject") },
-                            ...TIERS.map((c) => ({
-                              value: c as ModelTier,
-                              label: t("budget.degrade", { id: virtualId(c, config.routing.naming_style) }),
-                            })),
-                          ]}
-                        />
-                      </td>
-                      <td>
-                        <input
-                          type="checkbox"
-                          aria-label={t("budget.on")}
-                          checked={b.enabled}
-                          onChange={(e) => patchBudget(b.id, { enabled: e.currentTarget.checked })}
-                        />
-                      </td>
-                      <td>
-                        <Button
-                          kind="ghost"
-                          onClick={() =>
-                            setConfirm({
-                              title: t("confirm.remove_budget"),
-                              confirmLabel: t("common.delete"),
-                              danger: true,
-                              onConfirm: () => removeBudget(b.id),
-                            })
-                          }
-                        >
-                          {t("common.delete")}
-                        </Button>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          )}
-          <div className="setting-row">
-            <div className="setting-left">
-              <span className="setting-title">{t("budget.covers")}</span>
-            </div>
-            <div className="setting-right">
-              <Select
-                ariaLabel={t("budget.covers")}
-                value={budgetDraft.scope}
-                onChange={(scope) => setBudgetDraft({ ...budgetDraft, scope })}
-                options={[
-                  { value: "global", label: t("scope.global") },
-                  ...TIERS.map((c) => ({ value: `tier:${c}`, label: virtualId(c, config.routing.naming_style) })),
-                  ...config.providers.map((p) => ({
-                    value: `provider:${p.id}`,
-                    label: t("scope.provider", { id: p.name }),
-                  })),
-                ]}
-              />
-            </div>
-          </div>
-          <div className="setting-row">
-            <div className="setting-left">
-              <span className="setting-title">{t("budget.window")}</span>
-            </div>
-            <div className="setting-right">
-              <Segment<BudgetPeriod>
-                ariaLabel={t("budget.window")}
-                value={budgetDraft.period}
-                onChange={(period) => setBudgetDraft({ ...budgetDraft, period })}
-                options={[
-                  { value: "day", label: t("period.day") },
-                  { value: "month", label: t("period.month") },
-                ]}
-              />
-            </div>
-          </div>
-          <div className="setting-row">
-            <div className="setting-left">
-              <span className="setting-title">{t("budget.limit")}</span>
-              <span className="setting-desc">{t("budget.currency_hint")}</span>
-            </div>
-            <div className="setting-right">
-              <CommitNumber
-                min={0}
-                value={budgetDraft.amount}
-                ariaLabel={t("budget.limit")}
-                onCommit={(amount) => setBudgetDraft({ ...budgetDraft, amount: amount ?? 0 })}
-              />
-            </div>
-          </div>
-          <div className="setting-row">
-            <div className="setting-left">
-              <span className="setting-title">{t("field.currency")}</span>
-            </div>
-            <div className="setting-right">
-              <input
-                aria-label={t("field.currency")}
-                value={budgetDraft.currency}
-                onChange={(e) =>
-                  setBudgetDraft({ ...budgetDraft, currency: e.currentTarget.value.toUpperCase() })
-                }
-              />
-            </div>
-          </div>
-          <div className="setting-row">
-            <div className="setting-left" />
-            <div className="setting-right">
-              <Button onClick={addBudget} disabled={busy || budgetDraft.amount <= 0}>
-                {t("budget.add")}
-              </Button>
-            </div>
-          </div>
-        </Section>
-    </>
-  );
-  const [tab, setTab] = useState<"general" | "gateway" | "budgets">("general");
+  const [tab, setTab] = useState<"general" | "gateway">("general");
+  useEffect(() => {
+    if (simpleOnly && tab !== "general") setTab("general");
+  }, [simpleOnly, tab]);
 
   return (
     <>
@@ -711,31 +574,18 @@ export default function Settings({
       <PageHead lede={t("settings.lede")} />
 
       <Tabs
-        value={tab}
+        value={simpleOnly ? "general" : tab}
         onChange={(next) => setTab(next as typeof tab)}
         ariaLabel={t("settings.tab_group")}
-        tabs={[
-          { value: "general", label: t("settings.tab_general"), content: generalPane },
-          { value: "gateway", label: t("settings.tab_gateway"), content: gatewayPane },
-          { value: "budgets", label: t("settings.tab_budgets"), content: budgetsPane },
-        ]}
+        tabs={
+          simpleOnly
+            ? [{ value: "general", label: t("settings.tab_general"), content: generalPane }]
+            : [
+                { value: "general", label: t("settings.tab_general"), content: generalPane },
+                { value: "gateway", label: t("settings.tab_gateway"), content: gatewayPane },
+              ]
+        }
       />
     </>
   );
-}
-
-/** A budget's scope as a localized phrase. */
-function budgetScopeText(
-  t: ReturnType<typeof useI18n>["t"],
-  scope: BudgetScope,
-  style: NamingStyle = "internal",
-): string {
-  switch (scope.kind) {
-    case "global":
-      return t("scope.global");
-    case "provider":
-      return t("scope.provider", { id: scope.id });
-    case "tier":
-      return virtualId(scope.tier, style);
-  }
 }
