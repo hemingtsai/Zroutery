@@ -116,6 +116,7 @@ rusqlite = { version = "0.40", features = ["bundled"] }
 tauri = { version = "2", features = ["tray-icon", "macos-private-api", "image-png"] }
 tauri-plugin-clipboard-manager = "2"
 tauri-plugin-autostart = "2"
+tauri-plugin-dialog = "2"
 
 # The desktop-native shell: one process at a time, a way to summon the
 # window from another application, a `zroutery://` URL scheme, and a
@@ -129,17 +130,20 @@ tauri-plugin-global-shortcut = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-deep-link = "2"
 
-# Each platform uses its native credential store: the macOS keychain or the
-# Windows Credential Manager. Both backends exist in the same keyring version
-# under target-specific features.
+# Each platform uses its native credential store: the macOS keychain, Windows
+# Credential Manager or Linux Secret Service, selected by target-specific features.
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { version = "3.6.3", features = ["apple-native"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSColor", "NSColorSpace", "objc2-core-foundation"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 keyring = { version = "3.6.3", features = ["windows-native"] }
 # Reading the user's UI language for the tray menu, which is drawn before any
 # webview (and its locale machinery) exists.
-windows-sys = { version = "0.60", features = ["Win32_Globalization"] }
+windows-sys = { version = "0.60", features = ["Win32_Globalization", "Win32_Graphics_Dwm"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3.6.3", features = ["sync-secret-service"] }
 
 # A panel on a real socket, for the balance path.
 #
