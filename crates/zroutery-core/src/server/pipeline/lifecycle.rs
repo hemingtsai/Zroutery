@@ -6,6 +6,10 @@ use std::time::Instant;
 use axum::http::HeaderMap;
 
 use super::AppState;
+use crate::accounting::{
+    AttemptFact, AttemptState, PersistenceState, RequestAccounting, SettlementFact,
+    SETTLEMENT_SCHEMA_VERSION,
+};
 use crate::billing::{Cost, Pricing};
 use crate::config::{ModelTier, RoutingConfig};
 use crate::error::Error;
@@ -60,6 +64,7 @@ pub(super) enum TerminalKind {
     /// The request failed. The class is the canonical one.
     Failed {
         failure: ClassifiedFailure,
+        retry_after: Option<std::time::Duration>,
         /// The message for the activity log, taken from the error's safe form.
         /// `Error::to_string()` is deliberately not used: it embeds the
         /// provider's response body, whose shape — HTML, JSON, plain text — no
@@ -85,6 +90,7 @@ impl TerminalKind {
     pub(super) fn failed(error: &Error) -> Self {
         TerminalKind::Failed {
             failure: error.classified(),
+            retry_after: error.retry_after(),
             message: error.safe_message(),
         }
     }
@@ -198,6 +204,7 @@ pub(super) struct RequestLifecycle {
     planned: Option<CandidateIdentity>,
     /// One entry per send the pipeline observed, in order.
     attempts: Vec<OutcomeAttempt>,
+    accounting_attempts: Vec<AttemptFact>,
     /// The candidate whose response was actually delivered, if any.
     served: Option<CandidateIdentity>,
     /// Response store id, for the Responses API lifecycle.
@@ -301,6 +308,7 @@ impl RequestLifecycle {
             decision: None,
             planned: None,
             attempts: Vec::new(),
+            accounting_attempts: Vec::new(),
             served: None,
             response_id: None,
             attempt_failure_accounted: false,
@@ -770,7 +778,26 @@ impl RequestLifecycle {
     /// moves on — so at most one is ever open. A buffered attempt is settled
     /// immediately; a stream's is settled by the terminal transition, because a
     /// handshake is all that is known once the body belongs to the client.
-    pub(super) fn begin_attempt(&mut self, candidate: &Candidate, rectified: bool) {
+    pub(super) fn begin_attempt(
+        &mut self,
+        candidate: &Candidate,
+        rectified: bool,
+    ) -> crate::error::Result<()> {
+        self.begin_accounting_attempt(candidate, rectified, true)
+    }
+
+    pub(super) fn begin_preparation(&mut self, candidate: &Candidate) -> crate::error::Result<()> {
+        self.begin_accounting_attempt(candidate, false, false)
+    }
+
+    fn begin_accounting_attempt(
+        &mut self,
+        candidate: &Candidate,
+        rectified: bool,
+        sent: bool,
+    ) -> crate::error::Result<()> {
+        // Before opening a retry, any known failed usage must already be durable.
+        self.state.accounting_ready()?;
         self.last_candidate = Some(candidate.clone());
         self.record
             .inference_credential(candidate.credential.as_ref());
@@ -789,8 +816,14 @@ impl RequestLifecycle {
         // another candidate already settled one.
         self.attempt_failure_accounted = false;
         let now = chrono::Utc::now().timestamp();
+        let id = format!("att_{}", uuid::Uuid::new_v4().simple());
+        let mut fact = AttemptFact::new(id.clone(), Some(self.id().to_string()), candidate, sent);
+        fact.rectified = rectified;
+        self.state.persist_attempt(&fact)?;
+        self.record.execution(&fact.execution);
+        self.accounting_attempts.push(fact);
         self.attempts.push(OutcomeAttempt {
-            attempt_id: format!("att_{}", uuid::Uuid::new_v4().simple()),
+            attempt_id: id,
             candidate_model: candidate.model_id().to_string(),
             candidate_provider: candidate.provider.id.clone(),
             started_at: now,
@@ -806,6 +839,15 @@ impl RequestLifecycle {
             // what the provider reported back and is not knowable before.
             cost: None,
         });
+        Ok(())
+    }
+
+    /// Capture usage before validating the returned task. A malformed classifier
+    /// answer can still be billed; failover must not discard its known charge.
+    pub(super) fn observed_attempt_usage(&mut self, usage: Usage) {
+        if let Some(fact) = self.accounting_attempts.last_mut() {
+            fact.observe_usage(usage);
+        }
     }
 
     /// Price the most recent attempt, once its usage is known.
@@ -819,17 +861,12 @@ impl RequestLifecycle {
     /// It prices the last attempt, which is the one the settlement describes; an
     /// earlier failed attempt in the same chain keeps whatever usage its own
     /// failure reported.
-    fn price_last_attempt(&mut self, pricing: Option<&Pricing>, usage: &Usage) {
-        let Some(pricing) = pricing else {
-            return;
-        };
-        if *usage == Usage::default() {
-            // No usage means no basis for a figure. Leaving it unattributed is
-            // the honest answer; zero would claim the call was free.
-            return;
-        }
-        if let Some(attempt) = self.attempts.last_mut() {
-            attempt.cost = Some(pricing.cost_of(usage).amount);
+    fn price_last_attempt(&mut self) {
+        if let (Some(attempt), Some(fact)) =
+            (self.attempts.last_mut(), self.accounting_attempts.last())
+        {
+            // The same quote that is charged goes into the Outcome/ML sample.
+            attempt.cost = fact.cost.as_ref().map(|cost| cost.amount);
         }
     }
 
@@ -882,6 +919,19 @@ impl RequestLifecycle {
         attempt.failure_class = Some(failure.class);
         attempt.failure_message = Some(failure.message);
         attempt.http_status = failure.status;
+        if let Some(fact) = self.accounting_attempts.get_mut(index) {
+            if let Error::InterruptedStream { usage } = error {
+                fact.observe_usage(*usage);
+            }
+            fact.failure_class = Some(failure.class);
+            fact.finish(AttemptState::Failed);
+            // The caller may still classify/fail over; a persistence error
+            // makes the next before-send gate fail locally, not replay this call.
+            if let Err(error) = self.state.persist_attempt(fact) {
+                tracing::error!(attempt_id = %fact.id, %error, "failed attempt accounting is pending");
+            }
+            attempt.cost = fact.cost.as_ref().map(|cost| cost.amount);
+        }
     }
 
     /// The identity of the final attempt actually made, if any.
@@ -941,9 +991,13 @@ impl RequestLifecycle {
     /// counts. The attempt verdict, the classified router accounting, the
     /// activity record, the charge and the request's single `Outcome` are each
     /// written exactly once, in that order, from one place.
-    pub(super) fn finalize(&mut self, terminal: TerminalKind, settlement: Settlement) {
+    pub(super) fn finalize(
+        &mut self,
+        terminal: TerminalKind,
+        settlement: Settlement,
+    ) -> crate::error::Result<()> {
         if self.terminal {
-            return;
+            return self.state.accounting_ready();
         }
         self.terminal = true;
 
@@ -965,29 +1019,53 @@ impl RequestLifecycle {
                 self.state
                     .router
                     .record_candidate_failure(candidate, &failure, &self.routing);
+                if failure.class == crate::failure::FailureClass::RateLimit {
+                    if let TerminalKind::Failed {
+                        retry_after: Some(wait),
+                        ..
+                    } = &terminal
+                    {
+                        self.state
+                            .router
+                            .note_candidate_rate_limit_wait(candidate, *wait);
+                    }
+                }
             }
         }
 
-        // 3. Spend. A stream only reports its usage at the end, so this is the
-        //    one moment its cost can be charged.
-        let cost = settlement
-            .pricing
-            .as_ref()
-            .map(|pricing| pricing.cost_of(&settlement.usage));
-        if let Some(cost) = &cost {
-            if !settlement.provider_id.is_empty() {
-                // Booked against the model that answered, so a failover spends
-                // from the provider it actually reached.
-                self.state
-                    .charge(&settlement.provider_id, settlement.tier, cost);
+        // 3. Finish the bound final attempt. Prices and identity come from its
+        // pre-send snapshot, never from configuration re-read at completion.
+        if let Some(fact) = self.accounting_attempts.last_mut() {
+            if fact.state == AttemptState::InFlight {
+                // The handoff must describe the same pre-send identity. These
+                // are checks, not a second source of price or budget scope.
+                debug_assert!(
+                    settlement.provider_id.is_empty()
+                        || settlement.provider_id == fact.execution.provider_id
+                );
+                debug_assert!(settlement.tier.is_none() || settlement.tier == fact.execution.tier);
+                fact.observe_usage(settlement.usage);
+                let state = match terminal {
+                    TerminalKind::Served => AttemptState::Served,
+                    TerminalKind::Failed { .. } => AttemptState::Failed,
+                    TerminalKind::ClientCancelled => AttemptState::Cancelled,
+                    TerminalKind::ClientDisconnected { emitted: true } => AttemptState::Interrupted,
+                    TerminalKind::ClientDisconnected { emitted: false } => AttemptState::Cancelled,
+                };
+                fact.failure_class = terminal.classified().map(|failure| failure.class);
+                fact.finish(state);
             }
         }
+        let cost = self
+            .accounting_attempts
+            .last()
+            .and_then(|attempt| attempt.cost.clone());
         // And attributed to the attempt that incurred it, so a chain's spend is
         // per-attempt rather than only in total. Without this the attempt-scoped
         // training samples carry no cost target at all, and the routing
         // comparison — which reads only attempt samples — compares cost as a
         // structural constant.
-        self.price_last_attempt(settlement.pricing.as_ref(), &settlement.usage);
+        self.price_last_attempt();
 
         // 4. The activity record, once.
         let latency_ms = self.elapsed_ms();
@@ -1000,11 +1078,36 @@ impl RequestLifecycle {
         } else {
             record.fail(terminal.record_status(), terminal.record_message());
         }
-        let record = record.finish(latency_ms);
-        self.state.stats.record(record.clone());
+        let mut record = record.finish(latency_ms);
+        // The legacy builder counted candidate selection, not repaired/retried
+        // sends. The same bound attempt facts must own the displayed counter as
+        // the outcome and accounting journal; skipped probes create no fact.
+        record.attempts = self.accounting_attempts.len().min(u32::MAX as usize) as u32;
+        record.cost = cost.clone();
+        let persistence = if self.state.accounting_status().durable {
+            PersistenceState::Durable
+        } else {
+            PersistenceState::Volatile
+        };
+        record.accounting = Some(RequestAccounting::from_attempts(
+            &self.accounting_attempts,
+            persistence,
+        ));
+        let mut fact = SettlementFact {
+            schema_version: SETTLEMENT_SCHEMA_VERSION,
+            request: record,
+            attempts: self.accounting_attempts.clone(),
+        };
+        let committed = self.state.settle_request(&mut fact);
+        let record = fact.request;
 
         // 5. Exactly one outcome per request, from the accepted schema.
-        let outcome = self.build_outcome(&record, &terminal, cost.as_ref());
+        let published_terminal = if committed.is_ok() {
+            terminal
+        } else {
+            TerminalKind::failed(&Error::Persistence)
+        };
+        let outcome = self.build_outcome(&record, &published_terminal, cost.as_ref());
         let validation = outcome.validate();
         if let Err(reason) = &validation {
             tracing::error!(
@@ -1052,6 +1155,7 @@ impl RequestLifecycle {
         // cannot fail a request.
         self.observed(&outcome, validation.is_ok());
         // projection-block-end
+        committed
     }
 
     /// Build this request's outcome from the accepted schema.

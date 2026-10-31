@@ -56,6 +56,9 @@ pub(super) fn client_for(req: &ChatRequest, provider: &ProviderConfig) -> Client
         &req.client_headers,
     );
     identity.reply_headers = req.reply_headers.clone();
+    if identity.profile != crate::config::ProviderClientProfile::OpenCodeCli {
+        identity.session = super::session_binding::session_signal(req);
+    }
     // The session carrier must survive a Claude -> Chat/Responses bridge too;
     // other Claude-only headers remain subject to the profile/native allowlist.
     if let Some(value) = req.client_headers.get("x-claude-code-session-id") {

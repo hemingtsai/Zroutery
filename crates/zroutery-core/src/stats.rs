@@ -21,6 +21,9 @@ use crate::outcome::Outcome;
 use crate::policy::{DecisionReason, RouteDecision};
 use crate::query::RequestKind;
 
+mod history;
+pub use history::{UsageHistoryPage, UsageHistoryQuery};
+
 /// One completed (or failed) client request.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RequestRecord {
@@ -87,10 +90,47 @@ pub struct RequestRecord {
     pub account_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inference_key_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accounting: Option<crate::accounting::RequestAccounting>,
+}
+
+impl RequestRecord {
+    /// All observed attempts, when available; legacy archives only know the
+    /// final attempt. Reading statistics never rewrites either historical fact.
+    fn observed_usage(&self) -> crate::accounting::UsageTotals {
+        self.accounting
+            .as_ref()
+            .map(|accounting| accounting.observed_usage)
+            .unwrap_or_else(|| self.usage.into())
+    }
+
+    fn add_known_cost(&self, totals: &mut CostTotals) {
+        if let Some(accounting) = &self.accounting {
+            for (currency, amount) in &accounting.known_cost.0 {
+                *totals.0.entry(currency.clone()).or_default() += amount;
+            }
+        } else if let Some(cost) = &self.cost {
+            totals.add(cost);
+        }
+    }
+
+    fn unpriced(&self) -> bool {
+        self.accounting
+            .as_ref()
+            .map(|accounting| accounting.unknown_cost_attempts > 0)
+            .unwrap_or_else(|| self.cost.is_none())
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ModelTotals {
+    /// Request-level grouping by the final resolved model. Attempt totals can
+    /// include failed predecessors; actual charge identities remain in the
+    /// accounting attempt facts, not inferred from this grouping label.
     pub model_id: String,
     pub requests: u64,
     pub failures: u64,
@@ -165,14 +205,13 @@ impl ClientTotals {
         if !record.ok {
             self.failures += 1;
         }
-        self.input_tokens += record.usage.input_tokens as u64;
-        self.output_tokens += record.usage.output_tokens as u64;
-        self.cache_read_tokens += record.usage.cache_read_tokens as u64;
-        self.cache_write_tokens += record.usage.cache_write_tokens as u64;
-        self.reasoning_tokens += record.usage.reasoning_tokens as u64;
-        if let Some(cost) = &record.cost {
-            self.cost.add(cost);
-        }
+        let usage = record.observed_usage();
+        self.input_tokens += usage.input_tokens;
+        self.output_tokens += usage.output_tokens;
+        self.cache_read_tokens += usage.cache_read_tokens;
+        self.cache_write_tokens += usage.cache_write_tokens;
+        self.reasoning_tokens += usage.reasoning_tokens;
+        record.add_known_cost(&mut self.cost);
         let n = self.requests as f64;
         self.avg_latency_ms += (record.latency_ms as f64 - self.avg_latency_ms) / n;
         if let Some(ttft) = record.ttft_ms {
@@ -235,8 +274,9 @@ impl KindTotals {
         if !record.ok {
             self.failures += 1;
         }
-        self.input_tokens += record.usage.input_tokens as u64;
-        self.output_tokens += record.usage.output_tokens as u64;
+        let usage = record.observed_usage();
+        self.input_tokens += usage.input_tokens;
+        self.output_tokens += usage.output_tokens;
         let n = self.requests as f64;
         self.avg_latency_ms += (record.latency_ms as f64 - self.avg_latency_ms) / n;
     }
@@ -249,6 +289,14 @@ pub struct StatsSummary {
     pub failures: u64,
     pub input_tokens: u64,
     pub output_tokens: u64,
+    /// Cache reads/writes are subsets of the cache-inclusive input total.
+    #[serde(default)]
+    pub cache_read_tokens: u64,
+    #[serde(default)]
+    pub cache_write_tokens: u64,
+    /// Requests with wholly or partly unknown cost, not zero-cost requests.
+    #[serde(default)]
+    pub unpriced_requests: u64,
     /// Spend per currency; never summed across currencies.
     pub cost: CostTotals,
     pub per_model: Vec<ModelTotals>,
@@ -287,6 +335,29 @@ pub struct UsageDay {
     pub failures: u64,
     pub input_tokens: u64,
     pub output_tokens: u64,
+    #[serde(default)]
+    pub cache_read_tokens: u64,
+    #[serde(default)]
+    pub cache_write_tokens: u64,
+    #[serde(default)]
+    pub unpriced_requests: u64,
+    /// Known subtotals only, always separated by currency.
+    #[serde(default)]
+    pub cost: CostTotals,
+}
+
+impl UsageDay {
+    pub(crate) fn observe(&mut self, record: &RequestRecord) {
+        let usage = record.observed_usage();
+        self.requests += 1;
+        self.failures += u64::from(!record.ok);
+        self.input_tokens += usage.input_tokens;
+        self.output_tokens += usage.output_tokens;
+        self.cache_read_tokens += usage.cache_read_tokens;
+        self.cache_write_tokens += usage.cache_write_tokens;
+        self.unpriced_requests += u64::from(record.unpriced());
+        record.add_known_cost(&mut self.cost);
+    }
 }
 
 /// How much of the traffic could be attributed to a client.
@@ -364,11 +435,16 @@ struct Inner {
     failures: u64,
     input_tokens: u64,
     output_tokens: u64,
+    cache_read_tokens: u64,
+    cache_write_tokens: u64,
+    unpriced_requests: u64,
     cost: CostTotals,
     store: Option<Arc<crate::runtime_store::RuntimeStore>>,
     pending: Vec<RequestRecord>,
+    settlement_pending: BTreeMap<String, RequestRecord>,
     revision: Option<i64>,
     synced: Option<Instant>,
+    local_revision: i64,
 }
 
 impl Stats {
@@ -386,11 +462,16 @@ impl Stats {
                 failures: 0,
                 input_tokens: 0,
                 output_tokens: 0,
+                cache_read_tokens: 0,
+                cache_write_tokens: 0,
+                unpriced_requests: 0,
                 cost: CostTotals::default(),
                 store: None,
                 pending: Vec::new(),
+                settlement_pending: BTreeMap::new(),
                 revision: None,
                 synced: None,
+                local_revision: 0,
             }),
             observed_clients: Mutex::new(BTreeMap::new()),
         }
@@ -431,6 +512,7 @@ impl Stats {
         inner.limit = limit.max(1);
         while inner.records.len() > inner.limit {
             inner.records.pop_front();
+            inner.local_revision = inner.local_revision.saturating_add(1);
         }
     }
 
@@ -442,17 +524,58 @@ impl Stats {
         Self::accumulate(&mut inner, record);
     }
 
+    /// A transaction already committed usage **and** spend. Do not queue a
+    /// second independent usage write. Normal local commits update in O(1).
+    pub(crate) fn record_committed(
+        &self,
+        record: RequestRecord,
+        before: i64,
+        after: i64,
+        inserted: bool,
+    ) {
+        let mut inner = crate::sync::lock(&self.inner);
+        let was_pending = inner.settlement_pending.remove(&record.id).is_some();
+        if inserted && !was_pending && inner.revision == Some(before) {
+            Self::accumulate(&mut inner, record);
+            inner.revision = Some(after);
+            inner.synced = Some(Instant::now());
+        } else {
+            if let Some(live) = inner.records.iter_mut().find(|live| live.id == record.id) {
+                *live = record;
+            }
+            inner.revision = None;
+            if let Err(error) = Self::refresh_inner(&mut inner) {
+                tracing::error!(%error, "committed accounting projection could not be refreshed");
+            }
+        }
+    }
+
+    pub(crate) fn record_settlement_pending(&self, record: RequestRecord) {
+        let mut inner = crate::sync::lock(&self.inner);
+        if inner
+            .settlement_pending
+            .insert(record.id.clone(), record.clone())
+            .is_none()
+        {
+            Self::accumulate(&mut inner, record);
+        }
+        inner.revision = None;
+    }
+
     fn accumulate(inner: &mut Inner, record: RequestRecord) {
+        inner.local_revision = inner.local_revision.saturating_add(1);
         inner.since = inner.since.min(record.at);
         inner.requests += 1;
         if !record.ok {
             inner.failures += 1;
         }
-        inner.input_tokens += record.usage.input_tokens as u64;
-        inner.output_tokens += record.usage.output_tokens as u64;
-        if let Some(cost) = &record.cost {
-            inner.cost.add(cost);
-        }
+        let usage = record.observed_usage();
+        inner.input_tokens += usage.input_tokens;
+        inner.output_tokens += usage.output_tokens;
+        inner.cache_read_tokens += usage.cache_read_tokens;
+        inner.cache_write_tokens += usage.cache_write_tokens;
+        inner.unpriced_requests += u64::from(record.unpriced());
+        record.add_known_cost(&mut inner.cost);
 
         // Only a model that actually resolved earns its own permanent
         // dimension. An unresolved request still counts towards the totals and
@@ -473,13 +596,11 @@ impl Stats {
         if !record.ok {
             totals.failures += 1;
         }
-        totals.input_tokens += record.usage.input_tokens as u64;
-        totals.output_tokens += record.usage.output_tokens as u64;
-        totals.reasoning_tokens += record.usage.reasoning_tokens as u64;
-        totals.cached_tokens += record.usage.cache_read_tokens as u64;
-        if let Some(cost) = &record.cost {
-            totals.cost.add(cost);
-        }
+        totals.input_tokens += usage.input_tokens;
+        totals.output_tokens += usage.output_tokens;
+        totals.reasoning_tokens += usage.reasoning_tokens;
+        totals.cached_tokens += usage.cache_read_tokens;
+        record.add_known_cost(&mut totals.cost);
         let n = totals.requests as f64;
         totals.avg_latency_ms += (record.latency_ms as f64 - totals.avg_latency_ms) / n;
 
@@ -532,6 +653,18 @@ impl Stats {
         inner.records.iter().rev().take(limit).cloned().collect()
     }
 
+    /// Bounded process-local summaries for lightweight surfaces. No SQLite
+    /// refresh or keychain work is initiated while opening a tray panel.
+    pub fn recent_local(&self, limit: usize) -> Vec<RequestRecord> {
+        crate::sync::lock(&self.inner)
+            .records
+            .iter()
+            .rev()
+            .take(limit)
+            .cloned()
+            .collect()
+    }
+
     pub fn summary(&self) -> StatsSummary {
         let mut inner = crate::sync::lock(&self.inner);
         Self::refresh_if_due(&mut inner);
@@ -541,6 +674,9 @@ impl Stats {
             failures: inner.failures,
             input_tokens: inner.input_tokens,
             output_tokens: inner.output_tokens,
+            cache_read_tokens: inner.cache_read_tokens,
+            cache_write_tokens: inner.cache_write_tokens,
+            unpriced_requests: inner.unpriced_requests,
             cost: inner.cost.clone(),
             per_model: inner.per_model.values().cloned().collect(),
             per_kind: inner.per_kind.values().cloned().collect(),
@@ -562,14 +698,18 @@ impl Stats {
         const MAX_DAYS: u32 = 400;
         let days = days.clamp(1, MAX_DAYS);
         let mut inner = crate::sync::lock(&self.inner);
-        Self::flush_inner(&mut inner)?;
-        let records: Vec<RequestRecord> = match &inner.store {
-            Some(store) => store.usage()?,
-            None => inner.records.iter().cloned().collect(),
-        };
-
         let today = chrono::Local::now().date_naive();
         let first = today - chrono::Duration::days(i64::from(days) - 1);
+        Self::flush_pending(&mut inner)?;
+        if inner.store.is_some() && !inner.settlement_pending.is_empty() {
+            return Err("usage settlement is pending; retry after accounting recovery".into());
+        }
+        let records = if let Some(store) = inner.store.clone() {
+            drop(inner);
+            return store.usage_days(first, today);
+        } else {
+            inner.records.iter().cloned().collect::<Vec<_>>()
+        };
         let mut buckets: BTreeMap<NaiveDate, UsageDay> = BTreeMap::new();
         let mut day = first;
         while day <= today {
@@ -588,12 +728,7 @@ impl Stats {
             let Some(bucket) = buckets.get_mut(&local) else {
                 continue;
             };
-            bucket.requests += 1;
-            if !record.ok {
-                bucket.failures += 1;
-            }
-            bucket.input_tokens += u64::from(record.usage.input_tokens);
-            bucket.output_tokens += u64::from(record.usage.output_tokens);
+            bucket.observe(&record);
         }
 
         Ok(buckets.into_values().collect())
@@ -621,6 +756,11 @@ impl Stats {
     }
 
     fn flush_inner(inner: &mut Inner) -> Result<(), String> {
+        Self::flush_pending(inner)?;
+        Self::refresh_inner(inner)
+    }
+
+    fn flush_pending(inner: &mut Inner) -> Result<(), String> {
         if let Some(store) = &inner.store {
             if !inner.pending.is_empty() {
                 let (before, after, inserted) = store.append_usage_versioned(&inner.pending)?;
@@ -630,11 +770,12 @@ impl Stats {
                     // Duplicate ids or another process changed history. Rebuild
                     // from the committed rows instead of counting the attempted insert.
                     inner.revision = None;
+                    inner.synced = None;
                 }
             }
             inner.pending.clear();
         }
-        Self::refresh_inner(inner)
+        Ok(())
     }
 
     fn refresh_if_due(inner: &mut Inner) {
@@ -667,11 +808,23 @@ impl Stats {
             let ids: std::collections::HashSet<_> =
                 records.iter().map(|record| record.id.clone()).collect();
             let pending = inner.pending.clone();
+            let unsettled: Vec<_> = inner.settlement_pending.values().cloned().collect();
             Self::reset_totals(inner);
-            for record in records {
-                Self::accumulate(inner, live.remove(&record.id).unwrap_or(record));
+            for mut record in records {
+                // Only ephemeral diagnostics come from the in-memory copy.
+                // A revised durable fact must replace old usage/cost/identity.
+                if let Some(previous) = live.remove(&record.id) {
+                    record.error = previous.error;
+                    record.routing_decision = previous.routing_decision;
+                }
+                Self::accumulate(inner, record);
             }
             for record in pending {
+                if !ids.contains(&record.id) {
+                    Self::accumulate(inner, record);
+                }
+            }
+            for record in unsettled {
                 if !ids.contains(&record.id) {
                     Self::accumulate(inner, record);
                 }
@@ -689,10 +842,15 @@ impl Stats {
 
     pub fn export_history(&self) -> Result<Vec<RequestRecord>, String> {
         let mut inner = crate::sync::lock(&self.inner);
-        Self::flush_inner(&mut inner)?;
-        match &inner.store {
-            Some(store) => store.usage(),
-            None => Ok(inner.records.iter().cloned().collect()),
+        Self::flush_pending(&mut inner)?;
+        if inner.store.is_some() && !inner.settlement_pending.is_empty() {
+            return Err("usage settlement is pending; retry after accounting recovery".into());
+        }
+        if let Some(store) = inner.store.clone() {
+            drop(inner);
+            store.usage()
+        } else {
+            Ok(inner.records.iter().cloned().collect())
         }
     }
 
@@ -706,12 +864,42 @@ impl Stats {
                 || record.id.len() > 256
                 || record.client.client_id.as_str().len() > 256
                 || record.requested_model.len() > 512
-                || record
-                    .cost
-                    .as_ref()
-                    .is_some_and(|cost| !cost.amount.is_finite() || cost.amount < 0.0)
+                || record.cost.as_ref().is_some_and(|cost| {
+                    !cost.amount.is_finite()
+                        || cost.amount < 0.0
+                        || cost.currency.trim().is_empty()
+                        || cost.currency != cost.currency.trim().to_ascii_uppercase()
+                })
             {
                 return Err("the usage archive contains an invalid record".into());
+            }
+            if let Some(accounting) = &record.accounting {
+                if accounting.schema_version != crate::accounting::SETTLEMENT_SCHEMA_VERSION
+                    || accounting.known_cost.0.iter().any(|(currency, amount)| {
+                        currency.trim().is_empty()
+                            || *currency != currency.trim().to_ascii_uppercase()
+                            || !amount.is_finite()
+                            || *amount < 0.0
+                    })
+                    || accounting
+                        .observed_usage
+                        .cache_read_tokens
+                        .checked_add(accounting.observed_usage.cache_write_tokens)
+                        .is_none_or(|cached| cached > accounting.observed_usage.input_tokens)
+                    || accounting.observed_usage.reasoning_tokens
+                        > accounting.observed_usage.output_tokens
+                    || [
+                        accounting.observed_usage.input_tokens,
+                        accounting.observed_usage.output_tokens,
+                        accounting.observed_usage.cache_read_tokens,
+                        accounting.observed_usage.cache_write_tokens,
+                        accounting.observed_usage.reasoning_tokens,
+                    ]
+                    .into_iter()
+                    .any(|tokens| tokens > u64::from(u32::MAX) * u64::from(record.attempts.max(1)))
+                {
+                    return Err("the usage archive contains invalid accounting totals".into());
+                }
             }
         }
         let mut inner = crate::sync::lock(&self.inner);
@@ -728,6 +916,15 @@ impl Stats {
     pub fn clear_history(&self, client: Option<&str>) -> Result<(), String> {
         let mut inner = crate::sync::lock(&self.inner);
         Self::flush_inner(&mut inner)?;
+        if inner
+            .settlement_pending
+            .values()
+            .any(|record| client.is_none_or(|client| record.client.client_id.as_str() == client))
+        {
+            return Err(
+                "usage settlement is pending; retry clearing after accounting recovery".into(),
+            );
+        }
         let retained: Vec<RequestRecord> = match &inner.store {
             Some(store) => {
                 store.clear_usage(client)?;
@@ -749,6 +946,7 @@ impl Stats {
     }
 
     fn reset_totals(inner: &mut Inner) {
+        inner.local_revision = inner.local_revision.saturating_add(1);
         inner.records.clear();
         inner.per_model.clear();
         inner.per_kind.clear();
@@ -758,6 +956,9 @@ impl Stats {
         inner.failures = 0;
         inner.input_tokens = 0;
         inner.output_tokens = 0;
+        inner.cache_read_tokens = 0;
+        inner.cache_write_tokens = 0;
+        inner.unpriced_requests = 0;
         inner.cost = CostTotals::default();
         inner.since = Utc::now();
     }
@@ -869,6 +1070,9 @@ impl RecordBuilder {
                 client: ClientFingerprint::unknown(),
                 account_id: None,
                 inference_key_id: None,
+                provider_id: None,
+                model_name: None,
+                accounting: None,
             },
         }
     }
@@ -902,6 +1106,11 @@ impl RecordBuilder {
         self.record.resolved_model = Some(model_id.to_string());
         self.record.provider_name = Some(provider_name.to_string());
         self
+    }
+
+    pub fn execution(&mut self, snapshot: &crate::accounting::ExecutionSnapshot) {
+        self.record.provider_id = Some(snapshot.provider_id.clone());
+        self.record.model_name = Some(snapshot.model_name.clone());
     }
 
     pub fn attempt(&mut self) -> &mut Self {
@@ -1405,5 +1614,27 @@ mod tests {
         assert_eq!(stats.usage_days(0).unwrap().len(), 1);
         assert_eq!(stats.usage_days(5).unwrap().len(), 5);
         assert_eq!(stats.usage_days(u32::MAX).unwrap().len(), 400);
+    }
+
+    #[test]
+    fn durable_views_report_pending_settlement_instead_of_silently_omitting_it() {
+        let directory = tempfile::tempdir().unwrap();
+        let stats = Stats::new(2);
+        stats
+            .attach_store(Arc::new(
+                crate::runtime_store::RuntimeStore::open(&directory.path().join("usage.db"))
+                    .unwrap(),
+            ))
+            .unwrap();
+        stats.record_settlement_pending(rec("pending", false, 1, Usage::default()));
+        assert_eq!(stats.summary().requests, 1);
+        assert!(stats.usage_days(1).unwrap_err().contains("pending"));
+        assert!(stats
+            .query_history(&Default::default())
+            .unwrap_err()
+            .contains("pending"));
+        assert!(stats.export_history().unwrap_err().contains("pending"));
+        assert!(stats.clear_history(None).unwrap_err().contains("pending"));
+        assert!(stats.clear_history(Some("another-client")).is_ok());
     }
 }

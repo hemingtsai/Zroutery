@@ -60,6 +60,8 @@ pub(super) fn stream_response(
     // request does. `SseState`'s terminal transition charges the ledger before
     // the field is dropped, and `Drop` runs for a client that disconnects too.
     admission: AdmissionGuard,
+    classifier_severity: bool,
+    reply_headers: &crate::ir::ReplyHeaders,
 ) -> Response {
     let mut encoder = protocol::stream_encoder(dialect, &candidate.exposed_id, include_usage);
     if let Some(ref id) = response_id {
@@ -80,6 +82,7 @@ pub(super) fn stream_response(
             provider_id: candidate.provider.id.clone(),
             tier: candidate.entry.tier,
             kind,
+            classifier_severity,
             storage,
             response_id,
             cancel_rx,
@@ -99,6 +102,7 @@ pub(super) fn stream_response(
     headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
     headers.insert("x-accel-buffering", HeaderValue::from_static("no"));
     inject_routing_headers(response.headers_mut(), candidate, kind);
+    reply_headers.apply(response.headers_mut());
     response
 }
 

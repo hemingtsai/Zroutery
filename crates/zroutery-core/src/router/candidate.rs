@@ -29,6 +29,8 @@ pub struct Candidate {
     pub degraded: bool,
     /// Explicit account/key selected after model ranking. No secret is held here.
     pub credential: Option<InferenceCredential>,
+    /// Quote chosen before cost ranking; execution uses this exact credential.
+    pub rate_quote: Option<crate::billing::RateQuote>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -45,6 +47,7 @@ impl Candidate {
             provider: provider.clone(),
             degraded,
             credential: None,
+            rate_quote: None,
         }
     }
 
@@ -72,7 +75,10 @@ pub struct ModelHealth {
     pub total_failure: u64,
     /// Exponentially weighted average latency of successful calls.
     pub avg_latency_ms: f64,
-    /// Seconds left before an open breaker may probe, 0 when not open.
+    /// Seconds left for a circuit or default-credential rate-limit window.
     pub cooldown_remaining_secs: u64,
+    /// Rate-limit availability is independent of the circuit's health state.
+    #[serde(default)]
+    pub rate_limit_remaining_secs: u64,
     pub last_error: Option<String>,
 }

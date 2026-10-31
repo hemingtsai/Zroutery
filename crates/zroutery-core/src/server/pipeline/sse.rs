@@ -47,6 +47,8 @@ pub(super) struct SseState {
     /// Set for classifier streams, which accumulate their text so the verdict
     /// can be checked once the stream ends. Main streams never pay for this.
     classifier_text: Option<String>,
+    kind: RequestKind,
+    classifier_severity: bool,
     finished: bool,
     /// Whether any answer byte has been produced for this client yet. A client
     /// that disappears after that truncated the answer it was reading.
@@ -162,16 +164,16 @@ impl SseState {
     ///
     /// Idempotent, so [`Drop`] can call it for a client that walked away
     /// without disturbing a stream that already ended normally.
-    fn finalize(&mut self, terminal: StreamTerminal) {
+    fn finalize(&mut self, terminal: StreamTerminal) -> crate::error::Result<()> {
         if self.lifecycle.is_terminal() {
-            return;
+            return Ok(());
         }
+        let completed = matches!(terminal, StreamTerminal::Completed);
         // Clean up in-flight tracking for Responses API streams.
         if let Some(ref id) = self.response_id {
             self.state.response_store.complete_in_flight(id);
         }
         if let StreamTerminal::Completed = terminal {
-            self.store_completed();
             // Judge the task from the reassembled answer. Only on a normal terminal: a
             // truncated, failed or cancelled stream is content the client never
             // received in full, and attributing a verdict to it would score a model
@@ -185,9 +187,12 @@ impl SseState {
         // parse, and this line is how that shows up in the proxy's log.
         if let StreamTerminal::Completed = terminal {
             if let Some(text) = self.classifier_text.take() {
-                if crate::classifier::parse_verdict(&text)
-                    == crate::classifier::ClassifierVerdict::Unparseable
-                {
+                let valid = crate::classifier::verdict_shape_valid_for_format(
+                    self.kind,
+                    self.classifier_severity,
+                    &text,
+                );
+                if !valid {
                     tracing::warn!(
                         model = %self.lifecycle.served_model(),
                         "streamed classifier response carried no <block> verdict"
@@ -209,7 +214,11 @@ impl SseState {
             provider_id: self.provider_id.clone(),
             tier: self.tier,
         };
-        self.lifecycle.finalize(kind, settlement);
+        self.lifecycle.finalize(kind, settlement)?;
+        if completed {
+            self.store_completed();
+        }
+        Ok(())
     }
 }
 
@@ -220,7 +229,7 @@ impl Drop for SseState {
         // the answer was abandoned, and an abandoned answer is never a served
         // one. Activity, the ledger and the outcome still record what happened,
         // exactly once, and the provider's health is left alone.
-        self.finalize(StreamTerminal::ClientDisconnected);
+        let _ = self.finalize(StreamTerminal::ClientDisconnected);
     }
 }
 
@@ -235,6 +244,7 @@ pub(super) struct StreamContext {
     pub(super) provider_id: String,
     pub(super) tier: Option<ModelTier>,
     pub(super) kind: RequestKind,
+    pub(super) classifier_severity: bool,
     /// Pre-generated response ID for in-flight tracking (Responses API).
     pub(super) response_id: Option<String>,
     /// Cancel receiver for cancellation detection (Responses API).
@@ -277,6 +287,8 @@ pub(super) fn sse_body(
         provider_id: context.provider_id,
         tier: context.tier,
         classifier_text,
+        kind: context.kind,
+        classifier_severity: context.classifier_severity,
         #[cfg(feature = "ml")]
         verify_accumulator,
         finished: false,
@@ -296,12 +308,16 @@ pub(super) fn sse_body(
                     // Settle as the terminal frame is handed out, not while
                     // earlier closing frames are still queued. A disconnect
                     // before the terminal is delivered remains interrupted.
-                    st.finalize(StreamTerminal::Completed);
+                    if let Err(error) = st.finalize(StreamTerminal::Completed) {
+                        let frames = st.encoder.error(&error);
+                        st.pending.extend(frames);
+                        continue;
+                    }
                 }
                 return Some((Ok(bytes::Bytes::from(frame.to_wire())), st));
             }
             if st.finished {
-                st.finalize(StreamTerminal::Completed);
+                let _ = st.finalize(StreamTerminal::Completed);
                 return None;
             }
             // Race upstream events against cancellation signal for immediate abort.
@@ -322,7 +338,7 @@ pub(super) fn sse_body(
                             }
                             // An explicit cancellation is a terminal state of its
                             // own, never a success.
-                            st.finalize(StreamTerminal::Cancelled);
+                            let _ = st.finalize(StreamTerminal::Cancelled);
                             return None;
                         }
                         // Spurious wakeup or channel closed — continue
@@ -424,14 +440,20 @@ pub(super) fn sse_body(
                     let frames = st.encoder.error(&err);
                     st.emitted |= !frames.is_empty();
                     st.pending.extend(frames);
-                    st.finalize(StreamTerminal::UpstreamError(err));
+                    if let Err(error) = st.finalize(StreamTerminal::UpstreamError(err)) {
+                        st.pending.clear();
+                        st.pending.extend(st.encoder.error(&error));
+                    }
                 }
                 None => {
                     st.finished = true;
                     let frames = st.encoder.finish();
                     st.emitted |= !frames.is_empty();
                     st.pending.extend(frames);
-                    st.finalize(StreamTerminal::Completed);
+                    if let Err(error) = st.finalize(StreamTerminal::Completed) {
+                        st.pending.clear();
+                        st.pending.extend(st.encoder.error(&error));
+                    }
                 }
             }
         }

@@ -81,6 +81,7 @@ impl Router {
             members
         };
 
+        let mut rate_wait: Option<std::time::Duration> = None;
         let (closed, half_open): (Vec<&ModelEntry>, Vec<&ModelEntry>) = {
             let health = crate::sync::lock(&self.health);
             let mut closed = Vec::new();
@@ -90,6 +91,11 @@ impl Router {
                 // a whole: the per-model breaker has nothing to say about it,
                 // because the 429 is the account's, not the model's.
                 if self.is_provider_gated(&m.provider_id) {
+                    continue;
+                }
+                let provider = registry.provider_of(m)?;
+                if let Some(wait) = self.default_model_rate_limit(m, provider) {
+                    rate_wait = Some(rate_wait.map_or(wait, |old| old.min(wait)));
                     continue;
                 }
                 match health.get(&m.exposed_id()) {
@@ -139,6 +145,12 @@ impl Router {
             out.push(Candidate::new(entry, provider, degraded));
         }
         if out.is_empty() {
+            if let Some(retry_after) = rate_wait {
+                return Err(Error::RateLimited {
+                    scope: pool_name,
+                    retry_after,
+                });
+            }
             return Err(Error::NoCandidate(pool_name));
         }
         Ok(out)

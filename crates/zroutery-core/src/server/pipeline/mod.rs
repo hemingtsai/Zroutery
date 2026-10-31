@@ -60,6 +60,7 @@ mod ml_rank;
 mod repair;
 mod response;
 mod responses_native;
+pub(super) mod session_binding;
 
 #[cfg(test)]
 mod tests;
@@ -80,6 +81,9 @@ pub(super) async fn handle_chat(
     headers: axum::http::HeaderMap,
     body: Value,
 ) -> Response {
+    if let Err(error) = state.accounting_ready() {
+        return error_response(dialect, &error);
+    }
     let include_usage = dialect == Dialect::OpenAI && openai::wants_stream_usage(&body);
 
     let mut req = match protocol::decode_request(dialect, body.clone()) {
@@ -527,7 +531,21 @@ pub(super) async fn handle_chat(
     } else {
         1
     } as usize;
-    let plan = credentials::expand_inference_keys(&state, plan, limit);
+    let plan = match credentials::expand_inference_keys(&state, plan, limit) {
+        Ok(plan) => plan,
+        Err(error) => {
+            reject(
+                Arc::clone(&state),
+                dialect,
+                req.stream,
+                kind,
+                &req.model,
+                &req.client_headers,
+                &error,
+            );
+            return error_response(dialect, &error);
+        }
+    };
 
     let reply_headers = req.reply_headers.clone();
     let mut response = if req.stream {
@@ -1084,51 +1102,19 @@ async fn console_key(
 /// upstream asking for a moment, and the next candidate is the fallback's job.
 /// The policy lives in `upstream::retry_advice` so the streaming handshake and
 /// this path cannot disagree about what is retryable.
-async fn send_with_retry<F, Fut, T>(
-    provider: &crate::config::ProviderConfig,
-    can_fail_over: bool,
-    mut send: F,
-) -> Result<T>
-where
-    F: FnMut() -> Fut,
-    Fut: std::future::Future<Output = Result<T>>,
-{
-    let mut retries = 0u32;
-    loop {
-        match send().await {
-            Ok(value) => return Ok(value),
-            Err(err) => match crate::upstream::retry_advice(&err, retries, can_fail_over, 1) {
-                Some(delay) => {
-                    tracing::warn!(
-                        provider = %provider.name,
-                        retry = retries + 1,
-                        wait_ms = delay.as_millis(),
-                        error = %err,
-                        "retryable upstream failure, retrying the same candidate"
-                    );
-                    tokio::time::sleep(delay).await;
-                    retries += 1;
-                }
-                None => return Err(err),
-            },
-        }
-    }
-}
-
 /// Send one buffered request, folding an SSE-only upstream back into a response.
 ///
 /// OpenCode's free tier forces `stream: true` (its gate rejects a non-streaming
 /// request), so a non-streaming client's answer arrives as SSE. That case is
 /// collected back into one [`crate::ir::ChatResponse`] here; every other provider
 /// uses the plain buffered send.
-async fn buffered_upstream(
+async fn buffered_upstream_once(
     state: &AppState,
     candidate: &Candidate,
     key: Option<&str>,
     body: &Value,
     client: &ClientIdentity,
     kind: RequestKind,
-    can_fail_over: bool,
 ) -> Result<crate::ir::ChatResponse> {
     // A decision endpoint answers with a probability rather than a message, so
     // the answer is read as a probability and then *spoken back* in the
@@ -1136,17 +1122,19 @@ async fn buffered_upstream(
     // model answered, and the client sees exactly what a language model's
     // verdict would have looked like.
     if candidate.provider.kind.is_decision() {
-        let decision = send_with_retry(&candidate.provider, can_fail_over, || {
-            state.upstream.send_decision(&candidate.provider, key, body)
-        })
-        .await?;
+        let decision = state
+            .upstream
+            .send_decision(&candidate.provider, key, body)
+            .await?;
         let threshold = candidate.provider.decision.threshold;
         let verdict = crate::classifier::verdict_from_decision(Some(decision), threshold);
-        return Ok(decision_response(
-            kind,
-            verdict,
-            &candidate.entry.upstream_model,
-        ));
+        let mut response = decision_response(kind, verdict, &candidate.entry.upstream_model);
+        response.passthrough.insert(
+            "zroutery.internal.decision_verdict".into(),
+            serde_json::to_value(verdict)
+                .map_err(|_| Error::internal("cannot represent decision verdict"))?,
+        );
+        return Ok(response);
     }
     #[cfg(feature = "opencode")]
     if client.profile == crate::config::ProviderClientProfile::OpenCodeCli {
@@ -1159,7 +1147,7 @@ async fn buffered_upstream(
                 body,
                 &candidate.entry.upstream_model,
                 client,
-                can_fail_over,
+                true, // Pipeline owns every retry and its durable attempt ID.
             )
             .await?;
         let mut collector = protocol::StreamCollector::default();
@@ -1169,12 +1157,170 @@ async fn buffered_upstream(
         }
         return Ok(collector.finish());
     }
-    send_with_retry(&candidate.provider, can_fail_over, || {
-        state
+    state
+        .upstream
+        .send_with_identity(&candidate.provider, key, body, client)
+        .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn buffered_upstream(
+    state: &AppState,
+    candidate: &Candidate,
+    key: Option<&str>,
+    body: &Value,
+    client: &ClientIdentity,
+    kind: RequestKind,
+    can_fail_over: bool,
+    lifecycle: &mut RequestLifecycle,
+) -> Result<crate::ir::ChatResponse> {
+    let mut body = body.clone();
+    let mut client = client.clone();
+    let mut binding = state
+        .upstream_sessions
+        .resolve(candidate, &mut body, &mut client);
+    let started = Instant::now();
+    let deadline = std::time::Duration::from_secs(120).min(std::time::Duration::from_secs(
+        candidate.provider.timeout_secs,
+    ));
+    let mut retries = 0;
+    loop {
+        let attempt = Instant::now();
+        let result = buffered_upstream_once(state, candidate, key, &body, &client, kind).await;
+        match result {
+            Ok(response) => return Ok(response),
+            Err(error) => {
+                if lifecycle.routing().rectifier.enabled
+                    && error.is_session_binding_invalidated()
+                    && retries < crate::upstream::MAX_TOTAL_RETRIES
+                    && started.elapsed() < deadline
+                    && binding.refresh(&state.upstream_sessions, &mut body, &mut client)
+                {
+                    lifecycle.failed_attempt(attempt, &error);
+                    state.accounting_ready()?;
+                    lifecycle.attempted(candidate);
+                    lifecycle.begin_attempt(candidate, true)?;
+                    retries += 1;
+                    tracing::info!(
+                        model = candidate.model_id(),
+                        "renewed upstream session binding"
+                    );
+                    continue;
+                }
+                let advice = crate::upstream::retry_advice(&error, retries, can_fail_over, 1);
+                let Some(delay) = advice.filter(|delay| started.elapsed() + *delay < deadline)
+                else {
+                    return Err(error);
+                };
+                lifecycle.failed_attempt(attempt, &error);
+                state.accounting_ready()?;
+                tokio::time::sleep(delay).await;
+                lifecycle.attempted(candidate);
+                lifecycle.begin_attempt(candidate, false)?;
+                retries += 1;
+            }
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn stream_upstream(
+    state: &AppState,
+    candidate: &Candidate,
+    key: Option<&str>,
+    body: &Value,
+    client: &ClientIdentity,
+    can_fail_over: bool,
+    lifecycle: &mut RequestLifecycle,
+    kind: RequestKind,
+    req: &ChatRequest,
+) -> Result<crate::upstream::EventStream> {
+    if candidate.provider.kind.is_decision() {
+        let decision = state
             .upstream
-            .send_with_identity(&candidate.provider, key, body, client)
-    })
-    .await
+            .send_decision(&candidate.provider, key, body)
+            .await?;
+        let verdict = crate::classifier::verdict_from_decision(
+            Some(decision),
+            candidate.provider.decision.threshold,
+        );
+        let response = decision_response(kind, verdict, &candidate.entry.upstream_model);
+        let text = crate::classifier::decision_text_for_request(req, kind, verdict);
+        let events = vec![
+            crate::ir::StreamEvent::Start {
+                id: response.id,
+                model: response.model,
+                usage: response.usage,
+            },
+            crate::ir::StreamEvent::TextDelta { index: 0, text },
+            crate::ir::StreamEvent::BlockStop { index: 0 },
+            crate::ir::StreamEvent::Stop {
+                stop_reason: crate::ir::StopReason::EndTurn,
+                stop_sequence: None,
+                usage: response.usage,
+            },
+        ];
+        return Ok(Box::pin(futures_util::stream::iter(
+            events.into_iter().map(Ok),
+        )));
+    }
+    let mut body = body.clone();
+    let mut client = client.clone();
+    let mut binding = state
+        .upstream_sessions
+        .resolve(candidate, &mut body, &mut client);
+    let started = Instant::now();
+    let deadline = std::time::Duration::from_secs(120).min(std::time::Duration::from_secs(
+        candidate.provider.timeout_secs,
+    ));
+    let mut retries = 0;
+    loop {
+        let attempt = Instant::now();
+        let result = state
+            .upstream
+            .stream_with_identity_policy(
+                &candidate.provider,
+                key,
+                &body,
+                &candidate.entry.upstream_model,
+                &client,
+                true,
+            )
+            .await;
+        match result {
+            Ok(events) => return Ok(events),
+            Err(error) => {
+                if lifecycle.routing().rectifier.enabled
+                    && error.is_session_binding_invalidated()
+                    && retries < crate::upstream::MAX_TOTAL_RETRIES
+                    && started.elapsed() < deadline
+                    && binding.refresh(&state.upstream_sessions, &mut body, &mut client)
+                {
+                    lifecycle.failed_attempt(attempt, &error);
+                    state.accounting_ready()?;
+                    lifecycle.attempted(candidate);
+                    lifecycle.begin_attempt(candidate, true)?;
+                    retries += 1;
+                    tracing::info!(
+                        model = candidate.model_id(),
+                        "renewed upstream session binding"
+                    );
+                    continue;
+                }
+                let Some(delay) = crate::upstream::retry_advice(&error, retries, can_fail_over, 2)
+                    .filter(|delay| started.elapsed() + *delay < deadline)
+                else {
+                    return Err(error);
+                };
+                lifecycle.failed_attempt(attempt, &error);
+                state.accounting_ready()?;
+                tokio::time::sleep(delay).await;
+                lifecycle.attempted(candidate);
+                lifecycle.begin_attempt(candidate, false)?;
+                retries += 1;
+            }
+        }
+    }
 }
 
 /// The answer a decision model's probability is spoken back as.
@@ -1192,10 +1338,7 @@ fn decision_response(
         // An id of its own, and not a constant: the decision protocol has no
         // id to carry, and two answers that shared one would be two answers a
         // client could not tell apart.
-        id: format!(
-            "zroutery-decision-{}",
-            chrono::Utc::now().timestamp_millis()
-        ),
+        id: format!("zroutery-decision-{}", uuid::Uuid::new_v4().simple()),
         model: model.to_string(),
         content: vec![crate::ir::ContentBlock::text(
             crate::classifier::verdict_text_for(kind, verdict),
@@ -1305,7 +1448,9 @@ async fn buffered_chat(
                 // The candidate was never reached, but the loop did try it, so
                 // the attempt evidence records the same canonical failure the
                 // router adapter accounts for.
-                lifecycle.begin_attempt(candidate, false);
+                if let Err(error) = lifecycle.begin_preparation(candidate) {
+                    return error_response(dialect, &error);
+                }
                 lifecycle.failed_attempt(attempt_start, &e);
                 state.router.record_candidate_failure(
                     candidate,
@@ -1332,7 +1477,10 @@ async fn buffered_chat(
             continue;
         }
 
-        lifecycle.begin_attempt(candidate, false);
+        if let Err(error) = lifecycle.begin_attempt(candidate, false) {
+            state.router.release_half_open_permit(candidate.model_id());
+            return error_response(dialect, &error);
+        }
         let mut client = client_for(&req, &candidate.provider);
         let key = match console_key(&state, candidate, key, &mut client).await {
             Ok(key) => key,
@@ -1355,10 +1503,30 @@ async fn buffered_chat(
             &client,
             kind,
             can_fail_over,
+            &mut lifecycle,
         )
         .await
         {
             Ok(mut resp) => {
+                lifecycle.observed_attempt_usage(resp.usage);
+                if candidate.provider.kind.is_decision() {
+                    if let Some(verdict) = resp
+                        .passthrough
+                        .get("zroutery.internal.decision_verdict")
+                        .and_then(|value| {
+                            serde_json::from_value::<crate::classifier::ClassifierVerdict>(
+                                value.clone(),
+                            )
+                            .ok()
+                        })
+                    {
+                        // Validate the canonical binary verdict first; the
+                        // native severity representation is applied at egress.
+                        resp.content = vec![crate::ir::ContentBlock::text(
+                            crate::classifier::verdict_text_for(kind, verdict),
+                        )];
+                    }
+                }
                 // A placeholder we injected only to satisfy the gate must not
                 // reach a client that never declared it.
                 #[cfg(feature = "opencode")]
@@ -1373,36 +1541,36 @@ async fn buffered_chat(
                 // is reported, the failure is recorded and the next candidate
                 // is tried. There is no "looks safe" fallback.
                 if !kind.is_main() {
-                    match crate::classifier::parse_verdict_for(kind, &resp.text()) {
-                        crate::classifier::ClassifierVerdict::Allow
-                        | crate::classifier::ClassifierVerdict::Block => {
-                            tracing::debug!(
-                                kind = kind.as_str(),
-                                candidate_model = candidate.model_id(),
-                                verdict = "parsed",
-                                "classifier response validated"
-                            );
-                        }
-                        crate::classifier::ClassifierVerdict::Unparseable => {
-                            let unusable = Error::BadUpstreamPayload(format!(
-                                "classifier response from `{}` carried no verdict",
-                                candidate.model_id()
-                            ));
-                            lifecycle.failed_attempt(attempt_start, &unusable);
-                            state.router.record_candidate_failure(
-                                candidate,
-                                &unusable.classified(),
-                                lifecycle.routing(),
-                            );
-                            tracing::warn!(
-                                kind = kind.as_str(),
-                                candidate_model = candidate.model_id(),
-                                upstream_model = %candidate.entry.upstream_model,
-                                "classifier response had no verdict; failing over"
-                            );
-                            last_error = unusable;
-                            continue;
-                        }
+                    if (candidate.provider.kind.is_decision()
+                        && crate::classifier::parse_verdict_for(kind, &resp.text())
+                            != crate::classifier::ClassifierVerdict::Unparseable)
+                        || crate::classifier::verdict_shape_valid(&req, kind, &resp.text())
+                    {
+                        tracing::debug!(
+                            kind = kind.as_str(),
+                            candidate_model = candidate.model_id(),
+                            verdict = "parsed",
+                            "classifier response validated"
+                        );
+                    } else {
+                        let unusable = Error::BadUpstreamPayload(format!(
+                            "classifier response from `{}` carried no verdict",
+                            candidate.model_id()
+                        ));
+                        lifecycle.failed_attempt(attempt_start, &unusable);
+                        state.router.record_candidate_failure(
+                            candidate,
+                            &unusable.classified(),
+                            lifecycle.routing(),
+                        );
+                        tracing::warn!(
+                            kind = kind.as_str(),
+                            candidate_model = candidate.model_id(),
+                            upstream_model = %candidate.entry.upstream_model,
+                            "classifier response had no verdict; failing over"
+                        );
+                        last_error = unusable;
+                        continue;
                     }
                 }
                 let latency_ms = attempt_start.elapsed().as_millis() as u64;
@@ -1444,7 +1612,7 @@ async fn buffered_chat(
                 lifecycle.note_task_evidence(&req, &resp, candidate);
                 // The terminal transition below owns the charge, the record and
                 // the outcome: booking here as well would spend twice.
-                lifecycle.finalize(
+                let committed = lifecycle.finalize(
                     TerminalKind::Served,
                     Settlement {
                         usage: resp.usage,
@@ -1453,9 +1621,31 @@ async fn buffered_chat(
                         tier: candidate.entry.tier,
                     },
                 );
+                if let Err(error) = committed {
+                    return error_response(dialect, &error);
+                }
                 // Report the model that actually answered, not the virtual id.
                 resp.model = candidate.exposed_id.clone();
+                if candidate.provider.kind.is_decision() {
+                    if let Some(verdict) = resp
+                        .passthrough
+                        .get("zroutery.internal.decision_verdict")
+                        .and_then(|value| {
+                            serde_json::from_value::<crate::classifier::ClassifierVerdict>(
+                                value.clone(),
+                            )
+                            .ok()
+                        })
+                    {
+                        resp.content = vec![crate::ir::ContentBlock::text(
+                            crate::classifier::decision_text_for_request(&req, kind, verdict),
+                        )];
+                    }
+                }
                 let mut wire = protocol::encode_response(dialect, &resp);
+                if dialect == Dialect::OpenAIResponses {
+                    session_binding::annotate_response(&mut wire, &req.reply_headers);
+                }
                 if dialect == Dialect::OpenAIResponses {
                     protocol::responses::restore_response_tools(&mut wire, &req);
                 }
@@ -1479,6 +1669,7 @@ async fn buffered_chat(
                 let mut response = Json(wire).into_response();
                 inject_routing_headers(response.headers_mut(), candidate, kind);
                 inject_cost_header(response.headers_mut(), cost.as_ref());
+                req.reply_headers.apply(response.headers_mut());
                 return response;
             }
             Err(e) => {
@@ -1502,6 +1693,7 @@ async fn buffered_chat(
                 .await
                 {
                     Ok(Some(mut resp)) => {
+                        lifecycle.observed_attempt_usage(resp.usage);
                         // The repaired retry is not a fresh probe: give the
                         // half-open permit back without recording health.
                         state.router.release_half_open_permit(candidate.model_id());
@@ -1510,8 +1702,7 @@ async fn buffered_chat(
                         // path applies, minus the health report (this was a
                         // repaired retry, which never records health).
                         if !kind.is_main()
-                            && crate::classifier::parse_verdict_for(kind, &resp.text())
-                                == crate::classifier::ClassifierVerdict::Unparseable
+                            && !crate::classifier::verdict_shape_valid(&req, kind, &resp.text())
                         {
                             tracing::warn!(
                                 kind = kind.as_str(),
@@ -1537,7 +1728,7 @@ async fn buffered_chat(
                         // persists the trace. See the buffered path for why.
                         #[cfg(feature = "ml")]
                         lifecycle.note_declared_model(Some(resp.model.as_str()));
-                        lifecycle.finalize(
+                        let committed = lifecycle.finalize(
                             TerminalKind::Served,
                             Settlement {
                                 usage: resp.usage,
@@ -1546,8 +1737,14 @@ async fn buffered_chat(
                                 tier: candidate.entry.tier,
                             },
                         );
+                        if let Err(error) = committed {
+                            return error_response(dialect, &error);
+                        }
                         resp.model = candidate.exposed_id.clone();
                         let mut wire = protocol::encode_response(dialect, &resp);
+                        if dialect == Dialect::OpenAIResponses {
+                            session_binding::annotate_response(&mut wire, &req.reply_headers);
+                        }
                         if dialect == Dialect::OpenAIResponses {
                             protocol::responses::restore_response_tools(&mut wire, &req);
                         }
@@ -1571,6 +1768,7 @@ async fn buffered_chat(
                         let mut response = Json(wire).into_response();
                         inject_routing_headers(response.headers_mut(), candidate, kind);
                         inject_cost_header(response.headers_mut(), cost.as_ref());
+                        req.reply_headers.apply(response.headers_mut());
                         return response;
                     }
                     Ok(None) => {
@@ -1628,7 +1826,10 @@ async fn buffered_chat(
         }
     }
 
-    lifecycle.finalize(TerminalKind::failed(&last_error), Settlement::default());
+    if let Err(error) = lifecycle.finalize(TerminalKind::failed(&last_error), Settlement::default())
+    {
+        return error_response(dialect, &error);
+    }
     error_response(dialect, &last_error)
 }
 
@@ -1713,7 +1914,9 @@ async fn stream_chat(
         let (key, body) = match prepare(&state, candidate, &req, mode) {
             Ok(v) => v,
             Err(e) => {
-                lifecycle.begin_attempt(candidate, false);
+                if let Err(error) = lifecycle.begin_preparation(candidate) {
+                    return error_response(dialect, &error);
+                }
                 lifecycle.failed_attempt(attempt_start, &e);
                 state.router.record_candidate_failure(
                     candidate,
@@ -1742,7 +1945,10 @@ async fn stream_chat(
         // Only the handshake can be retried; once bytes are flowing the client
         // has already seen part of the answer. The attempt stays open: its
         // verdict is the stream's terminal state, not the handshake.
-        lifecycle.begin_attempt(candidate, false);
+        if let Err(error) = lifecycle.begin_attempt(candidate, false) {
+            state.router.release_half_open_permit(candidate.model_id());
+            return error_response(dialect, &error);
+        }
         let mut client = client_for(&req, &candidate.provider);
         let key = match console_key(&state, candidate, key, &mut client).await {
             Ok(key) => key,
@@ -1757,17 +1963,18 @@ async fn stream_chat(
                 continue;
             }
         };
-        match state
-            .upstream
-            .stream_with_identity_policy(
-                &candidate.provider,
-                key.as_deref(),
-                &body,
-                &candidate.entry.upstream_model,
-                &client,
-                can_fail_over,
-            )
-            .await
+        match stream_upstream(
+            &state,
+            candidate,
+            key.as_deref(),
+            &body,
+            &client,
+            can_fail_over,
+            &mut lifecycle,
+            kind,
+            &req,
+        )
+        .await
         {
             Ok(events) => {
                 // Health is reported once, here: the handshake is the part a
@@ -1805,6 +2012,8 @@ async fn stream_chat(
                     input_items.clone(),
                     previous_response_id.clone(),
                     admission,
+                    crate::classifier::uses_severity(&req),
+                    &req.reply_headers,
                 );
             }
             Err(e) => {
@@ -1844,6 +2053,8 @@ async fn stream_chat(
                             input_items,
                             previous_response_id,
                             admission,
+                            crate::classifier::uses_severity(&req),
+                            &req.reply_headers,
                         );
                     }
                     Ok(None) => {
@@ -1895,7 +2106,10 @@ async fn stream_chat(
         }
     }
 
-    lifecycle.finalize(TerminalKind::failed(&last_error), Settlement::default());
+    if let Err(error) = lifecycle.finalize(TerminalKind::failed(&last_error), Settlement::default())
+    {
+        return error_response(dialect, &error);
+    }
     error_response(dialect, &last_error)
 }
 
@@ -1989,5 +2203,5 @@ fn reject(
         #[cfg(feature = "ml")]
         None,
     );
-    lifecycle.finalize(TerminalKind::failed(error), Settlement::default());
+    let _ = lifecycle.finalize(TerminalKind::failed(error), Settlement::default());
 }

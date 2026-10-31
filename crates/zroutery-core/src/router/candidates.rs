@@ -94,7 +94,10 @@ impl Router {
 
         for member in members {
             let circuit_open = self.is_circuit_blocked(&member.exposed_id())
-                || self.is_provider_gated(&member.provider_id);
+                || self.is_provider_gated(&member.provider_id)
+                || registry.provider_of(member).is_ok_and(|provider| {
+                    self.default_model_rate_limit(member, provider).is_some()
+                });
             let check = requirements.check_with_request_capabilities(
                 &member.exposed_id(),
                 &member.provider_id,
@@ -127,12 +130,18 @@ impl Router {
 
     pub(super) fn push_candidate_decision(
         &self,
+        registry: &Registry,
         decisions: &mut Vec<CandidateDecision>,
         member: &ModelEntry,
         requirements: &PolicyRequirements,
         request_capabilities: &[Capability],
     ) {
-        let circuit_open = self.is_circuit_blocked(&member.exposed_id());
+        let rate_limited = registry
+            .provider_of(member)
+            .is_ok_and(|provider| self.default_model_rate_limit(member, provider).is_some());
+        let circuit_open = self.is_circuit_blocked(&member.exposed_id())
+            || self.is_provider_gated(&member.provider_id)
+            || rate_limited;
         let check = requirements.check_with_request_capabilities(
             &member.exposed_id(),
             &member.provider_id,
@@ -141,8 +150,13 @@ impl Router {
             circuit_open,
             request_capabilities,
         );
-        let rejection = (!check.eligible)
-            .then(|| crate::policy::bounded_trace_text(&check.reason_strings().join(", ")));
+        let rejection = (!check.eligible).then(|| {
+            crate::policy::bounded_trace_text(&if rate_limited {
+                "rate_limit_cooldown".to_string()
+            } else {
+                check.reason_strings().join(", ")
+            })
+        });
         decisions.push(CandidateDecision {
             model_id: member.exposed_id(),
             provider_id: member.provider_id.clone(),
@@ -156,6 +170,7 @@ impl Router {
 
     pub(super) fn push_seen_decisions(
         &self,
+        registry: &Registry,
         decisions: &mut Vec<CandidateDecision>,
         seen: &[&ModelEntry],
         requirements: &PolicyRequirements,
@@ -168,7 +183,13 @@ impl Router {
             {
                 continue;
             }
-            self.push_candidate_decision(decisions, member, requirements, request_capabilities);
+            self.push_candidate_decision(
+                registry,
+                decisions,
+                member,
+                requirements,
+                request_capabilities,
+            );
         }
     }
 
@@ -234,7 +255,9 @@ impl Router {
             max_steps,
             "fallback exhausted; no eligible candidates found"
         );
-        Err(Error::NoCandidate(name))
+        let mut inspected = registry.tier_members(start_tier);
+        inspected.extend(seen);
+        Err(self.rate_limited_pool(registry, &inspected, name))
     }
 
     /// Score candidates by policy preferences and return them sorted (best first),

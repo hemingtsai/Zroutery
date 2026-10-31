@@ -54,6 +54,8 @@ struct DecisionMock {
 struct DecisionInner {
     /// A response body to send instead of the probability answer.
     raw: Option<Value>,
+    /// An HTTP refusal to send instead of the probability answer.
+    refusal: Option<(axum::http::StatusCode, Value)>,
     /// The probability every answer carries.
     noul: f64,
     /// Every body the endpoint received.
@@ -73,6 +75,12 @@ impl DecisionMock {
     fn answering_raw(body: Value) -> Self {
         let mock = Self::default();
         mock.inner.lock().unwrap().raw = Some(body);
+        mock
+    }
+
+    fn refusing(status: axum::http::StatusCode, body: Value) -> Self {
+        let mock = Self::default();
+        mock.inner.lock().unwrap().refusal = Some((status, body));
         mock
     }
 
@@ -100,6 +108,10 @@ async fn decide(
             .unwrap_or_default()
             .to_string(),
     );
+    if let Some((status, body)) = inner.refusal.clone() {
+        drop(inner);
+        return (status, Json(body)).into_response();
+    }
     if let Some(raw) = inner.raw.clone() {
         drop(inner);
         return Json(raw).into_response();
@@ -119,6 +131,13 @@ async fn start_decision_endpoint(noul: f64) -> (String, DecisionMock) {
 /// A decision endpoint that answers with `body` instead.
 async fn start_raw_endpoint(body: Value) -> (String, DecisionMock) {
     start_mock(DecisionMock::answering_raw(body)).await
+}
+
+async fn start_refusing_endpoint(
+    status: axum::http::StatusCode,
+    body: Value,
+) -> (String, DecisionMock) {
+    start_mock(DecisionMock::refusing(status, body)).await
 }
 
 async fn start_mock(mock: DecisionMock) -> (String, DecisionMock) {
@@ -399,6 +418,84 @@ async fn an_endpoint_that_answers_with_no_probability_is_no_verdict() {
         verdict_from_decision(Some(unsure), 0.85),
         ClassifierVerdict::Unparseable
     );
+}
+
+/// A regional Jev refusal must not strand the approval link when another
+/// classifier model is configured. The refusal is provider-local evidence;
+/// the ordinary generation model receives the original Guardian-shaped
+/// request and supplies the fail-closed verdict contract.
+#[tokio::test]
+async fn a_jev_451_fails_over_to_a_generation_classifier() {
+    let (decision_base, decision_mock) = start_refusing_endpoint(
+        axum::http::StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS,
+        json!({"error":{"type":"server_error","message":"Endpoint is unavailable."}}),
+    )
+    .await;
+
+    #[derive(Clone, Default)]
+    struct GenerationMock(Arc<Mutex<Vec<Value>>>);
+    async fn generate(State(mock): State<GenerationMock>, Json(body): Json<Value>) -> Json<Value> {
+        mock.0.lock().unwrap().push(body.clone());
+        Json(json!({
+            "id": "chatcmpl-classifier-fallback",
+            "object": "chat.completion",
+            "created": 1,
+            "model": body["model"],
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": "<block>no</block>"},
+                "finish_reason": "stop"
+            }],
+            "usage": {"prompt_tokens": 7, "completion_tokens": 3}
+        }))
+    }
+
+    let generation_mock = GenerationMock::default();
+    let app = axum::Router::new()
+        .route("/v1/chat/completions", post(generate))
+        .with_state(generation_mock.clone());
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let generation_address = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+
+    let mut cfg = config_for(&decision_base, 0.85);
+    let mut fallback = ProviderConfig::new(
+        "fallback",
+        "Generation fallback",
+        ProviderKind::OpenAICompatible,
+    );
+    fallback.base_url = format!("http://{generation_address}/v1");
+    fallback.key_ref = String::new();
+    fallback.timeout_secs = 10;
+    cfg.providers.push(fallback);
+    cfg.models
+        .push(ModelEntry::for_upstream("fallback", "guardian", None));
+    cfg.classifier.max_attempts = 2;
+    cfg.classifier.candidates.push(ClassifierCandidate {
+        model: "fallback-guardian".into(),
+        priority: 20,
+        enabled: true,
+    });
+
+    let h = Harness::start(cfg).await;
+    let (status, text) = h.ask().await;
+    assert_eq!(status, 200, "the fallback body was {text}");
+    assert!(
+        text.contains("<block>no</block>"),
+        "the generation fallback must preserve the Guardian verdict: {text}"
+    );
+    assert_eq!(decision_mock.bodies().len(), 1, "Jev must be tried once");
+    let generation_bodies = generation_mock.0.lock().unwrap().clone();
+    assert_eq!(
+        generation_bodies.len(),
+        1,
+        "the fallback must be tried once"
+    );
+    assert_eq!(generation_bodies[0]["model"], "guardian");
+
+    h.shutdown().await;
 }
 
 /// A live probe of a real System One endpoint, run only when asked.

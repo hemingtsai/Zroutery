@@ -681,7 +681,19 @@ fn a_rate_limit_does_not_gate_a_provider_that_does_not_share_its_quota() {
     let plan = router
         .plan(&r, &Resolution::Tier(ModelTier::Standard), &[])
         .unwrap();
-    assert_eq!(ids(&plan), vec!["p1-limited", "p1-sibling"]);
+    assert_eq!(ids(&plan), vec!["p1-sibling"]);
+    assert!(!router.allow_request_for("p1-limited", "p1"));
+    assert!(router.allow_request_for("p1-sibling", "p1"));
+    assert!(
+        !router.is_circuit_open("p1-limited"),
+        "429 cooling is not circuit failure"
+    );
+    let health = router.health_snapshot();
+    assert!(health[0].rate_limit_remaining_secs > 0);
+    assert_eq!(
+        health[0].cooldown_remaining_secs,
+        health[0].rate_limit_remaining_secs
+    );
 }
 
 #[test]

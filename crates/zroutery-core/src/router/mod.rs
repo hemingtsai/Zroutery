@@ -54,8 +54,8 @@ pub struct Router {
     /// OpenCode's free and Console tiers meter by account (or by source IP for
     /// the anonymous free tier), so a 429 on one model means every model under
     /// that provider is unusable at the same time. The set is refreshed from
-    /// the configuration; a provider that is not listed keeps today's
-    /// behaviour, where a rate limit is model-scoped and never opens a circuit.
+    /// the configuration; other providers use a model/default-credential
+    /// cooldown, separate from circuit health.
     group_limited: Mutex<HashSet<String>>,
     /// Cooldown deadlines for shared rate limits or empty provider wallets,
     /// keyed by provider id. Wallet gates apply to every provider kind.
@@ -64,8 +64,14 @@ pub struct Router {
     /// models, and a synthetic "provider" row there would be a fact that does
     /// not exist. A gate is a time window, not a model circuit.
     provider_gates: Mutex<HashMap<String, std::time::Instant>>,
+    /// Rate-limit windows for an ordinary model using the default credential.
+    /// Explicit inference keys have independent key_gates instead.
+    model_gates: Mutex<HashMap<(String, String), std::time::Instant>>,
     account_gates: Mutex<HashMap<(String, String), std::time::Instant>>,
     key_gates: Mutex<HashMap<(String, String, String), std::time::Instant>>,
+    /// Rate-limit subset of `key_gates`, retained separately so an
+    /// authentication-gated key is never reported to the client as a 429.
+    key_rate_limit_gates: Mutex<HashMap<(String, String, String), std::time::Instant>>,
     wallet_holds: Mutex<std::collections::BTreeMap<String, WalletHold>>,
     /// When the hold map was last reconciled with the shared database.
     wallet_synced: Mutex<Option<std::time::Instant>>,
@@ -81,6 +87,7 @@ impl Default for Router {
 mod candidate;
 mod candidates;
 mod classifier;
+mod cooldown;
 mod health;
 mod helpers;
 mod plan;

@@ -90,6 +90,15 @@ impl Router {
         self.report_classified_failure(model_id, failure, routing);
         self.record_classified_failure(model_id, provider_id, failure);
         self.note_provider_gate(provider_id, failure, routing);
+        if failure.class == FailureClass::RateLimit
+            && !crate::sync::lock(&self.group_limited).contains(provider_id)
+        {
+            self.extend_model_gate(
+                provider_id,
+                model_id,
+                Duration::from_secs(routing.circuit_breaker.timeout_secs.max(1)),
+            );
+        }
     }
 
     /// Refresh the set of providers whose rate limit covers every model.
@@ -105,14 +114,19 @@ impl Router {
     /// Drop provider gates only when the provider itself is removed.
     pub fn retain_providers(&self, known: impl Fn(&str) -> bool) {
         crate::sync::lock(&self.provider_gates).retain(|id, _| known(id));
+        crate::sync::lock(&self.model_gates).retain(|(provider, _), _| known(provider));
+        crate::sync::lock(&self.key_rate_limit_gates).retain(|(provider, _, _), _| known(provider));
         self.retain_wallet_providers(&known);
     }
 
     /// Operator-requested retry after replenishing funds or resolving a limit.
     pub fn reset_provider_gate(&self, provider_id: &str) {
         crate::sync::lock(&self.provider_gates).remove(provider_id);
+        crate::sync::lock(&self.model_gates).retain(|(provider, _), _| provider != provider_id);
         crate::sync::lock(&self.account_gates).retain(|(provider, _), _| provider != provider_id);
         crate::sync::lock(&self.key_gates).retain(|(provider, _, _), _| provider != provider_id);
+        crate::sync::lock(&self.key_rate_limit_gates)
+            .retain(|(provider, _, _), _| provider != provider_id);
     }
 
     /// Credential failures belong to the wallet/key, not to the shared model
@@ -150,6 +164,12 @@ impl Router {
                     cooldown
                 };
                 let until = Instant::now() + Duration::from_secs(cooldown);
+                if failure.class == FailureClass::RateLimit {
+                    crate::sync::lock(&self.key_rate_limit_gates)
+                        .entry(key.clone())
+                        .and_modify(|old| *old = (*old).max(until))
+                        .or_insert(until);
+                }
                 crate::sync::lock(&self.key_gates)
                     .entry(key)
                     .and_modify(|old| *old = (*old).max(until))
@@ -191,6 +211,27 @@ impl Router {
         gates.contains_key(&(provider.to_string(), account.to_string(), key.to_string()))
     }
 
+    /// Remaining cooldown for one explicit inference key. Reading this value
+    /// also removes elapsed rows, but never consumes a circuit probe permit.
+    pub(crate) fn key_rate_limit_remaining(
+        &self,
+        provider: &str,
+        account: &str,
+        key: &str,
+    ) -> Option<Duration> {
+        let now = Instant::now();
+        let id = (provider.to_string(), account.to_string(), key.to_string());
+        let mut gates = crate::sync::lock(&self.key_rate_limit_gates);
+        match gates.get(&id).copied() {
+            Some(until) if until > now => Some(until.saturating_duration_since(now)),
+            Some(_) => {
+                gates.remove(&id);
+                None
+            }
+            None => None,
+        }
+    }
+
     pub fn allow_candidate_request(&self, candidate: &super::Candidate) -> bool {
         self.credential_available(candidate) && self.allow_request(candidate.model_id())
     }
@@ -207,6 +248,11 @@ impl Router {
             {
                 return false;
             }
+        } else if self
+            .model_rate_limit_remaining(&candidate.provider.id, candidate.model_id())
+            .is_some()
+        {
+            return false;
         }
         !self.is_provider_gated(&candidate.provider.id)
     }
@@ -227,6 +273,13 @@ impl Router {
                 .is_some_and(|p| p.accounts.iter().any(|a| &a.account_id == account))
         });
         crate::sync::lock(&self.key_gates).retain(|(provider, account, key), _| {
+            config.provider(provider).is_some_and(|p| {
+                p.accounts.iter().any(|a| {
+                    &a.account_id == account && a.inference_keys.iter().any(|k| &k.id == key)
+                })
+            })
+        });
+        crate::sync::lock(&self.key_rate_limit_gates).retain(|(provider, account, key), _| {
             config.provider(provider).is_some_and(|p| {
                 p.accounts.iter().any(|a| {
                     &a.account_id == account && a.inference_keys.iter().any(|k| &k.id == key)
@@ -313,24 +366,37 @@ impl Router {
     /// The transport must not retry earlier than an upstream's Retry-After.
     /// Carry it into the shared gate as well as returning it to the caller.
     pub fn note_candidate_retry_after(&self, candidate: &super::Candidate, error: &Error) {
+        if error.classified().class != FailureClass::RateLimit {
+            return;
+        }
         let Error::Upstream {
-            status: 429,
             retry_after: Some(wait),
             ..
         } = error
         else {
             return;
         };
-        let Some(until) = Instant::now().checked_add(*wait) else {
+        self.note_candidate_rate_limit_wait(candidate, *wait);
+    }
+
+    /// Extend the exact availability scope; a shorter observation never resets
+    /// an already-known longer window.
+    pub fn note_candidate_rate_limit_wait(&self, candidate: &super::Candidate, wait: Duration) {
+        let Some(until) = Instant::now().checked_add(wait) else {
             return;
         };
         if let Some(credential) = &candidate.credential {
+            let key = (
+                candidate.provider.id.clone(),
+                credential.account_id.clone(),
+                credential.key_id.clone(),
+            );
             crate::sync::lock(&self.key_gates)
-                .entry((
-                    candidate.provider.id.clone(),
-                    credential.account_id.clone(),
-                    credential.key_id.clone(),
-                ))
+                .entry(key.clone())
+                .and_modify(|previous| *previous = (*previous).max(until))
+                .or_insert(until);
+            crate::sync::lock(&self.key_rate_limit_gates)
+                .entry(key)
                 .and_modify(|previous| *previous = (*previous).max(until))
                 .or_insert(until);
         } else if crate::sync::lock(&self.group_limited).contains(&candidate.provider.id) {
@@ -338,6 +404,8 @@ impl Router {
                 .entry(candidate.provider.id.clone())
                 .and_modify(|previous| *previous = (*previous).max(until))
                 .or_insert(until);
+        } else {
+            self.extend_model_gate(&candidate.provider.id, candidate.model_id(), wait);
         }
     }
 
@@ -421,7 +489,11 @@ impl Router {
     /// the send-time check has to see the gate the per-model breaker knows
     /// nothing about.
     pub fn allow_request_for(&self, model_id: &str, provider_id: &str) -> bool {
-        !self.is_provider_gated(provider_id) && self.allow_request(model_id)
+        !self.is_provider_gated(provider_id)
+            && self
+                .model_rate_limit_remaining(provider_id, model_id)
+                .is_none()
+            && self.allow_request(model_id)
     }
 
     /// Release a half-open probe permit after a rectifier retry.
@@ -505,6 +577,7 @@ impl Router {
 
     /// Clear circuit breaker state for one model (GUI "retry now").
     pub fn reset(&self, model_id: &str) {
+        crate::sync::lock(&self.model_gates).retain(|(_, model), _| model != model_id);
         let mut health = crate::sync::lock(&self.health);
         if let Some(h) = health.get_mut(model_id) {
             h.breaker.reset();
@@ -536,6 +609,7 @@ impl Router {
     /// for as long as the process lived. History that still matters survives —
     /// a re-added model id simply starts fresh, like a new install would.
     pub fn retain_models(&self, known: impl Fn(&str) -> bool) {
+        crate::sync::lock(&self.model_gates).retain(|(_, model), _| known(model));
         let mut health = crate::sync::lock(&self.health);
         health.retain(|id, _| known(id));
     }
@@ -580,11 +654,26 @@ impl Router {
     }
 
     pub fn health_snapshot(&self) -> Vec<ModelHealth> {
+        let now = Instant::now();
+        let rate_limits: std::collections::HashMap<String, u64> = {
+            let mut gates = crate::sync::lock(&self.model_gates);
+            gates.retain(|_, until| *until > now);
+            gates
+                .iter()
+                .map(|((_, model), until)| {
+                    (
+                        model.clone(),
+                        super::cooldown::remaining_secs(until.saturating_duration_since(now)),
+                    )
+                })
+                .collect()
+        };
         let health = crate::sync::lock(&self.health);
         let mut out: Vec<ModelHealth> = health
             .iter()
             .map(|(id, h)| {
                 let state = h.breaker.state();
+                let rate_limit_remaining_secs = rate_limits.get(id).copied().unwrap_or_default();
                 ModelHealth {
                     model_id: id.clone(),
                     state,
@@ -592,7 +681,11 @@ impl Router {
                     total_success: h.total_success,
                     total_failure: h.total_failure,
                     avg_latency_ms: h.avg_latency_ms,
-                    cooldown_remaining_secs: h.breaker.open_remaining_secs(),
+                    cooldown_remaining_secs: h
+                        .breaker
+                        .open_remaining_secs()
+                        .max(rate_limit_remaining_secs),
+                    rate_limit_remaining_secs,
                     last_error: h.last_error.clone(),
                 }
             })

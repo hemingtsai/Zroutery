@@ -262,6 +262,27 @@ fn system_text(body: &Value) -> String {
         }
         _ => {}
     }
+    if let Some(messages) = body.get("messages").and_then(Value::as_array) {
+        for message in messages {
+            if !matches!(
+                message.get("role").and_then(Value::as_str),
+                Some("system") | Some("developer")
+            ) {
+                continue;
+            }
+            match message.get("content") {
+                Some(Value::String(text)) => push(text),
+                Some(Value::Array(parts)) => {
+                    for part in parts {
+                        if let Some(text) = part.get("text").and_then(Value::as_str) {
+                            push(text);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
     if let Some(items) = body.get("input").and_then(Value::as_array) {
         for item in items {
             let role = item.get("role").and_then(Value::as_str);
@@ -312,6 +333,17 @@ fn is_codex_guardian(body: &Value, system: &str) -> bool {
 /// either. A detection failure is never an error — the request is simply
 /// treated as a main request, which is the routing it would have had anyway.
 pub fn detect(headers: &HeaderMap, body: &Value, config: &DetectionConfig) -> Detection {
+    if body.get("safeguards").is_some_and(|value| !value.is_null()) {
+        // Embedded server review belongs to the main conversation. A beta
+        // naming its classifier must not redirect this into the legacy paid
+        // side-query pool and replace the model's answer with a verdict.
+        return Detection {
+            kind: RequestKind::Main,
+            confidence: 0.0,
+            matched: None,
+            reasons: Vec::new(),
+        };
+    }
     if !config.enabled {
         return Detection {
             kind: RequestKind::Main,
@@ -351,6 +383,29 @@ pub fn detect(headers: &HeaderMap, body: &Value, config: &DetectionConfig) -> De
     // match that reached the shared scorer would be reported as Auto Mode and
     // answered with a `<block>` tag Codex cannot read.
     let system = system_text(body);
+    if config.builtins.xml_classifier_signature {
+        // Claude 2.1.281 defaults to temperature=1 and varies max_tokens with
+        // the fast stage/thinking budget. Identify the specific monitor prompt
+        // plus its verdict contract, not a model alias or a frozen parameter.
+        let monitor = system.contains("security monitor for autonomous AI coding agents");
+        let stop = body
+            .get("stop_sequences")
+            .and_then(Value::as_array)
+            .is_some_and(|stops| {
+                stops
+                    .iter()
+                    .any(|stop| matches!(stop.as_str(), Some("</block>" | "</severity>")))
+            });
+        let contract = system.contains("## Output Format")
+            && (system.contains("<block>") || system.contains("<severity>"));
+        if monitor && (stop || contract) {
+            consider(
+                0.98,
+                "claude-auto-mode-current-contract",
+                vec!["security_monitor_prompt", "verdict_contract"],
+            );
+        }
+    }
     if config.builtins.codex_guardian_signature && is_codex_guardian(body, &system) {
         return Detection {
             kind: RequestKind::Side(crate::query::SideQueryKind::CodexGuardian),
@@ -462,6 +517,64 @@ pub fn parse_verdict(text: &str) -> ClassifierVerdict {
         }
     }
     ClassifierVerdict::Unparseable
+}
+
+/// The client can request the newer declared 0..100 severity contract. A binary
+/// decision is represented only at its two extremes; this is not a fabricated
+/// model severity/calibration score. Unknown confidence still cannot approve.
+pub fn decision_text_for_request(
+    req: &crate::ir::ChatRequest,
+    kind: RequestKind,
+    verdict: ClassifierVerdict,
+) -> String {
+    if matches!(
+        kind,
+        RequestKind::Side(crate::query::SideQueryKind::AutoMode)
+    ) && (req.stop_sequences.iter().any(|stop| stop == "</severity>")
+        || req
+            .system
+            .iter()
+            .any(|part| part.text.contains("<severity>")))
+    {
+        return if verdict == ClassifierVerdict::Allow {
+            "<severity>0</severity>"
+        } else {
+            "<severity>100</severity>"
+        }
+        .into();
+    }
+    verdict_text_for(kind, verdict)
+}
+
+pub fn verdict_shape_valid(req: &crate::ir::ChatRequest, kind: RequestKind, text: &str) -> bool {
+    verdict_shape_valid_for_format(kind, uses_severity(req), text)
+}
+
+pub fn uses_severity(req: &crate::ir::ChatRequest) -> bool {
+    req.stop_sequences.iter().any(|stop| stop == "</severity>")
+        || req
+            .system
+            .iter()
+            .any(|part| part.text.contains("<severity>"))
+}
+
+pub fn verdict_shape_valid_for_format(kind: RequestKind, severity: bool, text: &str) -> bool {
+    if matches!(
+        kind,
+        RequestKind::Side(crate::query::SideQueryKind::AutoMode)
+    ) && severity
+    {
+        let Some((_, after)) = text.split_once("<severity>") else {
+            return false;
+        };
+        let Some((value, _)) = after.split_once("</severity>") else {
+            return false;
+        };
+        // Only validate the wire contract. The native client's own configured
+        // severity thresholds decide a chat model's verdict, not this gateway.
+        return value.trim().parse::<u8>().is_ok_and(|value| value <= 100);
+    }
+    parse_verdict_for(kind, text) != ClassifierVerdict::Unparseable
 }
 
 /// The verdict a decision model's answer carries.
@@ -681,8 +794,28 @@ mod tests {
         // either — a signature is all-or-nothing on the fields it declares.
         let mut body = stage_1_body();
         body["max_tokens"] = json!(1024);
+        body["stop_sequences"] = json!(["END"]);
         let d = detect_with(body);
         assert_eq!(d.kind, RequestKind::Main);
+    }
+
+    #[test]
+    fn current_classifier_temperature_caps_and_severity_do_not_route_to_main() {
+        let body = json!({"model":"standard-class","max_tokens":256,"temperature":1,
+            "stop_sequences":["</severity>"],
+            "system":"You are a security monitor for autonomous AI coding agents.\n## Output Format\nOutput <severity>N</severity> where N is an integer 0-100.",
+            "messages":[{"role":"user","content":"fixture transcript"}]});
+        assert_eq!(
+            detect_with(body.clone()).kind,
+            RequestKind::Side(crate::query::SideQueryKind::AutoMode)
+        );
+        let mut server_review = body;
+        server_review["safeguards"] = json!({"opaque_fixture":true});
+        assert_eq!(
+            detect_with(server_review).kind,
+            RequestKind::Main,
+            "embedded server review is not a legacy side query"
+        );
     }
 
     #[test]

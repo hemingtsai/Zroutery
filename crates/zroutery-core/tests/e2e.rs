@@ -3699,8 +3699,8 @@ async fn shadow_does_not_cause_retry() {
             .all(|block| block["type"] != "thinking"));
     }
     assert!(
-        off.records.iter().all(|r| r.attempts == 1),
-        "a repaired retry is not a fresh attempt"
+        off.records.iter().all(|r| r.attempts == 2),
+        "each actual upstream send has its own complete attempt identity"
     );
 
     // Identical traffic, outcomes, health, spend and bytes.

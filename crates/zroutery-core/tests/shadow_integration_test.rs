@@ -1146,6 +1146,7 @@ fn production_shaped_input(h: &Harness) -> ShadowInput {
         provider,
         degraded: false,
         credential: None,
+        rate_quote: None,
     };
     let decision = RouteDecision {
         decision_id: "decision-injected".to_string(),

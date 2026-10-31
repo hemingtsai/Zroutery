@@ -46,6 +46,7 @@ pub struct ServerHandle {
 impl ServerHandle {
     /// Bind and serve. Returns as soon as the socket is listening.
     pub async fn start(state: Arc<AppState>) -> Result<ServerHandle> {
+        state.accounting_ready()?;
         let cfg = state.config();
         let addr = format!("{}:{}", cfg.server.host, cfg.server.port);
         let listener = TcpListener::bind(&addr).await.map_err(|e| {
@@ -95,6 +96,7 @@ impl ServerHandle {
     }
 }
 mod accessors;
+mod accounting;
 mod config_state;
 mod cors;
 mod handlers;

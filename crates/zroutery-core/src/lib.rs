@@ -23,6 +23,7 @@
 //! * [`upstream`] talks HTTP to providers.
 //! * [`server`] exposes the axum app used by the desktop shell.
 
+pub mod accounting;
 pub mod agent_takeover;
 pub mod billing;
 pub mod budget;

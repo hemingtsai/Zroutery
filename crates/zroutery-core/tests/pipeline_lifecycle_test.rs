@@ -1396,14 +1396,14 @@ fn the_pipeline_has_no_second_failure_classifier() {
     // Gate 6, structurally: the activity record and the charge are written in
     // exactly one place, so no terminal path can write either of them twice.
     assert_eq!(
-        source.matches("stats.record(").count(),
+        source.matches(".settle_request(&mut fact)").count(),
         1,
-        "the activity record is written once, in the terminal transition"
+        "the activity record and budget are committed once by the terminal settlement owner"
     );
     assert_eq!(
         source.matches(".charge(").count(),
-        1,
-        "the ledger is charged once, in the terminal transition"
+        0,
+        "the pipeline cannot add a second direct charge beside durable attempt settlement"
     );
 }
 

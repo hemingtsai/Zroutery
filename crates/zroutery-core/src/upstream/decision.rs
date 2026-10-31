@@ -143,18 +143,32 @@ pub fn question_of(req: &ChatRequest) -> (String, String) {
         .filter(|text| !text.is_empty())
         .collect::<Vec<_>>()
         .join("\n\n");
-    let state = req
+    let state = if req
         .messages
         .iter()
-        .filter(|message| message.role == Role::User)
-        .flat_map(|message| message.content.iter())
-        .filter_map(|block| match block {
-            ContentBlock::Text { text, .. } => Some(text.trim()),
-            _ => None,
-        })
-        .filter(|text| !text.is_empty())
-        .collect::<Vec<_>>()
-        .join("\n\n");
+        .any(|message| message.role != Role::User)
+    {
+        // Keep assistant/system turns and tool evidence rather than judging
+        // only the last user message. This JSON is transient request content,
+        // never persisted in records or diagnostics.
+        req.anthropic_body
+            .as_ref()
+            .and_then(|body| body.get("messages"))
+            .map(Value::to_string)
+            .unwrap_or_else(|| serde_json::to_string(&req.messages).unwrap_or_default())
+    } else {
+        req.messages
+            .iter()
+            .filter(|message| message.role == Role::User)
+            .flat_map(|message| message.content.iter())
+            .filter_map(|block| match block {
+                ContentBlock::Text { text, .. } => Some(text.trim()),
+                _ => None,
+            })
+            .filter(|text| !text.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n\n")
+    };
     (state, instructions)
 }
 
@@ -228,7 +242,11 @@ mod tests {
             Message::user_text("the question"),
         ];
         let (state, instructions) = question_of(&req);
-        assert_eq!(state, "the tool call\n\nthe question");
+        assert!(
+            state.contains("the tool call")
+                && state.contains("the tool's answer")
+                && state.contains("the question")
+        );
         assert_eq!(instructions, "You are a security monitor.");
     }
 }

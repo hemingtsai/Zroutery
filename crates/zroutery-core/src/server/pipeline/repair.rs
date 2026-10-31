@@ -60,9 +60,12 @@ pub(super) async fn try_rectify_buffered(
     {
         apply_vision_fallback(state, req, "upstream rejected media").await;
         let key_owned = key.map(str::to_string);
-        if let Some(body) = reencode(candidate, req) {
+        if let Some(mut body) = reencode(candidate, req) {
+            state
+                .upstream_sessions
+                .resolve(candidate, &mut body, &mut client);
             let started = Instant::now();
-            lifecycle.begin_attempt(candidate, true);
+            lifecycle.begin_attempt(candidate, true)?;
             match state
                 .upstream
                 .send_with_identity(&candidate.provider, key_owned.as_deref(), &body, &client)
@@ -87,10 +90,13 @@ pub(super) async fn try_rectify_buffered(
 
     // Rectifiers operate on the encoded body; re-encode the (possibly
     // vision-repaired) request for them.
-    let base_body = match reencode(candidate, req) {
+    let mut base_body = match reencode(candidate, req) {
         Some(body) => body,
         None => return Ok(None),
     };
+    state
+        .upstream_sessions
+        .resolve(candidate, &mut base_body, &mut client);
     let mut current_body = base_body.clone();
     let mut last_error: Option<Error> = None;
     let mut current_error: &Error = error;
@@ -116,7 +122,7 @@ pub(super) async fn try_rectify_buffered(
                 "request repaired, retrying same provider without health accounting"
             );
             let started = Instant::now();
-            lifecycle.begin_attempt(candidate, true);
+            lifecycle.begin_attempt(candidate, true)?;
             match state
                 .upstream
                 .send_with_identity(&candidate.provider, key, &modified, &client)
@@ -198,9 +204,12 @@ pub(super) async fn try_rectify_stream(
     {
         apply_vision_fallback(state, req, "upstream rejected media").await;
         let key_owned = key.map(str::to_string);
-        if let Some(body) = reencode(candidate, req) {
+        if let Some(mut body) = reencode(candidate, req) {
+            state
+                .upstream_sessions
+                .resolve(candidate, &mut body, &mut client);
             let started = Instant::now();
-            lifecycle.begin_attempt(candidate, true);
+            lifecycle.begin_attempt(candidate, true)?;
             match state
                 .upstream
                 .stream_with_identity(
@@ -231,10 +240,13 @@ pub(super) async fn try_rectify_stream(
 
     // Rectifiers operate on the encoded body; re-encode the (possibly
     // vision-repaired) request for them.
-    let base_body = match reencode(candidate, req) {
+    let mut base_body = match reencode(candidate, req) {
         Some(body) => body,
         None => return Ok(None),
     };
+    state
+        .upstream_sessions
+        .resolve(candidate, &mut base_body, &mut client);
     let mut current_body = base_body.clone();
     let mut last_error: Option<Error> = None;
     let mut current_error: &Error = error;
@@ -260,7 +272,7 @@ pub(super) async fn try_rectify_stream(
                 "stream request repaired, retrying same provider without health accounting"
             );
             let started = Instant::now();
-            lifecycle.begin_attempt(candidate, true);
+            lifecycle.begin_attempt(candidate, true)?;
             match state
                 .upstream
                 .stream_with_identity(

@@ -28,8 +28,10 @@ impl Router {
             stats_store: StatsStore::new(),
             group_limited: Mutex::new(std::collections::HashSet::new()),
             provider_gates: Mutex::new(HashMap::new()),
+            model_gates: Mutex::new(HashMap::new()),
             account_gates: Mutex::new(HashMap::new()),
             key_gates: Mutex::new(HashMap::new()),
+            key_rate_limit_gates: Mutex::new(HashMap::new()),
             wallet_holds: Mutex::new(std::collections::BTreeMap::new()),
             wallet_synced: Mutex::new(None),
             runtime_store: Mutex::new(None),
@@ -166,6 +168,7 @@ impl Router {
         let mut decisions = Vec::with_capacity(members.len());
         for member in &members {
             self.push_candidate_decision(
+                registry,
                 &mut decisions,
                 member,
                 requirements,
@@ -184,7 +187,7 @@ impl Router {
                         pool = %name,
                         "no candidate satisfies hard eligibility; fallback=reject"
                     );
-                    return Err(Error::NoCandidate(name));
+                    return Err(self.rate_limited_pool(registry, &members, name));
                 }
                 PolicyFallback::Escalate { enabled, max_steps } if *enabled => {
                     let (candidates, tier, seen) = self.fallback_tier(
@@ -197,6 +200,7 @@ impl Router {
                     )?;
                     effective_tier = Some(tier);
                     self.push_seen_decisions(
+                        registry,
                         &mut decisions,
                         &seen,
                         requirements,
@@ -205,7 +209,11 @@ impl Router {
                     candidates
                 }
                 PolicyFallback::Escalate { .. } => {
-                    return Err(Error::NoCandidate(resolution_name(resolution)));
+                    return Err(self.rate_limited_pool(
+                        registry,
+                        &members,
+                        resolution_name(resolution),
+                    ));
                 }
                 PolicyFallback::Degrade { enabled, max_steps } if *enabled => {
                     let (candidates, tier, seen) = self.fallback_tier(
@@ -218,6 +226,7 @@ impl Router {
                     )?;
                     effective_tier = Some(tier);
                     self.push_seen_decisions(
+                        registry,
                         &mut decisions,
                         &seen,
                         requirements,
@@ -226,7 +235,11 @@ impl Router {
                     candidates
                 }
                 PolicyFallback::Degrade { .. } => {
-                    return Err(Error::NoCandidate(resolution_name(resolution)));
+                    return Err(self.rate_limited_pool(
+                        registry,
+                        &members,
+                        resolution_name(resolution),
+                    ));
                 }
                 PolicyFallback::IgnoreRequirements => {
                     // This explicit policy action may bypass non-capability
@@ -245,7 +258,11 @@ impl Router {
                         &request_capabilities,
                     );
                     if candidates.is_empty() {
-                        return Err(Error::NoCandidate(resolution_name(resolution)));
+                        return Err(self.rate_limited_pool(
+                            registry,
+                            &members,
+                            resolution_name(resolution),
+                        ));
                     }
                     for member in &candidates {
                         let check = capability_only.check_with_request_capabilities(

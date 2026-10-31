@@ -234,6 +234,25 @@ impl Ledger {
         tier: Option<ModelTier>,
         cost: &Cost,
     ) {
+        self.charge_windows(
+            &BudgetPeriod::Day.key(at),
+            &BudgetPeriod::Month.key(at),
+            provider_id,
+            tier,
+            cost,
+        );
+    }
+
+    /// Persisted attempts keep their observed local windows even when a disk
+    /// retry, restart or timezone change happens after the call completed.
+    pub fn charge_windows(
+        &mut self,
+        day: &str,
+        month: &str,
+        provider_id: &str,
+        tier: Option<ModelTier>,
+        cost: &Cost,
+    ) {
         let mut scopes = vec![
             BudgetScope::Global,
             BudgetScope::Provider {
@@ -244,10 +263,10 @@ impl Ledger {
             scopes.push(BudgetScope::Tier { tier });
         }
         for scope in scopes {
-            for period in BudgetPeriod::ALL {
+            for period in [day, month] {
                 let key = LedgerKey {
                     scope: scope.key(),
-                    period: period.key(at),
+                    period: period.to_string(),
                     currency: cost.currency.clone(),
                 };
                 let entry = self.entries.entry(Self::flat(&key)).or_insert(0.0);
@@ -293,6 +312,17 @@ impl Ledger {
 
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        if self
+            .entries
+            .values()
+            .any(|amount| !amount.is_finite() || *amount < 0.0)
+        {
+            return Err("the spend ledger contains an invalid amount".into());
+        }
+        Ok(())
     }
 
     /// Everything counted for one scope in the current periods, for display.

@@ -12,16 +12,9 @@ use crate::error::Error;
 /// The reference filter (alexcarterio/AgentRouter-Codex-Filter) allows up to 20
 /// retries and a 30-minute budget because it stages the whole SSE response, so a
 /// long wait is invisible to the client. Zroutery forwards a stream live, so
-/// at most two brief handshake replays are permitted; long rate windows are
-/// surfaced with Retry-After rather than holding the client for minutes.
-const MAX_TOTAL_RETRIES: u32 = 2;
-/// Waits for a rate limit: a token/request window is minutes, not milliseconds.
-const RATE_DELAYS: [Duration; 4] = [
-    Duration::from_secs(5),
-    Duration::from_secs(15),
-    Duration::from_secs(30),
-    Duration::from_secs(60),
-];
+/// transport replays stay brief, availability gets six bounded delays, and
+/// rate limits are returned for scoped cooling rather than replayed here.
+pub(crate) const MAX_TOTAL_RETRIES: u32 = 6;
 /// Waits for a dropped handshake or a gateway blip.
 const TRANSPORT_DELAYS: [Duration; 3] = [
     Duration::from_secs(1),
@@ -29,9 +22,12 @@ const TRANSPORT_DELAYS: [Duration; 3] = [
     Duration::from_secs(4),
 ];
 /// Waits for a relay with no available channel.
-const AVAILABILITY_DELAYS: [Duration; 3] = [
-    Duration::from_secs(5),
-    Duration::from_secs(10),
+const AVAILABILITY_DELAYS: [Duration; 6] = [
+    Duration::from_secs(1),
+    Duration::from_secs(2),
+    Duration::from_secs(4),
+    Duration::from_secs(8),
+    Duration::from_secs(15),
     Duration::from_secs(20),
 ];
 /// Waits for a history item that belongs to another upstream resource.
@@ -46,7 +42,7 @@ const MAX_WAIT: Duration = Duration::from_secs(5);
 /// field-tested them against the failures a multi-account relay produces:
 ///
 /// * a **rate limit** (429, or a 400 carrying `rate_limit_exceeded`) is a
-///   window that reopens, so it is retried with a long backoff;
+///   window owned by the router: cool its scope and prefer another candidate;
 /// * a **transport** failure or a 408/502/504 gateway blip happened before the
 ///   upstream processed anything;
 /// * **no available channel** (503) is the relay failing over between accounts;
@@ -61,6 +57,9 @@ pub(crate) fn retry_advice(
     can_fail_over: bool,
     transport_limit: u32,
 ) -> Option<Duration> {
+    if err.is_session_binding_invalidated() {
+        return None;
+    }
     if retries_done >= MAX_TOTAL_RETRIES {
         return None;
     }
@@ -75,34 +74,23 @@ pub(crate) fn retry_advice(
     // relay puts them on a 429. A long Retry-After is returned to the caller,
     // not slept on (nor violated by retrying earlier than the requested floor).
     let failure = err.classified();
+    if failure.class == crate::failure::FailureClass::RateLimit {
+        return None;
+    }
     if !failure.retryable()
         && !matches!(err, Error::Upstream { status: 400, body, .. }
-        if is_history_resource_error(body) || is_rate_limit_body(body))
+        if is_history_resource_error(body))
     {
         return None;
     }
     let (delays, class_limit, floor, transport): (&[Duration], u32, Duration, bool) = match err {
         Error::Upstream {
-            status: 429,
-            retry_after,
-            ..
-        } => (&RATE_DELAYS, 4, retry_after.unwrap_or_default(), false),
-        Error::Upstream {
-            status,
-            body,
-            retry_after,
-            ..
-        } if *status == 400 && is_rate_limit_body(body) => {
-            (&RATE_DELAYS, 4, retry_after.unwrap_or_default(), false)
-        }
-        Error::Upstream {
             status: 503,
-            body,
             retry_after,
             ..
-        } if is_no_available_channel(body) => (
+        } => (
             &AVAILABILITY_DELAYS,
-            3,
+            6,
             retry_after.unwrap_or_default(),
             false,
         ),
@@ -115,7 +103,7 @@ pub(crate) fn retry_advice(
             (&HISTORY_DELAYS, 2, retry_after.unwrap_or_default(), false)
         }
         Error::Upstream {
-            status: 408 | 502 | 503 | 504 | 529,
+            status: 408 | 502 | 504 | 529,
             retry_after,
             ..
         } => (
@@ -138,28 +126,15 @@ pub(crate) fn retry_advice(
         return None;
     }
     let base = delays[(retries_done as usize).min(delays.len() - 1)];
-    if floor > MAX_WAIT || base > MAX_WAIT {
+    let max_wait = if matches!(err, Error::Upstream { status: 503, .. }) {
+        Duration::from_secs(30)
+    } else {
+        MAX_WAIT
+    };
+    if floor > max_wait || base > max_wait {
         return None;
     }
     Some(base.max(floor))
-}
-
-/// A 400 that is really a rate limit (some relays use 400 for token windows).
-fn is_rate_limit_body(body: &str) -> bool {
-    let lower = body.to_ascii_lowercase();
-    lower.contains("rate_limit_exceeded")
-        || lower.contains("exceeded token rate limit")
-        || (lower.contains("rate limit exceeded")
-            && (lower.contains("requests per minute") || lower.contains("token")))
-}
-
-/// A relay that could not find a channel for the request.
-fn is_no_available_channel(body: &str) -> bool {
-    let lower = body.to_ascii_lowercase();
-    lower.contains("no_available_channel")
-        || lower.contains("no available channel")
-        || body.contains("无可用渠道")
-        || body.contains("没有可用渠道")
 }
 
 /// Azure's "this item belongs to another resource" refusal.
@@ -228,12 +203,9 @@ mod tests {
     }
 
     #[test]
-    fn a_rate_limit_waits_for_the_window_and_honours_the_server_floor() {
+    fn a_rate_limit_is_returned_for_scoped_cooling_without_a_replay() {
         let limited = upstream(429, "rate limited", None);
-        assert_eq!(
-            retry_advice(&limited, 0, false, 0),
-            Some(Duration::from_secs(5))
-        );
+        assert_eq!(retry_advice(&limited, 0, false, 0), None);
         assert_eq!(retry_advice(&limited, 1, false, 0), None);
         assert_eq!(retry_advice(&limited, 2, false, 0), None);
         assert_eq!(retry_advice(&limited, 3, false, 0), None);
@@ -250,15 +222,9 @@ mod tests {
     #[test]
     fn a_relay_that_reports_rate_limits_as_400_is_recognised() {
         let limited = upstream(400, r#"{"code":"rate_limit_exceeded"}"#, None);
-        assert_eq!(
-            retry_advice(&limited, 0, false, 0),
-            Some(Duration::from_secs(5))
-        );
+        assert_eq!(retry_advice(&limited, 0, false, 0), None);
         let tokens = upstream(400, "exceeded token rate limit", None);
-        assert_eq!(
-            retry_advice(&tokens, 0, false, 0),
-            Some(Duration::from_secs(5))
-        );
+        assert_eq!(retry_advice(&tokens, 0, false, 0), None);
         // An ordinary 400 is not retried.
         let bad = upstream(400, "invalid model", None);
         assert_eq!(retry_advice(&bad, 0, false, 0), None);
@@ -280,9 +246,40 @@ mod tests {
                 false,
                 0
             ),
-            Some(Duration::from_secs(5))
+            Some(Duration::from_secs(1))
         );
         assert_eq!(retry_advice(&upstream(502, "", None), 3, false, 2), None);
+    }
+
+    #[test]
+    fn service_unavailable_gets_several_bounded_recovery_attempts() {
+        let unavailable = upstream(503, "temporarily unavailable", None);
+        for (attempt, seconds) in [1, 2, 4, 8, 15, 20].into_iter().enumerate() {
+            assert_eq!(
+                retry_advice(&unavailable, attempt as u32, false, 1),
+                Some(Duration::from_secs(seconds))
+            );
+        }
+        assert_eq!(retry_advice(&unavailable, 6, false, 2), None);
+        assert_eq!(
+            retry_advice(
+                &upstream(503, "", Some(Duration::from_secs(25))),
+                0,
+                false,
+                2
+            ),
+            Some(Duration::from_secs(25))
+        );
+        assert_eq!(
+            retry_advice(
+                &upstream(503, "", Some(Duration::from_secs(120))),
+                0,
+                false,
+                2
+            ),
+            None,
+            "never violate a longer upstream floor"
+        );
     }
 
     #[test]

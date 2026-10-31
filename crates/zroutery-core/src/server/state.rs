@@ -48,6 +48,7 @@ pub struct AppState {
     /// Held across snapshot/write/confirm, so a timer flush and a shutdown flush
     /// cannot interleave into writing an older snapshot over a newer one.
     pub(super) ledger_flush: Mutex<()>,
+    pub(super) accounting: Mutex<super::accounting::AccountingRuntime>,
     /// One admission gate per budgeted scope.
     ///
     /// A request takes a gate for every scope with a configured limit it could
@@ -134,6 +135,7 @@ pub struct AppState {
     /// serving path rather than only from tests.
     pub(super) projections: ProjectionLog,
     pub response_store: ResponseStore,
+    pub(super) upstream_sessions: super::pipeline::session_binding::UpstreamSessions,
 }
 
 /// The admission gates, one per budgeted scope.

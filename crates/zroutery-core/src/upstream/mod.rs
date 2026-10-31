@@ -48,7 +48,7 @@ mod decision;
 mod encode;
 mod errors;
 
-pub(crate) use errors::retry_advice;
+pub(crate) use errors::{retry_advice, MAX_TOTAL_RETRIES};
 mod headers;
 mod json;
 mod stream;
@@ -76,26 +76,38 @@ const USER_AGENT: &str = concat!("zroutery/", env!("CARGO_PKG_VERSION"));
 /// millisecond count some relays send instead. The retry policy treats the
 /// answer as a floor, never as a reason to retry early.
 pub(crate) fn retry_after(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
-    if let Some(millis) = headers
-        .get("x-ms-retry-after-ms")
+    let millis = ["retry-after-ms", "x-ms-retry-after-ms"]
+        .iter()
+        .filter_map(|name| {
+            headers
+                .get(*name)?
+                .to_str()
+                .ok()?
+                .trim()
+                .parse::<f64>()
+                .ok()
+        })
+        .filter(|value| value.is_finite() && *value >= 0.0)
+        .map(|value| Duration::from_secs_f64((value / 1000.0).min(1e12)))
+        .max();
+    let Some(value) = headers
+        .get(reqwest::header::RETRY_AFTER)
         .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.trim().parse::<u64>().ok())
-    {
-        return Some(Duration::from_millis(millis));
-    }
-    let value = headers
-        .get(reqwest::header::RETRY_AFTER)?
-        .to_str()
-        .ok()?
-        .trim();
-    if let Ok(seconds) = value.parse::<u64>() {
-        return Some(Duration::from_secs(seconds));
-    }
-    chrono::DateTime::parse_from_rfc2822(value).ok().map(|at| {
+        .map(str::trim)
+    else {
+        return millis;
+    };
+    let seconds = value
+        .parse::<f64>()
+        .ok()
+        .filter(|v| v.is_finite() && *v >= 0.0)
+        .map(|v| Duration::from_secs_f64(v.min(1e12)));
+    let date = chrono::DateTime::parse_from_rfc2822(value).ok().map(|at| {
         (at.with_timezone(&chrono::Utc) - chrono::Utc::now())
             .to_std()
             .unwrap_or_default()
-    })
+    });
+    millis.into_iter().chain(seconds).chain(date).max()
 }
 
 /// Stream of canonical events coming from one upstream call.

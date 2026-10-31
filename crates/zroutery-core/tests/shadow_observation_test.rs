@@ -163,6 +163,7 @@ fn route_decision_rejected_candidate_is_retained_but_never_actionable() {
         provider,
         degraded: false,
         credential: None,
+        rate_quote: None,
     };
     let selected_id = executable.exposed_id.clone();
     let route_decision = RouteDecision {

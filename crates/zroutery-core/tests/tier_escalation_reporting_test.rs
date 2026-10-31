@@ -148,6 +148,7 @@ fn cooling(model_id: &str) -> ModelHealth {
         total_failure: 3,
         avg_latency_ms: 0.0,
         cooldown_remaining_secs: 30,
+        rate_limit_remaining_secs: 0,
         last_error: Some("upstream exploded".into()),
     }
 }

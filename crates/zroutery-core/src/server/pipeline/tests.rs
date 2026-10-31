@@ -236,6 +236,7 @@ fn classifier_admission_scopes_cover_the_pool_but_not_the_class() {
             provider,
             degraded: false,
             credential: None,
+            rate_quote: None,
         }
     };
     let plan = vec![candidate("deepseek-flash"), candidate("openai-sol")];
@@ -271,16 +272,12 @@ fn test_candidate(provider: &str, model: &str) -> Candidate {
         provider,
         degraded: false,
         credential: None,
+        rate_quote: None,
     }
 }
 
 /// One lifecycle for a main request, with the candidate's first attempt open.
-fn lifecycle_with_attempt(
-    state: &Arc<AppState>,
-    provider: &str,
-    model: &str,
-) -> (RequestLifecycle, Candidate) {
-    let candidate = test_candidate(provider, model);
+fn lifecycle_with_attempt(state: &Arc<AppState>, candidate: &Candidate) -> RequestLifecycle {
     let mut lifecycle = RequestLifecycle::new(
         Arc::clone(state),
         Dialect::OpenAI,
@@ -291,8 +288,8 @@ fn lifecycle_with_attempt(
         #[cfg(feature = "ml")]
         None,
     );
-    lifecycle.begin_attempt(&candidate, false);
-    (lifecycle, candidate)
+    lifecycle.begin_attempt(candidate, false).unwrap();
+    lifecycle
 }
 
 /// A charge that measures exactly `amount` USD: `pricing` prices this usage at
@@ -360,18 +357,23 @@ async fn concurrent_requests_are_admitted_to_the_limit_and_charged_once() {
                     assert_eq!(resolution, Resolution::Tier(ModelTier::Standard));
                     // The gate is still held here, exactly as it is between the
                     // check and the terminal transition in the real pipeline.
-                    let (mut lifecycle, candidate) =
-                        lifecycle_with_attempt(&state, "relay", "stream-model");
-                    lifecycle.finalize(
-                        TerminalKind::Served,
-                        settlement(&candidate, &pricing, usage),
-                    );
+                    let mut candidate = test_candidate("relay", "stream-model");
+                    candidate.entry.pricing = Some(pricing.clone());
+                    let mut lifecycle = lifecycle_with_attempt(&state, &candidate);
+                    lifecycle
+                        .finalize(
+                            TerminalKind::Served,
+                            settlement(&candidate, &pricing, usage),
+                        )
+                        .unwrap();
                     // A duplicate terminal attempt must be a no-op, including
                     // the charge.
-                    lifecycle.finalize(
-                        TerminalKind::Served,
-                        settlement(&candidate, &pricing, usage),
-                    );
+                    lifecycle
+                        .finalize(
+                            TerminalKind::Served,
+                            settlement(&candidate, &pricing, usage),
+                        )
+                        .unwrap();
                     drop(guard);
                     true
                 }
@@ -473,16 +475,20 @@ async fn an_exhausted_tier_degrades_and_charges_the_tier_that_served() {
         "the request is served by the cheaper tier"
     );
 
-    let candidate = test_candidate("relay", "flash-model");
+    let mut candidate = test_candidate("relay", "flash-model");
     let pricing = crate::billing::Pricing::new("USD", 3.0, 0.0);
     let usage = crate::ir::Usage {
         input_tokens: 200_000,
         ..Default::default()
     };
-    let (mut lifecycle, _) = lifecycle_with_attempt(&state, "relay", "flash-model");
+    candidate.entry.pricing = Some(pricing.clone());
+    candidate.entry.tier = Some(ModelTier::Fast);
+    let mut lifecycle = lifecycle_with_attempt(&state, &candidate);
     let mut fast_settlement = settlement(&candidate, &pricing, usage);
     fast_settlement.tier = Some(ModelTier::Fast);
-    lifecycle.finalize(TerminalKind::Served, fast_settlement);
+    lifecycle
+        .finalize(TerminalKind::Served, fast_settlement)
+        .unwrap();
     drop(guard);
 
     let fast: f64 = state
@@ -544,7 +550,9 @@ async fn a_disconnected_stream_is_billed_once_and_leaves_health_alone() {
     };
     let expected = pricing.cost_of(&reported).amount;
 
-    let (lifecycle, _) = lifecycle_with_attempt(&state, "relay", "stream-model");
+    let mut candidate = test_candidate("relay", "stream-model");
+    candidate.entry.pricing = Some(pricing.clone());
+    let lifecycle = lifecycle_with_attempt(&state, &candidate);
     let events: crate::upstream::EventStream = Box::pin(futures_util::stream::iter(vec![
         Ok(StreamEvent::Start {
             id: "chunk-1".into(),
@@ -567,6 +575,7 @@ async fn a_disconnected_stream_is_billed_once_and_leaves_health_alone() {
         provider_id: "relay".into(),
         tier: Some(ModelTier::Standard),
         kind: crate::query::RequestKind::Main,
+        classifier_severity: false,
         response_id: None,
         cancel_rx: None,
         storage: Default::default(),
@@ -671,7 +680,8 @@ async fn a_client_closing_after_the_terminal_frame_is_not_a_disconnect() {
         AppConfig::default(),
         Arc::new(crate::config::MemorySecretStore::new()),
     ));
-    let (lifecycle, _) = lifecycle_with_attempt(&state, "relay", "stream-model");
+    let candidate = test_candidate("relay", "stream-model");
+    let lifecycle = lifecycle_with_attempt(&state, &candidate);
     let terminal_usage = Usage {
         input_tokens: 11,
         output_tokens: 7,
@@ -705,6 +715,7 @@ async fn a_client_closing_after_the_terminal_frame_is_not_a_disconnect() {
             provider_id: "relay".into(),
             tier: Some(ModelTier::Standard),
             kind: crate::query::RequestKind::Main,
+            classifier_severity: false,
             response_id: None,
             cancel_rx: None,
             storage: crate::protocol::responses::StoragePolicy::Discard,
@@ -766,7 +777,7 @@ fn explicit_credentials_order_is_stable_and_does_not_change_models() {
     let mut config = AppConfig::default();
     config.providers.push(candidate.provider.clone());
     let state = AppState::new(config, Arc::new(crate::config::MemorySecretStore::new()));
-    let expanded = expand_inference_keys(&state, vec![candidate.clone()], 2);
+    let expanded = expand_inference_keys(&state, vec![candidate.clone()], 2).unwrap();
     assert_eq!(
         expanded
             .iter()
@@ -777,5 +788,10 @@ fn explicit_credentials_order_is_stable_and_does_not_change_models() {
     assert!(expanded
         .iter()
         .all(|expanded| expanded.model_id() == candidate.model_id()));
-    assert_eq!(expand_inference_keys(&state, vec![candidate], 1).len(), 1);
+    assert_eq!(
+        expand_inference_keys(&state, vec![candidate], 1)
+            .unwrap()
+            .len(),
+        1
+    );
 }

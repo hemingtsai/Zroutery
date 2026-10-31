@@ -156,10 +156,12 @@ impl AppState {
             ledger_dirty: AtomicBool::new(false),
             ledger_generation: AtomicU64::new(0),
             ledger_flush: Mutex::new(()),
+            accounting: Mutex::new(Default::default()),
             admission: AdmissionGates::default(),
             shadow_attachment: RwLock::new(attachment),
             projections: ProjectionLog::new(log_limit),
             response_store: ResponseStore::default(),
+            upstream_sessions: Default::default(),
             // `ml` and `account` are independent features, so this constructor is
             // reached with accounts on or off and the field must satisfy both.
             // Found by compiling `--features account`: gating the field in `build()`
@@ -262,6 +264,7 @@ impl AppState {
             ledger_dirty: AtomicBool::new(false),
             ledger_generation: AtomicU64::new(0),
             ledger_flush: Mutex::new(()),
+            accounting: Mutex::new(Default::default()),
             admission: AdmissionGates::default(),
             #[cfg(feature = "ml")]
             shadow: crate::ml::ShadowEngine::with_retention(
@@ -290,6 +293,7 @@ impl AppState {
             shadow_attachment: RwLock::new(attachment),
             projections: ProjectionLog::new(log_limit),
             response_store: ResponseStore::default(),
+            upstream_sessions: Default::default(),
         }
     }
 

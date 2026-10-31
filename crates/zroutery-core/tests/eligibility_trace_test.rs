@@ -574,8 +574,12 @@ fn neutral_failure_returns_the_half_open_probe_permit() {
         "a rate limit must not open the circuit"
     );
     assert!(
+        !router.allow_request_for("provider-a-m", "provider-a"),
+        "the returned circuit permit does not bypass the rate-limit window"
+    );
+    assert!(
         router.allow_request("provider-a-m"),
-        "the neutral failure must return the probe permit"
+        "the neutral failure returns the circuit permit"
     );
     assert!(!router.allow_request("provider-a-m"));
 

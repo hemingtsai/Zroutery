@@ -34,6 +34,26 @@ impl ReplyHeaders {
         headers
     }
 
+    pub(crate) fn clear_session_id(&self) {
+        let mut metadata = crate::sync::lock(&self.0);
+        metadata.session_id = None;
+        metadata.claude_session = false;
+    }
+
+    pub(crate) fn set_session_id(&self, id: HeaderValue, claude: bool) {
+        let mut metadata = crate::sync::lock(&self.0);
+        metadata.session_id = Some(id);
+        metadata.claude_session = claude;
+    }
+
+    pub(crate) fn session_id(&self) -> Option<String> {
+        crate::sync::lock(&self.0)
+            .session_id
+            .as_ref()
+            .and_then(|id| id.to_str().ok())
+            .map(str::to_string)
+    }
+
     pub fn capture(&self, headers: &HeaderMap) {
         let mut kept = HeaderMap::new();
         for (name, value) in headers {

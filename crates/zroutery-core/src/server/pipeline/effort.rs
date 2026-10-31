@@ -105,6 +105,7 @@ pub(super) fn registry_for(
             provider: provider.clone(),
             degraded: false,
             credential: None,
+            rate_quote: None,
         };
         if !permitted(req, &candidate) {
             model.enabled = false;
@@ -171,6 +172,7 @@ pub(super) fn validate_scope(
                 provider: provider.clone(),
                 degraded: false,
                 credential: None,
+                rate_quote: None,
             };
             permitted(req, &candidate)
         })
@@ -223,6 +225,7 @@ mod tests {
             provider: ProviderConfig::new("p", "P", ProviderKind::OpenAICompatible),
             degraded: false,
             credential: None,
+            rate_quote: None,
         }
     }
 

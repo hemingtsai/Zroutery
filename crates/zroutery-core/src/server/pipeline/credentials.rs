@@ -4,14 +4,18 @@
 use std::collections::HashSet;
 
 use super::AppState;
+use crate::error::Error;
 use crate::router::{Candidate, InferenceCredential};
 
 pub(super) fn expand_inference_keys(
     state: &AppState,
     plan: Vec<Candidate>,
     limit: usize,
-) -> Vec<Candidate> {
+) -> Result<Vec<Candidate>, Error> {
     let mut result = Vec::new();
+    let mut cooldown: Option<std::time::Duration> = None;
+    let mut cooldown_scope: Option<String> = None;
+    let mut unavailable_without_rate_limit = false;
     let config = state.config();
     let panel_refs: HashSet<&str> = config
         .providers
@@ -32,30 +36,52 @@ pub(super) fn expand_inference_keys(
             result.push(candidate);
             continue;
         }
-        let mut keys: Vec<_> = provider
-            .accounts
-            .iter()
-            .filter(|account| account.enabled)
-            .flat_map(|account| {
-                account
-                    .inference_keys
-                    .iter()
-                    .filter(|key| {
-                        key.enabled
-                            && !key.key_ref.trim().is_empty()
-                            && !panel_refs.contains(key.key_ref.as_str())
-                            && !state
-                                .router
-                                .is_account_gated(&provider.id, &account.account_id)
-                            && !state.router.is_key_gated(
-                                &provider.id,
-                                &account.account_id,
-                                &key.id,
-                            )
-                    })
-                    .map(move |key| (account, key))
-            })
-            .collect();
+        // Credential expansion happens after model ranking. Retain the shortest
+        // key cooldown while filtering so an otherwise valid model whose whole
+        // explicit pool is cooling reports 429 instead of looking unconfigured.
+        let mut configured_key = false;
+        let mut keys = Vec::new();
+        for account in provider.accounts.iter().filter(|account| account.enabled) {
+            for key in account.inference_keys.iter().filter(|key| {
+                key.enabled
+                    && !key.key_ref.trim().is_empty()
+                    && !panel_refs.contains(key.key_ref.as_str())
+            }) {
+                configured_key = true;
+                if state
+                    .router
+                    .is_account_gated(&provider.id, &account.account_id)
+                {
+                    unavailable_without_rate_limit = true;
+                    continue;
+                }
+                if let Some(wait) = state.router.key_rate_limit_remaining(
+                    &provider.id,
+                    &account.account_id,
+                    &key.id,
+                ) {
+                    if cooldown.is_none_or(|current| wait < current) {
+                        cooldown = Some(wait);
+                        cooldown_scope = Some(format!(
+                            "{} account {} key {}",
+                            provider.id, account.account_id, key.id
+                        ));
+                    }
+                    continue;
+                }
+                if state
+                    .router
+                    .is_key_gated(&provider.id, &account.account_id, &key.id)
+                {
+                    unavailable_without_rate_limit = true;
+                    continue;
+                }
+                keys.push((account, key));
+            }
+        }
+        if !configured_key {
+            unavailable_without_rate_limit = true;
+        }
         keys.sort_by(|(a, ka), (b, kb)| {
             ka.priority
                 .cmp(&kb.priority)
@@ -84,5 +110,13 @@ pub(super) fn expand_inference_keys(
     if limit == 1 {
         result.truncate(1);
     }
-    result
+    if result.is_empty() && !unavailable_without_rate_limit {
+        if let Some(retry_after) = cooldown {
+            return Err(Error::RateLimited {
+                scope: cooldown_scope.unwrap_or_else(|| "inference key pool".to_string()),
+                retry_after,
+            });
+        }
+    }
+    Ok(result)
 }

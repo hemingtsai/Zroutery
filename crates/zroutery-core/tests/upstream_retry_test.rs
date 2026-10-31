@@ -1,10 +1,10 @@
-//! A retryable upstream failure is replayed on the same candidate.
+//! Transport and availability failures may be replayed on the same candidate.
 //!
 //! The reference filter in front of CC Switch learned this the hard way: a
-//! relay between several accounts answers 429/502/503 for reasons a second
-//! attempt usually clears, and failing the client on the first answer turns a
-//! transient window into a visible error. The policy lives in
-//! `upstream::retry_advice`; this drives it through the real pipeline.
+//! A relay between several accounts answers 502/503 for reasons a second attempt
+//! may clear. A 429 is different: it establishes a scoped cooldown and must be
+//! returned rather than replayed into that same exhausted scope. The policy
+//! lives in `upstream::retry_advice`; this drives it through the real pipeline.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -34,11 +34,18 @@ struct Flaky {
 async fn messages(axum::extract::State(flaky): axum::extract::State<Flaky>) -> Response {
     let n = flaky.seen.fetch_add(1, Ordering::SeqCst);
     if n < flaky.failures {
-        return (
+        let mut response = (
             StatusCode::from_u16(flaky.status).unwrap(),
             Json(json!({"error": {"type": "overloaded_error", "message": "try again"}})),
         )
             .into_response();
+        if flaky.status == 429 {
+            response.headers_mut().insert(
+                axum::http::header::RETRY_AFTER,
+                axum::http::HeaderValue::from_static("120"),
+            );
+        }
+        return response;
     }
     Json(json!({
         "id": "msg_1",
@@ -90,7 +97,7 @@ async fn start_proxy(cfg: AppConfig) -> (String, ServerHandle) {
     (format!("http://{}", server.addr), server)
 }
 
-async fn ask(base: &str) -> (reqwest::StatusCode, String) {
+async fn ask(base: &str) -> (reqwest::StatusCode, reqwest::header::HeaderMap, String) {
     let client = reqwest::Client::builder()
         .pool_max_idle_per_host(0)
         .build()
@@ -107,7 +114,8 @@ async fn ask(base: &str) -> (reqwest::StatusCode, String) {
         .await
         .unwrap();
     let status = response.status();
-    (status, response.text().await.unwrap())
+    let headers = response.headers().clone();
+    (status, headers, response.text().await.unwrap())
 }
 
 /// A gateway blip (502) is replayed on the same candidate and the client sees
@@ -116,7 +124,7 @@ async fn ask(base: &str) -> (reqwest::StatusCode, String) {
 async fn a_transient_gateway_failure_is_replayed_before_the_client_sees_it() {
     let (upstream, seen) = start_flaky(1, 502).await;
     let (proxy, server) = start_proxy(config_for(&upstream)).await;
-    let (status, text) = ask(&proxy).await;
+    let (status, _, text) = ask(&proxy).await;
     assert_eq!(status, 200, "{text}");
     assert!(text.contains("\"ok\""), "{text}");
     assert_eq!(
@@ -133,23 +141,41 @@ async fn a_transient_gateway_failure_is_replayed_before_the_client_sees_it() {
 async fn a_terminal_failure_is_not_replayed() {
     let (upstream, seen) = start_flaky(1, 401).await;
     let (proxy, server) = start_proxy(config_for(&upstream)).await;
-    let (status, _) = ask(&proxy).await;
+    let (status, _, _) = ask(&proxy).await;
     assert_eq!(status, 401);
     assert_eq!(seen.load(Ordering::SeqCst), 1);
     server.stop().await;
 }
 
-/// A rate limit is retried, and the upstream asking for a long wait is obeyed
-/// (here with the shortest possible schedule, so the test stays quick).
+/// A rate limit establishes a cooldown for this scope. It is returned with the
+/// upstream's scheduling hint and is not replayed against the same candidate.
 #[tokio::test]
-async fn a_rate_limit_is_retried_on_the_same_candidate() {
+async fn a_rate_limit_is_returned_without_replaying_the_same_candidate() {
     let (upstream, seen) = start_flaky(1, 429).await;
-    let mut cfg = config_for(&upstream);
-    // One retry's wait is 5 s; nothing else in the request is slow.
-    cfg.providers[0].timeout_secs = 10;
-    let (proxy, server) = start_proxy(cfg).await;
-    let (status, text) = ask(&proxy).await;
-    assert_eq!(status, 200, "{text}");
-    assert_eq!(seen.load(Ordering::SeqCst), 2);
+    let (proxy, server) = start_proxy(config_for(&upstream)).await;
+    let (status, headers, text) = ask(&proxy).await;
+    assert_eq!(status, 429, "{text}");
+    assert_eq!(headers[reqwest::header::RETRY_AFTER], "120");
+    assert_eq!(
+        seen.load(Ordering::SeqCst),
+        1,
+        "the rate-limited scope must not be replayed automatically"
+    );
+    let (status, headers, text) = ask(&proxy).await;
+    assert_eq!(status, 429, "{text}");
+    assert!(
+        headers[reqwest::header::RETRY_AFTER]
+            .to_str()
+            .unwrap()
+            .parse::<u64>()
+            .unwrap()
+            >= 119,
+        "the latched scope must carry its remaining wait"
+    );
+    assert_eq!(
+        seen.load(Ordering::SeqCst),
+        1,
+        "a request during cooldown must not reach the same scope"
+    );
     server.stop().await;
 }
