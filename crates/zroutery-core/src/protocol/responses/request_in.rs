@@ -4,8 +4,9 @@ use serde_json::{json, Value};
 
 use crate::error::{Error, Result};
 use crate::ir::{
-    ChatRequest, ContentBlock, Dialect, MediaSource, Message, Role, StructuredOutput, SystemPart,
-    ToolChoice, ToolDef, ToolResultPart, DEFAULT_STRUCTURED_OUTPUT_SCHEMA_NAME,
+    ChatRequest, ContentBlock, Dialect, MediaSource, Message, ResponsesTools, Role,
+    StructuredOutput, SystemPart, ToolChoice, ToolResultPart,
+    DEFAULT_STRUCTURED_OUTPUT_SCHEMA_NAME,
 };
 use crate::protocol::reasoning_bridge;
 use crate::protocol::unsupported_content;
@@ -97,6 +98,28 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
         .and_then(Value::as_str)
         .ok_or_else(|| Error::invalid("`model` is required"))?;
     let mut req = ChatRequest::new(model, Dialect::OpenAIResponses);
+    req.responses_body = Some(body.clone());
+    req.responses_native_only = obj.get("conversation").is_some_and(|v| !v.is_null())
+        || obj
+            .get("previous_response_id")
+            .is_some_and(|v| !v.is_null())
+        || obj.get("context_management").is_some_and(|v| !v.is_null());
+    if let Some(include) = obj.get("include") {
+        if !include.is_array() {
+            return Err(Error::invalid("include must be an array"));
+        }
+    }
+
+    // The initial catalog precedes history declarations; later additional_tools
+    // items may replace an earlier definition with the same identity.
+    match obj.get("tools") {
+        None | Some(Value::Null) => {}
+        Some(Value::Array(tools)) => {
+            req.responses_tools = Some(ResponsesTools::default());
+            super::tools::decode_tools(tools, &mut req)?;
+        }
+        Some(_) => return Err(Error::invalid("`tools` must be an array")),
+    }
 
     match obj.get("instructions") {
         Some(Value::String(s)) => req.system.push(SystemPart::new(s.clone())),
@@ -180,31 +203,6 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
         }
     }
 
-    match obj.get("tools") {
-        None | Some(Value::Null) => {}
-        Some(Value::Array(tools)) => {
-            for t in tools {
-                let name = t
-                    .get("name")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| Error::invalid("tool definition is missing `name`"))?;
-                req.tools.push(ToolDef {
-                    name: name.to_string(),
-                    description: t
-                        .get("description")
-                        .and_then(Value::as_str)
-                        .map(str::to_string),
-                    input_schema: t
-                        .get("parameters")
-                        .cloned()
-                        .unwrap_or_else(|| json!({"type": "object"})),
-                    cache_control: None,
-                });
-            }
-        }
-        Some(_) => return Err(Error::invalid("`tools` must be an array")),
-    }
-
     req.tool_choice = match obj.get("tool_choice") {
         None | Some(Value::Null) => None,
         Some(Value::String(s)) => match s.as_str() {
@@ -213,31 +211,38 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
             "required" | "any" => Some(ToolChoice::Any),
             other => return Err(unsupported_content("tool_choice", Some(other))),
         },
-        Some(Value::Object(o)) => {
-            let name = o
-                .get("name")
-                .and_then(Value::as_str)
-                .ok_or_else(|| Error::invalid("tool_choice is missing `name`"))?;
-            Some(ToolChoice::Specific {
-                name: name.to_string(),
-            })
-        }
+        Some(Value::Object(o)) => Some(ToolChoice::Specific {
+            name: super::tools::call_name(&Value::Object(o.clone()))?,
+        }),
         Some(_) => {
             return Err(Error::invalid(
                 "`tool_choice` must be a string or an object",
             ))
         }
     };
+    req.parallel_tool_use = obj.get("parallel_tool_calls").and_then(Value::as_bool);
 
     if let Some(reasoning) = obj.get("reasoning") {
         let effort = reasoning
             .get("effort")
             .and_then(Value::as_str)
             .ok_or_else(|| Error::invalid("reasoning is missing `effort`"))?;
-        req.thinking = Some(
-            reasoning_bridge::decode_effort(effort)
-                .ok_or_else(|| unsupported_content("reasoning effort", Some(effort)))?,
-        );
+        req.thinking = Some(reasoning_bridge::decode_effort(effort).unwrap_or(
+            crate::ir::ThinkingConfig {
+                enabled: true,
+                budget_tokens: None,
+            },
+        ));
+        req.reasoning = Some(if effort == "none" {
+            // Codex always sends an explicit effort, including `none`. That is
+            // the absence of a reasoning requirement, not a native capability
+            // that every candidate must advertise. The encoders still project
+            // this as `none` on same-protocol Responses upstreams, while Chat
+            // and Anthropic fallbacks can legally omit their reasoning knob.
+            crate::ir::ReasoningRequest::Disabled
+        } else {
+            crate::ir::ReasoningRequest::native(effort).map_err(Error::invalid)?
+        });
     }
 
     req.refresh_required_capabilities();
@@ -404,7 +409,27 @@ fn decode_input_item(item: &Value, req: &mut ChatRequest) -> Result<()> {
         None if item.get("role").is_some() || item.get("content").is_some() => "message",
         None => return Err(Error::invalid("input item is missing `type`")),
     };
+    if item_type != "reasoning"
+        && item
+            .get("encrypted_content")
+            .is_some_and(|value| !value.is_null())
+    {
+        req.responses_native_only = true;
+    }
     match item_type {
+        // These are upstream-owned context, never empty substitute messages.
+        "compaction"
+        | "compaction_summary"
+        | "context_compaction"
+        | "item_reference"
+        | "web_search_call"
+        | "tool_search_call"
+        | "tool_search_output"
+        | "configuration_update"
+        | "compaction_trigger"
+        | "image_generation_call" => {
+            req.responses_native_only = true;
+        }
         "function_call" => {
             let arguments = item
                 .get("arguments")
@@ -416,15 +441,11 @@ fn decode_input_item(item: &Value, req: &mut ChatRequest) -> Result<()> {
                 .get("call_id")
                 .and_then(Value::as_str)
                 .ok_or_else(|| Error::invalid("function_call is missing `call_id`"))?;
-            let name = item
-                .get("name")
-                .and_then(Value::as_str)
-                .ok_or_else(|| Error::invalid("function_call is missing `name`"))?;
             req.messages.push(Message {
                 role: Role::Assistant,
                 content: vec![ContentBlock::ToolUse {
                     id: id.to_string(),
-                    name: name.to_string(),
+                    name: super::tools::call_name(item)?,
                     input,
                 }],
             });

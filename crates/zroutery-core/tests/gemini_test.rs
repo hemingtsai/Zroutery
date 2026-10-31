@@ -44,6 +44,27 @@ fn request_decodes_system_contents_and_function_calls() {
 }
 
 #[test]
+fn native_thinking_level_is_preserved_instead_of_becoming_a_token_budget() {
+    let request = decode_request(json!({
+        "model":"standard-class", "contents":[{"parts":[{"text":"hello"}]}],
+        "generationConfig":{"thinkingConfig":{"thinkingLevel":"high"}}
+    }))
+    .unwrap();
+    assert_eq!(request.reasoning.as_ref().unwrap().effort(), Some("high"));
+    let wire = encode_request(&request, "gemini-upstream").unwrap();
+    assert_eq!(
+        wire["generationConfig"]["thinkingConfig"]["thinkingLevel"],
+        "high"
+    );
+    assert!(wire["generationConfig"]["thinkingConfig"]
+        .get("thinkingBudget")
+        .is_none());
+    assert!(decode_request(json!({"model":"standard-class",
+        "generationConfig":{"thinkingConfig":{"thinkingLevel":"high","thinkingBudget":512}}}))
+    .is_err());
+}
+
+#[test]
 fn response_round_trips_through_ir() {
     let resp = ChatResponse {
         id: "gemini_1".into(),

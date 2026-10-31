@@ -6,8 +6,8 @@ use serde_json::{json, Value};
 
 use crate::error::{Error, Result};
 use crate::ir::{
-    classify_media, ChatRequest, ContentBlock, Dialect, MediaSource, Message, Role,
-    StructuredOutput, SystemPart, ThinkingConfig, ToolChoice, ToolDef, ToolResultPart,
+    classify_media, ChatRequest, ContentBlock, Dialect, MediaSource, Message, ReasoningRequest,
+    Role, StructuredOutput, SystemPart, ThinkingConfig, ToolChoice, ToolDef, ToolResultPart,
 };
 use crate::protocol::unsupported_content;
 // ---------------------------------------------------------------- request in
@@ -22,6 +22,13 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
         .ok_or_else(|| Error::invalid("model is required"))?
         .to_string();
     let mut req = ChatRequest::new(model, Dialect::Gemini);
+    // The native resource handler sets this from the URL operation. The legacy
+    // /generateContent compatibility route may also request streaming explicitly.
+    req.stream = match obj.get("stream") {
+        None => false,
+        Some(Value::Bool(stream)) => *stream,
+        Some(_) => return Err(Error::invalid("stream must be a boolean")),
+    };
 
     // Google's canonical JSON spelling is camelCase `systemInstruction`; the
     // snake_case form is accepted as a compatibility alias.  Reading only the
@@ -183,7 +190,35 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
         // Thinking configuration was received and then discarded, so a caller
         // that asked for a thinking budget silently got the provider default.
         if let Some(thinking) = gc.get("thinkingConfig").filter(|value| !value.is_null()) {
-            req.thinking = Some(decode_thinking_config(thinking)?);
+            if let Some(level) = thinking
+                .get("thinkingLevel")
+                .filter(|value| !value.is_null())
+            {
+                if thinking
+                    .get("thinkingBudget")
+                    .is_some_and(|value| !value.is_null())
+                {
+                    return Err(Error::invalid(
+                        "send thinkingLevel or thinkingBudget, not both",
+                    ));
+                }
+                let level = level
+                    .as_str()
+                    .ok_or_else(|| Error::invalid("thinkingLevel must be a native identifier"))?;
+                let reasoning = ReasoningRequest::native(level).map_err(Error::invalid)?;
+                req.thinking = Some(reasoning.legacy());
+                req.reasoning = Some(reasoning);
+            } else {
+                let thinking = decode_thinking_config(thinking)?;
+                req.reasoning = if !thinking.enabled {
+                    Some(ReasoningRequest::Disabled)
+                } else {
+                    thinking
+                        .budget_tokens
+                        .map(|tokens| ReasoningRequest::TokenBudget { tokens })
+                };
+                req.thinking = Some(thinking);
+            }
         }
         // `responseMimeType` / `responseSchema` are the Gemini structured-output
         // knobs. They were accepted and ignored, so a caller that required JSON
@@ -457,9 +492,8 @@ fn decode_structured_output(
 /// Map `generationConfig.thinkingConfig` onto the IR thinking config.
 ///
 /// Gemini expresses the budget in tokens and disables thinking with a budget
-/// of zero; an absent budget means the provider default. Gemini 3's
-/// `thinkingLevel` has no IR counterpart and is not mapped here, and neither
-/// is `includeThoughts`.
+/// of zero; an absent budget means the provider default. Native thinkingLevel
+/// is handled separately and must never become an invented numerical budget.
 fn decode_thinking_config(config: &Value) -> Result<ThinkingConfig> {
     match config
         .get("thinkingBudget")

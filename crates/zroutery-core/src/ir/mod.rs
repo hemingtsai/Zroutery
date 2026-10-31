@@ -6,7 +6,11 @@
 //! keeps the number of conversions at `2 decoders + 2 encoders` instead of a
 //! full N x M matrix.
 
+mod headers;
+pub mod reasoning;
 pub mod response;
+pub use headers::ReplyHeaders;
+pub use reasoning::{ReasoningRequest, NATIVE_EFFORTS, REASONING_SCHEMA_VERSION};
 
 pub use response::{ResponseStatus, ResponseStore, StoredResponse};
 
@@ -83,6 +87,9 @@ pub enum Dialect {
 pub enum Role {
     User,
     Assistant,
+    /// Mid-conversation instructions; preserve their position, never user data.
+    #[serde(alias = "developer")]
+    System,
 }
 
 /// A single piece of message content.
@@ -369,6 +376,23 @@ pub struct ToolDef {
     pub cache_control: Option<Value>,
 }
 
+/// The Responses identity of a function exposed under a portable upstream name.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ResponsesToolName {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<String>,
+    #[serde(default)]
+    pub custom: bool,
+}
+
+/// Wire details needed to reverse a Responses-to-function-tools translation.
+/// Kept out of vendor passthrough so other dialects never receive these fields.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ResponsesTools {
+    pub names: BTreeMap<String, ResponsesToolName>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ToolChoice {
     Auto,
@@ -460,6 +484,18 @@ pub struct ChatRequest {
     /// an explicit non-strict schema, which is not the same as saying nothing.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub tool_strict: BTreeMap<String, bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub responses_tools: Option<ResponsesTools>,
+    /// Original Responses wire body. Native upstreams keep positional tool
+    /// declarations, phases, ids and opaque context instead of reconstructing it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub responses_body: Option<Value>,
+    /// Same-protocol Anthropic forwarding retains positional system entries,
+    /// native effort and cache/extension fields without guessing a downgrade.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anthropic_body: Option<Value>,
+    #[serde(default)]
+    pub responses_native_only: bool,
     pub tool_choice: Option<ToolChoice>,
     /// Whether the client allows more than one tool call per turn.  `None`
     /// keeps the target dialect's default, `Some(false)` is an explicit
@@ -467,6 +503,9 @@ pub struct ChatRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parallel_tool_use: Option<bool>,
     pub thinking: Option<ThinkingConfig>,
+    /// Authoritative native control; omission differs from disabled and budget.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<ReasoningRequest>,
     /// Structured-output constraint the caller asked for, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub structured_output: Option<StructuredOutput>,
@@ -492,6 +531,8 @@ pub struct ChatRequest {
     /// Request context, not protocol data, and never serialized.
     #[serde(skip)]
     pub client_headers: HeaderMap,
+    #[serde(skip)]
+    pub reply_headers: ReplyHeaders,
 }
 
 impl ChatRequest {
@@ -508,9 +549,14 @@ impl ChatRequest {
             stream: false,
             tools: Vec::new(),
             tool_strict: BTreeMap::new(),
+            responses_tools: None,
+            responses_body: None,
+            anthropic_body: None,
+            responses_native_only: false,
             tool_choice: None,
             parallel_tool_use: None,
             thinking: None,
+            reasoning: None,
             structured_output: None,
             metadata_user: None,
             passthrough: Map::new(),
@@ -519,6 +565,7 @@ impl ChatRequest {
             required_capabilities: Vec::new(),
             client_identity: None,
             client_headers: HeaderMap::new(),
+            reply_headers: ReplyHeaders::default(),
         }
     }
 
@@ -620,6 +667,25 @@ impl ChatRequest {
         if !self.tools.is_empty() || self.tool_choice.is_some() {
             required.insert(Capability::Tools);
         }
+        if self.responses_body.as_ref().is_some_and(|body| {
+            body.get("tools")
+                .and_then(Value::as_array)
+                .is_some_and(|tools| !tools.is_empty())
+                || body
+                    .get("input")
+                    .and_then(Value::as_array)
+                    .is_some_and(|items| {
+                        items.iter().any(|item| {
+                            item["type"] == "additional_tools"
+                                && item
+                                    .get("tools")
+                                    .and_then(Value::as_array)
+                                    .is_some_and(|tools| !tools.is_empty())
+                        })
+                    })
+        }) {
+            required.insert(Capability::Tools);
+        }
         if self
             .thinking
             .as_ref()
@@ -659,6 +725,21 @@ impl ChatRequest {
     /// reasoning requirement is not silently described as a capability pass.
     pub fn drop_reasoning(&mut self) {
         self.thinking = None;
+        self.reasoning = None;
+        if let Some(body) = self.anthropic_body.as_mut().and_then(Value::as_object_mut) {
+            body.remove("thinking");
+            if let Some(config) = body.get_mut("output_config").and_then(Value::as_object_mut) {
+                config.remove("effort");
+            }
+        }
+        if let Some(body) = self.responses_body.as_mut() {
+            if let Some(object) = body.as_object_mut() {
+                object.remove("reasoning");
+            }
+            if let Some(input) = body.get_mut("input").and_then(Value::as_array_mut) {
+                input.retain(|item| item["type"] != "reasoning");
+            }
+        }
         for message in &mut self.messages {
             message.content.retain(|block| {
                 !matches!(
@@ -810,6 +891,15 @@ pub enum StreamEvent {
         usage: Usage,
     },
     Ping,
+    /// A native frame plus its canonical observations. Used only for a
+    /// same-protocol extension path; the opaque payload is never a fabricated
+    /// safety verdict and is not persisted as accounting or training content.
+    Native {
+        dialect: Dialect,
+        event: Option<String>,
+        data: Value,
+        canonical: Vec<StreamEvent>,
+    },
 }
 
 #[cfg(test)]

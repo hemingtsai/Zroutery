@@ -242,6 +242,29 @@ async fn mock_anthropic_messages(
         )
             .into_response();
     }
+    if body["model"]
+        .as_str()
+        .unwrap_or("")
+        .starts_with("signature")
+    {
+        let stale = body["messages"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|message| {
+                message["content"]
+                    .as_array()
+                    .is_some_and(|blocks| blocks.iter().any(|block| block["type"] == "thinking"))
+            });
+        if stale {
+            return (
+                axum::http::StatusCode::BAD_REQUEST,
+                Json(json!({"error":{"type":"invalid_request_error",
+                "message":"invalid signature thinking block"}})),
+            )
+                .into_response();
+        }
+    }
     // A repairable rejection for the rectifier A/B test: the thinking budget
     // exceeds the (pretend) provider allowance. The thinking-budget rectifier
     // halves `budget_tokens` and retries the SAME model, so the halved body
@@ -1039,7 +1062,7 @@ async fn openai_in_openai_out_with_tool_calls() {
 }
 
 #[tokio::test]
-async fn reasoning_effort_degrades_and_drops_the_control_for_a_non_reasoning_model() {
+async fn unsupported_reasoning_effort_fails_closed_without_dropping_the_control() {
     let (addr, mock) = start_mock().await;
     let mut cfg = config_for(addr);
     // Make the quirk observable: without the transform, the encoded body would
@@ -1058,30 +1081,18 @@ async fn reasoning_effort_degrades_and_drops_the_control_for_a_non_reasoning_mod
         .await
         .unwrap();
 
-    assert!(
-        response.status().is_success(),
-        "a reasoning variant must be served, not rejected: {}",
-        response.status()
-    );
     assert_eq!(
-        response
-            .headers()
-            .get("x-zroutery-degraded")
-            .and_then(|v| v.to_str().ok()),
-        Some("1"),
-        "the dropped reasoning control must be observable"
+        response.status(),
+        422,
+        "unknown class effort cannot be silently dropped"
     );
-    let sent = &h.mock.bodies()[0];
-    assert!(
-        sent.get("reasoning_effort").is_none(),
-        "the reasoning control reached a model that does not declare thinking support: {sent}"
-    );
+    assert_eq!(h.mock.count(), 0);
 
     h.shutdown().await;
 }
 
 #[tokio::test]
-async fn reasoning_effort_degrades_in_the_streaming_path() {
+async fn unsupported_streaming_effort_is_also_refused_without_a_send() {
     // Agent clients stream. The preflight that drops the control must run on
     // both attempt loops, or the fix would exist only for buffered callers.
     let (addr, mock) = start_mock().await;
@@ -1101,21 +1112,10 @@ async fn reasoning_effort_degrades_in_the_streaming_path() {
         .await
         .unwrap();
 
-    assert!(response.status().is_success());
-    assert_eq!(
-        response
-            .headers()
-            .get("x-zroutery-degraded")
-            .and_then(|v| v.to_str().ok()),
-        Some("1")
-    );
+    assert_eq!(response.status(), 422);
     // Drain the stream so the upstream attempt is complete before inspecting it.
     let _ = response.text().await.unwrap();
-    let sent = &h.mock.bodies()[0];
-    assert!(
-        sent.get("reasoning_effort").is_none(),
-        "the streaming path forwarded the dropped reasoning control: {sent}"
-    );
+    assert_eq!(h.mock.count(), 0);
 
     h.shutdown().await;
 }
@@ -1165,6 +1165,7 @@ async fn a_declared_thinking_capability_is_not_degraded() {
     let (addr, mock) = start_mock().await;
     let mut cfg = config_for(addr);
     cfg.models[1].capabilities.thinking = true;
+    cfg.models[1].effort_levels = vec!["xhigh".into()];
     cfg.providers[0].quirks.send_reasoning_effort = true;
     let h = Harness::start(cfg, mock).await;
 
@@ -3629,7 +3630,7 @@ async fn shadow_does_not_cause_retry() {
         // candidate. It advertises the thinking capability the request
         // requires and is priced so the ledger comparison is over real spend.
         let mut primary =
-            ModelEntry::for_upstream("anthropic", "budget-v4", Some(ModelTier::Standard))
+            ModelEntry::for_upstream("anthropic", "signature-v4", Some(ModelTier::Standard))
                 .with_priority(0);
         primary.capabilities.thinking = true;
         primary.pricing = Some(Pricing::new("USD", 0.5, 2.0));
@@ -3648,8 +3649,11 @@ async fn shadow_does_not_cause_retry() {
                 .json(&json!({
                     "model": "sonnet-class",
                     "max_tokens": 64,
-                    "thinking": {"type": "enabled", "budget_tokens": 2048},
-                    "messages": [{"role": "user", "content": format!("round {round}")}]
+                    "messages": [
+                        {"role":"user","content":"prior fixture"},
+                        {"role":"assistant","content":[{"type":"thinking","thinking":"fixture","signature":"stale"},{"type":"text","text":"prior answer"}]},
+                        {"role": "user", "content": format!("round {round}")}
+                    ]
                 }))
                 .send()
                 .await
@@ -3678,16 +3682,21 @@ async fn shadow_does_not_cause_retry() {
     for round in 0..2 {
         let rejected = &off.upstream_bodies[round * 2];
         let repaired = &off.upstream_bodies[round * 2 + 1];
-        assert_eq!(rejected["model"], "budget-v4");
+        assert_eq!(rejected["model"], "signature-v4");
         assert_eq!(
-            repaired["model"], "budget-v4",
+            repaired["model"], "signature-v4",
             "the retry must stay on the same candidate"
         );
-        assert_eq!(rejected["thinking"]["budget_tokens"], 2048);
-        assert_eq!(
-            repaired["thinking"]["budget_tokens"], 1024,
-            "the rectifier must have halved the budget"
-        );
+        assert!(rejected["messages"][1]["content"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|block| block["type"] == "thinking"));
+        assert!(repaired["messages"][1]["content"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|block| block["type"] != "thinking"));
     }
     assert!(
         off.records.iter().all(|r| r.attempts == 1),

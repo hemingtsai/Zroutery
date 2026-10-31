@@ -37,9 +37,14 @@ mod response;
 mod sanitize;
 mod stream_in;
 mod stream_out;
+mod tools;
 
 pub use request_in::{decode_history, decode_request, input_items, StoragePolicy};
 pub use request_out::{encode_request, encode_request_with};
 pub use response::{decode_response, encode_response};
 pub use stream_in::ResponsesStreamParser;
 pub use stream_out::ResponsesStreamEncoder;
+pub use tools::{restore_response_tools, restore_stream_frames};
+pub fn response_usage(body: &serde_json::Value) -> crate::ir::Usage {
+    response::decode_usage(body.get("usage"))
+}

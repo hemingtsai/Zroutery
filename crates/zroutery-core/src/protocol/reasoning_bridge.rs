@@ -37,10 +37,11 @@ pub fn decode_effort(effort: &str) -> Option<ThinkingConfig> {
         budget_tokens: Some(budget_tokens),
     };
     Some(match effort {
-        "none" | "minimal" => ThinkingConfig {
+        "none" => ThinkingConfig {
             enabled: false,
             budget_tokens: None,
         },
+        "minimal" => enabled(512),
         "low" => enabled(LOW_BUDGET),
         "medium" => enabled(MEDIUM_BUDGET),
         "high" => enabled(HIGH_BUDGET),
@@ -90,11 +91,46 @@ pub fn encode_effort(thinking: &ThinkingConfig) -> &'static str {
         return "none";
     }
     match thinking.budget_tokens.unwrap_or(MEDIUM_BUDGET) {
+        0..=512 => "minimal",
         budget if budget <= LOW_BUDGET => "low",
         budget if budget < HIGH_BUDGET => "medium",
         budget if budget < XHIGH_BUDGET => "high",
         budget if budget < MAX_BUDGET => "xhigh",
         _ => "max",
+    }
+}
+
+/// Preserve a native value. The pipeline validates declared support, direct
+/// same-protocol exceptions and bridge evidence before encoding it.
+pub fn request_effort(req: &crate::ir::ChatRequest) -> Option<&str> {
+    req.reasoning
+        .as_ref()
+        .and_then(crate::ir::ReasoningRequest::effort)
+        .or_else(|| req.thinking.as_ref().map(encode_effort))
+}
+
+/// Translate native effort as a native identifier, never through an invented
+/// numeric ceiling. Exact model/surface support is still checked by routing.
+/// Anthropic and OpenAI both encode these five names; their implementations
+/// need not spend identical tokens at the same name. Unknown/minimal values do
+/// not gain a bridge merely because another model once advertised them.
+pub fn native_effort_bridge(
+    source: crate::ir::Dialect,
+    target: crate::ir::Dialect,
+    value: &str,
+) -> bool {
+    use crate::ir::Dialect;
+    if source == target {
+        return true;
+    }
+    match (source, target) {
+        (Dialect::OpenAI, Dialect::OpenAIResponses)
+        | (Dialect::OpenAIResponses, Dialect::OpenAI) => true,
+        (Dialect::Anthropic, Dialect::OpenAI | Dialect::OpenAIResponses)
+        | (Dialect::OpenAI | Dialect::OpenAIResponses, Dialect::Anthropic) => {
+            matches!(value, "low" | "medium" | "high" | "xhigh" | "max")
+        }
+        _ => false,
     }
 }
 
@@ -224,7 +260,7 @@ mod tests {
     fn effort_vocabulary_includes_xhigh_and_max() {
         for (effort, budget) in [
             ("none", None),
-            ("minimal", None),
+            ("minimal", Some(512)),
             ("low", Some(LOW_BUDGET)),
             ("medium", Some(MEDIUM_BUDGET)),
             ("high", Some(HIGH_BUDGET)),
@@ -240,7 +276,7 @@ mod tests {
 
     #[test]
     fn effort_round_trips_every_level() {
-        for effort in ["none", "low", "medium", "high", "xhigh", "max"] {
+        for effort in ["none", "minimal", "low", "medium", "high", "xhigh", "max"] {
             let thinking = decode_effort(effort).unwrap();
             assert_eq!(encode_effort(&thinking), effort, "effort={effort}");
         }

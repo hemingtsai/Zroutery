@@ -96,6 +96,9 @@ pub(super) async fn try_rectify_buffered(
     let mut current_error: &Error = error;
 
     for rectifier in rectifiers {
+        if req.reasoning.is_some() && rectifier.name() == "thinking_budget" {
+            continue;
+        }
         let mut rounds = 0;
         loop {
             if !rectifier.should_apply(current_error, &current_body) {
@@ -237,6 +240,9 @@ pub(super) async fn try_rectify_stream(
     let mut current_error: &Error = error;
 
     for rectifier in rectifiers {
+        if req.reasoning.is_some() && rectifier.name() == "thinking_budget" {
+            continue;
+        }
         let mut rounds = 0;
         loop {
             if !rectifier.should_apply(current_error, &current_body) {

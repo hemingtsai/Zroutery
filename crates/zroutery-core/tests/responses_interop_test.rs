@@ -612,10 +612,9 @@ fn native_reasoning_input_keeps_payload_and_all_summaries() {
         "opaque payload must round trip verbatim by default: {wire}"
     );
     assert!(
-        input
-            .iter()
-            .any(|item| item["type"] == "reasoning"
-                && item["summary"][0]["text"] == "first\n\nsecond"),
+        input.iter().any(|item| item["type"] == "reasoning"
+            && item["summary"][0]["text"] == "first"
+            && item["summary"][1]["text"] == "second"),
         "full summary must round trip by default: {wire}"
     );
 

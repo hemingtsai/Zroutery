@@ -235,10 +235,13 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
         let effort = effort
             .as_str()
             .ok_or_else(|| Error::invalid("`reasoning_effort` must be a string"))?;
-        req.thinking = Some(
-            reasoning_bridge::decode_effort(effort)
-                .ok_or_else(|| unsupported_content("reasoning effort", Some(effort)))?,
-        );
+        req.thinking = Some(reasoning_bridge::decode_effort(effort).unwrap_or(
+            crate::ir::ThinkingConfig {
+                enabled: true,
+                budget_tokens: None,
+            },
+        ));
+        req.reasoning = Some(crate::ir::ReasoningRequest::native(effort).map_err(Error::invalid)?);
     }
 
     req.metadata_user = obj.get("user").and_then(Value::as_str).map(str::to_string);

@@ -27,6 +27,7 @@ mod app;
 mod ml;
 mod model;
 mod provider;
+mod reasoning;
 mod registry;
 mod routing;
 mod secrets;
@@ -46,6 +47,7 @@ pub use provider::{
     passthrough_denied, resolve_client_identity, ClientIdentity, ProviderClientProfile,
     ProviderKind, PASSTHROUGH_DENIED,
 };
+pub use reasoning::ReasoningCapability;
 pub use registry::{
     qualified_id, AccountConfig, InferenceKeyConfig, MaintenanceConfig, ModelEntry, ProviderConfig,
 };

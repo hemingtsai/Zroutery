@@ -274,7 +274,10 @@ fn anthropic_text_request_round_trip() {
     assert_eq!(encoded["max_tokens"], 1024);
     assert_eq!(encoded["temperature"], 0.5);
     assert_eq!(encoded["stop_sequences"], json!(["END"]));
-    assert_eq!(encoded["system"][0]["text"], "Be helpful.");
+    assert_eq!(
+        encoded["system"], "Be helpful.",
+        "same-protocol forwarding retains the native string representation"
+    );
 }
 
 #[test]
@@ -730,8 +733,8 @@ fn responses_text_request_round_trip() {
     assert_eq!(encoded["instructions"], "Be concise.");
     assert_eq!(encoded["max_output_tokens"], 128);
     let input = encoded["input"].as_array().unwrap();
-    assert_eq!(input[0]["type"], "message");
-    assert_eq!(input[0]["content"][0]["type"], "input_text");
+    assert_eq!(input[0]["type"], "input_text");
+    assert_eq!(input[0]["text"], "What is 2+2?");
 }
 
 #[test]
@@ -764,15 +767,11 @@ fn responses_input_audio_decodes() {
     // Re-encode to Responses wire format.
     let encoded = responses::encode_request(&req, "gpt-5").unwrap();
     let input = encoded["input"].as_array().unwrap();
-    // Audio inside a message gets encoded as input_audio in message content.
-    let msg = input
-        .iter()
-        .find(|i| i["type"] == "message")
-        .expect("should have a message item");
-    let content = msg["content"].as_array().unwrap();
-    assert_eq!(content[0]["type"], "input_audio");
-    assert_eq!(content[0]["input_audio"]["data"], "SGVsbG8=");
-    assert_eq!(content[0]["input_audio"]["format"], "wav");
+    // A native Responses upstream keeps the client's original item placement.
+    // Moving an item into a new message can shift positional tool declarations.
+    assert_eq!(input[0]["type"], "input_audio");
+    assert_eq!(input[0]["input_audio"]["data"], "SGVsbG8=");
+    assert_eq!(input[0]["input_audio"]["format"], "wav");
 }
 
 #[test]
@@ -1626,7 +1625,7 @@ fn openai_response_stop_reasons() {
 fn responses_reasoning_effort_decode() {
     let cases = vec![
         ("none", false, None),
-        ("minimal", false, None),
+        ("minimal", true, Some(512)),
         ("low", true, Some(1024u32)),
         ("medium", true, Some(4096)),
         ("high", true, Some(16384)),

@@ -89,6 +89,11 @@ impl StreamEncoder for OpenAiStreamEncoder {
     fn encode(&mut self, event: &StreamEvent) -> Vec<SseFrame> {
         let mut out = Vec::new();
         match event {
+            StreamEvent::Native { canonical, .. } => {
+                for event in canonical {
+                    out.extend(self.encode(event));
+                }
+            }
             StreamEvent::Start { id, usage, .. } => {
                 // The upstream's own model name is ignored on purpose: a client
                 // that asked for an exposed id is told that id, exactly as the

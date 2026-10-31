@@ -92,6 +92,31 @@ impl StreamEncoder for AnthropicStreamEncoder {
     fn encode(&mut self, event: &StreamEvent) -> Vec<SseFrame> {
         let mut out = Vec::new();
         match event {
+            StreamEvent::Native {
+                dialect: Dialect::Anthropic,
+                event,
+                data,
+                ..
+            } => {
+                let kind = event
+                    .as_deref()
+                    .or_else(|| data.get("type").and_then(Value::as_str));
+                if kind == Some("message_start") {
+                    self.started = true;
+                }
+                if kind == Some("message_stop") {
+                    self.finished = true;
+                }
+                return vec![SseFrame {
+                    event: event.clone(),
+                    data: data.to_string(),
+                }];
+            }
+            StreamEvent::Native { canonical, .. } => {
+                for event in canonical {
+                    out.extend(self.encode(event));
+                }
+            }
             StreamEvent::Start { id, usage, .. } => {
                 // Keep the model the client asked for; the upstream's own name
                 // never reaches a client-facing frame.

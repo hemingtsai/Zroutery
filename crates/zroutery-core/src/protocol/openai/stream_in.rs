@@ -193,6 +193,9 @@ impl StreamParser for OpenAiStreamParser {
         }
 
         let chunk = frame.json()?;
+        if let Some(error) = Error::session_binding_payload(&self.model, &chunk) {
+            return Err(error);
+        }
         if let Some(err) = chunk.get("error").filter(|e| !e.is_null()) {
             let msg = err
                 .get("message")

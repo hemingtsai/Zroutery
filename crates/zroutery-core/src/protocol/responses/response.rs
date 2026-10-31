@@ -10,6 +10,14 @@ use crate::protocol::reasoning_bridge;
 use crate::protocol::{explicit_placeholder, unsupported_upstream_content};
 
 pub fn decode_response(body: Value) -> Result<ChatResponse> {
+    if let Some(error) = Error::session_binding_payload(
+        body.get("model")
+            .and_then(Value::as_str)
+            .unwrap_or("upstream"),
+        &body,
+    ) {
+        return Err(error);
+    }
     // `error` is nullable on a normal Response: only a non-null error object
     // means the upstream failed.
     if let Some(err) = body.get("error").filter(|err| !err.is_null()) {

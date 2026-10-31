@@ -8,6 +8,8 @@ use crate::ir::{ChatResponse, StopReason, Usage};
 use super::request_in::decode_block;
 use super::request_out::encode_block;
 
+const NATIVE_RESPONSE: &str = "zroutery.internal.native_anthropic_response";
+
 // -------------------------------------------------------------------- responses
 
 pub fn stop_reason_from_str(s: &str) -> StopReason {
@@ -77,6 +79,14 @@ pub(crate) fn encode_usage(u: &Usage) -> Value {
 }
 
 pub fn decode_response(body: Value) -> Result<ChatResponse> {
+    if let Some(error) = Error::session_binding_payload(
+        body.get("model")
+            .and_then(Value::as_str)
+            .unwrap_or("upstream"),
+        &body,
+    ) {
+        return Err(error);
+    }
     if body.get("type").and_then(Value::as_str) == Some("error") {
         let msg = body
             .get("error")
@@ -124,11 +134,21 @@ pub fn decode_response(body: Value) -> Result<ChatResponse> {
             .and_then(Value::as_str)
             .map(str::to_string),
         usage: decode_usage(body.get("usage")),
-        passthrough: Map::new(),
+        passthrough: Map::from_iter([(NATIVE_RESPONSE.to_string(), body.clone())]),
     })
 }
 
 pub fn encode_response(resp: &ChatResponse) -> Value {
+    if let Some(native) = resp.passthrough.get(NATIVE_RESPONSE) {
+        // Preserve safeguard results and extension members on tool blocks as
+        // supplied by the upstream. In particular, never generate approvals or
+        // rewrite the tool IDs that its review results refer to.
+        let mut body = native.clone();
+        if body.get("safeguard_results").is_none() {
+            body["model"] = json!(resp.model);
+        }
+        return body;
+    }
     json!({
         "id": resp.id,
         "type": "message",

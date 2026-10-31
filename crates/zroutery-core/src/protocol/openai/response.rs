@@ -88,6 +88,14 @@ pub(super) fn encode_usage(u: &Usage) -> Value {
 }
 
 pub fn decode_response(body: Value) -> Result<ChatResponse> {
+    if let Some(error) = Error::session_binding_payload(
+        body.get("model")
+            .and_then(Value::as_str)
+            .unwrap_or("upstream"),
+        &body,
+    ) {
+        return Err(error);
+    }
     if let Some(err) = body.get("error") {
         let msg = err
             .get("message")

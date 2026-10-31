@@ -104,6 +104,7 @@ impl Upstream {
             };
 
             let status = response.status();
+            client.reply_headers.capture(response.headers());
             if status.is_success() {
                 break response;
             }
@@ -143,6 +144,15 @@ impl Upstream {
             return Err(err);
         };
 
+        // A relay can return a JSON error under HTTP 200 even when the client
+        // asked for SSE. Retain a bounded copy for the EOF error check; normal
+        // SSE parsing and its no-replay-after-output boundary stay unchanged.
+        let error_body = (!response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.to_ascii_lowercase().starts_with("text/event-stream")))
+        .then(Vec::new);
         let state = StreamState {
             body: Box::pin(response.bytes_stream()),
             decoder: SseDecoder::new(),
@@ -152,6 +162,10 @@ impl Upstream {
             idle: Duration::from_secs(provider.timeout_secs),
             done: false,
             terminal_error: None,
+            error_body,
+            native_review: provider.dialect() == crate::ir::Dialect::Anthropic
+                && body.get("safeguards").is_some_and(|value| !value.is_null()),
+            native_stopped: false,
         };
 
         let mut stream: EventStream = Box::pin(futures_util::stream::unfold(
@@ -177,11 +191,27 @@ impl Upstream {
                         }
                         Ok(None) => {
                             state.done = true;
+                            if let Some(body) = state.error_body.take() {
+                                let body = String::from_utf8_lossy(&body);
+                                if crate::failure::is_session_binding_invalidated(200, &body) {
+                                    state.terminal_error = Some(Error::Upstream {
+                                        provider: state.provider.clone(),
+                                        status: 200,
+                                        body: body.into_owned(),
+                                        retry_after: None,
+                                    });
+                                    continue;
+                                }
+                            }
                             // `finish()` closes dangling blocks, but it is not
                             // proof the answer finished: only a real terminal
                             // event is, and its absence is reported as an
                             // interruption rather than a success.
-                            let normal = state.parser.saw_normal_terminal();
+                            let normal = if state.native_review {
+                                state.native_stopped
+                            } else {
+                                state.parser.saw_normal_terminal()
+                            };
                             let usage = state.parser.reported_usage();
                             state.pending.extend(state.parser.finish());
                             if !normal {
@@ -194,9 +224,68 @@ impl Upstream {
                             return Some((Err(Error::Transport { provider, source }), state));
                         }
                         Ok(Some(Ok(chunk))) => {
+                            if let Some(body) = state.error_body.as_mut() {
+                                if body.len().saturating_add(chunk.len()) <= 64 * 1024 {
+                                    body.extend_from_slice(&chunk);
+                                } else {
+                                    state.error_body = None;
+                                }
+                            }
                             for frame in state.decoder.push(&chunk) {
-                                match state.parser.push(&frame) {
-                                    Ok(events) => state.pending.extend(events),
+                                let value = if state.native_review {
+                                    match frame.json() {
+                                        Ok(value) => Some(value),
+                                        Err(error) => {
+                                            state.done = true;
+                                            state.terminal_error = Some(error);
+                                            break;
+                                        }
+                                    }
+                                } else {
+                                    None
+                                };
+                                let kind = frame
+                                    .event
+                                    .as_deref()
+                                    .or_else(|| {
+                                        value
+                                            .as_ref()
+                                            .and_then(|v| v.get("type"))
+                                            .and_then(Value::as_str)
+                                    })
+                                    .unwrap_or("");
+                                let extension = state.native_review
+                                    && !matches!(
+                                        kind,
+                                        "message_start"
+                                            | "content_block_start"
+                                            | "content_block_delta"
+                                            | "content_block_stop"
+                                            | "message_delta"
+                                            | "message_stop"
+                                            | "ping"
+                                            | "error"
+                                    );
+                                let native_stop = kind == "message_stop";
+                                let parsed = if extension {
+                                    Ok(Vec::new())
+                                } else {
+                                    state.parser.push(&frame)
+                                };
+                                match parsed {
+                                    Ok(events) => {
+                                        if let Some(data) = value {
+                                            state.native_stopped |= native_stop;
+                                            state.pending.push_back(StreamEvent::Native {
+                                                dialect: crate::ir::Dialect::Anthropic,
+                                                event: frame.event,
+                                                data,
+                                                canonical: events,
+                                            });
+                                        } else {
+                                            state.pending.extend(events);
+                                        }
+                                    }
                                     Err(err) => {
                                         tracing::warn!(provider = %state.provider, error = %err,
                                             "upstream SSE parser rejected an event");
@@ -238,7 +327,9 @@ impl Upstream {
                             | StreamEvent::ToolUseStart { .. }
                             | StreamEvent::RedactedThinking { .. }
                             | StreamEvent::Stop { .. }
-                    );
+                    ) || matches!(&event, StreamEvent::Native { event, data, .. }
+                        if matches!(event.as_deref().or_else(|| data.get("type").and_then(Value::as_str)),
+                            Some("content_block_start" | "content_block_delta" | "message_stop")));
                     prefix.push(Ok(event));
                     if output {
                         break;
@@ -280,4 +371,8 @@ struct StreamState {
     /// after the parser's closing events, so the client keeps everything it
     /// already received before the cut is reported.
     terminal_error: Option<Error>,
+    /// Non-SSE replies can contain a relay error despite HTTP 200. At most 64 KiB.
+    error_body: Option<Vec<u8>>,
+    native_review: bool,
+    native_stopped: bool,
 }

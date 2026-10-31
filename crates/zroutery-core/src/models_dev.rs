@@ -208,10 +208,8 @@ impl Catalog {
     /// A cross-provider hit set is merged conservatively: a capability is only
     /// claimed when every match claims it, and a limit is only published when
     /// every match publishes one. Two relays that disagree about a model are
-    /// not evidence for the more generous answer. Effort levels are the one
-    /// exception — they are the union — because providers describe the same
-    /// family at different lengths, and a level one knows about is a real
-    /// control even when another has not caught up.
+    /// not evidence for the more generous answer. Cross-provider matches never
+    /// supply effort levels: they do not prove this provider/API surface's set.
     pub fn lookup(
         &self,
         provider_id: &str,
@@ -241,7 +239,11 @@ impl Catalog {
         }
         match matches.as_slice() {
             [] => None,
-            [only] => Some((*only).clone()),
+            [only] => {
+                let mut model = (*only).clone();
+                model.effort_levels.clear();
+                Some(model)
+            }
             many => Some(merge(many)),
         }
     }
@@ -267,7 +269,8 @@ fn normalize_model_id(id: &str) -> &str {
 fn merge(entries: &[&CatalogModel]) -> CatalogModel {
     let first = entries[0];
     let mut capabilities = first.capabilities.clone();
-    let mut effort_levels = first.effort_levels.clone();
+    // Cross-relay matches do not prove this provider/model/surface effort set.
+    let effort_levels = Vec::new();
     let mut free = first.free;
     for entry in &entries[1..] {
         capabilities.vision &= entry.capabilities.vision;
@@ -277,20 +280,8 @@ fn merge(entries: &[&CatalogModel]) -> CatalogModel {
         capabilities.audio &= entry.capabilities.audio;
         capabilities.video &= entry.capabilities.video;
         capabilities.files &= entry.capabilities.files;
-        for level in &entry.effort_levels {
-            if !effort_levels.contains(level) {
-                effort_levels.push(level.clone());
-            }
-        }
         free &= entry.free;
     }
-    // Re-establish picker order after the union: providers list the same
-    // levels in different orders, and one may omit a level another declares.
-    effort_levels = crate::config::EFFORT_LEVELS
-        .iter()
-        .filter(|level| effort_levels.iter().any(|value| value == *level))
-        .map(|level| (*level).to_string())
-        .collect();
     CatalogModel {
         // An unknown window on any match makes the merged one unknown: the
         // smaller known value would overstate the match that declared nothing.
@@ -429,7 +420,10 @@ mod tests {
         let found = catalog
             .lookup("workbuddy", None, "glm-5.3")
             .expect("the model id matches zhipuai");
-        assert_eq!(found.effort_levels, vec!["low", "high", "max"]);
+        assert!(
+            found.effort_levels.is_empty(),
+            "another relay's vocabulary is not this provider's contract"
+        );
         // A namespaced relay id is normalized before the global search.
         assert!(catalog.lookup("docode", None, "cn:glm-5.3").is_some());
     }
@@ -454,8 +448,8 @@ mod tests {
         assert!(!found.capabilities.tools, "one provider denies tool calls");
         assert_eq!(
             found.effort_levels,
-            vec!["low", "high", "max"],
-            "the union of the family's declared levels"
+            Vec::<String>::new(),
+            "cross-provider union cannot advertise native reasoning controls"
         );
         assert_eq!(
             found.context_window,
@@ -482,7 +476,10 @@ mod tests {
         }];
         enrich_from(&catalog, &mut models, "workbuddy", None);
         assert_eq!(models[0].context_window, Some(200_000));
-        assert_eq!(models[0].effort_levels, vec!["low", "high", "max"]);
+        assert!(
+            models[0].effort_levels.is_empty(),
+            "relay effort remains unknown without exact evidence"
+        );
         assert!(models[0]
             .capabilities
             .as_ref()

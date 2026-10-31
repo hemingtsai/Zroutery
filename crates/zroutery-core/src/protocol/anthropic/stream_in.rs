@@ -41,6 +41,9 @@ impl StreamParser for AnthropicStreamParser {
             return Ok(Vec::new());
         }
         let v = frame.json()?;
+        if let Some(error) = Error::session_binding_payload(&self.model, &v) {
+            return Err(error);
+        }
         let kind = frame
             .event
             .as_deref()

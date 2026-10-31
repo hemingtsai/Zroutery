@@ -322,6 +322,11 @@ impl StreamEncoder for ResponsesStreamEncoder {
     fn encode(&mut self, event: &StreamEvent) -> Vec<SseFrame> {
         let mut out = Vec::new();
         match event {
+            StreamEvent::Native { canonical, .. } => {
+                for event in canonical {
+                    out.extend(self.encode(event));
+                }
+            }
             StreamEvent::Start { id, .. } => {
                 // The upstream model name in the event is ignored: the frames
                 // carry the exposed id the client asked for. When the pipeline
@@ -708,7 +713,7 @@ impl StreamEncoder for ResponsesStreamEncoder {
                     "status": "failed",
                     "model": self.model,
                     "error": {
-                        "code": err.kind(),
+                        "code": err.code(),
                         "message": err.safe_message(),
                     },
                     "output": output,

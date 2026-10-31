@@ -350,37 +350,43 @@ pub(super) fn sse_body(
                         }
                         _ => event,
                     };
-                    match &event {
-                        #[cfg_attr(not(feature = "ml"), allow(unused_variables))]
-                        StreamEvent::Start { model, usage, .. } => {
-                            // `model` is read only by the `ml` identity capture; the
-                            // usage accounting below is needed on every build.
-                            // Capture the upstream's declared model before the
-                            // encoder rewrites it to the client-facing `exposed_id`
-                            // (the encoder was built with that id at
-                            // `stream_encoder`). Streaming declares the model in its
-                            // opening frame, so this is the only place it exists —
-                            // unlike the buffered path, there is no later field to
-                            // recover it from.
-                            #[cfg(feature = "ml")]
-                            st.lifecycle.note_declared_model(Some(model.as_str()));
-                            st.usage = *usage;
-                        }
-                        StreamEvent::ThinkingDelta { .. } => {
-                            let elapsed = st.elapsed_ms();
-                            st.lifecycle.ttft_ms(elapsed);
-                        }
-                        StreamEvent::TextDelta { text, .. } => {
-                            let elapsed = st.elapsed_ms();
-                            st.lifecycle.ttft_ms(elapsed);
-                            // Classifier streams keep their text so the verdict
-                            // can be checked once the stream ends.
-                            if let Some(acc) = st.classifier_text.as_mut() {
-                                acc.push_str(text);
+                    let observations: Vec<&StreamEvent> = match &event {
+                        StreamEvent::Native { canonical, .. } => canonical.iter().collect(),
+                        _ => vec![&event],
+                    };
+                    for observation in observations {
+                        match observation {
+                            #[cfg_attr(not(feature = "ml"), allow(unused_variables))]
+                            StreamEvent::Start { model, usage, .. } => {
+                                // `model` is read only by the `ml` identity capture; the
+                                // usage accounting below is needed on every build.
+                                // Capture the upstream's declared model before the
+                                // encoder rewrites it to the client-facing `exposed_id`
+                                // (the encoder was built with that id at
+                                // `stream_encoder`). Streaming declares the model in its
+                                // opening frame, so this is the only place it exists —
+                                // unlike the buffered path, there is no later field to
+                                // recover it from.
+                                #[cfg(feature = "ml")]
+                                st.lifecycle.note_declared_model(Some(model.as_str()));
+                                st.usage = *usage;
                             }
+                            StreamEvent::ThinkingDelta { .. } => {
+                                let elapsed = st.elapsed_ms();
+                                st.lifecycle.ttft_ms(elapsed);
+                            }
+                            StreamEvent::TextDelta { text, .. } => {
+                                let elapsed = st.elapsed_ms();
+                                st.lifecycle.ttft_ms(elapsed);
+                                // Classifier streams keep their text so the verdict
+                                // can be checked once the stream ends.
+                                if let Some(acc) = st.classifier_text.as_mut() {
+                                    acc.push_str(text);
+                                }
+                            }
+                            StreamEvent::Stop { usage, .. } => st.usage = *usage,
+                            _ => {}
                         }
-                        StreamEvent::Stop { usage, .. } => st.usage = *usage,
-                        _ => {}
                     }
                     let frames = st.encoder.encode(&event);
                     // Reassemble for the task verifier. Fed the *published* event, so
@@ -399,7 +405,10 @@ pub(super) fn sse_body(
                     // waiting for another poll/EOF mislabels that normal close
                     // as 499. Drain the queued frames, settling when the last
                     // (terminal) frame is handed out above.
-                    if matches!(event, StreamEvent::Stop { .. }) {
+                    if matches!(event, StreamEvent::Stop { .. })
+                        || matches!(&event, StreamEvent::Native { dialect: crate::ir::Dialect::Anthropic, event, data, .. }
+                            if event.as_deref().or_else(|| data.get("type").and_then(Value::as_str)) == Some("message_stop"))
+                    {
                         st.finished = true;
                     }
                 }

@@ -459,7 +459,7 @@ async fn mock_anthropic(State(mock): State<Mock>, Json(body): Json<Value>) -> Re
             return (
                 axum::http::StatusCode::BAD_REQUEST,
                 Json(json!({"error": {"type": "invalid_request_error",
-                                      "message": "thinking budget too large"}})),
+                                      "message": "invalid signature thinking block"}})),
             )
                 .into_response();
         }
@@ -472,10 +472,9 @@ async fn mock_anthropic(State(mock): State<Mock>, Json(body): Json<Value>) -> Re
 
     // A model family that rejects the request shape and accepts it after the
     // pipeline's rectifiers repair it. `repair-once`/`repair-twice`/`repair-
-    // stream` only accept a thinking budget at or below 1024, so the thinking
-    // budget rectifier has to halve it (once, twice, or through a stream
-    // handshake); `repair-never` rejects every budget, so the cascade runs out
-    // of rounds; `repair-multi` asks for two different rectifiers in turn.
+    // stream` reject a stale thinking signature; `repair-twice` and
+    // `repair-multi` then reject an image. These test complete attempt identity
+    // without relying on silent reduction of an explicitly requested budget.
     if model.starts_with("repair") {
         let budget = body["thinking"]
             .get("budget_tokens")
@@ -492,17 +491,21 @@ async fn mock_anthropic(State(mock): State<Mock>, Json(body): Json<Value>) -> Re
                 .into_response()
         };
         if model.starts_with("repair-never") {
-            return reject("thinking budget too large");
+            return reject(if budget > 0 {
+                "thinking budget too large"
+            } else {
+                "invalid signature thinking block"
+            });
         }
-        if model.starts_with("repair-multi") {
+        if model.starts_with("repair-multi") || model.starts_with("repair-twice") {
             if has_thinking_block {
                 return reject("invalid signature thinking block");
             }
             if has_image {
                 return reject("image unsupported");
             }
-        } else if budget > 1024 {
-            return reject("thinking budget too large");
+        } else if has_thinking_block {
+            return reject("invalid signature thinking block");
         }
         if model.starts_with("repair-stream") && body["stream"].as_bool().unwrap_or(false) {
             return Response::builder()
@@ -2568,6 +2571,26 @@ impl Harness {
             .await
             .unwrap()
     }
+
+    /// Signature repair is permitted after an explicit upstream rejection;
+    /// unlike a token budget or native effort, no reasoning control is lowered.
+    async fn ask_signature_repair(
+        &self,
+        model: &str,
+        with_image: bool,
+        stream: bool,
+    ) -> reqwest::Response {
+        let mut content = vec![json!({"type":"text","text":"fixture"})];
+        if with_image {
+            content.push(json!({"type":"image","source":{"type":"base64","media_type":"image/png","data":"AAAA"}}));
+        }
+        self.post("/v1/messages").json(&json!({"model":model,"max_tokens":4096,"stream":stream,"messages":[
+            {"role":"user","content":content},
+            {"role":"assistant","content":[{"type":"thinking","thinking":"fixture reasoning","signature":"stale-signature"},
+                {"type":"text","text":"prior answer"}]},
+            {"role":"user","content":"continue fixture"}
+        ]})).send().await.unwrap()
+    }
 }
 
 /// The Anthropic provider the rectifier scenarios talk to.
@@ -2639,7 +2662,9 @@ fn repair_fallback_secrets() -> Arc<MemorySecretStore> {
 async fn a_repaired_request_records_every_send_as_a_complete_attempt() {
     let h = repair_harness().await;
 
-    let response = h.ask_thinking("delta-repair-once-model", 2048, false).await;
+    let response = h
+        .ask_signature_repair("delta-repair-once-model", false, false)
+        .await;
     assert_eq!(response.status(), 200);
     let _ = response.text().await.unwrap();
     wait_for_outcomes(&h, 1).await;
@@ -2693,7 +2718,7 @@ async fn a_repaired_request_that_is_still_refused_fails_over() {
     )
     .await;
 
-    let response = h.ask_thinking("standard-class", 2048, false).await;
+    let response = h.ask_signature_repair("standard-class", false, false).await;
     assert_eq!(response.status(), 200);
     let _ = response.text().await.unwrap();
     wait_for_outcomes(&h, 1).await;
@@ -2755,7 +2780,7 @@ async fn a_multi_round_repair_records_each_round() {
     let h = repair_harness().await;
 
     let response = h
-        .ask_thinking("delta-repair-twice-model", 4096, false)
+        .ask_signature_repair("delta-repair-twice-model", true, false)
         .await;
     assert_eq!(response.status(), 200);
     let _ = response.text().await.unwrap();
@@ -2829,7 +2854,7 @@ async fn every_failed_repair_is_a_complete_attempt() {
     let h = repair_harness().await;
 
     let response = h
-        .ask_thinking("delta-repair-never-model", 8192, false)
+        .ask_signature_repair("delta-repair-never-model", false, false)
         .await;
     assert_eq!(response.status(), 400);
     let _ = response.text().await.unwrap();
@@ -2838,7 +2863,7 @@ async fn every_failed_repair_is_a_complete_attempt() {
     let outcome = h.outcome();
     assert_eq!(outcome.final_status, FinalStatus::Failed);
     assert!(
-        outcome.attempts.len() >= 3,
+        outcome.attempts.len() >= 2,
         "the initial send and each repair round: {}",
         outcome.attempts.len()
     );
@@ -2868,7 +2893,7 @@ async fn a_streamed_repair_records_both_handshakes() {
     let h = repair_harness().await;
 
     let response = h
-        .ask_thinking("delta-repair-stream-model", 2048, true)
+        .ask_signature_repair("delta-repair-stream-model", false, true)
         .await;
     assert_eq!(response.status(), 200);
     let body = response.text().await.unwrap();
@@ -2918,6 +2943,12 @@ async fn a_failed_streamed_repair_is_a_complete_attempt() {
     );
     assert!(outcome.validate().is_ok(), "{:?}", outcome.validate());
     assert_eq!(h.mock.count(), outcome.attempts.len());
+    assert_eq!(
+        outcome.attempts.len(),
+        1,
+        "an explicit budget rejection must not trigger a lower-budget replay"
+    );
+    assert_eq!(h.mock.bodies()[0]["thinking"]["budget_tokens"], 4096);
 
     h.shutdown().await;
 }

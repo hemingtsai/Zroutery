@@ -24,6 +24,7 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
         .ok_or_else(|| Error::invalid("`model` is required"))?;
 
     let mut req = ChatRequest::new(model, Dialect::Anthropic);
+    req.anthropic_body = Some(body.clone());
 
     req.system = match obj.get("system") {
         None | Some(Value::Null) => Vec::new(),
@@ -58,6 +59,45 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
         .and_then(Value::as_array)
         .ok_or_else(|| Error::invalid("`messages` is required"))?;
     for m in messages {
+        // Current Claude Code includes textual system entries mid-transcript.
+        // Preserve their position; do not hoist a reminder before earlier turns.
+        if matches!(
+            m.get("role").and_then(Value::as_str),
+            Some("system") | Some("developer")
+        ) {
+            let parts = match m.get("content") {
+                Some(Value::String(text)) => vec![SystemPart::new(text)],
+                Some(Value::Array(blocks)) => blocks
+                    .iter()
+                    .map(|block| {
+                        if block.get("type").and_then(Value::as_str) != Some("text") {
+                            return Err(Error::invalid("system messages only support text blocks"));
+                        }
+                        let text = block
+                            .get("text")
+                            .and_then(Value::as_str)
+                            .ok_or_else(|| Error::invalid("system text is missing"))?;
+                        Ok(SystemPart {
+                            text: text.into(),
+                            cache_control: block.get("cache_control").cloned(),
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?,
+                None | Some(Value::Null) => Vec::new(),
+                _ => return Err(Error::invalid("system message content must be text")),
+            };
+            req.messages.push(Message {
+                role: Role::System,
+                content: parts
+                    .into_iter()
+                    .map(|part| ContentBlock::Text {
+                        text: part.text,
+                        cache_control: part.cache_control,
+                    })
+                    .collect(),
+            });
+            continue;
+        }
         req.messages.push(decode_message(m)?);
     }
 
@@ -157,7 +197,7 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
             .and_then(Value::as_str)
             .ok_or_else(|| Error::invalid("thinking is missing `type`"))?;
         let enabled = match kind {
-            "enabled" => true,
+            "enabled" | "adaptive" => true,
             "disabled" => false,
             other => return Err(unsupported_content("thinking", Some(other))),
         };
@@ -168,6 +208,13 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
                 .and_then(Value::as_u64)
                 .map(|v| v.min(u32::MAX as u64) as u32),
         });
+        req.reasoning = if !enabled {
+            Some(crate::ir::ReasoningRequest::Disabled)
+        } else {
+            req.thinking
+                .and_then(|thinking| thinking.budget_tokens)
+                .map(|tokens| crate::ir::ReasoningRequest::TokenBudget { tokens })
+        };
     }
 
     req.metadata_user = obj
@@ -175,6 +222,14 @@ pub fn decode_request(body: Value) -> Result<ChatRequest> {
         .and_then(|m| m.get("user_id"))
         .and_then(Value::as_str)
         .map(str::to_string);
+    if let Some(effort) = body
+        .pointer("/output_config/effort")
+        .and_then(Value::as_str)
+    {
+        let reasoning = crate::ir::ReasoningRequest::native(effort).map_err(Error::invalid)?;
+        req.thinking = Some(reasoning.legacy());
+        req.reasoning = Some(reasoning);
+    }
 
     for (k, v) in obj {
         if !KNOWN_KEYS.contains(&k.as_str()) {

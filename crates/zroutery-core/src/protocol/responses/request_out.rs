@@ -57,6 +57,23 @@ pub fn encode_request_with(
     upstream_model: &str,
     portable_history: bool,
 ) -> Result<Value> {
+    if let Some(original) = &req.responses_body {
+        let mut body = original.clone();
+        body["model"] = json!(upstream_model);
+        if req.stream || body.get("stream").is_some() {
+            body["stream"] = json!(req.stream);
+        }
+        if let Some(cap) = req.max_tokens {
+            body["max_output_tokens"] = json!(cap);
+        }
+        if let Some(effort) = reasoning_bridge::request_effort(req) {
+            body["reasoning"]["effort"] = json!(effort);
+        }
+        if portable_history {
+            sanitize::make_portable(&mut body);
+        }
+        return Ok(body);
+    }
     let mut input: Vec<Value> = Vec::new();
     for m in &req.messages {
         let mut parts: Vec<Value> = Vec::new();
@@ -245,7 +262,7 @@ pub fn encode_request_with(
         if !parts.is_empty() {
             input.push(json!({
                 "type": "message",
-                "role": if m.role == Role::Assistant { "assistant" } else { "user" },
+                "role": match m.role { Role::User => "user", Role::Assistant => "assistant", Role::System => "system" },
                 "content": parts,
             }));
         }
@@ -301,8 +318,7 @@ pub fn encode_request_with(
             },
         );
     }
-    if let Some(th) = &req.thinking {
-        let effort = reasoning_bridge::encode_effort(th);
+    if let Some(effort) = reasoning_bridge::request_effort(req) {
         body.insert("reasoning".into(), json!({"effort": effort}));
     }
     if let Some(temp) = req.temperature {

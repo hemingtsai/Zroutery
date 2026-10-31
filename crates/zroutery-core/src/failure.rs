@@ -6,6 +6,7 @@
 //! about health, circuit breaking, and fallback.
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 /// Classification of a request failure.
 ///
@@ -274,6 +275,11 @@ impl FailureClass {
     }
 
     fn from_upstream_status(status: u16, body: Option<&str>) -> Self {
+        if body.is_some_and(|body| is_session_binding_invalidated(status, body)) {
+            // Changing the session id is required; replaying the same binding
+            // or treating it as model-health evidence cannot repair it.
+            return Self::InvalidRequest;
+        }
         let lower = body.map(str::to_ascii_lowercase);
         if status >= 400 && lower.as_deref().is_some_and(is_tool_history_mismatch) {
             return Self::InvalidRequest;
@@ -285,13 +291,6 @@ impl FailureClass {
             })
         {
             return Self::Capability;
-        }
-        if status == 400
-            && lower
-                .as_deref()
-                .is_some_and(|body| body.contains("rate_limit_exceeded"))
-        {
-            return Self::RateLimit;
         }
         // A 5xx is normally transient, but one that names the request itself as
         // invalid is a mislabelled client error: retrying it, or failing over to
@@ -314,6 +313,9 @@ impl FailureClass {
                 return Self::BalanceExhausted;
             }
         }
+        if status == 400 && lower.as_deref().is_some_and(is_rate_limit_message) {
+            return Self::RateLimit;
+        }
         // A status alone is not evidence of a local budget/key decision.
         // Only explicit, deterministic body markers may select local classes;
         // otherwise 402/412 become provider evidence below.
@@ -335,6 +337,11 @@ impl FailureClass {
         }
         match status {
             401 | 403 => return Self::Authentication,
+            // A regional/legal refusal is a deterministic endpoint rejection,
+            // not an authentication or request error. The same classifier
+            // question may still be accepted by another configured model, but
+            // replaying this endpoint cannot change its regional policy.
+            451 => return Self::ProviderRejected,
             408 => return Self::Timeout,
             429 => return Self::RateLimit,
             502..=504 | 529 => return Self::ProviderUnavailable,
@@ -363,7 +370,9 @@ impl FailureClass {
     /// [`ClassifiedFailure::from_core_error`] is the authoritative path.
     pub fn from_error_message(message: &str) -> Self {
         let lower = message.to_ascii_lowercase();
-        if is_cancelled_message(&lower) {
+        if is_session_binding_message(&lower) {
+            Self::InvalidRequest
+        } else if is_cancelled_message(&lower) {
             Self::ClientCancelled
         } else if is_interrupted_message(&lower) {
             Self::Interrupted
@@ -418,6 +427,119 @@ impl FailureClass {
     }
 }
 
+/// A relay's session/model binding expired, not its reasoning ciphertext.
+/// Keep this marker shared by classification, wire errors and retry policy.
+pub(crate) fn is_session_binding_invalidated(status: u16, body: &str) -> bool {
+    if !binding_status_permits(status) {
+        return false;
+    }
+    match serde_json::from_str::<Value>(body) {
+        Ok(value) => is_session_binding_invalidated_value(status, &value),
+        Err(_) => {
+            let lower = body.trim().to_ascii_lowercase();
+            is_session_binding_message(&lower)
+                && (status != 200 || lower.starts_with("session binding invalidated"))
+                && !is_balance_exhausted_message(&lower)
+                && !is_over_budget_message(&lower)
+                && !is_quota_exhausted_message(&lower)
+        }
+    }
+}
+
+pub(crate) fn is_session_binding_invalidated_value(status: u16, value: &Value) -> bool {
+    if !binding_status_permits(status) {
+        return false;
+    }
+    let explicit_error = value.get("error").is_some_and(|error| !error.is_null())
+        || value
+            .pointer("/response/error")
+            .is_some_and(|error| !error.is_null());
+    if status == 200
+        && !explicit_error
+        && (value.get("choices").is_some()
+            || value.get("output").is_some()
+            || value.get("success") == Some(&Value::Bool(true)))
+    {
+        // Text produced by a model can quote an error; it is not an error.
+        return false;
+    }
+    let mut detail = value;
+    for _ in 0..4 {
+        if binding_business_error(detail) {
+            return false;
+        }
+        match detail
+            .get("error")
+            .filter(|error| !error.is_null())
+            .or_else(|| {
+                detail
+                    .pointer("/response/error")
+                    .filter(|error| !error.is_null())
+            }) {
+            Some(inner) => detail = inner,
+            None => break,
+        }
+    }
+    if binding_business_error(detail) {
+        return false;
+    }
+    if ["code", "type"].iter().any(|field| {
+        detail.get(*field).is_some_and(|code| {
+            code.as_u64() == Some(30013)
+                || matches!(
+                    code.as_str().map(str::trim),
+                    Some("30013" | "session_binding_invalidated")
+                )
+        })
+    }) {
+        return true;
+    }
+    detail
+        .get("message")
+        .and_then(Value::as_str)
+        .or_else(|| detail.as_str())
+        .is_some_and(|message| is_session_binding_message(&message.to_ascii_lowercase()))
+}
+
+fn binding_status_permits(status: u16) -> bool {
+    (status == 200 || status >= 400) && !matches!(status, 401..=403)
+}
+
+fn is_session_binding_message(lower: &str) -> bool {
+    lower.contains("session binding invalidated")
+}
+
+fn binding_business_error(value: &Value) -> bool {
+    let protected = ["code", "type"].iter().any(|field| {
+        matches!(
+            value.get(*field).and_then(Value::as_str),
+            Some(
+                "invalid_api_key"
+                    | "authentication_error"
+                    | "permission_denied"
+                    | "unauthorized"
+                    | "forbidden"
+                    | "insufficient_quota"
+                    | "insufficient_balance"
+                    | "budget_exceeded"
+                    | "rate_limit_exceeded"
+                    | "rate_limit_error"
+                    | "too_many_requests"
+            )
+        )
+    });
+    let lower = value
+        .get("message")
+        .and_then(Value::as_str)
+        .or_else(|| value.as_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    protected
+        || is_balance_exhausted_message(&lower)
+        || is_over_budget_message(&lower)
+        || is_quota_exhausted_message(&lower)
+}
+
 fn is_cancelled_message(message: &str) -> bool {
     message.contains("cancel") || message.contains("abort")
 }
@@ -455,6 +577,15 @@ fn is_over_budget_message(message: &str) -> bool {
 
 fn is_quota_exhausted_message(message: &str) -> bool {
     message.contains("budget pool quota has been exhausted")
+}
+
+/// Some relays use 400 for a token/request window. Keep this decision in the
+/// canonical classifier so transport retry and scoped cooling cannot disagree.
+fn is_rate_limit_message(message: &str) -> bool {
+    message.contains("rate_limit_exceeded")
+        || message.contains("exceeded token rate limit")
+        || (message.contains("rate limit exceeded")
+            && (message.contains("requests per minute") || message.contains("token")))
 }
 
 /// Markers that say the wallet behind a provider cannot pay for this request.
@@ -587,11 +718,76 @@ impl ClassifiedFailure {
             crate::Error::NoCandidate(_) => {
                 (FailureClass::NoCandidate, Some(error.status().as_u16()))
             }
+            crate::Error::RateLimited { .. } => {
+                // No upstream was contacted; the gate is existing availability
+                // evidence, not another observed failure of a healthy model.
+                (FailureClass::NoCandidate, Some(error.status().as_u16()))
+            }
+            crate::Error::UnsupportedReasoning { .. } => {
+                (FailureClass::InvalidRequest, Some(error.status().as_u16()))
+            }
             crate::Error::Unauthorized => {
                 (FailureClass::Authentication, Some(error.status().as_u16()))
             }
             crate::Error::MissingApiKey(_) => {
                 (FailureClass::MissingApiKey, Some(error.status().as_u16()))
+            }
+            crate::Error::Upstream { status, body, .. }
+                if is_session_binding_invalidated(*status, body) =>
+            {
+                (FailureClass::InvalidRequest, Some(400))
+            }
+            crate::Error::Upstream {
+                status: 200, body, ..
+            } => {
+                // A staged SSE failure arrived over HTTP 200, not a successful
+                // attempt. Preserve the transport status for the filter's exact
+                // trigger rules, but classify its explicit error centrally.
+                let value = serde_json::from_str::<serde_json::Value>(body).unwrap_or_default();
+                let detail = value
+                    .get("error")
+                    .filter(|v| !v.is_null())
+                    .or_else(|| value.pointer("/response/error").filter(|v| !v.is_null()))
+                    .unwrap_or(&value);
+                let code = detail
+                    .get("code")
+                    .and_then(serde_json::Value::as_str)
+                    .or_else(|| detail.get("type").and_then(serde_json::Value::as_str))
+                    .unwrap_or("");
+                let auth_type = detail
+                    .get("type")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|kind| {
+                        matches!(
+                            kind,
+                            "invalid_api_key"
+                                | "authentication_error"
+                                | "permission_denied"
+                                | "unauthorized"
+                                | "forbidden"
+                        )
+                    });
+                let effective = if auth_type {
+                    401
+                } else {
+                    match code {
+                        "rate_limit_exceeded" | "rate_limit_error" | "too_many_requests" => 429,
+                        "invalid_api_key"
+                        | "authentication_error"
+                        | "permission_denied"
+                        | "unauthorized"
+                        | "forbidden" => 401,
+                        "insufficient_quota" | "insufficient_balance" => 402,
+                        "invalid_request_error"
+                        | "invalid_encrypted_content"
+                        | "tool_call_mismatch" => 400,
+                        _ => 502,
+                    }
+                };
+                (
+                    FailureClass::from_status_with_body(effective, body),
+                    Some(effective),
+                )
             }
             crate::Error::Upstream { status, body, .. } => (
                 FailureClass::from_status_with_body(*status, body),
@@ -602,7 +798,9 @@ impl ClassifiedFailure {
             }
             crate::Error::BadUpstreamPayload(message) => {
                 let lower = message.to_ascii_lowercase();
-                let class = if is_cancelled_message(&lower) {
+                let class = if is_session_binding_invalidated(200, message) {
+                    FailureClass::InvalidRequest
+                } else if is_cancelled_message(&lower) {
                     FailureClass::ClientCancelled
                 } else if is_interrupted_message(&lower) {
                     FailureClass::Interrupted
@@ -618,6 +816,9 @@ impl ClassifiedFailure {
                 (FailureClass::Interrupted, Some(error.status().as_u16()))
             }
             crate::Error::Timeout(_) => (FailureClass::Timeout, Some(error.status().as_u16())),
+            crate::Error::Persistence => {
+                (FailureClass::Configuration, Some(error.status().as_u16()))
+            }
             crate::Error::Internal(message) => {
                 let lower = message.to_ascii_lowercase();
                 let class = if is_cancelled_message(&lower) {
@@ -851,6 +1052,7 @@ mod tests {
         assert!(impact.affects_observation);
         assert!(impact.affects_circuit);
         assert!(!impact.retryable);
+        assert!(!impact.retryable);
         assert!(impact.fallbackable);
         assert!(impact.provider_fault);
 
@@ -916,6 +1118,16 @@ mod tests {
     #[test]
     fn status_403_is_authentication() {
         assert_eq!(FailureClass::from_status(403), FailureClass::Authentication);
+    }
+
+    #[test]
+    fn status_451_is_provider_rejected_and_can_fail_over() {
+        let class = FailureClass::from_status(451);
+        assert_eq!(class, FailureClass::ProviderRejected);
+        let impact = class.impact();
+        assert!(!impact.retryable);
+        assert!(impact.fallbackable);
+        assert!(impact.provider_fault);
     }
 
     #[test]

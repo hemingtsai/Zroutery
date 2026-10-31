@@ -35,6 +35,10 @@ const ENDPOINTS: &[&str] = &[
     "/v1/responses/{response_id}",
     "/v1/responses/{response_id}/cancel",
     "/v1/generateContent",
+    "/v1beta/models",
+    "/v1beta/models/{model}:generateContent",
+    "/v1beta/models/{model}:streamGenerateContent",
+    "/v1beta/models/{model}:countTokens",
     "/v1/models",
     "/v1/models/{id}",
     "/v1/status",
@@ -77,7 +81,12 @@ pub fn build_app(state: Arc<AppState>) -> AxumRouter {
             );
     }
 
+    api = api
+        .route("/v1beta/models", get(super::gemini::list_models))
+        .route("/v1beta/models/{resource}", post(super::gemini::resource));
+
     let mut app = api
+        .layer(tower_http::decompression::RequestDecompressionLayer::new())
         // Prompts with inline images are large, runaway bodies are not.
         .layer(DefaultBodyLimit::max(cfg.server.max_body_bytes()))
         .route_layer(middleware::from_fn_with_state(
@@ -113,7 +122,7 @@ pub(crate) async fn unknown_route(method: Method, uri: Uri) -> Response {
         Dialect::Anthropic
     } else if path.contains("responses") {
         Dialect::OpenAIResponses
-    } else if path.contains("generateContent") {
+    } else if path.contains("generateContent") || path.starts_with("/v1beta/") {
         Dialect::Gemini
     } else {
         Dialect::OpenAI
@@ -447,6 +456,13 @@ async fn auth_layer(
         .or_else(|| {
             request
                 .headers()
+                .get("x-goog-api-key")
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_string)
+        })
+        .or_else(|| {
+            request
+                .headers()
                 .get(header::AUTHORIZATION)
                 .and_then(|v| v.to_str().ok())
                 .and_then(|v| v.strip_prefix("Bearer ").map(str::to_string))
@@ -462,7 +478,7 @@ async fn auth_layer(
             Dialect::Anthropic
         } else if path.contains("responses") {
             Dialect::OpenAIResponses
-        } else if path.contains("generateContent") {
+        } else if path.contains("generateContent") || path.starts_with("/v1beta/") {
             Dialect::Gemini
         } else {
             Dialect::OpenAI
@@ -701,5 +717,22 @@ async fn cancel_response(
 }
 
 pub(crate) fn error_response(dialect: Dialect, err: &Error) -> Response {
-    (err.status(), Json(err.to_wire(dialect))).into_response()
+    let mut response = (err.status(), Json(err.to_wire(dialect))).into_response();
+    if let Some(wait) = err.retry_after() {
+        let seconds = wait
+            .as_secs()
+            .saturating_add(u64::from(wait.subsec_nanos() > 0));
+        if let Ok(value) = axum::http::HeaderValue::from_str(&seconds.to_string()) {
+            response
+                .headers_mut()
+                .insert(axum::http::header::RETRY_AFTER, value);
+        }
+    }
+    if matches!(err, Error::UnsupportedReasoning { .. } | Error::Persistence) {
+        response.headers_mut().insert(
+            "x-should-retry",
+            axum::http::HeaderValue::from_static("false"),
+        );
+    }
+    response
 }

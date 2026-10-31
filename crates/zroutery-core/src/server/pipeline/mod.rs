@@ -39,7 +39,7 @@ use serde_json::Value;
 
 use super::{error_response, AdmissionGuard, AppState};
 use crate::budget::Verdict;
-use crate::config::ClientIdentity;
+use crate::config::{ClientIdentity, ModelTier};
 use crate::error::{Error, Result};
 use crate::ir::{Capability, ChatRequest, Dialect, Message, ResponseStatus, StoredResponse};
 #[cfg(feature = "ml")]
@@ -54,10 +54,12 @@ mod sse;
 mod budget;
 mod client;
 mod credentials;
+mod effort;
 mod lifecycle;
 mod ml_rank;
 mod repair;
 mod response;
+mod responses_native;
 
 #[cfg(test)]
 mod tests;
@@ -136,7 +138,23 @@ pub(super) async fn handle_chat(
         // Capability requirements are derived after history expansion, because
         // a continued conversation can carry images or tools the current turn
         // does not mention.
-        match expand_continuation(&state.response_store, &body, &mut req) {
+        let native = registry
+            .resolve(&req.model)
+            .ok()
+            .is_some_and(|resolution| match resolution {
+                Resolution::Direct(id) => registry
+                    .entry(&id)
+                    .ok()
+                    .and_then(|entry| config.provider(&entry.provider_id))
+                    .is_some_and(|provider| provider.dialect() == Dialect::OpenAIResponses),
+                Resolution::Tier(tier) => ModelTier::ALL
+                    .into_iter()
+                    .skip_while(|candidate| *candidate < tier)
+                    .any(|candidate| {
+                        responses_native::tier_has_native_candidate(&registry, candidate)
+                    }),
+            });
+        match expand_continuation(&state.response_store, &body, &mut req, native) {
             Ok(fields) => fields,
             Err(e) => {
                 reject(
@@ -155,7 +173,6 @@ pub(super) async fn handle_chat(
         (Vec::new(), None)
     };
     req.required_capabilities = req.compute_required_capabilities();
-
     // Build task profile and client context for policy resolution.
     let task_profile = policy::TaskProfile::from_request(&req);
     let header_pairs: Vec<(&str, &str)> = headers
@@ -168,6 +185,28 @@ pub(super) async fn handle_chat(
     let client_ctx = build_client_context(&headers, &req.model, &header_pairs);
     let policy_config = &config.routing.policies;
     let matched_policy = resolve_policy(policy_config, &client_ctx, &task_profile);
+
+    if kind.is_main() {
+        let fallback = matched_policy
+            .as_ref()
+            .map(|policy| &policy.fallback)
+            .unwrap_or(&policy::PolicyFallback::Reject);
+        if let Err(error) = effort::validate_scope(&req, &registry, fallback) {
+            reject(
+                Arc::clone(&state),
+                dialect,
+                req.stream,
+                kind,
+                &req.model,
+                &req.client_headers,
+                &error,
+            );
+            return error_response(dialect, &error);
+        }
+    }
+    let registry = effort::registry_for(&req, &registry);
+    let registry = responses_native::registry_for(&req, &registry);
+    let config = registry.config();
 
     // Admission permits for every budgeted scope this request occupies. Taken
     // before the budget check and held until the request settles: the streaming
@@ -196,51 +235,88 @@ pub(super) async fn handle_chat(
             //    - Once terminal events have been sent
             //    - The response cannot be transparently retried
             let result = match registry.resolve(&req.model) {
-                Ok(resolution) => apply_budgets(&state, &registry, resolution).await.and_then(
-                    |(resolution, guard)| {
-                        // Resolution::Direct skips policy: the client named an exact
-                        // model, so policy filtering would be surprising.
-                        // Resolution::Tier uses policy-aware routing when a policy is
-                        // resolved (via client profile, matchers, or default).
-                        let planned = match &resolution {
-                            Resolution::Direct(_) => state
-                                .router
-                                .plan(&registry, &resolution, &req.required_capabilities)
-                                .map(|plan| (plan, None)),
-                            Resolution::Tier(_) => match &matched_policy {
-                                Some(policy) => {
-                                    tracing::debug!(
-                                        policy_id = %policy.id,
-                                        "using policy-aware routing"
-                                    );
-                                    state
+                Ok(resolution) => {
+                    match responses_native::validate_resolution(&req, &registry, &resolution) {
+                        Ok(()) => apply_budgets(&state, &registry, resolution).await.and_then(
+                            |(resolution, guard)| {
+                                // Resolution::Direct skips policy: the client named an exact
+                                // model, so policy filtering would be surprising.
+                                // Resolution::Tier uses policy-aware routing when a policy is
+                                // resolved (via client profile, matchers, or default).
+                                let planned = match &resolution {
+                                    Resolution::Direct(_) => state
                                         .router
-                                        .plan_with_policy(
-                                            &registry,
-                                            &resolution,
-                                            &req.required_capabilities,
-                                            &policy.requirements,
-                                            &policy.preference,
-                                            &policy.fallback,
-                                            Some(&task_profile),
-                                        )
-                                        .map(|(plan, mut decision)| {
-                                            decision.policy_id = policy.id.clone();
-                                            decision.policy_revision.policy_id = policy.id.clone();
-                                            decision.policy_revision.policy_enabled =
-                                                policy.enabled;
-                                            (plan, Some(decision))
+                                        .plan(&registry, &resolution, &{
+                                            let entry = match &resolution {
+                                                Resolution::Direct(id) => registry.entry(id),
+                                                _ => unreachable!(),
+                                            };
+                                            entry
+                                                .and_then(|entry| registry.provider_of(entry))
+                                                .map(|provider| {
+                                                    effort::direct_requirements(
+                                                        &req,
+                                                        provider.dialect(),
+                                                    )
+                                                })
+                                                .unwrap_or_else(|_| {
+                                                    req.required_capabilities.clone()
+                                                })
                                         })
-                                }
-                                None => state
-                                    .router
-                                    .plan(&registry, &resolution, &req.required_capabilities)
-                                    .map(|plan| (plan, None)),
+                                        .map(|plan| (plan, None)),
+                                    Resolution::Tier(_) => match &matched_policy {
+                                        Some(policy) => {
+                                            tracing::debug!(
+                                                policy_id = %policy.id,
+                                                "using policy-aware routing"
+                                            );
+                                            let policy =
+                                                responses_native::policy(&req, &registry, policy);
+                                            responses_native::plan(
+                                                &state,
+                                                &registry,
+                                                &resolution,
+                                                &req,
+                                                &policy,
+                                                &task_profile,
+                                            )
+                                            .map(
+                                                |(plan, mut decision)| {
+                                                    decision.policy_id = policy.id.clone();
+                                                    decision.policy_revision.policy_id =
+                                                        policy.id.clone();
+                                                    decision.policy_revision.policy_enabled =
+                                                        policy.enabled;
+                                                    (plan, Some(decision))
+                                                },
+                                            )
+                                        }
+                                        None if req.responses_native_only => {
+                                            responses_native::plan_without_policy(
+                                                &state,
+                                                &registry,
+                                                &resolution,
+                                                &req,
+                                                &task_profile,
+                                            )
+                                            .map(|(plan, decision)| (plan, Some(decision)))
+                                        }
+                                        None => state
+                                            .router
+                                            .plan(
+                                                &registry,
+                                                &resolution,
+                                                &req.required_capabilities,
+                                            )
+                                            .map(|plan| (plan, None)),
+                                    },
+                                };
+                                planned.map(|(plan, decision)| (plan, decision, guard))
                             },
-                        };
-                        planned.map(|(plan, decision)| (plan, decision, guard))
-                    },
-                ),
+                        ),
+                        Err(error) => Err(error),
+                    }
+                }
                 Err(e) => Err(e),
             };
             match result {
@@ -343,6 +419,21 @@ pub(super) async fn handle_chat(
         }
     };
 
+    let plan = match effort::filter(&req, plan) {
+        Ok(plan) => plan,
+        Err(error) => {
+            reject(
+                Arc::clone(&state),
+                dialect,
+                req.stream,
+                kind,
+                &req.model,
+                &req.client_headers,
+                &error,
+            );
+            return error_response(dialect, &error);
+        }
+    };
     // Log a summary of the routing decision for diagnostics.
     if let Some(ref decision) = routing_decision {
         tracing::debug!(
@@ -438,7 +529,8 @@ pub(super) async fn handle_chat(
     } as usize;
     let plan = credentials::expand_inference_keys(&state, plan, limit);
 
-    if req.stream {
+    let reply_headers = req.reply_headers.clone();
+    let mut response = if req.stream {
         stream_chat(
             state,
             dialect,
@@ -471,7 +563,9 @@ pub(super) async fn handle_chat(
             shadow_input,
         )
         .await
-    }
+    };
+    reply_headers.apply(response.headers_mut());
+    response
 }
 
 /// How many prior turns a `previous_response_id` chain may replay.
@@ -518,12 +612,23 @@ fn expand_continuation(
     store: &crate::ir::ResponseStore,
     body: &Value,
     req: &mut ChatRequest,
+    native: bool,
 ) -> Result<(Vec<Value>, Option<String>)> {
     let input_items = protocol::responses::input_items(body);
     let Some(previous) = body.get("previous_response_id").and_then(Value::as_str) else {
         return Ok((input_items, None));
     };
     let previous = previous.to_string();
+    // An upstream response reference is not in the gateway's local store.
+    // Preserve it only on the native wire; a Chat/Anthropic candidate must not
+    // interpret the missing history as an empty conversation.
+    if native
+        && store.get(&previous).is_none()
+        && req.responses_body.is_some()
+        && req.responses_native_only
+    {
+        return Ok((input_items, Some(previous)));
+    }
 
     let mut chain: Vec<StoredResponse> = Vec::new();
     let mut visited: HashSet<String> = HashSet::new();
@@ -563,6 +668,25 @@ fn expand_continuation(
 
     // Oldest turn first, so the replayed messages read in conversation order.
     chain.reverse();
+    if let Some(original) = &req.responses_body {
+        let mut expanded = original.clone();
+        let mut items = Vec::new();
+        for stored in &chain {
+            items.extend(stored.input.clone());
+            items.extend(stored.output.clone());
+        }
+        items.extend(input_items.clone());
+        expanded["input"] = Value::Array(items);
+        expanded
+            .as_object_mut()
+            .unwrap()
+            .remove("previous_response_id");
+        let mut decoded = protocol::responses::decode_request(expanded)?;
+        decoded.client_identity = req.client_identity.clone();
+        decoded.client_headers = req.client_headers.clone();
+        *req = decoded;
+        return Ok((input_items, Some(previous)));
+    }
     let mut history: Vec<Message> = Vec::new();
     for stored in &chain {
         history.extend(protocol::responses::decode_history(&stored.input)?);
@@ -644,6 +768,7 @@ async fn shape_for_candidate(
     }
     if rectifier.enabled
         && rectifier.thinking_fallback
+        && shaped.reasoning.is_none()
         && !candidate.entry.capabilities.thinking
         && shaped.required_capabilities.contains(&Capability::Thinking)
     {
@@ -654,25 +779,31 @@ async fn shape_for_candidate(
         );
         shaped.drop_reasoning();
     }
-    // A client may ask for a level the served model never advertised (its
-    // picker outlives the class membership it was written for). Lower the
-    // budget to the model's own highest declared level instead of sending a
-    // value the upstream will refuse.
-    if let Some(thinking) = shaped.thinking.as_mut() {
-        if thinking.enabled {
-            if let Some(budget) = thinking.budget_tokens {
-                if let Some(lowered) = crate::protocol::reasoning_bridge::clamp_budget_to_declared(
-                    budget,
-                    &candidate.entry.normalized_effort_levels(),
-                ) {
-                    thinking.budget_tokens = Some(lowered);
-                    tracing::debug!(
-                        model = %candidate.model_id(),
-                        from = budget,
-                        to = lowered,
-                        "lowered the reasoning budget to a level the model declares"
-                    );
-                }
+    // Native effort is never inferred from a usage tier or silently clamped.
+    if candidate.provider.dialect() != req.source_dialect {
+        // `none` is explicit on the Responses wire, but it is not a portable
+        // native effort value. A Chat/Anthropic fallback should receive no
+        // reasoning knob rather than a vendor-specific `none` that it may
+        // reject. Keep the original request intact so a later native Responses
+        // candidate still sees the client's explicit disable instruction.
+        if matches!(
+            shaped.reasoning.as_ref(),
+            Some(crate::ir::ReasoningRequest::Disabled)
+        ) {
+            shaped.reasoning = None;
+            shaped.thinking = None;
+        }
+        if let (Some(reasoning), Some(source)) =
+            (&req.reasoning, &candidate.entry.reasoning_capability)
+        {
+            if let Some(budget) = reasoning
+                .effort()
+                .and_then(|effort| source.effort_budgets.get(effort))
+            {
+                shaped.thinking = Some(crate::ir::ThinkingConfig {
+                    enabled: *budget > 0,
+                    budget_tokens: Some(*budget),
+                });
             }
         }
     }
@@ -690,6 +821,11 @@ fn prepare(
     req: &ChatRequest,
     mode: crate::upstream::EncodeMode,
 ) -> Result<(Option<String>, Value)> {
+    if !effort::permitted(req, candidate) {
+        return Err(Error::NoCandidate(
+            "the final candidate does not support the requested reasoning control".into(),
+        ));
+    }
     let key = state.api_key(&candidate.provider)?;
     // A decision endpoint is not asked a chat. It is asked a question, in its
     // own protocol, and the body is the decision shape: the state the client
@@ -1319,7 +1455,10 @@ async fn buffered_chat(
                 );
                 // Report the model that actually answered, not the virtual id.
                 resp.model = candidate.exposed_id.clone();
-                let wire = protocol::encode_response(dialect, &resp);
+                let mut wire = protocol::encode_response(dialect, &resp);
+                if dialect == Dialect::OpenAIResponses {
+                    protocol::responses::restore_response_tools(&mut wire, &req);
+                }
                 if dialect == Dialect::OpenAIResponses && storage.retains() {
                     let output = wire
                         .get("output")
@@ -1408,7 +1547,10 @@ async fn buffered_chat(
                             },
                         );
                         resp.model = candidate.exposed_id.clone();
-                        let wire = protocol::encode_response(dialect, &resp);
+                        let mut wire = protocol::encode_response(dialect, &resp);
+                        if dialect == Dialect::OpenAIResponses {
+                            protocol::responses::restore_response_tools(&mut wire, &req);
+                        }
                         if dialect == Dialect::OpenAIResponses && storage.retains() {
                             let output = wire
                                 .get("output")

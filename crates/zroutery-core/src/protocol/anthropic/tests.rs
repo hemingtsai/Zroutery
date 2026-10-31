@@ -153,11 +153,9 @@ fn decodes_tool_use_and_tool_result_round_trip() {
     assert_eq!(encoded["model"], "upstream-model");
     assert_eq!(encoded["messages"][1]["content"][1]["name"], "get_weather");
     assert_eq!(encoded["messages"][1]["content"][0]["signature"], "sig");
-    assert_eq!(
-        encoded["messages"][2]["content"][0]["content"][0]["text"],
-        "sunny"
-    );
-    // Re-decoding the encoded form yields the same IR.
+    assert_eq!(encoded["messages"][2]["content"][0]["content"], "sunny");
+    // Same-protocol forwarding preserves the valid native string form;
+    // re-decoding it still yields the same canonical IR.
     let again = decode_request(encoded).unwrap();
     assert_eq!(again.messages, req.messages);
 }
@@ -281,19 +279,12 @@ fn strict_tool_schema_is_rejected_instead_of_dropped() {
 }
 
 #[test]
-fn translated_reasoning_budget_fits_anthropic_limits() {
-    // An OpenAI `reasoning_effort` becomes an Anthropic thinking budget;
-    // whatever the effort and the output cap, the emitted body must honour
-    // 1024 <= budget_tokens < max_tokens.
-    for (effort, cap, expected) in [
-        ("low", None, 1024u32),
-        ("medium", None, 4095),
-        ("high", None, 4095),
-        ("low", Some(64_000u32), 1024),
-        ("medium", Some(64_000), 4096),
-        ("high", Some(64_000), 16384),
-        ("high", Some(2048), 2047),
-        ("high", Some(1025), 1024),
+fn native_effort_uses_anthropic_effort_not_a_clamped_numeric_budget() {
+    for (effort, cap) in [
+        ("low", None),
+        ("medium", None),
+        ("high", Some(2048u32)),
+        ("max", Some(64_000)),
     ] {
         let mut body = json!({
             "model": "m",
@@ -305,13 +296,9 @@ fn translated_reasoning_budget_fits_anthropic_limits() {
         }
         let req = crate::protocol::openai::decode_request(body).unwrap();
         let encoded = encode_request(&req, "claude").unwrap();
-        let budget = encoded["thinking"]["budget_tokens"].as_u64().unwrap();
-        let max_tokens = encoded["max_tokens"].as_u64().unwrap();
-        assert_eq!(budget, expected as u64, "effort={effort} cap={cap:?}");
-        assert!(
-            budget >= MIN_THINKING_BUDGET as u64 && budget < max_tokens,
-            "effort={effort} cap={cap:?} produced an invalid body: {encoded}"
-        );
+        assert_eq!(encoded["output_config"]["effort"], effort);
+        assert_eq!(encoded["thinking"]["type"], "adaptive");
+        assert!(encoded["thinking"].get("budget_tokens").is_none());
     }
 }
 
@@ -320,13 +307,18 @@ fn reasoning_budget_that_cannot_fit_the_cap_is_refused() {
     // `1024 <= budget < max_tokens` has no solution at these caps, so the
     // proxy must say so rather than emit an invalid body.
     for cap in [1u32, 1024] {
-        let req = crate::protocol::openai::decode_request(json!({
+        let mut req = crate::protocol::openai::decode_request(json!({
             "model": "m",
             "messages": [{"role": "user", "content": "q"}],
             "reasoning_effort": "high",
             "max_tokens": cap
         }))
         .unwrap();
+        req.reasoning = Some(crate::ir::ReasoningRequest::TokenBudget { tokens: 2048 });
+        req.thinking = Some(crate::ir::ThinkingConfig {
+            enabled: true,
+            budget_tokens: Some(2048),
+        });
         let err = encode_request(&req, "claude").unwrap_err();
         assert!(
             err.to_string().contains("thinking budget"),

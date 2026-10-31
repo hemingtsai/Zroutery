@@ -55,6 +55,37 @@ pub(super) fn client_for(req: &ChatRequest, provider: &ProviderConfig) -> Client
         provider.client_profile_for(req.client_identity.as_deref()),
         &req.client_headers,
     );
+    identity.reply_headers = req.reply_headers.clone();
+    // The session carrier must survive a Claude -> Chat/Responses bridge too;
+    // other Claude-only headers remain subject to the profile/native allowlist.
+    if let Some(value) = req.client_headers.get("x-claude-code-session-id") {
+        if !identity
+            .passthrough
+            .iter()
+            .any(|(name, _)| name.as_str() == "x-claude-code-session-id")
+        {
+            identity.passthrough.push((
+                axum::http::HeaderName::from_static("x-claude-code-session-id"),
+                value.clone(),
+            ));
+        }
+    }
+    if req.source_dialect == crate::ir::Dialect::Anthropic
+        && provider.dialect() == req.source_dialect
+    {
+        for (name, value) in &req.client_headers {
+            if (name.as_str().starts_with("anthropic-")
+                || name.as_str().starts_with("x-claude-code-"))
+                && !crate::config::passthrough_denied(name.as_str())
+                && !identity
+                    .passthrough
+                    .iter()
+                    .any(|(existing, _)| existing == name)
+            {
+                identity.passthrough.push((name.clone(), value.clone()));
+            }
+        }
+    }
     // The OpenCode gateway needs a canonical session. Resolve it once here, from
     // the client's own header when it already carries one, else from the
     // conversation — one session per conversation keeps the upstream prompt cache

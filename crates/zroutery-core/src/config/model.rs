@@ -7,10 +7,9 @@ use crate::ir::CapabilityState;
 /// The reasoning-effort levels the gateway accepts, in the order a model picker
 /// should present them.
 ///
-/// `none` and `minimal` are accepted on the wire (see the OpenAI decoders) but
-/// are not selectable "effort" levels: they turn reasoning off rather than
-/// choosing how much of it to spend.
-pub const EFFORT_LEVELS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
+/// `none` disables reasoning; `minimal` is a distinct enabled native value.
+/// A model advertises only its own evidence-backed subset, never all by default.
+pub const EFFORT_LEVELS: [&str; 7] = crate::ir::NATIVE_EFFORTS;
 
 /// Restrict declared effort levels to the accepted vocabulary and put them in
 /// [`EFFORT_LEVELS`] order.

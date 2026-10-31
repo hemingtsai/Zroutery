@@ -2,7 +2,8 @@
 
 use serde_json::json;
 use zroutery_core::ir::{
-    ChatRequest, ChatResponse, ContentBlock, Dialect, Role, StopReason, StreamEvent, Usage,
+    ChatRequest, ChatResponse, ContentBlock, Dialect, ReasoningRequest, Role, StopReason,
+    StreamEvent, Usage,
 };
 use zroutery_core::protocol::reasoning_bridge::encode_thinking_block;
 use zroutery_core::protocol::responses::{
@@ -31,6 +32,24 @@ fn reasoning_effort_supports_xhigh_and_max() {
             "the level must survive the round trip"
         );
     }
+}
+
+#[test]
+fn reasoning_effort_none_is_an_explicit_disable_and_round_trips() {
+    let body = json!({
+        "model": "gpt-5",
+        "reasoning": {"effort": "none"},
+        "input": [{"type": "input_text", "text": "hi"}]
+    });
+    let req = decode_request(body).unwrap();
+    assert!(matches!(req.reasoning, Some(ReasoningRequest::Disabled)));
+    assert_eq!(
+        req.thinking.as_ref().map(|thinking| thinking.enabled),
+        Some(false)
+    );
+
+    let encoded = encode_request(&req, "gpt-5").unwrap();
+    assert_eq!(encoded["reasoning"]["effort"], "none");
 }
 
 #[test]

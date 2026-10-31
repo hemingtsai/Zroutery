@@ -7,6 +7,7 @@
 //! Security: it binds loopback by default and requires a local token. Anything
 //! that can reach this port can spend the configured API keys.
 
+mod gemini;
 mod pipeline;
 mod projection_log;
 mod shadow_candidate;

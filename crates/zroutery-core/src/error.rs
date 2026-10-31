@@ -32,6 +32,18 @@ pub enum Error {
     #[error("no model is available for `{0}`")]
     NoCandidate(String),
 
+    /// A local availability gate prevented a send; not a new upstream failure.
+    #[error("{scope} is temporarily rate limited; wait for its cooldown before retrying")]
+    RateLimited {
+        scope: String,
+        retry_after: std::time::Duration,
+    },
+
+    #[error(
+        "no candidate for `{model}` supports {control}; the requested reasoning was not lowered"
+    )]
+    UnsupportedReasoning { model: String, control: String },
+
     #[error("missing or invalid credentials")]
     Unauthorized,
 
@@ -82,6 +94,11 @@ pub enum Error {
     #[error("request timed out after {0}s")]
     Timeout(u64),
 
+    /// Local accounting failed after an upstream may already have executed.
+    /// Never classify this as a provider fault or transparently replay it.
+    #[error("local accounting could not be persisted; any executed upstream call must not be replayed; inspect Usage and records")]
+    Persistence,
+
     #[error("{0}")]
     Internal(String),
 }
@@ -95,18 +112,52 @@ impl Error {
         Error::Internal(msg.into())
     }
 
+    /// Preserve a known relay binding error instead of losing its numeric code
+    /// when a JSON/SSE parser would otherwise call it malformed content.
+    pub(crate) fn session_binding_payload(provider: &str, body: &Value) -> Option<Self> {
+        crate::failure::is_session_binding_invalidated_value(200, body).then(|| Self::Upstream {
+            provider: provider.to_string(),
+            status: 200,
+            body: body.to_string(),
+            retry_after: None,
+        })
+    }
+
+    pub(crate) fn is_session_binding_invalidated(&self) -> bool {
+        match self {
+            Self::Upstream { status, body, .. } => {
+                crate::failure::is_session_binding_invalidated(*status, body)
+            }
+            Self::BadUpstreamPayload(message) => {
+                crate::failure::is_session_binding_invalidated(200, message)
+            }
+            _ => false,
+        }
+    }
+
     pub fn status(&self) -> StatusCode {
+        if self.is_session_binding_invalidated() {
+            return StatusCode::BAD_REQUEST;
+        }
         match self {
             Error::InvalidRequest(_) => StatusCode::BAD_REQUEST,
             Error::TooLarge { .. } => StatusCode::PAYLOAD_TOO_LARGE,
             Error::UnknownModel(_) | Error::UnknownRoute(_) => StatusCode::NOT_FOUND,
             Error::NoCandidate(_) => StatusCode::SERVICE_UNAVAILABLE,
+            Error::RateLimited { .. } => StatusCode::TOO_MANY_REQUESTS,
+            Error::UnsupportedReasoning { .. } => StatusCode::UNPROCESSABLE_ENTITY,
             Error::Unauthorized => StatusCode::UNAUTHORIZED,
             Error::MissingApiKey(_) => StatusCode::PRECONDITION_FAILED,
             // The request is well formed and authorised; what is missing is money.
             Error::OverBudget(_) => StatusCode::PAYMENT_REQUIRED,
             Error::Upstream { status, .. } => {
-                StatusCode::from_u16(*status).unwrap_or(StatusCode::BAD_GATEWAY)
+                // An upstream can report SSE/JSON failure under HTTP 200.
+                // That failure must never become a successful gateway response.
+                if *status == 200 {
+                    StatusCode::BAD_GATEWAY
+                } else {
+                    StatusCode::from_u16(*status).unwrap_or(StatusCode::BAD_GATEWAY)
+                }
             }
             Error::Transport { .. } => StatusCode::BAD_GATEWAY,
             // The client already holds part of the answer; what failed is the
@@ -116,17 +167,23 @@ impl Error {
                 StatusCode::BAD_GATEWAY
             }
             Error::Timeout(_) => StatusCode::GATEWAY_TIMEOUT,
+            Error::Persistence => StatusCode::INSUFFICIENT_STORAGE,
             Error::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
 
     /// Anthropic style error `type` / OpenAI style error `code`.
     pub fn kind(&self) -> &'static str {
+        if self.is_session_binding_invalidated() {
+            return "invalid_request_error";
+        }
         match self {
             Error::InvalidRequest(_) => "invalid_request_error",
             Error::TooLarge { .. } => "request_too_large",
             Error::UnknownModel(_) | Error::UnknownRoute(_) => "not_found_error",
             Error::NoCandidate(_) => "overloaded_error",
+            Error::RateLimited { .. } => "rate_limit_error",
+            Error::UnsupportedReasoning { .. } => "invalid_request_error",
             Error::Unauthorized => "authentication_error",
             Error::MissingApiKey(_) => "authentication_error",
             Error::OverBudget(_) => "budget_exceeded",
@@ -142,7 +199,17 @@ impl Error {
             | Error::BadUpstreamPayload(_)
             | Error::InterruptedStream { .. } => "api_error",
             Error::Timeout(_) => "timeout_error",
+            Error::Persistence => "accounting_persistence_error",
             Error::Internal(_) => "api_error",
+        }
+    }
+
+    /// OpenAI's machine-readable code can be more specific than its error type.
+    pub fn code(&self) -> &'static str {
+        if self.is_session_binding_invalidated() {
+            "session_binding_invalidated"
+        } else {
+            self.kind()
         }
     }
 
@@ -153,6 +220,15 @@ impl Error {
     /// message themselves.
     pub fn classified(&self) -> crate::failure::ClassifiedFailure {
         crate::failure::ClassifiedFailure::from_core_error(self)
+    }
+
+    /// A scheduling hint, forwarded without exposing the upstream's body.
+    pub fn retry_after(&self) -> Option<std::time::Duration> {
+        match self {
+            Self::RateLimited { retry_after, .. } => Some(*retry_after),
+            Self::Upstream { retry_after, .. } => *retry_after,
+            _ => None,
+        }
     }
 
     /// Alias for [`Error::classified`] used by failure-aware adapters.
@@ -185,6 +261,13 @@ impl Error {
     /// is the redacted view: upstream failures keep provider and status, and
     /// nothing of the provider's own error page.
     pub fn safe_message(&self) -> String {
+        if self.is_session_binding_invalidated() {
+            let upstream = match self {
+                Self::Upstream { provider, .. } => format!("upstream {provider}"),
+                _ => "upstream".to_string(),
+            };
+            return format!("{upstream} invalidated the session's model binding (code 30013); a new session id is required to continue");
+        }
         match self {
             Error::Upstream {
                 provider, status, ..
@@ -217,7 +300,7 @@ impl Error {
                 "error": {
                     "message": msg,
                     "type": self.kind(),
-                    "code": self.kind(),
+                    "code": self.code(),
                     "param": Value::Null,
                 }
             }),

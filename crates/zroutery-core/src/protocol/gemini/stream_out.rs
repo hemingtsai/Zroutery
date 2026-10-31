@@ -51,6 +51,10 @@ impl GeminiStreamEncoder {
 impl StreamEncoder for GeminiStreamEncoder {
     fn encode(&mut self, event: &StreamEvent) -> Vec<SseFrame> {
         match event {
+            StreamEvent::Native { canonical, .. } => canonical
+                .iter()
+                .flat_map(|event| self.encode(event))
+                .collect(),
             // Gemini's wire format names no model, so nothing is echoed here;
             // the upstream's own name in the event is deliberately dropped.
             StreamEvent::Start { .. } => Vec::new(),

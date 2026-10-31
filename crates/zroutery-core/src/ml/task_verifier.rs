@@ -72,6 +72,11 @@ impl StreamResponseAccumulator {
     pub fn observe(&mut self, event: &crate::ir::StreamEvent) {
         use crate::ir::StreamEvent;
         match event {
+            StreamEvent::Native { canonical, .. } => {
+                for event in canonical {
+                    self.observe(event);
+                }
+            }
             StreamEvent::Start { id, model, usage } => {
                 self.id = id.clone();
                 self.model = model.clone();
@@ -386,14 +391,20 @@ mod tests {
             tool_choice: None,
             parallel_tool_use: None,
             thinking: None,
+            reasoning: None,
             structured_output: None,
             metadata_user: None,
             passthrough: Default::default(),
             source_dialect: crate::ir::Dialect::OpenAI,
+            responses_tools: None,
+            responses_body: None,
+            anthropic_body: None,
+            responses_native_only: false,
             unsupported_content_policy: Default::default(),
             required_capabilities: Vec::new(),
             client_identity: None,
             client_headers: Default::default(),
+            reply_headers: Default::default(),
         }
     }
 

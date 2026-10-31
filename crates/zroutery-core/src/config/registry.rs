@@ -575,6 +575,8 @@ pub struct ModelEntry {
     /// rather than one that offers levels the upstream may reject.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub effort_levels: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_capability: Option<super::reasoning::ReasoningCapability>,
     /// What the provider charges for this model. Entered by hand, like the tier;
     /// without it a request is logged with no cost rather than a guessed one.
     #[serde(default)]
@@ -610,6 +612,7 @@ impl ModelEntry {
             max_output_tokens: None,
             context_window: None,
             effort_levels: Vec::new(),
+            reasoning_capability: None,
             pricing: None,
         }
     }

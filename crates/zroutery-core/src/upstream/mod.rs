@@ -264,6 +264,7 @@ impl Upstream {
                 })?;
 
         let status = response.status();
+        client.reply_headers.capture(response.headers());
         let retry_after = retry_after(response.headers());
         let text =
             tokio::time::timeout(Duration::from_secs(provider.timeout_secs), response.text())
@@ -285,6 +286,9 @@ impl Upstream {
 
         let json: Value = serde_json::from_str(&text)
             .map_err(|e| Error::BadUpstreamPayload(format!("{e}: {}", truncate(&text, 500))))?;
+        if let Some(error) = Error::session_binding_payload(&provider.name, &json) {
+            return Err(error);
+        }
         protocol::decode_response(provider.dialect(), json)
     }
 

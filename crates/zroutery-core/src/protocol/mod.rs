@@ -287,6 +287,9 @@ pub fn encode_request(
     quirks: &ProviderQuirks,
     anthropic_version: anthropic::AnthropicApiVersion,
 ) -> Result<Value> {
+    if req.responses_native_only && dialect != Dialect::OpenAIResponses {
+        return Err(Error::invalid("Responses context or hosted tools require a Responses upstream; refusing to discard context"));
+    }
     match dialect {
         Dialect::Anthropic => anthropic::encode_request_for(req, upstream_model, anthropic_version),
         Dialect::OpenAI => openai::encode_request_with(req, upstream_model, quirks),
@@ -542,6 +545,11 @@ impl StreamCollector {
     pub fn push(&mut self, event: &StreamEvent) {
         use std::collections::btree_map::Entry;
         match event {
+            StreamEvent::Native { canonical, .. } => {
+                for event in canonical {
+                    self.push(event);
+                }
+            }
             StreamEvent::Start { id, model, usage } => {
                 self.id = id.clone();
                 self.model = model.clone();

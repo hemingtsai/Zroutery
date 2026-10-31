@@ -148,12 +148,12 @@ pub fn encode_request_with(
     if let Some(allow) = req.parallel_tool_use {
         body.insert("parallel_tool_calls".into(), json!(allow));
     }
-    if let Some(th) = &req.thinking {
-        if quirks.send_reasoning_effort {
-            body.insert(
-                "reasoning_effort".into(),
-                json!(reasoning_bridge::encode_effort(th)),
-            );
+    if let Some(effort) = reasoning_bridge::request_effort(req) {
+        if req.reasoning.is_some()
+            || quirks.send_reasoning_effort
+            || req.source_dialect == Dialect::OpenAI
+        {
+            body.insert("reasoning_effort".into(), json!(effort));
         }
     }
     if let Some(u) = &req.metadata_user {
@@ -185,6 +185,19 @@ fn encode_message_into(
     policy: UnsupportedContentPolicy,
 ) -> Result<()> {
     match m.role {
+        Role::System => {
+            let content: Result<Vec<_>> = m
+                .content
+                .iter()
+                .map(|block| match block {
+                    ContentBlock::Text { text, .. } => Ok(json!({"type":"text","text":text})),
+                    _ => Err(Error::invalid(
+                        "mid-conversation system content only supports text",
+                    )),
+                })
+                .collect();
+            out.push(json!({"role":"system","content":content?}));
+        }
         Role::Assistant => {
             let mut text = String::new();
             let mut reasoning = String::new();

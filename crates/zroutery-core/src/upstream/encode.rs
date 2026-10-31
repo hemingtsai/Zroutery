@@ -81,6 +81,7 @@ pub fn encode_for_mode(
     // to pass Anthropic subscription/OAuth plan checks.
     if provider.client_profile_for(req.client_identity.as_deref())
         == ProviderClientProfile::ClaudeCode
+        && !(req.source_dialect == crate::ir::Dialect::Anthropic && req.anthropic_body.is_some())
     {
         prepend_claude_code_system_prompt(&mut body);
     }

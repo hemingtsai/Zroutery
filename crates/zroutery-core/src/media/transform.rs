@@ -31,6 +31,16 @@ impl Replacement {
 /// false when the slot no longer matches an image (the request changed
 /// underneath), which the caller treats as "nothing replaced".
 pub fn replace(req: &mut ChatRequest, slot: &ImageSlot, replacement: &Replacement) -> bool {
+    // Native Responses requests keep their original wire shape. Apply the
+    // same explicit replacement there, or re-encoding would restore the image
+    // the remediation just removed from the IR.
+    let wire_image = if req.responses_body.is_some() {
+        super::collect::collect(req)
+            .iter()
+            .position(|(image, _)| image == slot)
+    } else {
+        None
+    };
     let (message_index, block_index) = match slot {
         ImageSlot::Message {
             message_index,
@@ -77,11 +87,51 @@ pub fn replace(req: &mut ChatRequest, slot: &ImageSlot, replacement: &Replacemen
         }
     };
     if replaced {
+        if let (Some(ordinal), Some(body)) = (wire_image, req.responses_body.as_mut()) {
+            replace_wire_image(body, ordinal, &replacement.text());
+        }
         // A replacement is a real remediation: the image requirement is no
         // longer present in the transformed request.
         req.refresh_required_capabilities();
     }
     replaced
+}
+
+fn replace_wire_image(body: &mut serde_json::Value, mut ordinal: usize, text: &str) {
+    let Some(items) = body
+        .get_mut("input")
+        .and_then(serde_json::Value::as_array_mut)
+    else {
+        return;
+    };
+    for item in items {
+        if item["type"] == "input_image" {
+            if ordinal == 0 {
+                *item = serde_json::json!({"type":"input_text","text":text});
+                return;
+            }
+            ordinal -= 1;
+        }
+        for field in ["content", "output"] {
+            if let Some(parts) = item
+                .get_mut(field)
+                .and_then(serde_json::Value::as_array_mut)
+            {
+                for part in parts {
+                    if matches!(
+                        part["type"].as_str(),
+                        Some("input_image" | "image" | "image_url")
+                    ) {
+                        if ordinal == 0 {
+                            *part = serde_json::json!({"type":"input_text","text":text});
+                            return;
+                        }
+                        ordinal -= 1;
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]

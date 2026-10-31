@@ -97,6 +97,9 @@ impl StreamParser for ResponsesStreamParser {
             return Ok(Vec::new());
         }
         let event = frame.json()?;
+        if let Some(error) = Error::session_binding_payload(&self.model, &event) {
+            return Err(error);
+        }
         let event_type = event
             .get("type")
             .and_then(Value::as_str)

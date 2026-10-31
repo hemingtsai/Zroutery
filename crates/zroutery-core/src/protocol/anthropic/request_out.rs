@@ -24,6 +24,22 @@ pub fn encode_request_for(
     upstream_model: &str,
     version: AnthropicApiVersion,
 ) -> Result<Value> {
+    if let Some(original) = &req.anthropic_body {
+        let mut body = original.clone();
+        body["model"] = json!(upstream_model);
+        body["max_tokens"] = json!(req.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS));
+        if req.stream || body.get("stream").is_some() {
+            body["stream"] = json!(req.stream);
+        }
+        if version == AnthropicApiVersion::V2026_10_21 {
+            if let Some(object) = body.as_object_mut() {
+                object.remove("temperature");
+                object.remove("top_p");
+                object.remove("top_k");
+            }
+        }
+        return Ok(body);
+    }
     let mut body = Map::new();
     body.insert("model".into(), json!(upstream_model));
     let max_tokens = req.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS);
@@ -143,7 +159,20 @@ pub fn encode_request_for(
             json!({"type": "auto", "disable_parallel_tool_use": true}),
         );
     }
-    if let Some(th) = &req.thinking {
+    if let Some(crate::ir::ReasoningRequest::NativeEffort { value }) = &req.reasoning {
+        if crate::protocol::reasoning_bridge::native_effort_bridge(
+            req.source_dialect,
+            Dialect::Anthropic,
+            value,
+        ) {
+            body.insert("output_config".into(), json!({"effort": value}));
+            body.insert("thinking".into(), json!({"type": "adaptive"}));
+        } else {
+            return Err(Error::invalid(
+                "this native effort cannot be represented on the Anthropic surface",
+            ));
+        }
+    } else if let Some(th) = &req.thinking {
         if th.enabled {
             let mut budget = th.budget_tokens.unwrap_or(DEFAULT_THINKING_BUDGET);
             if req.source_dialect != Dialect::Anthropic {
@@ -165,6 +194,9 @@ pub fn encode_request_for(
                 "thinking".into(),
                 json!({"type": "enabled", "budget_tokens": budget}),
             );
+        }
+        if !th.enabled {
+            body.insert("thinking".into(), json!({"type":"disabled"}));
         }
     }
     if let Some(u) = &req.metadata_user {
@@ -189,6 +221,7 @@ fn encode_message(
     let role = match m.role {
         Role::User => "user",
         Role::Assistant => "assistant",
+        Role::System => "system",
     };
     let mut content = Vec::new();
     for b in &m.content {

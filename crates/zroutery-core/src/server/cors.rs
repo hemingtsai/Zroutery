@@ -23,8 +23,20 @@ pub(super) fn cors_layer(server: &ServerConfig) -> Option<CorsLayer> {
             header::AUTHORIZATION,
             header::ACCEPT,
             HeaderName::from_static("x-api-key"),
+            HeaderName::from_static("x-goog-api-key"),
             HeaderName::from_static("anthropic-version"),
             HeaderName::from_static("anthropic-beta"),
+            HeaderName::from_static("x-zroutery-session-id"),
+            HeaderName::from_static("session_id"),
+            HeaderName::from_static("x-session-id"),
+            HeaderName::from_static("x-opencode-session"),
+            HeaderName::from_static("x-claude-code-session-id"),
+        ])
+        .expose_headers([
+            HeaderName::from_static("x-zroutery-session-id"),
+            HeaderName::from_static("x-session-id"),
+            HeaderName::from_static("session_id"),
+            HeaderName::from_static("x-claude-code-session-id"),
         ])
         .max_age(Duration::from_secs(600));
 

@@ -27,6 +27,11 @@ pub fn encode_request(req: &ChatRequest, upstream_model: &str) -> Result<Value> 
         let role = match m.role {
             Role::User => "user",
             Role::Assistant => "model",
+            Role::System => {
+                return Err(crate::error::Error::invalid(
+                    "Gemini cannot preserve mid-conversation system instructions",
+                ))
+            }
         };
         let mut parts: Vec<Value> = Vec::new();
         for b in &m.content {
@@ -179,7 +184,9 @@ pub fn encode_request(req: &ChatRequest, upstream_model: &str) -> Result<Value> 
     if !req.stop_sequences.is_empty() {
         gc.insert("stopSequences".into(), json!(req.stop_sequences));
     }
-    if let Some(thinking) = &req.thinking {
+    if let Some(crate::ir::ReasoningRequest::NativeEffort { value }) = &req.reasoning {
+        gc.insert("thinkingConfig".into(), json!({"thinkingLevel": value}));
+    } else if let Some(thinking) = &req.thinking {
         let mut config = Map::new();
         match (thinking.enabled, thinking.budget_tokens) {
             (true, Some(budget)) => {

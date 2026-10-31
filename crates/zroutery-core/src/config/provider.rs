@@ -123,6 +123,22 @@ impl DecisionConfig {
         if path.is_empty() {
             return base.to_string();
         }
+
+        // Some provider catalogues publish the complete decision endpoint as
+        // `base_url` while older configurations store a host root plus `path`.
+        // Do not append the same endpoint twice (`.../v1/systemone/v1/systemone`).
+        // Exact suffix matching accepts complete endpoints without duplication.
+        // A gateway alias such as `/inference/systemone` remains distinct and
+        // still receives the configured `/v1/systemone` suffix.
+        let path_segments: Vec<&str> = path.split('/').filter(|part| !part.is_empty()).collect();
+        let base_segments: Vec<&str> = base.split('/').filter(|part| !part.is_empty()).collect();
+        if !path_segments.is_empty()
+            && base_segments.len() >= path_segments.len()
+            && base_segments[base_segments.len() - path_segments.len()..] == path_segments[..]
+        {
+            return base.to_string();
+        }
+
         if path.starts_with("/v1") {
             format!("{base}{path}")
         } else {
@@ -131,6 +147,32 @@ impl DecisionConfig {
     }
 }
 
+#[cfg(test)]
+mod decision_url_tests {
+    use super::DecisionConfig;
+
+    #[test]
+    fn a_complete_systemone_endpoint_is_not_duplicated() {
+        let config = DecisionConfig::default();
+        assert_eq!(
+            config.url("https://api.hal-x.ai/v1/systemone"),
+            "https://api.hal-x.ai/v1/systemone"
+        );
+        assert_eq!(
+            config.url("https://opencode.ai/inference/systemone"),
+            "https://opencode.ai/inference/systemone/v1/systemone"
+        );
+    }
+
+    #[test]
+    fn a_host_root_still_gets_the_configured_path() {
+        let config = DecisionConfig::default();
+        assert_eq!(
+            config.url("https://api.typesafe.ai"),
+            "https://api.typesafe.ai/v1/systemone"
+        );
+    }
+}
 impl ProviderKind {
     pub fn dialect(&self) -> Dialect {
         match self {
@@ -276,6 +318,7 @@ impl ProviderClientProfile {
             ],
             Self::ClaudeCode => &[
                 "x-app",
+                "x-claude-code-session-id",
                 "x-stainless-arch",
                 "x-stainless-lang",
                 "x-stainless-os",
@@ -334,13 +377,14 @@ pub struct ClientIdentity {
     /// Empty when the profile forwards nothing (or the client sent none of the
     /// allowlisted names).
     pub passthrough: Vec<(HeaderName, HeaderValue)>,
-    /// The canonical `ses_…` OpenCode session for this request. `Some` only when
-    /// the resolved profile is [`ProviderClientProfile::OpenCodeCli`]; `None`
-    /// otherwise, and for auxiliary calls that carry no conversation.
+    /// This conversation's session signal. Canonical `ses_…` for OpenCodeCli;
+    /// otherwise the client's session/cache id, used for scoped upstream renewal.
+    /// Auxiliary calls without a conversation carry `None`.
     pub session: Option<String>,
     /// The OpenCode Console billing org, sent back as `x-opencode-org-id`. `Some`
     /// only for an `OPENCODE-CONSOLE` provider with a resolved token.
     pub org_id: Option<String>,
+    pub reply_headers: crate::ir::ReplyHeaders,
 }
 
 /// Resolve the client profile for one request and collect its forwarding set.
@@ -393,6 +437,7 @@ pub fn resolve_client_identity(
         passthrough,
         session: None,
         org_id: None,
+        reply_headers: Default::default(),
     }
 }
 
