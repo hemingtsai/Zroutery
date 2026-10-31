@@ -142,6 +142,8 @@ pub fn run() {
             commands::ccswitch_preview,
             commands::ccswitch_import,
             takeover_commands::takeover_status,
+            takeover_commands::client_setup_preview,
+            takeover_commands::client_setup_apply,
             takeover_commands::takeover_adopt,
             takeover_commands::takeover_release,
             migration_commands::migration_status,
@@ -240,7 +242,13 @@ pub fn run() {
             let autostart = config.server.autostart;
             let secrets = Arc::new(KeychainSecrets::new(KEYCHAIN_SERVICE));
             let desktop = Arc::new(Desktop::new(config_dir, config, secrets));
-            desktop.set_warning(warning);
+            if let Some(warning) = warning {
+                let warning = match desktop.warning() {
+                    Some(startup) => format!("{warning}\n{startup}"),
+                    None => warning,
+                };
+                desktop.set_warning(Some(warning));
+            }
             app.manage(Arc::clone(&desktop));
             app.manage(log_buffer.clone());
             // The capture's reports outlive the browser session they describe;

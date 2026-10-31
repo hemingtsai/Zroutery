@@ -83,11 +83,11 @@ fn a_fresh_cutover_record_is_detected_durable_and_has_nothing_to_undo() {
 
 /// Every agent is listed, including the one this build cannot migrate.
 ///
-/// Gemini has no adapter. A surface that dropped it would render a page whose
+/// Gemini needs a composite setup. A surface that dropped it would render a page whose
 /// row count silently depends on which clients exist, and a user with a Gemini
 /// config would see nothing at all rather than an explained refusal.
 #[test]
-fn every_agent_is_listed_and_the_one_without_an_adapter_says_why() {
+fn every_agent_is_listed_and_composite_setup_explains_the_cutover_limit() {
     let (desktop, dir) = cutover_desktop(serving_config());
     let previews = desktop.migration_previews();
 
@@ -103,7 +103,7 @@ fn every_agent_is_listed_and_the_one_without_an_adapter_says_why() {
         .expect("gemini is listed");
     assert!(
         gemini.blocked_reason.is_some(),
-        "gemini has no adapter, so its row must carry the reason rather than an empty button"
+        "Gemini requires two-file setup, so its row must explain why cutover is unavailable"
     );
     assert!(gemini.steps.is_empty(), "a blocked client has no plan");
     assert!(

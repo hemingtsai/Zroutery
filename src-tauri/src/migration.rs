@@ -153,6 +153,12 @@ pub fn build_plan(
     gateway_base_url: &str,
     port: u16,
 ) -> Result<(MigrationPlan, PathBuf), String> {
+    if agent == AgentType::Gemini {
+        return Err(
+            "Gemini uses two configuration files; use client setup instead of whole-file cutover"
+                .into(),
+        );
+    }
     let adapter = adapter_for(agent).ok_or_else(|| {
         format!(
             "this build has no migration adapter for {}",

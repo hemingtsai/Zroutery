@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use zroutery_core::config::{AppConfig, ProviderConfig, SecretStore};
 use zroutery_core::upstream::{DiscoveredModel, Upstream};
@@ -19,6 +19,14 @@ use crate::store;
 use crate::tray;
 
 pub(crate) type Cmd<T> = Result<T, String>;
+
+pub(crate) const CONFIG_STATE_EVENT: &str = "zroutery://config-state-changed";
+
+pub(crate) fn announce_config(app: &AppHandle) {
+    if let Err(error) = app.emit(CONFIG_STATE_EVENT, ()) {
+        tracing::warn!(%error, "cannot announce configuration change");
+    }
+}
 
 pub(crate) async fn refreshed(app: &AppHandle, desktop: &Desktop) -> Snapshot {
     tray::refresh(app, desktop).await;

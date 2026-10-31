@@ -118,14 +118,14 @@ fn the_plan_is_the_one_the_core_gate_drives() {
 
 /// A client this build cannot migrate has no plan, and says why.
 #[test]
-fn a_client_with_no_adapter_has_no_plan() {
+fn composite_gemini_setup_has_no_single_file_cutover_plan() {
     let dir = std::env::temp_dir().join(format!("zr-plan-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&dir).expect("a temporary directory");
 
     let error = build_plan(&dir, AgentType::Gemini, "http://127.0.0.1:8787", 8787)
-        .expect_err("a client with no adapter has no plan");
+        .expect_err("two-file setup cannot use single-file cutover");
     assert!(
-        error.contains("gemini"),
+        error.contains("Gemini") && error.contains("two configuration files"),
         "the refusal names the client it is about: {error}"
     );
 

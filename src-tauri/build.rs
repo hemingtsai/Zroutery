@@ -86,6 +86,8 @@ const APP_COMMANDS: &[&str] = &[
     "ccswitch_import",
     // Agent takeover.
     "takeover_status",
+    "client_setup_preview",
+    "client_setup_apply",
     "takeover_adopt",
     "takeover_release",
     // I2 migration.

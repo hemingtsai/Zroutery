@@ -48,6 +48,8 @@
     "allow-ccswitch-preview",
     "allow-ccswitch-import",
     "allow-takeover-status",
+    "allow-client-setup-preview",
+    "allow-client-setup-apply",
     "allow-takeover-adopt",
     "allow-takeover-release",
     "allow-migration-status",

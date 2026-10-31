@@ -64,7 +64,7 @@ impl Desktop {
         let checkin_schedule = crate::checkin::schedule::Schedule::load(
             crate::checkin::schedule::Schedule::path_in(&config_dir),
         );
-        Desktop {
+        let desktop = Desktop {
             core,
             secrets,
             config_dir,
@@ -86,8 +86,15 @@ impl Desktop {
             #[cfg(feature = "account-maint")]
             checkin_schedule,
             takeover_stores: Mutex::new(BTreeMap::new()),
+            client_files: Mutex::new(()),
             cutover: Mutex::new(None),
+        };
+        if let Err(error) = desktop.recover_client_files() {
+            desktop.set_warning(Some(format!(
+                "client configuration recovery needs attention: {error}"
+            )));
         }
+        desktop
     }
 
     /// Point the ML durable state at the application's own configuration

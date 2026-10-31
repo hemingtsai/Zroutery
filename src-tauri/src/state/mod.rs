@@ -107,6 +107,8 @@ pub struct Desktop {
             Arc<zroutery_core::agent_takeover::TakeoverStore>,
         >,
     >,
+    /// Serialize apply/restore across client config and owned catalogue files.
+    client_files: Mutex<()>,
     /// The cutover record and its rollback snapshot, opened on first use.
     ///
     /// Durable by construction: the three states that mean a cutover started
@@ -151,6 +153,10 @@ mod accounts;
 mod balance_tests;
 mod balances;
 mod budget;
+mod client_catalogue;
+#[cfg(test)]
+mod client_catalogue_tests;
+mod client_environment;
 mod helpers;
 mod lifecycle;
 mod migration;
@@ -177,6 +183,7 @@ mod views;
 mod tests;
 
 pub use helpers::{needs_rebind, server_addr};
+pub use takeover::{ClientSetupOptions, ClientSetupPreview};
 // The gates below mirror the items in `views`. A flat re-export would not
 // compile under a feature combination the items themselves support.
 #[cfg(feature = "newapi")]

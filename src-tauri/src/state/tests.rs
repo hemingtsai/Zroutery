@@ -230,7 +230,7 @@ fn rebind_only_on_transport_changes() {
     assert!(needs_rebind(&a, &f));
 }
 
-fn desktop_with(config: AppConfig) -> (Arc<Desktop>, PathBuf) {
+pub(super) fn desktop_with(config: AppConfig) -> (Arc<Desktop>, PathBuf) {
     let dir = std::env::temp_dir().join(format!("zroutery-state-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&dir).unwrap();
     let secrets = Arc::new(KeychainSecrets::new(format!(
@@ -1414,7 +1414,7 @@ fn the_gateway_target_offers_exactly_the_tiers_that_have_enabled_models() {
 }
 
 #[test]
-fn the_gateway_target_publishes_only_the_effort_levels_every_member_accepts() {
+fn the_gateway_target_publishes_the_safe_union_of_member_effort_levels() {
     let config: AppConfig = serde_json::from_value(serde_json::json!({
         "server": {"auth_token": "gw-token"},
         "providers": [
@@ -1429,7 +1429,10 @@ fn the_gateway_target_publishes_only_the_effort_levels_every_member_accepts() {
             {"provider_id": "p", "upstream_model": "m-b", "tier": "fast",
              "effort_levels": ["high", "max", "ultra"]},
             {"provider_id": "off", "upstream_model": "m-c", "tier": "fast",
-             "effort_levels": ["medium"]}
+             "effort_levels": ["medium"]},
+            {"provider_id": "p", "upstream_model": "m-empty", "tier": "standard"},
+            {"provider_id": "p", "upstream_model": "m-unknown", "tier": "standard",
+             "effort_levels": ["ultra"]}
         ]
     }))
     .expect("the fixture is a valid configuration");
@@ -1443,9 +1446,47 @@ fn the_gateway_target_publishes_only_the_effort_levels_every_member_accepts() {
         .expect("the fast class");
     assert_eq!(
         fast.effort_levels,
-        ["high"],
-        "only the level both enabled members accept; `max` is m-b's alone and would be \
-         refused by m-a, and the disabled provider does not contribute"
+        ["low", "high", "max"],
+        "an effort is published when at least one usable member supports it; canonical order is \
+         retained, the disabled provider does not contribute `medium`, and unknown `ultra` is dropped"
+    );
+    assert_eq!(
+        fast.capability_source,
+        "configured enabled members; effort union filtered per request, shared capabilities and limits remain conservative, not client defaults"
+    );
+
+    let catalogue = zroutery_core::agent_takeover::codex_catalogue(&target.classes);
+    let catalogue_models = catalogue["models"]
+        .as_array()
+        .expect("the Codex catalogue has a model list");
+    let published_efforts = |slug: &str| {
+        catalogue_models
+            .iter()
+            .find(|model| model["slug"] == slug)
+            .expect("the tier is published to Codex")["supported_reasoning_levels"]
+            .as_array()
+            .expect("Codex reasoning levels are an array")
+            .iter()
+            .map(|level| level["effort"].as_str().expect("an effort string"))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        published_efforts("fast-class"),
+        ["low", "high", "max"],
+        "the Codex catalogue publishes the same safe union"
+    );
+    let standard = target
+        .classes
+        .iter()
+        .find(|class| class.model == "standard-class")
+        .expect("the standard class still exists because it has usable members");
+    assert!(
+        standard.effort_levels.is_empty(),
+        "when no usable member declares a valid effort the published list remains empty"
+    );
+    assert!(
+        published_efforts("standard-class").is_empty(),
+        "Codex also receives an empty list when no usable member supports an effort"
     );
 }
 
