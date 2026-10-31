@@ -34,6 +34,7 @@ pub mod election;
 pub mod error;
 pub mod failure;
 pub mod feedback;
+pub mod file_transaction;
 pub mod ir;
 pub mod media;
 pub mod migration;
