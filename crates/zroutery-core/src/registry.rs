@@ -135,8 +135,9 @@ impl Registry {
     /// The ladder runs in two passes over the exact spelling and the spelling
     /// with any client window modifier stripped (`claude-opus-4-8[1m]`):
     ///
-    /// 1. Deterministic names: model id or alias, `*-class` virtual id,
-    ///    configured client alias.
+    /// 1. Deterministic names: model id or alias, `*-class` virtual id, exact
+    ///    duplicated `*-class-class` compatibility spelling, or configured
+    ///    client alias. Configured names always take priority over compatibility.
     /// 2. Opt-in Claude-style name heuristic, then the configured
     ///    unknown-model fallback.
     ///
@@ -169,8 +170,8 @@ impl Registry {
         Err(self.unknown_model_error(asked))
     }
 
-    /// Deterministic lookups for one exact spelling: model id or alias, a
-    /// `*-class` virtual id, or a configured client alias.
+    /// Deterministic lookups for one exact spelling. Configured model names and
+    /// client aliases precede the narrow duplicated-suffix compatibility rule.
     fn resolve_named(&self, name: &str) -> Option<Resolution> {
         if let Some(position) = self.index.by_name.get(name).copied() {
             if self.config.models[position].enabled {
@@ -182,6 +183,9 @@ impl Registry {
         }
         if let Some(tier) = self.config.routing.client_aliases.get(name) {
             return Some(Resolution::Tier(*tier));
+        }
+        if let Some(tier) = tier_from_duplicated_class_suffix(name) {
+            return Some(Resolution::Tier(tier));
         }
         None
     }
@@ -344,6 +348,17 @@ impl Registry {
         }
         out
     }
+}
+
+/// Accept only an exact duplicate of an internal virtual id's `-class` suffix.
+///
+/// This intentionally does not trim suffixes repeatedly or guess from a prefix:
+/// `standard-class-class` is compatible, while nearby typos remain unknown.
+fn tier_from_duplicated_class_suffix(name: &str) -> Option<ModelTier> {
+    let virtual_id = name.strip_suffix("-class")?;
+    ModelTier::ALL
+        .into_iter()
+        .find(|tier| virtual_id == tier.virtual_id())
 }
 
 /// Recognise Anthropic-style model names sent by clients such as Claude Code.
@@ -771,6 +786,73 @@ mod tests {
         assert_eq!(
             r.resolve("does-not-exist[1m]").unwrap(),
             Resolution::Tier(ModelTier::Fast)
+        );
+    }
+
+    #[test]
+    fn exact_duplicated_class_suffix_resolves_without_masking_typos() {
+        let mut cfg = brief_config();
+        cfg.routing.match_claude_names = false;
+        let r = registry(cfg);
+
+        for tier in ModelTier::ALL {
+            let requested = format!("{}-class", tier.virtual_id());
+            assert_eq!(
+                r.resolve(&requested).unwrap(),
+                Resolution::Tier(tier),
+                "{requested} should resolve to its exact virtual tier"
+            );
+        }
+        assert_eq!(
+            r.resolve("standard-class-class[1m]").unwrap(),
+            Resolution::Tier(ModelTier::Standard),
+            "the existing window-modifier retry should preserve compatibility"
+        );
+
+        for typo in [
+            "standard-class-class-class",
+            "standard-classx-class",
+            "typo-class-class",
+        ] {
+            assert!(r.resolve(typo).is_err(), "{typo} must remain unknown");
+        }
+    }
+
+    #[test]
+    fn duplicated_class_compatibility_preserves_configured_name_priority() {
+        let mut cfg = brief_config();
+        cfg.routing.match_claude_names = false;
+
+        cfg.providers.push(ProviderConfig::new(
+            "standard-class",
+            "Literal duplicate suffix provider",
+            ProviderKind::OpenAICompatible,
+        ));
+        cfg.models.push(ModelEntry::for_upstream(
+            "standard-class",
+            "class",
+            Some(ModelTier::Fast),
+        ));
+        cfg.models[0].aliases.push("reasoning-class-class".into());
+        cfg.routing
+            .client_aliases
+            .insert("frontier-class-class".into(), ModelTier::Fast);
+
+        let r = registry(cfg);
+        assert_eq!(
+            r.resolve("standard-class-class").unwrap(),
+            Resolution::Direct("standard-class-class".into()),
+            "an exact exposed model id must win"
+        );
+        assert_eq!(
+            r.resolve("reasoning-class-class").unwrap(),
+            Resolution::Direct("deepseek-deepseek-v4-flash".into()),
+            "an exact model alias must win"
+        );
+        assert_eq!(
+            r.resolve("frontier-class-class").unwrap(),
+            Resolution::Tier(ModelTier::Fast),
+            "a configured client alias must win over compatibility mapping"
         );
     }
 
