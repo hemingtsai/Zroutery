@@ -31,6 +31,8 @@ fn provider(kind: ProviderKind, profile: Profile) -> ProviderConfig {
 const CLAUDE_UA: &str = "claude-cli/2.1.217 (external, sdk-cli)";
 /// The Codex client's own User-Agent, as it arrives.
 const CODEX_UA: &str = "codex_cli_rs/0.1.0";
+/// The observed Codex Desktop User-Agent form, with underscore separators.
+const CODEX_DESKTOP_UA: &str = "codex_desktop_0.166.0-alpha.5.1_windows_10.0.26200_x86_64_unknown";
 
 #[test]
 fn auto_resolves_a_claude_client_to_the_claude_code_profile() {
@@ -47,6 +49,45 @@ fn auto_resolves_a_codex_client_to_the_codex_profile() {
         Profile::Auto.resolve(Some(CODEX_UA)),
         Profile::Codex,
         "a Codex client talking to an Auto provider should be relayed as Codex"
+    );
+}
+
+#[test]
+fn auto_routes_codex_desktop_through_the_compatible_codex_profile() {
+    assert_eq!(
+        Profile::Auto.resolve(Some(CODEX_DESKTOP_UA)),
+        Profile::Codex,
+        "the reporting id stays codex_desktop, while its compatible wire profile is Codex"
+    );
+}
+
+#[test]
+fn header_resolution_routes_codex_desktop_through_the_codex_profile() {
+    let mut headers = axum::http::HeaderMap::new();
+    for agent in [
+        CODEX_DESKTOP_UA,
+        "Codex Desktop/0.162.3 (Windows 10.0.26100; x86_64) unknown",
+    ] {
+        headers.insert(
+            axum::http::header::USER_AGENT,
+            axum::http::HeaderValue::from_static(agent),
+        );
+        assert_eq!(
+            zroutery_core::resolve_client_identity(Profile::Auto, &headers).profile,
+            Profile::Codex,
+            "the direct header detector agrees for {agent}"
+        );
+    }
+
+    headers.clear();
+    headers.insert(
+        "x-zroutery-client",
+        axum::http::HeaderValue::from_static("codex_desktop"),
+    );
+    assert_eq!(
+        zroutery_core::resolve_client_identity(Profile::Auto, &headers).profile,
+        Profile::Codex,
+        "the distinct reporting id maps to the compatible Codex wire profile"
     );
 }
 

@@ -411,13 +411,14 @@ fn header_text<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
 /// 3. `x-app: cli` together with an `anthropic-beta` carrying `claude-code-`,
 ///    the Claude Code CLI pairing.
 /// 4. `User-Agent` starting with `claude-cli/`.
-/// 5. `User-Agent` starting with `codex_cli_rs/` or `codex/`.
+/// 5. `User-Agent` starting with `codex_cli_rs/`, `codex/`, or an observed
+///    Codex Desktop form (`codex_desktop_` / `Codex Desktop/`).
 /// 6. Nothing matched: the client is unknown and gets the native identity.
 fn detect_client_profile(headers: &HeaderMap) -> ProviderClientProfile {
     if let Some(hint) = header_text(headers, "x-zroutery-client") {
         match hint.trim().to_ascii_lowercase().as_str() {
             "claude_code" => return ProviderClientProfile::ClaudeCode,
-            "codex" => return ProviderClientProfile::Codex,
+            "codex" | "codex_desktop" => return ProviderClientProfile::Codex,
             // Not an override we know: keep detecting rather than guessing.
             _ => {}
         }
@@ -443,7 +444,11 @@ fn detect_client_profile(headers: &HeaderMap) -> ProviderClientProfile {
             return ProviderClientProfile::ClaudeCode;
         }
         let agent = agent.to_ascii_lowercase();
-        if agent.starts_with("codex_cli_rs/") || agent.starts_with("codex/") {
+        if agent.starts_with("codex_cli_rs/")
+            || agent.starts_with("codex/")
+            || agent.starts_with("codex_desktop_")
+            || agent.starts_with("codex desktop/")
+        {
             return ProviderClientProfile::Codex;
         }
     }

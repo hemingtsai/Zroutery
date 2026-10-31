@@ -26,7 +26,7 @@
 //! 2. **`x-zroutery-client`.** An explicit operator- or client-set identifier.
 //! 3. **A verified client-specific header pair.** For example `x-app: cli`
 //!    together with an `anthropic-beta` carrying `claude-code-`.
-//! 4. **An exact `User-Agent` prefix.**
+//! 4. **An exact `User-Agent` prefix or canonical bare name.**
 //! 5. **A runtime or SDK family rule.** `python-requests/…`, `Go-http-client/…`.
 //! 6. **`unknown`.**
 //!
@@ -112,7 +112,7 @@ pub enum AttributionSource {
     ExplicitHeader,
     /// A verified pairing of client-specific headers.
     ClientHeader,
-    /// An exact `User-Agent` prefix rule.
+    /// An exact `User-Agent` prefix or canonical-name rule.
     UserAgent,
     /// A language-runtime or SDK family rule.
     RuntimeFamily,
@@ -394,10 +394,10 @@ fn header_text<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
 
 /// The verified `User-Agent` rules.
 ///
-/// Each entry is a product name and the prefixes that product actually sends.
-/// A rule matches on a **prefix**, never a substring: `curl/8.4.0` appears
-/// verbatim inside the agent string of tools that embed libcurl, and a
-/// substring match would attribute them all to curl.
+/// Each entry is a product name plus the bounded prefixes and canonical bare
+/// names that product actually sends. A rule never matches a substring:
+/// `curl/8.4.0` appears verbatim inside the agent string of tools that embed
+/// libcurl, and a substring match would attribute them all to curl.
 ///
 /// Every entry is annotated with what it rests on. A rule whose provenance is
 /// `Observed` was seen on this machine or in a pinned fixture; `Documented`
@@ -416,7 +416,7 @@ pub enum RuleProvenance {
     Inferred,
 }
 
-/// One `User-Agent` prefix rule.
+/// One `User-Agent` prefix/canonical-name rule.
 #[derive(Debug, Clone, Copy)]
 struct UaRule {
     /// Canonical id.
@@ -425,18 +425,68 @@ struct UaRule {
     name: &'static str,
     /// Application family.
     family: ClientFamily,
-    /// The prefixes this product sends, lowercased.
+    /// The prefixes this product sends, lowercased and boundary-qualified.
     prefixes: &'static [&'static str],
+    /// Complete agent strings this product sends, lowercased.
+    ///
+    /// Kept separate from prefixes so a canonical bare name such as `magpie`
+    /// does not also match an unrelated `magpie-something` product.
+    exact: &'static [&'static str],
     /// What the rule rests on.
     provenance: RuleProvenance,
 }
 
-/// Every registered `User-Agent` prefix rule.
+/// Every registered `User-Agent` rule.
 ///
 /// Ordered most specific first, because a prefix list is scanned in order and
 /// `python-requests` must not shadow a product that embeds it.
 static UA_RULES: &[UaRule] = &[
     // -- Agents whose own agent string is documented or observed -------------
+    UaRule {
+        id: "gemini",
+        name: "Gemini CLI",
+        family: ClientFamily::Cli,
+        // Gemini CLI v0.66.0 contentGenerator: entrypoint is part of the UA.
+        prefixes: &[
+            "geminicli/",
+            "geminicli-tui/",
+            "geminicli-cli-command/",
+            "geminicli-acp/",
+        ],
+        exact: &[],
+        provenance: RuleProvenance::Documented,
+    },
+    UaRule {
+        id: "codex_desktop",
+        name: "Codex Desktop",
+        family: ClientFamily::Desktop,
+        // Both forms are observed: Codex's normalized desktop UA on Windows
+        // uses underscores, while the desktop shell also emits the conventional
+        // `Codex Desktop/<version>` form. Both include the product boundary so
+        // similarly-prefixed names do not match.
+        prefixes: &["codex_desktop_", "codex desktop/"],
+        exact: &[],
+        provenance: RuleProvenance::Observed,
+    },
+    UaRule {
+        id: "pi-desktop",
+        name: "PI-Desktop",
+        family: ClientFamily::Desktop,
+        // Reported by PI-Desktop and pinned by Magpie's client catalogue. Keep
+        // this ahead of Pi even though both currently have explicit boundaries.
+        prefixes: &["pi-desktop/"],
+        exact: &["pi-desktop"],
+        provenance: RuleProvenance::Observed,
+    },
+    UaRule {
+        id: "kimi-code-desktop",
+        name: "Kimi Code Desktop",
+        family: ClientFamily::Desktop,
+        // Observed from the desktop app's own configured client name.
+        prefixes: &["kimi-code-desktop/"],
+        exact: &["kimi-code-desktop"],
+        provenance: RuleProvenance::Observed,
+    },
     UaRule {
         id: "claude_code",
         name: "Claude Code",
@@ -447,6 +497,7 @@ static UA_RULES: &[UaRule] = &[
         // Both are needed: matching only the first misses the second, and
         // matching only the second misses ordinary traffic.
         prefixes: &["claude-cli/", "claude-code/"],
+        exact: &[],
         provenance: RuleProvenance::Observed,
     },
     UaRule {
@@ -458,6 +509,7 @@ static UA_RULES: &[UaRule] = &[
         // Only the leading `codex_cli_rs/<version>` is stable across releases;
         // the OS and terminal tail changes per machine and per shell.
         prefixes: &["codex_cli_rs/", "codex-cli/", "codex/"],
+        exact: &[],
         provenance: RuleProvenance::Observed,
     },
     UaRule {
@@ -466,6 +518,7 @@ static UA_RULES: &[UaRule] = &[
         family: ClientFamily::Cli,
         // Verified: OpenCode builds `opencode/<channel>/<version>/<name>`.
         prefixes: &["opencode/"],
+        exact: &[],
         provenance: RuleProvenance::Observed,
     },
     UaRule {
@@ -473,15 +526,40 @@ static UA_RULES: &[UaRule] = &[
         name: "Aider",
         family: ClientFamily::Cli,
         prefixes: &["aider/"],
+        exact: &[],
         // Aider's documented UA prefix.
         provenance: RuleProvenance::Documented,
+    },
+    UaRule {
+        id: "pi",
+        name: "Pi",
+        family: ClientFamily::Cli,
+        // Pi's engine identifies itself as `pi (<platform>; <arch>)`, while
+        // Pi bridges use the observed `pi-` prefix. PI-Desktop is deliberately
+        // above this broader product prefix. Raft embeds this same engine, so
+        // those requests remain Pi's; there is no Raft UA rule in this table.
+        prefixes: &["pi (", "pi-"],
+        exact: &["pi"],
+        provenance: RuleProvenance::Observed,
+    },
+    UaRule {
+        id: "magpie",
+        name: "magpie",
+        family: ClientFamily::Desktop,
+        // Magpie's catalogue only establishes the canonical bare name. Its
+        // distinct internal `magpie-router/…` etc. identities must not collapse
+        // into this client, and no speculative version prefix is added here.
+        prefixes: &[],
+        exact: &["magpie"],
+        provenance: RuleProvenance::Observed,
     },
     // -- SDKs ----------------------------------------------------------------
     UaRule {
         id: "openai_sdk",
         name: "OpenAI SDK",
         family: ClientFamily::Sdk,
-        prefixes: &["openai-python/", "openai-node/", "OpenAI/Python"],
+        prefixes: &["openai-python/", "openai-node/", "openai/python"],
+        exact: &[],
         provenance: RuleProvenance::Documented,
     },
     UaRule {
@@ -489,6 +567,7 @@ static UA_RULES: &[UaRule] = &[
         name: "Anthropic SDK",
         family: ClientFamily::Sdk,
         prefixes: &["anthropic-sdk-python/", "anthropic-sdk-typescript/"],
+        exact: &[],
         provenance: RuleProvenance::Documented,
     },
     // -- Generic runtimes ----------------------------------------------------
@@ -500,6 +579,7 @@ static UA_RULES: &[UaRule] = &[
         name: "curl",
         family: ClientFamily::Http,
         prefixes: &["curl/"],
+        exact: &["curl"],
         provenance: RuleProvenance::Documented,
     },
     UaRule {
@@ -507,6 +587,7 @@ static UA_RULES: &[UaRule] = &[
         name: "Python requests/httpx",
         family: ClientFamily::Http,
         prefixes: &["python-requests/", "python-httpx/", "httpx/"],
+        exact: &[],
         provenance: RuleProvenance::Documented,
     },
     UaRule {
@@ -514,6 +595,7 @@ static UA_RULES: &[UaRule] = &[
         name: "Node fetch/undici",
         family: ClientFamily::Http,
         prefixes: &["node-fetch/", "undici/", "node/"],
+        exact: &[],
         provenance: RuleProvenance::Documented,
     },
     UaRule {
@@ -521,6 +603,7 @@ static UA_RULES: &[UaRule] = &[
         name: "Go http client",
         family: ClientFamily::Http,
         prefixes: &["go-http-client/"],
+        exact: &[],
         provenance: RuleProvenance::Documented,
     },
     UaRule {
@@ -528,6 +611,7 @@ static UA_RULES: &[UaRule] = &[
         name: "Python urllib",
         family: ClientFamily::Http,
         prefixes: &["python-urllib/"],
+        exact: &[],
         provenance: RuleProvenance::Documented,
     },
     UaRule {
@@ -535,6 +619,7 @@ static UA_RULES: &[UaRule] = &[
         name: "OkHttp",
         family: ClientFamily::Http,
         prefixes: &["okhttp/", "ktor/", "axios/"],
+        exact: &[],
         provenance: RuleProvenance::Documented,
     },
     UaRule {
@@ -542,21 +627,37 @@ static UA_RULES: &[UaRule] = &[
         name: "Rust reqwest",
         family: ClientFamily::Http,
         prefixes: &["reqwest/"],
+        exact: &[],
         provenance: RuleProvenance::Documented,
     },
 ];
 
-/// The `x-zroutery-client` values Zroutery recognises.
+/// Registered clients that deliberately have no `User-Agent` rule.
 ///
-/// Only values already in the rule table count as a *known* client. An
+/// Raft runs Pi's engine and its requests therefore carry Pi's identity. Raft
+/// can still be named by a credential or `x-zroutery-client`, but inventing a
+/// UA prefix for it would reclassify indistinguishable Pi traffic.
+static NON_UA_CLIENTS: &[(&str, &str, ClientFamily)] = &[("raft", "Raft", ClientFamily::Desktop)];
+
+/// The registered client metadata for an id, whether or not it has a UA rule.
+///
+/// Only values already in these tables count as a *known* client. An
 /// unrecognised value is still a declaration the caller made about itself, so it
 /// is kept — but at [`Confidence::Weak`], and only after the stronger rules have
 /// had their turn. A header is caller-controlled, so a value that happens to
 /// read `claude_code` proves nothing either; what the table adds is that Zroutery
 /// at least knows the product.
-fn is_registered_client_id(id: &ClientId) -> bool {
-    UA_RULES.iter().any(|rule| rule.id == id.as_str())
-        || matches!(id.as_str(), "claude_code" | "codex" | "opencode")
+fn registered_client(id: &ClientId) -> Option<(&'static str, &'static str, ClientFamily)> {
+    UA_RULES
+        .iter()
+        .find(|rule| rule.id == id.as_str())
+        .map(|rule| (rule.id, rule.name, rule.family))
+        .or_else(|| {
+            NON_UA_CLIENTS
+                .iter()
+                .copied()
+                .find(|(known_id, _, _)| *known_id == id.as_str())
+        })
 }
 
 /// The header Codex CLI sends, which only it sends.
@@ -606,6 +707,15 @@ pub fn identify(headers: &HeaderMap, binding: Option<&CredentialBinding>) -> Cli
     // 1. A validated named credential. Established by authentication, so it
     //    outranks anything a header can claim.
     if let Some(binding) = binding {
+        if let Some((id, name, family)) = registered_client(&binding.client_id) {
+            return ClientFingerprint::known(
+                id,
+                name,
+                family,
+                AttributionSource::CredentialBinding,
+                Confidence::Strong,
+            );
+        }
         return ClientFingerprint {
             client_id: binding.client_id.clone(),
             client_name: binding.client_id.as_str().to_string(),
@@ -622,11 +732,11 @@ pub fn identify(headers: &HeaderMap, binding: Option<&CredentialBinding>) -> Cli
     let declared = header_text(headers, "x-zroutery-client")
         .map(ClientId::sanitised)
         .filter(|id| !id.is_unknown());
-    if let Some(id) = declared.clone().filter(is_registered_client_id) {
+    if let Some((id, name, family)) = declared.as_ref().and_then(registered_client) {
         return ClientFingerprint::known(
-            id.as_str(),
-            id.as_str(),
-            family_for(&id),
+            id,
+            name,
+            family,
             AttributionSource::ExplicitHeader,
             Confidence::Probable,
         );
@@ -661,13 +771,15 @@ pub fn identify(headers: &HeaderMap, binding: Option<&CredentialBinding>) -> Cli
         );
     }
 
-    // 4. An exact User-Agent prefix rule, most specific first.
+    // 4. An exact User-Agent prefix/canonical-name rule, most specific first.
     if let Some(agent) = header_text(headers, header::USER_AGENT.as_str()) {
         let agent = agent.trim();
         if !agent.is_empty() {
             let lowered = agent.to_ascii_lowercase();
             for rule in UA_RULES {
-                if !rule.prefixes.iter().any(|p| lowered.starts_with(p)) {
+                if !rule.prefixes.iter().any(|p| lowered.starts_with(p))
+                    && !rule.exact.contains(&lowered.as_str())
+                {
                     continue;
                 }
                 // A rule that only names a library never claims to have
@@ -715,22 +827,17 @@ pub fn identify(headers: &HeaderMap, binding: Option<&CredentialBinding>) -> Cli
 
 /// The family Zroutery already knows for a canonical id.
 fn family_for(id: &ClientId) -> ClientFamily {
-    for rule in UA_RULES {
-        if rule.id == id.as_str() {
-            return rule.family;
-        }
-    }
-    match id.as_str() {
-        "claude_code" | "codex" | "opencode" | "aider" => ClientFamily::Cli,
-        _ => ClientFamily::Unknown,
-    }
+    registered_client(id)
+        .map(|(_, _, family)| family)
+        .unwrap_or(ClientFamily::Unknown)
 }
 
-/// Every client id Zroutery ships a rule for, with its provenance.
+/// Every User-Agent client rule Zroutery ships, with its provenance.
 ///
 /// The single source for a diagnostics view, so "which clients can we
 /// actually recognise, and on what basis" has one answer rather than a second
-/// list that can fall behind [`UA_RULES`].
+/// list that can fall behind [`UA_RULES`]. Explicit-only identities such as
+/// Raft are intentionally absent because they have no UA evidence to report.
 pub fn registered_rules() -> Vec<(&'static str, &'static str, ClientFamily, RuleProvenance)> {
     UA_RULES
         .iter()

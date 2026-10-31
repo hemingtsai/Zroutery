@@ -365,6 +365,94 @@ fn the_verified_agent_fingerprints_are_recognised() {
 }
 
 #[test]
+fn codex_desktop_observed_ua_has_its_own_stable_desktop_identity() {
+    for agent in [
+        "codex_desktop_0.166.0-alpha.5.1_windows_10.0.26200_x86_64_unknown",
+        "Codex Desktop/0.162.3 (Windows 10.0.26100; x86_64) unknown",
+    ] {
+        let fingerprint = identify(&ua(agent), None);
+        assert_eq!(fingerprint.client_id.as_str(), "codex_desktop", "{agent}");
+        assert_eq!(fingerprint.client_name, "Codex Desktop", "{agent}");
+        assert_eq!(fingerprint.family, ClientFamily::Desktop, "{agent}");
+        assert_eq!(fingerprint.source, AttributionSource::UserAgent, "{agent}");
+        assert_eq!(fingerprint.confidence, Confidence::Probable, "{agent}");
+    }
+}
+
+#[test]
+fn desktop_rules_require_product_boundaries_and_beat_broader_engines() {
+    let pi_desktop = identify(&ua("PI-Desktop/0.1.0"), None);
+    assert_eq!(pi_desktop.client_id.as_str(), "pi-desktop");
+    assert_eq!(pi_desktop.client_name, "PI-Desktop");
+    assert_eq!(pi_desktop.family, ClientFamily::Desktop);
+
+    for agent in ["pi (darwin 25.6.0; arm64)", "pi-bridge/1.0"] {
+        let pi = identify(&ua(agent), None);
+        assert_eq!(pi.client_id.as_str(), "pi", "{agent}");
+        assert_eq!(pi.client_name, "Pi", "{agent}");
+        assert_eq!(pi.family, ClientFamily::Cli, "{agent}");
+    }
+
+    let kimi = identify(&ua("kimi-code-desktop/1.2.1"), None);
+    assert_eq!(kimi.client_id.as_str(), "kimi-code-desktop");
+    assert_eq!(kimi.client_name, "Kimi Code Desktop");
+    assert_eq!(kimi.family, ClientFamily::Desktop);
+
+    for (agent, wrongly_claimed) in [
+        ("codex_desktopish_0.166.0", "codex_desktop"),
+        ("codex desktopish/0.166.0", "codex_desktop"),
+        ("pi-desktopish/0.1.0", "pi-desktop"),
+        ("kimi-code-desktopish/1.2.1", "kimi-code-desktop"),
+        ("acme/1.0 (pi-desktop/0.1.0)", "pi-desktop"),
+        ("magpie-router/1", "magpie"),
+    ] {
+        assert_ne!(
+            identify(&ua(agent), None).client_id.as_str(),
+            wrongly_claimed,
+            "{agent} crosses a product boundary or only embeds the name"
+        );
+    }
+}
+
+#[test]
+fn registered_explicit_and_credential_ids_use_canonical_readable_names() {
+    let declared = identify(&headers(&[("x-zroutery-client", "codex_desktop")]), None);
+    assert_eq!(declared.client_id.as_str(), "codex_desktop");
+    assert_eq!(declared.client_name, "Codex Desktop");
+    assert_eq!(declared.family, ClientFamily::Desktop);
+    assert_eq!(declared.source, AttributionSource::ExplicitHeader);
+
+    let binding = CredentialBinding {
+        credential_id: "raft-key".into(),
+        client_id: ClientId::trusted("raft"),
+    };
+    let bound = identify(&HeaderMap::new(), Some(&binding));
+    assert_eq!(bound.client_id.as_str(), "raft");
+    assert_eq!(bound.client_name, "Raft");
+    assert_eq!(bound.family, ClientFamily::Desktop);
+    assert_eq!(bound.source, AttributionSource::CredentialBinding);
+    assert_eq!(bound.confidence, Confidence::Strong);
+}
+
+#[test]
+fn raft_has_no_fabricated_user_agent_and_pi_engine_traffic_stays_pi() {
+    let pi = identify(&ua("pi (darwin 25.6.0; arm64)"), None);
+    assert_eq!(pi.client_id.as_str(), "pi");
+    assert_ne!(pi.client_id.as_str(), "raft");
+
+    let claimed = identify(&ua("raft/1.0"), None);
+    assert_ne!(claimed.client_id.as_str(), "raft");
+    assert_eq!(claimed.confidence, Confidence::Weak);
+
+    assert!(
+        zroutery_core::client::registered_rules()
+            .iter()
+            .all(|(id, _, _, _)| *id != "raft"),
+        "Raft is explicit/credential-only because its requests use Pi's UA"
+    );
+}
+
+#[test]
 fn versions_do_not_create_new_clients() {
     // The same product across releases must land in one bucket, or a
     // per-client table becomes a per-version table.
@@ -1081,6 +1169,58 @@ fn a_legacy_record_without_a_client_loads_as_unknown() {
     assert_eq!(summary.per_client.len(), 1);
     assert_eq!(summary.per_client[0].client_id, ClientId::UNKNOWN);
     assert_eq!(summary.attribution.unknown, 1);
+}
+
+#[test]
+fn a_historical_unknown_desktop_record_round_trips_without_reclassification() {
+    let legacy_id = "codex_desktop_0.166.0-alpha.5.1_windows_10.0.26200_x86_64_unknow";
+    let historical_client = serde_json::json!({
+        "client_id": legacy_id,
+        "client_name": legacy_id,
+        "family": "unknown",
+        "source": "runtime_family",
+        "confidence": "weak"
+    });
+    let historical = serde_json::json!({
+        "id": "req_codex_desktop_before_b3",
+        "at": "2026-10-30T00:00:00Z",
+        "ingress": "open_a_i_responses",
+        "kind": "main",
+        "requested_model": "gpt-5",
+        "resolved_model": "gpt-5",
+        "provider_name": "OpenAI",
+        "stream": true,
+        "status": 200,
+        "ok": true,
+        "error": null,
+        "latency_ms": 10,
+        "ttft_ms": 2,
+        "usage": {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_read_tokens": 0,
+            "cache_write_tokens": 0,
+            "reasoning_tokens": 0
+        },
+        "cost": null,
+        "attempts": 1,
+        "routing_decision": null,
+        "client": historical_client
+    });
+
+    let record: zroutery_core::stats::RequestRecord =
+        serde_json::from_value(historical).expect("historical request record loads");
+    assert_eq!(record.client.client_id.as_str(), legacy_id);
+    assert_eq!(record.client.client_name, legacy_id);
+    assert_eq!(record.client.family, ClientFamily::Unknown);
+    assert_eq!(record.client.source, AttributionSource::RuntimeFamily);
+    assert_eq!(record.client.confidence, Confidence::Weak);
+
+    let round_tripped = serde_json::to_value(&record).expect("historical request serialises");
+    assert_eq!(
+        round_tripped["client"], historical_client,
+        "serde preserves stored request identity; only new requests run UA detection"
+    );
 }
 
 #[test]
