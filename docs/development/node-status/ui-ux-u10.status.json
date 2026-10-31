@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "node_id": "UI-UX-U10",
+  "display_name": "Toast dedup",
+  "status": "DONE",
+  "implementation_state": "ToastProvider deduplicates by kind:message through ui/src/toastDedup.ts, a pure injected-clock helper (82 lines) with five vitest cases on its own map; same-text toasts reuse the live id and restart their timer instead of stacking, and the notify caller signature is unchanged. Reuse also moves the refreshed toast to the tail of both the timer map and the display array, preserving the eviction/display pairing invariant the subagent found while implementing.",
+  "dependencies": [
+    "UI"
+  ],
+  "dependents": [],
+  "required_gates": [
+    "Callers unchanged (notify signature intact)",
+    "pnpm --dir ui build (tsc)",
+    "pnpm --dir ui test (vitest)",
+    "mock 实操作验证",
+    "真机只读目视"
+  ],
+  "blocked_by": [],
+  "unblock_condition": "Same kind+message toast reuses the active id (timer restarts) instead of stacking; verified by a focused unit test on the dedup helper.",
+  "evidence": [
+    "E-180"
+  ],
+  "source_references": [
+    "ui/src/components.tsx",
+    "docs/development/cc-switch-design-notes.md"
+  ],
+  "notes": [
+    "Design source: cc-switch lib/toast.ts 53-line dedup layer (docs/development/cc-switch-design-notes.md §3).",
+    "The subagent reported two pre-existing quirks and deliberately left them: (1) eviction clears timers by Map insertion order while the display trims by array slice(-3) — the two orders only agree because nothing reorders; (2) a toast trimmed from the display keeps its timer until the next notify evicts it (harmless: the expiry callback is an idempotent no-op)."
+  ]
+}

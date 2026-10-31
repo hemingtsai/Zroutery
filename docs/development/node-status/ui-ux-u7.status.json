@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "node_id": "UI-UX-U7",
+  "display_name": "Chart hover cards",
+  "status": "DONE",
+  "implementation_state": "Chart hover cards replace the SVG native title on heatmap, bars and line: a single fixed-position portal card (pointer-events none, aria-hidden) showing day plus both metric rows with the active metric emphasized; edge flipping on both axes; stable across the 2s poll.",
+  "dependencies": [
+    "UI-NEW-TRACKS"
+  ],
+  "dependents": [],
+  "required_gates": [
+    "pnpm --dir ui build (tsc)",
+    "pnpm --dir ui test (vitest)",
+    "mock 实操作验证",
+    "真机只读目视"
+  ],
+  "blocked_by": [],
+  "unblock_condition": "Heatmap and bar cells show a styled hover card (day, metric, value) instead of the native title attribute.",
+  "evidence": [
+    "E-182"
+  ],
+  "source_references": [
+    "ui/src/pages/UsageCharts.tsx",
+    "docs/development/ui-optimization-plan.md",
+    "docs/development/cc-switch-design-notes.md"
+  ],
+  "notes": [
+    "Root cause found while implementing: .tab-panel page-in animation transforms hijack position:fixed — the card renders through a body portal per the fixed-layer convention now written into ui-optimization-plan.md.",
+    "Keyboard: cells stay unfocused by design (371 read-only rects would drown the Tab order); pointerless access should come from a data-table form, not tab stops.",
+    "Follow-up queued: bars over 30-day windows have a 1px hover target (pre-existing)."
+  ]
+}

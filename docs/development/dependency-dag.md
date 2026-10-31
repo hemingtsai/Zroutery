@@ -94,6 +94,18 @@ failed node. Historical tags are not graph edges.
 | `ORCH-ROADMAP` | `DONE` | `ORCH-INFRA` |
 | `ORCH-VALIDATION` | `DONE` | `ORCH-STATUS`, `ORCH-EVIDENCE`, `ORCH-REGRESSION`, `ORCH-ARCHITECTURE`, `ORCH-DAG`, `ORCH-ROADMAP` |
 | `ORCH-DOCS` | `DONE` | `ORCH-VALIDATION` |
+| `UI-UX-U10` | `DONE` | `UI` |
+| `UI-UX-U3` | `DONE` | `UI-NEW-TRACKS` |
+| `UI-UX-U6` | `QUEUED` | `UI-NEW-TRACKS` |
+| `UI-UX-U7` | `DONE` | `UI-NEW-TRACKS` |
+| `UI-UX-U12` | `DONE` | `UI-NEW-TRACKS` |
+| `UI-UX-U14` | `DONE` | `UI-NEW-TRACKS` |
+| `UI-UX-U13` | `DONE` | `UI-NEW-TRACKS` |
+| `UI-UX-M1` | `DONE` | `UI-LAYOUT` |
+| `UI-UX-M2` | `DONE` | `UI-UX-M1`, `UI-UX-U12` |
+| `UI-UX-M3` | `RUNNING` | `UI-UX-M1` |
+| `UI-UX-P2` | `DONE` | `UI-NEW-TRACKS`, `TEST-UI-BUILD` |
+| `BACKEND-OPTIMIZATION` | `PARTIAL` | none |
 
 The JSON `dependents` arrays are generated as the exact reverse of this
 inventory. The validator checks that symmetry, known IDs, legal statuses,
@@ -170,6 +182,34 @@ I3 ─────────────────────────�
 I4 (depends on I2 + I3) ──────┘
 UI ─> UI-LAYOUT
 ```
+
+## Frontend queue (UI-UX)
+
+```text
+UI ─────────────────> UI-UX-U10 (toast dedup)              DONE
+UI-NEW-TRACKS ──────┬─> UI-UX-U3 (usage KPI row)           DONE
+                    ├─> UI-UX-U6 (copy and empty states)
+                    ├─> UI-UX-U7 (chart hover cards)
+                    ├─> UI-UX-U12 (usage split: monitor vs ledger)          DONE
+                    ├─> UI-UX-U14 (stream facet filters)
+                    ├─> UI-UX-U13 (copy slim-down)
+                    └─> UI-UX-P2 (perf baseline, also behind TEST-UI-BUILD)
+UI-LAYOUT ─> UI-UX-M1 (simple and geek modes)
+                 └─> UI-UX-M2 (simple home workbench)
+                 └─> UI-UX-M3 (skins: md3 / fluent)
+```
+
+These seven nodes carry the frontend queue from
+[`ui-optimization-plan.md`](ui-optimization-plan.md) (batches U, M, P) and its
+design inputs from [`cc-switch-design-notes.md`](cc-switch-design-notes.md).
+Their edges are data dependencies only — the **execution order** (U10 → U3 →
+U7 → U12 → U6 → P2 baseline, M1 last because it restyles every surface) is
+maintained by the frontend owner and is deliberately not encoded as graph
+edges, so a reordering never has to rewrite the graph. `UI-UX-M1` depends on `UI-LAYOUT` for a real
+reason: mode switching changes the sidebar inventory and folds forms, and the
+layout harness must describe those surfaces before the feature can pass.
+Backend-gated items (batch P1: the P0 fixes' UI faces) are not nodes here yet —
+they join when the backend P0 work has DAG nodes to depend on.
 
 `I2` and `I3` have no Core implementation dependency because their local
 state-machine and adapter seams are independently testable. `I4` cannot be

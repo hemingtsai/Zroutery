@@ -18,6 +18,9 @@ design records live here, so a commit message never has to explain the roadmap
 
 | Record | Covers |
 |---|---|
+| [upgrade-contracts.md](upgrade-contracts.md) | Agreed upgrade implementation contracts: six task doors, versioned identities/rates/settlements/history/catalogues, decision authority, compatibility and failure recovery. |
+| [upgrade-execution.md](upgrade-execution.md) | Current upgrade baseline and bounded delivery/verification evidence; code, local validation, submission and release are separate states. |
+| [backend-optimization-execution.md](backend-optimization-execution.md) | Backend optimization implementation, API handoff and scoped verification for tray, client attribution, usage, export and recoverable configuration publication. |
 | [newapi-adapter.md](newapi-adapter.md) | The NewAPI account adapter: panel endpoints and auth, quota-unit semantics, what "quota exhausted" means there, test approach, and the application-side wiring that is still missing. |
 | [opencode-zen.md](opencode-zen.md) | The two OpenCode Zen upstream providers (anonymous free tier and Console OAuth), the field-verified free-tier gate, the shared shaping identity, non-streaming collapse, discovery, and what is deliberately excluded. |
 

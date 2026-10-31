@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "node_id": "UI-UX-U13",
+  "display_name": "Copy slim-down: human wording across the dictionary",
+  "status": "DONE",
+  "implementation_state": "Both batches landed: 116 keys rewritten across account/accounts/providers/accounting/models/routing/ml/activity/settings/cutover/takeover/rectifier/cc/client_setup/binding/vision prefixes. The 三律 hold — one question per hint, consequences not mechanisms, most fields carry no hint. Internal identifiers and vendor names are out of user-facing strings; 侧查询 unified to 自动审查; reviewer fixes on top (strategy_order_note zh-TW, task.providers 供應商).",
+  "dependencies": [
+    "UI-NEW-TRACKS"
+  ],
+  "dependents": [],
+  "required_gates": [
+    "pnpm --dir ui build (tsc)",
+    "pnpm --dir ui test (vitest)",
+    "before/after table reviewed by the frontend owner",
+    "真机只读目视"
+  ],
+  "blocked_by": [],
+  "unblock_condition": "Hint paragraphs reduced to one-line consequence wording (or removed) across en/zh/zh-TW with keys unchanged; internal identifiers (NoDecisionTimeInput etc.) out of user-facing strings; the three dictionaries stay key-set identical.",
+  "evidence": [
+    "E-183"
+  ],
+  "source_references": [
+    "ui/src/i18n.tsx",
+    "ui/src/i18n.zhTW.ts",
+    "docs/development/ui-optimization-plan.md"
+  ],
+  "notes": [
+    "Deliberately kept: balance_hint.custom JSON pointers (format constraint — deleting them makes the field unfillable), per-probe path hints, activity.health_hint (explains cross-pool consistency), KPI help and drag hints (hover-slot copy).",
+    "Follow-up for the backend owner: models.tier_decision_hint wording now says 加入自动审查的模型池 — if the pool UI moves, the copy moves with it."
+  ]
+}

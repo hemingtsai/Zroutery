@@ -7,7 +7,9 @@
   "dependencies": [
     "UI"
   ],
-  "dependents": [],
+  "dependents": [
+    "UI-UX-M1"
+  ],
   "required_gates": [
     "Pure self-test",
     "Real browser execution",

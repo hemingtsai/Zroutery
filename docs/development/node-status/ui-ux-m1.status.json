@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "node_id": "UI-UX-M1",
+  "display_name": "Simple and geek modes",
+  "status": "DONE",
+  "implementation_state": "Landed: mode.ts (localStorage zroutery-mode, default simple, SaveStatusContext-style context), nav filtered to 概览/用量与记录/设置 in simple with the sidebar mode segment, deep links to hidden pages fall back with a toast, one-time advanced-config toast (ml/budgets/classifier/quirks counted), provider drawer folds to facts/key/enable/remove, settings single tab + mode row + about section, zh 提供商→服务商 unified (68 strings), harness pins geek mode. Alt+1..N now follows the visible nav (was TASK_PAGES, pointed at hidden pages in simple).",
+  "dependencies": [
+    "UI-LAYOUT"
+  ],
+  "dependents": [
+    "UI-UX-M2",
+    "UI-UX-M3"
+  ],
+  "required_gates": [
+    "pnpm --dir ui build (tsc)",
+    "pnpm --dir ui test (vitest)",
+    "mock 实操作验证",
+    "真机只读目视"
+  ],
+  "blocked_by": [],
+  "unblock_condition": "Mode filters visibility only (behavior unchanged), stored like the theme; sidebar collapses to 首页/用量/设置; provider drawer folds to four sections; deep links to hidden pages fall back with a toast; settings carries the mode row and the about/whats-new section.",
+  "evidence": [
+    "E-187"
+  ],
+  "source_references": [
+    "ui/src/App.tsx",
+    "ui/src/navigation.ts",
+    "ui/src/pages/Providers.tsx",
+    "docs/development/ui-optimization-plan.md",
+    "docs/development/cc-switch-design-notes.md"
+  ],
+  "notes": [
+    "Modes filter visibility only — switch away and back restores every folded surface (browser-verified).",
+    "Reviewer follow-ups: zhTW task.catalogue 服務商→供應商 unification; ToastProvider lacks a neutral tone (deep-link notice uses ok).",
+    "M2 scope remains: home composition (ledger + pools + provider list), default standard tier for catalogue adds, budgets read-only strip, simple-mode harness surfaces."
+  ]
+}

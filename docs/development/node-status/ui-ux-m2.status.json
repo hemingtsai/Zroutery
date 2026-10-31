@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "node_id": "UI-UX-M2",
+  "display_name": "Simple-mode home workbench",
+  "status": "DONE",
+  "implementation_state": "Simple-mode Overview is a workbench: the route section swaps the readonly flow for the draggable RoutePool (reorder writes priorities via applyTierOrder), a read-only provider list (status dot, wallet-hold inline, balance, model count, 添加模型 CTA that switches to geek and navigates for providers without models), recent requests stay. Geek overview is diff-verified byte-identical. Zero new CSS — every element reuses existing vocabulary.",
+  "dependencies": [
+    "UI-UX-M1",
+    "UI-UX-U12"
+  ],
+  "dependents": [],
+  "required_gates": [
+    "pnpm --dir ui build (tsc)",
+    "pnpm --dir ui test (vitest)",
+    "mock 实操作验证",
+    "geek 路径 diff 等价"
+  ],
+  "blocked_by": [],
+  "unblock_condition": "Reopen if the pool drag, the provider list or the CTA breaks in either mode.",
+  "evidence": [
+    "E-190"
+  ],
+  "source_references": [
+    "ui/src/pages/Overview.tsx",
+    "ui/src/pages/Routing.tsx",
+    "docs/development/ui-optimization-plan.md"
+  ],
+  "notes": [
+    "RoutePool reuse drags the Routing chunk into the Overview lazy load (37KB/9KB gzip) — accepted reuse price.",
+    "Simple-mode harness surfaces remain undeclared (协作约定 3 follow-up).",
+    "Two honest-call decisions: classifier line hidden in simple (it is M1-defined advanced config); model-count CTA only for zero-model providers (a provider with models but all disabled needs 启用, not 添加)."
+  ]
+}

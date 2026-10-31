@@ -12,7 +12,15 @@
     "I3",
     "I4"
   ],
-  "dependents": [],
+  "dependents": [
+    "UI-UX-P2",
+    "UI-UX-U12",
+    "UI-UX-U13",
+    "UI-UX-U14",
+    "UI-UX-U3",
+    "UI-UX-U6",
+    "UI-UX-U7"
+  ],
   "required_gates": [
     "Backend lifecycle ownership",
     "Real account/NewAPI/migration/takeover surfaces",

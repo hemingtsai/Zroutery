@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "node_id": "BACKEND-OPTIMIZATION",
+  "display_name": "Backend optimization slice",
+  "status": "PARTIAL",
+  "implementation_state": "B3 desktop client attribution, B5 cache/cost history aggregates and indexed revision-bound pages, B6 streamed file export, B1 recoverable client-file transactions, B4 Gemini native ingress and composite takeover, T least-privilege tray window/commands and B7 native accent are implemented. Full workspace all-feature verification: 3238 passed, zero failed, 22 existing ignored; strict Clippy, Rust 1.90, no-default checks and UI contract build/tests pass. Frontend/native handoff remains open in backend-optimization-execution.md; master milestones remain open.",
+  "dependencies": [],
+  "dependents": [],
+  "required_gates": [
+    "Rust workspace all-target/all-feature check and clippy",
+    "Targeted accounting, transaction, attribution, Gemini and desktop tests",
+    "No-default-feature and Rust 1.90 locked checks",
+    "API fixture build/unit tests, command ACL and orchestration gates",
+    "Frontend panel/chart/export/Gemini handoff and native interaction acceptance"
+  ],
+  "blocked_by": [],
+  "unblock_condition": "Finish the documented frontend wiring and native tray/Gemini acceptance; retain honest partial status until those gates close.",
+  "evidence": ["E-192"],
+  "source_references": [
+    "docs/development/backend-optimization-plan.md",
+    "docs/development/backend-optimization-execution.md",
+    "crates/zroutery-core/src/client.rs",
+    "crates/zroutery-core/src/file_transaction.rs",
+    "crates/zroutery-core/src/stats.rs",
+    "crates/zroutery-core/src/runtime_store/history.rs",
+    "crates/zroutery-core/src/agent_takeover/gemini.rs",
+    "src-tauri/src/tray_panel.rs",
+    "src-tauri/src/tray_commands.rs",
+    "src-tauri/src/usage_export.rs",
+    "src-tauri/src/accent.rs"
+  ],
+  "notes": [
+    "Existing dirty upgrade work is preserved; no commit or public release was created.",
+    "B3 verified image is observed on authorized standby PID 46568; subsequent source changes are not assumed deployed.",
+    "Layout harness preserves two real 18px alignment failures for frontend ownership; a later concurrent-UI rebuild run timed out closing a drawer. Per-attempt model/day reconciliation remains master-plan work."
+  ]
+}

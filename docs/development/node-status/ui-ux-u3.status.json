@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "node_id": "UI-UX-U3",
+  "display_name": "Usage KPI row as chart control",
+  "status": "DONE",
+  "implementation_state": "Usage KPI row (请求数/成功率/缓存命中率/Token/预估花费) under a period-frame lede; request-count and Token cells drive the traffic chart (two-way with the in-chart segment, single state owner in Activity); success/hit/spend are deliberate readouts; hit rate = sum(per_model.cached_tokens)/sum(per_model.input_tokens) with ? = formula tooltip; denominator zero renders an em dash while zero hits with traffic render 0%.",
+  "dependencies": [
+    "UI-NEW-TRACKS"
+  ],
+  "dependents": [],
+  "required_gates": [
+    "pnpm --dir ui build (tsc)",
+    "pnpm --dir ui test (vitest)",
+    "mock 实操作验证",
+    "真机只读目视"
+  ],
+  "blocked_by": [],
+  "unblock_condition": "Five KPI figures render; clicking one switches the traffic chart metric; hit-rate tooltip states its formula; missing cache-write data renders N/A, not zero.",
+  "evidence": [
+    "E-181"
+  ],
+  "source_references": [
+    "ui/src/pages/Activity.tsx",
+    "ui/src/pages/UsageCharts.tsx",
+    "docs/development/ui-optimization-plan.md",
+    "docs/development/cc-switch-design-notes.md"
+  ],
+  "notes": [
+    "Design source: cc-switch UsageHero selected/onSelect (docs/development/cc-switch-design-notes.md §1), tightened by an honesty rule: the per-day ledger has no cost/cache series, so only requests/tokens became controllers.",
+    "Backend note: get_usage_days carrying cost/cache columns would let all five cells drive the chart — a [B] suggestion for the Rust owner."
+  ]
+}

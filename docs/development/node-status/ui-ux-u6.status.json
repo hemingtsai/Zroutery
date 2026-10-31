@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "node_id": "UI-UX-U6",
+  "display_name": "Copy and empty-state pass",
+  "status": "QUEUED",
+  "implementation_state": "Queued. Scope and design inputs live in docs/development/ui-optimization-plan.md; execution order is maintained by the frontend owner, not by graph edges — the edges here are data dependencies only.",
+  "dependencies": [
+    "UI-NEW-TRACKS"
+  ],
+  "dependents": [],
+  "required_gates": [
+    "pnpm --dir ui build (tsc)",
+    "pnpm --dir ui test (vitest)",
+    "mock 实操作验证",
+    "真机只读目视"
+  ],
+  "blocked_by": [],
+  "unblock_condition": "内部日志 empty state uses Empty; 持久结算 sentence rewritten; 8 次中断尝试待核对 carries an action or is gone; no raw identifiers in dictionary strings.",
+  "evidence": [],
+  "source_references": [
+    "ui/src/pages/Activity.tsx",
+    "ui/src/i18n.tsx",
+    "docs/development/ui-optimization-plan.md",
+    "docs/development/cc-switch-design-notes.md"
+  ],
+  "notes": [
+    "Includes the audit finding that NoDecisionTimeInput reached the dictionary (i18n.tsx)."
+  ]
+}

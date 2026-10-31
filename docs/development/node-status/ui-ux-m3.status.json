@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "node_id": "UI-UX-M3",
+  "display_name": "Skins: MD3 and Fluent on the token architecture",
+  "status": "DONE",
+  "implementation_state": "v2 complete after the dark-accent fix: dark skins invert the system accent (color-mix 45% white primary, 15% accent on-primary, 40% hover — the MD3 baseline tone inversion applied to AccentColor), light skins keep the raw AccentColor per OS-button behavior. Component-form matrix (md3 pill/tonal/state-layers/shape-scale, fluent acrylic/pivot/dual-ring/infobar) from the official-spec contract docs/development/skin-spec-md3-fluent.md. Contrast sweep across six accent colors all >= 4.5:1.",
+  "dependencies": [
+    "UI-UX-M1"
+  ],
+  "dependents": [],
+  "required_gates": [
+    "pnpm --dir ui build (tsc)",
+    "pnpm --dir ui test (vitest)",
+    "三 skin × 亮暗 全页截图对照",
+    "对比度记录（文本对 >=4.5:1）",
+    "mock 实操作验证",
+    "真机只读目视"
+  ],
+  "blocked_by": [],
+  "unblock_condition": "Settings 外观区 gains 皮肤 Select (persisted zroutery-skin); md3 and fluent token sheets for light+dark; component overrides limited to shape (radius/rotation) with --control-h kept at 30px across skins so the layout harness stays valid; text-bearing color pairs pass 4.5:1 in all six combinations; charts auto-tint via color-mix on --text (no new chart tokens).",
+  "evidence": [
+    "E-190",
+    "E-191",
+    "E-192"
+  ],
+  "source_references": [
+    "ui/src/styles.css",
+    "ui/src/mode.ts",
+    "ui/src/pages/Settings.tsx",
+    "docs/development/upgrade-master-plan.md"
+  ],
+  "notes": [
+    "INCIDENT: mid-task a Write call truncated styles.css to 316 lines; recovered in full from the ZCode session database readFileState snapshots and re-verified (brace balance, build, tests, per-batch markers, industrial pixel-identical). Reviewer independently confirmed all batch markers post-recovery.",
+    "Contrast: all hardcoded fallback pairs >= 4.5:1 (table in E-191); AccentColor itself is user-controlled — same caveat as OS-native buttons.",
+    "Follow-ups: Fluent light --line #E0E0E0 1.6:1 non-text contrast (design decision pending); popover menus not yet skinned (square corners); font-per-skin deferred to the font first-paint work.",
+    "Fluent dark --danger lightened to #E87F76 (industrial red on #272727 was 4.40:1).",
+    "v2 (official-spec rebuild): see docs/development/skin-spec-md3-fluent.md — the implementation contract. v1 kept only the skin.ts/select infrastructure.",
+    "Dark-accent fix (E-192) closed the user-reported glow: raw AccentColor on near-black surfaces glows — MD3 baseline dark inverts the tone (#6750A4 -> #D0BCFF), so the system accent gets the same 45%-white mix. The subagent also caught the reviewer spec error (60% mix was darker than 45%) and implemented the intent at 40%.",
+    "Remaining follow-ups unchanged: Fluent light line contrast decision, popover skinning, font-per-skin, simple-mode harness surfaces."
+  ]
+}

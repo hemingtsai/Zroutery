@@ -9,7 +9,8 @@
   ],
   "dependents": [
     "UI-LAYOUT",
-    "UI-NEW-TRACKS"
+    "UI-NEW-TRACKS",
+    "UI-UX-U10"
   ],
   "required_gates": [
     "Production UI build",

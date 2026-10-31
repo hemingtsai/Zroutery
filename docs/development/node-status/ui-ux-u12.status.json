@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "node_id": "UI-UX-U12",
+  "display_name": "Usage page: one ledger, two dimensions",
+  "status": "DONE",
+  "implementation_state": "Landed: one ledger, two dimensions. 请求与用量 tab = KPI + accounting meta line + trend + a single dimension table (按客户端|按模型 over the same summary) + the paged failure-filterable stream; a dimension-row click filters the stream (stacking with failedOnly, dismissible strip); health is an inline dot on model rows joined from snapshot.health; the durable-history, spend and model-health sections are gone; spend total exists only in the KPI; counters demoted off this page.",
+  "dependencies": [
+    "UI-NEW-TRACKS"
+  ],
+  "dependents": ["UI-UX-M2"],
+  "required_gates": [
+    "pnpm --dir ui build (tsc)",
+    "pnpm --dir ui test (vitest)",
+    "mock 实操作验证",
+    "真机只读目视"
+  ],
+  "blocked_by": [],
+  "unblock_condition": "Usage page renders KPI + trend + one dimension table (客户端/模型 switch, health dot on model rows, per-row clear) + the filterable paged stream; dimension-row click filters the stream; no spend figure appears twice with different calibers; 模型健康 and 持久结算 sections no longer exist; three-language keys; harness surfaces updated.",
+  "evidence": [
+    "E-184"
+  ],
+  "source_references": [
+    "ui/src/pages/Activity.tsx",
+    "docs/development/ui-optimization-plan.md"
+  ],
+  "notes": [
+    "resetHealth lost its UI entry with the health section (cooldowns auto-expire) — revisit only if a user asks for manual clearing.",
+    "RequestRecord.client is now declared in api.ts; the subagent implementation_state workaround (typed local reads) was superseded by the declaration.",
+    "Simple mode (UI-UX-M1) reuses this monitor page as its whole usage surface."
+  ]
+}

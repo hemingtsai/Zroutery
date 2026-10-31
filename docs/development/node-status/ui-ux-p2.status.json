@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "node_id": "UI-UX-P2",
+  "display_name": "Frontend performance baseline",
+  "status": "DONE",
+  "implementation_state": "Baseline recorded in docs/development/perf-baseline.md against the stress fixture (?stress=600: 600 models/500 records/30 accounts, default fixture unchanged). Headline numbers: 600-row scroll at 60.5fps meets the 55+ target; page-switch hot misses 16ms on takeover(40)/activity(82)/models(235-308); first-paint network 445KB with CJK font slices 262.7KB. Optimization ranking: models virtualization, activity poll/memo, font first-paint.",
+  "dependencies": [
+    "UI-NEW-TRACKS",
+    "TEST-UI-BUILD"
+  ],
+  "dependents": [],
+  "required_gates": [
+    "Baseline recorded before any optimization",
+    "pnpm --dir ui build (tsc)",
+    "pnpm --dir ui test (vitest)",
+    "mock 实操作验证",
+    "真机只读目视"
+  ],
+  "blocked_by": [],
+  "unblock_condition": "600 models / 500 activity records / 30 accounts at 820×560: bundle split, first paint, interaction latency, scroll framerate and transferred font bytes measured and written down; optimizations start only against this baseline.",
+  "evidence": [
+    "E-185"
+  ],
+  "source_references": [
+    "ui/src/pages/Models.tsx",
+    "ui/src/pages/Activity.tsx",
+    "docs/development/upgrade-master-plan.md"
+  ],
+  "notes": [
+    "Measurement constraints recorded in the report: window must be foreground (visibilityState=hidden stops rAF and FCP), production first-paint needs the Tauri window (dist preview stops at ErrorBoundary without the bridge).",
+    "Stress fixture stays behind the URL parameter by design; default fixture unchanged."
+  ]
+}

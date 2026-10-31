@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "node_id": "UI-UX-U14",
+  "display_name": "Request stream facet filters with counts",
+  "status": "DONE",
+  "implementation_state": "Stream toolbar gains a provider facet Select (options carry per-provider counts over the recent window) and a cascading model Select scoped to the chosen provider; facets stack with 仅失败, mutually exclude ledger-row filters (later writer owns the stream, argued in comments), and reset the page. Counts computed before the failure filter so comparisons stay stable.",
+  "dependencies": [
+    "UI-NEW-TRACKS"
+  ],
+  "dependents": [],
+  "required_gates": [
+    "pnpm --dir ui build (tsc)",
+    "pnpm --dir ui test (vitest)",
+    "mock 实操作验证",
+    "真机只读目视"
+  ],
+  "blocked_by": [],
+  "unblock_condition": "Stream toolbar gains a 供应商 facet Select (options carry counts, e.g. OpenCode · 3,398) and a dependent 模型 Select scoped to the chosen provider; facets stack with 仅失败 and ledger-row filters, resetting the page; counts computed client-side over the current window.",
+  "evidence": [
+    "E-186"
+  ],
+  "source_references": [
+    "ui/src/pages/Activity.tsx",
+    "docs/development/cc-switch-design-notes.md"
+  ],
+  "notes": [
+    "Radix Select + synthetic el.click() leaves an opacity:0 content node — automation artifact only.",
+    "Follow-up queued into M1: zh terminology fork 服务商(nav) vs 提供商(body, 10+ strings) — unify to 服务商, the owner's own usage."
+  ]
+}
