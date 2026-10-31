@@ -15,6 +15,7 @@ pub(super) struct Session {
     pub(super) refresh_cookie: Option<String>,
     pub(super) user_id: Option<String>,
     pub(super) username: Option<String>,
+    pub(super) group: Option<String>,
     pub(super) expires_at: Option<i64>,
 }
 

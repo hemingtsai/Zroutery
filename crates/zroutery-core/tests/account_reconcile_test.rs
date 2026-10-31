@@ -230,8 +230,9 @@ async fn a_failed_probe_replaces_the_previous_good_reading() {
     );
     assert_eq!(runtime.last_failure, Some(1_700_000_000));
     assert_eq!(
-        runtime.last_success, None,
-        "a failure must not claim a success timestamp for this attempt"
+        runtime.last_success,
+        Some(1_700_000_000),
+        "failure preserves the timestamp of the previous valid observation, not a new success"
     );
 }
 

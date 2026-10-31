@@ -14,8 +14,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::ir::Usage;
+pub mod effective;
+pub use effective::{resolve_rate, EffectiveRate, RateQuote, RateSource, RATE_SCHEMA_VERSION};
 
-/// Price of one model, per million tokens.
+/// A token tariff or a distinct per-execution tariff in the stated billing unit.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Pricing {
     /// Currency code as the provider bills it, e.g. `USD` or `CNY`.
@@ -28,10 +30,13 @@ pub struct Pricing {
     /// price when unset, which is the conservative direction.
     #[serde(default)]
     pub cache_read_per_mtok: Option<f64>,
-    /// Price per 1M tokens written to the prompt cache. Unset bills cache
-    /// writes at zero rather than inventing a write premium.
+    /// Price per 1M tokens written to the prompt cache. Unset uses the explicit
+    /// input-price fallback as an estimate, never as evidence of free writes.
     #[serde(default)]
     pub cache_write_per_mtok: Option<f64>,
+    /// A per-call tariff is not a token rate; present means charge per execution.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub per_request: Option<f64>,
 }
 
 impl Pricing {
@@ -42,6 +47,7 @@ impl Pricing {
             output_per_mtok,
             cache_read_per_mtok: None,
             cache_write_per_mtok: None,
+            per_request: None,
         }
     }
 
@@ -53,22 +59,24 @@ impl Pricing {
     /// Cache reads are billed at the cache read price and cache writes at the
     /// cache write price; nothing is billed twice. An unset cache read price
     /// falls back to the input price, which is the conservative direction, and
-    /// an unset cache write price bills writes at zero. Reasoning tokens are
+    /// an unset cache write price uses that same explicit fallback. Reasoning tokens are
     /// already part of the output count, so they are not added again.
     pub fn cost_of(&self, usage: &Usage) -> Cost {
         let per_token = |price: f64, tokens: u32| price * tokens as f64 / 1_000_000.0;
         let fresh_input = usage.fresh_input_tokens();
 
-        let amount = per_token(self.input_per_mtok, fresh_input)
-            + per_token(
-                self.cache_read_per_mtok.unwrap_or(self.input_per_mtok),
-                usage.cache_read_tokens,
-            )
-            + per_token(
-                self.cache_write_per_mtok.unwrap_or(0.0),
-                usage.cache_write_tokens,
-            )
-            + per_token(self.output_per_mtok, usage.output_tokens);
+        let amount = self.per_request.unwrap_or_else(|| {
+            per_token(self.input_per_mtok, fresh_input)
+                + per_token(
+                    self.cache_read_per_mtok.unwrap_or(self.input_per_mtok),
+                    usage.cache_read_tokens,
+                )
+                + per_token(
+                    self.cache_write_per_mtok.unwrap_or(self.input_per_mtok),
+                    usage.cache_write_tokens,
+                )
+                + per_token(self.output_per_mtok, usage.output_tokens)
+        });
 
         Cost {
             currency: self.currency.clone(),
@@ -80,7 +88,9 @@ impl Pricing {
     pub fn estimate_input(&self, input_tokens: u32) -> Cost {
         Cost {
             currency: self.currency.clone(),
-            amount: self.input_per_mtok * input_tokens as f64 / 1_000_000.0,
+            amount: self
+                .per_request
+                .unwrap_or(self.input_per_mtok * input_tokens as f64 / 1_000_000.0),
         }
     }
 
@@ -95,6 +105,7 @@ impl Pricing {
             ("output", Some(self.output_per_mtok)),
             ("cache read", self.cache_read_per_mtok),
             ("cache write", self.cache_write_per_mtok),
+            ("per request", self.per_request),
         ] {
             if let Some(v) = value {
                 if v < 0.0 || !v.is_finite() {
@@ -519,6 +530,36 @@ mod tests {
             ..Usage::default()
         };
         assert!((p.cost_of(&u).amount - 3.75).abs() < 1e-9);
+    }
+
+    #[test]
+    fn omitted_cache_write_is_input_fallback_not_free() {
+        let p = Pricing::new("USD", 3.0, 15.0);
+        let u = Usage {
+            input_tokens: 1_000_000,
+            cache_write_tokens: 1_000_000,
+            ..Default::default()
+        };
+        assert_eq!(p.cost_of(&u).amount, 3.0);
+    }
+
+    #[test]
+    fn per_request_tariff_is_not_multiplied_by_token_counts() {
+        let mut p = Pricing::new("CNY", 3.0, 15.0);
+        p.per_request = Some(0.12);
+        let u = Usage {
+            input_tokens: 1_000_000,
+            output_tokens: 1_000_000,
+            ..Default::default()
+        };
+        assert_eq!(
+            p.cost_of(&u),
+            Cost {
+                currency: "CNY".into(),
+                amount: 0.12
+            }
+        );
+        assert_eq!(p.estimate_input(0).amount, 0.12);
     }
 
     #[test]

@@ -67,7 +67,10 @@ impl AppState {
                 .map(|provider| provider.id.clone()),
         );
         let registry = Arc::new(Registry::new(Arc::new(config)));
-        *crate::sync::write(&self.registry) = registry;
+        let mut current = crate::sync::write(&self.registry);
+        #[cfg(feature = "account")]
+        self.accounts.sync_declarations(&registry.snapshot());
+        *current = registry;
     }
 
     pub fn registry(&self) -> Arc<Registry> {

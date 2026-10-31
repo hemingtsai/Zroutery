@@ -23,6 +23,7 @@
 
 pub use crate::protocol::ProviderQuirks;
 mod app;
+mod binding;
 #[cfg(feature = "ml")]
 mod ml;
 mod model;
@@ -38,6 +39,10 @@ mod validate;
 mod tests;
 
 pub use app::{AppConfig, BalanceRefreshConfig, NotificationConfig, WindowBehavior};
+pub use binding::{
+    panel_root as account_panel_root, AccountBinding, AccountProbeKind, BindingVerification,
+    RemoteIdentity, BINDING_SCHEMA_VERSION,
+};
 #[cfg(feature = "ml")]
 pub use ml::MlRoutingConfig;
 pub use model::{

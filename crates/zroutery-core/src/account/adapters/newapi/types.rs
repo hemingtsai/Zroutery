@@ -32,6 +32,7 @@ pub struct AuthenticatedSession {
     pub user_id: Option<String>,
     /// Login name the instance reports for that credential.
     pub username: Option<String>,
+    pub group: Option<String>,
     pub authenticated_at: i64,
     /// Expiry of the access token, when the instance reports one. Personal
     /// access tokens do not expire.

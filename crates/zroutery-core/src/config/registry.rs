@@ -108,7 +108,7 @@ pub struct ProviderConfig {
 /// `AppConfig` is technically possible and wrong: it would turn a number that was
 /// true at one moment into configuration that reads as authoritative afterwards.
 /// See `docs/development/account-surface-plan.md`.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct AccountConfig {
     /// Stable identifier for this account within its provider.
     ///
@@ -117,6 +117,12 @@ pub struct AccountConfig {
     /// same value would collide silently and one of them would be unreachable
     /// while the configuration still claimed both.
     pub account_id: String,
+    #[serde(default)]
+    pub binding: Option<super::binding::AccountBinding>,
+    #[serde(default)]
+    pub probe_kind: Option<super::binding::AccountProbeKind>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub effective_rates: Vec<crate::billing::EffectiveRate>,
     /// Where this account's credential lives. Empty means "use the provider's own
     /// key", which is the common case for a relay with a single account.
     #[serde(default)]

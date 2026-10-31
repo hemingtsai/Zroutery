@@ -17,6 +17,41 @@ use super::NewApiAdapter;
 use super::{DEFAULT_USAGE_WINDOW_SECS, LOG_PAGE_SIZE};
 
 impl NewApiAdapter {
+    /// Identity-only verification does not sweep logs, sign in, mint a token or
+    /// infer account ownership from an unverified JWT/username.
+    pub async fn verify_identity(&self, token: &str) -> Result<crate::config::RemoteIdentity> {
+        let session = self
+            .authenticate(NewApiAuth::ApiKey {
+                key: token.to_string(),
+            })
+            .await?;
+        let user_id = session
+            .user_id
+            .filter(|id| !id.trim().is_empty())
+            .ok_or_else(|| {
+                Error::BadUpstreamPayload(
+                    "verified panel response contains no remote user id".into(),
+                )
+            })?;
+        if self
+            .config
+            .new_api_user
+            .as_deref()
+            .is_some_and(|expected| expected != user_id)
+        {
+            return Err(Error::invalid(
+                "the verified remote identity does not match New-Api-User",
+            ));
+        }
+        Ok(crate::config::RemoteIdentity {
+            panel_root: self.base.clone(),
+            user_id,
+            username: session.username,
+            group: session.group,
+            verified_at: session.authenticated_at,
+            source: "GET /api/user/self (Rust HTTP, accepted credential)".into(),
+        })
+    }
     /// Build an adapter for one NewAPI instance.
     ///
     /// A non-empty [`NewApiConfig::api_key`] is installed as the initial
@@ -42,6 +77,7 @@ impl NewApiAdapter {
                 refresh_cookie: None,
                 user_id: None,
                 username: None,
+                group: None,
                 expires_at: None,
             })
         };
@@ -108,6 +144,7 @@ impl NewApiAdapter {
             auth,
             user_id: installed.session.user_id,
             username: installed.session.username,
+            group: installed.session.group,
             authenticated_at,
             expires_at: installed.session.expires_at,
         })

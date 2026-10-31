@@ -650,6 +650,7 @@ fn apply_newapi_prices(
             continue;
         };
         model.pricing = Some(zroutery_core::billing::Pricing {
+            per_request: None,
             currency: "USD".into(),
             input_per_mtok: input,
             output_per_mtok: output,

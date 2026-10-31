@@ -42,6 +42,7 @@ impl NewApiAdapter {
             refresh_cookie: Some(attempt.refresh_cookie.unwrap_or(cookie)),
             user_id: user_id_of(&user),
             username: username_of(&user),
+            group: user.group.clone(),
             expires_at: login.access_expires_at,
         })
     }
@@ -71,6 +72,7 @@ impl NewApiAdapter {
             refresh_cookie,
             user_id: user_id_of(&user),
             username: username_of(&user),
+            group: user.group.clone(),
             expires_at: None,
         })
     }
@@ -107,6 +109,7 @@ impl NewApiAdapter {
             refresh_cookie: Some(attempt.refresh_cookie.unwrap_or_else(|| cookie.to_string())),
             user_id: user_id_of(&user).or_else(|| session.user_id.clone()),
             username: username_of(&user).or_else(|| session.username.clone()),
+            group: user.group.clone().or_else(|| session.group.clone()),
             expires_at: login.access_expires_at,
         })
     }

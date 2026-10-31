@@ -105,6 +105,9 @@ fn an_account_config_carries_no_observation_fields() {
     // could be added here and would compile, round-trip, and then sit in AppConfig
     // presenting as configuration while expiring.
     let declared = AccountConfig {
+        binding: None,
+        probe_kind: None,
+        effective_rates: Vec::new(),
         account_id: "main".to_string(),
         key_ref: String::new(),
         enabled: true,
@@ -145,13 +148,25 @@ fn an_account_config_carries_no_observation_fields() {
         );
     }
 
-    // Five fields, and every one of them a declaration. `inference_keys` is
-    // the chat pool the routing path may use; it names keychain references and
-    // priorities, which the user chose, not readings that expire.
+    // Seven serialized fields, and every one of them a declaration. `binding`
+    // and `probe_kind` declare how this account is addressed and inspected;
+    // `inference_keys` declares the chat pool the routing path may use. None is
+    // a reading that expires. Empty `effective_rates` is deliberately omitted.
+    let mut expected = vec![
+        "account_id",
+        "binding",
+        "enabled",
+        "inference_keys",
+        "key_ref",
+        "maintenance",
+        "probe_kind",
+    ];
+    expected.sort_unstable();
+    let mut fields = fields;
+    fields.sort_unstable();
     assert_eq!(
-        fields.len(),
-        5,
-        "AccountConfig is a declaration and nothing else; got {fields:?}"
+        fields, expected,
+        "AccountConfig is a declaration and nothing else"
     );
 }
 

@@ -157,6 +157,7 @@ pub(super) fn pricing_from_catalogue(entry: &Value) -> Option<Pricing> {
         return None;
     }
     Some(Pricing {
+        per_request: None,
         currency,
         input_per_mtok: scale(input),
         output_per_mtok: scale(output),

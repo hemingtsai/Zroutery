@@ -135,8 +135,8 @@ async fn a_declared_account_reaches_the_store() {
     assert_eq!(runtime.provider_id, "relay");
     assert_eq!(runtime.account_id, AccountId("acct-0".to_string()));
     assert!(
-        runtime.last_sync.is_some(),
-        "a probe that happened must be stamped, or a panel cannot say how stale a reading is"
+        runtime.last_failure.is_some(),
+        "a failed attempt is stamped separately; it is not a valid observation timestamp"
     );
 }
 
@@ -174,8 +174,8 @@ async fn a_failed_probe_overwrites_a_previous_healthy_reading() {
         "a failure must be stamped, or the panel cannot say the account is failing"
     );
     assert_eq!(
-        after.last_success, None,
-        "last_success must not survive into a reading that was never established"
+        after.last_success, before.last_success,
+        "the previous observation keeps its original valid timestamp"
     );
 }
 

@@ -1077,6 +1077,7 @@ async fn a_refresh_result_never_overwrites_a_newer_login() {
         refresh_cookie: Some("cookie-new".into()),
         user_id: Some("7".into()),
         username: Some("alice".into()),
+        group: None,
         expires_at: None,
     };
     let installed = adapter.install_session(newer.clone());

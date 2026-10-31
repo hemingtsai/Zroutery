@@ -156,6 +156,8 @@ pub enum AccountSyncOutcome {
     Unsupported,
     /// The probe failed. The store still holds a runtime, carrying the failure.
     Failed { reason: String },
+    /// A credential/configuration change or newer probe won the publication CAS.
+    Stale,
 }
 
 impl AccountSyncOutcome {
@@ -247,15 +249,41 @@ impl<'a> AccountReconciler<'a> {
         provider: &dyn DynAccountProvider,
         probes: &[AccountProbe],
     ) -> ReconcileReport {
+        self.reconcile_at(provider, probes, None).await
+    }
+
+    pub async fn reconcile_versioned(
+        &self,
+        provider: &dyn DynAccountProvider,
+        probe: &AccountProbe,
+        version: u64,
+    ) -> ReconcileReport {
+        self.reconcile_at(provider, std::slice::from_ref(probe), Some(version))
+            .await
+    }
+
+    async fn reconcile_at(
+        &self,
+        provider: &dyn DynAccountProvider,
+        probes: &[AccountProbe],
+        expected: Option<u64>,
+    ) -> ReconcileReport {
         let capabilities = provider.capabilities();
         let mut outcomes = Vec::with_capacity(probes.len());
 
         for probe in probes {
+            let version = expected.unwrap_or_else(|| {
+                self.store
+                    .begin_probe(&probe.provider_id, &probe.account_id)
+            });
             let outcome = if !capabilities.supports_refresh {
                 // Recorded as declining, not as failing, and not as reporting an
                 // empty reading: there is no measurement here at all.
-                self.publish_unsupported(probe, capabilities.clone());
-                AccountSyncOutcome::Unsupported
+                if self.publish_unsupported(probe, capabilities.clone(), version) {
+                    AccountSyncOutcome::Unsupported
+                } else {
+                    AccountSyncOutcome::Stale
+                }
             } else {
                 match provider.refresh_dyn(&probe.account_id).await {
                     Ok(mut runtime) => {
@@ -275,16 +303,26 @@ impl<'a> AccountReconciler<'a> {
                         }
                         runtime.last_success = Some(stamp);
                         runtime.last_sync = Some(stamp);
-                        self.store.upsert(runtime);
+                        if !self.store.publish_if_current(runtime, version) {
+                            outcomes.push((
+                                probe.provider_id.clone(),
+                                probe.account_id.clone(),
+                                AccountSyncOutcome::Stale,
+                            ));
+                            continue;
+                        }
                         match missing_capabilities(&capabilities, self.store, probe) {
                             missing if missing.is_empty() => AccountSyncOutcome::Refreshed,
                             missing => AccountSyncOutcome::PartiallyReported { missing },
                         }
                     }
                     Err(error) => {
-                        self.publish_failure(probe, capabilities.clone(), &error);
-                        AccountSyncOutcome::Failed {
-                            reason: error.to_string(),
+                        if self.publish_failure(probe, capabilities.clone(), &error, version) {
+                            AccountSyncOutcome::Failed {
+                                reason: error.safe_message(),
+                            }
+                        } else {
+                            AccountSyncOutcome::Stale
                         }
                     }
                 }
@@ -296,23 +334,31 @@ impl<'a> AccountReconciler<'a> {
     }
 
     /// Publish a runtime for a provider that declines to refresh.
-    fn publish_unsupported(&self, probe: &AccountProbe, capabilities: AccountCapabilities) {
-        self.store.upsert(AccountRuntime {
-            account_id: probe.account_id.clone(),
-            provider_id: probe.provider_id.clone(),
-            // `Unknown`, not `Active`: nothing has been established about this
-            // account, and a panel that renders `Unknown` as healthy would be
-            // repeating the original sin in a different place.
-            status: AccountStatus::Unknown,
-            capabilities,
-            quota: None,
-            usage: None,
-            rate_limit: None,
-            last_success: None,
-            last_failure: None,
-            last_sync: Some((self.now)()),
-            metadata: HashMap::new(),
-        });
+    fn publish_unsupported(
+        &self,
+        probe: &AccountProbe,
+        capabilities: AccountCapabilities,
+        version: u64,
+    ) -> bool {
+        self.store.publish_if_current(
+            AccountRuntime {
+                account_id: probe.account_id.clone(),
+                provider_id: probe.provider_id.clone(),
+                // `Unknown`, not `Active`: nothing has been established about this
+                // account, and a panel that renders `Unknown` as healthy would be
+                // repeating the original sin in a different place.
+                status: AccountStatus::Unknown,
+                capabilities,
+                quota: None,
+                usage: None,
+                rate_limit: None,
+                last_success: None,
+                last_failure: None,
+                last_sync: Some((self.now)()),
+                metadata: HashMap::new(),
+            },
+            version,
+        )
     }
 
     /// Publish a runtime for a failed probe.
@@ -326,21 +372,31 @@ impl<'a> AccountReconciler<'a> {
         probe: &AccountProbe,
         capabilities: AccountCapabilities,
         error: &Error,
-    ) {
+        version: u64,
+    ) -> bool {
         let stamp = (self.now)();
-        self.store.upsert(AccountRuntime {
-            account_id: probe.account_id.clone(),
-            provider_id: probe.provider_id.clone(),
-            status: status_for(error),
-            capabilities,
-            quota: None,
-            usage: None,
-            rate_limit: None,
-            last_success: None,
-            last_failure: Some(stamp),
-            last_sync: Some(stamp),
-            metadata: HashMap::new(),
-        });
+        let previous = self.store.get(&probe.provider_id, &probe.account_id);
+        self.store.publish_if_current(
+            AccountRuntime {
+                account_id: probe.account_id.clone(),
+                provider_id: probe.provider_id.clone(),
+                status: status_for(error),
+                capabilities,
+                quota: previous.as_ref().and_then(|runtime| runtime.quota.clone()),
+                usage: previous.as_ref().and_then(|runtime| runtime.usage.clone()),
+                rate_limit: None,
+                last_success: previous.as_ref().and_then(|runtime| runtime.last_success),
+                last_failure: Some(stamp),
+                last_sync: previous.as_ref().and_then(|runtime| runtime.last_sync),
+                metadata: {
+                    let mut metadata = previous.map(|runtime| runtime.metadata).unwrap_or_default();
+                    metadata.insert("last_attempt_at".into(), stamp.to_string());
+                    metadata.insert("last_attempt_error".into(), error.safe_message());
+                    metadata
+                },
+            },
+            version,
+        )
     }
 }
 

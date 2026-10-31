@@ -214,6 +214,7 @@ impl AppState {
     #[cfg(feature = "account")]
     async fn reconcile_providers(&self, providers: &[&ProviderConfig]) -> ReconcileReport {
         let store = &self.accounts;
+        store.sync_declarations(&self.config());
         let mut outcomes = Vec::new();
 
         for provider in providers {
@@ -221,13 +222,25 @@ impl AppState {
                 continue;
             }
             for declaration in provider.accounts.iter().filter(|a| a.enabled) {
+                // The sweep captured a provider earlier; a changed declaration
+                // cannot start a new probe with the old credential after a swap.
+                let Some(version) = store.begin_declared_probe(provider, declaration) else {
+                    outcomes.push((
+                        provider.id.clone(),
+                        AccountId(declaration.account_id.clone()),
+                        crate::account::AccountSyncOutcome::Stale,
+                    ));
+                    continue;
+                };
                 let probe = AccountProbe {
                     provider_id: provider.id.clone(),
                     account_id: AccountId(declaration.account_id.clone()),
                 };
                 let adapter = self.adapter_for(provider, declaration);
                 let reconciler = AccountReconciler::new(store);
-                let report = reconciler.reconcile(adapter.as_ref(), &[probe]).await;
+                let report = reconciler
+                    .reconcile_versioned(adapter.as_ref(), &probe, version)
+                    .await;
                 outcomes.extend(report.outcomes);
             }
         }
@@ -414,7 +427,16 @@ fn newapi_adapter(
 ) -> Box<dyn DynAccountProvider> {
     use crate::account::adapters::newapi::{NewApiAdapter, NewApiConfig};
 
-    if provider.kind != ProviderKind::OpenAICompatible {
+    let kind = declaration.probe_kind.unwrap_or_else(|| {
+        // Compatibility for old configurations only; new declarations carry
+        // an explicit probe kind, independent of the inference protocol.
+        if provider.kind == ProviderKind::OpenAICompatible {
+            crate::config::AccountProbeKind::NewApi
+        } else {
+            crate::config::AccountProbeKind::None
+        }
+    });
+    if kind != crate::config::AccountProbeKind::NewApi {
         return Box::new(UnreachableProvider::no_backend(&provider.id));
     }
 
@@ -422,11 +444,10 @@ fn newapi_adapter(
         // The wallet can live on a different host than inference, and some
         // panels require the declared user id even to answer /api/user/self.
         // Both values belong to this account, never the first sibling account.
-        base_url: declaration
-            .maintenance
-            .panel_override()
-            .unwrap_or(&provider.base_url)
-            .to_string(),
+        base_url: crate::config::account_panel_root(
+            &provider.base_url,
+            declaration.maintenance.panel_override(),
+        ),
         api_key: credential.to_string(),
         new_api_user: declaration.maintenance.new_api_user.clone(),
         capabilities: NewApiConfig::default().capabilities,
