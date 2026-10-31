@@ -23,20 +23,23 @@ export const HEATMAP_DAYS = 371;
 type ChartStyle = "heatmap" | "bars" | "line";
 
 /**
- * The measures the chart can draw, one per KPI that has a daily series.
+ * The measures the chart can draw, one per daily series the ledger keeps.
  *
- * The KPI row above this chart shows five figures, but only two of them exist
- * per day: the durable ledger buckets days by requests, failures and tokens,
- * so cost and cache reads are `StatsSummary` totals with no `UsageDay` column.
- * A "cost" or "cache hit" tier here would have to draw a series the ledger
- * does not keep, so the metric deliberately has no third tier — see the KPI
- * row in Activity.tsx, which makes the same call from its side of the wire.
+ * The KPI row above this chart shows five figures, but the figures with a
+ * per-day column are three: requests, tokens, and — since the cache columns
+ * joined `UsageDay` — a day's cache reads and writes, drawn as their sum
+ * (reads are what hit; writes are what populated the cache, and a day's
+ * cache traffic is both). The backend also provides per-currency daily cost,
+ * whose currency selector is not wired here yet. The cache-hit KPI remains a
+ * ratio rather than this token series — see Activity.tsx, which makes the same call from its
+ * side of the wire: its two controller cells drive this segment, while the
+ * 缓存 tier is reachable from this segment alone.
  *
  * The metric is a controlled prop rather than local state for the same reason:
  * the KPI cells are the chart's gears, and one owner (Activity) keeps the
  * segment and the row from disagreeing about which measure is on.
  */
-export type Metric = "requests" | "tokens";
+export type Metric = "requests" | "tokens" | "cache";
 /** Segment values are strings; the number is parsed where the window is cut. */
 type RangeKey = "7" | "30" | "90" | "365";
 
@@ -53,7 +56,11 @@ type OnHover = (day: UsageDay, x: number, y: number) => void;
 const viewport = () => ({ width: window.innerWidth, height: window.innerHeight });
 
 const measure = (day: UsageDay, metric: Metric): number =>
-  metric === "requests" ? day.requests : day.input_tokens + day.output_tokens;
+  metric === "requests"
+    ? day.requests
+    : metric === "cache"
+      ? day.cache_read_tokens + day.cache_write_tokens
+      : day.input_tokens + day.output_tokens;
 
 /** `2026-10-29` as local midnight, not as UTC midnight. */
 function parseDay(day: string): Date {
@@ -172,7 +179,12 @@ export default function UsageCharts({
   const total = window ? window.reduce((sum, day) => sum + measure(day, metric), 0) : 0;
   const quiet = window !== null && total === 0;
   const canvas = chartSize(style, weeks?.length ?? 0);
-  const metricLabel = metric === "requests" ? t("activity.metric_requests") : t("activity.metric_tokens");
+  const metricLabel =
+    metric === "requests"
+      ? t("activity.metric_requests")
+      : metric === "cache"
+        ? t("activity.metric_cache")
+        : t("activity.metric_tokens");
 
   return (
     <div className="usage-charts">
@@ -194,6 +206,7 @@ export default function UsageCharts({
           options={[
             { value: "requests", label: t("activity.metric_requests") },
             { value: "tokens", label: t("activity.metric_tokens") },
+            { value: "cache", label: t("activity.metric_cache") },
           ]}
         />
         <Segment<RangeKey>
@@ -252,7 +265,7 @@ export default function UsageCharts({
        * The card, rendered only while a chart is on the screen: a counter
        * reset can empty the window under a stationary pointer, and the card
        * must not outlive the cells that fed it. The rows repeat the day's
-       * two readings with the measure the chart is drawing in full ink; the
+       * three readings with the measure the chart is drawing in full ink; the
        * labels are the same words the measure segment above uses.
        *
        * The portal is load-bearing: the panels around this chart carry the
@@ -281,6 +294,12 @@ export default function UsageCharts({
               <span>{t("activity.metric_tokens")}</span>
               <span className="chart-card-value">
                 {num(hover.day.input_tokens + hover.day.output_tokens)}
+              </span>
+            </div>
+            <div className="chart-card-row" data-active={metric === "cache" ? "" : undefined}>
+              <span>{t("activity.metric_cache")}</span>
+              <span className="chart-card-value">
+                {num(hover.day.cache_read_tokens + hover.day.cache_write_tokens)}
               </span>
             </div>
           </div>,

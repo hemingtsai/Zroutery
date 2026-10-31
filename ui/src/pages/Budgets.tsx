@@ -61,10 +61,10 @@ export default function Budgets({ snapshot, save, busy }: {
         options={[{ value: "day", label: t("period.day") }, { value: "month", label: t("period.month") }]} /></Field>
       <Field label={t("budget.limit")}><CommitNumber value={draft.amount} min={0} ariaLabel={t("budget.limit")} onCommit={(amount) => setDraft({ ...draft, amount: amount ?? 0 })} /></Field>
       <Field label={t("field.currency")}><input aria-label={t("field.currency")} value={draft.currency} onChange={(event) => setDraft({ ...draft, currency: event.target.value.toUpperCase() })} /></Field>
-      <Button disabled={busy || draft.amount <= 0 || !draft.currency.trim()} onClick={() => void save((config) => {
+      <div className="field-actions"><Button disabled={busy || draft.amount <= 0 || !draft.currency.trim()} onClick={() => void save((config) => {
         config.budgets.push({ id: "", scope: scope(draft.scope), period: draft.period, limit: { amount: draft.amount, currency: draft.currency.trim() }, on_exceeded: { action: "reject" }, enabled: true });
         return config;
-      }).then((ok) => { if (ok) { setDraft({ ...draft, amount: 0 }); setAdding(false); } })}>{t("budget.add")}</Button>
+      }).then((ok) => { if (ok) { setDraft({ ...draft, amount: 0 }); setAdding(false); } })}>{t("budget.add")}</Button></div>
     </div>}
   </Section>;
 }

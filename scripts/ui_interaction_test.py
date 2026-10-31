@@ -170,6 +170,7 @@ HARNESS = """
     decisionProvider: query("decisionProvider") || null,
     // A model on that provider.
     decisionModel: query("decisionModel") || null,
+    takeover: query("takeover") || [],
     commandLog: [],
     delays: {},
   };
@@ -281,6 +282,31 @@ HARNESS = """
       }
       case "get_usage_days":
         return clone(USAGE_DAYS);
+      case "takeover_status":
+        return clone(state.takeover);
+      case "client_setup_preview":
+        state.commandLog.push({ cmd, args: clone(args) });
+        return {
+          agent: args.agent,
+          config_path: "C:/fixture/" + args.agent + "/settings.json",
+          gateway_url: "http://127.0.0.1:" + (args.options.standby ? "8788" : "8787"),
+          catalogue_fingerprint: "catalogue-fixture",
+          classes: [{
+            model: "standard-class", display_name: "Standard fixture", effort_levels: ["high"],
+            capabilities: { tools: true, vision: false, thinking: true, structured_output: false, audio: false, video: false, files: false },
+            context_window: null, max_output_tokens: null, capability_source: "configured fixture",
+          }],
+          unavailable_classes: ["fast-class"],
+          notes: ["Fixture menu needs a client restart"],
+          proposal: {
+            managed_fields: ["model"],
+            changes: [{ field_path: "model", current: null, managed: args.options.default_class }],
+            fingerprint: "preview-" + args.agent + (args.options.standby ? "-standby" : ""),
+          },
+        };
+      case "client_setup_apply":
+        state.commandLog.push({ cmd, args: clone(args) });
+        return { agent: args.agent, status: { state: "active", config_path: "C:/fixture/settings.json", generation: 2 } };
       case "save_config":
         state.config = clone(args.config);
         state.commandLog.push({ cmd, args: clone(args) });
@@ -501,7 +527,7 @@ HARNESS = """
     // the snapshot, so a case that seeds it has to be able to install it. A key
     // missing from this list is a seed that is silently dropped and a case that
     // times out with no explanation.
-    for (const key of ["config", "server", "keys", "catalogues", "account", "ml", "migration", "deepLink", "opencode", "balances", "decisionProvider", "decisionModel"]) {
+    for (const key of ["config", "server", "keys", "catalogues", "account", "ml", "migration", "deepLink", "opencode", "balances", "decisionProvider", "decisionModel", "takeover"]) {
       if (seed && seed[key] !== undefined) state[key] = clone(seed[key]);
     }
     if (seed && seed.delays) state.delays = { ...seed.delays };
@@ -3817,6 +3843,62 @@ def case_ui25_the_browser_token_capture_runs_and_cancels(devtools) -> list[str]:
     return failures
 
 
+def case_ui26_client_menu_preview_and_apply(devtools: DevTools) -> list[str]:
+    """The row owns setup; preview and confirmation preserve its exact intent."""
+    seed(devtools, takeover=[
+        {"agent": agent, "status": {"state": "active", "config_path": f"C:/fixture/{agent}", "generation": 1}}
+        for agent in ("claude", "codex")
+    ])
+    open_page(devtools, "takeover")
+    action = '[data-agent="codex"] .btn-ghost'
+    devtools.wait_for("document.querySelector(%s) !== null" % json.dumps(action), "Codex menu action")
+    devtools.click_selector(action)
+    devtools.wait_for("document.querySelector('.drawer-title')?.textContent.includes('Codex')", "Codex setup drawer")
+    failures = []
+    devtools.click_selector(".drawer .field-actions .btn")
+    devtools.wait_for("document.querySelector('.drawer')?.textContent.includes('configured fixture')", "menu preview evidence")
+    first = devtools.evaluate("window.__zrStub.last('client_setup_preview')")
+    if first["args"]["agent"] != "codex":
+        failures.append("the row opened another client's preview")
+
+    devtools.click_selector('.drawer input[type="checkbox"]')
+    if devtools.evaluate("[...document.querySelectorAll('.drawer button')].some(b => b.textContent.trim() === 'Synchronize native menu')"):
+        failures.append("changing the standby option retained an applicable stale preview")
+    devtools.click_selector(".drawer .field-actions .btn")
+    devtools.wait_for("document.querySelector('.drawer')?.textContent.includes('8788')", "standby preview")
+    devtools.click_selector(".drawer .btn-primary")
+    devtools.wait_for("document.querySelector('.confirm') !== null", "menu synchronization confirmation")
+    devtools.press_key("Escape")
+    devtools.wait_for("document.querySelector('.confirm') === null", "only the confirmation to close")
+    if not devtools.evaluate("document.querySelector('.drawer') !== null"):
+        failures.append("Escape dismissed the setup drawer together with its confirmation")
+        return failures
+    if devtools.evaluate("window.__zrStub.log('client_setup_apply').length"):
+        failures.append("cancelled confirmation still published client setup")
+    devtools.click_selector(".drawer .btn-primary")
+    devtools.wait_for("document.querySelector('.confirm') !== null", "second confirmation")
+    devtools.click_selector(".confirm .btn-primary")
+    devtools.wait_for("window.__zrStub.log('client_setup_apply').length === 1", "one confirmed setup write")
+    devtools.wait_for("document.querySelector('.drawer') === null", "completed setup to close")
+    sent = devtools.evaluate("window.__zrStub.last('client_setup_apply').args")
+    if sent != {"agent": "codex", "options": {"default_class": None, "standby": True}, "expectedFingerprint": "preview-codex-standby"}:
+        failures.append("setup publication lost its client, options or preview fingerprint: %r" % sent)
+
+    devtools.evaluate("window.__zrStub.setDelay('client_setup_preview', 300)")
+    devtools.click_selector(action)
+    devtools.click_selector(".drawer .field-actions .btn")
+    devtools.press_key("Escape")
+    devtools.wait_for("document.querySelector('.drawer') === null", "dismissed pending setup")
+    devtools.wait_for("window.__zrStub.log('client_setup_preview').length === 3", "late preview reply")
+    devtools.wait_for("!document.querySelector(%s)?.disabled" % json.dumps(action), "pending setup action to settle")
+    devtools.click_selector('[data-agent="claude"] .btn-ghost')
+    devtools.wait_for("document.querySelector('.drawer-title')?.textContent.includes('Claude')", "fresh Claude setup")
+    if devtools.evaluate("document.querySelector('.drawer')?.textContent.includes('configured fixture')"):
+        failures.append("a dismissed late preview leaked into another client's drawer")
+    devtools.press_key("Escape")
+    return failures
+
+
 CASES = (
     {"label": "UI-1 two nested edits in sequence (first save delayed)", "run": case_ui1_nested_rebase},
     {"label": "UI-2 moved candidate renumbers priority", "run": case_ui2_candidate_priority},
@@ -3928,6 +4010,7 @@ CASES = (
         "run": case_ui25_the_browser_token_capture_runs_and_cancels,
         "query": ACCOUNT_QUERY,
     },
+    {"label": "UI-26 client menu preview, confirmation and stale reply isolation", "run": case_ui26_client_menu_preview_and_apply},
 )
 
 

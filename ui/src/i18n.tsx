@@ -804,9 +804,10 @@ export const en = {
   "takeover.table.current": "Current value",
   "takeover.table.next": "After adoption",
   "takeover.table.managed": "Zroutery wrote",
-  "takeover.generation": "generation {n}",
+  "takeover.generation": "taken over {n} times",
   "takeover.adopt": "Take over",
   "takeover.adopt_again": "Take over again",
+  "takeover.sync_menu": "Sync model menu",
   "takeover.release": "Release",
   "takeover.working": "Working…",
   "takeover.strategy.label": "Conflict resolution",
@@ -1011,12 +1012,17 @@ export const en = {
   "activity.lede_none": "Nothing yet. Point a client at the gateway to see traffic here.",
   "activity.lede_since": "Totals since {since}.",
   // The headline figures. Two of the five drive the traffic chart's measure;
-  // their labels are the chart's own metric words ("Requests", "Tokens").
+  // their labels are the chart's own metric words ("Requests", "Tokens",
+  // "Cache" — the cache tokens are a series, while the hit rate itself is a
+  // ratio and drives nothing).
   "activity.kpi_row": "Usage totals",
   "activity.kpi_success": "Success rate",
   "activity.kpi_cache": "Cache hit",
   "activity.kpi_cache_help":
-    "cache-read tokens ÷ input tokens, summed across models. Input is cache-inclusive, so the share never passes 100%.",
+    "cache-read tokens ÷ input tokens, as the backend aggregates them. Input is cache-inclusive, so the share never passes 100%.",
+  // The spend cell's hover caveat: these requests' cost is wholly or partly
+  // unknown, so the shown total is a floor, not the whole story.
+  "activity.kpi_unpriced": "{n} unpriced requests",
   // ---------------------------------------------------------- activity charts
   "activity.traffic": "Traffic",
   "activity.traffic_hint": "Completed requests per local day; a quiet day is a zero, not a gap.",
@@ -1027,6 +1033,7 @@ export const en = {
   "activity.chart_metric": "Measure",
   "activity.metric_requests": "Requests",
   "activity.metric_tokens": "Tokens",
+  "activity.metric_cache": "Cache",
   "activity.chart_range": "Range",
   "activity.range_7": "7 days",
   "activity.range_30": "30 days",
@@ -1122,6 +1129,16 @@ export const en = {
   "activity.no_match_window": "No request in the kept window matches this filter.",
   "activity.export_history": "Export history",
   "activity.import_history": "Import history",
+  /*
+   * The native save path's feedback: the toast and the hint line share the
+   * "Exported to {path}" sentence with the path's short form; the full path
+   * rides on the title. The failure note covers both an older backend
+   * without the save dialog and a dialog that failed to open — either way
+   * the copyable archive is the fallback on screen.
+   */
+  "activity.exported_to": "Exported to {path}",
+  "activity.export_file_failed":
+    "Could not export to a file; opened the copyable archive instead.",
   "activity.export_hint":
     "A portable JSON archive of the recorded usage, ready to import elsewhere.",
   "activity.import_hint":
@@ -2156,9 +2173,10 @@ export const zh: Dict = {
   "takeover.table.current": "当前值",
   "takeover.table.next": "接管后",
   "takeover.table.managed": "Zroutery 写入",
-  "takeover.generation": "第 {n} 代",
+  "takeover.generation": "已接管 {n} 次",
   "takeover.adopt": "接管",
   "takeover.adopt_again": "再次接管",
+  "takeover.sync_menu": "同步模型菜单",
   "takeover.release": "释放",
   "takeover.working": "处理中…",
   "takeover.strategy.label": "冲突处理",
@@ -2336,7 +2354,9 @@ export const zh: Dict = {
   "activity.kpi_success": "成功率",
   "activity.kpi_cache": "缓存命中",
   "activity.kpi_cache_help":
-    "缓存读 token ÷ 输入 token，按模型求和。输入已包含缓存部分，占比不会超过 100%。",
+    "缓存读 token ÷ 输入 token，由后端聚合。输入已包含缓存部分，占比不会超过 100%。",
+  // 花费格的悬停注脚：这些请求的成本全部或部分未知，所以显示的合计只是下限。
+  "activity.kpi_unpriced": "{n} 笔未定价",
   // ---------------------------------------------------------- activity charts
   "activity.traffic": "流量",
   "activity.traffic_hint": "按本地日期统计的已完成请求；没有请求的日子是零，而不是缺口。",
@@ -2347,6 +2367,7 @@ export const zh: Dict = {
   "activity.chart_metric": "度量",
   "activity.metric_requests": "请求数",
   "activity.metric_tokens": "Token",
+  "activity.metric_cache": "缓存",
   "activity.chart_range": "范围",
   "activity.range_7": "7 天",
   "activity.range_30": "30 天",
@@ -2429,6 +2450,13 @@ export const zh: Dict = {
   "activity.no_match_window": "保留的请求窗口中没有符合此筛选的请求。",
   "activity.export_history": "导出历史",
   "activity.import_history": "导入历史",
+  /*
+   * 原生保存路径的反馈：toast 与提示行共用“已导出到 {path}”一句，路径用短
+   * 形式，完整路径放在 title 上。失败提示同时覆盖没有保存对话框的旧后端与
+   * 打开失败的对话框——两种情况下可复制的归档都是兜底。
+   */
+  "activity.exported_to": "已导出到 {path}",
+  "activity.export_file_failed": "无法导出为文件；已改为打开可复制的归档。",
   "activity.export_hint": "可移植的 JSON 账目归档，可在别处再次导入。",
   "activity.import_hint": "粘贴由“导出历史”生成的归档；有一行无效，整份文件都会被拒绝。",
   "activity.import_placeholder": "在此粘贴 JSON 归档",

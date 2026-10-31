@@ -37,10 +37,10 @@
 - ✅ U14 请求流水 facet 筛选（cc-switch UsageDashboard.tsx:186-194 模式）：供应商 Select（选项带计数 OpenCode · 3,398）+ 级联模型 Select；纯前端 Map 计数；与仅失败/账本行筛选叠加（后动者优先互斥，E-186）
 - ✅ P2 头号候选落地：Models 列表分页（cc-switch TablePagination 模式）——热切换 236.8ms → 50.6ms（4.7×），翻页 17-18ms，搜索全集过滤后再分页（E-188）
 - ✅ U16 流水行 首字 + 速度（tok/s）两格 + 抽屉命中率——公式与门槛照抄 cc-switch format.ts（E-189）；行级读 final-attempt usage 的口径细节已记录
-- ⬜ U17 接线 [B5]/[B6]（后端已就绪）：KPI 五格全部可驱动图表（summary cache 聚合）、流量图 cost/cache 视角（日账本列已补）、导出走真实文件、分页换 SQL 源（可选）
+- 🔄 U17 接线 [B5]/[B6]（E-193）：命中率改后端聚合、图表加缓存视角、导出走原生文件对话框（取消静默/失败回落 textarea）、花费 KPI 带未定价计数；后端已有按币种的日成本列，cost 日视图和 SQL 分页仍待前端接线
 - ⬜ [B7] 系统强调色注入落地后：MD3/Fluent 皮肤 `--primary` 切 `var(--system-accent)`（M3 已留回退链）
 - ⬜ 字体首绘（P2 第三候选：CJK 分片 262KB）；@fontsource/ibm-plex-sans 零产物清理
-- ⬜ U15' 导出为文件：现 JSON textarea+复制够用但糙；保存对话框需要 Tauri 侧支持（[B] 小项，GPT 6.1 SOL 排期）
+- ✅ U15' 导出为文件：已随 U17 接入原生保存对话框，保留 JSON textarea+复制作为失败回退（E-193）
 - ⬜ U6 内部日志空态对齐 Empty；"持久结算/8 次中断尝试待核对"句式重写
 - ⬜ [B·可选] StatsSummary 增加 cache_read/write_tokens 聚合（前端先用 per_model 聚合顶上，非阻塞）
 
@@ -104,7 +104,7 @@
 - U3 多 Key 账户 UI：备注、优先级、每 Key 余额（若支持）
 - U2 托盘菜单 = 批次 T（已列，后端为主）
 
-### P5 · 主题系统（U15）✅ = DAG 节点 UI-UX-M3（DONE，E-191+E-192；dark 反转修正与跟进见下）
+### P5 · 主题系统（U15）✅ = DAG 节点 UI-UX-M3（DONE，E-191+E-195；dark 反转修正与跟进见下）
 
 - **skin × theme 双轴**：`data-skin`（industrial=现状默认 / md3 / fluent）× `data-theme`（light/dark 已有）；持久化 `zroutery-skin`；设置外观区加皮肤 Select
 - **token 三层**：层1 全局语义 token 全 skin 共享（组件只消费这些）；层2 每 skin×theme 一份值；层3 组件覆写只做 token 表达不了的形状

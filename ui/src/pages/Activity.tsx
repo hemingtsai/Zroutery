@@ -39,6 +39,7 @@ import {
   StatusDot,
   Tabs,
   num,
+  useToast,
   type ConfirmRequest,
 } from "../components";
 import { useI18n } from "../i18n";
@@ -81,6 +82,18 @@ const recordClientId = (record: RequestRecord): string | null =>
 
 /** An id this long does not fit a cell; the full value rides on the title. */
 const truncateId = (id: string) => (id.length > 24 ? `${id.slice(0, 23)}…` : id);
+
+/*
+ * A saved-file path shown in one line: the file name and the separator before
+ * it, with an ellipsis standing for everything above. The full path rides on
+ * the title of whatever renders the short form — a toast or a hint line that
+ * spelled out every directory would wrap, and the reader copying a path wants
+ * the whole string anyway, which the hover gives.
+ */
+const shortPath = (path: string) => {
+  const cut = Math.max(path.lastIndexOf("\\"), path.lastIndexOf("/"));
+  return cut >= 0 ? `…${path.slice(cut)}` : path;
+};
 
 /*
  * A ledger row is clickable — clicking it filters the stream below to that
@@ -216,6 +229,14 @@ export default function Activity({
   const [history, setHistory] = useState<"export" | "import" | null>(null);
   const [archive, setArchive] = useState("");
   const [historyError, setHistoryError] = useState<string | null>(null);
+  /*
+   * The file the last successful native export was written to, kept so the
+   * path survives its toast: the full string rides on the hint line's title,
+   * because a toast is gone in three seconds and a file location is the one
+   * fact a reader may need long after.
+   */
+  const [exportedPath, setExportedPath] = useState<string | null>(null);
+  const notify = useToast();
 
   /*
    * The chart's series, loaded once and then refreshed at most every ten
@@ -253,13 +274,38 @@ export default function Activity({
    */
   const [ledgerDim, setLedgerDim] = useState<"client" | "model">("client");
 
+  /*
+   * Export, in three branches, because the command answers three ways:
+   *
+   * a path — the native save dialog ran, the archive is on disk, and the
+   * confirmation is an info toast (the short form of the path in the line,
+   * the full path on the hint below, which outlives the toast);
+   *
+   * null — the reader looked at the dialog and cancelled it. Cancelling a
+   * save is a decision, not an event: no toast, no drawer, the page exactly
+   * as it stood;
+   *
+   * a rejection — an older backend without the file command, or a dialog
+   * that failed to open. The string-archive path still works there, so the
+   * old textarea drawer opens and an error toast says why the flow changed
+   * under the pointer; only if the fallback itself fails does the section's
+   * error line take the raw text, as it always did.
+   */
   const openExport = async () => {
     setHistoryError(null);
     try {
-      setArchive(await api.exportUsageHistory());
-      setHistory("export");
-    } catch (error) {
-      setHistoryError(String(error));
+      const path = await api.exportUsageHistoryFile();
+      if (path === null) return;
+      setExportedPath(path);
+      notify("info", t("activity.exported_to", { path: shortPath(path) }));
+    } catch {
+      notify("error", t("activity.export_file_failed"));
+      try {
+        setArchive(await api.exportUsageHistory());
+        setHistory("export");
+      } catch (fallbackError) {
+        setHistoryError(String(fallbackError));
+      }
     }
   };
 
@@ -307,10 +353,13 @@ export default function Activity({
       : null;
 
   /*
-   * Cache hit = Σ per_model.cached_tokens ÷ Σ per_model.input_tokens, summed
-   * across models. The denominator is cache-inclusive (stats.rs:124 — the
-   * input column already contains the cache reads), so the quotient is a true
-   * share and can never pass 1; the "?" beside the label carries this formula,
+   * Cache hit = summary.cache_read_tokens ÷ summary.input_tokens, the
+   * backend's own aggregate (stats.rs applies the same accounting rule the
+   * ledger applies per record, so summing per_model here again would be work
+   * the summary has already done — and two roads to one number is one road
+   * to disagreeing numbers). The denominator is cache-inclusive — the input
+   * column already contains the cache reads — so the quotient is a true share
+   * and can never pass 1; the "?" beside the label carries this formula,
    * because a percentage with an unstated denominator is a rumour.
    *
    * The dash is reserved for an undefined quotient — no input tokens recorded
@@ -319,10 +368,11 @@ export default function Activity({
    * say (the upstream reported no cache reads), and hiding that behind "—"
    * would claim we cannot know what the counters do say.
    */
-  const cacheReadTokens = summary.per_model.reduce((n, m) => n + m.cached_tokens, 0);
-  const cacheInputTokens = summary.per_model.reduce((n, m) => n + m.input_tokens, 0);
+  const cacheInputTokens = summary.input_tokens;
   const cacheHitRate =
-    cacheInputTokens > 0 ? Math.round((cacheReadTokens / cacheInputTokens) * 1000) / 10 : null;
+    cacheInputTokens > 0
+      ? Math.round((summary.cache_read_tokens / cacheInputTokens) * 1000) / 10
+      : null;
 
   const classifier = (() => {
     // Every side kind is Auto review traffic, whatever protocol it was asked in.
@@ -896,6 +946,17 @@ export default function Activity({
           }
         >
           {historyError && <p className="field-error">{historyError}</p>}
+          {/*
+            Where the last native export landed. The toast is the moment's
+            confirmation; this line is the record — the short form in the
+            text, the full path on the title, because "which folder was it"
+            is asked long after three seconds have passed.
+          */}
+          {exportedPath && (
+            <p className="field-hint" title={exportedPath}>
+              {t("activity.exported_to", { path: shortPath(exportedPath) })}
+            </p>
+          )}
           {ledgerDim === "client" ? clientCut : modelCut}
         </Section>
       )}
@@ -1080,20 +1141,21 @@ export default function Activity({
           {/*
             The KPI row, cc-switch's UsageHero converted: the page's headline
             figures are the chart's gears, and clicking one drives the measure
-            the traffic chart below draws. Only two of the five have a per-day
+            the traffic chart below draws. Not all of the five have a per-day
             series to drive, though — the durable ledger buckets days by
-            requests, failures and tokens (see UsageDay), so cost and cache
-            reads exist only as StatsSummary totals. That kills the tempting
-            third chart tier: a "cost" or "cache hit" view would draw a series
-            the ledger does not keep, and the two honest outs are a selection
-            that highlights but changes nothing, or no selection at all. This
-            row takes the second, harder option: 请求数 and Tokens are the two
-            controllers (they carry the chart's selected state, both ways —
-            the chart's own segment moves them too), while success rate, cache
-            hit and spend are readouts. A highlighted cell that leaves the
-            chart where it stood would be a control claiming an action it
-            cannot perform, which is the same lie the fabricated series would
-            have told, one step further from the pixels.
+            requests, failures and tokens, and since the cache columns joined
+            UsageDay a day's cache reads/writes are a series too. What still
+            is not wired here is a per-currency cost view; UsageDay already
+            carries those totals. The cache KPI is a ratio (reads over
+            cache-inclusive input), rather than the cache-token series. So
+            请求数 and Tokens stay the two controllers (they carry the chart's
+            selected state, both ways — the chart's own segment moves them
+            too), the chart's 缓存 tier is driven from its own segment alone,
+            and success rate, cache hit and spend remain readouts. A
+            highlighted cell that leaves the chart where it stood would be a
+            control claiming an action it cannot perform, which is the same
+            lie the fabricated series would have told, one step further from
+            the pixels.
           */}
           <Kpi
             label={t("activity.metric_requests")}
@@ -1120,7 +1182,7 @@ export default function Activity({
             title={
               cacheHitRate === null
                 ? undefined
-                : `${t("activity.cache_read")} ${num(cacheReadTokens)} / ${t("activity.input_tokens")} ${num(cacheInputTokens)}`
+                : `${t("activity.cache_read")} ${num(summary.cache_read_tokens)} / ${t("activity.input_tokens")} ${num(cacheInputTokens)}`
             }
             help={t("activity.kpi_cache_help")}
           />
@@ -1134,11 +1196,22 @@ export default function Activity({
           {/*
             Spend is exact at two decimals — a currency figure abbreviated to
             "149" would round away the cents a budget is watched with — and
-            totalsText is already the full, unrounded statement, so there is
-            nothing more precise for a title to add. Multiple currencies stay
-            joined, never summed.
+            totalsText is already the full, unrounded statement. What a title
+            can still add is the caveat on the estimate itself: unpriced
+            requests are the ones whose cost is wholly or partly unknown
+            (stats.rs), so their true spend is not inside the figure shown.
+            The note rides the title only when there is something unpriced —
+            a caveat attached to a clean total would invent a problem.
           */}
-          <Kpi label={t("activity.estimated")} value={totalsText(summary.cost)} />
+          <Kpi
+            label={t("activity.estimated")}
+            value={totalsText(summary.cost)}
+            title={
+              summary.unpriced_requests > 0
+                ? `${totalsText(summary.cost)} · ${t("activity.kpi_unpriced", { n: summary.unpriced_requests })}`
+                : undefined
+            }
+          />
         </div>
       )}
 

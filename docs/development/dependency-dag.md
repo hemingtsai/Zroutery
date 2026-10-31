@@ -103,7 +103,7 @@ failed node. Historical tags are not graph edges.
 | `UI-UX-U13` | `DONE` | `UI-NEW-TRACKS` |
 | `UI-UX-M1` | `DONE` | `UI-LAYOUT` |
 | `UI-UX-M2` | `DONE` | `UI-UX-M1`, `UI-UX-U12` |
-| `UI-UX-M3` | `RUNNING` | `UI-UX-M1` |
+| `UI-UX-M3` | `DONE` | `UI-UX-M1` |
 | `UI-UX-P2` | `DONE` | `UI-NEW-TRACKS`, `TEST-UI-BUILD` |
 | `BACKEND-OPTIMIZATION` | `PARTIAL` | none |
 

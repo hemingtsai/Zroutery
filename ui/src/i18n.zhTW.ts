@@ -698,9 +698,10 @@ export const zhTW: Dict = {
   "takeover.table.current": "當前值",
   "takeover.table.next": "接管後",
   "takeover.table.managed": "Zroutery 寫入",
-  "takeover.generation": "第 {n} 代",
+  "takeover.generation": "已接管 {n} 次",
   "takeover.adopt": "接管",
   "takeover.adopt_again": "再次接管",
+  "takeover.sync_menu": "同步模型選單",
   "takeover.release": "釋放",
   "takeover.working": "處理中…",
   "takeover.strategy.label": "衝突處理",
@@ -878,7 +879,9 @@ export const zhTW: Dict = {
   "activity.kpi_success": "成功率",
   "activity.kpi_cache": "快取命中",
   "activity.kpi_cache_help":
-    "快取讀 token ÷ 輸入 token，按模型加總。輸入已包含快取部分，佔比不會超過 100%。",
+    "快取讀 token ÷ 輸入 token，由後端聚合。輸入已包含快取部分，佔比不會超過 100%。",
+  // 花費格的懸停註腳：這些請求的成本全部或部分未知，所以顯示的合計只是下限。
+  "activity.kpi_unpriced": "{n} 筆未定價",
   // ---------------------------------------------------------- activity charts
   "activity.traffic": "流量",
   "activity.traffic_hint": "按本地日期統計的已完成請求；沒有請求的日子是零，而不是缺口。",
@@ -889,6 +892,7 @@ export const zhTW: Dict = {
   "activity.chart_metric": "度量",
   "activity.metric_requests": "請求數",
   "activity.metric_tokens": "Token",
+  "activity.metric_cache": "快取",
   "activity.chart_range": "範圍",
   "activity.range_7": "7 天",
   "activity.range_30": "30 天",
@@ -967,6 +971,13 @@ export const zhTW: Dict = {
   "activity.no_match_window": "保留的請求視窗中沒有符合此篩選的請求。",
   "activity.export_history": "匯出歷史",
   "activity.import_history": "匯入歷史",
+  /*
+   * 原生儲存路徑的回饋：toast 與提示行共用「已匯出到 {path}」一句，路徑用
+   * 短形式，完整路徑放在 title 上。失敗提示同時涵蓋沒有儲存對話框的舊後端
+   * 與開啟失敗的對話框——兩種情況下可複製的歸檔都是兜底。
+   */
+  "activity.exported_to": "已匯出到 {path}",
+  "activity.export_file_failed": "無法匯出為檔案；已改為開啟可複製的歸檔。",
   "activity.export_hint": "可移植的 JSON 賬目歸檔，可在別處再次匯入。",
   "activity.import_hint": "貼上由“匯出歷史”產生的歸檔；有一行無效，整份檔案都會被拒絕。",
   "activity.import_placeholder": "在此貼上 JSON 歸檔",

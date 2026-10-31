@@ -767,6 +767,7 @@ class Surface:
     anchor: str
     scope: str = ".page"
     drawer: int | None = None
+    drawer_selector: str = ".section-head button.linky"
     # Click the Nth page-head action before measuring, for surfaces whose
     # controls live behind a folded form ("添加提供商" in the page head).
     # Unlike ``drawer`` there is nothing to close and no .drawer to wait for:
@@ -821,12 +822,22 @@ SURFACES = (
     Surface(
         "takeover",
         "Takeover page",
-        # Four agent rows; exactly two render actions in the fixture — the ready
-        # row's adopt and the active row's release. The proposal and conflict
+        # The ready and active rows each offer menu sync plus adopt/release.
+        # The proposal and conflict
         # tables are content, not controls, and are deliberately not counted.
-        {"action": 2},
+        {"action": 4},
         nav="takeover",
         anchor=".list-row",
+    ),
+    Surface(
+        "takeover-setup",
+        "Client model-menu drawer",
+        {"combobox": 1, "action": 1},
+        nav="takeover",
+        anchor=".list-row",
+        scope=".drawer",
+        drawer=0,
+        drawer_selector='[data-agent="claude"] .controls button',
     ),
     Surface(
         "cutover",
@@ -1419,7 +1430,7 @@ def measure_surfaces(devtools: DevTools) -> dict[str, dict]:
                 surface.anchor,
             )
             if surface.drawer is not None:
-                devtools.click(devtools.element(".section-head button.linky", surface.drawer))
+                devtools.click(devtools.element(surface.drawer_selector, surface.drawer))
                 devtools.wait_for(
                     "document.querySelector('.drawer') !== null",
                     "drawer %d" % surface.drawer,

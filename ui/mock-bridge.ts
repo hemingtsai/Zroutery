@@ -919,7 +919,7 @@ const snapshot = (): Json => ({
   recent: recent(),
   warning: null,
   config_path: "C:\\Users\\operator\\.zroutery\\config.toml",
-  version: "0.8.0",
+  version: "1.0.0-rc.1",
   balances: {
     dsk: {
       checked_at: ago(120_000),
@@ -1560,9 +1560,16 @@ const handlers: Record<string, (args: any) => Json | Promise<Json>> = {
       2,
     ),
   // Stands in for a completed native save-dialog choice and durable write. The
-  // command accepts no target pathname from the webview.
-  export_usage_history_file: () =>
-    "C:\\Users\\operator\\Downloads\\zroutery-usage-history.json",
+  // command accepts no target pathname from the webview, and the file name is
+  // what the real dialog pre-fills: zroutery-usage-<local %Y%m%d-%H%M%S>.json.
+  export_usage_history_file: () => {
+    const stamp = new Date(NOW);
+    const two = (n: number) => String(n).padStart(2, "0");
+    const name =
+      `${stamp.getFullYear()}${two(stamp.getMonth() + 1)}${two(stamp.getDate())}` +
+      `-${two(stamp.getHours())}${two(stamp.getMinutes())}${two(stamp.getSeconds())}`;
+    return `C:\\Users\\operator\\Downloads\\zroutery-usage-${name}.json`;
+  },
   import_usage_history: () => snapshot(),
   clear_client_usage: () => snapshot(),
   reveal_token: () => "zr-0123456789abcdef7c41",

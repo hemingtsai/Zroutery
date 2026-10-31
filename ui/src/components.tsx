@@ -1227,6 +1227,7 @@ export function Toggle({
   label,
   hint,
   ariaLabel,
+  disabled,
 }: {
   checked: boolean;
   onChange: (value: boolean) => void;
@@ -1234,6 +1235,7 @@ export function Toggle({
   hint?: string;
   /** Accessible name for the switch itself, independent of the language. */
   ariaLabel?: string;
+  disabled?: boolean;
 }) {
   /*
    * The hint is a description, not part of the name.
@@ -1255,6 +1257,7 @@ export function Toggle({
         <input
           type="checkbox"
           checked={checked}
+          disabled={disabled}
           aria-label={ariaLabel}
           aria-describedby={hint ? hintId : undefined}
           onChange={(e) => onChange(e.currentTarget.checked)}

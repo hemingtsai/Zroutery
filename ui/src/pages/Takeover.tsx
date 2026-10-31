@@ -19,9 +19,9 @@
  * them into held/not-held would hide exactly the moments a user must decide
  * something, which is the failure mode this subsystem exists to prevent.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useI18n, describeBackendError, type TKey } from "../i18n";
-import { Badge, Button, ConfirmDialog, Empty, Field, Section, Select, Toggle, useToast } from "../components";
+import { Badge, Button, ConfirmDialog, Disclosure, Drawer, Empty, Field, Section, Select, Toggle, useToast } from "../components";
 import type { ConfirmRequest } from "../components";
 import {
   api,
@@ -38,6 +38,7 @@ import {
 } from "../api";
 
 const AGENTS: TakeoverAgent[] = ["claude", "codex", "opencode", "gemini"];
+const MENU_AGENTS: TakeoverAgent[] = ["claude", "codex", "opencode"];
 
 /** A config value as a reviewable fragment: JSON for anything but a string. */
 function valueText(value: unknown): string {
@@ -72,23 +73,53 @@ export default function Takeover() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [acting, setActing] = useState<TakeoverAgent | null>(null);
   const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
-  const [selectedAgent, setSelectedAgent] = useState<TakeoverAgent>("claude");
   const [setup, setSetup] = useState<ClientSetupOptions>({ default_class: null, standby: false });
   const [preview, setPreview] = useState<ClientSetupPreview | null>(null);
+  const [setupError, setSetupError] = useState<string | null>(null);
+  const setupVersion = useRef(0);
+  // The native-menu sync lives in a per-client drawer now: the row is the one
+  // place a client's actions live, so its menu sync opens from the row rather
+  // than from a top form that made the reader pick the client all over again.
+  const [setupAgent, setSetupAgent] = useState<TakeoverAgent | null>(null);
+  const openSetup = (agent: TakeoverAgent) => {
+    setupVersion.current += 1;
+    setSetupAgent(agent);
+    setSetup({ default_class: null, standby: false });
+    setPreview(null);
+    setSetupError(null);
+  };
+  const closeSetup = () => {
+    setupVersion.current += 1;
+    setSetupAgent(null);
+    setPreview(null);
+    setSetupError(null);
+  };
   const previewSetup = async () => {
-    setActing(selectedAgent);
-    try { setPreview(await api.clientSetupPreview(selectedAgent, setup)); }
-    catch (error) { setLoadError(errorText(error)); }
+    if (!setupAgent || acting) return;
+    const version = ++setupVersion.current;
+    setPreview(null);
+    setSetupError(null);
+    setActing(setupAgent);
+    try {
+      const next = await api.clientSetupPreview(setupAgent, setup);
+      if (version === setupVersion.current) setPreview(next);
+    } catch (error) {
+      if (version === setupVersion.current) setSetupError(describeBackendError(t, errorText(error)));
+    }
     finally { setActing(null); }
   };
   const applySetup = async () => {
-    if (!preview) return;
-    setActing(selectedAgent);
+    if (!preview || !setupAgent || acting) return;
+    const version = setupVersion.current;
+    setActing(setupAgent);
+    setSetupError(null);
     try {
-      await api.clientSetupApply(selectedAgent, setup, preview.proposal.fingerprint);
-      setPreview(null);
+      await api.clientSetupApply(setupAgent, setup, preview.proposal.fingerprint);
+      if (version === setupVersion.current) closeSetup();
       await load();
-    } catch (error) { setLoadError(errorText(error)); }
+    } catch (error) {
+      if (version === setupVersion.current) setSetupError(describeBackendError(t, errorText(error)));
+    }
     finally { setActing(null); }
   };
   // Per-agent release strategy, preselected to the safe default: a release
@@ -177,28 +208,6 @@ export default function Takeover() {
 
   return (
     <>
-      <Section title={t("client_setup.title")} hint={t("client_setup.hint")}>
-        <div className="controls">
-          <Field label={t("client_setup.client")}><Select value={selectedAgent} ariaLabel={t("client_setup.client")}
-            options={["claude", "codex", "opencode"].map((agent) => ({ value: agent as TakeoverAgent, label: t(`takeover.agent.${agent}` as TKey) }))}
-            onChange={(agent) => { setSelectedAgent(agent); setPreview(null); }} /></Field>
-          <Field label={t("client_setup.default")}><Select value={setup.default_class ?? "keep"} ariaLabel={t("client_setup.default")}
-            options={[{ value: "keep", label: t("client_setup.keep") }, ...["fast", "standard", "reasoning", "frontier"].map((tier) => ({ value: `${tier}-class`, label: t(`tier.${tier}` as TKey) }))]}
-            onChange={(value) => { setSetup({ ...setup, default_class: value === "keep" ? null : value }); setPreview(null); }} /></Field>
-          <Toggle label={t("client_setup.standby")} checked={setup.standby} onChange={(standby) => { setSetup({ ...setup, standby }); setPreview(null); }} />
-          <Button disabled={acting !== null} onClick={() => void previewSetup()}>{t("client_setup.preview")}</Button>
-        </div>
-        {preview && <>
-          <p className="field-hint">{preview.gateway_url} · {preview.config_path}</p>
-          <div className="table-scroll"><table className="table"><thead><tr><th scope="col">{t("client_setup.pool")}</th><th scope="col">{t("models.effort_levels")}</th><th scope="col">{t("client_setup.evidence")}</th></tr></thead>
-            <tbody>{preview.classes.map((entry) => <tr key={entry.model}><td>{entry.display_name}</td><td>{entry.effort_levels.join(" / ") || t("common.unknown")}</td><td>{entry.capability_source}</td></tr>)}</tbody>
-          </table></div>
-          {preview.unavailable_classes.length > 0 && <p className="field-hint">{t("client_setup.unavailable", { ids: preview.unavailable_classes.join(", ") })}</p>}
-          {preview.notes.map((note) => <p className="field-hint" key={note}>{note}</p>)}
-          <ChangesTable rows={preview.proposal.changes} kind="proposal" />
-          <Button disabled={acting !== null} kind="primary" onClick={() => setConfirm({ title: t("client_setup.apply"), body: t("client_setup.confirm"), confirmLabel: t("client_setup.apply"), onConfirm: () => void applySetup() })}>{t("client_setup.apply")}</Button>
-        </>}
-      </Section>
       <Section title={t("takeover.section")} hint={t("takeover.section_hint")}>
         {loadError ? (
           <Empty>{t("takeover.load_failed", { err: loadError })}</Empty>
@@ -212,11 +221,12 @@ export default function Takeover() {
               <AgentRow
                 key={view.agent}
                 view={view}
-                acting={acting === view.agent}
+                acting={acting !== null}
                 strategy={strategies[view.agent] ?? "keep_external"}
                 onStrategy={(next) =>
                   setStrategies((current) => ({ ...current, [view.agent]: next }))
                 }
+                onSetupMenu={MENU_AGENTS.includes(view.agent) ? () => openSetup(view.agent) : undefined}
                 onAdopt={(proposal) =>
                   setConfirm({
                     title: t("takeover.confirm_adopt_title", {
@@ -260,6 +270,79 @@ export default function Takeover() {
           </div>
         )}
       </Section>
+      {setupAgent && (
+        <Drawer
+          title={`${t("takeover.sync_menu")} · ${t(`takeover.agent.${setupAgent}`)}`}
+          onClose={closeSetup}
+        >
+          <p className="section-hint">{t("client_setup.hint")}</p>
+          <div className="controls">
+            <Field label={t("client_setup.default")}>
+              <Select
+                value={setup.default_class ?? "keep"}
+                ariaLabel={t("client_setup.default")}
+                disabled={acting !== null}
+                options={[
+                  { value: "keep", label: t("client_setup.keep") },
+                  ...["fast", "standard", "reasoning", "frontier"].map((tier) => ({
+                    value: `${tier}-class`, label: t(`tier.${tier}` as TKey),
+                  })),
+                ]}
+                onChange={(value) => {
+                  setSetup({ ...setup, default_class: value === "keep" ? null : value });
+                  setPreview(null);
+                }}
+              />
+            </Field>
+            <div className="field-actions">
+              <Button disabled={acting !== null} onClick={() => void previewSetup()}>
+                {t("client_setup.preview")}
+              </Button>
+            </div>
+          </div>
+          <Toggle
+            label={t("client_setup.standby")}
+            checked={setup.standby}
+            disabled={acting !== null}
+            onChange={(standby) => { setSetup({ ...setup, standby }); setPreview(null); }}
+          />
+          {setupError && <p className="field-error" role="alert">{setupError}</p>}
+          {preview && <>
+            <p className="field-hint">{preview.gateway_url} · {preview.config_path}</p>
+            <div className="table-scroll">
+              <table className="table">
+                <thead><tr>
+                  <th scope="col">{t("client_setup.pool")}</th>
+                  <th scope="col">{t("models.effort_levels")}</th>
+                  <th scope="col">{t("client_setup.evidence")}</th>
+                </tr></thead>
+                <tbody>{preview.classes.map((entry) => <tr key={entry.model}>
+                  <td>{entry.display_name}</td>
+                  <td>{entry.effort_levels.join(" / ") || t("common.unknown")}</td>
+                  <td>{entry.capability_source}</td>
+                </tr>)}</tbody>
+              </table>
+            </div>
+            {preview.unavailable_classes.length > 0 && (
+              <p className="field-hint">{t("client_setup.unavailable", { ids: preview.unavailable_classes.join(", ") })}</p>
+            )}
+            {preview.notes.map((note) => <p className="field-hint" key={note}>{note}</p>)}
+            <Disclosure title={t("takeover.hint.ready", { n: preview.proposal.changes.length })} defaultOpen>
+              <div className="table-scroll"><ChangesTable rows={preview.proposal.changes} kind="proposal" /></div>
+            </Disclosure>
+            <div className="controls">
+              <Button disabled={acting !== null} kind="primary" onClick={() => setConfirm({
+                title: t("client_setup.apply"),
+                body: t("client_setup.confirm"),
+                confirmLabel: t("client_setup.apply"),
+                onConfirm: () => void applySetup(),
+              })}>
+                {t("client_setup.apply")}
+              </Button>
+            </div>
+          </>}
+        </Drawer>
+      )}
       <ConfirmDialog request={confirm} onClose={() => setConfirm(null)} />
     </>
   );
@@ -274,6 +357,7 @@ function AgentRow({
   onAdopt,
   onAdoptAgain,
   onRelease,
+  onSetupMenu,
 }: {
   view: TakeoverView;
   acting: boolean;
@@ -282,6 +366,9 @@ function AgentRow({
   onAdopt: (proposal: TakeoverProposal) => void;
   onAdoptAgain: () => void;
   onRelease: () => void;
+  /** Present only for agents the native menu can be written to; the row is
+   * the one place that client's actions live, takeover and menu alike. */
+  onSetupMenu?: () => void;
 }) {
   const { t } = useI18n();
   const status = view.status;
@@ -298,7 +385,7 @@ function AgentRow({
         : null;
 
   return (
-    <div className="list-row">
+    <div className="list-row" data-agent={view.agent}>
       <div className="row-main">
         <span className="row-title mono">{agentName}</span>
         <Badge tone={stateTone(status)}>{stateLabel}</Badge>
@@ -307,6 +394,11 @@ function AgentRow({
       </div>
       {(holdsOwnership(status)) && (
         <div className="controls">
+          {onSetupMenu && (
+            <Button kind="ghost" disabled={acting} onClick={onSetupMenu}>
+              {t("takeover.sync_menu")}
+            </Button>
+          )}
           {status.state === "conflict" && (
             <Select
               ariaLabel={t("takeover.strategy.label")}
@@ -330,6 +422,11 @@ function AgentRow({
       )}
       {status.state === "ready" && (
         <div className="controls">
+          {onSetupMenu && (
+            <Button kind="ghost" disabled={acting} onClick={onSetupMenu}>
+              {t("takeover.sync_menu")}
+            </Button>
+          )}
           <Button kind="primary" disabled={acting} onClick={() => onAdopt(status.proposal)}>
             {acting ? t("takeover.working") : t("takeover.adopt")}
           </Button>
@@ -337,6 +434,11 @@ function AgentRow({
       )}
       {status.state === "released" && (
         <div className="controls">
+          {onSetupMenu && (
+            <Button kind="ghost" disabled={acting} onClick={onSetupMenu}>
+              {t("takeover.sync_menu")}
+            </Button>
+          )}
           <Button kind="primary" disabled={acting} onClick={onAdoptAgain}>
             {acting ? t("takeover.working") : t("takeover.adopt_again")}
           </Button>
@@ -373,10 +475,13 @@ function StatusDetail({
       return <p className="row-sub">{t("takeover.hint.unsupported")}</p>;
 
     case "not_detected":
+      // The localized hint already states the finding in the page's own
+      // words; the backend's raw English reason (e.g. "no OpenCode
+      // configuration found") would repeat it verbatim after the
+      // translation, so it rides only in the hover title.
       return (
-        <p className="row-sub">
+        <p className="row-sub" title={status.reason}>
           {t("takeover.hint.not_detected", { agent: agentName })}
-          {status.reason && <span className="muted"> · {status.reason}</span>}
         </p>
       );
 
