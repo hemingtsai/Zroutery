@@ -3,6 +3,7 @@
 //! Runs the aggregating proxy in-process and exposes it through a menu bar
 //! item plus a dashboard window.
 
+mod accent;
 #[cfg(feature = "account")]
 mod account_binding;
 #[cfg(all(test, feature = "account", feature = "newapi"))]
@@ -31,6 +32,9 @@ pub mod takeover_commands;
 #[cfg(all(feature = "account-maint", feature = "account"))]
 mod token_capture;
 mod tray;
+mod tray_commands;
+mod tray_panel;
+mod usage_export;
 
 use std::sync::Arc;
 
@@ -74,6 +78,7 @@ pub fn run() {
     }
 
     builder = builder.plugin(tauri_plugin_clipboard_manager::init());
+    builder = builder.plugin(tauri_plugin_dialog::init());
 
     // The notification plugin carries the failures nobody is looking at, and
     // the deep-link plugin owns the `zroutery://` scheme. The global
@@ -89,6 +94,10 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::get_snapshot,
             commands::get_activity,
+            commands::get_system_accent,
+            tray_commands::get_tray_snapshot,
+            tray_commands::tray_set_provider_enabled,
+            tray_commands::tray_set_gateway_running,
             commands::get_usage_days,
             commands::query_usage_history,
             commands::get_logs,
@@ -144,12 +153,16 @@ pub fn run() {
             commands::regenerate_token,
             commands::clear_stats,
             commands::export_usage_history,
+            commands::export_usage_history_file,
             commands::import_usage_history,
             commands::clear_client_usage,
             commands::release_wallet_hold,
             commands::reset_model_health,
             commands::copy_text,
             commands::hide_window,
+            commands::tray_panel_ready,
+            commands::hide_tray_panel,
+            commands::show_dashboard,
             commands::quit_app,
             commands::ccswitch_preview,
             commands::ccswitch_import,
@@ -418,6 +431,11 @@ pub fn run() {
         })
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() == tray_panel::LABEL {
+                    api.prevent_close();
+                    let _ = tray_panel::hide(window.app_handle());
+                    return;
+                }
                 // The close button is a window action; what it does to the
                 // process is the user's setting. Keep-in-tray hides the
                 // window and everything keeps running; otherwise closing

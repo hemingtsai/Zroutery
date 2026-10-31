@@ -45,6 +45,28 @@ pub fn get_activity(desktop: State<'_, Arc<Desktop>>) -> Cmd<Activity> {
     Ok(desktop.activity())
 }
 
+/// AppKit must be read on the UI thread; slow Linux desktop settings are read
+/// off it. No OS preference or application configuration is changed.
+#[tauri::command]
+pub async fn get_system_accent(app: AppHandle) -> Cmd<Option<crate::accent::SystemAccent>> {
+    #[cfg(target_os = "macos")]
+    {
+        let (send, receive) = tokio::sync::oneshot::channel();
+        app.run_on_main_thread(move || {
+            let _ = send.send(crate::accent::current());
+        })
+        .map_err(|error| error.to_string())?;
+        receive.await.map_err(|error| error.to_string())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app;
+        tauri::async_runtime::spawn_blocking(crate::accent::current)
+            .await
+            .map_err(|error| error.to_string())
+    }
+}
+
 /// Daily totals for the Activity page's charts.
 ///
 /// `days` is the size of the window ending today, and the reply always holds
@@ -912,12 +934,46 @@ pub async fn release_wallet_hold(
 }
 
 #[tauri::command]
-pub fn export_usage_history(desktop: State<'_, Arc<Desktop>>) -> Cmd<String> {
-    serde_json::to_string_pretty(&serde_json::json!({
-        "schema_version": 1,
-        "records": desktop.core.stats().export_history()?,
-    }))
-    .map_err(|e| e.to_string())
+pub async fn export_usage_history(desktop: State<'_, Arc<Desktop>>) -> Cmd<String> {
+    let desktop = Arc::clone(desktop.inner());
+    tauri::async_runtime::spawn_blocking(move || {
+        serde_json::to_string_pretty(&crate::usage_export::archive(desktop.core.stats())?)
+            .map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn export_usage_history_file(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    desktop: State<'_, Arc<Desktop>>,
+) -> Cmd<Option<String>> {
+    use tauri_plugin_dialog::DialogExt;
+    let (send, receive) = tokio::sync::oneshot::channel();
+    app.dialog()
+        .file()
+        .set_parent(&window)
+        .set_file_name(format!(
+            "zroutery-usage-{}.json",
+            chrono::Local::now().format("%Y%m%d-%H%M%S")
+        ))
+        .add_filter("JSON", &["json"])
+        .save_file(move |path| {
+            let _ = send.send(path);
+        });
+    let Some(path) = receive.await.map_err(|error| error.to_string())? else {
+        return Ok(None);
+    };
+    let path = path.into_path().map_err(|error| error.to_string())?;
+    let desktop = Arc::clone(desktop.inner());
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::usage_export::write_archive(desktop.core.stats(), &path)?;
+        Ok(Some(path.display().to_string()))
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
@@ -972,6 +1028,25 @@ pub fn hide_window(app: AppHandle) -> Cmd<()> {
     if let Some(window) = app.get_webview_window("main") {
         window.hide().map_err(|e| e.to_string())?;
     }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn tray_panel_ready(app: AppHandle, window: tauri::WebviewWindow) -> Cmd<()> {
+    if window.label() != crate::tray_panel::LABEL {
+        return Err("only the tray panel can acknowledge readiness".into());
+    }
+    crate::tray_panel::ready(&app)
+}
+
+#[tauri::command]
+pub fn hide_tray_panel(app: AppHandle) -> Cmd<()> {
+    crate::tray_panel::hide(&app)
+}
+
+#[tauri::command]
+pub fn show_dashboard(app: AppHandle) -> Cmd<()> {
+    tray::show_dashboard(&app);
     Ok(())
 }
 

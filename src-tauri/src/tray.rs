@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
-use tauri::tray::{TrayIconBuilder, TrayIconEvent};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, Wry};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 
@@ -29,6 +29,7 @@ pub const GATEWAY_STATE_EVENT: &str = "zroutery://gateway-state-changed";
 /// system directly.
 struct Labels {
     open: &'static str,
+    panel: &'static str,
     gateway_stopped: &'static str,
     start: &'static str,
     copy_url: &'static str,
@@ -40,6 +41,7 @@ fn labels() -> Labels {
     if system_language_is_chinese() {
         Labels {
             open: "打开 Zroutery",
+            panel: "打开快切面板",
             gateway_stopped: "网关:已停止",
             start: "启动网关",
             copy_url: "复制 Base URL",
@@ -49,6 +51,7 @@ fn labels() -> Labels {
     } else {
         Labels {
             open: "Open Zroutery",
+            panel: "Open quick panel",
             gateway_stopped: "Gateway: stopped",
             start: "Start gateway",
             copy_url: "Copy base URL",
@@ -85,8 +88,10 @@ pub struct TrayHandles {
 }
 
 pub fn build(app: &AppHandle) -> tauri::Result<()> {
+    app.manage(crate::tray_panel::Controller::default());
     let l = labels();
     let open = MenuItem::with_id(app, "open", l.open, true, None::<&str>)?;
+    let panel = MenuItem::with_id(app, "panel", l.panel, true, None::<&str>)?;
     let status = MenuItem::with_id(app, "status", l.gateway_stopped, false, None::<&str>)?;
     let toggle = MenuItem::with_id(app, "toggle", l.start, true, None::<&str>)?;
     let copy_url = MenuItem::with_id(app, "copy_url", l.copy_url, true, None::<&str>)?;
@@ -97,6 +102,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
         app,
         &[
             &open,
+            &panel,
             &PredefinedMenuItem::separator(app)?,
             &status,
             &toggle,
@@ -110,12 +116,18 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
 
     let mut builder = TrayIconBuilder::with_id(TRAY_ID)
         .menu(&menu)
-        .show_menu_on_left_click(true)
+        .show_menu_on_left_click(false)
         .tooltip("Zroutery")
         .on_menu_event(on_menu_event)
         .on_tray_icon_event(|tray, event| {
-            if let TrayIconEvent::DoubleClick { .. } = event {
-                show_dashboard(tray.app_handle());
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                rect,
+                ..
+            } = event
+            {
+                crate::tray_panel::toggle(tray.app_handle(), rect);
             }
         });
 
@@ -144,6 +156,7 @@ fn on_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
     let app = app.clone();
     match event.id().as_ref() {
         "open" => show_dashboard(&app),
+        "panel" => crate::tray_panel::show_at_cursor(&app),
         "quit" => quit(&app),
         "toggle" => {
             tauri::async_runtime::spawn(async move {
@@ -194,6 +207,7 @@ fn on_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
 }
 
 pub fn show_dashboard(app: &AppHandle) {
+    let _ = crate::tray_panel::hide(app);
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
         let _ = window.unminimize();

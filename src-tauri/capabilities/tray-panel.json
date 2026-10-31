@@ -1,0 +1,17 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "tray-panel",
+  "description": "Quick panel reads and targeted actions. Configuration, credentials, imports and arbitrary filesystem access remain in the main window.",
+  "windows": ["tray-panel"],
+  "permissions": [
+    "allow-get-tray-snapshot",
+    "allow-get-system-accent",
+    "allow-tray-set-provider-enabled",
+    "allow-tray-set-gateway-running",
+    "allow-tray-panel-ready",
+    "allow-hide-tray-panel",
+    "allow-show-dashboard",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten"
+  ]
+}
