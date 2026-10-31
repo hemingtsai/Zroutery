@@ -74,7 +74,7 @@ impl Upstream {
     ) -> Result<Value> {
         let response = tokio::time::timeout(
             Duration::from_secs(timeout_secs),
-            self.client()
+            self.client_for(provider)
                 .get(url)
                 .headers(build_headers(provider, api_key)?)
                 .send(),

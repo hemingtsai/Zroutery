@@ -65,6 +65,19 @@ impl AppConfig {
         let mut notes = Vec::new();
         self.routing.apply_legacy();
         for provider in &mut self.providers {
+            // The official System One lane moved, independently of the chat
+            // free tier. Only this exact legacy endpoint is migrated; custom
+            // gateways, credentials, profiles and proxy choices stay intact.
+            if provider.kind.is_decision()
+                && provider.base_url.trim().trim_end_matches('/') == "https://opencode.ai/zen"
+                && provider.decision.path.trim() == "/v1/systemone"
+            {
+                provider.base_url = "https://opencode.ai/inference/systemone".into();
+                notes.push(format!(
+                    "Provider `{}` migrated to the official OpenCode System One inference endpoint",
+                    provider.name
+                ));
+            }
             if provider.kind == super::provider::ProviderKind::OpenCodeZenFree
                 && matches!(
                     provider.base_url.trim_end_matches('/'),

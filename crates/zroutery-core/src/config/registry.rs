@@ -38,6 +38,11 @@ pub struct ProviderConfig {
     pub timeout_secs: u64,
     #[serde(default = "default_connect_timeout")]
     pub connect_timeout_secs: u64,
+    /// Override the gateway's proxy bypass for this upstream only. Missing/null
+    /// inherits `server.bypass_proxy`; false follows the configured system proxy,
+    /// true stays direct. `ZROUTERY_NO_PROXY` still forces every call direct.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bypass_proxy: Option<bool>,
     /// Anthropic API version header. Ignored for OpenAI compatible providers.
     #[serde(default)]
     pub anthropic_version: Option<String>,
@@ -370,6 +375,7 @@ impl ProviderConfig {
             enabled: true,
             timeout_secs: default_timeout(),
             connect_timeout_secs: default_connect_timeout(),
+            bypass_proxy: None,
             anthropic_version: None,
             api_surface: ApiSurface::default(),
             quirks: ProviderQuirks::default(),

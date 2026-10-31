@@ -21,6 +21,7 @@
 //! | `json` | `list_models`, `fetch_balance`, `get_json` |
 //! | `catalogue` | `DiscoveredModel` and the shapes catalogues arrive in |
 //! | `headers` | the client fingerprints and every `build_headers*` |
+//! | `http` | shared direct/system-proxy pools and provider overrides |
 //! | `encode` | `EncodeMode`, `encode_for`, `encode_for_mode` |
 //! | `errors` | reading an upstream refusal, and the body truncation |
 //!
@@ -50,6 +51,7 @@ mod errors;
 
 pub(crate) use errors::{retry_advice, MAX_TOTAL_RETRIES};
 mod headers;
+mod http;
 mod json;
 mod stream;
 
@@ -115,7 +117,7 @@ pub type EventStream = Pin<Box<dyn Stream<Item = Result<StreamEvent>> + Send>>;
 
 #[derive(Debug)]
 pub struct Upstream {
-    client: RwLock<reqwest::Client>,
+    clients: RwLock<http::HttpClients>,
     connect_timeout_secs: u64,
 }
 
@@ -125,81 +127,22 @@ impl Default for Upstream {
     }
 }
 
-fn build_http_client(bypass_proxy: bool, connect_timeout_secs: u64) -> reqwest::Client {
-    tracing::info!(
-        bypass_proxy,
-        connect_timeout_secs,
-        "building upstream HTTP client"
-    );
-    // Read once: the variable is allowed to change, but one client must not be
-    // half-proxied. `rebuild_client` is how a runtime change reaches the pool.
-    let direct = bypass_proxy || std::env::var("ZROUTERY_NO_PROXY").is_ok();
-    // The properties below are the client's contract, not tuning: HTTP/1.1
-    // only, no redirect following, and the proxy decision. They are applied to
-    // the fallback too, so a client that failed to build its TLS pool is still
-    // not a client that follows a 3xx to another host with `x-api-key` on it.
-    let configure = |builder: reqwest::ClientBuilder, pooled: bool| {
-        let mut builder = builder
-            .connect_timeout(Duration::from_secs(connect_timeout_secs))
-            .http1_only()
-            // Never follow a redirect. reqwest strips Authorization across
-            // hosts but not custom headers, and the Anthropic key rides in
-            // x-api-key, so a 3xx would hand the key to whatever host it names;
-            // a downgrade to plain http would also put it on the wire in the
-            // clear.
-            .redirect(reqwest::redirect::Policy::none())
-            .user_agent(USER_AGENT);
-        if pooled {
-            builder = builder
-                .pool_idle_timeout(Duration::from_secs(90))
-                // A busy provider used to be served by an unbounded idle pool:
-                // every finished connection sat there until the idle timeout,
-                // and fifty concurrent streams to one host held fifty file
-                // descriptors for that long. Sixteen is comfortably above the
-                // concurrency a single desktop instance generates.
-                .pool_max_idle_per_host(16)
-                // Keepalive probes let a dead relay be noticed between
-                // requests rather than by the next request timing out.
-                .tcp_keepalive(Duration::from_secs(60));
-        }
-        if direct {
-            builder = builder.no_proxy();
-        }
-        builder
-    };
-
-    configure(reqwest::Client::builder(), true)
-        .build()
-        .unwrap_or_else(|e| {
-            // The A3 plan said `expect`. This keeps a usable process instead:
-            // a panic in `AppState::new` would take the desktop shell down at
-            // startup, while the degraded client still refuses redirects and
-            // still speaks HTTP/1.1 — the two properties whose loss would be a
-            // security incident rather than a performance regression. The log
-            // is an error, so the fallback is never quiet.
-            tracing::error!("falling back to an unpooled HTTP client: {e}");
-            configure(reqwest::Client::builder(), false)
-                .build()
-                .expect("the fallback client must build when TLS does")
-        })
-}
-
 impl Upstream {
     pub fn new(bypass_proxy: bool, connect_timeout_secs: u64) -> Self {
         Upstream {
-            client: RwLock::new(build_http_client(bypass_proxy, connect_timeout_secs)),
+            clients: RwLock::new(http::HttpClients::new(bypass_proxy, connect_timeout_secs)),
             connect_timeout_secs,
         }
     }
 
     /// Rebuild the HTTP client (e.g. when bypass_proxy setting changes at runtime).
     pub fn rebuild_client(&self, bypass_proxy: bool) {
-        *crate::sync::write(&self.client) =
-            build_http_client(bypass_proxy, self.connect_timeout_secs);
+        *crate::sync::write(&self.clients) =
+            http::HttpClients::new(bypass_proxy, self.connect_timeout_secs);
     }
 
-    fn client(&self) -> reqwest::Client {
-        crate::sync::read(&self.client).clone()
+    fn client_for(&self, provider: &ProviderConfig) -> reqwest::Client {
+        crate::sync::read(&self.clients).for_provider(provider)
     }
 
     /// Time a minimal completion, for an election.
@@ -261,7 +204,7 @@ impl Upstream {
         client: &ClientIdentity,
     ) -> Result<ChatResponse> {
         let request = self
-            .client()
+            .client_for(provider)
             .post(provider.chat_url())
             .headers(build_headers_for_identity(provider, api_key, client)?)
             .json(body);
@@ -323,7 +266,7 @@ impl Upstream {
     ) -> Result<Decision> {
         let identity = anonymous_identity(provider);
         let request = self
-            .client()
+            .client_for(provider)
             .post(provider.decision.url(&provider.base_url))
             .headers(build_headers_for_identity(provider, api_key, &identity)?)
             .json(body);

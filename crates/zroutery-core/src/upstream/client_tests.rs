@@ -283,6 +283,130 @@ async fn codex_profile_overrides_the_default_ua_on_the_actual_wire() {
     assert!(!request.contains("\r\nuser-agent: opencode/"));
 }
 
+fn with_proxy(inherited_bypass: bool, port: u16) -> super::Upstream {
+    super::Upstream {
+        clients: std::sync::RwLock::new(super::http::HttpClients::with_test_proxy(
+            inherited_bypass,
+            &format!("http://127.0.0.1:{port}"),
+        )),
+        connect_timeout_secs: 5,
+    }
+}
+
+#[tokio::test]
+async fn only_the_opted_in_decision_provider_uses_the_proxy() {
+    let (proxy, proxied) = one_shot(response(
+        "HTTP/1.1 200 OK",
+        "content-type: application/json\r\n",
+        r#"{"answers":{"decision":{"type":"noul","noul":0.03}}}"#,
+    ))
+    .await;
+    let upstream = with_proxy(true, proxy);
+    let mut jev = ProviderConfig::new("jev", "Jev fixture", ProviderKind::Decision);
+    jev.base_url = "http://proxy-only.invalid".into();
+    jev.bypass_proxy = Some(false);
+    jev.extra_headers
+        .insert("x-opencode-client".into(), "zroutery".into());
+    let body = super::build_decision_body(
+        "non-executable fixture",
+        "Is it dangerous?",
+        "jev-1.13-free",
+    );
+    let answer = upstream.send_decision(&jev, None, &body).await.unwrap();
+    assert_eq!(answer.noul, 0.03);
+    let request = proxied.await.unwrap();
+    assert!(
+        request.starts_with("POST http://proxy-only.invalid/v1/systemone HTTP/1.1\r\n"),
+        "{request}"
+    );
+    assert!(request
+        .to_ascii_lowercase()
+        .contains("\r\nx-opencode-client: zroutery\r\n"));
+    assert!(!request.to_ascii_lowercase().contains("authorization:"));
+    assert!(!request.contains("opencode/latest"));
+
+    let (port, direct) = one_shot(response(
+        "HTTP/1.1 200 OK",
+        "content-type: application/json\r\n",
+        COMPLETION_BODY,
+    ))
+    .await;
+    let sibling = local_provider(port);
+    assert_eq!(sibling.bypass_proxy, None);
+    upstream
+        .send(
+            &sibling,
+            Some("sk-sibling-fixture"),
+            &serde_json::json!({"model":"m"}),
+        )
+        .await
+        .unwrap();
+    let request = direct.await.unwrap();
+    assert!(
+        request.starts_with("POST /v1/chat/completions HTTP/1.1\r\n"),
+        "{request}"
+    );
+    assert!(request
+        .to_ascii_lowercase()
+        .contains("\r\nauthorization: bearer sk-sibling-fixture\r\n"));
+}
+
+#[tokio::test]
+async fn an_explicit_direct_provider_bypasses_a_proxied_gateway_default() {
+    let upstream = with_proxy(false, 1);
+    let (port, direct) = one_shot(response(
+        "HTTP/1.1 200 OK",
+        "content-type: application/json\r\n",
+        COMPLETION_BODY,
+    ))
+    .await;
+    let mut provider = local_provider(port);
+    provider.bypass_proxy = Some(true);
+    upstream
+        .send(&provider, None, &serde_json::json!({"model":"m"}))
+        .await
+        .unwrap();
+    assert!(direct
+        .await
+        .unwrap()
+        .starts_with("POST /v1/chat/completions HTTP/1.1\r\n"));
+}
+
+#[tokio::test]
+async fn a_proxied_decision_refusal_is_not_retried_directly() {
+    let direct = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let (proxy, captured) = one_shot(response(
+        "HTTP/1.1 451 Unavailable For Legal Reasons",
+        "content-type: application/json\r\n",
+        r#"{"error":{"type":"server_error","message":"Endpoint is unavailable."}}"#,
+    ))
+    .await;
+    let upstream = with_proxy(true, proxy);
+    let mut provider = ProviderConfig::new("jev", "Jev fixture", ProviderKind::Decision);
+    provider.base_url = format!("http://{}", direct.local_addr().unwrap());
+    provider.bypass_proxy = Some(false);
+    let error = upstream
+        .send_decision(
+            &provider,
+            None,
+            &super::build_decision_body("fixture", "Dangerous?", "jev-1.13-free"),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.status().as_u16(), 451);
+    assert_eq!(super::retry_advice(&error, 0, false, 2), None);
+    assert!(captured
+        .await
+        .unwrap()
+        .starts_with("POST http://127.0.0.1:"));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), direct.accept())
+            .await
+            .is_err(),
+        "a proxy refusal must never trigger a direct retry"
+    );
+}
+
 /// The environment variable is a second way to ask for the same direct path,
 /// because a packaged desktop build cannot pass `bypass_proxy` before the first
 /// client exists.
@@ -306,7 +430,8 @@ async fn the_no_proxy_environment_switch_keeps_the_request_direct() {
         COMPLETION_BODY,
     ))
     .await;
-    let provider = local_provider(port);
+    let mut provider = local_provider(port);
+    provider.bypass_proxy = Some(false);
     // `bypass_proxy = false`: the variable is the only thing asking for direct.
     let upstream = super::Upstream::new(false, 5);
 

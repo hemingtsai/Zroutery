@@ -70,7 +70,7 @@ impl Upstream {
         let mut retries = 0u32;
         let response = loop {
             let request = self
-                .client()
+                .client_for(provider)
                 .post(provider.chat_url())
                 .headers(build_headers_for_identity(provider, api_key, client)?)
                 .json(body);

@@ -270,19 +270,19 @@ fn the_zen_jev_preset_validates() {
         "OpenCode Zen · Jev (free)",
         ProviderKind::Decision,
     );
-    provider.base_url = "https://opencode.ai/zen".into();
+    provider.base_url = "https://opencode.ai/inference/systemone".into();
     provider.key_ref = String::new();
     provider.client_profile = ProviderClientProfile::Native;
     provider
         .extra_headers
         .insert("x-opencode-client".into(), "zroutery".into());
-    provider.timeout_secs = 4;
-    provider.connect_timeout_secs = 4;
+    provider.timeout_secs = 15;
+    provider.connect_timeout_secs = 10;
     provider.decision.path = "/v1/systemone".into();
     provider.decision.threshold = 0.6;
     assert_eq!(
         provider.decision.url(&provider.base_url),
-        "https://opencode.ai/zen/v1/systemone"
+        "https://opencode.ai/inference/systemone/v1/systemone"
     );
     cfg.providers.push(provider);
     cfg.models.push(ModelEntry::for_upstream(
@@ -306,6 +306,76 @@ fn the_zen_jev_preset_validates() {
         errors.is_empty(),
         "the preset must be a valid config: {errors:?}"
     );
+}
+
+#[test]
+fn the_legacy_jev_endpoint_migrates_without_changing_operator_choices_or_model_identity() {
+    let mut cfg = sample();
+    let mut legacy = ProviderConfig::new("custom-jev-id", "Jev", ProviderKind::Decision);
+    legacy.base_url = "https://opencode.ai/zen/".into();
+    legacy.bypass_proxy = Some(false);
+    legacy.client_profile = ProviderClientProfile::OpenCodeCli;
+    legacy.key_ref = "a-private-reference".into();
+    legacy.timeout_secs = 21;
+    legacy.decision.threshold = 0.7;
+    let mut expected = legacy.clone();
+    expected.base_url = "https://opencode.ai/inference/systemone".into();
+    let mut custom = legacy.clone();
+    custom.id = "custom-endpoint".into();
+    custom.decision.path = "/v1/my-decision".into();
+    let mut other_host = legacy.clone();
+    other_host.id = "other-host".into();
+    other_host.base_url = "https://opencode.ai.example/zen".into();
+    cfg.providers
+        .extend([legacy, custom.clone(), other_host.clone()]);
+    cfg.models.push(ModelEntry::for_upstream(
+        "custom-jev-id",
+        "jev-1.13-free",
+        None,
+    ));
+    let models = cfg.models.clone();
+
+    let notes = cfg.normalize();
+    assert!(notes
+        .iter()
+        .any(|note| note.contains("official OpenCode System One")));
+    assert_eq!(cfg.provider("custom-jev-id"), Some(&expected));
+    assert_eq!(cfg.provider("custom-endpoint"), Some(&custom));
+    assert_eq!(cfg.provider("other-host"), Some(&other_host));
+    assert_eq!(cfg.models, models);
+    assert!(
+        cfg.normalize().is_empty(),
+        "the migration must be idempotent"
+    );
+}
+
+#[test]
+fn a_provider_proxy_override_is_optional_and_round_trips_without_changing_the_gateway() {
+    let provider = ProviderConfig::new("p", "Provider", ProviderKind::Decision);
+    let original = serde_json::to_value(&provider).unwrap();
+    assert!(original.get("bypass_proxy").is_none());
+    let restored: ProviderConfig = serde_json::from_value(original.clone()).unwrap();
+    assert_eq!(restored.bypass_proxy, None);
+    for value in [
+        serde_json::Value::Null,
+        serde_json::json!(true),
+        serde_json::json!(false),
+    ] {
+        let mut document = original.clone();
+        document["bypass_proxy"] = value.clone();
+        let restored: ProviderConfig = serde_json::from_value(document).unwrap();
+        assert_eq!(restored.bypass_proxy, value.as_bool());
+        let mut config = sample();
+        config.server.bypass_proxy = true;
+        config.providers.push(restored);
+        let restored: AppConfig =
+            serde_json::from_str(&serde_json::to_string(&config).unwrap()).unwrap();
+        assert!(restored.server.bypass_proxy);
+        assert_eq!(
+            restored.provider("p").unwrap().bypass_proxy,
+            value.as_bool()
+        );
+    }
 }
 
 #[test]
