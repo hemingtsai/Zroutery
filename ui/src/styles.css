@@ -306,17 +306,16 @@
   --line: #79747e;
   --line-muted: #cac4d0;
   /*
-   * The neutral-variant roles follow the accent too — a blue seed tints the
-   * outline blue-grey, the same way Material You recolours outline/outline-
-   * variant with the seed. Without an accent the fallback is `transparent`,
-   * which leaves the line as 55%-alpha text over its surface ≈ the official
-   * #79747e on white; with one, every hairline, table rule and the segment
-   * ring shifts hue with the fill it frames (the purple-grey ring on a blue
-   * pill was the "边框的线爆炸了"). Boundary contrast stays ≥3:1 against the
-   * container fills for every accent (verified worst 3.68:1).
+   * v3.2 REVERTED the accent-following derivations for the containers and
+   * these lines: layered CSS color-mix "derivations" (tone-limited primary,
+   * accent-tinted containers, accent-mixed lines) drifted the skin into a
+   * muddy custom palette the user called hallucinated ("溜溜梅"). The
+   * official baseline values below are Google's own design and read clean;
+   * accent-following primary stays (the one mapping that was accepted).
+   * A real full-seed recolour needs the HCT tonal engine
+   * (@material/material-color-utilities), not hand-mixed percentages —
+   * recorded as a future item, not a CSS trick.
    */
-  --line: color-mix(in srgb, var(--system-accent, transparent) 45%, var(--text));
-  --line-muted: color-mix(in srgb, var(--system-accent, transparent) 14%, var(--bg));
   /* --border-primary is deliberately NOT re-declared: it is var(--line) on
      the document element, so it picks the outline up on its own — and a
      literal here would stick as a computed colour into the dark sheet below,
@@ -331,15 +330,7 @@
   --muted: #49454f;
 
   --primary: #6750a4;
-  /*
-   * The accent is tone-limited, not raw: a raw OS accent (#0078d4 and
-   * especially the white/black extremes) is more saturated or lighter than
-   * the M3 light primary register (tone 40, ~6.4:1 under white ink), and a
-   * solid filled button in that voice on a container card is what read as
-   * "过于奇异". 70% toward the text ink mutes every accent into the
-   * baseline register without losing its hue; all on-pairs stay >= 6.3:1.
-   */
-  --primary: color-mix(in srgb, var(--system-accent, #6750a4) 70%, var(--text));
+  --primary: var(--system-accent, #6750a4);
   /* The official filled-button hover — one formula for fallback and accent
      alike, because both speak the same grammar: the state layer is the *on*
      colour at 8% over the container, so a light-theme button gets lighter
@@ -350,21 +341,9 @@
   --on-primary: #ffffff;
   --on-primary: var(--system-accent-fg, #ffffff);
 
-  /*
-   * The tonal containers follow the accent the way Material You recolours
-   * them — mixed toward the primary instead of frozen at the baseline, so a
-   * yellow system accent yields yellow-tinted pills and cards and the scheme
-   * reads as one colour ("强调色生效了一半" was this: primary took the
-   * accent, the containers stayed lavender). The mixes hang off --primary,
-   * so the no-accent fallback lands within a step of the official baseline
-   * (#e0d6ed vs #e8def8). The on-inks stay the fixed dark baseline — mixed
-   * inks fail on the white/black accent extremes, and a coloured container
-   * under a fixed dark ink holds 4.5:1 for every accent Windows offers
-   * (verified: fallback/blue/olive/white/black, worst 10.19:1).
-   */
-  --primary-container: color-mix(in srgb, var(--primary) 30%, var(--bg));
+  --primary-container: #eaddff;
   --on-primary-container: #21005d;
-  --secondary-container: color-mix(in srgb, var(--primary) 20%, var(--bg));
+  --secondary-container: #e8def8;
   --on-secondary-container: #1d192b;
   --error-container: #f9dedc;
   --on-error-container: #410e0b;
@@ -430,11 +409,8 @@
 
   --line: #938f99;
   --line-muted: #49454f;
-  /* The same neutral-variant derivation as the light sheet: pale
-     accent-grey lines over the dark surface, official #938f99 without an
-     accent (55%-alpha pale text ≈ #8a868e over #141218). */
-  --line: color-mix(in srgb, var(--system-accent, transparent) 45%, var(--text));
-  --line-muted: color-mix(in srgb, var(--system-accent, transparent) 14%, var(--surface));
+  /* v3.2: the accent-following line derivation was reverted with the light
+     sheet's — see the note there. */
 
   --text: #e6e0e9;
   --text-2: #cac4d0;
@@ -463,18 +439,10 @@
   --surface-high: #2b2930;
   --container-highest: #36343b;
 
-  /*
-   * The dark containers take the same accent derivation as light: tinted by
-   * the lifted primary (45% accent over white) over the dark surface, so a
-   * yellow accent tints the pills yellow-grey here instead of leaving
-   * purple slabs next to yellow controls. The on-inks are the theme's own
-   * pale text — fixed pale ink on a tinted container clears 4.5:1 for every
-   * accent Windows offers (verified worst 4.87:1 on the white accent).
-   */
-  --primary-container: color-mix(in srgb, var(--primary) 26%, var(--surface));
-  --on-primary-container: var(--text);
-  --secondary-container: color-mix(in srgb, var(--primary) 30%, var(--surface));
-  --on-secondary-container: var(--text);
+  --primary-container: #4f378b;
+  --on-primary-container: #eaddff;
+  --secondary-container: #4a4458;
+  --on-secondary-container: #e8def8;
   --error-container: #8c1d18;
   --on-error-container: #f2b8b5;
 
