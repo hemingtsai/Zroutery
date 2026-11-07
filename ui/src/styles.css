@@ -490,6 +490,8 @@
   --subtle-secondary: rgba(0, 0, 0, 0.035);
   /* ControlAltFillColorSecondary: the switch's off-track fill. */
   --control-alt: rgba(0, 0, 0, 0.024);
+  /* DividerStrokeColorDefault: the NavigationView pane divider. */
+  --divider: rgba(0, 0, 0, 0.06);
 
   --bg: #f5f5f5;
   --surface: #ffffff;
@@ -586,6 +588,7 @@
   --card-shadow: none;
   --subtle-secondary: rgba(255, 255, 255, 0.06);
   --control-alt: rgba(0, 0, 0, 0.1);
+  --divider: rgba(255, 255, 255, 0.08);
   --surface-muted: #141414;
   /* Hover *lightens* in dark — WinUI layers white over the surface
      (ControlFillColorSecondary, rgba(255,255,255,.0605)), and v9's dark
@@ -1382,6 +1385,30 @@ html[data-skin="fluent"] input[type="checkbox"] {
   height: 16px;
   border-radius: 2px;
   background: var(--primary);
+}
+
+/*
+ * The shell chrome follows WinUI's window anatomy: the top area is window
+ * over mica — no solid Background1 band across it, no hairline under it —
+ * the page title speaks Subtitle (20px semibold, no industrial tracking),
+ * and the nav pane's divider is DividerStrokeColorDefault, not the strong
+ * line. The same merge the MD3 sheet applies; the user's screenshot flagged
+ * the fluent side of it.
+ */
+[data-skin="fluent"] .mainbar {
+  height: 48px;
+  background: transparent;
+  border-bottom-color: transparent;
+}
+[data-skin="fluent"] .sidebar {
+  border-right-color: var(--divider);
+}
+[data-skin="fluent"] .mainbar .page-title {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text);
+  text-transform: none;
+  letter-spacing: 0;
 }
 
 * {
