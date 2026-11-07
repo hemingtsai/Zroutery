@@ -2519,6 +2519,16 @@ code,
   justify-content: flex-end;
 }
 
+/*
+ * A numeric setting input is a setting, not a table cell: the 64px `tiny`
+ * width exists for tight table cells (the quota editor), and a lone number
+ * field at the right edge of a settings row reads as a stub. 120px holds the
+ * largest declared value (86400) with room to edit it.
+ */
+.setting-row .setting-right input.tiny {
+  width: 120px;
+}
+
 .grid-two {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
@@ -3070,6 +3080,14 @@ input::placeholder {
   height: 20px;
   padding: 0 8px;
   border-radius: 0;
+  /*
+   * The badge speaks in the UI voice, explicitly. It frequently lives inside
+   * a `.mono` table cell (the ledger's count column), and inherited, its CJK
+   * text falls through the mono stack to the platform's monospace CJK
+   * fallback — SimSun at 12px, next to Roboto/Segoe neighbours. A badge is a
+   * status word, not a column figure; its digits are part of that word.
+   */
+  font-family: var(--font-sans);
   font-size: 12px;
   font-weight: 500;
   background: var(--surface-muted);
