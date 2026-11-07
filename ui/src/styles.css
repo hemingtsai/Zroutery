@@ -224,11 +224,12 @@
    opaque fill swaps (Background1Hover/1Selected) and white-alpha layers in
    dark, per the WinUI compositing model.
 
-   What a skin deliberately does NOT touch: layout tokens (`--control-h` stays
-   30px and `.segment-item` stays 36px, which is what makes the layout stubs
-   meaningful across skins), timing, and the type stack beyond the per-skin
-   family (Roboto for MD3, Segoe UI Variable for Fluent — loaded by
-   `applySkin()`). Status colours ARE re-inked: Fluent takes its official
+   What a skin deliberately does NOT touch: timing, and the type stack beyond
+   the per-skin family (Roboto for MD3, Segoe UI Variable for Fluent — loaded
+   by `applySkin()`). Control heights ARE per skin since v3.1 (the user
+   approved the move: industrial keeps its 30px grid and the layout stubs run
+   industrial only — md3 takes the approved 36px compromise, fluent the
+   official 32px). Status colours ARE re-inked: Fluent takes its official
    success/warning tokens; MD3's baseline defines no success role, so its
    ok/warn are a custom pair built on the official container pattern (tone
    levels matched to the baseline error pair), each recorded below. Elevation:
@@ -276,6 +277,9 @@
 [data-skin="md3"] {
   --font-sans: "Roboto", "Microsoft YaHei", sans-serif;
   --radius: 12px;
+  /* The approved 36px register (between industrial's 30px and M3's 40px);
+     the layer-3 card block states the decision. */
+  --control-h: 36px;
 
   --bg: #fef7ff;
   --surface: #f7f2fa;
@@ -379,6 +383,7 @@
   --bg: #141218;
   --surface: #1d1b20;
   --surface-muted: #211f26;
+  --control-h: 36px;
   --hover: color-mix(in srgb, var(--text) 8%, transparent);
   --selected: color-mix(in srgb, var(--text) 12%, transparent);
 
@@ -469,6 +474,22 @@
 [data-skin="fluent"] {
   --font-sans: "Segoe UI Variable", "Segoe UI", "Microsoft YaHei", sans-serif;
   --radius: 4px;
+  /* The official WinUI control height (32px) — same approved per-skin
+     heights decision as the MD3 sheet's 36px. */
+  --control-h: 32px;
+  /* The WinUI card, from `Common_themeresources_any.xaml` (microsoft-ui-xaml
+     main): CardBackgroundFillColorDefault is 70% white in light, the stroke
+     is CardStrokeColorDefault at 6% black, and the card sits at ThemeShadow
+     depth 8 — WinUI ships no literal shadow values, so the shadow here is
+     the quietest fill that reads as that depth, and the dark theme drops it
+     entirely (dark WinUI separates surfaces by stroke, not shadow). */
+  --card-fill: rgba(255, 255, 255, 0.7);
+  --card-stroke: rgba(0, 0, 0, 0.06);
+  --card-shadow: 0 2px 4px rgba(0, 0, 0, 0.04);
+  /* SubtleFillColorSecondary: the NavigationView item's selected/hover fill. */
+  --subtle-secondary: rgba(0, 0, 0, 0.035);
+  /* ControlAltFillColorSecondary: the switch's off-track fill. */
+  --control-alt: rgba(0, 0, 0, 0.024);
 
   --bg: #f5f5f5;
   --surface: #ffffff;
@@ -551,11 +572,20 @@
  * stays above 3:1 for the non-text uses on the card.
  */
 [data-skin="fluent"][data-theme="dark"] {
-  /* Canvas = Background2 (#1f1f1f), the tone WinUI's dark mica sits at; the
-     card stays Background1 (#292929) above it, and the inset fill drops to
-     Background3 (#141414) — v9's filled-darker direction. */
-  --bg: #1f1f1f;
+  /* Canvas = SolidBackgroundFillColorBase dark (#202020), the tone WinUI's
+     dark mica sits at; the card stays Background1 (#292929) above it, and
+     the inset fill drops to Background3 (#141414) — v9's filled-darker
+     direction. */
+  --bg: #202020;
   --surface: #292929;
+  --control-h: 32px;
+  /* The dark card: 5% white fill over the canvas, separated by the 10%
+     black stroke and no shadow — dark WinUI separates by stroke. */
+  --card-fill: rgba(255, 255, 255, 0.05);
+  --card-stroke: rgba(0, 0, 0, 0.1);
+  --card-shadow: none;
+  --subtle-secondary: rgba(255, 255, 255, 0.06);
+  --control-alt: rgba(0, 0, 0, 0.1);
   --surface-muted: #141414;
   /* Hover *lightens* in dark — WinUI layers white over the surface
      (ControlFillColorSecondary, rgba(255,255,255,.0605)), and v9's dark
@@ -618,12 +648,14 @@
    object language, because the shapes are hardcoded in the shared component
    layer (the `border-radius: 0` on controls is industrial's voice, not a
    variable). Every rule below is scoped to a skin, so industrial — no
-   attribute — matches none of them. Invariants hold throughout: no control
-   changes height (`--control-h` stays 30px, `.segment-item` stays 36px, and
-   the switch keeps its 36x20 box while the skin reshapes the track and the
-   thumb inside it), nothing here re-inks what a layer-2 token already says,
-   and hovers are official — MD3 the on-colour state layer, Fluent the
-   Background fill swap. The charts get no rules (their ink is
+   attribute — matches none of them. Invariants hold throughout: the
+   industrial 30px grid is untouched (the harnesses run industrial only);
+   per skin the control register is the skin's own (md3 36px, fluent 32px)
+   while `.segment-item` stays 36px everywhere and the switch keeps its
+   20px-tall track box (fluent widens it to the official 40px — a horizontal
+   move inside the row) — nothing here re-inks what a layer-2 token already
+   says, and hovers are official — MD3 the on-colour state layer, Fluent the
+   SubtleFill swap. The charts get no rules (their ink is
    color-mix(--text) and picks the skin up from layer 2 without a single
    extra rule). The pager's nav arrows are .linky text actions, not buttons,
    so no matrix entry.
@@ -950,6 +982,74 @@ html[data-skin="md3"] input[type="checkbox"] {
 }
 
 /*
+ * The card layer — the pass v3 skipped and the user named ("md3 没有对应的
+ * 卡片设计"). M3 groups page content in cards; the industrial page is
+ * hairline-flat by conviction, so the section becomes the card: the official
+ * filled-card container (surface-container-highest) at the medium 12px corner.
+ * Nested sections flatten back to plain flow so a card never sits on a card,
+ * and the drawer/dialog/popover stay surfaces rather than cards-on-cards.
+ */
+[data-skin="md3"] .section {
+  gap: 12px;
+  padding: 14px 16px 16px;
+  border-radius: 12px;
+  background: var(--container-highest);
+}
+[data-skin="md3"] .section .section,
+[data-skin="md3"] .drawer .section,
+[data-skin="md3"] .confirm .section,
+[data-skin="md3"] .popover .section {
+  gap: 16px;
+  padding: 0;
+  border-radius: 0;
+  background: none;
+}
+
+/* Rows inside a card keep the outline-variant separators but gain the card's
+   own inset, so a hairline never touches the rounded corner. */
+[data-skin="md3"] .list-row {
+  padding-left: 12px;
+  padding-right: 12px;
+}
+
+/* The KPI tiles read as elevated cards on the filled card: the official
+   elevated-card recipe (surface-container-low fill + the level-1 shadow). */
+[data-skin="md3"] .kpi-cell {
+  box-shadow: var(--shadow-1);
+}
+
+/* The outlined text field: M3's resting fill is transparent — a grey slab
+   inside a grey card was reading as neither. The disabled register keeps its
+   own fill. */
+[data-skin="md3"] input:not([type="checkbox"]):not([readonly]),
+[data-skin="md3"] .select-trigger {
+  background: transparent;
+}
+[data-skin="md3"] .select-trigger:hover:not(:focus-visible) {
+  background: transparent;
+}
+
+/*
+ * The 36px register — the approved compromise between the industrial 30px
+ * grid and M3's 40px phone control. Proportions are half of what makes M3
+ * read as M3, and the layout stubs run the industrial skin only, so the
+ * height is free to move per skin. With it: label-large's 500 weight on the
+ * controls that speak as labels, and the page's section titles step into the
+ * headline register — large, but not bold.
+ */
+[data-skin="md3"] .btn,
+[data-skin="md3"] .nav-item,
+[data-skin="md3"] .segment-item,
+[data-skin="md3"] .field-label {
+  font-weight: 500;
+}
+[data-skin="md3"] .section-title {
+  font-size: 22px;
+  font-weight: 400;
+}
+
+
+/*
  * Fluent — Windows 11 (fluent2.microsoft.design shapes, v9 web states).
  *
  * Depth and the double ring do the identity work. Hover is an opaque fill
@@ -1139,7 +1239,10 @@ html[data-skin="fluent"] input[type="checkbox"] {
 [data-skin="fluent"] .kpi-cell {
   border-left: none;
   border-radius: var(--radius);
-  background: var(--surface);
+  /* The tiles sit on the section card now, so they take the card fill — one
+     WinUI layer up (CardBackgroundFillColorDefault again) — instead of the
+     solid Background1, which on the dark card read as a hole below it. */
+  background: var(--card-fill);
   box-shadow: var(--shadow-card);
 }
 [data-skin="fluent"] .kpi-cell:first-child {
@@ -1163,16 +1266,19 @@ html[data-skin="fluent"] input[type="checkbox"] {
   border-radius: 50%;
 }
 
-/* The switch, reshaped to the official Fluent form inside its own 36x20
-   footprint (no layout token moves): the pill track, unchecked as v9 states
-   it — transparent fill, the 1px accessible stroke, thumb in the same grey —
-   checked as the brand fill with the inverted thumb. The thumb grows 12 ->
-   16px on check, the official 12 -> 20 scaled to the 20px track, and glides
-   on the house fast transition. */
+/* The switch, reshaped to the official WinUI form — and since the user named
+   "不像 winui3", the WinUI 3 template values, not v9 web's: the 40×20 pill
+   track (SwitchKnobBounds), the off track filled with
+   ControlAltFillColorSecondary behind its 1px strong stroke, the knob at
+   12×12 in BOTH states (it does not grow; only the margin moves), the on
+   track in the accent with the knob 1px off the right edge. Glides on the
+   house fast transition. */
 [data-skin="fluent"] .toggle input[type="checkbox"] {
+  width: 40px;
   border-radius: 999px;
   border-color: var(--control-line);
   border-width: 1px;
+  background: var(--control-alt);
   transition: background-color var(--t-fast) var(--ease),
     border-color var(--t-fast) var(--ease);
 }
@@ -1188,11 +1294,68 @@ html[data-skin="fluent"] input[type="checkbox"] {
   border-color: transparent;
 }
 [data-skin="fluent"] .toggle input[type="checkbox"]:checked::after {
-  left: 16px;
-  top: 1px;
-  width: 16px;
-  height: 16px;
+  left: 26px;
+  top: 3px;
+  width: 12px;
+  height: 12px;
   background: var(--on-primary);
+}
+
+/*
+ * The WinUI 3 surface pass — the card layer the user named ("fluent 更是个
+ * 四不像"): WinUI 3 groups page content in cards on the mica canvas. The
+ * section becomes the card at OverlayCornerRadius (8px) with
+ * CardBackgroundFillColorDefault behind CardStrokeColorDefault; the dark
+ * theme separates by stroke alone. Nested sections flatten, and the
+ * drawer/dialog/popover stay surfaces rather than cards-on-cards. The
+ * NavigationView grammar carries the sidebar: selected and hovered items
+ * take SubtleFillColorSecondary and the 3×16 radius-2 accent pill at the
+ * left edge — the indicator that says "WinUI" at a glance.
+ */
+[data-skin="fluent"] .section {
+  gap: 12px;
+  padding: 14px 16px 16px;
+  border-radius: 8px;
+  background: var(--card-fill);
+  border: 1px solid var(--card-stroke);
+  box-shadow: var(--card-shadow);
+}
+[data-skin="fluent"] .section .section,
+[data-skin="fluent"] .drawer .section,
+[data-skin="fluent"] .confirm .section,
+[data-skin="fluent"] .popover .section {
+  gap: 16px;
+  padding: 0;
+  border-radius: 0;
+  background: none;
+  border-color: transparent;
+  box-shadow: none;
+}
+
+[data-skin="fluent"] .list-row {
+  padding-left: 12px;
+  padding-right: 12px;
+}
+
+[data-skin="fluent"] .nav-item {
+  position: relative;
+}
+[data-skin="fluent"] .nav-item:hover {
+  background: var(--subtle-secondary);
+}
+[data-skin="fluent"] .nav-item.active {
+  background: var(--subtle-secondary);
+}
+[data-skin="fluent"] .nav-item.active::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 16px;
+  border-radius: 2px;
+  background: var(--primary);
 }
 
 * {

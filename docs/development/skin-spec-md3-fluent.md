@@ -138,3 +138,34 @@ dark 45% accent 混白做 tone-80 反转 + on-primary 15% accent 混墨、hover 
 - Industrial（默认）皮肤零改动；皮肤规则全部 skin-scoped。
 - pager 箭头是 .linky 文本动作，不入组件矩阵。
 - M3 的 40px 控件高度、字号 ramp 不搬（本应用 30px/14px 网格是跨 skin 守恒量）。
+
+## 五、v3.1 附录：卡片层与按皮肤控件高度（2026-11-07）
+
+用户复核后的两条裁决，落为本附录：
+
+1. **控件高度按皮肤放行**（原"30px 跨 skin 守恒"撤销）：industrial 保持 30px
+   （布局桩只跑 industrial，安全），**MD3 = 36px**（用户在 40/36/30 三案中选折中）、
+   **Fluent = 32px**（WinUI 官方控件高）。`.segment-item` 36px 各皮肤不变；开关轨
+   MD3 保持 36×20，Fluent 加宽到官方 40×20（水平移动，行高不变）。
+2. **区域卡片层**（用户点名"MD3 没有卡片设计 / Fluent 不像 WinUI3"）：
+   - **MD3**：`.section` → 官方 filled card（surface-container-highest 底 +
+     medium 12px 角）；嵌套 section 与 drawer/confirm/popover 内 section 摊平回
+     流式；list-row 加卡内 12px 内边距；KPI tile 加 level-1 阴影（elevated card）
+     ；输入框/Select 透明底（outlined 场语法，readonly 例外）；控件标签 500 字重；
+     section-title 22px/400（headline register）。
+   - **Fluent（WinUI 3 令牌，来源 microsoft-ui-xaml `Common_themeresources_any.xaml`
+     与 learn.microsoft.com geometry/layering/shadows 页）**：`.section` →
+     OverlayCornerRadius 8px + CardBackgroundFillColorDefault（light 70% 白 /
+     dark 5% 白）+ CardStrokeColorDefault（light 6% 黑 / dark 10% 黑）+ 阴影
+     （WinUI 无字面阴影令牌——ThemeShadow 深度制；light 取深度 8 的近似
+     `0 2px 4px rgba(0,0,0,.04)`，dark 无阴影、纯描边分离）；深色画布校正为
+     SolidBackgroundFillColorBase dark #202020；侧栏导航 = NavigationView 语法：
+     选中/hover 用 SubtleFillColorSecondary（light 3.5% 黑 / dark 6% 白）+
+     左缘 3×16 r2 强调色胶囊（NavigationViewSelectionIndicator 3/16/2）；开关
+     按 WinUI 模板：40×20 轨（SwitchKnobBounds r10）、off 轨
+     ControlAltFillColorSecondary 填充 + 1px 强描边、**滑块 12×12 两态不变**
+     （只移位，不长大——v9 web 的 12→20 是另一种语法）、on 态强调轨 + 反色滑块
+     右缘 1px。KPI tile 用 --card-fill 再叠一层（CardBackgroundFillColorDefault
+     复用），不再用 Background1 实色（深色卡上读成洞）。
+   - 未做（记录）：ControlElevationBorderBrush 悬停渐变描边（控件签名细节，
+     CSS 需 border-image/backgroud-clip 双层，留待单独 pass）。
