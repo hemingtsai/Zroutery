@@ -879,7 +879,10 @@ html[data-skin="md3"] input[type="checkbox"] {
 [data-skin="md3"] .kpi-row .kpi-cell {
   border-left: none;
   border-radius: 12px;
-  background: var(--surface);
+  /* The tile steps to container-highest — darker than the container card
+     around it (lighter in dark theme), the register the grey was right for
+     at small scale. */
+  background: var(--container-highest);
 }
 [data-skin="md3"] .kpi-row .kpi-cell:first-child {
   padding-left: 24px;
@@ -987,16 +990,18 @@ html[data-skin="md3"] input[type="checkbox"] {
 /*
  * The card layer — the pass v3 skipped and the user named ("md3 没有对应的
  * 卡片设计"). M3 groups page content in cards; the industrial page is
- * hairline-flat by conviction, so the section becomes the card: the official
- * filled-card container (surface-container-highest) at the medium 12px corner.
- * Nested sections flatten back to plain flow so a card never sits on a card,
- * and the drawer/dialog/popover stay surfaces rather than cards-on-cards.
+ * hairline-flat by conviction, so the section becomes the card at the medium
+ * 12px corner. The fill is surface-*container* — the page had gone grey
+ * ("发灰") under container-highest, which is the darkest step and belongs at
+ * small-component scale, not across whole content regions. Nested sections
+ * flatten back to plain flow so a card never sits on a card, and the
+ * drawer/dialog/popover stay surfaces rather than cards-on-cards.
  */
 [data-skin="md3"] .section {
   gap: 12px;
   padding: 14px 16px 16px;
   border-radius: 12px;
-  background: var(--container-highest);
+  background: var(--surface-muted);
 }
 [data-skin="md3"] .section .section,
 [data-skin="md3"] .drawer .section,
