@@ -6,12 +6,36 @@ use chrono::{DateTime, Local, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::billing::{Cost, CostTotals, Pricing};
-use crate::config::ModelTier;
-use crate::ir::{Dialect, Usage};
+use crate::config::{ModelTier, ProviderConfig};
+use crate::ir::{Dialect, ObservedResponse, Usage, UsageEvidence};
 use crate::router::Candidate;
 use crate::stats::RequestRecord;
 
 pub const SETTLEMENT_SCHEMA_VERSION: u32 = 1;
+
+/// The stable name of the wire protocol an upstream actually answered on.
+///
+/// Recorded per attempt so a reader can tell the API the *client* used from
+/// the API the *upstream* answered on — the two differ whenever the proxy
+/// bridges dialects, and collapsing them is how an inbound `/v1/messages`
+/// request starts looking like an upstream Messages call. The decision bridge
+/// is named before any dialect lookup: a decision endpoint's `dialect()` value
+/// is the wire fallback nothing asks it to chat on, not the protocol it
+/// speaks.
+fn upstream_protocol_name(provider: &ProviderConfig) -> Option<String> {
+    if provider.kind.is_decision() {
+        return Some("systemone".to_string());
+    }
+    Some(
+        match provider.dialect() {
+            Dialect::Anthropic => "anthropic_messages",
+            Dialect::OpenAI => "openai_chat",
+            Dialect::OpenAIResponses => "openai_responses",
+            Dialect::Gemini => "gemini",
+        }
+        .to_string(),
+    )
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ExecutionSnapshot {
@@ -21,6 +45,15 @@ pub struct ExecutionSnapshot {
     pub model_name: String,
     pub upstream_model: String,
     pub dialect: Dialect,
+    /// The wire protocol the upstream actually answered on, as a stable name
+    /// (`systemone`, `anthropic_messages`, `openai_chat`, `openai_responses`,
+    /// `gemini`). Distinct from the record's ingress dialect, which is the
+    /// API the *client* spoke. `None` on records written before the field
+    /// existed; it is never re-derived from current configuration, because a
+    /// legacy attempt's protocol is a fact about that attempt, not about the
+    /// provider as configured today.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upstream_protocol: Option<String>,
     pub account_id: Option<String>,
     pub inference_key_id: Option<String>,
     /// Unknown for legacy bindings, never inferred from an account name.
@@ -46,6 +79,7 @@ impl ExecutionSnapshot {
                 .to_string(),
             upstream_model: candidate.entry.upstream_model.clone(),
             dialect: candidate.provider.dialect(),
+            upstream_protocol: upstream_protocol_name(&candidate.provider),
             account_id: candidate
                 .credential
                 .as_ref()
@@ -61,11 +95,7 @@ impl ExecutionSnapshot {
                     .map(|binding| binding.version())
             }),
             tier: candidate.entry.tier,
-            pricing: candidate
-                .rate_quote
-                .as_ref()
-                .map(|quote| quote.pricing.clone())
-                .or_else(|| candidate.entry.pricing.clone()),
+            pricing: candidate.settled_pricing().cloned(),
             rate_quote: candidate.rate_quote.clone(),
         }
     }
@@ -94,7 +124,20 @@ pub struct AttemptFact {
     pub sent: bool,
     pub rectified: bool,
     pub usage: Option<Usage>,
+    /// Wire quality is separate from retained counters. Conflicting readings
+    /// remain evidence but cannot become complete accounting or a known charge.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage_evidence: Option<UsageEvidence>,
     pub cost: Option<Cost>,
+    /// What the upstream's structured response declared it ran, when the
+    /// attempt produced a response to read. `None` means the attempt predates
+    /// the capture or has not settled yet — not "the provider declared
+    /// nothing", which is [`crate::ir::DeclaredIdentity::Missing`]. The value
+    /// is an observation that completes the attempt and is deliberately not
+    /// part of `same_execution`: a late completion may add it without the
+    /// pre-send identity having moved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub declared: Option<crate::ir::UpstreamModelDeclaration>,
     pub failure_class: Option<crate::failure::FailureClass>,
     /// Freeze budget windows when observed, not when a disk retry happens.
     pub budget_day: String,
@@ -114,7 +157,9 @@ impl AttemptFact {
             sent,
             rectified: false,
             usage: None,
+            usage_evidence: None,
             cost: None,
+            declared: None,
             failure_class: None,
             budget_day: now.format("%Y-%m-%d").to_string(),
             budget_month: now.format("%Y-%m").to_string(),
@@ -144,8 +189,46 @@ impl AttemptFact {
         }
     }
 
+    pub fn observe_response(&mut self, observed: &ObservedResponse) {
+        if self.state != AttemptState::InFlight || !self.sent {
+            return;
+        }
+        self.usage_evidence = Some(observed.usage_evidence);
+        self.usage = observed.usage;
+        self.cost = observed.accounting_usage().and_then(|usage| {
+            self.execution
+                .pricing
+                .as_ref()
+                .map(|price| price.cost_of(&usage))
+        });
+        self.declared
+            .get_or_insert_with(Default::default)
+            .merge(&observed.declaration);
+    }
+
+    pub(crate) fn accounted_usage(&self) -> Option<Usage> {
+        match self.usage_evidence {
+            Some(UsageEvidence::Absent | UsageEvidence::Invalid | UsageEvidence::Conflicting) => {
+                None
+            }
+            _ => self.usage,
+        }
+    }
+
     pub fn finish(&mut self, state: AttemptState) {
         let now = Local::now();
+        // A completed per-call response has a tariff even if it omits token
+        // counters. A cancellation without usage does not prove a charged call.
+        if self.sent && state == AttemptState::Served {
+            if let Some(price) = self
+                .execution
+                .pricing
+                .as_ref()
+                .filter(|price| price.per_request.is_some())
+            {
+                self.cost = Some(price.cost_of(&Usage::default()));
+            }
+        }
         self.state = state;
         self.finished_at = Some(now.with_timezone(&Utc));
         self.budget_day = now.format("%Y-%m-%d").to_string();
@@ -251,14 +334,26 @@ impl RequestAccounting {
             unknown_usage_attempts: 0,
         };
         for attempt in attempts.iter().filter(|attempt| attempt.sent) {
-            match &attempt.cost {
-                Some(cost) => result.known_cost.add(cost),
-                None => result.unknown_cost_attempts += 1,
+            if let Some(cost) = &attempt.cost {
+                result.known_cost.add(cost);
             }
-            match attempt.usage {
-                Some(usage) => result.observed_usage.add(usage),
-                None => result.unknown_usage_attempts += 1,
+            let usage = attempt.accounted_usage();
+            if let Some(usage) = usage {
+                result.observed_usage.add(usage);
             }
+            // Keep the known part and disclose that no final counters arrived;
+            // the same partial attempt is counted only once in each unknown set.
+            let partial = attempt.usage_evidence == Some(UsageEvidence::Partial);
+            result.unknown_usage_attempts += u32::from(usage.is_none() || partial);
+            result.unknown_cost_attempts += u32::from(
+                attempt.cost.is_none()
+                    || (partial
+                        && attempt
+                            .execution
+                            .pricing
+                            .as_ref()
+                            .is_some_and(|price| price.per_request.is_none())),
+            );
         }
         result
     }
@@ -291,4 +386,33 @@ pub struct AccountingStatus {
     pub error: Option<String>,
     pub commits: u64,
     pub last_commit_wait_ms: Option<f64>,
+}
+
+#[cfg(test)]
+mod protocol_name_tests {
+    use super::upstream_protocol_name;
+    use crate::config::{ProviderConfig, ProviderKind};
+
+    #[test]
+    fn the_protocol_name_follows_the_dialect_and_names_the_decision_bridge_first() {
+        let mut provider = ProviderConfig::new("relay", "Relay", ProviderKind::OpenAICompatible);
+        assert_eq!(
+            upstream_protocol_name(&provider).as_deref(),
+            Some("openai_chat")
+        );
+        provider.kind = ProviderKind::Anthropic;
+        assert_eq!(
+            upstream_protocol_name(&provider).as_deref(),
+            Some("anthropic_messages")
+        );
+
+        // A decision endpoint's `dialect()` value is the wire fallback nothing
+        // chats on; the bridge it actually speaks is named before that
+        // lookup, so an inbound dialect confusion cannot relabel it.
+        let decision = ProviderConfig::new("jev", "Jev", ProviderKind::Decision);
+        assert_eq!(
+            upstream_protocol_name(&decision).as_deref(),
+            Some("systemone")
+        );
+    }
 }

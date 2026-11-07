@@ -11,12 +11,19 @@ use rusqlite::{params, Connection, OptionalExtension};
 use crate::stats::RequestRecord;
 
 mod accounting;
+mod attempts;
 mod bindings;
 mod history;
+mod imports;
+mod publications;
 mod schema;
+mod usage_reader;
 pub use accounting::SettlementCommit;
 pub use bindings::BindingPublication;
+pub use imports::{ImportCommit, ImportRun};
+pub use publications::{InferencePublication, INFERENCE_PUBLICATION_PUBLISHED};
 pub use schema::SCHEMA_VERSION;
+pub use usage_reader::UsageReader;
 
 #[derive(Debug)]
 pub struct RuntimeStore {
@@ -30,6 +37,55 @@ impl RuntimeStore {
             .map_err(|e| e.to_string())?;
         schema::migrate(&mut db)?;
         Ok(Self { db: Mutex::new(db) })
+    }
+
+    /// Open an existing runtime database without migration or write capability.
+    pub fn open_read_only(path: &Path) -> Result<Self, String> {
+        let db = Connection::open_with_flags(
+            path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .map_err(|error| error.to_string())?;
+        db.busy_timeout(Duration::from_secs(2))
+            .map_err(|error| error.to_string())?;
+        db.pragma_update(None, "query_only", "ON")
+            .map_err(|error| error.to_string())?;
+        let version: i64 = db
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .map_err(|error| error.to_string())?;
+        /*
+         * Schema 5 only added the imported-fact tables; every table the usage
+         * reader queries exists unchanged in schema 4. Reading that file
+         * read-only is both possible and the point of a standby view — the
+         * alternative is refusing to show a colleague's database until the
+         * owning build opens it. Older layouts are a different matter: before
+         * schema 4 the timestamps were not normalized and the indexes the
+         * queries assume were absent, so those still need their owning build
+         * once.
+         */
+        if !(4..=SCHEMA_VERSION).contains(&version) {
+            return Err(format!(
+                "runtime database schema {version} is not readable without migration; \
+                 schemas 4 to {SCHEMA_VERSION} are supported"
+            ));
+        }
+        db.query_row(
+            "SELECT revision FROM usage_revision WHERE id = 1",
+            [],
+            |_| Ok(()),
+        )
+        .map_err(|error| format!("runtime usage index is unavailable: {error}"))?;
+        Ok(Self { db: Mutex::new(db) })
+    }
+
+    pub fn usage_revision(&self) -> Result<i64, String> {
+        crate::sync::lock(&self.db)
+            .query_row(
+                "SELECT revision FROM usage_revision WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())
     }
 
     pub fn append_usage(&self, records: &[RequestRecord]) -> Result<usize, String> {

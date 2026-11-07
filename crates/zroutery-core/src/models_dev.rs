@@ -227,6 +227,15 @@ impl Catalog {
         }
 
         let normalized = normalize_model_id(model_id);
+        // `auto` names each relay's own automatic-routing pool, not a model:
+        // one relay's auto pool is a different service with different limits,
+        // and its metadata is not evidence for another provider's. Only the
+        // provider's own entry — or the id its kind implies — may answer an
+        // auto request, which is why the cross-provider scan refuses the name
+        // even when exactly one relay publishes it.
+        if normalized.trim().eq_ignore_ascii_case("auto") {
+            return None;
+        }
         let mut matches: Vec<&CatalogModel> = Vec::new();
         for models in self.providers.values() {
             if let Some(model) = models.get(model_id) {
@@ -460,6 +469,74 @@ mod tests {
             found.max_output, None,
             "an undeclared output cap makes the merged cap unknown"
         );
+    }
+
+    #[test]
+    fn auto_requires_provider_scoped_metadata_even_with_a_single_match() {
+        let mut document = json!({
+            "tool-relay": {"models": {"auto": {
+                "tool_call": true,
+                "reasoning": true,
+                "reasoning_options": [{"type": "effort", "values": ["high"]}],
+                "limit": {"context": 128000, "output": 16384}
+            }}}
+        });
+        for multiple in [false, true] {
+            if multiple {
+                document["text-relay"] = json!({"models": {"auto": {
+                    "tool_call": false,
+                    "limit": {"context": 32000, "output": 32000}
+                }}});
+            }
+            let catalog = parse(&document);
+            for id in ["auto", "AUTO", "vendor/auto", "zone:auto"] {
+                assert!(
+                    catalog.lookup("lightvela", None, id).is_none(),
+                    "{id} selects this provider's models, not another relay's auto pool"
+                );
+            }
+            for (provider, hint) in [
+                ("tool-relay", None),
+                ("configured-relay", Some("tool-relay")),
+            ] {
+                let exact = catalog.lookup(provider, hint, "auto").unwrap();
+                assert!(exact.capabilities.tools);
+                assert_eq!(exact.context_window, Some(128_000));
+                assert_eq!(exact.effort_levels, ["high"]);
+            }
+        }
+    }
+
+    #[test]
+    fn auto_enrichment_leaves_the_providers_discovery_untouched() {
+        let catalog = parse(&json!({
+            "unrelated": {"models": {"auto": {
+                "tool_call": false,
+                "limit": {"context": 32000, "output": 16384},
+                "cost": {"input": 0, "output": 0}
+            }}}
+        }));
+        let mut models = vec![
+            DiscoveredModel {
+                id: "auto".into(),
+                ..Default::default()
+            },
+            DiscoveredModel {
+                id: "vendor/auto".into(),
+                pricing: Some(crate::billing::Pricing::new("USD", 1.0, 2.0)),
+                context_window: Some(200_000),
+                max_output: Some(32_000),
+                capabilities: Some(ModelCapabilities {
+                    tools: true,
+                    ..Default::default()
+                }),
+                effort_levels: vec!["high".into()],
+                free: false,
+            },
+        ];
+        let before = models.clone();
+        enrich_from(&catalog, &mut models, "lightvela", None);
+        assert_eq!(models, before);
     }
 
     #[test]

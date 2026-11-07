@@ -31,8 +31,8 @@
 
 use axum::http::{header, HeaderMap, HeaderName, HeaderValue};
 use zroutery_core::client::{
-    identify, AttributionSource, ClientFamily, ClientFingerprint, ClientId, ClientRegistry,
-    Confidence, CredentialBinding, MAX_CUSTOM_CLIENT_ID_LEN, MAX_TRACKED_CLIENTS,
+    identify, name_for_user_agent, AttributionSource, ClientFamily, ClientFingerprint, ClientId,
+    ClientRegistry, Confidence, CredentialBinding, MAX_CUSTOM_CLIENT_ID_LEN, MAX_TRACKED_CLIENTS,
 };
 use zroutery_core::ir::{Dialect, Usage};
 use zroutery_core::stats::{RecordBuilder, Stats};
@@ -377,6 +377,25 @@ fn codex_desktop_observed_ua_has_its_own_stable_desktop_identity() {
         assert_eq!(fingerprint.source, AttributionSource::UserAgent, "{agent}");
         assert_eq!(fingerprint.confidence, Confidence::Probable, "{agent}");
     }
+}
+
+#[test]
+fn a_legacy_raw_user_agent_can_be_named_without_identifying_anyone() {
+    // A record written before the desktop rule existed stores its own raw
+    // agent string as the display name. Naming the bucket from that string is
+    // a lookup, not an attribution: it returns the product and nothing about
+    // confidence, and a string no rule knows stays unnamed.
+    assert_eq!(
+        name_for_user_agent("codex_desktop_0.166.0-alpha.5.1_windows_10.0.26200_x86_64_unknown"),
+        Some(("codex_desktop", "Codex Desktop"))
+    );
+    assert_eq!(
+        name_for_user_agent("  Claude-CLI/1.0.60 (external, cli)"),
+        Some(("claude_code", "Claude Code")),
+        "the lookup is trimmed and case-folded like identify"
+    );
+    assert_eq!(name_for_user_agent("some-unknown-agent/3.1"), None);
+    assert_eq!(name_for_user_agent("   "), None);
 }
 
 #[test]

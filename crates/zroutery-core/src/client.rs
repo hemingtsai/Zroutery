@@ -825,6 +825,32 @@ pub fn identify(headers: &HeaderMap, binding: Option<&CredentialBinding>) -> Cli
     ClientFingerprint::unknown()
 }
 
+/// The product a user-agent string names, if a shipped rule knows it.
+///
+/// Records keep the attribution they were written with, so a row persisted
+/// before a rule existed carries its own raw agent string as both id and name.
+/// Reading it is still useful: the same string identifies a product today.
+/// This looks the string up in the same ordered rule list [`identify`] walks,
+/// and returns only the product's canonical id and readable name — never a
+/// confidence, a family or a replacement identity. Callers decide what to do
+/// with the name; nothing here rewrites a stored record.
+pub fn name_for_user_agent(agent: &str) -> Option<(&'static str, &'static str)> {
+    let agent = agent.trim();
+    if agent.is_empty() {
+        return None;
+    }
+    let lowered = agent.to_ascii_lowercase();
+    UA_RULES
+        .iter()
+        .find(|rule| {
+            rule.prefixes
+                .iter()
+                .any(|prefix| lowered.starts_with(prefix))
+                || rule.exact.contains(&lowered.as_str())
+        })
+        .map(|rule| (rule.id, rule.name))
+}
+
 /// The family Zroutery already knows for a canonical id.
 fn family_for(id: &ClientId) -> ClientFamily {
     registered_client(id)

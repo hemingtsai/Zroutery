@@ -94,6 +94,18 @@ pub struct RequestRecord {
     pub provider_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_name: Option<String>,
+    /// What the upstream's structured response declared it ran, for the
+    /// attempt that settled this request.
+    ///
+    /// `None` means the record predates the field (or the request never
+    /// opened an attempt, so there was no response to read). A present value
+    /// is the full declaration: the model axis and the version axis, each
+    /// either a specific name, a placeholder (`auto` is not a model), a
+    /// conflict, or an explicit absence. It is a provider's claim about its
+    /// own routing, not a verification of the backend, and it is never
+    /// back-filled from the requested or configured model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upstream_declared: Option<crate::ir::UpstreamModelDeclaration>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub accounting: Option<crate::accounting::RequestAccounting>,
 }
@@ -165,7 +177,9 @@ pub struct ModelTotals {
 pub struct ClientTotals {
     /// The canonical client id this row aggregates.
     pub client_id: String,
-    /// The name to show, captured at the moment the row was created.
+    /// The name to show. A legacy row whose name repeats its raw id is named
+    /// from the shipped user-agent rules when one of them recognises it; see
+    /// `client_display_name`.
     pub client_name: String,
     /// The application family.
     pub family: String,
@@ -197,6 +211,26 @@ pub struct ClientTotals {
     /// How many of this client's requests actually streamed, and therefore how
     /// many rows `avg_ttft_ms` is averaged over.
     pub streamed: u64,
+}
+
+/// The label a client bucket shows.
+///
+/// The bucket's id is what the record stored, because a legacy row keeps the
+/// identity it was written with. A row written before user-agent attribution
+/// also stored its raw agent string as the *name*, though, and printing that
+/// twice tells a reader nothing. When the stored name is the stored id, the
+/// same string is looked up in the shipped user-agent rules and the product's
+/// readable name is used instead. Nothing else changes: the id, family,
+/// source and confidence stay exactly as recorded, so a legacy row is named,
+/// not reclassified.
+fn client_display_name(client: &ClientFingerprint) -> String {
+    let stored = client.client_name.trim();
+    if stored == client.client_id.as_str() {
+        if let Some((_, name)) = crate::client::name_for_user_agent(stored) {
+            return name.to_string();
+        }
+    }
+    stored.to_string()
 }
 
 impl ClientTotals {
@@ -322,6 +356,53 @@ pub struct StatsSummary {
     pub attribution: AttributionSummary,
 }
 
+impl StatsSummary {
+    /// Fold imported history into this device's headline figures.
+    ///
+    /// Only quantities the imported store measures are added: requests,
+    /// failures, tokens (with cache kept as a subset of input), unpriced rows
+    /// and known spend per currency. The breakdowns and the attribution shares
+    /// stay this device's own ledger — the imported store has no request kind
+    /// and no attribution evidence, and a split that silently disagreed with
+    /// the headline would be worse than one that says what it covers.
+    ///
+    /// `since` moves back to the imported store's first counted day so the
+    /// period matches the numbers it is printed beside. A missing first day
+    /// leaves the device's own start alone.
+    pub fn add_imported(
+        &mut self,
+        totals: &crate::history_import::ImportTotals,
+        first_day: Option<NaiveDate>,
+    ) {
+        self.requests = self.requests.saturating_add(totals.requests);
+        self.failures = self.failures.saturating_add(totals.failures);
+        self.input_tokens = self.input_tokens.saturating_add(totals.input_tokens);
+        self.output_tokens = self.output_tokens.saturating_add(totals.output_tokens);
+        self.cache_read_tokens = self
+            .cache_read_tokens
+            .saturating_add(totals.cache_read_tokens);
+        self.cache_write_tokens = self
+            .cache_write_tokens
+            .saturating_add(totals.cache_write_tokens);
+        self.unpriced_requests = self
+            .unpriced_requests
+            .saturating_add(totals.unpriced_requests);
+        for (currency, amount) in &totals.cost.0 {
+            self.cost.add(&Cost {
+                currency: currency.clone(),
+                amount: *amount,
+            });
+        }
+        if let Some(first) = first_day {
+            if let Some(start) =
+                crate::history_import::day_start_utc(&first.format("%Y-%m-%d").to_string())
+            {
+                self.since = self.since.min(start);
+            }
+        }
+    }
+}
+
 /// One local calendar day of usage, for the Activity page's charts.
 ///
 /// The calendar is the operator's, not UTC: a request at 00:30 local time
@@ -358,6 +439,50 @@ impl UsageDay {
         self.unpriced_requests += u64::from(record.unpriced());
         record.add_known_cost(&mut self.cost);
     }
+
+    /// Add another store's totals for the same calendar day.
+    ///
+    /// Every field is a count or a known amount, so the sum is exact; no
+    /// average is derived here and no missing figure becomes zero.
+    pub fn add_imported(&mut self, other: &UsageDay) {
+        self.requests = self.requests.saturating_add(other.requests);
+        self.failures = self.failures.saturating_add(other.failures);
+        self.input_tokens = self.input_tokens.saturating_add(other.input_tokens);
+        self.output_tokens = self.output_tokens.saturating_add(other.output_tokens);
+        self.cache_read_tokens = self
+            .cache_read_tokens
+            .saturating_add(other.cache_read_tokens);
+        self.cache_write_tokens = self
+            .cache_write_tokens
+            .saturating_add(other.cache_write_tokens);
+        self.unpriced_requests = self
+            .unpriced_requests
+            .saturating_add(other.unpriced_requests);
+        for (currency, amount) in &other.cost.0 {
+            self.cost.add(&Cost {
+                currency: currency.clone(),
+                amount: *amount,
+            });
+        }
+    }
+}
+
+/// Add imported days to this device's series, one row per local day.
+///
+/// A day the imported store never covered is not created: silence from another
+/// tool is not a measured zero. A day both stores know about is summed, because
+/// both describe requests made that day; repeated imports of the same source are
+/// already deduplicated by source, instance and entity id when they are stored,
+/// so they cannot be added twice here.
+pub fn merge_imported_days(mut local: Vec<UsageDay>, imported: Vec<UsageDay>) -> Vec<UsageDay> {
+    for day in imported {
+        match local.iter_mut().find(|row| row.day == day.day) {
+            Some(row) => row.add_imported(&day),
+            None => local.push(day),
+        }
+    }
+    local.sort_by(|left, right| left.day.cmp(&right.day));
+    local
 }
 
 /// How much of the traffic could be attributed to a client.
@@ -625,7 +750,7 @@ impl Stats {
             .entry(client_key.clone())
             .or_insert_with(|| ClientTotals {
                 client_id: client_key,
-                client_name: record.client.client_name.clone(),
+                client_name: client_display_name(&record.client),
                 family: record.client.family.as_str().to_string(),
                 source: record.client.source.as_str().to_string(),
                 confidence: record.client.confidence.as_str().to_string(),
@@ -683,6 +808,12 @@ impl Stats {
             per_client: inner.per_client.values().cloned().collect(),
             attribution: inner.attribution.clone(),
         }
+    }
+
+    /// Refresh the durable projection immediately rather than waiting for its poll interval.
+    pub fn refresh_history(&self) -> Result<(), String> {
+        let mut inner = crate::sync::lock(&self.inner);
+        Self::refresh_inner(&mut inner)
     }
 
     /// The last `days` local calendar days, oldest first.
@@ -1072,6 +1203,7 @@ impl RecordBuilder {
                 inference_key_id: None,
                 provider_id: None,
                 model_name: None,
+                upstream_declared: None,
                 accounting: None,
             },
         }
@@ -1111,6 +1243,20 @@ impl RecordBuilder {
     pub fn execution(&mut self, snapshot: &crate::accounting::ExecutionSnapshot) {
         self.record.provider_id = Some(snapshot.provider_id.clone());
         self.record.model_name = Some(snapshot.model_name.clone());
+    }
+
+    /// Record what the upstream's structured response declared it ran.
+    ///
+    /// Taken from the attempt that settled the request; per-attempt facts keep
+    /// every other attempt's own declaration. `None` is honest for a record
+    /// that predates the capture or never reached a response — it is never a
+    /// stand-in for "the provider declared nothing".
+    pub fn upstream_declared(
+        &mut self,
+        declared: Option<crate::ir::UpstreamModelDeclaration>,
+    ) -> &mut Self {
+        self.record.upstream_declared = declared;
+        self
     }
 
     pub fn attempt(&mut self) -> &mut Self {
@@ -1229,6 +1375,118 @@ mod tests {
         b.finish(100)
     }
 
+    fn usd(amount: f64) -> CostTotals {
+        let mut totals = CostTotals::default();
+        totals.add(&Cost {
+            currency: "USD".into(),
+            amount,
+        });
+        totals
+    }
+
+    #[test]
+    fn imported_history_adds_to_the_headline_without_inventing_a_split() {
+        let mut summary = Stats::new(10).summary();
+        summary.since = "2026-10-27T10:22:00Z".parse().unwrap();
+        let mut totals = crate::history_import::ImportTotals {
+            requests: 3,
+            failures: 1,
+            input_tokens: 100,
+            output_tokens: 20,
+            cache_read_tokens: 30,
+            cache_write_tokens: 10,
+            unpriced_requests: 2,
+            aggregate_requests: 1,
+            suspected_requests: 4,
+            cost: usd(1.5),
+        };
+        totals.cost.add(&Cost {
+            currency: "CNY".into(),
+            amount: 2.0,
+        });
+
+        summary.add_imported(&totals, NaiveDate::from_ymd_opt(2026, 5, 29));
+
+        let mut expected = usd(1.5);
+        expected.add(&Cost {
+            currency: "CNY".into(),
+            amount: 2.0,
+        });
+
+        assert_eq!(summary.requests, 3);
+        assert_eq!(summary.failures, 1);
+        assert_eq!(summary.input_tokens, 100);
+        assert_eq!(summary.cache_read_tokens, 30, "cache stays inside input");
+        assert_eq!(summary.unpriced_requests, 2);
+        assert_eq!(summary.cost, expected, "currencies stay apart");
+        assert_eq!(
+            summary.since,
+            crate::history_import::day_start_utc("2026-05-29").unwrap(),
+            "the period moves back to the imported store's first counted day"
+        );
+        assert_eq!(
+            totals.suspected_requests, 4,
+            "suspected duplicates are not in the headline but are not hidden"
+        );
+        assert!(
+            summary.per_client.is_empty(),
+            "the imported store has no attribution evidence, so no client split is invented"
+        );
+    }
+
+    #[test]
+    fn imported_days_are_added_and_do_not_create_quiet_days() {
+        let local = vec![UsageDay {
+            day: "2026-01-02".into(),
+            requests: 2,
+            input_tokens: 10,
+            cost: usd(1.0),
+            ..UsageDay::default()
+        }];
+        let imported = vec![
+            UsageDay {
+                day: "2026-01-02".into(),
+                requests: 5,
+                failures: 1,
+                input_tokens: 40,
+                output_tokens: 8,
+                cache_read_tokens: 4,
+                cache_write_tokens: 2,
+                unpriced_requests: 3,
+                cost: usd(2.0),
+            },
+            // The imported store's first day; the local series has no row for it.
+            UsageDay {
+                day: "2026-01-01".into(),
+                requests: 1,
+                input_tokens: 3,
+                ..UsageDay::default()
+            },
+        ];
+
+        let merged = merge_imported_days(local, imported);
+
+        assert_eq!(
+            merged
+                .iter()
+                .map(|day| day.day.as_str())
+                .collect::<Vec<_>>(),
+            ["2026-01-01", "2026-01-02"]
+        );
+        let shared = &merged[1];
+        assert_eq!(shared.requests, 7);
+        assert_eq!(shared.failures, 1);
+        assert_eq!(shared.input_tokens, 50);
+        assert_eq!(shared.output_tokens, 8);
+        assert_eq!(shared.cache_read_tokens, 4);
+        assert_eq!(shared.unpriced_requests, 3);
+        assert_eq!(shared.cost.get("USD"), 3.0);
+        assert_eq!(
+            merged[0].requests, 1,
+            "a day only the imported store knows is the imported count, not a zero"
+        );
+    }
+
     #[test]
     fn cost_is_recorded_per_request_and_summed_per_currency() {
         let stats = Stats::new(10);
@@ -1264,6 +1522,53 @@ mod tests {
             .unwrap();
         assert!(mystery.cost.is_empty());
         assert!(stats.recent(1)[0].cost.is_none());
+    }
+
+    #[test]
+    fn a_legacy_raw_user_agent_is_named_without_rewriting_the_record() {
+        let legacy = "codex_desktop_0.166.0-alpha.5.1_windows_10.0.26200_x86_64_unknown";
+        let stats = Stats::new(10);
+        let mut builder = RecordBuilder::new(Dialect::OpenAI, "gpt-5", false);
+        builder.client(ClientFingerprint {
+            client_id: ClientId::trusted(legacy),
+            client_name: legacy.to_string(),
+            family: crate::client::ClientFamily::Unknown,
+            source: crate::client::AttributionSource::RuntimeFamily,
+            confidence: Confidence::Weak,
+        });
+        let record = builder.finish(10);
+        // Persistence keeps what was written; naming happens at aggregation.
+        assert_eq!(record.client.client_name, legacy);
+        stats.record(record);
+
+        let totals = &stats.summary().per_client[0];
+        assert_eq!(
+            totals.client_id, legacy,
+            "the bucket keeps the identity stored on the record"
+        );
+        assert_eq!(
+            totals.client_name, "Codex Desktop",
+            "a raw user agent a shipped rule knows is shown by its product name"
+        );
+        assert_eq!(totals.family, "unknown", "the family is not invented");
+        assert_eq!(totals.confidence, "weak", "the confidence is not raised");
+    }
+
+    #[test]
+    fn a_named_client_keeps_the_name_it_recorded() {
+        let stats = Stats::new(10);
+        let mut builder = RecordBuilder::new(Dialect::Anthropic, "sonnet-class", false);
+        builder.client(ClientFingerprint {
+            client_id: ClientId::trusted("claude_code"),
+            client_name: "Claude Code".into(),
+            family: crate::client::ClientFamily::Cli,
+            source: crate::client::AttributionSource::UserAgent,
+            confidence: Confidence::Probable,
+        });
+        stats.record(builder.finish(10));
+        let totals = &stats.summary().per_client[0];
+        assert_eq!(totals.client_name, "Claude Code");
+        assert_eq!(totals.client_id, "claude_code");
     }
 
     #[test]

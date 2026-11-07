@@ -18,13 +18,15 @@ pub struct TierClass {
     pub model: String,
     /// The name the client's model picker shows for it.
     pub display_name: String,
-    /// The reasoning-effort levels at least one usable member of the class
+    /// The reasoning-effort levels **every** usable member of the class
     /// accepts, in picker order.
     ///
     /// The request pipeline filters the candidate plan by the requested effort
-    /// before routing, so members that cannot honour the selected level are not
-    /// eligible to serve it. Empty means no usable member declares an accepted
-    /// native effort, and the client is given no picker.
+    /// before routing, but the class is what the client is offered as a whole:
+    /// a level enters this list only when no member of the class is known to
+    /// be unable to serve it. A member that declares no levels is not known to
+    /// support any, so it empties the list. Empty means the class has no
+    /// commonly declared native effort, and the client is given no picker.
     pub effort_levels: Vec<String>,
     pub capabilities: crate::config::ModelCapabilities,
     pub context_window: Option<u32>,

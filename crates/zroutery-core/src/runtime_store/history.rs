@@ -228,12 +228,11 @@ mod tests {
     fn migrating_keys_preserves_records_and_queries_use_the_time_index() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("history.db");
-        drop(RuntimeStore::open(&path).unwrap());
-        let db = rusqlite::Connection::open(&path).unwrap();
+        let mut db = rusqlite::Connection::open(&path).unwrap();
+        super::super::schema::migrate_to(&mut db, 3).unwrap();
         let legacy = record("kept", "2026-10-30T20:00:00.123456789Z");
         let json = serde_json::to_string(&legacy).unwrap();
         db.execute("INSERT INTO usage VALUES ('kept', 'unknown', '2026-10-31T04:00:00.123456789+08:00', ?1)", [&json]).unwrap();
-        db.execute_batch("DROP INDEX usage_client_time; DROP INDEX usage_provider_time; DROP INDEX usage_model_time; PRAGMA user_version=3;").unwrap();
         drop(db);
         let store = RuntimeStore::open(&path).unwrap();
         let db = crate::sync::lock(&store.db);
