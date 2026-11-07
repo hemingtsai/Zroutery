@@ -662,6 +662,62 @@ fn is_capability_message(message: &str) -> bool {
         || message.contains("does not have")
 }
 
+/// An explicit error can be wrapped by a relay or by a Responses event.
+pub(crate) fn upstream_error_detail(mut value: &Value) -> &Value {
+    for _ in 0..4 {
+        match value
+            .get("error")
+            .filter(|error| !error.is_null())
+            .or_else(|| {
+                value
+                    .pointer("/response/error")
+                    .filter(|error| !error.is_null())
+            }) {
+            Some(inner) => value = inner,
+            None => break,
+        }
+    }
+    value
+}
+
+/// Effective status for a failure delivered inside a successful HTTP body.
+/// Live protocol parsers and staged SSE use this same mapping; an opaque code
+/// must not hide a recognized type, and a relay message alone can be generic.
+pub(crate) fn upstream_payload_status(value: &Value) -> u16 {
+    fn code_status(code: &str) -> Option<u16> {
+        match code {
+            "rate_limit_exceeded" | "rate_limit_error" | "too_many_requests" => Some(429),
+            "invalid_api_key"
+            | "authentication_error"
+            | "permission_denied"
+            | "unauthorized"
+            | "forbidden" => Some(401),
+            "insufficient_quota" | "insufficient_balance" | "insufficient_user_quota" => Some(402),
+            "invalid_request_error" | "invalid_encrypted_content" | "tool_call_mismatch" => {
+                Some(400)
+            }
+            "overloaded_error" => Some(529),
+            _ => None,
+        }
+    }
+
+    let detail = upstream_error_detail(value);
+    let kind_status = detail
+        .get("type")
+        .and_then(Value::as_str)
+        .and_then(code_status);
+    // Authentication still protects a coincidental history/binding code.
+    if kind_status == Some(401) {
+        return 401;
+    }
+    detail
+        .get("code")
+        .and_then(Value::as_str)
+        .and_then(code_status)
+        .or(kind_status)
+        .unwrap_or(502)
+}
+
 /// The impact of a failure on routing decisions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FailureImpact {
@@ -780,46 +836,7 @@ impl ClassifiedFailure {
                 // attempt. Preserve the transport status for the filter's exact
                 // trigger rules, but classify its explicit error centrally.
                 let value = serde_json::from_str::<serde_json::Value>(body).unwrap_or_default();
-                let detail = value
-                    .get("error")
-                    .filter(|v| !v.is_null())
-                    .or_else(|| value.pointer("/response/error").filter(|v| !v.is_null()))
-                    .unwrap_or(&value);
-                let code = detail
-                    .get("code")
-                    .and_then(serde_json::Value::as_str)
-                    .or_else(|| detail.get("type").and_then(serde_json::Value::as_str))
-                    .unwrap_or("");
-                let auth_type = detail
-                    .get("type")
-                    .and_then(serde_json::Value::as_str)
-                    .is_some_and(|kind| {
-                        matches!(
-                            kind,
-                            "invalid_api_key"
-                                | "authentication_error"
-                                | "permission_denied"
-                                | "unauthorized"
-                                | "forbidden"
-                        )
-                    });
-                let effective = if auth_type {
-                    401
-                } else {
-                    match code {
-                        "rate_limit_exceeded" | "rate_limit_error" | "too_many_requests" => 429,
-                        "invalid_api_key"
-                        | "authentication_error"
-                        | "permission_denied"
-                        | "unauthorized"
-                        | "forbidden" => 401,
-                        "insufficient_quota" | "insufficient_balance" => 402,
-                        "invalid_request_error"
-                        | "invalid_encrypted_content"
-                        | "tool_call_mismatch" => 400,
-                        _ => 502,
-                    }
-                };
+                let effective = upstream_payload_status(&value);
                 (
                     FailureClass::from_status_with_body(effective, body),
                     Some(effective),

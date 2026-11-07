@@ -154,12 +154,14 @@ impl Upstream {
             .and_then(|value| value.to_str().ok())
             .is_some_and(|value| value.to_ascii_lowercase().starts_with("text/event-stream")))
         .then(Vec::new);
+        let retry_after = super::retry_after(response.headers());
         let state = StreamState {
             body: Box::pin(response.bytes_stream()),
             decoder: SseDecoder::new(),
             parser: protocol::stream_parser(provider.dialect(), upstream_model),
             pending: VecDeque::new(),
             provider: provider.name.clone(),
+            retry_after,
             idle: Duration::from_secs(provider.timeout_secs),
             done: false,
             terminal_error: None,
@@ -270,6 +272,13 @@ impl Upstream {
                                             .and_then(|v| v.get("type"))
                                             .and_then(Value::as_str)
                                     })
+                                    .or_else(|| {
+                                        value
+                                            .as_ref()
+                                            .and_then(|v| v.get("error"))
+                                            .filter(|error| !error.is_null())
+                                            .map(|_| "error")
+                                    })
                                     .unwrap_or("");
                                 let extension = state.native_review
                                     && !matches!(
@@ -309,9 +318,33 @@ impl Upstream {
                                             state.pending.extend(events);
                                         }
                                     }
-                                    Err(err) => {
-                                        tracing::warn!(provider = %state.provider, error = %err,
-                                            "upstream SSE parser rejected an event");
+                                    Err(mut err) => {
+                                        let class = err.classified().class;
+                                        if let Error::Upstream {
+                                            provider,
+                                            status,
+                                            body,
+                                            retry_after,
+                                        } = &mut err
+                                        {
+                                            // Parsers know the model, not the
+                                            // provider or handshake headers.
+                                            *provider = state.provider.clone();
+                                            *retry_after = state.retry_after;
+                                            let payload = serde_json::from_str::<Value>(body)
+                                                .unwrap_or_default();
+                                            let detail =
+                                                crate::failure::upstream_error_detail(&payload);
+                                            tracing::warn!(provider = %state.provider,
+                                                error_status = *status, failure_class = ?class,
+                                                error_type = %error_token(detail.get("type")),
+                                                error_code = %error_token(detail.get("code")),
+                                                "upstream SSE reported an error");
+                                        } else {
+                                            tracing::warn!(provider = %state.provider,
+                                                error = %err.safe_message(), failure_class = ?class,
+                                                "upstream SSE parser rejected an event");
+                                        }
                                         state.done = true;
                                         // Preserve deltas parsed earlier in this
                                         // same network chunk before reporting a
@@ -388,6 +421,7 @@ struct StreamState {
     parser: Box<dyn StreamParser>,
     pending: VecDeque<StreamEvent>,
     provider: String,
+    retry_after: Option<Duration>,
     idle: Duration,
     done: bool,
     /// Set when the body ended without a normal terminal: the error is yielded
@@ -400,4 +434,17 @@ struct StreamState {
     native_stopped: bool,
     observation: crate::ir::AttemptObservation,
     dialect: crate::ir::Dialect,
+}
+
+/// Diagnostics carry bounded machine tokens, never an upstream message/body.
+fn error_token(value: Option<&Value>) -> String {
+    match value {
+        Some(Value::String(value)) => value
+            .chars()
+            .take(64)
+            .filter(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.'))
+            .collect(),
+        Some(Value::Number(value)) => value.to_string(),
+        _ => String::new(),
+    }
 }

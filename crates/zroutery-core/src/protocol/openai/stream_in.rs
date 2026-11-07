@@ -241,12 +241,11 @@ impl StreamParser for OpenAiStreamParser {
         if let Some(error) = Error::session_binding_payload(&self.model, &chunk) {
             return Err(error);
         }
-        if let Some(err) = chunk.get("error").filter(|e| !e.is_null()) {
-            let msg = err
-                .get("message")
-                .and_then(Value::as_str)
-                .unwrap_or("upstream stream error");
-            return Err(Error::BadUpstreamPayload(msg.to_string()));
+        if chunk.get("error").is_some_and(|error| !error.is_null())
+            || frame.event.as_deref() == Some("error")
+            || chunk.get("type").and_then(Value::as_str) == Some("error")
+        {
+            return Err(Error::stream_payload(&self.model, &chunk));
         }
 
         let mut out = Vec::new();

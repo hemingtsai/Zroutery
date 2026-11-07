@@ -123,6 +123,37 @@ impl Error {
         })
     }
 
+    /// An explicit SSE failure is an upstream refusal, not malformed JSON.
+    /// Retain bounded error fields for classification without copying request
+    /// echoes, credentials or arbitrary relay metadata into the error body.
+    pub(crate) fn stream_payload(provider: &str, body: &Value) -> Self {
+        let detail = crate::failure::upstream_error_detail(body);
+        let mut fields = serde_json::Map::new();
+        for field in ["code", "type", "message"] {
+            if let Some(value) = detail.get(field) {
+                let value = match value {
+                    Value::String(value) => Value::String(value.chars().take(2000).collect()),
+                    Value::Number(_) | Value::Null => value.clone(),
+                    _ => continue,
+                };
+                fields.insert(field.to_string(), value);
+            }
+        }
+        if let Some(message) = detail.as_str() {
+            fields.insert(
+                "message".into(),
+                Value::String(message.chars().take(2000).collect()),
+            );
+        }
+        let payload = json!({"error": fields});
+        Self::Upstream {
+            provider: provider.to_string(),
+            status: crate::failure::upstream_payload_status(&payload),
+            body: payload.to_string(),
+            retry_after: None,
+        }
+    }
+
     pub(crate) fn is_session_binding_invalidated(&self) -> bool {
         match self {
             Self::Upstream { status, body, .. } => {

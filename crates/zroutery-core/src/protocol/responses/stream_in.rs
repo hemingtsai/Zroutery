@@ -161,33 +161,7 @@ impl StreamParser for ResponsesStreamParser {
 
         match event_type {
             "response.failed" | "error" => {
-                let error = event
-                    .pointer("/response/error")
-                    .or_else(|| event.get("error"))
-                    .unwrap_or(&event);
-                let error = error.get("error").unwrap_or(error);
-                let code = error
-                    .get("code")
-                    .or_else(|| error.get("type"))
-                    .and_then(Value::as_str)
-                    .unwrap_or("api_error");
-                let message = error
-                    .get("message")
-                    .and_then(Value::as_str)
-                    .unwrap_or("upstream response failed");
-                let status = match code {
-                    "rate_limit_exceeded" | "rate_limit_error" => 429,
-                    "insufficient_quota" | "insufficient_balance" => 402,
-                    "invalid_request_error" | "tool_call_mismatch" => 400,
-                    "authentication_error" | "invalid_api_key" => 401,
-                    _ => 502,
-                };
-                return Err(Error::Upstream {
-                    provider: self.model.clone(),
-                    status,
-                    body: serde_json::json!({"error":{"code":code,"message":message}}).to_string(),
-                    retry_after: None,
-                });
+                return Err(Error::stream_payload(&self.model, &event));
             }
             "response.created" => {
                 let response = event.get("response").cloned().unwrap_or_default();

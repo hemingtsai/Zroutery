@@ -48,6 +48,11 @@ impl StreamParser for AnthropicStreamParser {
             .event
             .as_deref()
             .or_else(|| v.get("type").and_then(Value::as_str))
+            .or_else(|| {
+                v.get("error")
+                    .filter(|error| !error.is_null())
+                    .map(|_| "error")
+            })
             .unwrap_or_default();
         let index = v
             .get("index")
@@ -252,12 +257,7 @@ impl StreamParser for AnthropicStreamParser {
             }
             "ping" => vec![StreamEvent::Ping],
             "error" => {
-                let msg = v
-                    .get("error")
-                    .and_then(|e| e.get("message"))
-                    .and_then(Value::as_str)
-                    .unwrap_or("upstream stream error");
-                return Err(Error::BadUpstreamPayload(msg.to_string()));
+                return Err(Error::stream_payload(&self.model, &v));
             }
             _ => {
                 return Err(unsupported_upstream_content("Anthropic stream event"));

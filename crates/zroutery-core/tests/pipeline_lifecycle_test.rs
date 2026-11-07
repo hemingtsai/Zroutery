@@ -172,6 +172,35 @@ async fn mock_chat(State(mock): State<Mock>, Json(body): Json<Value>) -> Respons
     }
 
     if body["stream"].as_bool().unwrap_or(false) {
+        if model.starts_with("chat-refusal") || model.starts_with("chat-partial-refusal") {
+            let code = if model.ends_with("wallet") {
+                "insufficient_user_quota"
+            } else {
+                "rate_limit_exceeded"
+            };
+            let mut sse = String::new();
+            if model.starts_with("chat-partial-refusal") {
+                sse.push_str(&openai_chunk(
+                    "chatcmpl-refusal",
+                    json!({"role":"assistant", "content":"partial answer"}),
+                    Value::Null,
+                ));
+            }
+            // Same network chunk as any preceding output; a generic message
+            // must not erase the code or make that output safe to replay.
+            sse.push_str(&format!(
+                "data: {}\n\n",
+                json!({
+                    "error":{"type":"new_api_error", "code":code, "message":"openai_error"},
+                    "usage":{"prompt_tokens":11, "completion_tokens":7}
+                })
+            ));
+            return Response::builder()
+                .header("content-type", "text/event-stream")
+                .header("retry-after", "120")
+                .body(axum::body::Body::from(sse))
+                .unwrap();
+        }
         if model.starts_with("preoutput-quota") {
             let sse = format!(
                 "event: response.failed\ndata: {}\n\n",
@@ -832,6 +861,110 @@ async fn an_http200_quota_frame_before_output_fails_over_without_partial_replay(
     );
     assert!(outcome.attempts[1].is_terminal_success());
     assert_eq!(h.mock.count(), 2);
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn chat_refusal_before_output_fails_over_with_its_class_and_known_cost() {
+    for (suffix, class) in [
+        ("rate", FailureClass::RateLimit),
+        ("wallet", FailureClass::BalanceExhausted),
+    ] {
+        let (addr, mock) = start_mock().await;
+        let first = format!("chat-refusal-{suffix}");
+        let h = Harness::start(failover_config(addr, &first, "good-model"), mock).await;
+        let response = h.ask_streaming("fast-class").await;
+        assert_eq!(response.status(), 200);
+        let wire = response.text().await.unwrap();
+        assert!(!wire.contains("event: error"), "{wire}");
+        assert!(wire.contains("message_stop"), "{wire}");
+        wait_for_outcomes(&h, 1).await;
+
+        let outcome = h.outcome();
+        assert_eq!(outcome.final_status, FinalStatus::Success);
+        assert_eq!(outcome.attempts.len(), 2);
+        assert_eq!(outcome.attempts[0].failure_class, Some(class));
+        assert!(outcome.attempts[0].cost.is_some_and(|cost| cost > 0.0));
+        assert!(outcome.attempts[1].is_terminal_success());
+        assert!(outcome.validate().is_ok(), "{:?}", outcome.validate());
+        assert_eq!(h.mock.count_of(&first), 1);
+        assert_eq!(h.mock.count_of("good-model"), 1);
+        if class == FailureClass::RateLimit {
+            assert!(h
+                .state
+                .router()
+                .model_rate_limit_remaining("alpha", &format!("alpha-{first}"))
+                .is_some_and(|remaining| remaining > Duration::from_secs(118)));
+            assert!(!h.state.router().is_circuit_open(&format!("alpha-{first}")));
+        } else {
+            assert!(h.state.router().is_provider_gated("alpha"));
+        }
+        h.shutdown().await;
+    }
+}
+
+#[tokio::test]
+async fn chat_refusal_after_output_keeps_the_partial_answer_without_replay() {
+    let (addr, mock) = start_mock().await;
+    let first = "chat-partial-refusal-rate";
+    let h = Harness::start(failover_config(addr, first, "good-model"), mock).await;
+    let response = h.ask_streaming("fast-class").await;
+    assert_eq!(response.status(), 200);
+    let wire = response.text().await.unwrap();
+    assert!(wire.contains("partial answer"), "{wire}");
+    assert!(wire.contains("rate_limit_error"), "{wire}");
+    assert!(
+        !wire.contains("message_stop"),
+        "a failure is not a completed turn: {wire}"
+    );
+    wait_for_outcomes(&h, 1).await;
+
+    let outcome = h.outcome();
+    assert_eq!(outcome.final_status, FinalStatus::Failed);
+    assert_eq!(outcome.attempts.len(), 1);
+    assert_eq!(
+        outcome.attempts[0].failure_class,
+        Some(FailureClass::RateLimit)
+    );
+    assert!(outcome.attempts[0].cost.is_some_and(|cost| cost > 0.0));
+    assert!(outcome.validate().is_ok(), "{:?}", outcome.validate());
+    assert_eq!(h.record().usage.input_tokens, 11);
+    assert_eq!(h.record().usage.output_tokens, 7);
+    assert_eq!(h.mock.count_of(first), 1);
+    assert_eq!(h.mock.count_of("good-model"), 0);
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn chat_rate_refusal_returns_provider_and_retry_after_then_cools_the_scope() {
+    let (addr, mock) = start_mock().await;
+    let first = "chat-refusal-rate";
+    let id = format!("alpha-{first}");
+    let mut cfg = config_for(addr);
+    cfg.models = vec![model("alpha", first, 0, ModelTier::Fast)];
+    let h = Harness::start(cfg, mock).await;
+    let response = h.ask_streaming(&id).await;
+    assert_eq!(response.status(), 429);
+    assert_eq!(response.headers()["retry-after"], "120");
+    let wire: Value = response.json().await.unwrap();
+    assert_eq!(wire["error"]["type"], "rate_limit_error");
+    assert_eq!(wire["error"]["message"], "upstream Alpha returned 429");
+    assert!(!h.record().ok);
+    assert_eq!(h.outcome().attempts.len(), 1);
+
+    let cooled = h.ask_streaming(&id).await;
+    assert_eq!(cooled.status(), 429);
+    assert!(
+        cooled.headers()["retry-after"]
+            .to_str()
+            .unwrap()
+            .parse::<u64>()
+            .unwrap()
+            >= 118
+    );
+    let _ = cooled.text().await.unwrap();
+    assert_eq!(h.mock.count(), 1, "a cooled candidate is not sent again");
+    assert!(!h.state.router().is_circuit_open(&id));
     h.shutdown().await;
 }
 
@@ -3018,7 +3151,7 @@ async fn a_later_candidates_stream_failure_is_recorded() {
     );
     assert_eq!(
         outcome.attempts[1].failure_class,
-        Some(FailureClass::Protocol)
+        Some(FailureClass::ProviderUnavailable)
     );
     assert!(outcome.validate().is_ok(), "{:?}", outcome.validate());
 
@@ -3028,7 +3161,7 @@ async fn a_later_candidates_stream_failure_is_recorded() {
         .stats_store
         .get("beta-streamerr-model", "beta");
     assert_eq!(
-        later.failures.count(FailureClass::Protocol),
+        later.failures.count(FailureClass::ProviderUnavailable),
         1,
         "the later candidate's failure is not swallowed by the earlier one"
     );
@@ -3160,7 +3293,7 @@ async fn a_single_stream_failure_is_recorded_once() {
     assert_eq!(outcome.attempts.len(), 1);
     assert_eq!(
         outcome.attempts[0].failure_class,
-        Some(FailureClass::Protocol)
+        Some(FailureClass::ProviderUnavailable)
     );
     assert_eq!(outcome.final_status, FinalStatus::Failed);
     assert!(outcome.validate().is_ok(), "{:?}", outcome.validate());
@@ -3170,7 +3303,10 @@ async fn a_single_stream_failure_is_recorded_once() {
         .router()
         .stats_store
         .get("beta-streamerr-model", "beta");
-    assert_eq!(breakdown.failures.count(FailureClass::Protocol), 1);
+    assert_eq!(
+        breakdown.failures.count(FailureClass::ProviderUnavailable),
+        1
+    );
     let health = h.state.router().health_snapshot();
     assert_eq!(health[0].total_failure, 1, "counted once");
 
