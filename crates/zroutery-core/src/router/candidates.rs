@@ -37,7 +37,13 @@ impl Router {
             return false;
         }
         let config = registry.config();
-        let rectifier = &config.routing.rectifier;
+        // Remediation is a repair like the others: the provider the member
+        // belongs to may opt out or in of one for the requests it serves, so
+        // the flag is resolved for that provider rather than read globally.
+        let rectifier = registry
+            .provider_of(member)
+            .map(|provider| provider.resolved_rectifier(&config.routing.rectifier))
+            .unwrap_or_else(|_| config.routing.rectifier.clone());
         let vision_remediation =
             config.vision.enabled || (rectifier.enabled && rectifier.media_fallback);
         let thinking_remediation = rectifier.enabled && rectifier.thinking_fallback;

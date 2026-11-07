@@ -379,6 +379,65 @@ fn a_provider_proxy_override_is_optional_and_round_trips_without_changing_the_ga
 }
 
 #[test]
+fn a_provider_repair_override_is_optional_and_round_trips_without_emitting_it() {
+    let provider = ProviderConfig::new("p", "Provider", ProviderKind::Decision);
+    let original = serde_json::to_value(&provider).unwrap();
+    assert!(original.get("repair").is_none());
+    let restored: ProviderConfig = serde_json::from_value(original).unwrap();
+    assert_eq!(restored.repair, ProviderRepairOverrides::default());
+    assert!(restored.repair.is_empty());
+}
+
+#[test]
+fn a_provider_repair_override_round_trips_every_choice_it_names() {
+    let provider = ProviderConfig::new("p", "Provider", ProviderKind::Decision);
+    let mut document = serde_json::to_value(&provider).unwrap();
+    document["repair"] = serde_json::json!({
+        "thinking_signature": false,
+        "media_fallback": true,
+    });
+    let restored: ProviderConfig = serde_json::from_value(document).unwrap();
+    assert_eq!(restored.repair.thinking_signature, Some(false));
+    assert_eq!(restored.repair.media_fallback, Some(true));
+    // Repairs the override does not name stay inherited.
+    assert_eq!(restored.repair.thinking_budget, None);
+    let mut config = sample();
+    config.providers.push(restored);
+    let restored: AppConfig =
+        serde_json::from_str(&serde_json::to_string(&config).unwrap()).unwrap();
+    let repair = restored.provider("p").unwrap().repair.clone();
+    assert_eq!(repair.thinking_signature, Some(false));
+    assert_eq!(repair.media_fallback, Some(true));
+    assert_eq!(repair.thinking_budget, None);
+}
+
+#[test]
+fn resolved_rectifier_applies_the_overrides_and_keeps_the_global_rest() {
+    let mut provider = ProviderConfig::new("p", "Provider", ProviderKind::Decision);
+    provider.repair.media_fallback = Some(false);
+    provider.repair.codex_auto = Some(true);
+    let global = RectifierConfig {
+        enabled: false,
+        thinking_signature: false,
+        codex_auto: false,
+        ..RectifierConfig::default()
+    };
+    let resolved = provider.resolved_rectifier(&global);
+    // An override wins for the repairs it names.
+    assert!(!resolved.media_fallback);
+    assert!(resolved.codex_auto);
+    // Everything else rides along from the global, master switch included.
+    assert!(!resolved.enabled);
+    assert!(!resolved.thinking_signature);
+    assert!(resolved.thinking_budget);
+    assert!(resolved.thinking_fallback);
+    assert!(resolved.codex_metadata);
+    // An empty override inherits the global configuration exactly.
+    let inherited = ProviderConfig::new("q", "Inherit", ProviderKind::Decision);
+    assert_eq!(inherited.resolved_rectifier(&global), global);
+}
+
+#[test]
 fn a_decision_model_is_not_nagged_about_a_tier() {
     let mut cfg = sample();
     cfg.providers

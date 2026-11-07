@@ -41,6 +41,12 @@ pub(super) async fn try_rectify_buffered(
     if candidate.provider.kind.is_decision() {
         return Ok(None);
     }
+    // Every repair below answers to this provider's overrides over the global
+    // rectifier configuration: the provider may opt out or in of a repair for
+    // the requests it serves.
+    let rectifier_config = candidate
+        .provider
+        .resolved_rectifier(&state.config().routing.rectifier);
     // Resolve the provider credential once; every retry below reuses it.
     let mut client = client_for(req, &candidate.provider);
     let key = match console_key(state, candidate, key.map(str::to_string), &mut client).await {
@@ -53,10 +59,7 @@ pub(super) async fn try_rectify_buffered(
     // the request still carries them. `media_fallback` is a repair like the
     // rest: it runs with the description when a vision model is configured
     // and with the honest placeholder when one is not.
-    let media_fallback = {
-        let rectifier = &state.config().routing.rectifier;
-        rectifier.enabled && rectifier.media_fallback
-    };
+    let media_fallback = rectifier_config.enabled && rectifier_config.media_fallback;
     if media_fallback
         && MediaFallbackRectifier.should_apply(error, &serde_json::Value::Null)
         && !crate::media::collect::collect(req).is_empty()
@@ -89,7 +92,7 @@ pub(super) async fn try_rectify_buffered(
         }
     }
 
-    let rectifiers = rectifier::from_config(&state.config().routing.rectifier);
+    let rectifiers = rectifier::from_config(&rectifier_config);
     if rectifiers.is_empty() {
         return Ok(None);
     }
@@ -193,6 +196,12 @@ pub(super) async fn try_rectify_stream(
     if candidate.provider.kind.is_decision() {
         return Ok(None);
     }
+    // Every repair below answers to this provider's overrides over the global
+    // rectifier configuration: the provider may opt out or in of a repair for
+    // the requests it serves.
+    let rectifier_config = candidate
+        .provider
+        .resolved_rectifier(&state.config().routing.rectifier);
     // Resolve the provider credential once; every retry below reuses it.
     let mut client = client_for(req, &candidate.provider);
     let key = match console_key(state, candidate, key.map(str::to_string), &mut client).await {
@@ -205,10 +214,7 @@ pub(super) async fn try_rectify_stream(
     // the request still carries them. `media_fallback` is a repair like the
     // rest: it runs with the description when a vision model is configured
     // and with the honest placeholder when one is not.
-    let media_fallback = {
-        let rectifier = &state.config().routing.rectifier;
-        rectifier.enabled && rectifier.media_fallback
-    };
+    let media_fallback = rectifier_config.enabled && rectifier_config.media_fallback;
     if media_fallback
         && MediaFallbackRectifier.should_apply(error, &serde_json::Value::Null)
         && !crate::media::collect::collect(req).is_empty()
@@ -248,7 +254,7 @@ pub(super) async fn try_rectify_stream(
         }
     }
 
-    let rectifiers = rectifier::from_config(&state.config().routing.rectifier);
+    let rectifiers = rectifier::from_config(&rectifier_config);
     if rectifiers.is_empty() {
         return Ok(None);
     }

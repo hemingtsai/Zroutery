@@ -509,8 +509,11 @@ async fn run(
 ) -> Result<Completed> {
     let deadline = tokio::time::Instant::now() + policy::DEADLINE;
     let mut budget = policy::RetryBudget::default();
-    let auto_enabled =
-        lifecycle.routing().rectifier.enabled && lifecycle.routing().rectifier.codex_auto;
+    // The master switch stays gateway-wide; whether the Auto history repair
+    // itself runs is resolved per candidate below, because the provider may
+    // opt out or in of it for the requests it serves.
+    let global_rectifier = lifecycle.routing().rectifier.clone();
+    let rectifier_enabled = global_rectifier.enabled;
     let mut last = Error::NoCandidate(req.model.clone());
     let limit = if lifecycle.routing().failover {
         lifecycle.routing().max_attempts.max(1)
@@ -523,6 +526,11 @@ async fn run(
     );
     let mut candidates_sent = 0;
     for candidate in plan {
+        let auto_enabled = rectifier_enabled
+            && candidate
+                .provider
+                .resolved_rectifier(&global_rectifier)
+                .codex_auto;
         if candidates_sent >= limit {
             break;
         }

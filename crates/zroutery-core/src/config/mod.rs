@@ -55,6 +55,7 @@ pub use provider::{
 pub use reasoning::ReasoningCapability;
 pub use registry::{
     qualified_id, AccountConfig, InferenceKeyConfig, MaintenanceConfig, ModelEntry, ProviderConfig,
+    ProviderRepairOverrides,
 };
 pub use routing::{
     ClassifierCandidate, ClassifierConfig, RectifierConfig, RoutingConfig, RoutingStrategy,

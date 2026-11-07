@@ -11,6 +11,7 @@ use super::provider::{
     default_connect_timeout, default_timeout, default_true, ApiSurface, DecisionConfig,
     ProviderClientProfile,
 };
+use super::routing::RectifierConfig;
 use crate::billing::{BalanceConfig, BaseDepth, Pricing};
 use crate::ir::Dialect;
 pub use crate::protocol::ProviderQuirks;
@@ -76,6 +77,14 @@ pub struct ProviderConfig {
     pub bearer_auth: bool,
     #[serde(default)]
     pub quirks: ProviderQuirks,
+    /// Per-provider request-repair overrides. Every field left `None` (the
+    /// default) inherits `config.routing.rectifier`; a `Some` wins for the
+    /// requests this provider serves. The master switch (`rectifier.enabled`)
+    /// deliberately has no override — turning repairs off wholesale is a
+    /// gateway-wide policy, while the individual repairs are dialect and
+    /// capability concerns that belong to the upstream.
+    #[serde(default, skip_serializing_if = "ProviderRepairOverrides::is_empty")]
+    pub repair: ProviderRepairOverrides,
     /// How to ask this provider for the remaining credit, when it can be asked.
     #[serde(default)]
     pub balance: BalanceConfig,
@@ -95,6 +104,37 @@ pub struct ProviderConfig {
     /// migrate, and there is no second store whose absence becomes a question.
     #[serde(default)]
     pub accounts: Vec<AccountConfig>,
+}
+
+/// Per-provider request-repair overrides. Every field left `None` (the
+/// default) inherits `config.routing.rectifier`; a `Some` wins for the
+/// requests this provider serves.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderRepairOverrides {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_signature: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media_fallback: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_budget: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_fallback: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codex_metadata: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codex_auto: Option<bool>,
+}
+
+impl ProviderRepairOverrides {
+    /// Whether every repair still inherits the global rectifier configuration.
+    pub fn is_empty(&self) -> bool {
+        self.thinking_signature.is_none()
+            && self.media_fallback.is_none()
+            && self.thinking_budget.is_none()
+            && self.thinking_fallback.is_none()
+            && self.codex_metadata.is_none()
+            && self.codex_auto.is_none()
+    }
 }
 
 /// One account hosted by a provider.
@@ -379,6 +419,7 @@ impl ProviderConfig {
             anthropic_version: None,
             api_surface: ApiSurface::default(),
             quirks: ProviderQuirks::default(),
+            repair: ProviderRepairOverrides::default(),
             balance: BalanceConfig::default(),
             decision: DecisionConfig::default(),
             accounts: Vec::new(),
@@ -403,6 +444,32 @@ impl ProviderConfig {
             ProviderClientProfile::ClaudeCode
         } else {
             self.client_profile
+        }
+    }
+
+    /// The rectifier config this provider actually answers to: the global
+    /// defaults with the provider's overrides applied.
+    pub fn resolved_rectifier(
+        &self,
+        global: &crate::config::RectifierConfig,
+    ) -> crate::config::RectifierConfig {
+        RectifierConfig {
+            thinking_signature: self
+                .repair
+                .thinking_signature
+                .unwrap_or(global.thinking_signature),
+            media_fallback: self.repair.media_fallback.unwrap_or(global.media_fallback),
+            thinking_budget: self
+                .repair
+                .thinking_budget
+                .unwrap_or(global.thinking_budget),
+            thinking_fallback: self
+                .repair
+                .thinking_fallback
+                .unwrap_or(global.thinking_fallback),
+            codex_metadata: self.repair.codex_metadata.unwrap_or(global.codex_metadata),
+            codex_auto: self.repair.codex_auto.unwrap_or(global.codex_auto),
+            ..global.clone()
         }
     }
 

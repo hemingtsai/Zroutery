@@ -201,6 +201,7 @@ pub(super) fn validate_execution(state: &AppState, candidate: &Candidate) -> Res
         || provider.extra_headers != candidate.provider.extra_headers
         || provider.configured_client_profile() != candidate.provider.configured_client_profile()
         || provider.quirks != candidate.provider.quirks
+        || provider.repair != candidate.provider.repair
         || provider.decision != candidate.provider.decision
         || provider.bypass_proxy != candidate.provider.bypass_proxy
     {
@@ -735,6 +736,10 @@ mod tests {
             (
                 "quirks",
                 Box::new(|p: &mut ProviderConfig| p.quirks.drop_temperature = true),
+            ),
+            (
+                "repair",
+                Box::new(|p: &mut ProviderConfig| p.repair.media_fallback = Some(false)),
             ),
         ];
         for (name, mutate) in mutations {

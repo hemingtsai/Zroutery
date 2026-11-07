@@ -774,7 +774,12 @@ async fn shape_for_candidate(
         return Ok(shaped);
     }
     let config = state.config();
-    let rectifier = &config.routing.rectifier;
+    // Both proactive repairs below answer to this provider's overrides over
+    // the global rectifier configuration: the provider may opt out or in of a
+    // repair for the requests it serves.
+    let rectifier = candidate
+        .provider
+        .resolved_rectifier(&config.routing.rectifier);
     let media_fallback = rectifier.enabled && rectifier.media_fallback;
     // The client's output cap is a wish; the model's is a limit. Asking a
     // model for more than it can emit fails the whole request, so the smaller
