@@ -46,7 +46,7 @@ export const en = {
   "task.accounts": "Account observations",
   "task.connect": "Four-class setup",
   "client_setup.title": "Native four-class model menu",
-  "client_setup.hint": "Preview the real files and limitations, choose a default, synchronize, then verify the client's actual request.",
+  "client_setup.hint": "Preview the fields to write and the default tier, then verify the client's request.",
   "client_setup.client": "Client",
   "client_setup.default": "Default usage tier",
   "client_setup.keep": "Keep existing session/default",
@@ -480,16 +480,16 @@ export const en = {
   "field.connect_timeout": "Connect timeout (s)",
   "providers.proxy_policy": "Upstream proxy",
   "providers.proxy_policy_hint":
-    "Applies to requests to this upstream only; browser proxy settings are untouched.",
+    "Applies to requests to this upstream only.",
   "providers.proxy_inherit": "Inherit gateway setting",
   "providers.proxy_direct": "Direct · bypass proxy",
   "providers.proxy_system": "Follow system proxy",
   "providers.f_version": "anthropic-version",
   "providers.f_version_hint":
-    "Leave 2023-06-01 unless you know otherwise; 2026-10-21 drops temperature, top_p and top_k.",
+    "Defaults to 2023-06-01; 2026-10-21 drops temperature, top_p and top_k.",
   "providers.f_beta": "anthropic-beta",
   "providers.f_beta_hint":
-    "Comma separated beta capabilities, e.g. context-management-2025-06-27. Empty sends none.",
+    "Comma separated beta capabilities; empty sends none.",
   "providers.api_surface": "API surface",
   "providers.api_surface_hint":
     "Which OpenAI API this endpoint speaks; some Codex gateways only accept Responses.",
@@ -561,7 +561,7 @@ export const en = {
   "providers.checking": "Checking…",
   "providers.compatibility": "Compatibility",
   "providers.compatibility_hint":
-    "Switches for providers that do not follow the standard protocol exactly. Leave them all off unless a request fails.",
+    "For providers that do not follow the standard protocol exactly. Leave them off unless a request fails.",
   "providers.repair.title": "Request repair",
   "providers.repair.hint":
     "Overrides of the Routing page's global repair defaults for this provider. 'Follow the global' inherits the Routing page's switch.",
@@ -769,7 +769,7 @@ export const en = {
    */
   "takeover.section": "Agent takeover",
   "takeover.section_hint":
-    "Writes the gateway address and token into a client's own config and restores the original values on release; the client still picks a tier by the model name it sends.",
+    "Writes the gateway address and token into a client's own config, and restores the original values on release.",
   "takeover.none": "No external agent is known to this build.",
   "takeover.load_failed":
     "The takeover record could not be read: {err}; nothing on this page has changed a client's configuration.",
