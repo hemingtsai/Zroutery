@@ -269,6 +269,9 @@ impl StreamEncoder for AnthropicStreamEncoder {
             StreamEvent::Ping => {
                 out.push(Self::frame("ping", json!({"type": "ping"})));
             }
+            // Record-keeping only: the declaration travels to the request
+            // lifecycle, never to the client's wire.
+            StreamEvent::UpstreamDeclaration { .. } => {}
         }
         out
     }

@@ -6,7 +6,10 @@ use super::request_in::{
     arguments_json, decode_reasoning_value, decode_tool_call, flatten_content,
 };
 use crate::error::{Error, Result};
-use crate::ir::{ChatResponse, ContentBlock, StopReason, Usage};
+use crate::ir::{
+    capture_declaration_in_passthrough, declaration_from_wire, ChatResponse, ContentBlock,
+    StopReason, Usage,
+};
 use crate::protocol::explicit_placeholder;
 
 // -------------------------------------------------------------------- responses
@@ -150,6 +153,12 @@ pub fn decode_response(body: Value) -> Result<ChatResponse> {
         content.push(ContentBlock::text(refusal));
         passthrough.insert("refusal".into(), json!(refusal));
     }
+    // Park the complete classified declaration before anything rewrites
+    // `model` to the client-facing exposed id. The version axis reads both
+    // spellings a relay could use, so a disagreement between them is a
+    // conflict; neither the key nor any of its values is ever echoed to a
+    // client.
+    capture_declaration_in_passthrough(&mut passthrough, &declaration_from_wire(&body));
 
     Ok(ChatResponse {
         id: body

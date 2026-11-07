@@ -3,7 +3,9 @@
 use serde_json::{json, Map, Value};
 
 use crate::error::{Error, Result};
-use crate::ir::{ChatResponse, StopReason, Usage};
+use crate::ir::{
+    capture_declaration_in_passthrough, declaration_from_wire, ChatResponse, StopReason, Usage,
+};
 
 use super::request_in::decode_block;
 use super::request_out::encode_block;
@@ -112,6 +114,14 @@ pub fn decode_response(body: Value) -> Result<ChatResponse> {
             ));
         }
     };
+    // The native body already rides in the passthrough; park the complete
+    // classified declaration beside it so the lifecycle can keep what the
+    // upstream declared before the proxy rewrites `model` to the exposed id.
+    // The internal key never reaches a client: the egress encoders rebuild
+    // their wire JSON from named fields and the native path returns the
+    // upstream body, not this map.
+    let mut passthrough = Map::from_iter([(NATIVE_RESPONSE.to_string(), body.clone())]);
+    capture_declaration_in_passthrough(&mut passthrough, &declaration_from_wire(&body));
     Ok(ChatResponse {
         id: body
             .get("id")
@@ -134,7 +144,7 @@ pub fn decode_response(body: Value) -> Result<ChatResponse> {
             .and_then(Value::as_str)
             .map(str::to_string),
         usage: decode_usage(body.get("usage")),
-        passthrough: Map::from_iter([(NATIVE_RESPONSE.to_string(), body.clone())]),
+        passthrough,
     })
 }
 

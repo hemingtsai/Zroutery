@@ -3,7 +3,10 @@
 use serde_json::{json, Map, Value};
 
 use crate::error::{Error, Result};
-use crate::ir::{ChatResponse, ContentBlock, StopReason, Usage};
+use crate::ir::{
+    capture_declaration_in_passthrough, declaration_from_wire, ChatResponse, ContentBlock,
+    StopReason, Usage,
+};
 use crate::protocol::explicit_placeholder;
 // ---------------------------------------------------------------- responses
 
@@ -71,6 +74,14 @@ pub fn decode_response(body: Value) -> Result<ChatResponse> {
         .map(decode_usage_metadata)
         .unwrap_or_default();
 
+    // Keep the upstream's own structured declaration on the response, before
+    // anything rewrites `model` to the client-facing exposed id. The complete
+    // classified structure travels — both axes and any disagreement between
+    // the camel and snake version spellings — and the lifecycle reads it off
+    // the internal key; the client never sees it.
+    let mut passthrough = Map::new();
+    capture_declaration_in_passthrough(&mut passthrough, &declaration_from_wire(&body));
+
     Ok(ChatResponse {
         id: body
             .get("id")
@@ -86,7 +97,7 @@ pub fn decode_response(body: Value) -> Result<ChatResponse> {
         stop_reason,
         stop_sequence: None,
         usage,
-        passthrough: Map::new(),
+        passthrough,
     })
 }
 
@@ -96,6 +107,14 @@ pub fn decode_response(body: Value) -> Result<ChatResponse> {
 /// includes `cachedContentTokenCount`, which is the cached (read) subset. The
 /// cached count is clamped to the total so the IR subset invariant holds even
 /// for a relay that reports the two inconsistently.
+///
+/// Candidate text and thinking are separate output counters:
+/// `candidatesTokenCount` does not include `thoughtsTokenCount`, and the
+/// grand total of a thinking reply is prompt + candidates + thoughts. Both
+/// counters are billed output, and the IR keeps reasoning tokens inside
+/// `output_tokens`, so the decoded output total is their sum. The raw usage
+/// capture reports the same number; settlement must not see two different
+/// totals for one wire object.
 pub(super) fn decode_usage_metadata(u: &Value) -> Usage {
     let counter = |key: &str| {
         u.get(key)
@@ -104,23 +123,31 @@ pub(super) fn decode_usage_metadata(u: &Value) -> Usage {
             .min(u32::MAX as u64) as u32
     };
     let input_tokens = counter("promptTokenCount");
+    let candidates = counter("candidatesTokenCount");
+    let thoughts = counter("thoughtsTokenCount");
+    let output_tokens = candidates.saturating_add(thoughts);
     Usage {
         input_tokens,
-        output_tokens: counter("candidatesTokenCount"),
+        output_tokens,
         cache_read_tokens: counter("cachedContentTokenCount").min(input_tokens),
         cache_write_tokens: 0,
-        reasoning_tokens: counter("thoughtsTokenCount"),
+        reasoning_tokens: thoughts.min(output_tokens),
     }
 }
 
 /// Encode the IR contract to Gemini's cache-inclusive `usageMetadata`.
+///
+/// The inverse of the decode above: the IR output total already contains the
+/// reasoning subset, so the wire carries the two counters Gemini bills from —
+/// candidate text plus thoughts — and no thought is counted twice.
 pub(super) fn encode_usage(u: &Usage) -> Value {
+    let reasoning = u.reasoning_tokens.min(u.output_tokens);
     json!({
         "promptTokenCount": u.input_tokens,
-        "candidatesTokenCount": u.output_tokens,
+        "candidatesTokenCount": u.output_tokens - reasoning,
         "totalTokenCount": u.total(),
         "cachedContentTokenCount": u.cache_read_tokens.min(u.input_tokens),
-        "thoughtsTokenCount": u.reasoning_tokens,
+        "thoughtsTokenCount": reasoning,
     })
 }
 

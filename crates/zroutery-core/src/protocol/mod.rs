@@ -29,10 +29,10 @@ pub mod responses;
 use crate::error::{Error, Result};
 use crate::ir::{
     ChatRequest, ChatResponse, ContentBlock, Dialect, MediaSource, StopReason, StreamEvent,
-    UnsupportedContentPolicy, Usage,
+    UnsupportedContentPolicy, UpstreamModelDeclaration, Usage,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 /// The explicit result of evaluating an unsupported-content policy.
 ///
@@ -523,6 +523,13 @@ pub struct StreamCollector {
     blocks: std::collections::BTreeMap<u32, PartialBlock>,
     stop_reason: Option<StopReason>,
     stop_sequence: Option<String>,
+    /// Everything the stream's own frames declared about the model that ran,
+    /// merged across frames. `Start::model` feeds the model axis so a
+    /// dialect whose only identity frame is its opening one (Anthropic) is
+    /// still collected; explicit [`StreamEvent::UpstreamDeclaration`] events
+    /// carry every later frame, including the version axis and any
+    /// disagreement between frames.
+    declaration: UpstreamModelDeclaration,
 }
 
 #[derive(Debug)]
@@ -554,6 +561,12 @@ impl StreamCollector {
                 self.id = id.clone();
                 self.model = model.clone();
                 self.usage = *usage;
+                // An absent name stays absent (`Missing` merges as nothing);
+                // a named one joins the model axis beside any later frame.
+                self.declaration.observe_model(Some(model.as_str()));
+            }
+            StreamEvent::UpstreamDeclaration { declaration } => {
+                self.declaration.merge(declaration);
             }
             StreamEvent::TextDelta { index, text } => match self.blocks.entry(*index) {
                 Entry::Occupied(mut slot) => {
@@ -623,6 +636,12 @@ impl StreamCollector {
 
     /// The assembled response.
     pub fn finish(self) -> ChatResponse {
+        let mut passthrough = Map::new();
+        // The collected declaration travels the same internal key the buffered
+        // decoders use, so a non-streaming client whose answer arrived as SSE
+        // keeps the full evidence — both axes and any conflict — exactly like
+        // a directly decoded body. The key is never echoed to a client.
+        crate::ir::capture_declaration_in_passthrough(&mut passthrough, &self.declaration);
         ChatResponse {
             id: self.id,
             model: self.model,
@@ -634,7 +653,7 @@ impl StreamCollector {
             stop_reason: self.stop_reason.unwrap_or(StopReason::Unknown),
             stop_sequence: self.stop_sequence,
             usage: self.usage,
-            passthrough: Default::default(),
+            passthrough,
         }
     }
 }

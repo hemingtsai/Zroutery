@@ -82,6 +82,75 @@ pub struct Decision {
     pub noul: f64,
 }
 
+/// Accounting metadata observed beside the decision; no response body is kept.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DecisionReply {
+    pub decision: Decision,
+    pub usage: Option<crate::ir::Usage>,
+    pub declared: crate::ir::UpstreamModelDeclaration,
+}
+
+pub(super) fn parse_reply(answer: &Value) -> crate::error::Result<DecisionReply> {
+    let decision = parse_answer(answer).ok_or_else(|| {
+        crate::error::Error::BadUpstreamPayload(
+            "the decision endpoint answered with no probability".into(),
+        )
+    })?;
+    let mut declared = crate::ir::UpstreamModelDeclaration::from_wire_fields(
+        answer.get("model").and_then(Value::as_str),
+        answer.get("modelVersion").and_then(Value::as_str),
+    );
+    declared.observe_model_version(answer.get("model_version").and_then(Value::as_str));
+    let usage = observed_usage(answer)?;
+    Ok(DecisionReply {
+        decision,
+        usage,
+        declared,
+    })
+}
+
+/// Usage is independent of whether the answer is a usable decision. Read it
+/// before rejecting an HTTP error or a reply without a probability.
+pub(super) fn observed_usage(answer: &Value) -> crate::error::Result<Option<crate::ir::Usage>> {
+    answer
+        .get("usage")
+        .filter(|value| !value.is_null())
+        .map(|usage| {
+            let count = |key: &str, required: bool| -> crate::error::Result<u32> {
+                match usage.get(key) {
+                    None if !required => Ok(0),
+                    value => value
+                        .and_then(Value::as_u64)
+                        .and_then(|n| u32::try_from(n).ok())
+                        .ok_or_else(|| {
+                            crate::error::Error::BadUpstreamPayload(
+                                "invalid SystemOne usage count".into(),
+                            )
+                        }),
+                }
+            };
+            let usage = crate::ir::Usage {
+                input_tokens: count("input_tokens", true)?,
+                output_tokens: count("output_tokens", true)?,
+                cache_read_tokens: count("cache_read_tokens", false)?,
+                cache_write_tokens: count("cache_write_tokens", false)?,
+                reasoning_tokens: count("reasoning_tokens", false)?,
+            };
+            if usage
+                .cache_read_tokens
+                .checked_add(usage.cache_write_tokens)
+                .is_none_or(|n| n > usage.input_tokens)
+                || usage.reasoning_tokens > usage.output_tokens
+            {
+                return Err(crate::error::Error::BadUpstreamPayload(
+                    "invalid SystemOne usage subsets".into(),
+                ));
+            }
+            Ok(usage)
+        })
+        .transpose()
+}
+
 /// The body a decision endpoint is asked with.
 ///
 /// `model` is part of the body rather than the URL: the family's endpoint
@@ -143,11 +212,13 @@ pub fn question_of(req: &ChatRequest) -> (String, String) {
         .filter(|text| !text.is_empty())
         .collect::<Vec<_>>()
         .join("\n\n");
-    let state = if req
-        .messages
-        .iter()
-        .any(|message| message.role != Role::User)
-    {
+    let state = if req.messages.iter().any(|message| {
+        message.role != Role::User
+            || message
+                .content
+                .iter()
+                .any(|block| !matches!(block, ContentBlock::Text { .. }))
+    }) {
         // Keep assistant/system turns and tool evidence rather than judging
         // only the last user message. This JSON is transient request content,
         // never persisted in records or diagnostics.

@@ -188,6 +188,9 @@ impl StreamEncoder for OpenAiStreamEncoder {
                 self.done = true;
             }
             StreamEvent::Ping => {}
+            // Record-keeping only: the declaration travels to the request
+            // lifecycle, never to the client's wire.
+            StreamEvent::UpstreamDeclaration { .. } => {}
         }
         out
     }

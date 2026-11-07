@@ -44,6 +44,9 @@ pub struct OpenAiStreamParser {
     /// Whether the upstream really ended the answer (`finish_reason` or
     /// `[DONE]`). A body that just stops arriving is truncated, not finished.
     normal_terminal: bool,
+    /// The declaration events already published, so identical repeat frames
+    /// produce no event and a frame that changes a value always does.
+    last_declared: (Option<String>, Option<String>),
 }
 
 impl OpenAiStreamParser {
@@ -61,7 +64,39 @@ impl OpenAiStreamParser {
             pending_stop: None,
             emitted_stop: false,
             normal_terminal: false,
+            last_declared: (None, None),
         }
+    }
+
+    /// Publish the structured identity fields one chunk carried.
+    ///
+    /// Every chat-completion chunk may carry `model` — not only the first —
+    /// and a relay may add a version member. Each value is published the first
+    /// time it is seen and every time it changes, so a stream whose frames
+    /// disagree stays a conflict downstream instead of silently keeping
+    /// whichever chunk arrived last.
+    fn observe_declared(&mut self, chunk: &Value, out: &mut Vec<StreamEvent>) {
+        let model = chunk
+            .get("model")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let version = chunk
+            .get("model_version")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        if model.is_none() && version.is_none() {
+            return;
+        }
+        if model == self.last_declared.0.as_deref() && version == self.last_declared.1.as_deref() {
+            return;
+        }
+        let mut declaration = crate::ir::UpstreamModelDeclaration::default();
+        declaration.observe_model(model);
+        declaration.observe_model_version(version);
+        self.last_declared = (model.map(str::to_string), version.map(str::to_string));
+        out.push(StreamEvent::UpstreamDeclaration { declaration });
     }
 
     fn close_current(&mut self, out: &mut Vec<StreamEvent>) {
@@ -146,9 +181,19 @@ impl OpenAiStreamParser {
             }
         }
         self.id = Some(id.clone());
+        // The chunk's own name, verbatim. The seeded configured model is a
+        // routing fact, not a declaration, and is never substituted when the
+        // chunk omits the field: an absent name stays absent, which is how
+        // the record keeps "the provider declared nothing" distinguishable
+        // from "it declared what Zroutery asked for".
+        let declared = chunk
+            .get("model")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
         out.push(StreamEvent::Start {
             id,
-            model: self.model.clone(),
+            model: declared,
             usage: self.usage,
         });
     }
@@ -211,7 +256,6 @@ impl StreamParser for OpenAiStreamParser {
                 self.usage = parsed;
             }
         }
-
         let choices = chunk
             .get("choices")
             .and_then(Value::as_array)
@@ -219,15 +263,24 @@ impl StreamParser for OpenAiStreamParser {
             .unwrap_or_default();
 
         if choices.is_empty() {
-            // Usage-only trailer: flush the stop we deferred.
+            // Usage-only trailer: flush the stop we deferred. Identity fields
+            // ride the trailer too, even when no content opened the message.
             if self.pending_stop.is_some() {
                 self.ensure_started(&chunk, &mut out);
+            }
+            self.observe_declared(&chunk, &mut out);
+            if self.pending_stop.is_some() {
                 self.emit_stop(&mut out);
             }
             return Ok(out);
         }
 
         self.ensure_started(&chunk, &mut out);
+        // Identity fields ride every chunk. Published after `Start` so the
+        // opening frame stays the stream's first event; the value here is the
+        // same observation the first chunk's Start carried, and the merge
+        // downstream treats identical values as one.
+        self.observe_declared(&chunk, &mut out);
 
         for choice in choices {
             // Only the first choice is supported; `n > 1` is not representable

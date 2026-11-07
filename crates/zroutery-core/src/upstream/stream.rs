@@ -8,7 +8,7 @@ use bytes::Bytes;
 use futures_util::{Stream, StreamExt};
 use serde_json::Value;
 
-use super::errors::{capture_failed_body, truncate};
+use super::errors::truncate;
 use super::headers::{anonymous_identity, build_headers_for_identity};
 use super::{EventStream, Upstream};
 use crate::config::{ClientIdentity, ProviderConfig};
@@ -138,9 +138,10 @@ impl Upstream {
                 retries += 1;
                 continue;
             }
-            // DEBUG (opt-in via ZROUTERY_CAPTURE_FAILED_BODIES=1): capture the
-            // request body so relay-side rejections can be bisected offline.
-            capture_failed_body(provider, body, status.as_u16(), &text);
+            // Capture only accounting metadata before dropping this error body.
+            if let Ok(value) = serde_json::from_str::<Value>(&text) {
+                super::observation::capture(&client.observation, provider.dialect(), &value);
+            }
             return Err(err);
         };
 
@@ -166,6 +167,8 @@ impl Upstream {
             native_review: provider.dialect() == crate::ir::Dialect::Anthropic
                 && body.get("safeguards").is_some_and(|value| !value.is_null()),
             native_stopped: false,
+            observation: client.observation.clone(),
+            dialect: provider.dialect(),
         };
 
         let mut stream: EventStream = Box::pin(futures_util::stream::unfold(
@@ -192,6 +195,13 @@ impl Upstream {
                         Ok(None) => {
                             state.done = true;
                             if let Some(body) = state.error_body.take() {
+                                if let Ok(value) = serde_json::from_slice::<Value>(&body) {
+                                    super::observation::capture(
+                                        &state.observation,
+                                        state.dialect,
+                                        &value,
+                                    );
+                                }
                                 let body = String::from_utf8_lossy(&body);
                                 if crate::failure::is_session_binding_invalidated(200, &body) {
                                     state.terminal_error = Some(Error::Upstream {
@@ -232,6 +242,13 @@ impl Upstream {
                                 }
                             }
                             for frame in state.decoder.push(&chunk) {
+                                if let Ok(value) = frame.json() {
+                                    super::observation::capture(
+                                        &state.observation,
+                                        state.dialect,
+                                        &value,
+                                    );
+                                }
                                 let value = if state.native_review {
                                     match frame.json() {
                                         Ok(value) => Some(value),
@@ -274,6 +291,12 @@ impl Upstream {
                                 };
                                 match parsed {
                                     Ok(events) => {
+                                        for event in &events {
+                                            super::observation::capture_event(
+                                                &state.observation,
+                                                event,
+                                            );
+                                        }
                                         if let Some(data) = value {
                                             state.native_stopped |= native_stop;
                                             state.pending.push_back(StreamEvent::Native {
@@ -375,4 +398,6 @@ struct StreamState {
     error_body: Option<Vec<u8>>,
     native_review: bool,
     native_stopped: bool,
+    observation: crate::ir::AttemptObservation,
+    dialect: crate::ir::Dialect,
 }

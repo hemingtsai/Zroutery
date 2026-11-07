@@ -7,9 +7,17 @@
 //! full N x M matrix.
 
 mod headers;
+mod model_identity;
+mod observation;
 pub mod reasoning;
 pub mod response;
 pub use headers::ReplyHeaders;
+pub use model_identity::{
+    capture_declaration_in_passthrough, declaration_from_passthrough, declaration_from_wire,
+    DeclaredIdentity, UpstreamModelDeclaration, DECLARATION_PASSTHROUGH_KEY,
+    DECLARED_MODEL_SCHEMA_VERSION,
+};
+pub use observation::{AttemptObservation, ObservedResponse, UsageEvidence};
 pub use reasoning::{ReasoningRequest, NATIVE_EFFORTS, REASONING_SCHEMA_VERSION};
 
 pub use response::{ResponseStatus, ResponseStore, StoredResponse};
@@ -850,6 +858,13 @@ impl ChatResponse {
 ///
 /// Both upstream parsers emit these, and both egress encoders consume them.
 /// `index` is the content block index, matching Anthropic semantics.
+///
+/// `Start::model` is the name the upstream's own opening frame carried,
+/// verbatim. An **empty string means the frame named no model** — the seeded
+/// configured model is a routing fact and must never be substituted for it,
+/// because that would record a declaration the provider never made. The
+/// request lifecycle classifies the value (placeholder, specific, absent)
+/// into the persisted declaration; the egress encoders do not read it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum StreamEvent {
     Start {
@@ -891,6 +906,17 @@ pub enum StreamEvent {
         usage: Usage,
     },
     Ping,
+    /// A structured declaration one upstream frame carried: the model axis and
+    /// the version axis, exactly as that frame's fields stated.
+    ///
+    /// The parsers emit one whenever a frame carries structured identity
+    /// fields and the value differs from the last one seen, so a stream whose
+    /// opening and terminal frames disagree stays a conflict in the record
+    /// instead of a last-write win. Egress encoders never publish it; the
+    /// request lifecycle merges it into the attempt's declaration.
+    UpstreamDeclaration {
+        declaration: UpstreamModelDeclaration,
+    },
     /// A native frame plus its canonical observations. Used only for a
     /// same-protocol extension path; the opaque payload is never a fabricated
     /// safety verdict and is not persisted as accounting or training content.

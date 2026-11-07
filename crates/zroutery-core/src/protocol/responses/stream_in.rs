@@ -12,6 +12,17 @@ use crate::protocol::{unsupported_upstream_content, SseFrame, StreamParser};
 pub struct ResponsesStreamParser {
     id: String,
     model: String,
+    /// The name the upstream's own frames carried, verbatim. `model` stays the
+    /// seeded configured model for the session-binding checks; this field is
+    /// the one the Start events publish, so a frame that names no model stays
+    /// absent instead of being back-filled from the routing plan.
+    wire_model: String,
+    /// The declaration events already published, so identical repeat frames
+    /// produce no event and the terminal frame's response object is compared
+    /// against the opening one: a relay that changed the model or the version
+    /// part-way through the stream shows up as a conflict, not as a
+    /// last-write win.
+    last_declared: (Option<String>, Option<String>),
     started: bool,
     /// Whether the upstream really ended the response
     /// (`response.completed`/`response.incomplete`). A body that just stops
@@ -31,6 +42,8 @@ impl ResponsesStreamParser {
         Self {
             id: String::new(),
             model: model.to_string(),
+            wire_model: String::new(),
+            last_declared: (None, None),
             started: false,
             normal_terminal: false,
             next_index: 0,
@@ -47,6 +60,37 @@ impl ResponsesStreamParser {
         if self.stopped_tools.insert(index) {
             out.push(StreamEvent::BlockStop { index });
         }
+    }
+
+    /// Publish the structured identity fields one response object carried.
+    ///
+    /// The response object rides `response.created`, `response.in_progress`
+    /// and the terminal `response.completed`/`response.incomplete` frames, so
+    /// the opening and the terminal declaration are both read: a relay that
+    /// changed the model or the version between them is a conflict, and the
+    /// terminal frame cannot overwrite the opening one by arriving last.
+    fn observe_declared(&mut self, response: &Value, out: &mut Vec<StreamEvent>) {
+        let model = response
+            .get("model")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let version = response
+            .get("model_version")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        if model.is_none() && version.is_none() {
+            return;
+        }
+        if model == self.last_declared.0.as_deref() && version == self.last_declared.1.as_deref() {
+            return;
+        }
+        let mut declaration = crate::ir::UpstreamModelDeclaration::default();
+        declaration.observe_model(model);
+        declaration.observe_model_version(version);
+        self.last_declared = (model.map(str::to_string), version.map(str::to_string));
+        out.push(StreamEvent::UpstreamDeclaration { declaration });
     }
 
     /// Resolve a tool index from an event that references it by item or call id.
@@ -155,12 +199,20 @@ impl StreamParser for ResponsesStreamParser {
                 if let Some(model) = response.get("model").and_then(Value::as_str) {
                     self.model = model.to_string();
                 }
+                // Verbatim, and never the seeded configured model: the frame
+                // that names no model leaves the declaration absent.
+                self.wire_model = response
+                    .get("model")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
                 self.started = true;
                 out.push(StreamEvent::Start {
                     id: self.id.clone(),
-                    model: self.model.clone(),
+                    model: self.wire_model.clone(),
                     usage: self.usage,
                 });
+                self.observe_declared(&response, &mut out);
             }
             "response.output_item.added" => {
                 let item = event.get("item").ok_or_else(|| {
@@ -323,7 +375,7 @@ impl StreamParser for ResponsesStreamParser {
                     self.started = true;
                     out.push(StreamEvent::Start {
                         id: self.id.clone(),
-                        model: self.model.clone(),
+                        model: self.wire_model.clone(),
                         usage: self.usage,
                     });
                 }
@@ -331,6 +383,11 @@ impl StreamParser for ResponsesStreamParser {
                     if let Some(usage) = response.get("usage") {
                         self.usage = decode_usage(Some(usage));
                     }
+                    // The terminal frame's own response object: its model and
+                    // version are compared against what the opening frame
+                    // declared, so a change is a conflict rather than a
+                    // last-write win.
+                    self.observe_declared(response, &mut out);
                 }
                 let stop_reason = if event_type == "response.incomplete" {
                     match event
@@ -386,9 +443,14 @@ impl StreamParser for ResponsesStreamParser {
                     self.close_tool(index, &mut out);
                 }
             }
-            "response.in_progress"
-            | "response.queued"
-            | "response.output_text.done"
+            "response.in_progress" | "response.queued" => {
+                // Progress frames restate the response object, model included;
+                // the change-dedup keeps them quiet unless a value moved.
+                if let Some(response) = event.get("response") {
+                    self.observe_declared(response, &mut out);
+                }
+            }
+            "response.output_text.done"
             | "response.refusal.done"
             | "response.reasoning_text.done"
             | "response.reasoning_summary_text.done" => {}

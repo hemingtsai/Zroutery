@@ -868,3 +868,100 @@ fn json_object_mime_type_round_trips_without_a_schema() {
     );
     assert!(wire["generationConfig"].get("responseSchema").is_none());
 }
+
+// ------------------------------------------------------------------- usage
+
+#[test]
+fn gemini_thinking_is_billed_output_and_sums_to_the_reported_total() {
+    // Gemini reports candidate text and thinking as separate counters whose
+    // sum with the prompt is `totalTokenCount`; both are billed output, and
+    // the IR keeps reasoning tokens inside the output total.
+    let decoded = decode_response(json!({
+        "candidates": [{
+            "content": {"role": "model", "parts": [{"text": "hi"}]},
+            "finishReason": "STOP"
+        }],
+        "usageMetadata": {
+            "promptTokenCount": 100,
+            "cachedContentTokenCount": 20,
+            "candidatesTokenCount": 30,
+            "thoughtsTokenCount": 8,
+            "totalTokenCount": 138
+        }
+    }))
+    .unwrap();
+    assert_eq!(decoded.usage.input_tokens, 100);
+    assert_eq!(decoded.usage.output_tokens, 38);
+    assert_eq!(decoded.usage.reasoning_tokens, 8);
+    assert_eq!(decoded.usage.cache_read_tokens, 20);
+    assert_eq!(decoded.usage.fresh_input_tokens(), 80);
+}
+
+#[test]
+fn gemini_encode_splits_reasoning_back_out_of_the_output_total() {
+    let resp = ChatResponse {
+        id: "gemini_1".into(),
+        model: "gemini-2.5-pro".into(),
+        content: vec![ContentBlock::text("hi")],
+        stop_reason: StopReason::EndTurn,
+        stop_sequence: None,
+        usage: Usage {
+            input_tokens: 100,
+            output_tokens: 38,
+            cache_read_tokens: 20,
+            reasoning_tokens: 8,
+            ..Usage::default()
+        },
+        passthrough: serde_json::Map::new(),
+    };
+    let wire = encode_response(&resp);
+    assert_eq!(wire["usageMetadata"]["promptTokenCount"], 100);
+    assert_eq!(wire["usageMetadata"]["candidatesTokenCount"], 30);
+    assert_eq!(wire["usageMetadata"]["thoughtsTokenCount"], 8);
+    assert_eq!(wire["usageMetadata"]["totalTokenCount"], 138);
+    assert_eq!(wire["usageMetadata"]["cachedContentTokenCount"], 20);
+}
+
+#[test]
+fn gemini_usage_round_trips_reasoning_and_cache() {
+    let usage = Usage {
+        input_tokens: 100,
+        output_tokens: 38,
+        cache_read_tokens: 20,
+        cache_write_tokens: 0,
+        reasoning_tokens: 8,
+    };
+    let resp = ChatResponse {
+        id: "gemini_1".into(),
+        model: "gemini-2.5-pro".into(),
+        content: vec![ContentBlock::text("hi")],
+        stop_reason: StopReason::EndTurn,
+        stop_sequence: None,
+        usage,
+        passthrough: serde_json::Map::new(),
+    };
+    let decoded = decode_response(encode_response(&resp)).unwrap();
+    assert_eq!(decoded.usage, usage);
+}
+
+#[test]
+fn streamed_thinking_tokens_land_inside_the_stop_output() {
+    let raw = "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"hi\"}]}}]}\n\n\
+               data: {\"candidates\":[{\"content\":{\"parts\":[]},\"finishReason\":\"STOP\"}],\
+               \"usageMetadata\":{\"promptTokenCount\":100,\"candidatesTokenCount\":30,\"thoughtsTokenCount\":8}}\n\n";
+    let mut dec = SseDecoder::new();
+    let mut parser = GeminiStreamParser::new("gemini-2.5-pro");
+    let mut events = Vec::new();
+    for frame in dec.push(raw.as_bytes()) {
+        events.extend(parser.push(&frame).unwrap());
+    }
+    events.extend(parser.finish());
+    match events.last().unwrap() {
+        StreamEvent::Stop { usage, .. } => {
+            assert_eq!(usage.input_tokens, 100);
+            assert_eq!(usage.output_tokens, 38);
+            assert_eq!(usage.reasoning_tokens, 8);
+        }
+        other => panic!("unexpected tail {other:?}"),
+    }
+}

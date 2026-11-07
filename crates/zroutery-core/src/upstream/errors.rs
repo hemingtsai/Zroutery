@@ -2,9 +2,6 @@
 
 use std::time::Duration;
 
-use serde_json::Value;
-
-use crate::config::ProviderConfig;
 use crate::error::Error;
 
 /// The most same-candidate retries one request may spend, across every class.
@@ -143,45 +140,7 @@ fn is_history_resource_error(body: &str) -> bool {
         && body.contains("Use the same resource that created the item")
 }
 
-/// DEBUG: dump a request body whose upstream call failed, so relay
-/// rejections can be replayed and bisected offline. Opt-in via
-/// ZROUTERY_CAPTURE_FAILED_BODIES=1 — the dumps contain full conversation
-/// content, so they are never written by default.
-pub(super) fn capture_failed_body(
-    provider: &ProviderConfig,
-    body: &Value,
-    status: u16,
-    text: &str,
-) {
-    if std::env::var("ZROUTERY_CAPTURE_FAILED_BODIES").as_deref() != Ok("1") {
-        return;
-    }
-    use std::sync::atomic::{AtomicU32, Ordering};
-    static COUNTER: AtomicU32 = AtomicU32::new(0);
-    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    if n >= 10 {
-        return;
-    }
-    let dir = std::env::temp_dir().join("zroutery_failed_bodies");
-    if std::fs::create_dir_all(&dir).is_err() {
-        return;
-    }
-    let ts = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or_default();
-    let path = dir.join(format!(
-        "{ts}_s{status}_{}.json",
-        provider.name.replace(' ', "_")
-    ));
-    if let Ok(pretty) = serde_json::to_string_pretty(body) {
-        let _ = std::fs::write(&path, pretty);
-        let meta = format!("status: {status}\nresponse: {text}\n");
-        let _ = std::fs::write(dir.join(format!("{ts}_s{status}_meta.txt")), meta);
-        tracing::warn!("captured failed upstream body to {}", path.display());
-    }
-}
-
+/// Bound transient error text; durable diagnostics retain only metadata.
 pub(super) fn truncate(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         return s.to_string();

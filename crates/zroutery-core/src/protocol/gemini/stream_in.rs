@@ -10,7 +10,6 @@ use crate::ir::{StopReason, StreamEvent, Usage};
 // ---------------------------------------------------------------- stream in
 
 pub struct GeminiStreamParser {
-    model: String,
     started: bool,
     /// Whether the upstream really ended the answer (`finishReason`). A body
     /// that just stops arriving is truncated.
@@ -19,19 +18,56 @@ pub struct GeminiStreamParser {
     text_index: Option<u32>,
     open_blocks: Vec<u32>,
     usage: Usage,
+    /// The declaration events already published, so a chunk that restates the
+    /// same `modelVersion` produces no event and a chunk that changes it does.
+    last_declared: (Option<String>, Option<String>),
 }
 
 impl GeminiStreamParser {
-    pub fn new(model: &str) -> Self {
+    /// `_model` is accepted for parser-signature compatibility with the other
+    /// dialects. The configured model is a routing fact, not a declaration;
+    /// only the structured fields a chunk itself carries are published.
+    pub fn new(_model: &str) -> Self {
         Self {
-            model: model.to_string(),
             started: false,
             normal_terminal: false,
             next_index: 0,
             text_index: None,
             open_blocks: Vec::new(),
             usage: Usage::default(),
+            last_declared: (None, None),
         }
+    }
+
+    /// Publish the structured identity fields one chunk carried.
+    ///
+    /// Gemini names its version in a per-chunk `modelVersion` member and may
+    /// echo a `model` member; both spellings a chunk could use are read, and
+    /// each value is published the first time it is seen and every time it
+    /// changes, so a stream that revises its own declaration stays a conflict.
+    fn observe_declared(&mut self, value: &Value, out: &mut Vec<StreamEvent>) {
+        let model = value
+            .get("model")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|model| !model.is_empty());
+        let version = value
+            .get("modelVersion")
+            .or_else(|| value.get("model_version"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|version| !version.is_empty());
+        if model.is_none() && version.is_none() {
+            return;
+        }
+        if model == self.last_declared.0.as_deref() && version == self.last_declared.1.as_deref() {
+            return;
+        }
+        let mut declaration = crate::ir::UpstreamModelDeclaration::default();
+        declaration.observe_model(model);
+        declaration.observe_model_version(version);
+        self.last_declared = (model.map(str::to_string), version.map(str::to_string));
+        out.push(StreamEvent::UpstreamDeclaration { declaration });
     }
 }
 
@@ -46,12 +82,17 @@ impl StreamParser for GeminiStreamParser {
         let mut out = Vec::new();
         if !self.started {
             self.started = true;
+            // The seeded configured model is a routing fact, not a
+            // declaration; substituting it here would record a declaration the
+            // provider never made. An absent name stays absent, and whatever
+            // identity fields the chunks themselves carry are published below.
             out.push(StreamEvent::Start {
                 id: format!("gemini-{}", uuid::Uuid::new_v4().simple()),
-                model: self.model.clone(),
+                model: String::new(),
                 usage: self.usage,
             });
         }
+        self.observe_declared(&value, &mut out);
         if let Some(usage) = value.get("usageMetadata") {
             self.usage = decode_usage_metadata(usage);
         }

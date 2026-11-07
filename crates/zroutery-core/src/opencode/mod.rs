@@ -450,6 +450,7 @@ mod tests {
             session: Some("ses_0123456789abcdefghijklmnop".into()),
             org_id: None,
             reply_headers: Default::default(),
+            observation: Default::default(),
         };
         let headers =
             crate::upstream::build_headers_for_identity(&provider, Some("public"), &identity)
@@ -784,6 +785,7 @@ mod gateway_tests {
             session: Some("ses_0123456789abcdefghijklmnop".into()),
             org_id: Some("wrk_test".into()),
             reply_headers: Default::default(),
+            observation: Default::default(),
         };
         let headers = build_headers_for_identity(&provider, Some("public"), &identity)
             .expect("headers build");
@@ -874,6 +876,7 @@ mod gateway_tests {
             session: Some(session_id()),
             org_id: None,
             reply_headers: Default::default(),
+            observation: Default::default(),
         };
         let upstream = Upstream::new(false, 15);
         let mut stream = upstream

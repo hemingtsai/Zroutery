@@ -54,6 +54,7 @@ mod codex_auto;
 mod headers;
 mod http;
 mod json;
+mod observation;
 mod stream;
 pub use codex_auto::StagedResponse;
 
@@ -67,7 +68,7 @@ mod client_tests;
 pub use catalogue::DiscoveredModel;
 pub use decision::{
     build_body as build_decision_body, parse_answer as parse_decision_answer,
-    question_of as decision_question, Decision, BLOCK_POLARITY,
+    question_of as decision_question, Decision, DecisionReply, BLOCK_POLARITY,
 };
 pub use encode::{encode_for, encode_for_mode, EncodeMode};
 pub use headers::{build_headers, build_headers_for_identity, build_headers_for_profile};
@@ -205,6 +206,7 @@ impl Upstream {
         body: &Value,
         client: &ClientIdentity,
     ) -> Result<ChatResponse> {
+        let observation = client.observation.clone();
         let request = self
             .client_for(provider)
             .post(provider.chat_url())
@@ -232,6 +234,9 @@ impl Upstream {
                     source,
                 })?;
 
+        if let Ok(value) = serde_json::from_str::<Value>(&text) {
+            observation::capture(&observation, provider.dialect(), &value);
+        }
         if !status.is_success() {
             return Err(Error::Upstream {
                 provider: provider.name.clone(),
@@ -246,7 +251,12 @@ impl Upstream {
         if let Some(error) = Error::session_binding_payload(&provider.name, &json) {
             return Err(error);
         }
-        protocol::decode_response(provider.dialect(), json)
+        let response = protocol::decode_response(provider.dialect(), json)?;
+        observation.observe_decoded(
+            &crate::ir::declaration_from_passthrough(&response).unwrap_or_default(),
+            response.usage,
+        );
+        Ok(response)
     }
 
     /// Ask a decision endpoint for an answer.
@@ -266,11 +276,33 @@ impl Upstream {
         api_key: Option<&str>,
         body: &Value,
     ) -> Result<Decision> {
+        self.send_decision_reply(provider, api_key, body)
+            .await
+            .map(|reply| reply.decision)
+    }
+
+    pub async fn send_decision_reply(
+        &self,
+        provider: &ProviderConfig,
+        api_key: Option<&str>,
+        body: &Value,
+    ) -> Result<DecisionReply> {
         let identity = anonymous_identity(provider);
+        self.send_decision_with_identity(provider, api_key, body, &identity)
+            .await
+    }
+
+    pub async fn send_decision_with_identity(
+        &self,
+        provider: &ProviderConfig,
+        api_key: Option<&str>,
+        body: &Value,
+        identity: &ClientIdentity,
+    ) -> Result<DecisionReply> {
         let request = self
             .client_for(provider)
             .post(provider.decision.url(&provider.base_url))
-            .headers(build_headers_for_identity(provider, api_key, &identity)?)
+            .headers(build_headers_for_identity(provider, api_key, identity)?)
             .json(body);
 
         let response =
@@ -293,6 +325,16 @@ impl Upstream {
                     source,
                 })?;
 
+        if let Ok(value) = serde_json::from_str::<Value>(&text) {
+            let usage = decision::observed_usage(&value);
+            identity.observation.observe(
+                &crate::ir::declaration_from_wire(&value),
+                usage.as_ref().ok().copied().flatten(),
+            );
+            if usage.is_err() {
+                identity.observation.observe_invalid_usage();
+            }
+        }
         if !status.is_success() {
             return Err(Error::Upstream {
                 provider: provider.name.clone(),
@@ -304,11 +346,10 @@ impl Upstream {
 
         let json: Value = serde_json::from_str(&text)
             .map_err(|e| Error::BadUpstreamPayload(format!("{e}: {}", truncate(&text, 500))))?;
-        decision::parse_answer(&json).ok_or_else(|| {
-            Error::BadUpstreamPayload(format!(
-                "the decision endpoint answered with no probability: {}",
-                truncate(&text, 500)
-            ))
-        })
+        let reply = decision::parse_reply(&json)?;
+        identity
+            .observation
+            .observe_decoded(&reply.declared, reply.usage.unwrap_or_default());
+        Ok(reply)
     }
 }

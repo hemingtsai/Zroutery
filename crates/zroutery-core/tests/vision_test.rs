@@ -647,6 +647,9 @@ async fn a_description_is_charged_to_the_provider_that_answered() {
 async fn a_global_budget_stops_the_next_description() {
     let (addr, mock) = start_mock().await;
     let mut cfg = split_config(addr, "eyes-model");
+    // The main call is explicitly free in this fixture; an unknown tariff
+    // cannot be admitted under a price-dependent global budget.
+    cfg.models[0].pricing = Some(Pricing::new("USD", 0.0, 0.0));
     // One description costs 0.0018; the whole day allows less than that.
     cfg.budgets = vec![Budget::new(
         BudgetScope::Global,

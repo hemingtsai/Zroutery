@@ -60,6 +60,12 @@ impl StreamParser for AnthropicStreamParser {
                 let msg = v.get("message");
                 self.usage = decode_usage(msg.and_then(|m| m.get("usage")));
                 self.started = true;
+                // The wire's own name, verbatim. `self.model` is the seeded
+                // configured model — a routing fact, not a declaration — and
+                // must never be substituted when the frame omits the field:
+                // an absent name stays absent, which is how the record keeps
+                // "the provider declared nothing" distinguishable from "it
+                // declared what Zroutery asked for".
                 vec![StreamEvent::Start {
                     id: msg
                         .and_then(|m| m.get("id"))
@@ -69,7 +75,7 @@ impl StreamParser for AnthropicStreamParser {
                     model: msg
                         .and_then(|m| m.get("model"))
                         .and_then(Value::as_str)
-                        .unwrap_or(&self.model)
+                        .unwrap_or_default()
                         .to_string(),
                     usage: self.usage,
                 }]

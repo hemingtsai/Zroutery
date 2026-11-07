@@ -5,7 +5,10 @@ use serde_json::{json, Map, Value};
 use super::request_in::decode_reasoning_blocks;
 use super::request_out::arguments_json;
 use crate::error::{Error, Result};
-use crate::ir::{ChatResponse, ContentBlock, StopReason, Usage};
+use crate::ir::{
+    capture_declaration_in_passthrough, declaration_from_wire, ChatResponse, ContentBlock,
+    StopReason, Usage,
+};
 use crate::protocol::reasoning_bridge;
 use crate::protocol::{explicit_placeholder, unsupported_upstream_content};
 
@@ -109,6 +112,12 @@ pub fn decode_response(body: Value) -> Result<ChatResponse> {
     if let Some(prev_id) = body.get("previous_response_id").and_then(Value::as_str) {
         passthrough.insert("previous_response_id".to_string(), json!(prev_id));
     }
+
+    // Park the complete classified declaration before anything rewrites
+    // `model` to the client-facing exposed id. The staged Codex path reads the
+    // same value off the raw wire object; this key is what a decoded response
+    // carries, conflicts included. It is never echoed to a client.
+    capture_declaration_in_passthrough(&mut passthrough, &declaration_from_wire(&body));
 
     if body.get("status").and_then(Value::as_str) == Some("incomplete") {
         if let Some(reason) = body

@@ -62,6 +62,9 @@ impl Upstream {
             }
             bytes.extend_from_slice(&chunk);
         }
+        if let Ok(value) = serde_json::from_slice::<Value>(&bytes) {
+            super::observation::capture(&identity.observation, provider.dialect(), &value);
+        }
         if status >= 400 {
             return Err(Error::Upstream {
                 provider: provider.name.clone(),
@@ -130,6 +133,9 @@ impl Upstream {
                 continue;
             }
             for frame in decoder.push(&chunk) {
+                if let Ok(value) = frame.json() {
+                    super::observation::capture(&identity.observation, provider.dialect(), &value);
+                }
                 if provider.dialect() == Dialect::OpenAIResponses {
                     let value = match frame.json() {
                         Ok(value) => value,
@@ -161,11 +167,18 @@ impl Upstream {
                         return Ok(StagedResponse::Responses(frames));
                     }
                 } else {
-                    events.extend(parser.push(&frame)?);
+                    let parsed = parser.push(&frame)?;
+                    for event in &parsed {
+                        super::observation::capture_event(&identity.observation, event);
+                    }
+                    events.extend(parsed);
                     // Chat's finish_reason precedes its usage trailer. Do not
                     // stop here or the staged answer would lose its stop/usage.
                 }
             }
+        }
+        if let Ok(value) = serde_json::from_slice::<Value>(&bytes) {
+            super::observation::capture(&identity.observation, provider.dialect(), &value);
         }
         if status >= 400 {
             return Err(Error::Upstream {

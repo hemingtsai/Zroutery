@@ -10,6 +10,7 @@ use crate::config::{resolve_client_identity, AppConfig, ModelEntry, ProviderConf
 use crate::error::Result;
 use crate::ir::{ChatRequest, ChatResponse, ContentBlock, Message};
 use crate::upstream::Upstream;
+use serde_json::Value;
 
 /// The inbound request's headers. The description is an auxiliary call on behalf
 /// of that request, so it presents the same client identity and forwards the same
@@ -63,7 +64,25 @@ pub async fn describe(
     source: &crate::ir::MediaSource,
     client_identity: Option<&str>,
     client_headers: &InboundHeaders,
+    identity: Option<crate::config::ClientIdentity>,
 ) -> Result<ChatResponse> {
+    let body = encode_description(target, source, client_identity, client_headers)?;
+    let client = identity.unwrap_or_else(|| {
+        resolve_client_identity(target.provider.configured_client_profile(), client_headers)
+    });
+    upstream
+        .send_with_identity(&target.provider, api_key, &body, &client)
+        .await
+}
+
+/// Encode before opening a durable send: unsupported media is a local
+/// preparation error and must not be counted as an executed auxiliary call.
+pub(crate) fn encode_description(
+    target: &VisionTarget,
+    source: &crate::ir::MediaSource,
+    client_identity: Option<&str>,
+    client_headers: &InboundHeaders,
+) -> Result<Value> {
     let mut req = ChatRequest::new(&target.entry.upstream_model, target.provider.dialect());
     req.client_identity = client_identity.map(str::to_string);
     req.client_headers = client_headers.clone();
@@ -80,19 +99,12 @@ pub async fn describe(
     req.temperature = Some(0.0);
     // Descriptions go to the same model each time, so caching the prompt part
     // would only ever help the image-less prefix — not worth the machinery.
-    let body = crate::upstream::encode_for(
+    crate::upstream::encode_for(
         &target.provider,
         &req,
         &target.entry.upstream_model,
         target.entry.max_output_tokens,
-    )?;
-    let client = resolve_client_identity(
-        target.provider.configured_client_profile(),
-        &req.client_headers,
-    );
-    upstream
-        .send_with_identity(&target.provider, api_key, &body, &client)
-        .await
+    )
 }
 
 /// The description text from a response, trimmed of the model's own padding.
