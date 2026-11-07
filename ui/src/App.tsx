@@ -1,7 +1,14 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { api, deepLinkCurrent, errorText, gatewayAction, onDeepLink, onGatewayStateChanged, type AppConfig, type Snapshot } from "./api";
-import { applySystemAccent } from "./accent";
-import { Banner, MenuItem, Popover, StatusDot, Tabs, ToastProvider, useToast } from "./components";
+/**
+ * The application shell: one screen, one configuration, one save queue.
+ *
+ * The wiring lives here; the pieces live beside it — `shell/` holds the nav,
+ * the main-bar menus, the banner stack and the effect-shaped behaviours, and
+ * `components/` holds the shared primitives. This file keeps only what is
+ * genuinely entangled: the state, the save pipeline, and the page routing.
+ */
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { api, errorText, type AppConfig, type Snapshot } from "./api";
+import { Tabs, ToastProvider, useToast } from "./components";
 import { describeBackendError, I18nProvider, useI18n } from "./i18n";
 import { ModeContext, loadMode, storeMode, type UiMode } from "./mode";
 import {
@@ -15,48 +22,19 @@ import {
 } from "./saveQueue";
 import { applySkin, loadSkin, SkinContext, storeSkin, type Skin } from "./skin";
 import { applyTheme, loadThemePref, storeThemePref, type ThemePref } from "./theme";
-import { routeForDeepLink, taskFor, type Page } from "./navigation";
-const Overview = lazy(() => import("./pages/Overview"));
-const Models = lazy(() => import("./pages/Models"));
-const Providers = lazy(() => import("./pages/Providers"));
-const Accounts = lazy(() => import("./pages/Accounts"));
-const Takeover = lazy(() => import("./pages/Takeover"));
-const Cutover = lazy(() => import("./pages/Cutover"));
-const Routing = lazy(() => import("./pages/Routing"));
-const Activity = lazy(() => import("./pages/Activity"));
-const Settings = lazy(() => import("./pages/Settings"));
-
-/**
- * The doors into Zroutery. No icons, no section headers — a desktop utility's
- * navigation is a plain list of words, and the active one is simply the one
- * that reads darkest. Everything else lives inside a page: Auto review inside
- * Routing, the gateway inside Settings, diagnostics inside Settings.
- */
-
-/**
- * The page a `zroutery://` link names, or `null` when it names none.
- *
- * The link's host is the page name: `zroutery://providers` opens the
- * providers page. A link that names a page this build does not have opens
- * none, and says so — a link that opened the wrong page would be worse than
- * one that opened nothing, and the shell has already brought the window
- * forward by the time this runs.
- */
-function pageForLink(url: string): Page | null {
-  return routeForDeepLink(url);
-}
-
-const NAV: { id: Page; labelKey: Parameters<ReturnType<typeof useI18n>["t"]>[0] }[] = [
-  { id: "overview", labelKey: "nav.overview" },
-  { id: "providers", labelKey: "task.providers" },
-  { id: "models", labelKey: "task.models" },
-  { id: "takeover", labelKey: "task.clients" },
-  { id: "activity", labelKey: "task.usage" },
-  { id: "settings", labelKey: "nav.settings" },
-];
-
-// Both modes keep the six task doors. Basic setup cannot depend on discovering
-// an interface-mode switch; advanced controls remain inside their task pages.
+import { taskFor, type Page } from "./navigation";
+import { Accounts, Activity, Cutover, Models, Overview, Providers, Routing, Settings, Takeover } from "./shell/pages";
+import { NAV } from "./shell/nav";
+import { Sidebar } from "./shell/Sidebar";
+import { AppearanceMenu, GatewayMenu, toggleGateway } from "./shell/menus";
+import { BannerStack } from "./shell/BannerStack";
+import {
+  useActivityPolling,
+  useAltDigitNav,
+  useDeepLink,
+  useSnapshotRefreshTriggers,
+  useSystemAccent,
+} from "./shell/hooks";
 
 /**
  * The quirks the provider drawer offers as toggles.
@@ -98,9 +76,6 @@ function countAdvanced(config: AppConfig): number {
   }
   return n;
 }
-
-/** How many notification banners fit above the first useful section. */
-const MAX_BANNERS = 2;
 
 export default function App() {
   return (
@@ -146,7 +121,6 @@ function Shell() {
   // The save truth at drawer distance. begin/finish/fail below keep it in step
   // with the queue; Drawer reads it through context and speaks it at its foot.
   const [saveStatus, setSaveStatus] = useState<SaveStatus>({ phase: "idle" });
-  const [showAllBanners, setShowAllBanners] = useState(false);
   const configEpoch = useRef(0);
   const saving = useRef(false);
   const heading = useRef<HTMLHeadingElement>(null);
@@ -163,32 +137,7 @@ function Shell() {
     return () => media.removeEventListener("change", apply);
   }, [themePref]);
 
-  useEffect(() => {
-    let active = true;
-    const readAccent = async () => {
-      try {
-        const accent = await api.systemAccent();
-        if (active) applySystemAccent(accent, document.documentElement.style);
-      } catch {
-        if (active) applySystemAccent(null, document.documentElement.style);
-      }
-    };
-    const onVisibility = () => {
-      if (document.visibilityState === "visible") void readAccent();
-    };
-    const systemTheme = window.matchMedia("(prefers-color-scheme: dark)");
-    const onFocus = () => void readAccent();
-    void readAccent();
-    document.addEventListener("visibilitychange", onVisibility);
-    systemTheme.addEventListener("change", onFocus);
-    window.addEventListener("focus", onFocus);
-    return () => {
-      active = false;
-      document.removeEventListener("visibilitychange", onVisibility);
-      systemTheme.removeEventListener("change", onFocus);
-      window.removeEventListener("focus", onFocus);
-    };
-  }, [themePref]);
+  useSystemAccent(themePref);
 
   /**
    * Switch the interface mode — the one handler behind both entrances.
@@ -277,13 +226,10 @@ function Shell() {
   }, [run]);
 
   /**
-   * Re-read the whole snapshot without touching the save queue.
+   * Re-read the whole snapshot without touching the save queue, coalesced.
    *
-   * The server state is not part of the activity counters the live pages poll,
-   * so it only moves when something asks for a snapshot: the tray starting or
-   * stopping the gateway, or the window being shown again. Refreshes are
-   * coalesced, and a failure is reported like a failed save rather than
-   * leaving the page quietly out of date.
+   * A refresh that began before a save/identity publication cannot undo it:
+   * the epoch guard drops anything that raced a save.
    */
   const refreshRef = useRef<Promise<void> | null>(null);
   const refresh = useCallback((): Promise<void> => {
@@ -307,168 +253,22 @@ function Shell() {
     return pending;
   }, []);
 
-  // The tray can start or stop the gateway while this window sits on another
-  // page, so it announces the change and the window re-reads the state instead
-  // of trusting the snapshot it happened to load.
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    let cancelled = false;
-    void onGatewayStateChanged(() => {
-      void refresh();
-    })
-      .then((off) => {
-        if (cancelled) off();
-        else unlisten = off;
-      })
-      .catch(() => {
-        // No event bridge (a plain browser): visibility and focus below still
-        // refresh the snapshot.
-      });
-    const onFocus = () => void refresh();
-    const onVisibility = () => {
-      if (document.visibilityState === "visible") void refresh();
-    };
-    window.addEventListener("focus", onFocus);
-    document.addEventListener("visibilitychange", onVisibility);
-    return () => {
-      cancelled = true;
-      unlisten?.();
-      window.removeEventListener("focus", onFocus);
-      document.removeEventListener("visibilitychange", onVisibility);
-    };
-  }, [refresh]);
+  useSnapshotRefreshTriggers(refresh);
+  useDeepLink(setPage);
+  useAltDigitNav(NAV, setPage);
 
-  /*
-   * A `zroutery://` link opens the page it names.
-   *
-   * The desktop shell brings the window forward and hands the URL over; this
-   * is where the URL becomes a page. The shell cannot do it — it does not
-   * know what the pages are called, and it has to keep working when the
-   * window does not exist yet — and the window cannot be the one that waits
-   * for a link, because on Windows and Linux a link *starts* the application.
-   *
-   * A link that names a page this build does not have opens none. The shell
-   * has already brought the window forward by then, so the operator sees the
-   * dashboard rather than a page that does not exist.
-   */
-  useEffect(() => {
-    let cancelled = false;
-    let unlisten: (() => void) | undefined;
-
-    const open = (url: string) => {
-      const target = pageForLink(url);
-      if (!target) return;
-      setPage(target);
-    };
-
-    void onDeepLink(open)
-      .then((off) => {
-        if (cancelled) off();
-        else unlisten = off;
-      })
-      .catch(() => {
-        // No event bridge (a plain browser): there are no links to open.
-      });
-
-    // And the link that *started* this application, which was announced before
-    // there was a listener for it.
-    void deepLinkCurrent()
-      .then((url) => {
-        if (!cancelled && url) open(url);
-      })
-      .catch(() => {
-        // No such command in a build without the desktop shell.
-      });
-
-    return () => {
-      cancelled = true;
-      unlisten?.();
-    };
+  // Overview and Activity show live state; the sampling callbacks are stable
+  // state setters, so the poll effect subscribes once per task page, exactly
+  // as when this effect lived inline with `[taskPage]` deps.
+  const onPollSample = useCallback((activity: Awaited<ReturnType<typeof api.activity>>) => {
+    setPollError(null);
+    setSnapshot((current) => (current ? { ...current, ...activity } : current));
   }, []);
+  const onPollError = useCallback((message: string | null) => setPollError(message), []);
+  useActivityPolling(taskPage, onPollSample, onPollError);
 
-  const visibleNav = NAV;
-
-  /*
-   * Alt+1..9 jumps straight to the page at that position in the nav.
-   *
-   * A desktop utility is navigated from the keyboard as much as from the
-   * pointer, and the nav is a fixed list, so the position *is* the address.
-   * The position that counts is the one the sidebar is showing: the shortcut
-   * names the visible entry at that index, the same promise the tooltips
-   * make. Matched by `code` rather than `key`, because Alt is a dead key on
-   * some layouts — Option+1 on a Mac keyboard types "¡", and a shortcut that
-   * only worked on US layouts would be a shortcut that mostly did not work.
-   * Plain digits are left alone — they are typing — and so are every other
-   * modifier combination, which belongs to the OS and the webview.
-   */
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (!e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
-      const digit = /^Digit([1-9])$/.exec(e.code);
-      if (!digit) return;
-      const target = visibleNav[Number(digit[1]) - 1];
-      if (!target) return;
-      e.preventDefault();
-      setPage(target.id);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [visibleNav]);
-
-  // Overview and Activity show live state; their pages poll the counters
-  // only. A failure is reported rather than swallowed: silence would look
-  // like an idle proxy.
-  useEffect(() => {
-    if (taskPage !== "activity" && taskPage !== "overview") return;
-    let cancelled = false;
-    let pending = false;
-    const poll = async () => {
-      if (pending || document.visibilityState === "hidden") return;
-      pending = true;
-      try {
-        const activity = await api.activity();
-        if (cancelled) return;
-        setPollError(null);
-        setSnapshot((current) => (current ? { ...current, ...activity } : current));
-      } catch (e) {
-        if (!cancelled) setPollError(errorText(e));
-      } finally {
-        pending = false;
-      }
-    };
-    const timer = setInterval(poll, 2000);
-    const onVisibility = () => { if (document.visibilityState === "visible") void poll(); };
-    document.addEventListener("visibilitychange", onVisibility);
-    void poll();
-    return () => {
-      cancelled = true;
-      clearInterval(timer);
-      document.removeEventListener("visibilitychange", onVisibility);
-    };
-  }, [taskPage]);
-
-  /**
-   * Start or stop the gateway from the state Rust reports right now.
-   *
-   * Deciding from the rendered `server.running` would run the wrong command
-   * whenever the tray changed the state first, so the current status is loaded
-   * and the command chosen from that.
-   */
-  const toggleGateway = useCallback(async () => {
-    if (busy) return;
-    let fresh: Snapshot;
-    try {
-      fresh = await api.snapshot();
-    } catch (e) {
-      setError(errorText(e));
-      return;
-    }
-    configRef.current = fresh.config;
-    setSnapshot(fresh);
-    // Starting or stopping the gateway is a runtime action, not a
-    // configuration write: the status dot and the menu answer it, and the save
-    // vocabulary says nothing.
-    void run(gatewayAction(fresh.server) === "start" ? api.start : api.stop, "observe");
+  const onGatewayToggle = useCallback(() => {
+    void toggleGateway(busy, run, setError, setSnapshot);
   }, [busy, run]);
 
   /**
@@ -518,142 +318,13 @@ function Shell() {
 
   const { server } = snapshot;
 
-  /*
-   * Every notification the shell can show, worst first.
-   *
-   * There used to be six independent slots and no ceiling: two poll failures,
-   * a config warning, three configuration errors, an exposed listener and a
-   * missing token could stack into six banners, which at 560px tall pushes the
-   * page's own content off the screen. The ceiling is two visible, with the
-   * rest behind one text action, so nothing is dropped and the page still
-   * starts below the fold only once.
-   *
-   * `severity` orders them rather than JSX order: a missing auth token is a
-   * warning and an exposed listener is a danger, and at a two-banner ceiling
-   * the order decides which one an operator actually reads.
-   */
-  const banners: {
-    key: string;
-    tone: "danger" | "warn";
-    node: ReactNode;
-    severity: number;
-    /** Present when the notice is local state and dismissing it means anything. */
-    dismiss?: () => void;
-  }[] = [];
-  if (error) {
-    banners.push({
-      key: "error",
-      tone: "danger",
-      severity: 0,
-      node: describeBackendError(t, error),
-      dismiss: () => setError(null),
-    });
-  }
-  for (const issue of snapshot.issues.filter((i) => i.severity === "error")) {
-    banners.push({
-      key: `issue:${issue.code}:${issue.subject ?? ""}`,
-      tone: "danger",
-      severity: 1,
-      node: describeBackendError(t, issue.message),
-    });
-  }
-  if (server.exposed) {
-    banners.push({
-      key: "exposed",
-      tone: "danger",
-      severity: 2,
-      node: t("app.exposed", { host: server.host }),
-    });
-  }
-  if (snapshot.accounting && (!snapshot.accounting.available || snapshot.accounting.error)) {
-    banners.push({
-      key: "accounting",
-      tone: "danger",
-      severity: 1,
-      node: <>
-        {t("accounting.blocked")}{" "}
-        <button type="button" className="linky" onClick={() => setPage("activity")}>
-          {t("accounting.inspect")}
-        </button>
-      </>,
-    });
-  }
-  if (pollError) {
-    banners.push({
-      key: "poll",
-      tone: "warn",
-      severity: 3,
-      node: t("app.live_stopped", { err: describeBackendError(t, pollError) }),
-      // The next successful poll clears this server-side condition, but a
-      // reader who has seen it can fold it away now instead of waiting.
-      dismiss: () => setPollError(null),
-    });
-  }
-  if (snapshot.warning) {
-    banners.push({
-      key: "warning",
-      tone: "warn",
-      severity: 4,
-      node: describeBackendError(t, snapshot.warning),
-    });
-  }
-  if (!server.require_auth) {
-    banners.push({ key: "no-auth", tone: "warn", severity: 5, node: t("app.no_auth") });
-  }
-  banners.sort((a, b) => a.severity - b.severity);
-  const visibleBanners = showAllBanners ? banners : banners.slice(0, MAX_BANNERS);
-  const hiddenBanners = banners.length - MAX_BANNERS;
-
   return (
     <ModeContext.Provider value={mode}>
     <SkinContext.Provider value={skin}>
     <SaveStatusContext.Provider value={saveStatus}>
     <SaveFeedbackResetContext.Provider value={resetSaveFeedback}>
     <div className="shell">
-      <nav className="sidebar" aria-label={t("nav.main_aria")}>
-        <div className="sidebar-brand">
-          Zroutery<span className="mono">v{snapshot.version}</span>
-        </div>
-
-        {visibleNav.map((item, index) => (
-          <button type="button"
-            key={item.id}
-            className={`nav-item ${taskPage === item.id ? "active" : ""}`}
-            // Named as well as classed. The two layout harnesses drive the
-            // shell with real clicks, and an ordinal is a promise that breaks
-            // the moment a page is inserted: adding one silently repoints every
-            // later index at a different page, which measures a healthy surface
-            // and reports it as a pass. `data-page` survives the insert.
-            data-page={item.id}
-            // Which page is open is carried by the `active` class alone, and a
-            // class is invisible to a screen reader: the nav read as eight
-            // identical buttons with no indication of where you were.
-            aria-current={taskPage === item.id ? "page" : undefined}
-            // The shortcut is the nav's position, and the tooltip is the only
-            // place a keyboard user can discover it without reading source.
-            aria-keyshortcuts={`Alt+${index + 1}`}
-            title={`Alt+${index + 1}`}
-            onClick={() => setPage(item.id)}
-          >
-            {t(item.labelKey)}
-            {item.id === "models" && unclassified.length > 0 && (
-              <span className="nav-count" title={t("nav.unclassified_title", { n: unclassified.length })}>
-                {unclassified.length}
-              </span>
-            )}
-          </button>
-        ))}
-
-        <div className="sidebar-spacer" />
-
-        {/*
-          * No mode switch here any more. It used to close the nav because the
-          * mode decided how long this list was; since both modes keep the same
-          * six doors (see the visibleNav note above) the switch is a plain
-          * preference, and preferences belong in Settings — where the same
-          * Segment already renders in the Appearance section for both modes.
-          */}
-      </nav>
+      <Sidebar snapshot={snapshot} taskPage={taskPage} unclassified={unclassified} onNavigate={setPage} />
 
       <div className="main">
         <header className="mainbar">
@@ -682,161 +353,24 @@ function Shell() {
           <div className="mainbar-right">
             {/* The gateway lives here, not in a bottom strip: top of the
                 window is where a desktop app keeps global state. */}
-            <Popover
-              title={t("settings.gateway")}
-              trigger={
-                <>
-                  <StatusDot tone={server.running ? "ok" : "danger"} />
-                  {/*
-                    * The dot is the state, and the dot is a colour. Without this
-                    * the button announced itself as "Gateway" and said nothing
-                    * about whether the proxy was running, which is the one
-                    * thing a person opening this menu needs to know.
-                    */}
-                  <span className="visually-hidden">
-                    {server.running ? t("status.running") : t("status.stopped")}
-                  </span>
-                  {t("settings.gateway")}
-                </>
-              }
-            >
-              {(close) => (
-                <>
-                  {/*
-                    * A menu may only contain menu items, groups and
-                    * separators. The status rows and the rule are content, not
-                    * items, and saying so is what keeps the menu's structure
-                    * one a screen reader can walk.
-                    */}
-                  <div className="menu-row" role="none">
-                    <StatusDot tone={server.running ? "ok" : "danger"} />
-                    {t(server.running ? "status.running" : "status.stopped")}
-                  </div>
-                  {server.running && (
-                    <div className="menu-row" role="none">
-                      <span className="menu-key">{t("gw.address")}</span>
-                      <span className="mono">
-                        {server.host}:{server.port}
-                      </span>
-                    </div>
-                  )}
-                  <div className="menu-sep" role="separator" />
-                  <MenuItem
-                    onClick={() => {
-                      void api.copy(`http://${server.host}:${server.port}`).then(() =>
-                        notify("ok", t("toast.copied")),
-                      );
-                      close();
-                    }}
-                  >
-                    {t("gw.copy_address")}
-                  </MenuItem>
-                  <MenuItem
-                    onClick={() => {
-                      void api.copyToken().then(() => notify("ok", t("toast.copied")));
-                      close();
-                    }}
-                  >
-                    {t("action.copy_token")}
-                  </MenuItem>
-                  <div className="menu-sep" />
-                  <MenuItem
-                    onClick={() => {
-                      void toggleGateway();
-                      close();
-                    }}
-                  >
-                    {t(server.running ? "gw.stop" : "gw.start")}
-                  </MenuItem>
-                </>
-              )}
-            </Popover>
+            <GatewayMenu server={server} onToggle={onGatewayToggle} />
 
             {/* Appearance: a half-moon reads as "Appearance", not "dark
                 mode", and the three-way choice includes following the OS. */}
-            <Popover
-              title={t("appearance.title")}
-              ariaLabel={t("appearance.title")}
-              trigger={
-                <span aria-hidden className="glyph">
-                  {"◐"}
-                </span>
-              }
-            >
-              {(close) => (
-                <>
-                  <MenuItem
-                    active={themePref === "system"}
-                    onClick={() => {
-                      changeThemePref("system");
-                      close();
-                    }}
-                  >
-                    {t("theme.system")}
-                  </MenuItem>
-                  <MenuItem
-                    active={themePref === "light"}
-                    onClick={() => {
-                      changeThemePref("light");
-                      close();
-                    }}
-                  >
-                    {t("theme.light")}
-                  </MenuItem>
-                  <MenuItem
-                    active={themePref === "dark"}
-                    onClick={() => {
-                      changeThemePref("dark");
-                      close();
-                    }}
-                  >
-                    {t("theme.dark")}
-                  </MenuItem>
-                </>
-              )}
-            </Popover>
+            <AppearanceMenu themePref={themePref} onThemePref={changeThemePref} />
           </div>
         </header>
 
         <main className="content">
           <div className="page">
-            {visibleBanners.map((banner) => (
-              <Banner
-                key={banner.key}
-                tone={banner.tone}
-                actions={
-                  banner.dismiss ? (
-                    <button type="button" className="linky" onClick={banner.dismiss}>
-                      {t("common.dismiss")}
-                    </button>
-                  ) : undefined
-                }
-              >
-                {banner.node}
-              </Banner>
-            ))}
-            {hiddenBanners > 0 && !showAllBanners && (
-              <p className="banner-overflow">
-                <button
-                  type="button"
-                  className="linky"
-                  onClick={() => setShowAllBanners(true)}
-                >
-                  {t("app.more_notifications", { n: hiddenBanners })}
-                </button>
-              </p>
-            )}
-            {showAllBanners && banners.length > MAX_BANNERS && (
-              <p className="banner-overflow">
-                <button
-                  type="button"
-                  className="linky"
-                  onClick={() => setShowAllBanners(false)}
-                >
-                  {t("app.fewer_notifications")}
-                </button>
-              </p>
-            )}
+            <BannerStack
+              error={error}
+              onDismissError={() => setError(null)}
+              pollError={pollError}
+              onDismissPollError={() => setPollError(null)}
+              snapshot={snapshot}
+              onNavigate={setPage}
+            />
 
             <Suspense fallback={<p className="empty" role="status">{t("common.loading")}</p>}>
             {page === "overview" && (
