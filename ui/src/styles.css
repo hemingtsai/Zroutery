@@ -135,7 +135,16 @@
   --font-serif: "Noto Serif SC Variable", "Noto Serif SC", "PingFang SC",
     "Microsoft YaHei", serif;
   --font-sans: var(--font-serif);
-  --font-mono: "IBM Plex Mono", "SF Mono", "Cascadia Mono", Consolas, monospace;
+  /*
+   * `Microsoft YaHei` sits before the generic monospace on purpose: the mono
+   * stack has no CJK glyphs, so without a named fallback every Chinese word
+   * inside a `.mono`/`.row-sub.mono` run falls to the platform's monospace
+   * CJK font — SimSun, whose bitmap-ish 12px next to Roboto/Segoe neighbours
+   * is what read as "字体很奇怪". Latin digits and code keep the mono voice;
+   * CJK borrows the UI sans, the same split VS Code ships.
+   */
+  --font-mono: "IBM Plex Mono", "SF Mono", "Cascadia Mono", Consolas,
+    "Microsoft YaHei", monospace;
 
   /* Type scale — clear hierarchy by size and weight
      20px  display    — big statistics
@@ -322,7 +331,15 @@
   --muted: #49454f;
 
   --primary: #6750a4;
-  --primary: var(--system-accent, #6750a4);
+  /*
+   * The accent is tone-limited, not raw: a raw OS accent (#0078d4 and
+   * especially the white/black extremes) is more saturated or lighter than
+   * the M3 light primary register (tone 40, ~6.4:1 under white ink), and a
+   * solid filled button in that voice on a container card is what read as
+   * "过于奇异". 70% toward the text ink mutes every accent into the
+   * baseline register without losing its hue; all on-pairs stay >= 6.3:1.
+   */
+  --primary: color-mix(in srgb, var(--system-accent, #6750a4) 70%, var(--text));
   /* The official filled-button hover — one formula for fallback and accent
      alike, because both speak the same grammar: the state layer is the *on*
      colour at 8% over the container, so a light-theme button gets lighter
