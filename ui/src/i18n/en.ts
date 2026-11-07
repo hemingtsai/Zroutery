@@ -46,7 +46,7 @@ export const en = {
   "task.accounts": "Account observations",
   "task.connect": "Four-class setup",
   "client_setup.title": "Native four-class model menu",
-  "client_setup.hint": "Preview the fields to write and the default tier, then verify the client's request.",
+  "client_setup.hint": "Preview the fields to write and the default tier, then verify the client's request",
   "client_setup.client": "Client",
   "client_setup.default": "Default usage tier",
   "client_setup.keep": "Keep existing session/default",
@@ -125,7 +125,7 @@ export const en = {
   "mode.geek_only_page": "That page is available in Advanced mode.",
   "mode.advanced_active_toast":
     "Advanced configuration is in effect: {n} item. Simple mode hides it, but it keeps running. | Advanced configuration is in effect: {n} items. Simple mode hides them, but they keep running.",
-  "mode.settings_hint": "Advanced configuration keeps running; it is only hidden.",
+  "mode.settings_hint": "Advanced configuration keeps running, it is only hidden",
   "gw.address": "Address",
   "gw.copy_address": "Copy address",
   "gw.stop": "Stop gateway",
@@ -217,13 +217,13 @@ export const en = {
     "The proxy could not start: {addr} could not be bound ({err}). Pick a different port in Settings.",
   // -------------------------------------------------------------- accounts
   "accounts.title": "Accounts",
-  "accounts.title_hint": "Once an account has an inference key, chat requests go through it.",
+  "accounts.title_hint": "Once an account has an inference key, chat requests go through it",
   "accounts.empty": "No accounts yet; every request uses the provider's own key.",
   "accounts.lede":
     "Balance, check-in and panel token for each account. Add or edit accounts in the provider's account section.",
   "accounts.add": "Add account",
   "accounts.id_label": "Account ID",
-  "accounts.id_hint": "A stable name within this provider.",
+  "accounts.id_hint": "A stable name within this provider",
   "accounts.key_label_add": "Panel access token (optional)",
   "accounts.key_hint_add":
     "Empty uses the provider key. For a NewAPI panel paste the personal access token — sk- relay keys do not work.",
@@ -231,7 +231,7 @@ export const en = {
   "accounts.key_store_failed": "The account was saved, but storing its key failed.",
   "accounts.set_key": "Set credential",
   "accounts.key_label": "Panel access token",
-  "accounts.key_hint": "From the panel: personal settings → access tokens.",
+  "accounts.key_hint": "From the panel: personal settings → access tokens",
   "accounts.clear_key": "Clear credential",
   "accounts.clear_key_title": "Clear account {id}'s credential",
   "accounts.clear_key_body": "This account goes back to the provider's key.",
@@ -240,21 +240,21 @@ export const en = {
   "accounts.follows_provider": "Provider's credential",
   "accounts.inference_title": "Inference keys",
   "accounts.inference_hint":
-    "What chat requests are sent with; the panel token above is only for balances and check-in.",
+    "What chat requests are sent with, the panel token above is only for balances and check-in",
   "accounts.inference_empty":
     "Once any account on this provider has an inference key, accounts without one are skipped.",
   "accounts.inference_stored": "secret stored",
   "accounts.inference_missing": "secret missing",
   "accounts.inference_priority": "priority {n}",
   "accounts.inference_priority_label": "Priority",
-  "accounts.inference_priority_hint": "Lower is tried first.",
+  "accounts.inference_priority_hint": "Lower is tried first",
   "accounts.inference_note": "Note",
   "accounts.inference_note_placeholder": "e.g. main account",
   "accounts.inference_replace": "Replace secret",
   "accounts.inference_key_label": "New secret",
   "accounts.inference_key_hint": "",
   "accounts.inference_new_id": "Key ID",
-  "accounts.inference_new_id_hint": "e.g. wallet-1. Letters, digits, `-` and `_`.",
+  "accounts.inference_new_id_hint": "e.g. wallet-1. Letters, digits, `-` and `_`",
   "accounts.inference_new_secret": "Inference secret",
   "accounts.inference_add": "Add inference key",
   "accounts.inference_duplicate": "Inference key `{id}` already exists on this account.",
@@ -267,12 +267,12 @@ export const en = {
   "accounts.checkin": "Browser check-in",
   "accounts.checkin_settings": "Check-in settings",
   "accounts.login_path": "Panel sign-in path",
-  "accounts.login_path_hint": "NewAPI signs in at /sign-in; older forks use /login.",
+  "accounts.login_path_hint": "NewAPI signs in at /sign-in, older forks use /login",
   "accounts.panel_url": "Panel address",
   "accounts.new_api_user": "Panel user ID",
   "accounts.new_api_user_hint":
-    "Required by some panels (AgentRouter). Filled in automatically by token capture.",
-  "accounts.panel_url_hint": "Only needed when the panel lives on a different host than the relay.",
+    "Required by some panels (AgentRouter). Filled in automatically by token capture",
+  "accounts.panel_url_hint": "Only needed when the panel lives on a different host than the relay",
   "token_capture.start": "Get token in browser",
   "token_capture.starting": "Opening…",
   "token_capture.captured": "Token stored",
@@ -284,12 +284,12 @@ export const en = {
   "token_capture.phase.needs_verification": "Finish the verification in the browser…",
   "token_capture.phase.stored": "Verifying and storing…",
   "accounts.interval": "Interval (seconds)",
-  "accounts.interval_hint": "Empty disables automatic runs.",
+  "accounts.interval_hint": "Empty disables automatic runs",
   "accounts.checkin_path": "Check-in page path",
-  "accounts.checkin_path_hint": "Panel-relative path, e.g. /checkin.",
+  "accounts.checkin_path_hint": "Panel-relative path, e.g. /checkin",
   "accounts.checkin_selector": "Check-in button selector",
   "accounts.checkin_selector_hint":
-    "CSS selector of the button to click, e.g. button.checkin.",
+    "CSS selector of the button to click, e.g. button.checkin",
   "error.title": "The dashboard hit a bug",
   "error.unaffected": "The proxy is unaffected and keeps running in the menu bar.",
   "common.try_again": "Try again",
@@ -338,10 +338,10 @@ export const en = {
   "models.lede_none": "Models you add to a provider appear here.",
   "models.exposed": "{n} models · open one to edit, or add from a catalogue.",
   "models.empty": "No models.",
-  "models.empty_hint": "Add one below, or import from CC Switch on the Providers page.",
+  "models.empty_hint": "Add one below, or import from CC Switch on the Providers page",
   "models.no_tier": "no tier",
   "models.add_section": "Add a model",
-  "models.add_hint": "Assign a tier after adding; Zroutery does not guess one.",
+  "models.add_hint": "Assign a tier after adding, Zroutery does not guess one",
   "field.provider": "Provider",
   "field.model_name": "Model name",
   "models.add": "Add model",
@@ -359,7 +359,7 @@ export const en = {
   "models.failures": "Failures",
   "models.last_error": "Last error",
   "models.configuration": "Configuration",
-  "models.f_model_name_hint": "Sent upstream; renaming changes the exposed id",
+  "models.f_model_name_hint": "Sent upstream, renaming changes the exposed id",
   "models.f_display": "Display name",
   "models.f_display_hint": "",
   "models.f_priority": "Priority",
@@ -369,7 +369,7 @@ export const en = {
   "models.f_max_tokens": "Max output tokens",
   "models.f_max_tokens_hint": "Caps what clients may ask for",
   "models.f_context_window": "Context window",
-  "models.f_context_window_hint": "What the model accepts, when known.",
+  "models.f_context_window_hint": "What the model accepts, when known",
   "models.context_set_1m": "Set 1M",
   "models.context_unknown": "unknown",
   "models.f_aliases_hint": "Comma separated short names",
@@ -393,7 +393,7 @@ export const en = {
   "models.thinking": "Extended thinking",
   "models.effort_levels": "Reasoning effort levels",
   "models.effort_levels_hint":
-    "Variants offered to the client during takeover, one per level; adjust any that look wrong.",
+    "Variants offered to the client during takeover, one per level, adjust any that look wrong",
   "models.sync": "Sync metadata",
   "models.syncing": "Syncing…",
   "models.synced": "Filled missing metadata for {n} models",
@@ -404,7 +404,7 @@ export const en = {
   "models.price_missing": "No price configured",
   "models.price_side_unset": "not set",
   "models.price_hint":
-    "Leave empty and requests are logged without a cost rather than a guessed one.",
+    "Leave empty and requests are logged without a cost rather than a guessed one",
   "field.currency": "Currency",
   "field.currency_hint": "USD, CNY, …",
   "field.input": "Input",
@@ -420,7 +420,7 @@ export const en = {
   "drawer.save_failed": "Save failed: {err}",
   "routing.priority_for": "Priority for {model}",
   "routing.move_up": "Move {model} up",
-  "routing.drag_hint": "Drag to reorder, or use the arrows. The order saves as you drop.",
+  "routing.drag_hint": "Drag to reorder, or use the arrows. The order saves as you drop",
   "routing.strategy_order_note":
     "The {strategy} strategy decides the live order; this list is only the starting priority.",
   "routing.move_down": "Move {model} down",
@@ -438,12 +438,12 @@ export const en = {
   "providers.import_cc": "Import from CC Switch",
   "providers.reading_cc": "Reading CC Switch…",
   "providers.empty": "No providers.",
-  "providers.empty_hint": "Add one below, or import from CC Switch.",
+  "providers.empty_hint": "Add one below, or import from CC Switch",
   "providers.openai_dialect": "OpenAI compatible",
   "providers.anthropic_dialect": "Anthropic",
   "providers.provider_off": "(off)",
   "providers.add_section": "Add a provider",
-  "providers.add_hint": "Endpoint, credential and dialect; models come next on their own page.",
+  "providers.add_hint": "Endpoint, credential and dialect, models come next on their own page",
   "field.name": "Name",
   "field.api_dialect": "API dialect",
   "field.base_url": "Base URL",
@@ -455,7 +455,7 @@ export const en = {
   "providers.name_placeholder": "Leave empty to use the host",
   "providers.name_required": "Enter a name or a base URL to derive one from.",
   "cc.source_hint":
-    "Read from {path}; keys go into the OS credential store, never the config file.",
+    "Read from {path}, keys go into the OS credential store, never the config file",
   "cc.reload": "Reload",
   "cc.import": "Import",
   "cc.empty": "No Claude Code providers found in CC Switch.",
@@ -471,7 +471,7 @@ export const en = {
   "providers.models_count": "{n} on this provider",
   "providers.models_none": "none yet",
   "providers.api_key": "API key",
-  "providers.api_key_hint": "Kept in the system credential store, not the config file.",
+  "providers.api_key_hint": "Kept in the system credential store, not the config file",
   "providers.save_key": "Save key",
   "providers.models_section": "Models",
   "providers.empty_catalogue": "{name} returned an empty model list.",
@@ -481,52 +481,52 @@ export const en = {
   "field.connect_timeout": "Connect timeout (s)",
   "providers.proxy_policy": "Upstream proxy",
   "providers.proxy_policy_hint":
-    "Applies to requests to this upstream only.",
+    "Applies to requests to this upstream only",
   "providers.proxy_inherit": "Inherit gateway setting",
   "providers.proxy_direct": "Direct · bypass proxy",
   "providers.proxy_system": "Follow system proxy",
   "providers.f_version": "anthropic-version",
   "providers.f_version_hint":
-    "Defaults to 2023-06-01; 2026-10-21 drops temperature, top_p and top_k.",
+    "Defaults to 2023-06-01, 2026-10-21 drops temperature, top_p and top_k",
   "providers.f_beta": "anthropic-beta",
   "providers.f_beta_hint":
-    "Comma separated beta capabilities; empty sends none.",
+    "Comma separated beta capabilities, empty sends none",
   "providers.api_surface": "API surface",
   "providers.api_surface_hint":
-    "Which OpenAI API this endpoint speaks; some Codex gateways only accept Responses.",
+    "Which OpenAI API this endpoint speaks, some Codex gateways only accept Responses",
   "providers.surface_chat": "Chat Completions",
   "providers.surface_responses": "Responses",
   "providers.advanced_settings": "Advanced",
   "providers.client_profile": "Client identity",
   "providers.client_profile_hint":
-    "Who Zroutery presents as upstream. Claude Code and Codex also forward that client's own headers.",
+    "Who Zroutery presents as upstream. Claude Code and Codex also forward that client's own headers",
   "providers.profile_auto": "Auto · detect from the client",
   "providers.profile_native": "Native · no client identity",
   "providers.profile_claude_code": "Claude Code · with its headers",
   "providers.profile_codex": "Codex · with its headers",
   "providers.profile_opencode_cli": "OpenCode CLI · locked for OpenCode providers",
   "providers.client_profile_locked_hint":
-    "Locked: OpenCode's gateway verifies this identity and rejects any other.",
+    "Locked: OpenCode's gateway verifies this identity and rejects any other",
   "providers.opencode_zen_dialect": "OpenCode Zen (free)",
   "providers.opencode_console_dialect": "OpenCode Console",
   "providers.decision_dialect": "Decision model",
   "providers.decision": "Decisions",
   "providers.decision_hint":
-    "Answers fixed questions with a probability instead of text; serves Auto review only.",
+    "Answers fixed questions with a probability instead of text, serves Auto review only",
   "providers.decision_path": "Decision path",
-  "providers.decision_path_hint": "Appended to the Base URL, e.g. /v1/systemone.",
+  "providers.decision_path_hint": "Appended to the Base URL, e.g. /v1/systemone",
   "providers.decision_threshold": "Required confidence",
   "providers.decision_threshold_hint":
-    "How sure the model must be before Auto review blocks. Higher blocks more.",
+    "How sure the model must be before Auto review blocks. Higher blocks more",
   "providers.decision_no_catalogue":
     "A decision endpoint has no model catalogue. Add its model on the Models page.",
   "models.tier_decision": "Why no tier",
   "models.tier_decision_hint":
-    "Decision models serve Auto review only and cannot answer chat; add it to the Auto review pool.",
+    "Decision models serve Auto review only and cannot answer chat, add it to the Auto review pool",
   "providers.free_badge": "free",
   "providers.free_only": "Free models only",
   "providers.free_only_hint":
-    "Shows models the catalogue marks as free. A free model can still be rate-limited, region-blocked or retired.",
+    "Shows models the catalogue marks as free. A free model can still be rate-limited, region-blocked or retired",
   "providers.catalogue_shown": "Showing {shown} of {total} models",
   "providers.catalogue_total": "{total} models",
   "providers.catalogue_no_free":
@@ -536,7 +536,7 @@ export const en = {
     "For relays that read Authorization: Bearer instead of x-api-key",
   "providers.balance": "Balance",
   "providers.balance_hint":
-    "Some providers publish remaining credit at their own endpoint. Pick the one this provider uses; Zroutery asks with the provider key.",
+    "Some providers publish remaining credit at their own endpoint. Pick the one this provider uses, Zroutery asks with the provider key",
   "providers.balance_hint_panel":
     "Read from this provider's NewAPI panel with an account's personal access token.",
   "providers.balance_hint_none":
@@ -563,10 +563,10 @@ export const en = {
   "providers.checking": "Checking…",
   "providers.compatibility": "Compatibility",
   "providers.compatibility_hint":
-    "For providers that do not follow the standard protocol exactly. Leave them off unless a request fails.",
+    "For providers that do not follow the standard protocol exactly. Leave them off unless a request fails",
   "providers.repair.title": "Request repair",
   "providers.repair.hint":
-    "Overrides of the Routing page's global repair defaults for this provider. 'Follow the global' inherits the Routing page's switch.",
+    "Overrides of the Routing page's global repair defaults for this provider. 'Follow the global' inherits the Routing page's switch",
   "providers.repair.inherit": "Follow the global default",
   "providers.repair.on": "On for this provider",
   "providers.repair.off": "Off for this provider",
@@ -579,7 +579,7 @@ export const en = {
   "quirk.reasoning_effort": "Translate thinking to reasoning_effort",
   "quirk.portable_history": "Reuse Responses history across upstreams",
   "quirk.portable_history_hint":
-    "For relays where another upstream may answer next (AgentRouter, CC Switch). Responses requests only.",
+    "For relays where another upstream may answer next (AgentRouter, CC Switch). Responses requests only",
   "providers.remove": "Remove provider",
   "providers.removed_models_notice": "Removed {n} models that belonged to that provider.",
   "providers.balance_failed": "check failed",
@@ -670,19 +670,19 @@ export const en = {
   "providers.refresh_all": "Refresh every balance",
   "providers.wallet_holds": "Empty wallets blocked",
   "providers.wallet_holds_hint":
-    "A provider answered that its wallet is empty, so the router stopped sending to it. Refilling does not release the block; press Release after the account is usable again.",
+    "A provider answered that its wallet is empty, so the router stopped sending to it. Refilling does not release the block, press Release after the account is usable again",
   "providers.wallet_empty": "wallet empty",
   "providers.wallet_held_since": "held since {time}",
   "providers.wallet_release": "Release",
   "providers.panel_info": "Panel information",
   "providers.panel_info_hint":
-    "Read announcements and USD prices from this provider's NewAPI panel. Uses the selected account's panel address when set.",
+    "Read announcements and USD prices from this provider's NewAPI panel. Uses the selected account's panel address when set",
   "providers.panel_account": "Panel account",
-  "providers.panel_account_hint": "Select which account's panel address to read. These public requests use no credentials.",
+  "providers.panel_account_hint": "Select which account's panel address to read. These public requests use no credentials",
   "providers.panel_group": "Pricing group",
-  "providers.panel_group_hint": "Select the public group quote to use for this account or key.",
+  "providers.panel_group_hint": "Select the public group quote to use for this account or key",
   "providers.price_account_scope": "All keys on this account",
-  "providers.price_fallback_hint": "Public quotes are estimates, not verified charges. The selected fallback expires after 24 hours; other accounts and manual overrides are preserved.",
+  "providers.price_fallback_hint": "Public quotes are estimates, not verified charges. The selected fallback expires after 24 hours, other accounts and manual overrides are preserved",
   "providers.panel_no_announcements": "The panel has no active announcements.",
   "providers.panel_announcements_failed": "Announcements could not be read: {error}",
   "providers.panel_prices_failed": "Prices could not be read: {error}",
@@ -692,7 +692,7 @@ export const en = {
   "providers.panel_per_request": "Per request",
   "providers.panel_read": "Read panel",
   "providers.panel_read_hint":
-    "Read the panel's announcements and published prices. Nothing is changed until you apply the prices.",
+    "Read the panel's announcements and published prices. Nothing is changed until you apply the prices",
   "providers.panel_announcement": "Announcement",
   "providers.panel_prices": "{matched} of {total} published prices match this provider's models (group {group}).",
   "providers.panel_apply_prices": "Use as account/key fallback",
@@ -711,7 +711,7 @@ export const en = {
     "No accounts declared. Add one in a provider's Accounts section on the Providers page.",
   "accounts.probe_section": "Account probe",
   "accounts.probe_hint":
-    "Ask each enabled account's panel for its current state. One request per account, only when you press the button.",
+    "Ask each enabled account's panel for its current state. One request per account, only when you press the button",
   "accounts.probe_now": "Probe every account",
   "accounts.probing": "Probing…",
   "accounts.probe_idle":
@@ -730,16 +730,16 @@ export const en = {
    * a stale one.
    */
   "accounts.auth_hint":
-    "The panel rejected this credential. Accounts need the panel's personal access token, not a relay sk- key.",
+    "The panel rejected this credential. Accounts need the panel's personal access token, not a relay sk- key",
   "accounts.last_failure": "last probe failed",
   "accounts.checkin_api": "Check in (direct)",
   "accounts.checkin_api_hint":
-    "Signs in with the stored token, no browser. Fails if the panel asks for a challenge.",
+    "Signs in with the stored token, no browser. Fails if the panel asks for a challenge",
   "accounts.checking": "Checking in…",
   "accounts.checkin_api_failed": "Direct check-in failed",
   "accounts.events_section": "Account events",
   "accounts.events_hint":
-    "Recent account events, newest first, with the source of each figure.",
+    "Recent account events, newest first, with the source of each figure",
   "accounts.events_none": "Nothing observed yet.",
   "accounts.events_when": "When",
   "accounts.events_what": "What",
@@ -771,7 +771,7 @@ export const en = {
    */
   "takeover.section": "Agent takeover",
   "takeover.section_hint":
-    "Writes the gateway address and token into a client's own config, and restores the original values on release.",
+    "Writes the gateway address and token into a client's own config, and restores the original values on release",
   "takeover.none": "No external agent is known to this build.",
   "takeover.load_failed":
     "The takeover record could not be read: {err}; nothing on this page has changed a client's configuration.",
@@ -789,21 +789,21 @@ export const en = {
   "takeover.state.released": "released",
   "takeover.state.error": "error",
   "takeover.hint.unsupported":
-    "Gemini CLI's endpoint is only settable through an environment variable, which no config file records. Not offered.",
+    "Gemini CLI's endpoint is only settable through an environment variable, which no config file records. Not offered",
   "takeover.hint.not_detected":
-    "No {agent} config found. Install and run it once, then refresh.",
+    "No {agent} config found. Install and run it once, then refresh",
   "takeover.hint.ready":
-    "Ready: adopting writes the {n} field(s) below and records their current values.",
+    "Ready: adopting writes the {n} field(s) below and records their current values",
   "takeover.confirm_inline":
     "Adopting edits {agent}'s config file; release restores exactly these fields and leaves the rest untouched.",
   "takeover.hint.active":
-    "A request from this client reached the gateway, and its managed fields match what Zroutery wrote.",
+    "A request from this client reached the gateway, and its managed fields match what Zroutery wrote",
   "takeover.hint.degraded":
-    "The config is managed, but verification is incomplete. See the reason below.",
+    "The config is managed, but verification is incomplete. See the reason below",
   "takeover.hint.conflict":
-    "{n} managed field(s) changed outside Zroutery. Choose on release whether to keep those edits or restore the recorded values.",
+    "{n} managed field(s) changed outside Zroutery. Choose on release whether to keep those edits or restore the recorded values",
   "takeover.hint.released":
-    "Released; original values restored. Taking over again records the current values.",
+    "Released, original values restored. Taking over again records the current values",
   "takeover.blocker.no_token":
     "No gateway token yet. Set or regenerate it in Settings → Gateway.",
   "takeover.blocker.no_classes":
@@ -861,7 +861,7 @@ export const en = {
   "nav.cutover": "Cutover",
   "cutover.section": "Configuration cutover",
   "cutover.section_hint":
-    "Moves a client's configuration onto this gateway, capturing the original file first so a failed run can be undone; to switch a client on or off, use Takeover.",
+    "Moves a client's configuration onto this gateway, capturing the original file first so a failed run can be undone, to switch a client on or off, use Takeover",
   "cutover.state.section": "Migration record",
   "cutover.state.detected": "nothing run yet",
   "cutover.state.prepared": "interrupted while preparing",
@@ -871,18 +871,18 @@ export const en = {
   "cutover.state.rolled_back": "rolled back",
   "cutover.state.failed": "failed",
   "cutover.state.hint.detected":
-    "No cutover has been run from this record; nothing on this page has changed a client's configuration.",
+    "No cutover has been run from this record, nothing on this page has changed a client's configuration",
   "cutover.state.hint.completed":
-    "A cutover completed. There is no rollback from this state; the snapshot stays on disk.",
+    "A cutover completed. There is no rollback from this state, the snapshot stays on disk",
   "cutover.state.hint.rolled_back":
-    "Rolled back and the captured files were restored; starting again uses the original file.",
+    "Rolled back and the captured files were restored, starting again uses the original file",
   "cutover.state.hint.prepared":
-    "The new configuration is staged and the client file not yet written; the snapshot is the only copy of the original.",
+    "The new configuration is staged and the client file not yet written, the snapshot is the only copy of the original",
   "cutover.state.hint.verified":
-    "Staged and verified, the client file not changed; the snapshot is the only copy of the original.",
+    "Staged and verified, the client file not changed, the snapshot is the only copy of the original",
   "cutover.state.hint.switched":
-    "Switched and the client file was replaced; restoring the snapshot is the only way back.",
-  "cutover.state.hint.failed": "Failed partway; roll back from the snapshot below.",
+    "Switched and the client file was replaced, restoring the snapshot is the only way back",
+  "cutover.state.hint.failed": "Failed partway, roll back from the snapshot below",
   "cutover.snapshot.none": "No rollback snapshot has been captured.",
   "cutover.snapshot.files": "{n} file(s) captured, restorable byte for byte.",
   "cutover.not_durable":
@@ -890,7 +890,7 @@ export const en = {
   "cutover.persist_error": "The record is not reaching disk: {err}",
   "cutover.plans.section": "Cutover plans",
   "cutover.plans.hint":
-    "Each plan is built from the client's real configuration; nothing changes until you confirm.",
+    "Each plan is built from the client's real configuration, nothing changes until you confirm",
   "cutover.none":
     "No external client is known to this build; install and run one, then refresh this page.",
   "cutover.load_failed":
@@ -950,14 +950,14 @@ export const en = {
 
   // ------------------------------------------------------------- routing
   "routing.lede": "How requests are routed, by purpose; works with any Anthropic or OpenAI client.",
-  "routing.default_hint": "Every ordinary request, by the tier the client asks for.",
+  "routing.default_hint": "Every ordinary request, by the tier the client asks for",
   "routing.edit": "Edit",
   "tier.hint.fast": "short tasks, response first",
   "tier.hint.standard": "everyday questions and coding",
   "tier.hint.reasoning": "multi-step analysis and complex coding",
   "tier.hint.frontier": "your pool for demanding tasks",
   "overview.setup_path": "Connect your workflow",
-  "overview.setup_hint": "Manage a provider, assign models, then connect your client.",
+  "overview.setup_hint": "Manage a provider, assign models, then connect your client",
   "tier.name.fast": "Fast",
   "tier.name.standard": "Standard",
   "tier.name.reasoning": "Reasoning",
@@ -993,7 +993,7 @@ export const en = {
     "Everything else must be an exact id, or one of the client aliases below.",
   "routing.election": "Election",
   "routing.election_hint":
-    "One tiny request per model measures latency and price, then pins the order.",
+    "One tiny request per model measures latency and price, then pins the order",
   "routing.rerun": "Re-run now",
   "routing.elect_on_start": "Hold one at startup",
   "routing.no_election": "No election has been held this run.",
@@ -1001,18 +1001,18 @@ export const en = {
   "routing.primary": "primary",
   "routing.route_review": "Route permission checks",
   "routing.route_review_hint":
-    "Permission checks go to the pool below instead of the conversation's model; covers Claude Code Auto Mode and Codex Guardian.",
+    "Permission checks go to the pool below instead of the conversation's model, covers Claude Code Auto Mode and Codex Guardian",
   "routing.review_failover": "Fail over inside the pool",
   "routing.review_failover_hint": "Try the next candidate when one errors",
   "routing.pool": "Pool",
   "routing.pool_hint":
-    "Models come from the Models page; provider, key and price settings are reused.",
+    "Models come from the Models page, provider, key and price settings are reused",
   "routing.no_candidates": "No candidates yet. Pick a model below.",
   "routing.not_configured": "not a configured model",
   "routing.decision_candidate": "Decision model",
   "routing.add_jev": "Add OpenCode Zen's free Jev",
   "routing.add_jev_hint":
-    "Adds the keyless Jev decision model to the top of the pool with a threshold of 0.6; the free offer can end, and the text being checked is sent to Zen.",
+    "Adds the keyless Jev decision model to the top of the pool with a threshold of 0.6, the free offer can end, and the text being checked is sent to Zen",
   "routing.jev_added": "Jev was added first in the pool, and Auto review is on.",
   "routing.enable_for": "Enable {model}",
   "routing.add_model": "Add a model…",
@@ -1022,7 +1022,7 @@ export const en = {
   "routing.verdict_parsing": "Verdict parsing",
   "routing.verdict_only": "<block>yes|no</block> only",
   "routing.verdict_only_hint":
-    "Claude Code wants <block>yes|no</block> and Codex Guardian wants an `outcome` field in JSON; a decision model only gives a probability, and the provider's threshold turns it into a verdict.",
+    "Claude Code wants <block>yes|no</block> and Codex Guardian wants an `outcome` field in JSON, a decision model only gives a probability, and the provider's threshold turns it into a verdict",
   "routing.no_verdict": "When no verdict",
   "routing.fails_closed": "fails closed; the client asks the user",
   "routing.fail_closed_note":
@@ -1047,7 +1047,7 @@ export const en = {
   "activity.kpi_unpriced": "{n} unpriced requests",
   // ---------------------------------------------------------- activity charts
   "activity.traffic": "Traffic",
-  "activity.traffic_hint": "Completed requests per local day; days without requests count as zero.",
+  "activity.traffic_hint": "Completed requests per local day, days without requests count as zero",
   "activity.traffic_hint_imported": "Completed requests per local day, this device plus imported history; days without requests count as zero.",
   "activity.usage_source": "Usage source",
   "activity.source_local": "This device",
@@ -1062,7 +1062,7 @@ export const en = {
   "activity.import_source": "Import from another tool…",
   "activity.imported_history": "Imported history",
   "activity.import_source_title": "Import history from another tool",
-  "activity.import_source_hint": "Choose a source, review its history, then add it to your usage. Importing does not change your current budget.",
+  "activity.import_source_hint": "Choose a source, review its history, then add it to your usage. Importing does not change your current budget",
   "activity.import_step_source": "Source",
   "activity.import_step_review": "Review",
   "activity.import_step_done": "Result",
@@ -1086,7 +1086,7 @@ export const en = {
   "activity.model_missing": "Not reported / unknown",
   "activity.model_auto_only": "{value} · automatic selection, model unknown",
   "activity.model_conflict": "Conflicting declarations: {value}",
-  "activity.declaration_hint": "Names come from structured upstream fields. They are provider declarations, not independent verification of the backend.",
+  "activity.declaration_hint": "Names come from structured upstream fields. They are provider declarations, not independent verification of the backend",
   "activity.import_source_copy": "Source copy: {name} ({source}). Re-importing updates instead of counting twice.",
   "activity.import_found": "Found on this machine",
   "activity.import_recent": "used before",
@@ -1182,7 +1182,7 @@ export const en = {
   "activity.ttft": "ttft {v}",
   "activity.cache_hit_rate": "Cache hit rate",
   "activity.cache_hit_hint":
-    "Cache reads are a subset of the cache-inclusive input total; the rate is cache read over input, not over fresh tokens.",
+    "Cache reads are a subset of the cache-inclusive input total, the rate is cache read over input, not over fresh tokens",
   "activity.cost": "Cost",
   "activity.unpriced": "unpriced",
   /*
@@ -1194,7 +1194,7 @@ export const en = {
    */
   "activity.ledger": "Ledger",
   "activity.ledger_hint":
-    "Every recorded request, cut by client and by model; click a row to show only its requests in the stream below. Spend is estimated from configured prices; prompts and completions are never stored.",
+    "Every recorded request, cut by client and by model, click a row to show only its requests in the stream below. Spend is estimated from configured prices, prompts and completions are never stored",
   "activity.ledger_cut": "Ledger dimension",
   "activity.ledger_local_only": "This split counts this device's live ledger. Imported history is in the totals and the curve above, and that store carries no client or kind evidence to divide it by.",
   "activity.by_client": "By client",
@@ -1221,9 +1221,9 @@ export const en = {
   "activity.export_file_failed":
     "Could not export to a file; opened the copyable archive instead.",
   "activity.export_hint":
-    "A portable JSON archive of the recorded usage, ready to import elsewhere.",
+    "A portable JSON archive of the recorded usage, ready to import elsewhere",
   "activity.import_hint":
-    "Paste the archive produced by Export history; one invalid row rejects the whole file.",
+    "Paste the archive produced by Export history, one invalid row rejects the whole file",
   "activity.import_placeholder": "Paste the JSON archive here",
   "activity.client": "Client",
   "activity.clear_client": "Clear client",
@@ -1263,13 +1263,13 @@ export const en = {
   "settings.copy": "Copy",
   "settings.regenerate": "Regenerate",
   "settings.regenerate_title": "Existing clients will need the new token",
-  "settings.token_hint": "Send it as x-api-key or Authorization: Bearer.",
+  "settings.token_hint": "Send it as x-api-key or Authorization: Bearer",
   "settings.point_client": "Point a client at the gateway",
   "settings.anthropic_clients": "Anthropic-style clients:",
   "settings.openai_clients": "OpenAI-style clients:",
   "settings.snippet_comment": "# or any exact model id from the Models page",
   "settings.cors": "Browser access (CORS)",
-  "settings.cors_hint": "Only needed for clients that run inside a web page.",
+  "settings.cors_hint": "Only needed for clients that run inside a web page",
   "settings.allow_origins": "Allow browser origins",
   "settings.no_origins":
     "No origins listed, so any origin is accepted; add the ones you actually use.",
@@ -1279,14 +1279,14 @@ export const en = {
   "settings.origin_notice": "An origin looks like https://example.com, with no path.",
   "settings.budgets": "Budgets",
   "settings.budgets_hint":
-    "A limit stops spending once reached; the request that crosses it completes and the next is rejected.",
+    "A limit stops spending once reached, the request that crosses it completes and the next is rejected",
   "settings.balances": "Balances",
   "settings.balances_hint":
-    "Wallet checks cost one request per provider or account. The last successful figure is kept when a check fails.",
+    "Wallet checks cost one request per provider or account. The last successful figure is kept when a check fails",
   "settings.balance_auto": "Check balances automatically",
-  "settings.balance_auto_hint": "Runs in the background while the app is open.",
+  "settings.balance_auto_hint": "Runs in the background while the app is open",
   "settings.balance_interval": "Interval (seconds)",
-  "settings.balance_interval_hint": "Between 60 and 86400 seconds.",
+  "settings.balance_interval_hint": "Between 60 and 86400 seconds",
   "budget.covers": "Covers",
   "budget.window": "Window",
   "budget.limit": "Limit",
@@ -1328,7 +1328,7 @@ export const en = {
   "settings.config_path": "Configuration file",
   "settings.aliases": "Client model aliases",
   "settings.aliases_hint":
-    "Maps an exact model id a client sends onto a tier; wins over the Claude name heuristic.",
+    "Maps an exact model id a client sends onto a tier, wins over the Claude name heuristic",
   "settings.f_model_id": "Model id",
   "settings.f_class": "Tier",
   "settings.add_alias": "Add alias",
@@ -1337,7 +1337,7 @@ export const en = {
   "settings.latency_weight": "Latency weight",
   "settings.ref_input": "Reference input tokens",
   "settings.ref_input_hint":
-    "Prices are per million tokens, so they need a request size to be compared on.",
+    "Prices are per million tokens, so they need a request size to be compared on",
   "settings.ref_output": "Reference output tokens",
   "settings.naming_style": "Tier naming",
   "settings.naming_internal": "Internal",
@@ -1347,53 +1347,53 @@ export const en = {
   "win.launch_on_login": "Launch at login",
   "win.launch_on_login_hint": "Start Zroutery automatically when you sign in",
   "win.silent_start": "Start silently",
-  "win.silent_start_hint": "No main window on launch; the tray is the only presence",
+  "win.silent_start_hint": "No main window on launch, the tray is the only presence",
   "win.keep_in_tray": "Keep in tray on close",
   "win.keep_in_tray_hint":
-    "On: closing the window keeps Zroutery in the tray. Off: closing quits and stops the gateway.",
+    "On: closing the window keeps Zroutery in the tray. Off: closing quits and stops the gateway",
   "win.window_actions": "Hide or quit",
   "win.window_actions_hint":
-    "Hide keeps the gateway running in the tray; quit stops the gateway and ends the process",
+    "Hide keeps the gateway running in the tray, quit stops the gateway and ends the process",
   "win.hide_to_tray": "Hide to tray",
   "win.quit": "Quit",
   "vision.title": "Vision fallback",
   "vision.hint":
-    "A model without vision receives a description of the image, or a placeholder when none can be produced; images are never dropped silently.",
+    "A model without vision receives a description of the image, or a placeholder when none can be produced, images are never dropped silently",
   "vision.enable": "Describe images for non-vision models",
   "vision.model": "Vision model",
   "vision.model_hint":
-    "An existing model that can see, from the Models page; its provider and pricing are reused",
+    "An existing model that can see, from the Models page, its provider and pricing are reused",
   "vision.model_required": "Pick a model that supports vision on the Models page first.",
   "vision.placeholder": "Placeholder",
   "vision.placeholder_hint": "What replaces an image when no description was possible",
   // --------------------------------------------------------- request repair
   "rectifier.title": "Request repair",
   "rectifier.hint":
-    "When an upstream rejects a request, send it again to the same provider and model in a form it accepts; repairs do not count against the circuit breaker and never switch providers. These are the global defaults; each provider can override them in its own drawer.",
+    "When an upstream rejects a request, send it again to the same provider and model in a form it accepts, repairs do not count against the circuit breaker and never switch providers. These are the global defaults, each provider can override them in its own drawer",
   "rectifier.enable": "Repair rejected requests",
-  "rectifier.enable_hint": "Master switch: turning it off leaves every request to fail over at once.",
+  "rectifier.enable_hint": "Master switch: turning it off leaves every request to fail over at once",
   "rectifier.thinking_signature": "Repair a stale thinking signature",
   "rectifier.thinking_signature_hint":
-    "Anthropic rejects a request whose thinking block carries an old or misplaced signature; those blocks are dropped and the request is sent again.",
+    "Anthropic rejects a request whose thinking block carries an old or misplaced signature, those blocks are dropped and the request is sent again",
   "rectifier.media_fallback": "Replace an image with a description",
   "rectifier.media_fallback_hint":
-    "Providers that refuse images receive a text description instead; the image itself is kept.",
+    "Providers that refuse images receive a text description instead, the image itself is kept",
   "rectifier.thinking_budget": "Halve an oversized thinking budget",
   "rectifier.thinking_budget_hint":
-    "A provider that caps the reasoning budget gets the request with the budget halved (at least 1024 tokens) so it fits.",
+    "A provider that caps the reasoning budget gets the request with the budget halved (at least 1024 tokens) so it fits",
   "rectifier.codex_auto": "Codex conditional history repair",
   "rectifier.codex_auto_hint":
-    "History is kept and only errors the upstream names explicitly get cleaned; the reply is delivered complete, so visible output may be delayed.",
+    "History is kept and only errors the upstream names explicitly get cleaned, the reply is delivered complete, so visible output may be delayed",
   "rectifier.codex_metadata": "Strip Codex's private metadata field",
   "rectifier.codex_metadata_hint":
-    "Only removed and the request retried when an upstream rejects the field by name.",
+    "Only removed and the request retried when an upstream rejects the field by name",
   "rectifier.thinking_fallback": "Allow a model without thinking support",
   "rectifier.thinking_fallback_hint":
-    "A reasoning request may go to a model that does not declare thinking support, with the reasoning controls removed. The attempt is marked degraded.",
+    "A reasoning request may go to a model that does not declare thinking support, with the reasoning controls removed. The attempt is marked degraded",
   // ------------------------------------------------------------ learned routing
   "ml.title": "Learned routing",
   "ml.hint":
-    "When on, the trained model may re-order the provider plan; off keeps routing deterministic.",
+    "When on, the trained model may re-order the provider plan, off keeps routing deterministic",
   "ml.unavailable": "This build cannot learn; routing stays deterministic.",
   "ml.serving": "A promoted model is re-ordering the provider plan.",
   "ml.inert": "A model is promoted but learned routing is off, so it is not consulted.",
@@ -1469,31 +1469,31 @@ export const en = {
   "ml.rolling_back": "Rolling back…",
 
   "ml.config_title": "Collection settings",
-  "ml.config_hint": "Shadow produces the samples; no samples, no learning.",
+  "ml.config_hint": "Shadow produces the samples, no samples, no learning",
   "ml.config_unavailable": "This build cannot learn, so there is nothing to configure.",
   "ml.shadow_enable": "Shadow evaluation",
-  "ml.shadow_enable_hint": "When off, no training samples are collected.",
+  "ml.shadow_enable_hint": "When off, no training samples are collected",
   "ml.shadow_max_decisions": "Max decisions (in memory)",
   "ml.shadow_max_decisions_hint":
-    "The oldest decisions are dropped beyond this; 10000 is the default.",
+    "The oldest decisions are dropped beyond this, 10000 is the default",
   "ml.shadow_max_age": "Max age (seconds)",
-  "ml.shadow_max_age_hint": "Retention window; 604800 = 7 days.",
+  "ml.shadow_max_age_hint": "Retention window, 604800 = 7 days",
   "ml.routing_enable": "Learned routing",
   "ml.routing_enable_hint":
-    "When on, the promoted model may re-order the plan; promotion needs a state directory first.",
+    "When on, the promoted model may re-order the plan, promotion needs a state directory first",
   "ml.state_dir": "State directory",
   "ml.state_dir_hint":
-    "Where traces and the active model are stored; empty keeps them in memory only, lost on restart, e.g. ml",
+    "Where traces and the active model are stored, empty keeps them in memory only, lost on restart, e.g. ml",
   "ml.exploration": "Exploration probability",
-  "ml.exploration_hint": "0 = deterministic; >0 explores alternative candidates but blocks promotion.",
-  "ml.config_shadow_off_hint": "Shadow is off; no training samples are collected.",
+  "ml.exploration_hint": "0 = deterministic, >0 explores alternative candidates but blocks promotion",
+  "ml.config_shadow_off_hint": "Shadow is off, no training samples are collected",
   "ml.config_effect": "Collecting",
   "ml.effect_collecting": "yes — samples grow with traffic",
   "ml.effect_idle": "no — shadow is off",
   "ml.config_serve": "Serving",
   "ml.serve_active": "learned model re-orders the plan",
   "ml.serve_deterministic": "deterministic (no re-ordering)",
-  "ml.serve_blocked_hint": "Learned routing is on but no durable state directory is configured, so nothing can be promoted or survive a restart.",
+  "ml.serve_blocked_hint": "Learned routing is on but no durable state directory is configured, so nothing can be promoted or survive a restart",
 
   // ----------------------------------------------- learned routing: collection
   //
@@ -1515,14 +1515,14 @@ export const en = {
   // request that follows.
   "ml.round": "Promotion round",
   "ml.round_hint":
-    "Train a candidate from the recorded history and let the gate judge it against the baseline; nothing is installed or scheduled automatically.",
+    "Train a candidate from the recorded history and let the gate judge it against the baseline, nothing is installed or scheduled automatically",
   "ml.round_judge": "Judge a candidate",
   "ml.round_judging": "Judging…",
   "ml.round_judged": "Candidate judged, not installed.",
   "ml.round_install": "Install the authorised candidate",
   "ml.round_installing": "Installing…",
   "ml.round_install_hint":
-    "Available once the gate authorizes a candidate; changes which model serves later requests.",
+    "Available once the gate authorizes a candidate, changes which model serves later requests",
   "ml.round_none": "No round could be run.",
   "ml.round_records": "Records read",
   "ml.round_candidate": "Candidate",
@@ -1546,7 +1546,7 @@ export const en = {
   // change what the next model learns. The dialog states that consequence.
   "ml.log": "Recorded history",
   "ml.log_hint":
-    "The evidence rounds train from; retention is manual and nothing changes the next model on its own.",
+    "The evidence rounds train from, retention is manual and nothing changes the next model on its own",
   "ml.log_records": "Records",
   "ml.log_size": "On disk",
   "ml.log_path": "File",
