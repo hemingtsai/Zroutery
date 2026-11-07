@@ -31,7 +31,6 @@ export const zhTW: Dict = {
   "common.unknown": "未知",
   "count.models": "{n} 個模型",
   "count.providers": "{n} 個供應商",
-
   // ------------------------------------------------------------------ app
   "app.live_stopped": "即時更新已停止：{err}",
   "app.exposed":
@@ -142,11 +141,10 @@ export const zhTW: Dict = {
   "lang.zh_tw": "繁體中文",
   "lang.en": "English",
   "action.hide": "隱藏",
-  "toast.copied": "已複製。",
+  "toast.copied": "已複製",
   "toast.queued_discarded": "儲存失敗，排隊中的修改已丟棄。",
   "toast.balances_refreshed": "餘額已重新整理。",
   "toast.balances_refresh_failed": "餘額重新整理失敗，仍顯示上次取得的數值。",
-
   // ---------------------------------------------------------------- confirm
   "confirm.remove_provider": "移除供應商",
   "confirm.remove_provider_body":
@@ -277,7 +275,6 @@ export const zhTW: Dict = {
   "models.open_row": "開啟 {id}",
   "cc.import_row": "匯入 {name}",
   "settings.remove_origin": "移除 {origin}",
-
   // ------------------------------------------------------------ overview
   "overview.gateway": "閘道器",
   "overview.gateway_stopped": "閘道器已停止",
@@ -306,11 +303,10 @@ export const zhTW: Dict = {
   "overview.no_providers": "暫無供應商。",
   "overview.add_provider": "新增供應商",
   "overview.add_models": "新增模型 →",
-
   // -------------------------------------------------------------- models
   "models.pick_provider_name": "請選擇供應商並填寫模型名。",
   "models.duplicate": "該供應商已提供“{model}”。",
-  "models.unclassified": "{n} 個模型尚未分層：{ids}；仍可按完整 id 呼叫，但不參與分層路由。",
+  "models.unclassified": "{n} 個模型尚未分層，不參與路由：{ids}",
   "models.lede_none": "新增到供應商的模型會顯示在這裡。",
   "models.exposed": "{n} 個模型 · 點選編輯，或從目錄新增。",
   "models.empty": "暫無模型。",
@@ -405,7 +401,6 @@ export const zhTW: Dict = {
   "models.cache_write_hint": "可選",
   "models.clear_price": "清除價格",
   "models.remove": "移除模型",
-
   // ----------------------------------------------------------- providers
   "providers.lede_none": "每個上游帳號或端點一個供應商。",
   "providers.import_cc": "從 CC Switch 匯入",
@@ -542,7 +537,6 @@ export const zhTW: Dict = {
   "providers.remove": "移除供應商",
   "providers.removed_models_notice": "已移除屬於該供應商的 {n} 個模型。",
   "providers.balance_failed": "查詢失敗",
-
   // ------------------------------------------------------- account maintenance
   "account.phase.idle": "尚未簽到",
   "account.phase.running": "正在簽到…",
@@ -596,7 +590,6 @@ export const zhTW: Dict = {
   "account.cancelled": "簽到已取消。",
   "account.resume_failed": "無法繼續簽到",
   "account.cancel_failed": "無法取消簽到",
-
   // ------------------------------------------------------- account probing
   //
   // 探測不是簽到。它只詢問平臺帳戶處於什麼狀態並報告結果，不會開啟瀏覽器，
@@ -638,7 +631,7 @@ export const zhTW: Dict = {
   "accounts.probe_hint": "向每個已啟用帳戶的面板查詢當前狀態。每個帳戶一次請求，僅在點選時執行。",
   "accounts.probe_now": "探測所有帳戶",
   "accounts.probing": "探測中…",
-  "accounts.probe_idle": "尚未進行探測。",
+  "accounts.probe_idle": "尚未探測",
   "accounts.probe_none": "沒有可探測的已啟用帳戶。",
   "accounts.probe_outcome": "結果",
   "accounts.provider_disabled": "供應商已停用",
@@ -672,7 +665,6 @@ export const zhTW: Dict = {
   "account.sync.partially_reported": "未上報",
   "account.sync.unsupported": "此建置無法詢問該平臺；未探測。",
   "account.sync.failed": "探測失敗",
-
   // ------------------------------------------------------------- 接管
   // 接管頁。接管會把本機閘道器地址與令牌寫入外部客戶端自己的配置檔案,
   // 記錄被替換的值,釋放時恢復。九種狀態逐個渲染,因為其中四種需要使用者
@@ -699,9 +691,8 @@ export const zhTW: Dict = {
     "Gemini CLI 只能通過環境變數設定端點，配置檔案無法記錄，因此不提供接管。",
   "takeover.hint.not_detected":
     "未找到 {agent} 的配置。請安裝並執行一次後重新整理。",
-  "takeover.hint.ready":
-    "已就緒：接管會寫入下方 {n} 個欄位，並記錄當前值。",
-  "takeover.confirm_inline": "接管會修改 {agent} 的配置檔案；釋放時只恢復這些欄位，其餘內容不動。",
+  "takeover.hint.ready": "接管會寫入下方 {n} 個欄位，釋放時恢復",
+  "takeover.confirm_inline": "接管會修改 {agent} 的配置檔案，釋放時只恢復這些欄位",
   "takeover.hint.active":
     "已收到該客戶端的閘道器請求，託管欄位與寫入值一致。",
   "takeover.hint.degraded":
@@ -749,7 +740,6 @@ export const zhTW: Dict = {
   "takeover.report_kept": "保留 {n} 處修改",
   "takeover.report_overwritten": "恢復 {n} 個欄位",
   "takeover.report_skipped": "跳過 {n} 個欄位",
-
   // ------------------------------------------------------------- cutover
   /*
    * 切換頁。切換會用一個暫存副本整體替換客戶端的配置,並在動手之前逐位元組
@@ -824,7 +814,6 @@ export const zhTW: Dict = {
   "cutover.agent.codex": "Codex CLI",
   "cutover.agent.opencode": "OpenCode",
   "cutover.agent.gemini": "Gemini CLI",
-
   // ------------------------------------------------------------- routing
   "routing.lede": "按用途展示請求的路由方式，相容任何 Anthropic 或 OpenAI 客戶端。",
   "routing.default_hint": "所有普通請求，按客戶端請求的層級。",
@@ -901,7 +890,6 @@ export const zhTW: Dict = {
   "routing.fails_closed": "失敗關閉；由客戶端詢問使用者",
   "routing.fail_closed_note":
     "出錯、逾時或沒有把握都按攔截處理，不會放行；回覆裡的說明文字也不會當作放行。",
-
   // ------------------------------------------------------------ activity
   "activity.lede_none": "暫無資料。將客戶端指向閘道器即可在此看到流量。",
   "activity.lede_since": "自 {since} 起的累計。",
@@ -931,7 +919,7 @@ export const zhTW: Dict = {
   "activity.import_source": "從其他工具匯入…",
   "activity.imported_history": "匯入的歷史",
   "activity.import_source_title": "從其他工具匯入歷史",
-  "activity.import_source_hint": "選擇來源，核對歷史，再加入用量統計。匯入不會改變目前預算。",
+  "activity.import_source_hint": "選擇來源並核對歷史，匯入不改變目前預算",
   "activity.import_step_source": "選擇來源",
   "activity.import_step_review": "核對預覽",
   "activity.import_step_done": "查看結果",
@@ -948,7 +936,7 @@ export const zhTW: Dict = {
   "activity.inbound_api": "用戶端 → Zroutery",
   "activity.outbound_api": "Zroutery → 上游",
   "activity.attempt_route": "執行嘗試",
-  "activity.attempt_unavailable": "這筆記錄沒有逐次嘗試的協定證據。",
+  "activity.attempt_unavailable": "沒有逐次嘗試的記錄",
   "activity.planned_model": "設定請求模型",
   "activity.declared_model": "回應 model 欄位",
   "activity.declared_version": "回應版本欄位",
@@ -993,7 +981,7 @@ export const zhTW: Dict = {
   "activity.heat_less": "少",
   "activity.heat_more": "多",
   "activity.reset": "重置計數",
-  "activity.review_line": "自動審查：{n} 次檢查 · 失敗 {failed} · 平均 {latency}(與主流量分開統計)。",
+  "activity.review_line": "自動審查 {n} 次，失敗 {failed}，平均 {latency}",
   "activity.nothing": "暫無資料。",
   "activity.filter": "篩選請求",
   "activity.filter_all": "全部",
@@ -1084,9 +1072,8 @@ export const zhTW: Dict = {
   "activity.facet_model": "按模型篩選",
   "activity.facet_all_providers": "全部供應商",
   "activity.facet_all_models": "全部模型",
-
   // ------------------------------------------------------------ settings
-  "settings.lede": "應用行為、對外的閘道器，以及它被允許花多少。",
+  "settings.lede": "應用行為、閘道器與用量上限",
   "settings.gateway": "閘道器",
   "settings.gateway_hint": "服務地址 {url} · {path}",
   "field.host": "主機",
@@ -1127,7 +1114,7 @@ export const zhTW: Dict = {
   "settings.balance_auto": "自動檢查餘額",
   "settings.balance_auto_hint": "應用執行時在後臺執行。",
   "settings.balance_interval": "間隔（秒）",
-  "settings.balance_interval_hint": "範圍 60 到 86400 秒。",
+  "settings.balance_interval_hint": "60 到 86400 秒",
   "budget.covers": "覆蓋",
   "budget.window": "週期",
   "budget.limit": "限額",
@@ -1177,7 +1164,7 @@ export const zhTW: Dict = {
   "win.silent_start_hint": "啟動時不顯示主視窗，僅在系統托盤執行",
   "win.keep_in_tray": "關閉視窗時保留在托盤",
   "win.keep_in_tray_hint":
-    "開啟：關閉視窗後 Zroutery 留在托盤。關閉：關閉視窗即退出並停止閘道器。",
+    "開啟後關閉視窗留在托盤，關閉則退出並停止閘道器。",
   "win.window_actions": "隱藏或退出",
   "win.window_actions_hint": "隱藏則閘道器繼續在托盤執行；退出會停止閘道器並結束程序。",
   "win.hide_to_tray": "隱藏到托盤",
@@ -1234,7 +1221,6 @@ export const zhTW: Dict = {
   "ml.serve_active": "學習模型重排候選順序",
   "ml.serve_deterministic": "確定性路由(不重排)",
   "ml.serve_blocked_hint": "學習型路由已開啟，但未配置持久化目錄，因此無法晉升也無法跨重啟保留。",
-
   // ------------------------------------------------------------ learned routing
   "ml.title": "學習型路由",
   "ml.hint": "開啟後，訓練出的模型可重排供應商順序；關閉時路由保持確定性。",
@@ -1291,14 +1277,12 @@ export const zhTW: Dict = {
   "ml.gaps": "不可用記錄：",
   "ml.rollback_action": "回滾到上一個模型",
   "ml.rolling_back": "回滾中…",
-
   // ----------------------------------------------- learned routing: collection
   "ml.learning_blocked":
     "學習型路由已開啟，但 Shadow 評估關閉，因此沒有樣本（已丟棄 {n} 個請求）；請開啟 Shadow 評估。",
   "ml.learning_blocked_short": "學習已被阻斷",
   "ml.ingested": "已入庫請求",
   "ml.dropped_no_decision": "因缺少決策而丟棄",
-
   // -------------------------------------------- learned routing: promotion round
   "ml.round": "提升輪次",
   "ml.round_hint": "用已記錄歷史訓練候選，由門禁判斷是否優於基線；不會自動安裝或定時執行。",
@@ -1323,7 +1307,6 @@ export const zhTW: Dict = {
   "ml.verdict_rejected": "已拒絕",
   "ml.verdict_blocked": "已阻斷",
   "ml.round_error": "輪次已評判，但無法安裝",
-
   // ------------------------------------------------ learned routing: the log
   "ml.log": "已記錄的歷史",
   "ml.log_hint": "訓練所用的記錄；清理需手動執行，不會自動影響下一個模型。",

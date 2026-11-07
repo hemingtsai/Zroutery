@@ -24,7 +24,6 @@ export const zh: Dict = {
   "common.unknown": "未知",
   "count.models": "{n} 个模型",
   "count.providers": "{n} 个服务商",
-
   // ------------------------------------------------------------------ app
   "app.live_stopped": "实时更新已停止：{err}",
   "app.exposed":
@@ -135,11 +134,10 @@ export const zh: Dict = {
   "lang.zh_tw": "繁體中文",
   "lang.en": "English",
   "action.hide": "隐藏",
-  "toast.copied": "已复制。",
+  "toast.copied": "已复制",
   "toast.queued_discarded": "保存失败，排队中的修改已丢弃。",
   "toast.balances_refreshed": "余额已刷新。",
   "toast.balances_refresh_failed": "余额刷新失败，仍显示上次获取的数值。",
-
   // ---------------------------------------------------------------- confirm
   "confirm.remove_provider": "移除服务商",
   "confirm.remove_provider_body":
@@ -270,7 +268,6 @@ export const zh: Dict = {
   "models.open_row": "打开 {id}",
   "cc.import_row": "导入 {name}",
   "settings.remove_origin": "移除 {origin}",
-
   // ------------------------------------------------------------ overview
   "overview.gateway": "网关",
   "overview.gateway_stopped": "网关已停止",
@@ -299,11 +296,10 @@ export const zh: Dict = {
   "overview.no_providers": "暂无服务商。",
   "overview.add_provider": "添加服务商",
   "overview.add_models": "添加模型 →",
-
   // -------------------------------------------------------------- models
   "models.pick_provider_name": "请选择服务商并填写模型名。",
   "models.duplicate": "该服务商已提供“{model}”。",
-  "models.unclassified": "{n} 个模型尚未分层：{ids}；仍可按完整 id 调用，但不参与分层路由。",
+  "models.unclassified": "{n} 个模型尚未分层，不参与路由：{ids}",
   "models.lede_none": "添加到服务商的模型会显示在这里。",
   "models.exposed": "{n} 个模型 · 点击编辑，或从目录添加。",
   "models.empty": "暂无模型。",
@@ -398,7 +394,6 @@ export const zh: Dict = {
   "models.cache_write_hint": "可选",
   "models.clear_price": "清除价格",
   "models.remove": "移除模型",
-
   // ----------------------------------------------------------- providers
   "providers.lede_none": "每个上游账号或端点一个服务商。",
   "providers.import_cc": "从 CC Switch 导入",
@@ -535,7 +530,6 @@ export const zh: Dict = {
   "providers.remove": "移除服务商",
   "providers.removed_models_notice": "已移除属于该服务商的 {n} 个模型。",
   "providers.balance_failed": "查询失败",
-
   // ------------------------------------------------------- account maintenance
   "account.phase.idle": "尚未签到",
   "account.phase.running": "正在签到…",
@@ -589,7 +583,6 @@ export const zh: Dict = {
   "account.cancelled": "签到已取消。",
   "account.resume_failed": "无法继续签到",
   "account.cancel_failed": "无法取消签到",
-
   // ------------------------------------------------------- account probing
   //
   // 探测不是签到。它只询问平台账户处于什么状态并报告结果，不会打开浏览器，
@@ -631,7 +624,7 @@ export const zh: Dict = {
   "accounts.probe_hint": "向每个已启用账户的面板查询当前状态。每个账户一次请求，仅在点击时执行。",
   "accounts.probe_now": "探测所有账户",
   "accounts.probing": "探测中…",
-  "accounts.probe_idle": "尚未进行探测。",
+  "accounts.probe_idle": "尚未探测",
   "accounts.probe_none": "没有可探测的已启用账户。",
   "accounts.probe_outcome": "结果",
   "accounts.provider_disabled": "服务商已停用",
@@ -665,14 +658,13 @@ export const zh: Dict = {
   "account.sync.partially_reported": "未上报",
   "account.sync.unsupported": "此构建无法询问该平台；未探测。",
   "account.sync.failed": "探测失败",
-
   // ------------------------------------------------------------- 接管
   // 接管页。接管会把本机网关地址与令牌写入外部客户端自己的配置文件,
   // 记录被替换的值,释放时恢复。九种状态逐个渲染,因为其中四种需要用户
   // 做决定;归并成「在管/不在管」两类,恰好会藏住这些时刻。
   "takeover.section": "Agent 接管",
   "takeover.section_hint":
-    "把网关地址与令牌写入客户端自己的配置，释放时恢复原值；客户端仍按发送的模型名选择层级。",
+    "把网关地址与令牌写入客户端配置，释放时恢复原值。",
   "takeover.none": "此构建没有已知的外部 Agent。",
   "takeover.load_failed": "接管记录读取失败：{err}；本页没有改动过任何客户端的配置。",
   "takeover.agent.claude": "Claude Code",
@@ -692,9 +684,8 @@ export const zh: Dict = {
     "Gemini CLI 只能通过环境变量设置端点，配置文件无法记录，因此不提供接管。",
   "takeover.hint.not_detected":
     "未找到 {agent} 的配置。请安装并运行一次后刷新。",
-  "takeover.hint.ready":
-    "已就绪：接管会写入下方 {n} 个字段，并记录当前值。",
-  "takeover.confirm_inline": "接管会修改 {agent} 的配置文件；释放时只恢复这些字段，其余内容不动。",
+  "takeover.hint.ready": "接管会写入下方 {n} 个字段，释放时恢复",
+  "takeover.confirm_inline": "接管会修改 {agent} 的配置文件，释放时只恢复这些字段",
   "takeover.hint.active":
     "已收到该客户端的网关请求，托管字段与写入值一致。",
   "takeover.hint.degraded":
@@ -742,7 +733,6 @@ export const zh: Dict = {
   "takeover.report_kept": "保留 {n} 处修改",
   "takeover.report_overwritten": "恢复 {n} 个字段",
   "takeover.report_skipped": "跳过 {n} 个字段",
-
   // ------------------------------------------------------------- cutover
   /*
    * 切换页。切换会用一个暂存副本整体替换客户端的配置,并在动手之前逐字节
@@ -817,7 +807,6 @@ export const zh: Dict = {
   "cutover.agent.codex": "Codex CLI",
   "cutover.agent.opencode": "OpenCode",
   "cutover.agent.gemini": "Gemini CLI",
-
   // ------------------------------------------------------------- routing
   "routing.lede": "按用途展示请求的路由方式，兼容任何 Anthropic 或 OpenAI 客户端。",
   "routing.default_hint": "所有普通请求，按客户端请求的层级。",
@@ -894,7 +883,6 @@ export const zh: Dict = {
   "routing.fails_closed": "失败关闭；由客户端询问用户",
   "routing.fail_closed_note":
     "出错、超时或没有把握都按拦截处理，不会放行；回复里的说明文字也不会当作放行。",
-
   // ------------------------------------------------------------ activity
   "activity.lede_none": "暂无数据。将客户端指向网关即可在此看到流量。",
   "activity.lede_since": "自 {since} 起的累计。",
@@ -924,7 +912,7 @@ export const zh: Dict = {
   "activity.import_source": "从其他工具导入…",
   "activity.imported_history": "导入的历史",
   "activity.import_source_title": "从其他工具导入历史",
-  "activity.import_source_hint": "选择来源，核对历史，再加入用量统计。导入不会改变当前预算。",
+  "activity.import_source_hint": "选择来源并核对历史，导入不改变当前预算",
   "activity.import_step_source": "选择来源",
   "activity.import_step_review": "核对预览",
   "activity.import_step_done": "查看结果",
@@ -941,7 +929,7 @@ export const zh: Dict = {
   "activity.inbound_api": "客户端 → Zroutery",
   "activity.outbound_api": "Zroutery → 上游",
   "activity.attempt_route": "执行尝试",
-  "activity.attempt_unavailable": "这条记录没有逐次尝试的协议证据。",
+  "activity.attempt_unavailable": "没有逐次尝试的记录",
   "activity.planned_model": "配置请求模型",
   "activity.declared_model": "响应 model 字段",
   "activity.declared_version": "响应版本字段",
@@ -986,7 +974,7 @@ export const zh: Dict = {
   "activity.heat_less": "少",
   "activity.heat_more": "多",
   "activity.reset": "重置计数",
-  "activity.review_line": "自动审查：{n} 次检查 · 失败 {failed} · 平均 {latency}(与主流量分开统计)。",
+  "activity.review_line": "自动审查 {n} 次，失败 {failed}，平均 {latency}",
   "activity.nothing": "暂无数据。",
   "activity.filter": "筛选请求",
   "activity.filter_all": "全部",
@@ -1044,7 +1032,7 @@ export const zh: Dict = {
    */
   "activity.ledger": "账本",
   "activity.ledger_hint":
-    "已记录的请求按客户端、按模型分别合计；点击一行，下方流水只看它的请求。花费按所填价格估算；提示词与回复正文不会保存。",
+    "已记录的请求按客户端与模型合计，点击一行查看明细。花费按所填价格估算。",
   "activity.ledger_cut": "账本维度",
   "activity.ledger_local_only": "明细仅统计本机记录，导入的历史只计入上方合计。",
   "activity.by_client": "按客户端",
@@ -1081,9 +1069,8 @@ export const zh: Dict = {
   "activity.facet_model": "按模型筛选",
   "activity.facet_all_providers": "全部服务商",
   "activity.facet_all_models": "全部模型",
-
   // ------------------------------------------------------------ settings
-  "settings.lede": "应用行为、对外的网关，以及它被允许花多少。",
+  "settings.lede": "应用行为、网关与用量上限",
   "settings.gateway": "网关",
   "settings.gateway_hint": "服务地址 {url} · {path}",
   "field.host": "主机",
@@ -1124,7 +1111,7 @@ export const zh: Dict = {
   "settings.balance_auto": "自动检查余额",
   "settings.balance_auto_hint": "应用运行时在后台执行。",
   "settings.balance_interval": "间隔（秒）",
-  "settings.balance_interval_hint": "范围 60 到 86400 秒。",
+  "settings.balance_interval_hint": "60 到 86400 秒",
   "budget.covers": "覆盖",
   "budget.window": "周期",
   "budget.limit": "限额",
@@ -1174,7 +1161,7 @@ export const zh: Dict = {
   "win.silent_start_hint": "启动时不显示主窗口，仅在系统托盘运行",
   "win.keep_in_tray": "关闭窗口时保留在托盘",
   "win.keep_in_tray_hint":
-    "开启：关闭窗口后 Zroutery 留在托盘。关闭：关闭窗口即退出并停止网关。",
+    "开启后关闭窗口留在托盘，关闭则退出并停止网关。",
   "win.window_actions": "隐藏或退出",
   "win.window_actions_hint": "隐藏则网关继续在托盘运行；退出会停止网关并结束进程。",
   "win.hide_to_tray": "隐藏到托盘",
@@ -1231,7 +1218,6 @@ export const zh: Dict = {
   "ml.serve_active": "学习模型重排候选顺序",
   "ml.serve_deterministic": "确定性路由(不重排)",
   "ml.serve_blocked_hint": "学习型路由已开启，但未配置持久化目录，因此无法晋升也无法跨重启保留。",
-
   // ------------------------------------------------------------ learned routing
   "ml.title": "学习型路由",
   "ml.hint": "开启后，训练出的模型可重排服务商顺序；关闭时路由保持确定性。",
@@ -1288,14 +1274,12 @@ export const zh: Dict = {
   "ml.gaps": "不可用记录：",
   "ml.rollback_action": "回滚到上一个模型",
   "ml.rolling_back": "回滚中…",
-
   // ----------------------------------------------- learned routing: collection
   "ml.learning_blocked":
     "学习型路由已开启，但 Shadow 评估关闭，因此没有样本（已丢弃 {n} 个请求）；请打开 Shadow 评估。",
   "ml.learning_blocked_short": "学习已被阻断",
   "ml.ingested": "已入库请求",
   "ml.dropped_no_decision": "因缺少决策而丢弃",
-
   // -------------------------------------------- learned routing: promotion round
   "ml.round": "提升轮次",
   "ml.round_hint": "用已记录历史训练候选，由门禁判断是否优于基线；不会自动安装或定时执行。",
@@ -1320,7 +1304,6 @@ export const zh: Dict = {
   "ml.verdict_rejected": "已拒绝",
   "ml.verdict_blocked": "已阻断",
   "ml.round_error": "轮次已评判，但无法安装",
-
   // ------------------------------------------------ learned routing: the log
   "ml.log": "已记录的历史",
   "ml.log_hint": "训练所用的记录；清理需手动执行，不会自动影响下一个模型。",
