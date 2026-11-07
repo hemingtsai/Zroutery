@@ -36,7 +36,28 @@ DEFAULT_DIST = os.path.join(REPO, "ui", "dist")
 # Bytes. The build that set these wrote 547 kB of JavaScript across four chunks,
 # 129 kB of CSS across two files, and a 272 kB entry; the headroom absorbs one
 # more component without a conversation, and stops absorbing after that.
-JS_TOTAL_MAX = 700_000
+#
+# Raised from 700_000 B when the import drawer learned to find history sources on
+# this machine and remember the ones used before: the list, its two labels and
+# the discovery call are what bought the 6 kB, and nothing else may spend it
+# without saying so here.
+#
+# About 2 kB of that went to the year heatmap and the lede: sizing cells to the
+# measured panel, month names under the grid, the reading line that makes the
+# measure selector visible, and naming imported history in the period. A
+# further ~1.2 kB went to merging imported history into the headline and curve
+# and to the two notes that say what the split still excludes. The build is at
+# 704,010 B, so roughly 2 kB remains.
+# The staged history workflow adds cancellable preview/publication, saved-preview
+# recovery, range controls and three-locale feedback. Request diagnostics now
+# distinguish inbound/outbound protocols and per-attempt declared model identity;
+# the six task doors and exact effort-evidence editor are reachable in basic mode.
+# Measured before this slice: 704,010 B; after: about 715 kB (+~1.6%). This feature
+# allowance is bounded at 726 kB; CSS and largest-chunk ceilings are unchanged.
+# 720,000 -> 726,000: batch A of the 2026-11-06 task-experience review (A1
+# add-provider save discipline, A2 input/IME/Esc contract, A3 save-feedback
+# scoping, A4 add-form landing, A5 price sub-row) costs ~5.1 kB of shipped JS.
+JS_TOTAL_MAX = 726_000
 CSS_TOTAL_MAX = 180_000
 LARGEST_CHUNK_MAX = 320_000
 

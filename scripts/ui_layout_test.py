@@ -510,6 +510,9 @@ SNAPSHOT = {
 # staying silent -- the caller sees exactly the four counts it asked for.
 HARNESS = """
 <script>
+  window.__zrErrors = [];
+  window.addEventListener("error", (event) => window.__zrErrors.push(String(event.message || event.error)));
+  window.addEventListener("unhandledrejection", (event) => window.__zrErrors.push(String(event.reason)));
   // Measure every surface in geek mode: the simple mode hides advanced
   // surfaces that have no declared layout yet (the simple surfaces are
   // declared in M2). The inline script runs before the deferred bundle, so
@@ -651,8 +654,18 @@ HARNESS = """
       Promise.resolve(
         cmd === "fetch_provider_models"
           ? ["mock-a", "mock-b"]
+          : cmd === "get_activity"
+            ? { health: SNAPSHOT.health, summary: SNAPSHOT.summary, recent: SNAPSHOT.recent }
+          : cmd === "get_system_accent" || cmd === "deep_link_current"
+            ? null
           : cmd === "get_usage_days"
             ? USAGE_DAYS
+          : cmd === "get_usage_sources"
+            ? { local: { source_name: "This device", revision: 1, summary: SNAPSHOT.summary, recent: SNAPSHOT.recent, days: USAGE_DAYS }, standby: null }
+          : cmd === "get_imported_usage"
+            ? { totals: { requests: 0, failures: 0, input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0, unpriced_requests: 0, suspected_requests: 0, aggregate_requests: 0, cost: {} }, days: [] }
+          : cmd === "pending_usage_history_imports" || cmd === "discover_usage_history_sources" || cmd === "get_usage_attempts"
+            ? []
           : cmd === "takeover_status"
             ? TAKEOVER
             : cmd === "migration_status"
@@ -672,7 +685,7 @@ HARNESS = """
   // An action group holds plain <button>s, which are controls too.
   const ACTION_SELECTOR = 'button, input, select, [role="combobox"], [role="radio"]';
   // Containers whose children are expected to line up on a baseline.
-  const CONTAINER_SELECTOR = '.controls, .row, .setting-row';
+   const CONTAINER_SELECTOR = '.controls, .row, .setting-row, .page-head-actions, .import-range';
   const EXCLUDED_SELECTOR = 'input[type="checkbox"]';
 
   function kindOf(el) {
@@ -776,6 +789,7 @@ class Surface:
     unfold_selector: str = ".page-head-actions button.linky"
     unfold_anchor: str | None = None
     tab: str | tuple[str, ...] | None = None
+    mode: str = "geek"
 
 
 # Declared coverage. A surface listed here must yield at least ``required``
@@ -787,6 +801,15 @@ class Surface:
 # are mounted on demand -- the two drawers it mounts are declared instead, which
 # is exactly the surface the page-level walk used to step over.
 SURFACES = (
+    Surface(
+        "overview-simple",
+        "Simple home workbench",
+        {"action": 1},
+        nav="overview",
+        anchor=".flow-row",
+        scope=".page",
+        mode="simple",
+    ),
     Surface(
         "models",
         "Models page",
@@ -871,6 +894,17 @@ SURFACES = (
         unfold=0,
         unfold_selector=".section-head button.linky",
         unfold_anchor="#panel-budgets .section > .controls",
+    ),
+    Surface(
+        "history-import",
+        "History import source and range",
+        {"native": 3, "action": 3},
+        nav="activity",
+        anchor='[data-history-import]',
+        scope=".drawer",
+        drawer=0,
+        drawer_selector='[data-history-import] .linky',
+        tab="usage",
     ),
     Surface(
         "routing-default",
@@ -1370,6 +1404,46 @@ def measure_surfaces(devtools: DevTools) -> dict[str, dict]:
     )
     measured: dict[str, dict] = {}
     for surface in SURFACES:
+        if surface.mode == "simple":
+            # The mode switch lives in Settings now, not the sidebar foot, so
+            # both directions travel through storage: write the preference,
+            # reload, and prove the mode by its own layout — the simple home
+            # is the only branch that renders the drag pools (.flow-row).
+            devtools.evaluate('localStorage.setItem("zroutery-mode", "simple")')
+            devtools.call("Page.reload", {"ignoreCache": True})
+            devtools.wait_for(
+                "document.querySelector('.nav-item') !== null", "the dashboard shell"
+            )
+            devtools.wait_for(
+                "document.querySelectorAll('.nav-item[data-page]').length === 6",
+                "Simple mode",
+            )
+            devtools.wait_for(
+                "document.querySelector('[data-page=overview]')?.getAttribute('aria-current') === 'page'",
+                "Simple overview",
+            )
+            devtools.wait_for("document.querySelector('.flow-row') !== null", "Simple route pools")
+            measured[surface.id] = devtools.evaluate(
+                "window.__zrScan(%s, %s)" % (json.dumps(surface.scope), json.dumps(surface.id))
+            )
+            # Restore the original harness preference in storage and reload so
+            # the following Geek-only surfaces start from a fresh page tree;
+            # geek proves itself by the simple workbench being gone.
+            devtools.evaluate('localStorage.setItem("zroutery-mode", "geek")')
+            devtools.call("Page.reload", {"ignoreCache": True})
+            devtools.wait_for(
+                "document.querySelector('.nav-item') !== null",
+                "reloaded Geek dashboard",
+            )
+            devtools.wait_for(
+                "document.querySelector('[data-page=models]') !== null",
+                "restored geek layout preference",
+            )
+            devtools.wait_for(
+                "document.querySelector('.flow-row') === null",
+                "Advanced mode preference",
+            )
+            continue
         # Six task doors own the old sub-pages. Select the stable door first,
         # then the stable tab id when the declared surface is one of its
         # sub-areas. Waiting for aria-current prevents an anchor left on the
@@ -1408,6 +1482,24 @@ def measure_surfaces(devtools: DevTools) -> dict[str, dict]:
                 "document.querySelector(%s) !== null" % json.dumps(panel_selector),
                 "the %s task panel" % surface.nav,
             )
+        elif surface.nav == "activity" and surface.tab is not None:
+            try:
+                devtools.wait_for(
+                    "document.querySelector('#tab-usage') !== null",
+                    "the mounted Usage tabs before the %s surface" % surface.label,
+                    timeout=15.0,
+                )
+            except ProtocolError as error:
+                diagnostic = devtools.evaluate(
+                    "JSON.stringify({mode:localStorage.getItem('zroutery-mode'), "
+                    "active:document.querySelector('.nav-item[aria-current=page]')?.textContent, "
+                    "title:document.querySelector('.page-title')?.textContent, "
+                    "loading:document.querySelector('[role=status]')?.textContent, "
+                    "tabs:[...document.querySelectorAll('[role=tab]')].map(el=>el.id), "
+                    "activityLoads:performance.getEntriesByType('resource').map(e=>e.name).filter(n=>n.includes('Activity')), "
+                    "errors:window.__zrErrors})"
+                )
+                raise ProtocolError("%s; final Activity state %s" % (error, diagnostic)) from error
         tabs: tuple[str, ...]
         if surface.tab is None:
             tabs = (None,)  # type: ignore[assignment]
@@ -1420,14 +1512,31 @@ def measure_surfaces(devtools: DevTools) -> dict[str, dict]:
         for tab in tabs:
             if tab is not None:
                 selector = "#tab-%s" % tab
+                diagnostic = devtools.evaluate(
+                    "JSON.stringify({mode:localStorage.getItem('zroutery-mode'), "
+                    "active:document.querySelector('.nav-item[aria-current=page]')?.textContent, "
+                    "title:document.querySelector('.page-title')?.textContent, "
+                    "loading:document.querySelector('[role=status]')?.textContent, "
+                    "tabs:[...document.querySelectorAll('[role=tab]')].map(el=>el.id), "
+                    "errors:[...document.querySelectorAll('.banner-danger,.field-error')].map(el=>el.textContent)})"
+                )
                 devtools.wait_for(
                     "document.querySelector(%s) !== null" % json.dumps(selector),
-                    "the %s tab" % tab,
+                    "the %s tab button (state %s)" % (tab, diagnostic),
                 )
                 devtools.click(devtools.element(selector))
+                devtools.wait_for(
+                    "document.querySelector(%s)?.getAttribute('aria-selected') === 'true'" % json.dumps(selector),
+                    "the selected %s tab" % tab,
+                )
+            anchor_state = devtools.evaluate(
+                "JSON.stringify({anchor:%s, tabs:[...document.querySelectorAll('[role=tab]')].map(el=>({id:el.id, selected:el.getAttribute('aria-selected')})), "
+                "panels:[...document.querySelectorAll('[role=tabpanel]')].map(el=>el.id), errors:window.__zrErrors})"
+                % json.dumps(surface.anchor)
+            )
             devtools.wait_for(
                 "document.querySelector(%s) !== null" % json.dumps(surface.anchor),
-                surface.anchor,
+                "%s (state %s)" % (surface.anchor, anchor_state),
             )
             if surface.drawer is not None:
                 devtools.click(devtools.element(surface.drawer_selector, surface.drawer))

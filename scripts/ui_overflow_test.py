@@ -206,8 +206,36 @@ def main() -> int:
             devtools.wait_for(
                 "document.querySelector('.nav-item') !== null", "the dashboard shell"
             )
+            page_doors = {
+                "routing": "models",
+                "accounts": "providers",
+                "cutover": "takeover",
+            }
+
+            def open_page(name: str) -> None:
+                door = page_doors.get(name, name)
+                selector = '[data-page="%s"]' % door
+                devtools.click(devtools.element(selector))
+                devtools.wait_for(
+                    "document.querySelector(%s)?.getAttribute('aria-current') === 'page'"
+                    % json.dumps(selector),
+                    "the %s page door" % door,
+                )
+                if door != name:
+                    tab = "#tab-%s" % name
+                    devtools.wait_for(
+                        "document.querySelector(%s) !== null" % json.dumps(tab),
+                        "the %s page tab" % name,
+                    )
+                    devtools.click(devtools.element(tab))
+                    devtools.wait_for(
+                        "document.querySelector(%s)?.getAttribute('aria-selected') === 'true'"
+                        % json.dumps(tab),
+                        "the selected %s page tab" % name,
+                    )
+
             for name in PAGES:
-                devtools.click(devtools.element('[data-page="%s"]' % name))
+                open_page(name)
                 # Let the page's entrance animation finish so a transform is not
                 # measured mid-flight.
                 time.sleep(0.2)
@@ -240,7 +268,7 @@ def main() -> int:
             # The containment probe, on the first page that has a table.
             probed = False
             for name in PAGES:
-                devtools.click(devtools.element('[data-page="%s"]' % name))
+                open_page(name)
                 time.sleep(0.15)
                 if not devtools.evaluate(
                     "document.querySelector('.page table') !== null"
