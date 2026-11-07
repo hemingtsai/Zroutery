@@ -1020,6 +1020,23 @@ html[data-skin="md3"] input[type="checkbox"] {
 [data-skin="md3"] .kpi-cell {
   box-shadow: var(--shadow-1);
 }
+/* The chart controller's selected state: the industrial 2px underline lives
+   inside an M3 card and reads as a glitch, so the selection speaks the same
+   grammar as every other M3 selection here — the secondary-container fill
+   with its own ink — and the hover layers that ink instead of washing the
+   fill away. */
+[data-skin="md3"] .kpi-trigger[aria-pressed="true"] {
+  border-bottom-color: transparent;
+  background: var(--secondary-container);
+  color: var(--on-secondary-container);
+}
+[data-skin="md3"] .kpi-trigger[aria-pressed="true"] .kpi-label,
+[data-skin="md3"] .kpi-trigger[aria-pressed="true"] .kpi-value {
+  color: inherit;
+}
+[data-skin="md3"] .kpi-trigger[aria-pressed="true"]:hover {
+  background: color-mix(in srgb, var(--on-secondary-container) 8%, var(--secondary-container));
+}
 
 /* The outlined text field: M3's resting fill is transparent — a grey slab
    inside a grey card was reading as neither. The disabled register keeps its
@@ -1273,6 +1290,17 @@ html[data-skin="fluent"] input[type="checkbox"] {
      solid Background1, which on the dark card read as a hole below it. */
   background: var(--card-fill);
   box-shadow: var(--shadow-card);
+}
+/* The chart controller's selected state: the industrial underline goes, and
+   the selection is the skin's own selection register — Background1Selected,
+   the fill a WinUI collection uses — with the hover keeping it rather than
+   washing it back to the rest fill. */
+[data-skin="fluent"] .kpi-trigger[aria-pressed="true"] {
+  border-bottom-color: transparent;
+  background: var(--selected);
+}
+[data-skin="fluent"] .kpi-trigger[aria-pressed="true"]:hover {
+  background: var(--selected);
 }
 [data-skin="fluent"] .kpi-cell:first-child {
   padding-left: 24px;
