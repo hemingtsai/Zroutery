@@ -1039,8 +1039,8 @@ export const en = {
   "activity.kpi_unpriced": "{n} unpriced requests",
   // ---------------------------------------------------------- activity charts
   "activity.traffic": "Traffic",
-  "activity.traffic_hint": "Completed requests per local day; a quiet day is a zero, not a gap.",
-  "activity.traffic_hint_imported": "Completed requests per local day, this device plus imported history; a quiet day is a zero, not a gap.",
+  "activity.traffic_hint": "Completed requests per local day; days without requests count as zero.",
+  "activity.traffic_hint_imported": "Completed requests per local day, this device plus imported history; days without requests count as zero.",
   "activity.usage_source": "Usage source",
   "activity.source_local": "This device",
   "activity.source_standby": "Development standby",

@@ -1015,11 +1015,7 @@ html[data-skin="md3"] input[type="checkbox"] {
   padding-right: 12px;
 }
 
-/* The KPI tiles read as elevated cards on the filled card: the official
-   elevated-card recipe (surface-container-low fill + the level-1 shadow). */
-[data-skin="md3"] .kpi-row .kpi-cell {
-  box-shadow: var(--shadow-1);
-}
+
 /* The chart controller's selected state: the industrial 2px underline lives
    inside an M3 card and reads as a glitch, so the selection speaks the same
    grammar as every other M3 selection here — the secondary-container fill
@@ -1289,7 +1285,6 @@ html[data-skin="fluent"] input[type="checkbox"] {
      WinUI layer up (CardBackgroundFillColorDefault again) — instead of the
      solid Background1, which on the dark card read as a hole below it. */
   background: var(--card-fill);
-  box-shadow: var(--shadow-card);
 }
 /* The chart controller's selected state: the industrial underline goes, and
    the selection is the skin's own selection register — Background1Selected,
